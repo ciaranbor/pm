@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 use pm::commands;
+use pm::error::PmError;
 use pm::state::paths;
 use pm::tmux;
 
@@ -61,20 +62,28 @@ enum FeatCommands {
     },
     /// Delete a feature (with safety checks)
     Delete {
-        /// Feature name
-        name: String,
+        /// Feature name (detected from CWD if omitted)
+        name: Option<String>,
         /// Skip safety checks
         #[arg(long)]
         force: bool,
     },
     /// Merge a feature branch into the base branch
     Merge {
-        /// Feature name
-        name: String,
+        /// Feature name (detected from CWD if omitted)
+        name: Option<String>,
         /// Clean up after merge (kill session, remove worktree, delete branch, remove state)
         #[arg(long)]
         delete: bool,
     },
+}
+
+fn resolve_feature_name(
+    name: Option<String>,
+    project_root: &std::path::Path,
+) -> pm::error::Result<String> {
+    name.or_else(|| paths::detect_feature_from_cwd(project_root, &std::env::current_dir().ok()?))
+        .ok_or(PmError::NotInFeatureWorktree)
 }
 
 fn main() {
@@ -135,6 +144,12 @@ fn run() -> pm::error::Result<()> {
                     Ok(())
                 }
                 FeatCommands::Switch { name } => {
+                    let name = name.or_else(|| {
+                        paths::detect_feature_from_cwd(
+                            &project_root,
+                            &std::env::current_dir().ok()?,
+                        )
+                    });
                     if let Some(name) = name {
                         commands::feat_switch::feat_switch(&project_root, &name, None)
                     } else {
@@ -149,11 +164,13 @@ fn run() -> pm::error::Result<()> {
                     }
                 }
                 FeatCommands::Delete { name, force } => {
+                    let name = resolve_feature_name(name, &project_root)?;
                     commands::feat_delete::feat_delete(&project_root, &name, force, None)?;
                     println!("Deleted feature '{name}'");
                     Ok(())
                 }
                 FeatCommands::Merge { name, delete } => {
+                    let name = resolve_feature_name(name, &project_root)?;
                     commands::feat_merge::feat_merge(&project_root, &name, delete, None)?;
                     if delete {
                         println!("Merged and deleted feature '{name}'");
