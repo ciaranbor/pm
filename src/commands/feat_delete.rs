@@ -99,9 +99,13 @@ pub fn feat_delete(
         }
     }
 
-    // Step 1: Kill tmux session
+    // Step 1: Kill tmux session (switch to main first so we don't exit tmux)
     let session_name = format!("{project_name}/{name}");
     if tmux::has_session(tmux_server, &session_name)? {
+        let main_session = format!("{project_name}/main");
+        // Switch to main session before killing — if we're attached to the feature
+        // session, this prevents tmux from exiting. Ignore errors (no attached client).
+        let _ = tmux::switch_client(tmux_server, &main_session);
         tmux::kill_session(tmux_server, &session_name)?;
     }
 
