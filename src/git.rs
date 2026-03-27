@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::error::{PmError, Result};
@@ -143,6 +143,30 @@ pub fn branch_merged_into(repo: &Path, branch: &str, target: &str) -> Result<boo
         Err(PmError::Git(_)) => Ok(false),
         Err(e) => Err(e),
     }
+}
+
+/// Add a pattern to the repo's `.git/info/exclude` (local-only ignore).
+/// Works from any worktree by resolving the shared git common dir.
+pub fn exclude_pattern(repo: &Path, pattern: &str) -> Result<()> {
+    let common_dir = run_git(repo, &["rev-parse", "--git-common-dir"])?;
+    let common_path = if Path::new(&common_dir).is_absolute() {
+        PathBuf::from(&common_dir)
+    } else {
+        repo.join(&common_dir)
+    };
+    let info_dir = common_path.join("info");
+    std::fs::create_dir_all(&info_dir)?;
+    let exclude_path = info_dir.join("exclude");
+    let existing = std::fs::read_to_string(&exclude_path).unwrap_or_default();
+    if !existing.lines().any(|l| l.trim() == pattern) {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&exclude_path)?;
+        writeln!(f, "{pattern}")?;
+    }
+    Ok(())
 }
 
 /// Check if a path is a git repository (has .git dir or file).

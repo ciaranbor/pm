@@ -8,11 +8,27 @@ use crate::state::paths;
 use crate::state::project::ProjectConfig;
 use crate::{git, tmux};
 
+/// Resolve context: if the value is a path to an existing file, read its contents;
+/// otherwise treat it as literal text.
+fn resolve_context(context: &str) -> Result<String> {
+    let path = Path::new(context);
+    if path.is_file() {
+        Ok(std::fs::read_to_string(path)?)
+    } else {
+        Ok(context.to_string())
+    }
+}
+
 /// Create a new feature: branch + worktree + tmux session + state file.
 ///
 /// The tmux `server` parameter allows tests to use an isolated tmux server.
 /// In production, pass `None` to use the default server.
-pub fn feat_new(project_root: &Path, name: &str, tmux_server: Option<&str>) -> Result<()> {
+pub fn feat_new(
+    project_root: &Path,
+    name: &str,
+    context: Option<&str>,
+    tmux_server: Option<&str>,
+) -> Result<()> {
     let features_dir = paths::features_dir(project_root);
     let pm_dir = paths::pm_dir(project_root);
 
@@ -25,6 +41,9 @@ pub fn feat_new(project_root: &Path, name: &str, tmux_server: Option<&str>) -> R
     let config = ProjectConfig::load(&pm_dir)?;
     let project_name = &config.project.name;
 
+    // Resolve context upfront (file contents or literal text)
+    let resolved_context = context.map(resolve_context).transpose()?;
+
     // Step 1: Write state with status = initializing
     let now = Utc::now();
     let mut state = FeatureState {
@@ -33,7 +52,7 @@ pub fn feat_new(project_root: &Path, name: &str, tmux_server: Option<&str>) -> R
         worktree: name.to_string(),
         base: String::new(),
         pr: String::new(),
-        context: String::new(),
+        context: resolved_context.clone().unwrap_or_default(),
         created: now,
         last_active: now,
     };
@@ -46,6 +65,12 @@ pub fn feat_new(project_root: &Path, name: &str, tmux_server: Option<&str>) -> R
     // Step 3: Create git worktree
     let worktree_path = project_root.join(name);
     git::add_worktree(&main_worktree, &worktree_path, name)?;
+
+    // Step 3.5: Write TASK.md if context provided
+    if let Some(ref resolved) = resolved_context {
+        std::fs::write(worktree_path.join("TASK.md"), resolved)?;
+        git::exclude_pattern(&worktree_path, "TASK.md")?;
+    }
 
     // Step 4: Create tmux session
     let session_name = format!("{project_name}/{name}");
@@ -79,7 +104,7 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
-        feat_new(&project_path, "login", server.name()).unwrap();
+        feat_new(&project_path, "login", None, server.name()).unwrap();
 
         let features_dir = paths::features_dir(&project_path);
         let state = FeatureState::load(&features_dir, "login").unwrap();
@@ -92,7 +117,7 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
-        feat_new(&project_path, "login", server.name()).unwrap();
+        feat_new(&project_path, "login", None, server.name()).unwrap();
 
         let main_path = project_path.join("main");
         assert!(git::branch_exists(&main_path, "login").unwrap());
@@ -104,7 +129,7 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
-        feat_new(&project_path, "login", server.name()).unwrap();
+        feat_new(&project_path, "login", None, server.name()).unwrap();
 
         let worktree_path = project_path.join("login");
         assert!(worktree_path.exists());
@@ -117,7 +142,7 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
-        feat_new(&project_path, "login", server.name()).unwrap();
+        feat_new(&project_path, "login", None, server.name()).unwrap();
 
         assert!(tmux::has_session(server.name(), "myapp/login").unwrap());
     }
@@ -129,7 +154,7 @@ mod tests {
         let (project_path, _) = setup_project(dir.path(), &server);
         let before = Utc::now();
 
-        feat_new(&project_path, "login", server.name()).unwrap();
+        feat_new(&project_path, "login", None, server.name()).unwrap();
 
         let features_dir = paths::features_dir(&project_path);
         let state = FeatureState::load(&features_dir, "login").unwrap();
@@ -143,7 +168,7 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
-        feat_new(&project_path, "login", server.name()).unwrap();
+        feat_new(&project_path, "login", None, server.name()).unwrap();
 
         let features_dir = paths::features_dir(&project_path);
         let state = FeatureState::load(&features_dir, "login").unwrap();
@@ -157,8 +182,8 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
-        feat_new(&project_path, "login", server.name()).unwrap();
-        let result = feat_new(&project_path, "login", server.name());
+        feat_new(&project_path, "login", None, server.name()).unwrap();
+        let result = feat_new(&project_path, "login", None, server.name());
 
         assert!(result.is_err());
         assert!(matches!(
@@ -177,7 +202,7 @@ mod tests {
         // so create_session fails with "duplicate session"
         tmux::create_session(server.name(), "myapp/login", dir.path()).unwrap();
 
-        let result = feat_new(&project_path, "login", server.name());
+        let result = feat_new(&project_path, "login", None, server.name());
         assert!(result.is_err());
 
         // State file should exist with initializing status
@@ -202,7 +227,7 @@ mod tests {
         std::fs::create_dir(project_path.join("login")).unwrap();
         std::fs::write(project_path.join("login").join("blocker.txt"), "").unwrap();
 
-        let result = feat_new(&project_path, "login", server.name());
+        let result = feat_new(&project_path, "login", None, server.name());
         assert!(result.is_err());
 
         // State file should exist with initializing status
@@ -210,5 +235,93 @@ mod tests {
         assert!(FeatureState::exists(&features_dir, "login"));
         let state = FeatureState::load(&features_dir, "login").unwrap();
         assert_eq!(state.status, FeatureStatus::Initializing);
+    }
+
+    #[test]
+    fn feat_new_with_text_context_writes_task_md() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = setup_project(dir.path(), &server);
+
+        feat_new(
+            &project_path,
+            "login",
+            Some("Implement login page per issue #42"),
+            server.name(),
+        )
+        .unwrap();
+
+        let worktree_path = project_path.join("login");
+        let task_md = worktree_path.join("TASK.md");
+        assert!(task_md.exists());
+        let content = std::fs::read_to_string(&task_md).unwrap();
+        assert_eq!(content, "Implement login page per issue #42");
+
+        // TASK.md should be excluded from untracked files
+        let untracked = git::untracked_files(&worktree_path).unwrap();
+        assert!(!untracked.contains(&"TASK.md".to_string()));
+    }
+
+    #[test]
+    fn feat_new_with_file_context_reads_file() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = setup_project(dir.path(), &server);
+
+        // Create a temp file with context content
+        let brief_path = dir.path().join("brief.md");
+        std::fs::write(&brief_path, "# Login Feature\nBuild the login page").unwrap();
+
+        feat_new(
+            &project_path,
+            "login",
+            Some(brief_path.to_str().unwrap()),
+            server.name(),
+        )
+        .unwrap();
+
+        let task_md = project_path.join("login").join("TASK.md");
+        assert!(task_md.exists());
+        let content = std::fs::read_to_string(&task_md).unwrap();
+        assert_eq!(content, "# Login Feature\nBuild the login page");
+    }
+
+    #[test]
+    fn feat_new_with_context_stores_resolved_content_in_state() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = setup_project(dir.path(), &server);
+
+        // Pass a file path as context — state should store the file contents, not the path
+        let brief_path = dir.path().join("brief.md");
+        std::fs::write(&brief_path, "resolved file content").unwrap();
+
+        feat_new(
+            &project_path,
+            "login",
+            Some(brief_path.to_str().unwrap()),
+            server.name(),
+        )
+        .unwrap();
+
+        let features_dir = paths::features_dir(&project_path);
+        let state = FeatureState::load(&features_dir, "login").unwrap();
+        assert_eq!(state.context, "resolved file content");
+    }
+
+    #[test]
+    fn feat_new_without_context_has_no_task_md() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = setup_project(dir.path(), &server);
+
+        feat_new(&project_path, "login", None, server.name()).unwrap();
+
+        let task_md = project_path.join("login").join("TASK.md");
+        assert!(!task_md.exists());
+
+        let features_dir = paths::features_dir(&project_path);
+        let state = FeatureState::load(&features_dir, "login").unwrap();
+        assert_eq!(state.context, "");
     }
 }

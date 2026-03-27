@@ -148,7 +148,7 @@ mod tests {
         let project_path = dir.join("myapp");
         let projects_dir = dir.join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
-        feat_new::feat_new(&project_path, feature_name, server.name()).unwrap();
+        feat_new::feat_new(&project_path, feature_name, None, server.name()).unwrap();
         project_path
     }
 
