@@ -48,9 +48,11 @@ Restructures the repo in-place: moves it into `main/` within a new wrapper at th
 
 ```sh
 pm feat new login
+pm feat new login --context "Implement login page per issue #42"
+pm feat new login --context path/to/brief.md
 ```
 
-Creates a git branch, worktree, and tmux session (`myapp/login`).
+Creates a git branch, worktree, and tmux session (`myapp/login`). With `--context`, seeds a `TASK.md` in the worktree.
 
 ### List features
 
@@ -69,24 +71,33 @@ pm feat switch                   # interactive picker (tmux display-menu)
 
 ```sh
 pm feat merge login             # merge into main
-pm feat merge login --delete    # merge and clean up (session, worktree, branch, state)
+pm feat merge --delete          # merge current feature and clean up
 ```
 
-Blocks if either the feature or main worktree has uncommitted changes. Always creates a merge commit (`--no-ff`).
+Blocks if either the feature or main worktree has uncommitted changes. Always creates a merge commit (`--no-ff`). Feature name is detected from CWD if omitted.
 
 ### Delete a feature
 
 ```sh
 pm feat delete login             # with safety checks
-pm feat delete login --force     # skip safety checks
+pm feat delete --force           # delete current feature, skip safety checks
 ```
 
-Safety checks block deletion if the feature has uncommitted changes or commits not merged into main. Untracked files trigger a warning but don't block.
+Safety checks block deletion if the feature has uncommitted changes or commits not merged into main. Untracked files trigger a warning but don't block. Feature name is detected from CWD if omitted.
+
+### Open a project
+
+```sh
+pm open                          # open/reconstruct sessions for current project
+```
+
+Creates tmux sessions for the main worktree and any active features that are missing sessions. Useful after a reboot or tmux server restart.
 
 ### Other commands
 
 ```sh
 pm list                          # list all registered projects
+pm open                          # open/reconstruct tmux sessions
 pm --help                        # full help
 pm feat --help                   # feature subcommand help
 ```
