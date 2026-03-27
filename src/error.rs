@@ -32,6 +32,9 @@ pub enum PmError {
     #[error("Not a git repository: {0}")]
     NotAGitRepo(PathBuf),
 
+    #[error("Repo already registered as project \"{0}\"")]
+    RepoAlreadyRegistered(String),
+
     #[error("Git error: {0}")]
     Git(String),
 
