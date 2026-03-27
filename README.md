@@ -26,22 +26,23 @@ cd ~/projects/myapp/main
 
 Creates a project root with a git repo in `main/` and a `.pm/` state directory.
 
-### Option B: Register an existing repo
+### Option B: Register an existing repo (symlink)
 
 ```sh
 pm register ~/code/myapp --name myapp
 cd ~/code/myapp-pm/main
 ```
 
-Creates a wrapper directory (`myapp-pm/`) with a symlink to the original repo as `main/`.
+Creates a wrapper directory (`myapp-pm/`) with a symlink to the original repo as `main/`. The original repo is untouched.
 
-To move the repo into the wrapper instead of symlinking:
+### Option C: Register an existing repo (move)
 
 ```sh
 pm register ~/code/myapp --name myapp --move
+cd ~/code/myapp/main
 ```
 
-This physically moves the repo — the original path will no longer exist.
+Restructures the repo in-place: moves it into `main/` within a new wrapper at the same path. No `-pm` suffix needed since the original directory becomes the wrapper.
 
 ### Create a feature
 

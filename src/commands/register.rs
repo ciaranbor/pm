@@ -42,31 +42,42 @@ pub fn register(
             ))
         })?;
 
-    // Create wrapper directory
     let parent = repo_path.parent().ok_or_else(|| {
         PmError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "repo path has no parent directory",
         ))
     })?;
-    let wrapper_dir = parent.join(format!("{project_name}-pm"));
 
-    if wrapper_dir.exists() {
-        return Err(PmError::PathAlreadyExists(wrapper_dir));
-    }
+    let wrapper_dir = if move_repo {
+        // Move mode: wrapper takes the project name directly (no -pm suffix).
+        // The original repo path is vacated by the move.
+        let wrapper = parent.join(&project_name);
 
-    std::fs::create_dir_all(&wrapper_dir)?;
-
-    // Place the repo as main/ inside the wrapper
-    let main_path = wrapper_dir.join("main");
-    if move_repo {
-        std::fs::rename(&repo_path, &main_path)?;
+        // Temporarily rename the repo so we can create the wrapper at the target path
+        let tmp_name = parent.join(format!(".{project_name}-pm-tmp"));
+        if tmp_name.exists() {
+            return Err(PmError::PathAlreadyExists(tmp_name));
+        }
+        std::fs::rename(&repo_path, &tmp_name)?;
+        std::fs::create_dir_all(&wrapper)?;
+        std::fs::rename(&tmp_name, wrapper.join("main"))?;
+        wrapper
     } else {
+        // Symlink mode: wrapper gets -pm suffix to avoid collision with the original repo
+        let wrapper = parent.join(format!("{project_name}-pm"));
+        if wrapper.exists() {
+            return Err(PmError::PathAlreadyExists(wrapper));
+        }
+        std::fs::create_dir_all(&wrapper)?;
+
+        let main_path = wrapper.join("main");
         #[cfg(unix)]
         std::os::unix::fs::symlink(&repo_path, &main_path)?;
         #[cfg(windows)]
         std::os::windows::fs::symlink_dir(&repo_path, &main_path)?;
-    }
+        wrapper
+    };
 
     // Create .pm/ structure
     let pm_dir = paths::pm_dir(&wrapper_dir);
@@ -146,12 +157,14 @@ mod tests {
 
         register(&repo_path, None, &projects_dir, true).unwrap();
 
-        let main_path = dir.path().join("myapp-pm").join("main");
+        // With --move, wrapper uses the project name directly (no -pm suffix)
+        let wrapper = dir.path().join("myapp");
+        let main_path = wrapper.join("main");
         assert!(main_path.exists());
         assert!(main_path.join(".git").exists());
         assert!(!main_path.is_symlink());
-        // Original repo is gone
-        assert!(!repo_path.exists());
+        // Wrapper dir now has .pm/
+        assert!(wrapper.join(".pm").exists());
     }
 
     #[test]
