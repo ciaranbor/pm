@@ -23,6 +23,9 @@ pub enum PmError {
     #[error("Not inside a pm project")]
     NotInProject,
 
+    #[error("Not in a feature worktree — provide a feature name explicitly")]
+    NotInFeatureWorktree,
+
     #[error("Path already exists: {0}")]
     PathAlreadyExists(PathBuf),
 

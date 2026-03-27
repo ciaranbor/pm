@@ -54,6 +54,24 @@ pub fn find_project_root(start: &Path) -> Result<PathBuf> {
     }
 }
 
+/// Detect the current feature name from the working directory.
+/// Returns the feature name if CWD is inside a known feature worktree, None otherwise.
+pub fn detect_feature_from_cwd(project_root: &Path, cwd: &Path) -> Option<String> {
+    let cwd_canonical = cwd.canonicalize().ok()?;
+    let root_canonical = project_root.canonicalize().ok()?;
+    let relative = cwd_canonical.strip_prefix(&root_canonical).ok()?;
+    let first_component = relative.components().next()?;
+    let name = first_component.as_os_str().to_str()?;
+    if name == "main" || name == PM_DIR_NAME {
+        return None;
+    }
+    let feat_dir = features_dir(project_root);
+    if !crate::state::feature::FeatureState::exists(&feat_dir, name) {
+        return None;
+    }
+    Some(name.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,6 +123,94 @@ mod tests {
         let result = find_project_root(dir.path());
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), PmError::NotInProject));
+    }
+
+    fn create_feature_state(root: &Path, name: &str) {
+        let feat_dir = root.join(".pm").join("features");
+        std::fs::create_dir_all(&feat_dir).unwrap();
+        std::fs::write(feat_dir.join(format!("{name}.toml")), "").unwrap();
+    }
+
+    #[test]
+    fn detect_feature_from_feature_worktree() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join(".pm")).unwrap();
+        create_feature_state(root, "login");
+        let feature_dir = root.join("login").join("src");
+        std::fs::create_dir_all(&feature_dir).unwrap();
+
+        let result = detect_feature_from_cwd(root, &feature_dir);
+        assert_eq!(result, Some("login".to_string()));
+    }
+
+    #[test]
+    fn detect_feature_from_feature_root_dir() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join(".pm")).unwrap();
+        create_feature_state(root, "login");
+        let feature_dir = root.join("login");
+        std::fs::create_dir_all(&feature_dir).unwrap();
+
+        let result = detect_feature_from_cwd(root, &feature_dir);
+        assert_eq!(result, Some("login".to_string()));
+    }
+
+    #[test]
+    fn detect_feature_returns_none_for_unknown_directory() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join(".pm")).unwrap();
+        // No feature state for "docs"
+        let docs_dir = root.join("docs");
+        std::fs::create_dir_all(&docs_dir).unwrap();
+
+        let result = detect_feature_from_cwd(root, &docs_dir);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn detect_feature_returns_none_in_main() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join(".pm")).unwrap();
+        let main_dir = root.join("main").join("src");
+        std::fs::create_dir_all(&main_dir).unwrap();
+
+        let result = detect_feature_from_cwd(root, &main_dir);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn detect_feature_returns_none_in_pm_dir() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join(".pm")).unwrap();
+
+        let result = detect_feature_from_cwd(root, &root.join(".pm"));
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn detect_feature_returns_none_at_project_root() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join(".pm")).unwrap();
+
+        let result = detect_feature_from_cwd(root, root);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn detect_feature_returns_none_outside_project() {
+        let project_dir = tempdir().unwrap();
+        let other_dir = tempdir().unwrap();
+        let root = project_dir.path();
+        std::fs::create_dir(root.join(".pm")).unwrap();
+
+        let result = detect_feature_from_cwd(root, other_dir.path());
+        assert_eq!(result, None);
     }
 
     #[test]
