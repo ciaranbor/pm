@@ -81,6 +81,33 @@ pub fn switch_client(server: Option<&str>, name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Create a new window in an existing tmux session. Returns the new window's target
+/// (e.g. "session:1") for use with send_keys.
+pub fn new_window(server: Option<&str>, session: &str, start_dir: &Path) -> Result<String> {
+    run_tmux(
+        server,
+        &[
+            "new-window",
+            "-t",
+            session,
+            "-P",
+            "-F",
+            "#{session_name}:#{window_index}",
+            "-c",
+            &start_dir.to_string_lossy(),
+        ],
+    )
+}
+
+/// Count the number of windows in a tmux session.
+pub fn list_windows(server: Option<&str>, session: &str) -> Result<usize> {
+    let output = run_tmux(
+        server,
+        &["list-windows", "-t", session, "-F", "#{window_index}"],
+    )?;
+    Ok(output.lines().count())
+}
+
 /// Send keys to a tmux session (for running commands like setup.sh).
 pub fn send_keys(server: Option<&str>, target: &str, keys: &str) -> Result<()> {
     run_tmux(server, &["send-keys", "-t", target, keys, "Enter"])?;
@@ -236,6 +263,56 @@ mod tests {
         // Item at index 35 (0-indexed), past the 34 shortcuts available
         let shortcut_pos = 3 + 35 * 3 + 1;
         assert_eq!(args[shortcut_pos], "");
+    }
+
+    #[test]
+    fn new_window_creates_second_window() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+
+        create_session(server.name(), "win-test", dir.path()).unwrap();
+        let target = new_window(server.name(), "win-test", dir.path()).unwrap();
+
+        // Should return a target like "win-test:1"
+        assert!(target.starts_with("win-test:"));
+
+        // Session should still exist and now have 2 windows
+        assert!(has_session(server.name(), "win-test").unwrap());
+        let output = run_tmux(
+            server.name(),
+            &["list-windows", "-t", "win-test", "-F", "#{window_index}"],
+        )
+        .unwrap();
+        assert_eq!(output.lines().count(), 2);
+    }
+
+    #[test]
+    fn new_window_nonexistent_session_fails() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+
+        let result = new_window(server.name(), "no-such", dir.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn list_windows_counts_windows() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+
+        create_session(server.name(), "count-test", dir.path()).unwrap();
+        assert_eq!(list_windows(server.name(), "count-test").unwrap(), 1);
+
+        new_window(server.name(), "count-test", dir.path()).unwrap();
+        assert_eq!(list_windows(server.name(), "count-test").unwrap(), 2);
+    }
+
+    #[test]
+    fn list_windows_nonexistent_session_fails() {
+        let server = TestServer::new();
+
+        let result = list_windows(server.name(), "no-such");
+        assert!(result.is_err());
     }
 
     #[test]
