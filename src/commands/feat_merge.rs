@@ -1,13 +1,14 @@
 use std::path::Path;
 
+use crate::commands::feat_delete::{CleanupParams, cleanup_feature};
 use crate::error::{PmError, Result};
+use crate::git;
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
 use crate::state::project::ProjectConfig;
-use crate::{git, tmux};
 
 /// Merge a feature branch into its base branch from the main worktree.
-/// With `delete`, clean up the feature afterwards (kill session, remove worktree, delete branch, remove state).
+/// With `delete`, clean up the feature afterwards (remove worktree, delete branch, remove state, kill session).
 pub fn feat_merge(
     project_root: &Path,
     name: &str,
@@ -47,21 +48,16 @@ pub fn feat_merge(
     git::merge_no_ff(&main_repo, &state.branch)?;
 
     if delete {
-        // Clean up: kill session, remove worktree, delete branch, remove state
-        let session_name = format!("{project_name}/{name}");
-        if tmux::has_session(tmux_server, &session_name)? {
-            tmux::kill_session(tmux_server, &session_name)?;
-        }
-
-        if worktree_path.exists() {
-            git::remove_worktree_force(&main_repo, &worktree_path)?;
-        }
-
-        if git::branch_exists(&main_repo, &state.branch)? {
-            git::delete_branch(&main_repo, &state.branch)?;
-        }
-
-        FeatureState::delete(&features_dir, name)?;
+        cleanup_feature(&CleanupParams {
+            main_repo: &main_repo,
+            worktree_path: &worktree_path,
+            branch: &state.branch,
+            features_dir: &features_dir,
+            name,
+            project_name,
+            force_worktree: true, // always force — we already checked for uncommitted changes
+            tmux_server,
+        })?;
     } else {
         // Update feature state to Merged
         let mut updated = state.clone();
