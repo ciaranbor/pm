@@ -6,6 +6,52 @@ use crate::state::paths;
 use crate::state::project::ProjectConfig;
 use crate::{git, tmux};
 
+/// Parameters for feature cleanup.
+pub struct CleanupParams<'a> {
+    pub main_repo: &'a Path,
+    pub worktree_path: &'a Path,
+    pub branch: &'a str,
+    pub features_dir: &'a Path,
+    pub name: &'a str,
+    pub project_name: &'a str,
+    pub force_worktree: bool,
+    pub tmux_server: Option<&'a str>,
+}
+
+/// Remove a feature's worktree, branch, state file, and tmux session.
+///
+/// The tmux session is killed last so that cleanup completes even when run
+/// from within the feature session (where killing the session would kill
+/// this process).
+pub fn cleanup_feature(params: &CleanupParams) -> Result<()> {
+    // Step 1: Remove git worktree
+    if params.worktree_path.exists() {
+        if params.force_worktree {
+            git::remove_worktree_force(params.main_repo, params.worktree_path)?;
+        } else {
+            git::remove_worktree(params.main_repo, params.worktree_path)?;
+        }
+    }
+
+    // Step 2: Delete branch
+    if git::branch_exists(params.main_repo, params.branch)? {
+        git::delete_branch(params.main_repo, params.branch)?;
+    }
+
+    // Step 3: Remove state file
+    FeatureState::delete(params.features_dir, params.name)?;
+
+    // Step 4: Kill tmux session (last — see doc comment above)
+    let session_name = format!("{}/{}", params.project_name, params.name);
+    if tmux::has_session(params.tmux_server, &session_name)? {
+        let main_session = format!("{}/main", params.project_name);
+        let _ = tmux::switch_client(params.tmux_server, &main_session);
+        tmux::kill_session(params.tmux_server, &session_name)?;
+    }
+
+    Ok(())
+}
+
 /// Safety check results for feature deletion.
 pub struct SafetyReport {
     pub has_uncommitted_changes: bool,
@@ -99,40 +145,24 @@ pub fn feat_delete(
         }
     }
 
-    // Step 1: Remove git worktree
-    // Use force-remove if --force was passed or if there are untracked files
+    // Force-remove worktree if --force was passed or if there are untracked files
     // (git worktree remove refuses untracked files without --force, but we've
     // already warned the user about them in the safety checks above)
-    if worktree_path.exists() {
-        let needs_force = force
-            || !git::untracked_files(&worktree_path)
-                .unwrap_or_default()
-                .is_empty();
-        if needs_force {
-            git::remove_worktree_force(&main_repo, &worktree_path)?;
-        } else {
-            git::remove_worktree(&main_repo, &worktree_path)?;
-        }
-    }
+    let force_worktree = force
+        || !git::untracked_files(&worktree_path)
+            .unwrap_or_default()
+            .is_empty();
 
-    // Step 2: Delete branch
-    if git::branch_exists(&main_repo, &state.branch)? {
-        git::delete_branch(&main_repo, &state.branch)?;
-    }
-
-    // Step 3: Remove state file
-    FeatureState::delete(&features_dir, name)?;
-
-    // Step 4: Kill tmux session (last — so cleanup completes even when run from
-    // within the feature session, where killing the session would kill this process)
-    let session_name = format!("{project_name}/{name}");
-    if tmux::has_session(tmux_server, &session_name)? {
-        let main_session = format!("{project_name}/main");
-        let _ = tmux::switch_client(tmux_server, &main_session);
-        tmux::kill_session(tmux_server, &session_name)?;
-    }
-
-    Ok(())
+    cleanup_feature(&CleanupParams {
+        main_repo: &main_repo,
+        worktree_path: &worktree_path,
+        branch: &state.branch,
+        features_dir: &features_dir,
+        name,
+        project_name,
+        force_worktree,
+        tmux_server,
+    })
 }
 
 #[cfg(test)]
