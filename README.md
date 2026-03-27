@@ -65,6 +65,15 @@ pm feat switch login             # direct switch
 pm feat switch                   # interactive picker (tmux display-menu)
 ```
 
+### Merge a feature
+
+```sh
+pm feat merge login             # merge into main
+pm feat merge login --delete    # merge and clean up (session, worktree, branch, state)
+```
+
+Blocks if either the feature or main worktree has uncommitted changes. Always creates a merge commit (`--no-ff`).
+
 ### Delete a feature
 
 ```sh

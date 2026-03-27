@@ -1,5 +1,6 @@
 pub mod feat_delete;
 pub mod feat_list;
+pub mod feat_merge;
 pub mod feat_new;
 pub mod feat_switch;
 pub mod init;

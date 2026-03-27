@@ -169,6 +169,21 @@ pub fn exclude_pattern(repo: &Path, pattern: &str) -> Result<()> {
     Ok(())
 }
 
+/// Merge a branch into the current branch with `--no-ff` (always create a merge commit).
+pub fn merge_no_ff(repo: &Path, branch: &str) -> Result<()> {
+    run_git(
+        repo,
+        &[
+            "merge",
+            "--no-ff",
+            branch,
+            "-m",
+            &format!("Merge branch '{branch}'"),
+        ],
+    )?;
+    Ok(())
+}
+
 /// Check if a path is a git repository (has .git dir or file).
 pub fn is_git_repo(path: &Path) -> bool {
     let git_path = path.join(".git");
@@ -435,6 +450,83 @@ mod tests {
         run_git(&wt_path, &["commit", "-m", "feature commit"]).unwrap();
 
         assert!(!branch_merged_into(&repo_path, "feature", "main").unwrap());
+    }
+
+    #[test]
+    fn merge_no_ff_merges_branch() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().join("main");
+        init_repo(&repo_path).unwrap();
+
+        create_branch(&repo_path, "feature").unwrap();
+
+        let wt_path = dir.path().join("feature");
+        add_worktree(&repo_path, &wt_path, "feature").unwrap();
+        std::fs::write(wt_path.join("new.txt"), "content").unwrap();
+        run_git(&wt_path, &["add", "new.txt"]).unwrap();
+        run_git(&wt_path, &["commit", "-m", "feature commit"]).unwrap();
+
+        merge_no_ff(&repo_path, "feature").unwrap();
+
+        // The file from the feature branch should now be in the main worktree
+        assert!(repo_path.join("new.txt").exists());
+    }
+
+    #[test]
+    fn merge_no_ff_creates_merge_commit() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().join("main");
+        init_repo(&repo_path).unwrap();
+
+        create_branch(&repo_path, "feature").unwrap();
+
+        let wt_path = dir.path().join("feature");
+        add_worktree(&repo_path, &wt_path, "feature").unwrap();
+        std::fs::write(wt_path.join("new.txt"), "content").unwrap();
+        run_git(&wt_path, &["add", "new.txt"]).unwrap();
+        run_git(&wt_path, &["commit", "-m", "feature commit"]).unwrap();
+
+        merge_no_ff(&repo_path, "feature").unwrap();
+
+        // HEAD should be a merge commit (two parents)
+        let output = run_git(&repo_path, &["cat-file", "-p", "HEAD"]).unwrap();
+        let parent_count = output.lines().filter(|l| l.starts_with("parent ")).count();
+        assert_eq!(parent_count, 2, "merge commit should have two parents");
+    }
+
+    #[test]
+    fn merge_no_ff_fails_on_nonexistent_branch() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().join("myrepo");
+        init_repo(&repo_path).unwrap();
+
+        let result = merge_no_ff(&repo_path, "nonexistent");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn merge_no_ff_fails_on_conflict() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().join("main");
+        init_repo(&repo_path).unwrap();
+
+        // Create a file on main and commit
+        std::fs::write(repo_path.join("shared.txt"), "main content").unwrap();
+        run_git(&repo_path, &["add", "shared.txt"]).unwrap();
+        run_git(&repo_path, &["commit", "-m", "main change"]).unwrap();
+
+        // Create feature branch from before that commit
+        run_git(&repo_path, &["branch", "feature", "HEAD~1"]).unwrap();
+
+        // Add conflicting change on feature branch via worktree
+        let wt_path = dir.path().join("feature");
+        add_worktree(&repo_path, &wt_path, "feature").unwrap();
+        std::fs::write(wt_path.join("shared.txt"), "feature content").unwrap();
+        run_git(&wt_path, &["add", "shared.txt"]).unwrap();
+        run_git(&wt_path, &["commit", "-m", "feature change"]).unwrap();
+
+        let result = merge_no_ff(&repo_path, "feature");
+        assert!(result.is_err());
     }
 
     #[test]

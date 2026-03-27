@@ -67,6 +67,14 @@ enum FeatCommands {
         #[arg(long)]
         force: bool,
     },
+    /// Merge a feature branch into the base branch
+    Merge {
+        /// Feature name
+        name: String,
+        /// Clean up after merge (kill session, remove worktree, delete branch, remove state)
+        #[arg(long)]
+        delete: bool,
+    },
 }
 
 fn main() {
@@ -143,6 +151,15 @@ fn run() -> pm::error::Result<()> {
                 FeatCommands::Delete { name, force } => {
                     commands::feat_delete::feat_delete(&project_root, &name, force, None)?;
                     println!("Deleted feature '{name}'");
+                    Ok(())
+                }
+                FeatCommands::Merge { name, delete } => {
+                    commands::feat_merge::feat_merge(&project_root, &name, delete, None)?;
+                    if delete {
+                        println!("Merged and deleted feature '{name}'");
+                    } else {
+                        println!("Merged feature '{name}'");
+                    }
                     Ok(())
                 }
             }
