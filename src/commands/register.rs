@@ -47,6 +47,16 @@ pub fn register(
             ))
         })?;
 
+    // Check if this repo is already registered under a different name
+    for (existing_name, entry) in ProjectEntry::list(projects_dir)? {
+        let existing_main = Path::new(&entry.root).join("main");
+        if let Ok(existing_canonical) = existing_main.canonicalize()
+            && existing_canonical == repo_path
+        {
+            return Err(PmError::RepoAlreadyRegistered(existing_name));
+        }
+    }
+
     let parent = repo_path.parent().ok_or_else(|| {
         PmError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -273,10 +283,38 @@ mod tests {
 
         register(&repo_path, None, &projects_dir, false, server.name()).unwrap();
 
-        // Second register hits PathAlreadyExists because wrapper dir exists
+        // Second register detects duplicate repo in the registry
         let result = register(&repo_path, None, &projects_dir, false, server.name());
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), PmError::PathAlreadyExists(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            PmError::RepoAlreadyRegistered(_)
+        ));
+    }
+
+    #[test]
+    fn register_same_repo_different_name_fails() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().join("myapp");
+        create_git_repo(&repo_path);
+        let projects_dir = dir.path().join("registry");
+        let server = TestServer::new();
+
+        register(&repo_path, None, &projects_dir, false, server.name()).unwrap();
+
+        // Try to register the same repo under a different name
+        let result = register(
+            &repo_path,
+            Some("other-name"),
+            &projects_dir,
+            false,
+            server.name(),
+        );
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PmError::RepoAlreadyRegistered(name) => assert_eq!(name, "myapp"),
+            other => panic!("expected RepoAlreadyRegistered, got: {other}"),
+        }
     }
 
     #[test]
