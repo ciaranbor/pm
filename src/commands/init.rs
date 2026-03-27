@@ -4,6 +4,7 @@ use crate::error::{PmError, Result};
 use crate::git;
 use crate::state::paths;
 use crate::state::project::{GithubConfig, ProjectConfig, ProjectEntry, ProjectInfo, SetupConfig};
+use crate::tmux;
 
 /// Initialize a new pm project at the given path.
 ///
@@ -14,7 +15,10 @@ use crate::state::project::{GithubConfig, ProjectConfig, ProjectEntry, ProjectIn
 /// - `<path>/.pm/config.toml` — project config
 /// - `<path>/.pm/features/` — empty features directory
 /// - `~/.config/pm/projects/<name>.toml` — global registry entry
-pub fn init(path: &Path, projects_dir: &Path) -> Result<()> {
+/// - `<name>/main` tmux session pointing at the main worktree
+///
+/// The `tmux_server` parameter allows tests to use an isolated tmux server.
+pub fn init(path: &Path, projects_dir: &Path, tmux_server: Option<&str>) -> Result<()> {
     if path.exists() {
         return Err(PmError::PathAlreadyExists(path.to_path_buf()));
     }
@@ -57,12 +61,17 @@ pub fn init(path: &Path, projects_dir: &Path) -> Result<()> {
     };
     entry.save(projects_dir, &name)?;
 
+    // Create main tmux session
+    let session_name = format!("{name}/main");
+    tmux::create_session(tmux_server, &session_name, &main_path)?;
+
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TestServer;
     use tempfile::tempdir;
 
     #[test]
@@ -70,8 +79,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let project_path = dir.path().join("myapp");
         let projects_dir = dir.path().join("registry");
+        let server = TestServer::new();
 
-        init(&project_path, &projects_dir).unwrap();
+        init(&project_path, &projects_dir, server.name()).unwrap();
 
         assert!(project_path.join("main").exists());
         assert!(project_path.join("main").is_dir());
@@ -82,8 +92,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let project_path = dir.path().join("myapp");
         let projects_dir = dir.path().join("registry");
+        let server = TestServer::new();
 
-        init(&project_path, &projects_dir).unwrap();
+        init(&project_path, &projects_dir, server.name()).unwrap();
 
         assert!(project_path.join("main").join(".git").exists());
     }
@@ -93,8 +104,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let project_path = dir.path().join("myapp");
         let projects_dir = dir.path().join("registry");
+        let server = TestServer::new();
 
-        init(&project_path, &projects_dir).unwrap();
+        init(&project_path, &projects_dir, server.name()).unwrap();
 
         assert!(project_path.join(".pm").exists());
         assert!(project_path.join(".pm").join("config.toml").exists());
@@ -106,8 +118,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let project_path = dir.path().join("myapp");
         let projects_dir = dir.path().join("registry");
+        let server = TestServer::new();
 
-        init(&project_path, &projects_dir).unwrap();
+        init(&project_path, &projects_dir, server.name()).unwrap();
 
         let pm_dir = project_path.join(".pm");
         let config = ProjectConfig::load(&pm_dir).unwrap();
@@ -119,8 +132,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let project_path = dir.path().join("myapp");
         let projects_dir = dir.path().join("registry");
+        let server = TestServer::new();
 
-        init(&project_path, &projects_dir).unwrap();
+        init(&project_path, &projects_dir, server.name()).unwrap();
 
         let entry = ProjectEntry::load(&projects_dir, "myapp").unwrap();
         assert_eq!(entry.root, project_path.to_string_lossy().to_string());
@@ -135,7 +149,7 @@ mod tests {
 
         std::fs::create_dir(&project_path).unwrap();
 
-        let result = init(&project_path, &projects_dir);
+        let result = init(&project_path, &projects_dir, None);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), PmError::PathAlreadyExists(_)));
     }
@@ -145,12 +159,25 @@ mod tests {
         let dir = tempdir().unwrap();
         let project_path = dir.path().join("myapp");
         let projects_dir = dir.path().join("registry");
+        let server = TestServer::new();
 
-        init(&project_path, &projects_dir).unwrap();
+        init(&project_path, &projects_dir, server.name()).unwrap();
 
         // Should be able to create a branch (requires at least one commit)
         let main_path = project_path.join("main");
         git::create_branch(&main_path, "test-branch").unwrap();
         assert!(git::branch_exists(&main_path, "test-branch").unwrap());
+    }
+
+    #[test]
+    fn init_creates_main_tmux_session() {
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().join("myapp");
+        let projects_dir = dir.path().join("registry");
+        let server = TestServer::new();
+
+        init(&project_path, &projects_dir, server.name()).unwrap();
+
+        assert!(tmux::has_session(server.name(), "myapp/main").unwrap());
     }
 }

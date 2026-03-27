@@ -19,6 +19,7 @@ pub fn list_projects(projects_dir: &Path) -> Result<Vec<String>> {
 mod tests {
     use super::*;
     use crate::commands::init;
+    use crate::testing::TestServer;
     use tempfile::tempdir;
 
     #[test]
@@ -35,9 +36,10 @@ mod tests {
     fn list_shows_all_projects_with_roots() {
         let dir = tempdir().unwrap();
         let projects_dir = dir.path().join("registry");
+        let server = TestServer::new();
 
-        init::init(&dir.path().join("alpha"), &projects_dir).unwrap();
-        init::init(&dir.path().join("beta"), &projects_dir).unwrap();
+        init::init(&dir.path().join("alpha"), &projects_dir, server.name()).unwrap();
+        init::init(&dir.path().join("beta"), &projects_dir, server.name()).unwrap();
 
         let lines = list_projects(&projects_dir).unwrap();
         assert_eq!(lines.len(), 2);

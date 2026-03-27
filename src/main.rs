@@ -35,6 +35,8 @@ enum Commands {
     },
     /// List all registered projects
     List,
+    /// Open/reconstruct tmux sessions for the current project
+    Open,
     /// Feature management
     #[command(subcommand)]
     Feat(FeatCommands),
@@ -78,11 +80,11 @@ fn run() -> pm::error::Result<()> {
     match cli.command {
         Commands::Init { path } => {
             let projects_dir = paths::global_projects_dir()?;
-            commands::init::init(&path, &projects_dir)
+            commands::init::init(&path, &projects_dir, None)
         }
         Commands::Register { path, name, r#move } => {
             let projects_dir = paths::global_projects_dir()?;
-            commands::register::register(&path, name.as_deref(), &projects_dir, r#move)
+            commands::register::register(&path, name.as_deref(), &projects_dir, r#move, None)
         }
         Commands::List => {
             let projects_dir = paths::global_projects_dir()?;
@@ -94,6 +96,12 @@ fn run() -> pm::error::Result<()> {
                     println!("{line}");
                 }
             }
+            Ok(())
+        }
+        Commands::Open => {
+            let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+            commands::open::open(&project_root, None)?;
+            println!("Project sessions opened");
             Ok(())
         }
         Commands::Feat(feat_cmd) => {

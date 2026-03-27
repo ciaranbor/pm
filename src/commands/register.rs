@@ -3,16 +3,21 @@ use std::path::Path;
 use crate::error::{PmError, Result};
 use crate::state::paths;
 use crate::state::project::{GithubConfig, ProjectConfig, ProjectEntry, ProjectInfo, SetupConfig};
+use crate::tmux;
 
 /// Register an existing git repo as a pm project.
 ///
 /// Creates a wrapper directory (`<name>-pm/`) and either symlinks or moves
-/// the original repo as `main/` inside it. Sets up the `.pm/` state directory.
+/// the original repo as `main/` inside it. Sets up the `.pm/` state directory
+/// and creates a `<project>/main` tmux session.
+///
+/// The `tmux_server` parameter allows tests to use an isolated tmux server.
 pub fn register(
     repo_path: &Path,
     name: Option<&str>,
     projects_dir: &Path,
     move_repo: bool,
+    tmux_server: Option<&str>,
 ) -> Result<()> {
     // Validate the repo path exists and is a git repo
     let repo_path = repo_path.canonicalize().map_err(|_| {
@@ -101,6 +106,11 @@ pub fn register(
     };
     entry.save(projects_dir, &project_name)?;
 
+    // Create main tmux session
+    let session_name = format!("{project_name}/main");
+    let main_path = wrapper_dir.join("main");
+    tmux::create_session(tmux_server, &session_name, &main_path)?;
+
     Ok(())
 }
 
@@ -108,6 +118,7 @@ pub fn register(
 mod tests {
     use super::*;
     use crate::git;
+    use crate::testing::TestServer;
     use tempfile::tempdir;
 
     fn create_git_repo(path: &Path) {
@@ -120,8 +131,9 @@ mod tests {
         let repo_path = dir.path().join("myapp");
         create_git_repo(&repo_path);
         let projects_dir = dir.path().join("registry");
+        let server = TestServer::new();
 
-        register(&repo_path, None, &projects_dir, false).unwrap();
+        register(&repo_path, None, &projects_dir, false, server.name()).unwrap();
 
         let wrapper = dir.path().join("myapp-pm");
         assert!(wrapper.exists());
@@ -134,8 +146,9 @@ mod tests {
         let repo_path = dir.path().join("myapp");
         create_git_repo(&repo_path);
         let projects_dir = dir.path().join("registry");
+        let server = TestServer::new();
 
-        register(&repo_path, None, &projects_dir, false).unwrap();
+        register(&repo_path, None, &projects_dir, false, server.name()).unwrap();
 
         let symlink = dir.path().join("myapp-pm").join("main");
         assert!(symlink.exists());
@@ -154,8 +167,9 @@ mod tests {
         let repo_path = dir.path().join("myapp");
         create_git_repo(&repo_path);
         let projects_dir = dir.path().join("registry");
+        let server = TestServer::new();
 
-        register(&repo_path, None, &projects_dir, true).unwrap();
+        register(&repo_path, None, &projects_dir, true, server.name()).unwrap();
 
         // With --move, wrapper uses the project name directly (no -pm suffix)
         let wrapper = dir.path().join("myapp");
@@ -173,8 +187,9 @@ mod tests {
         let repo_path = dir.path().join("myapp");
         create_git_repo(&repo_path);
         let projects_dir = dir.path().join("registry");
+        let server = TestServer::new();
 
-        register(&repo_path, None, &projects_dir, false).unwrap();
+        register(&repo_path, None, &projects_dir, false, server.name()).unwrap();
 
         let wrapper = dir.path().join("myapp-pm");
         assert!(wrapper.join(".pm").exists());
@@ -188,8 +203,9 @@ mod tests {
         let repo_path = dir.path().join("myapp");
         create_git_repo(&repo_path);
         let projects_dir = dir.path().join("registry");
+        let server = TestServer::new();
 
-        register(&repo_path, None, &projects_dir, false).unwrap();
+        register(&repo_path, None, &projects_dir, false, server.name()).unwrap();
 
         let entry = ProjectEntry::load(&projects_dir, "myapp").unwrap();
         // Compare canonicalized paths to handle /var vs /private/var on macOS
@@ -204,8 +220,16 @@ mod tests {
         let repo_path = dir.path().join("myapp");
         create_git_repo(&repo_path);
         let projects_dir = dir.path().join("registry");
+        let server = TestServer::new();
 
-        register(&repo_path, Some("custom"), &projects_dir, false).unwrap();
+        register(
+            &repo_path,
+            Some("custom"),
+            &projects_dir,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         let wrapper = dir.path().join("custom-pm");
         assert!(wrapper.exists());
@@ -219,7 +243,7 @@ mod tests {
         std::fs::create_dir(&not_a_repo).unwrap();
         let projects_dir = dir.path().join("registry");
 
-        let result = register(&not_a_repo, None, &projects_dir, false);
+        let result = register(&not_a_repo, None, &projects_dir, false, None);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), PmError::NotAGitRepo(_)));
     }
@@ -234,7 +258,7 @@ mod tests {
         // Pre-create the wrapper directory
         std::fs::create_dir(dir.path().join("myapp-pm")).unwrap();
 
-        let result = register(&repo_path, None, &projects_dir, false);
+        let result = register(&repo_path, None, &projects_dir, false, None);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), PmError::PathAlreadyExists(_)));
     }
@@ -245,12 +269,26 @@ mod tests {
         let repo_path = dir.path().join("myapp");
         create_git_repo(&repo_path);
         let projects_dir = dir.path().join("registry");
+        let server = TestServer::new();
 
-        register(&repo_path, None, &projects_dir, false).unwrap();
+        register(&repo_path, None, &projects_dir, false, server.name()).unwrap();
 
         // Second register hits PathAlreadyExists because wrapper dir exists
-        let result = register(&repo_path, None, &projects_dir, false);
+        let result = register(&repo_path, None, &projects_dir, false, server.name());
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), PmError::PathAlreadyExists(_)));
+    }
+
+    #[test]
+    fn register_creates_main_tmux_session() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().join("myapp");
+        create_git_repo(&repo_path);
+        let projects_dir = dir.path().join("registry");
+        let server = TestServer::new();
+
+        register(&repo_path, None, &projects_dir, false, server.name()).unwrap();
+
+        assert!(tmux::has_session(server.name(), "myapp/main").unwrap());
     }
 }

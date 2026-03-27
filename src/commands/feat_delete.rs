@@ -147,7 +147,7 @@ mod tests {
     ) -> std::path::PathBuf {
         let project_path = dir.join("myapp");
         let projects_dir = dir.join("registry");
-        init::init(&project_path, &projects_dir).unwrap();
+        init::init(&project_path, &projects_dir, server.name()).unwrap();
         feat_new::feat_new(&project_path, feature_name, server.name()).unwrap();
         project_path
     }
@@ -287,7 +287,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let project_path = dir.path().join("myapp");
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir).unwrap();
+        let server = TestServer::new();
+        init::init(&project_path, &projects_dir, server.name()).unwrap();
 
         let result = feat_delete(&project_path, "nonexistent", false, None);
         assert!(result.is_err());

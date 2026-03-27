@@ -14,6 +14,14 @@ pub enum FeatureStatus {
     Stale,
 }
 
+impl FeatureStatus {
+    /// Whether this feature status represents an active feature that should
+    /// have a tmux session.
+    pub fn is_active(&self) -> bool {
+        matches!(self, Self::Wip | Self::Review)
+    }
+}
+
 impl std::fmt::Display for FeatureStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -168,6 +176,15 @@ mod tests {
             let wrapper: StatusWrapper = toml::from_str(toml_str).unwrap();
             assert_eq!(wrapper.status, expected);
         }
+    }
+
+    #[test]
+    fn feature_status_is_active() {
+        assert!(FeatureStatus::Wip.is_active());
+        assert!(FeatureStatus::Review.is_active());
+        assert!(!FeatureStatus::Initializing.is_active());
+        assert!(!FeatureStatus::Merged.is_active());
+        assert!(!FeatureStatus::Stale.is_active());
     }
 
     #[test]

@@ -54,8 +54,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let project_path = dir.path().join("myapp");
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir).unwrap();
         let server = TestServer::new();
+        init::init(&project_path, &projects_dir, server.name()).unwrap();
 
         let result = feat_switch(&project_path, "nonexistent", server.name());
         assert!(result.is_err());
@@ -67,8 +67,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let project_path = dir.path().join("myapp");
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir).unwrap();
         let server = TestServer::new();
+        init::init(&project_path, &projects_dir, server.name()).unwrap();
 
         feat_new::feat_new(&project_path, "login", server.name()).unwrap();
 
@@ -87,8 +87,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let project_path = dir.path().join("myapp");
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir).unwrap();
         let server = TestServer::new();
+        init::init(&project_path, &projects_dir, server.name()).unwrap();
 
         feat_new::feat_new(&project_path, "login", server.name()).unwrap();
         feat_new::feat_new(&project_path, "api", server.name()).unwrap();

@@ -30,7 +30,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let project_path = dir.path().join("myapp");
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir).unwrap();
+        let server = TestServer::new();
+        init::init(&project_path, &projects_dir, server.name()).unwrap();
 
         let lines = feat_list(&project_path).unwrap();
         assert!(lines.is_empty());
@@ -41,9 +42,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let project_path = dir.path().join("myapp");
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir).unwrap();
-
         let server = TestServer::new();
+        init::init(&project_path, &projects_dir, server.name()).unwrap();
         feat_new::feat_new(&project_path, "alpha", server.name()).unwrap();
         feat_new::feat_new(&project_path, "beta", server.name()).unwrap();
 

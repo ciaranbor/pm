@@ -66,18 +66,18 @@ mod tests {
     use crate::testing::TestServer;
     use tempfile::tempdir;
 
-    fn setup_project(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    fn setup_project(dir: &Path, server: &TestServer) -> (std::path::PathBuf, std::path::PathBuf) {
         let project_path = dir.join("myapp");
         let projects_dir = dir.join("registry");
-        init::init(&project_path, &projects_dir).unwrap();
+        init::init(&project_path, &projects_dir, server.name()).unwrap();
         (project_path, projects_dir)
     }
 
     #[test]
     fn feat_new_creates_state_file_with_wip_status() {
         let dir = tempdir().unwrap();
-        let (project_path, _) = setup_project(dir.path());
         let server = TestServer::new();
+        let (project_path, _) = setup_project(dir.path(), &server);
 
         feat_new(&project_path, "login", server.name()).unwrap();
 
@@ -89,8 +89,8 @@ mod tests {
     #[test]
     fn feat_new_creates_git_branch() {
         let dir = tempdir().unwrap();
-        let (project_path, _) = setup_project(dir.path());
         let server = TestServer::new();
+        let (project_path, _) = setup_project(dir.path(), &server);
 
         feat_new(&project_path, "login", server.name()).unwrap();
 
@@ -101,8 +101,8 @@ mod tests {
     #[test]
     fn feat_new_creates_worktree() {
         let dir = tempdir().unwrap();
-        let (project_path, _) = setup_project(dir.path());
         let server = TestServer::new();
+        let (project_path, _) = setup_project(dir.path(), &server);
 
         feat_new(&project_path, "login", server.name()).unwrap();
 
@@ -114,8 +114,8 @@ mod tests {
     #[test]
     fn feat_new_creates_tmux_session() {
         let dir = tempdir().unwrap();
-        let (project_path, _) = setup_project(dir.path());
         let server = TestServer::new();
+        let (project_path, _) = setup_project(dir.path(), &server);
 
         feat_new(&project_path, "login", server.name()).unwrap();
 
@@ -125,8 +125,8 @@ mod tests {
     #[test]
     fn feat_new_sets_timestamps() {
         let dir = tempdir().unwrap();
-        let (project_path, _) = setup_project(dir.path());
         let server = TestServer::new();
+        let (project_path, _) = setup_project(dir.path(), &server);
         let before = Utc::now();
 
         feat_new(&project_path, "login", server.name()).unwrap();
@@ -140,8 +140,8 @@ mod tests {
     #[test]
     fn feat_new_state_has_matching_branch_and_worktree() {
         let dir = tempdir().unwrap();
-        let (project_path, _) = setup_project(dir.path());
         let server = TestServer::new();
+        let (project_path, _) = setup_project(dir.path(), &server);
 
         feat_new(&project_path, "login", server.name()).unwrap();
 
@@ -154,8 +154,8 @@ mod tests {
     #[test]
     fn feat_new_duplicate_name_fails() {
         let dir = tempdir().unwrap();
-        let (project_path, _) = setup_project(dir.path());
         let server = TestServer::new();
+        let (project_path, _) = setup_project(dir.path(), &server);
 
         feat_new(&project_path, "login", server.name()).unwrap();
         let result = feat_new(&project_path, "login", server.name());
@@ -170,8 +170,8 @@ mod tests {
     #[test]
     fn feat_new_tmux_failure_leaves_initializing_state_with_orphan_worktree() {
         let dir = tempdir().unwrap();
-        let (project_path, _) = setup_project(dir.path());
         let server = TestServer::new();
+        let (project_path, _) = setup_project(dir.path(), &server);
 
         // Pre-create a tmux session with the name feat_new will use,
         // so create_session fails with "duplicate session"
@@ -195,8 +195,8 @@ mod tests {
     #[test]
     fn feat_new_worktree_path_conflict_leaves_initializing_state() {
         let dir = tempdir().unwrap();
-        let (project_path, _) = setup_project(dir.path());
         let server = TestServer::new();
+        let (project_path, _) = setup_project(dir.path(), &server);
 
         // Pre-create the worktree path so add_worktree fails
         std::fs::create_dir(project_path.join("login")).unwrap();

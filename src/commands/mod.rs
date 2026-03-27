@@ -4,4 +4,5 @@ pub mod feat_new;
 pub mod feat_switch;
 pub mod init;
 pub mod list;
+pub mod open;
 pub mod register;
