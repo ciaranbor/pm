@@ -99,17 +99,7 @@ pub fn feat_delete(
         }
     }
 
-    // Step 1: Kill tmux session (switch to main first so we don't exit tmux)
-    let session_name = format!("{project_name}/{name}");
-    if tmux::has_session(tmux_server, &session_name)? {
-        let main_session = format!("{project_name}/main");
-        // Switch to main session before killing — if we're attached to the feature
-        // session, this prevents tmux from exiting. Ignore errors (no attached client).
-        let _ = tmux::switch_client(tmux_server, &main_session);
-        tmux::kill_session(tmux_server, &session_name)?;
-    }
-
-    // Step 2: Remove git worktree
+    // Step 1: Remove git worktree
     // Use force-remove if --force was passed or if there are untracked files
     // (git worktree remove refuses untracked files without --force, but we've
     // already warned the user about them in the safety checks above)
@@ -125,13 +115,22 @@ pub fn feat_delete(
         }
     }
 
-    // Step 3: Delete branch
+    // Step 2: Delete branch
     if git::branch_exists(&main_repo, &state.branch)? {
         git::delete_branch(&main_repo, &state.branch)?;
     }
 
-    // Step 4: Remove state file (last — if earlier steps fail, feature is still tracked)
+    // Step 3: Remove state file
     FeatureState::delete(&features_dir, name)?;
+
+    // Step 4: Kill tmux session (last — so cleanup completes even when run from
+    // within the feature session, where killing the session would kill this process)
+    let session_name = format!("{project_name}/{name}");
+    if tmux::has_session(tmux_server, &session_name)? {
+        let main_session = format!("{project_name}/main");
+        let _ = tmux::switch_client(tmux_server, &main_session);
+        tmux::kill_session(tmux_server, &session_name)?;
+    }
 
     Ok(())
 }
