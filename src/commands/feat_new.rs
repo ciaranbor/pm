@@ -76,6 +76,12 @@ pub fn feat_new(
     let session_name = format!("{project_name}/{name}");
     tmux::create_session(tmux_server, &session_name, &worktree_path)?;
 
+    // Step 4.5: If context provided, open a claude session in a new window to read TASK.md
+    if resolved_context.is_some() {
+        let window_target = tmux::new_window(tmux_server, &session_name, &worktree_path)?;
+        tmux::send_keys(tmux_server, &window_target, "claude 'READ TASK.md'")?;
+    }
+
     // Step 5: Update status to wip
     state.status = FeatureStatus::Wip;
     state.last_active = Utc::now();
@@ -307,6 +313,38 @@ mod tests {
         let features_dir = paths::features_dir(&project_path);
         let state = FeatureState::load(&features_dir, "login").unwrap();
         assert_eq!(state.context, "resolved file content");
+    }
+
+    #[test]
+    fn feat_new_with_context_creates_claude_window() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = setup_project(dir.path(), &server);
+
+        feat_new(
+            &project_path,
+            "login",
+            Some("Build the login page"),
+            server.name(),
+        )
+        .unwrap();
+
+        // Session should have 2 windows: the default shell + the claude window
+        let output = tmux::list_windows(server.name(), "myapp/login").unwrap();
+        assert_eq!(output, 2);
+    }
+
+    #[test]
+    fn feat_new_without_context_has_single_window() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = setup_project(dir.path(), &server);
+
+        feat_new(&project_path, "login", None, server.name()).unwrap();
+
+        // Session should have only 1 window (no claude window)
+        let output = tmux::list_windows(server.name(), "myapp/login").unwrap();
+        assert_eq!(output, 1);
     }
 
     #[test]
