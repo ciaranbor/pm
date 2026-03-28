@@ -12,7 +12,7 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 - `src/state/` — TOML state management (project entries, feature state, config)
 - `src/git.rs` — git operations (branch, worktree, status checks)
 - `src/tmux.rs` — tmux operations (session create/kill/switch, display-menu)
-- `src/commands/` — one module per command group (project, feat, permissions, etc.)
+- `src/commands/` — one module per command group (project, feat, permissions, claude, etc.)
 
 ## Development
 

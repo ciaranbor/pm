@@ -19,6 +19,7 @@ pub fn register(
     projects_dir: &Path,
     move_repo: bool,
     tmux_server: Option<&str>,
+    claude_base: Option<&Path>,
 ) -> Result<()> {
     // Validate the repo path exists and is a git repo
     let repo_path = repo_path.canonicalize().map_err(|_| {
@@ -95,6 +96,17 @@ pub fn register(
         wrapper
     };
 
+    // Migrate Claude Code sessions from original repo path to new main path
+    let new_main = wrapper_dir.join("main");
+    match super::claude_migrate::migrate_sessions(&repo_path, &new_main, claude_base) {
+        Ok(msgs) => {
+            for msg in msgs {
+                eprintln!("{msg}");
+            }
+        }
+        Err(e) => eprintln!("Warning: Claude session migration failed: {e}"),
+    }
+
     // Create .pm/ structure
     let pm_dir = paths::pm_dir(&wrapper_dir);
     let features_dir = paths::features_dir(&wrapper_dir);
@@ -147,7 +159,7 @@ mod tests {
         let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
 
-        register(&repo_path, None, &projects_dir, false, server.name()).unwrap();
+        register(&repo_path, None, &projects_dir, false, server.name(), None).unwrap();
 
         let wrapper = dir.path().join("myapp-pm");
         assert!(wrapper.exists());
@@ -162,7 +174,7 @@ mod tests {
         let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
 
-        register(&repo_path, None, &projects_dir, false, server.name()).unwrap();
+        register(&repo_path, None, &projects_dir, false, server.name(), None).unwrap();
 
         let symlink = dir.path().join("myapp-pm").join("main");
         assert!(symlink.exists());
@@ -183,7 +195,7 @@ mod tests {
         let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
 
-        register(&repo_path, None, &projects_dir, true, server.name()).unwrap();
+        register(&repo_path, None, &projects_dir, true, server.name(), None).unwrap();
 
         // With --move, wrapper uses the project name directly (no -pm suffix)
         let wrapper = dir.path().join("myapp");
@@ -203,7 +215,7 @@ mod tests {
         let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
 
-        register(&repo_path, None, &projects_dir, false, server.name()).unwrap();
+        register(&repo_path, None, &projects_dir, false, server.name(), None).unwrap();
 
         let wrapper = dir.path().join("myapp-pm");
         assert!(wrapper.join(".pm").exists());
@@ -221,7 +233,7 @@ mod tests {
         let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
 
-        register(&repo_path, None, &projects_dir, false, server.name()).unwrap();
+        register(&repo_path, None, &projects_dir, false, server.name(), None).unwrap();
 
         let entry = ProjectEntry::load(&projects_dir, "myapp").unwrap();
         // Compare canonicalized paths to handle /var vs /private/var on macOS
@@ -244,6 +256,7 @@ mod tests {
             &projects_dir,
             false,
             server.name(),
+            None,
         )
         .unwrap();
 
@@ -259,7 +272,7 @@ mod tests {
         std::fs::create_dir(&not_a_repo).unwrap();
         let projects_dir = dir.path().join("registry");
 
-        let result = register(&not_a_repo, None, &projects_dir, false, None);
+        let result = register(&not_a_repo, None, &projects_dir, false, None, None);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), PmError::NotAGitRepo(_)));
     }
@@ -274,7 +287,7 @@ mod tests {
         // Pre-create the wrapper directory
         std::fs::create_dir(dir.path().join("myapp-pm")).unwrap();
 
-        let result = register(&repo_path, None, &projects_dir, false, None);
+        let result = register(&repo_path, None, &projects_dir, false, None, None);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), PmError::PathAlreadyExists(_)));
     }
@@ -287,10 +300,10 @@ mod tests {
         let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
 
-        register(&repo_path, None, &projects_dir, false, server.name()).unwrap();
+        register(&repo_path, None, &projects_dir, false, server.name(), None).unwrap();
 
         // Second register detects duplicate repo in the registry
-        let result = register(&repo_path, None, &projects_dir, false, server.name());
+        let result = register(&repo_path, None, &projects_dir, false, server.name(), None);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -306,7 +319,7 @@ mod tests {
         let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
 
-        register(&repo_path, None, &projects_dir, false, server.name()).unwrap();
+        register(&repo_path, None, &projects_dir, false, server.name(), None).unwrap();
 
         // Try to register the same repo under a different name
         let result = register(
@@ -315,6 +328,7 @@ mod tests {
             &projects_dir,
             false,
             server.name(),
+            None,
         );
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -363,8 +377,88 @@ mod tests {
         let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
 
-        register(&repo_path, None, &projects_dir, false, server.name()).unwrap();
+        register(&repo_path, None, &projects_dir, false, server.name(), None).unwrap();
 
         assert!(tmux::has_session(server.name(), "myapp/main").unwrap());
+    }
+
+    #[test]
+    fn register_symlink_migrates_claude_sessions() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().join("myapp");
+        create_git_repo(&repo_path);
+        let projects_dir = dir.path().join("registry");
+        let server = TestServer::new();
+
+        // Set up fake Claude session data keyed to the original repo path
+        let claude_base = dir.path().join("claude");
+        let repo_canonical = repo_path.canonicalize().unwrap();
+        let old_key = repo_canonical.to_string_lossy().replace('/', "-");
+        let old_session_dir = claude_base.join("projects").join(&old_key);
+        std::fs::create_dir_all(&old_session_dir).unwrap();
+        std::fs::write(
+            old_session_dir.join("session.jsonl"),
+            format!("{{\"cwd\":\"{}\"}}\n", repo_canonical.display()),
+        )
+        .unwrap();
+
+        register(
+            &repo_path,
+            None,
+            &projects_dir,
+            false,
+            server.name(),
+            Some(claude_base.as_path()),
+        )
+        .unwrap();
+
+        // register canonicalizes repo_path, so wrapper_dir is built from canonical parent
+        let canonical_parent = repo_canonical.parent().unwrap();
+        let new_main = canonical_parent.join("myapp-pm").join("main");
+        let new_key = new_main.to_string_lossy().replace('/', "-");
+        let new_session_dir = claude_base.join("projects").join(&new_key);
+        assert!(new_session_dir.exists());
+        let content = std::fs::read_to_string(new_session_dir.join("session.jsonl")).unwrap();
+        assert!(content.contains(&new_main.to_string_lossy().to_string()));
+    }
+
+    #[test]
+    fn register_move_migrates_claude_sessions() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().join("myapp");
+        create_git_repo(&repo_path);
+        let projects_dir = dir.path().join("registry");
+        let server = TestServer::new();
+
+        // Set up fake Claude session data keyed to the original repo path
+        let claude_base = dir.path().join("claude");
+        let repo_canonical = repo_path.canonicalize().unwrap();
+        let old_key = repo_canonical.to_string_lossy().replace('/', "-");
+        let old_session_dir = claude_base.join("projects").join(&old_key);
+        std::fs::create_dir_all(&old_session_dir).unwrap();
+        std::fs::write(
+            old_session_dir.join("session.jsonl"),
+            format!("{{\"cwd\":\"{}\"}}\n", repo_canonical.display()),
+        )
+        .unwrap();
+
+        register(
+            &repo_path,
+            None,
+            &projects_dir,
+            true,
+            server.name(),
+            Some(claude_base.as_path()),
+        )
+        .unwrap();
+
+        // With --move, wrapper is at canonical parent + "myapp", main inside it
+        let canonical_parent = repo_canonical.parent().unwrap();
+        let new_main = canonical_parent.join("myapp").join("main");
+        let new_key = new_main.to_string_lossy().replace('/', "-");
+        let new_session_dir = claude_base.join("projects").join(&new_key);
+        assert!(new_session_dir.exists());
+        let content = std::fs::read_to_string(new_session_dir.join("session.jsonl")).unwrap();
+        assert!(content.contains(&new_main.to_string_lossy().to_string()));
     }
 }

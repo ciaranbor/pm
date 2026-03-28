@@ -17,7 +17,9 @@ pub fn feat_adopt(
     project_root: &Path,
     name: &str,
     context: Option<&str>,
+    from: Option<&Path>,
     tmux_server: Option<&str>,
+    claude_base: Option<&Path>,
 ) -> Result<()> {
     let features_dir = paths::features_dir(project_root);
     let pm_dir = paths::pm_dir(project_root);
@@ -58,7 +60,19 @@ pub fn feat_adopt(
     let worktree_path = project_root.join(name);
     git::add_worktree(&main_worktree, &worktree_path, name)?;
 
-    // Step 2.5: Write TASK.md if context provided
+    // Step 2.5: Migrate Claude Code sessions from old path if provided
+    if let Some(old_path) = from {
+        match super::claude_migrate::migrate_sessions(old_path, &worktree_path, claude_base) {
+            Ok(msgs) => {
+                for msg in msgs {
+                    eprintln!("{msg}");
+                }
+            }
+            Err(e) => eprintln!("Warning: Claude session migration failed: {e}"),
+        }
+    }
+
+    // Step 2.6: Write TASK.md if context provided
     if let Some(ref resolved) = resolved_context {
         std::fs::write(worktree_path.join("TASK.md"), resolved)?;
         git::exclude_pattern(&worktree_path, "TASK.md")?;
@@ -110,7 +124,7 @@ mod tests {
         let project_path = setup_project(dir.path(), &server);
         create_branch(&project_path, "login");
 
-        feat_adopt(&project_path, "login", None, server.name()).unwrap();
+        feat_adopt(&project_path, "login", None, None, server.name(), None).unwrap();
 
         let features_dir = paths::features_dir(&project_path);
         let state = FeatureState::load(&features_dir, "login").unwrap();
@@ -124,7 +138,7 @@ mod tests {
         let project_path = setup_project(dir.path(), &server);
         create_branch(&project_path, "login");
 
-        feat_adopt(&project_path, "login", None, server.name()).unwrap();
+        feat_adopt(&project_path, "login", None, None, server.name(), None).unwrap();
 
         let worktree_path = project_path.join("login");
         assert!(worktree_path.exists());
@@ -138,7 +152,7 @@ mod tests {
         let project_path = setup_project(dir.path(), &server);
         create_branch(&project_path, "login");
 
-        feat_adopt(&project_path, "login", None, server.name()).unwrap();
+        feat_adopt(&project_path, "login", None, None, server.name(), None).unwrap();
 
         assert!(tmux::has_session(server.name(), "myapp/login").unwrap());
     }
@@ -154,7 +168,7 @@ mod tests {
         let main_wt = project_path.join("main");
         assert!(git::branch_exists(&main_wt, "login").unwrap());
 
-        feat_adopt(&project_path, "login", None, server.name()).unwrap();
+        feat_adopt(&project_path, "login", None, None, server.name(), None).unwrap();
 
         // Branch still exists (not a new one, same one)
         assert!(git::branch_exists(&main_wt, "login").unwrap());
@@ -166,7 +180,14 @@ mod tests {
         let server = TestServer::new();
         let project_path = setup_project(dir.path(), &server);
 
-        let result = feat_adopt(&project_path, "nonexistent", None, server.name());
+        let result = feat_adopt(
+            &project_path,
+            "nonexistent",
+            None,
+            None,
+            server.name(),
+            None,
+        );
 
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), PmError::BranchNotFound(_)));
@@ -179,8 +200,8 @@ mod tests {
         let project_path = setup_project(dir.path(), &server);
         create_branch(&project_path, "login");
 
-        feat_adopt(&project_path, "login", None, server.name()).unwrap();
-        let result = feat_adopt(&project_path, "login", None, server.name());
+        feat_adopt(&project_path, "login", None, None, server.name(), None).unwrap();
+        let result = feat_adopt(&project_path, "login", None, None, server.name(), None);
 
         assert!(result.is_err());
         assert!(matches!(
@@ -200,7 +221,9 @@ mod tests {
             &project_path,
             "login",
             Some("Adopt existing login branch"),
+            None,
             server.name(),
+            None,
         )
         .unwrap();
 
@@ -218,7 +241,7 @@ mod tests {
         create_branch(&project_path, "login");
         let before = Utc::now();
 
-        feat_adopt(&project_path, "login", None, server.name()).unwrap();
+        feat_adopt(&project_path, "login", None, None, server.name(), None).unwrap();
 
         let features_dir = paths::features_dir(&project_path);
         let state = FeatureState::load(&features_dir, "login").unwrap();
@@ -237,7 +260,9 @@ mod tests {
             &project_path,
             "login",
             Some("Adopt existing login branch"),
+            None,
             server.name(),
+            None,
         )
         .unwrap();
 
@@ -253,7 +278,7 @@ mod tests {
         let project_path = setup_project(dir.path(), &server);
         create_branch(&project_path, "login");
 
-        feat_adopt(&project_path, "login", None, server.name()).unwrap();
+        feat_adopt(&project_path, "login", None, None, server.name(), None).unwrap();
 
         let output = tmux::list_windows(server.name(), "myapp/login").unwrap();
         assert_eq!(output, 1);
@@ -269,12 +294,51 @@ mod tests {
         // Pre-create a tmux session to cause a conflict
         tmux::create_session(server.name(), "myapp/login", dir.path()).unwrap();
 
-        let result = feat_adopt(&project_path, "login", None, server.name());
+        let result = feat_adopt(&project_path, "login", None, None, server.name(), None);
         assert!(result.is_err());
 
         let features_dir = paths::features_dir(&project_path);
         assert!(FeatureState::exists(&features_dir, "login"));
         let state = FeatureState::load(&features_dir, "login").unwrap();
         assert_eq!(state.status, FeatureStatus::Initializing);
+    }
+
+    #[test]
+    fn feat_adopt_with_from_migrates_claude_sessions() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let project_path = setup_project(dir.path(), &server);
+        create_branch(&project_path, "login");
+
+        // Set up fake Claude session data keyed to some old path
+        let claude_base = dir.path().join("claude");
+        let old_path = std::path::Path::new("/tmp/old-repo");
+        let old_key = old_path.to_string_lossy().replace('/', "-");
+        let old_session_dir = claude_base.join("projects").join(&old_key);
+        std::fs::create_dir_all(&old_session_dir).unwrap();
+        std::fs::write(
+            old_session_dir.join("session.jsonl"),
+            format!("{{\"cwd\":\"{}\"}}\n", old_path.display()),
+        )
+        .unwrap();
+
+        feat_adopt(
+            &project_path,
+            "login",
+            None,
+            Some(old_path),
+            server.name(),
+            Some(claude_base.as_path()),
+        )
+        .unwrap();
+
+        // New session dir should exist with updated path
+        let worktree_path = project_path.join("login");
+        let new_key = worktree_path.to_string_lossy().replace('/', "-");
+        let new_session_dir = claude_base.join("projects").join(&new_key);
+        assert!(new_session_dir.exists());
+        let content = std::fs::read_to_string(new_session_dir.join("session.jsonl")).unwrap();
+        assert!(content.contains(&worktree_path.to_string_lossy().to_string()));
+        assert!(!content.contains("/tmp/old-repo"));
     }
 }
