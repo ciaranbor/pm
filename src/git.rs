@@ -184,6 +184,12 @@ pub fn merge_no_ff(repo: &Path, branch: &str) -> Result<()> {
     Ok(())
 }
 
+/// Push a branch to the remote (origin).
+pub fn push_branch(repo: &Path, branch: &str) -> Result<()> {
+    run_git(repo, &["push", "-u", "origin", branch])?;
+    Ok(())
+}
+
 /// Check if a path is a git repository (has .git dir or file).
 pub fn is_git_repo(path: &Path) -> bool {
     let git_path = path.join(".git");
