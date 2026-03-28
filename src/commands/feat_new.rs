@@ -60,42 +60,61 @@ pub fn feat_new(
     };
     state.save(&features_dir, name)?;
 
-    // Step 2: Create git branch
+    // Steps 2-5: Create resources, rolling back on failure
     let main_worktree = project_root.join("main");
-    git::create_branch(&main_worktree, name)?;
-
-    // Step 3: Create git worktree
     let worktree_path = project_root.join(name);
-    git::add_worktree(&main_worktree, &worktree_path, name)?;
-
-    // Step 3.5: Seed Claude Code permissions from main worktree
-    permissions::seed_feature_permissions(project_root, &worktree_path)?;
-
-    // Step 3.6: Write TASK.md if context provided
-    if let Some(ref resolved) = resolved_context {
-        std::fs::write(worktree_path.join("TASK.md"), resolved)?;
-        git::exclude_pattern(&worktree_path, "TASK.md")?;
-    }
-
-    // Step 4: Create tmux session
     let session_name = format!("{project_name}/{name}");
-    tmux::create_session(tmux_server, &session_name, &worktree_path)?;
-
-    // Step 4.5: If context provided, open a claude session in a new window to read TASK.md
-    if resolved_context.is_some() {
-        let window_target =
-            tmux::new_window(tmux_server, &session_name, &worktree_path, Some("claude"))?;
-        tmux::send_keys(tmux_server, &window_target, "claude 'READ TASK.md'")?;
-    }
-
-    // Step 4.6: Run post-create hook in a named "hook" window (non-fatal)
     let hook_path = project_root.join(hooks::POST_CREATE_PATH);
-    hooks::run_hook(tmux_server, &session_name, &worktree_path, &hook_path);
 
-    // Step 5: Update status to wip
-    state.status = FeatureStatus::Wip;
-    state.last_active = Utc::now();
-    state.save(&features_dir, name)?;
+    let result: Result<()> = (|| {
+        // Step 2: Create git branch
+        git::create_branch(&main_worktree, name)?;
+
+        // Step 3: Create git worktree
+        git::add_worktree(&main_worktree, &worktree_path, name)?;
+
+        // Step 3.5: Seed Claude Code permissions from main worktree
+        permissions::seed_feature_permissions(project_root, &worktree_path)?;
+
+        // Step 3.6: Write TASK.md if context provided
+        if let Some(ref resolved) = resolved_context {
+            std::fs::write(worktree_path.join("TASK.md"), resolved)?;
+            git::exclude_pattern(&worktree_path, "TASK.md")?;
+        }
+
+        // Step 4: Create tmux session
+        tmux::create_session(tmux_server, &session_name, &worktree_path)?;
+
+        // Step 4.5: If context provided, open a claude session in a new window to read TASK.md
+        if resolved_context.is_some() {
+            let window_target =
+                tmux::new_window(tmux_server, &session_name, &worktree_path, Some("claude"))?;
+            tmux::send_keys(tmux_server, &window_target, "claude 'READ TASK.md'")?;
+        }
+
+        // Step 4.6: Run post-create hook in a named "hook" window (non-fatal)
+        hooks::run_hook(tmux_server, &session_name, &worktree_path, &hook_path);
+
+        // Step 5: Update status to wip
+        state.status = FeatureStatus::Wip;
+        state.last_active = Utc::now();
+        state.save(&features_dir, name)?;
+
+        Ok(())
+    })();
+
+    if let Err(e) = result {
+        // Best-effort cleanup of any resources created before the failure
+        let _ = tmux::kill_session(tmux_server, &session_name);
+        if worktree_path.exists() {
+            let _ = git::remove_worktree_force(&main_worktree, &worktree_path);
+        }
+        if git::branch_exists(&main_worktree, name).unwrap_or(false) {
+            let _ = git::delete_branch(&main_worktree, name);
+        }
+        let _ = FeatureState::delete(&features_dir, name);
+        return Err(e);
+    }
 
     Ok(())
 }
@@ -210,7 +229,7 @@ mod tests {
     }
 
     #[test]
-    fn feat_new_tmux_failure_leaves_initializing_state_with_orphan_worktree() {
+    fn feat_new_tmux_failure_cleans_up_all_resources() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
@@ -222,20 +241,18 @@ mod tests {
         let result = feat_new(&project_path, "login", None, server.name());
         assert!(result.is_err());
 
-        // State file should exist with initializing status
+        // State file should be cleaned up
         let features_dir = paths::features_dir(&project_path);
-        assert!(FeatureState::exists(&features_dir, "login"));
-        let state = FeatureState::load(&features_dir, "login").unwrap();
-        assert_eq!(state.status, FeatureStatus::Initializing);
+        assert!(!FeatureState::exists(&features_dir, "login"));
 
-        // Branch and worktree were created before tmux failed — orphaned
+        // Branch and worktree should be cleaned up
         let main_path = project_path.join("main");
-        assert!(git::branch_exists(&main_path, "login").unwrap());
-        assert!(project_path.join("login").exists());
+        assert!(!git::branch_exists(&main_path, "login").unwrap());
+        assert!(!project_path.join("login").exists());
     }
 
     #[test]
-    fn feat_new_worktree_path_conflict_leaves_initializing_state() {
+    fn feat_new_worktree_failure_cleans_up_branch_and_state() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
@@ -247,11 +264,13 @@ mod tests {
         let result = feat_new(&project_path, "login", None, server.name());
         assert!(result.is_err());
 
-        // State file should exist with initializing status
+        // State file should be cleaned up
         let features_dir = paths::features_dir(&project_path);
-        assert!(FeatureState::exists(&features_dir, "login"));
-        let state = FeatureState::load(&features_dir, "login").unwrap();
-        assert_eq!(state.status, FeatureStatus::Initializing);
+        assert!(!FeatureState::exists(&features_dir, "login"));
+
+        // Branch should be cleaned up (worktree was never created by git)
+        let main_path = project_path.join("main");
+        assert!(!git::branch_exists(&main_path, "login").unwrap());
     }
 
     #[test]
