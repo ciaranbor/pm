@@ -53,6 +53,14 @@ enum FeatCommands {
         #[arg(long)]
         context: Option<String>,
     },
+    /// Adopt an existing branch as a feature (worktree + tmux session)
+    Adopt {
+        /// Branch name to adopt
+        name: String,
+        /// Initial context (literal text or path to a file)
+        #[arg(long)]
+        context: Option<String>,
+    },
     /// List all features with their status
     List,
     /// Switch to a feature's tmux session
@@ -130,6 +138,16 @@ fn run() -> pm::error::Result<()> {
                 FeatCommands::New { name, context } => {
                     commands::feat_new::feat_new(&project_root, &name, context.as_deref(), None)?;
                     println!("Created feature '{name}'");
+                    Ok(())
+                }
+                FeatCommands::Adopt { name, context } => {
+                    commands::feat_adopt::feat_adopt(
+                        &project_root,
+                        &name,
+                        context.as_deref(),
+                        None,
+                    )?;
+                    println!("Adopted feature '{name}'");
                     Ok(())
                 }
                 FeatCommands::List => {
