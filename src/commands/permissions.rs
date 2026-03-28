@@ -79,6 +79,30 @@ pub fn seed_feature_permissions(project_root: &Path, feature_worktree: &Path) ->
     Ok(())
 }
 
+/// List a feature's Claude Code permissions by displaying the contents of its `.claude/` settings files.
+pub fn list(project_root: &Path, feature_name: &str) -> Result<Vec<String>> {
+    require_feature(project_root, feature_name)?;
+
+    let feature_claude_dir = project_root.join(feature_name).join(".claude");
+    let mut lines = Vec::new();
+
+    for &filename in SETTINGS_FILES {
+        let path = feature_claude_dir.join(filename);
+        if path.exists() {
+            let content = std::fs::read_to_string(&path)?;
+            if !lines.is_empty() {
+                lines.push(String::new());
+            }
+            lines.push(format!("{BOLD}{filename}{RESET}"));
+            for line in content.lines() {
+                lines.push(line.to_string());
+            }
+        }
+    }
+
+    Ok(lines)
+}
+
 /// Push a feature's `.claude/` settings to main's `.claude/`.
 pub fn push(project_root: &Path, feature_name: &str) -> Result<()> {
     require_feature(project_root, feature_name)?;
@@ -376,6 +400,97 @@ mod tests {
     fn write_json(dir: &Path, filename: &str, content: &str) {
         std::fs::create_dir_all(dir).unwrap();
         std::fs::write(dir.join(filename), content).unwrap();
+    }
+
+    /// Strip ANSI escape sequences for easier assertions.
+    fn strip_ansi(s: &str) -> String {
+        let re = regex::Regex::new(r"\x1b\[[0-9;]*m").unwrap();
+        re.replace_all(s, "").to_string()
+    }
+
+    // --- list ---
+
+    #[test]
+    fn list_shows_feature_settings() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let project = setup_project(dir.path(), &server);
+        create_feature(&project, "login", &server);
+
+        let feat_claude = project.join("login").join(".claude");
+        write_json(
+            &feat_claude,
+            "settings.json",
+            "{\n  \"permissions\": true\n}",
+        );
+
+        let lines = list(&project, "login").unwrap();
+        let output = strip_ansi(&lines.join("\n"));
+        assert!(output.contains("settings.json"));
+        assert!(output.contains("\"permissions\": true"));
+    }
+
+    #[test]
+    fn list_shows_both_files() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let project = setup_project(dir.path(), &server);
+        create_feature(&project, "login", &server);
+
+        let feat_claude = project.join("login").join(".claude");
+        write_json(&feat_claude, "settings.json", r#"{"a":1}"#);
+        write_json(&feat_claude, "settings.local.json", r#"{"b":2}"#);
+
+        let lines = list(&project, "login").unwrap();
+        let output = strip_ansi(&lines.join("\n"));
+        assert!(output.contains("settings.json"));
+        assert!(output.contains("settings.local.json"));
+    }
+
+    #[test]
+    fn list_returns_empty_when_no_claude_dir() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let project = setup_project(dir.path(), &server);
+        create_feature(&project, "login", &server);
+
+        // Remove .claude/ if seeded
+        let feat_claude = project.join("login").join(".claude");
+        if feat_claude.exists() {
+            std::fs::remove_dir_all(&feat_claude).unwrap();
+        }
+
+        let lines = list(&project, "login").unwrap();
+        assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn list_only_local_settings_no_separator() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let project = setup_project(dir.path(), &server);
+        create_feature(&project, "login", &server);
+
+        let feat_claude = project.join("login").join(".claude");
+        // Remove settings.json if seeded, keep only settings.local.json
+        let _ = std::fs::remove_file(feat_claude.join("settings.json"));
+        write_json(&feat_claude, "settings.local.json", r#"{"local":true}"#);
+
+        let lines = list(&project, "login").unwrap();
+        let output = strip_ansi(&lines.join("\n"));
+        assert!(!output.contains("settings.json\n\n")); // no blank separator before first file
+        assert!(output.contains("settings.local.json"));
+        assert!(output.contains("\"local\":true"));
+    }
+
+    #[test]
+    fn list_fails_for_nonexistent_feature() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let project = setup_project(dir.path(), &server);
+
+        let result = list(&project, "nonexistent");
+        assert!(matches!(result.unwrap_err(), PmError::FeatureNotFound(_)));
     }
 
     // --- seed_feature_permissions ---
