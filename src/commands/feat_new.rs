@@ -4,6 +4,7 @@ use chrono::Utc;
 
 use crate::commands::permissions;
 use crate::error::{PmError, Result};
+use crate::hooks;
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
 use crate::state::project::ProjectConfig;
@@ -86,6 +87,10 @@ pub fn feat_new(
         tmux::send_keys(tmux_server, &window_target, "claude 'READ TASK.md'")?;
     }
 
+    // Step 4.6: Run post-create hook in a named "hook" window (non-fatal)
+    let hook_path = project_root.join(hooks::POST_CREATE_PATH);
+    hooks::run_hook(tmux_server, &session_name, &worktree_path, &hook_path);
+
     // Step 5: Update status to wip
     state.status = FeatureStatus::Wip;
     state.last_active = Utc::now();
@@ -98,6 +103,7 @@ pub fn feat_new(
 mod tests {
     use super::*;
     use crate::commands::init;
+    use crate::hooks;
     use crate::testing::TestServer;
     use tempfile::tempdir;
 
@@ -333,22 +339,22 @@ mod tests {
         )
         .unwrap();
 
-        // Session should have 2 windows: the default shell + the claude window
+        // Session should have 3 windows: the default shell + the claude window + hook window
         let output = tmux::list_windows(server.name(), "myapp/login").unwrap();
-        assert_eq!(output, 2);
+        assert_eq!(output, 3);
     }
 
     #[test]
-    fn feat_new_without_context_has_single_window() {
+    fn feat_new_without_context_has_shell_and_hook_windows() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
         feat_new(&project_path, "login", None, server.name()).unwrap();
 
-        // Session should have only 1 window (no claude window)
+        // Session should have 2 windows: default shell + hook window
         let output = tmux::list_windows(server.name(), "myapp/login").unwrap();
-        assert_eq!(output, 1);
+        assert_eq!(output, 2);
     }
 
     #[test]
@@ -365,5 +371,56 @@ mod tests {
         let features_dir = paths::features_dir(&project_path);
         let state = FeatureState::load(&features_dir, "login").unwrap();
         assert_eq!(state.context, "");
+    }
+
+    #[test]
+    fn feat_new_runs_default_post_create_hook() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = setup_project(dir.path(), &server);
+
+        feat_new(&project_path, "login", None, server.name()).unwrap();
+
+        // Session should have 2 windows: default shell + hook window
+        let windows = tmux::list_windows(server.name(), "myapp/login").unwrap();
+        assert_eq!(windows, 2);
+        // Hook window should be named "hook"
+        let target = tmux::find_window(server.name(), "myapp/login", "hook").unwrap();
+        assert!(target.is_some());
+    }
+
+    #[test]
+    fn feat_new_with_context_and_hook_creates_three_windows() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = setup_project(dir.path(), &server);
+
+        feat_new(
+            &project_path,
+            "login",
+            Some("Build the login page"),
+            server.name(),
+        )
+        .unwrap();
+
+        // 3 windows: default shell + claude window + hook window
+        let windows = tmux::list_windows(server.name(), "myapp/login").unwrap();
+        assert_eq!(windows, 3);
+    }
+
+    #[test]
+    fn feat_new_skips_hook_when_script_removed() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = setup_project(dir.path(), &server);
+
+        // Remove the bootstrapped hook script
+        std::fs::remove_file(project_path.join(hooks::POST_CREATE_PATH)).unwrap();
+
+        feat_new(&project_path, "login", None, server.name()).unwrap();
+
+        // Only 1 window — hook was skipped because file is missing
+        let windows = tmux::list_windows(server.name(), "myapp/login").unwrap();
+        assert_eq!(windows, 1);
     }
 }

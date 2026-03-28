@@ -114,6 +114,71 @@ pub fn send_keys(server: Option<&str>, target: &str, keys: &str) -> Result<()> {
     Ok(())
 }
 
+/// Find a window by name in a session. Returns the window target (e.g. "session:1") if found.
+pub fn find_window(server: Option<&str>, session: &str, name: &str) -> Result<Option<String>> {
+    let output = run_tmux(
+        server,
+        &[
+            "list-windows",
+            "-t",
+            session,
+            "-F",
+            "#{window_name}\t#{session_name}:#{window_index}",
+        ],
+    )?;
+    for line in output.lines() {
+        if let Some((wname, target)) = line.split_once('\t')
+            && wname == name
+        {
+            return Ok(Some(target.to_string()));
+        }
+    }
+    Ok(None)
+}
+
+/// Create a new named window in an existing tmux session. Returns the window target.
+pub fn new_named_window(
+    server: Option<&str>,
+    session: &str,
+    name: &str,
+    start_dir: &Path,
+) -> Result<String> {
+    run_tmux(
+        server,
+        &[
+            "new-window",
+            "-t",
+            session,
+            "-n",
+            name,
+            "-P",
+            "-F",
+            "#{session_name}:#{window_index}",
+            "-c",
+            &start_dir.to_string_lossy(),
+        ],
+    )
+}
+
+/// Find a named window in a session, or create it if it doesn't exist.
+pub fn find_or_create_window(
+    server: Option<&str>,
+    session: &str,
+    name: &str,
+    start_dir: &Path,
+) -> Result<String> {
+    if let Some(target) = find_window(server, session, name)? {
+        Ok(target)
+    } else {
+        new_named_window(server, session, name, start_dir)
+    }
+}
+
+/// Shell-quote a string for safe use in send_keys (single-quote wrapping with escaping).
+pub fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// Show a tmux display-menu for selecting from a list of items.
 /// Each item is a (label, session_name) pair. Selecting an item switches to that session.
 pub fn display_menu(server: Option<&str>, title: &str, items: &[(String, String)]) -> Result<()> {
@@ -354,5 +419,20 @@ mod tests {
         // display_menu swallows the tmux error (no client attached)
         let result = display_menu(server.name(), "Test", &items);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn shell_quote_wraps_in_single_quotes() {
+        assert_eq!(shell_quote("hello"), "'hello'");
+    }
+
+    #[test]
+    fn shell_quote_handles_spaces() {
+        assert_eq!(shell_quote("/path/to/my hook.sh"), "'/path/to/my hook.sh'");
+    }
+
+    #[test]
+    fn shell_quote_escapes_single_quotes() {
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
     }
 }

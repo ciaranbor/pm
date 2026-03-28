@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use crate::error::{PmError, Result};
+use crate::hooks;
 use crate::state::paths;
 use crate::state::project::{GithubConfig, ProjectConfig, ProjectEntry, ProjectInfo, SetupConfig};
 use crate::tmux;
@@ -109,6 +110,9 @@ pub fn register(
     };
     config.save(&pm_dir)?;
 
+    // Bootstrap default hook scripts
+    hooks::bootstrap(&wrapper_dir)?;
+
     // Register in global registry
     let entry = ProjectEntry {
         root: wrapper_dir.to_string_lossy().to_string(),
@@ -205,6 +209,8 @@ mod tests {
         assert!(wrapper.join(".pm").exists());
         assert!(wrapper.join(".pm").join("config.toml").exists());
         assert!(wrapper.join(".pm").join("features").exists());
+        assert!(wrapper.join(hooks::POST_CREATE_PATH).is_file());
+        assert!(wrapper.join(hooks::POST_MERGE_PATH).is_file());
     }
 
     #[test]

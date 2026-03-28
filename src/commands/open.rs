@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use crate::error::{PmError, Result};
+use crate::hooks;
 use crate::state::feature::FeatureState;
 use crate::state::paths;
 use crate::state::project::ProjectConfig;
@@ -23,6 +24,9 @@ pub fn open(project_root: &Path, tmux_server: Option<&str>) -> Result<()> {
     let pm_dir = paths::pm_dir(project_root);
     let config = ProjectConfig::load(&pm_dir)?;
     let project_name = &config.project.name;
+
+    // Backfill hook scripts for projects created before lifecycle hooks existed
+    hooks::bootstrap(project_root)?;
 
     // Ensure <project>/main session exists
     let main_session = format!("{project_name}/main");
@@ -177,6 +181,24 @@ mod tests {
         let sessions = tmux::list_sessions(server.name()).unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0], "myapp/main");
+    }
+
+    #[test]
+    fn open_backfills_hook_scripts_for_existing_projects() {
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().join("myapp");
+        let projects_dir = dir.path().join("registry");
+        let server = TestServer::new();
+        init::init(&project_path, &projects_dir, server.name()).unwrap();
+
+        // Simulate a pre-hooks project by removing the bootstrapped hooks
+        std::fs::remove_dir_all(project_path.join(".pm/hooks")).unwrap();
+        assert!(!project_path.join(hooks::POST_CREATE_PATH).exists());
+
+        open(&project_path, server.name()).unwrap();
+
+        assert!(project_path.join(hooks::POST_CREATE_PATH).is_file());
+        assert!(project_path.join(hooks::POST_MERGE_PATH).is_file());
     }
 
     #[test]

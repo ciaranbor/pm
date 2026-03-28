@@ -76,6 +76,17 @@ pm feat merge --delete          # merge current feature and clean up
 
 Blocks if either the feature or main worktree has uncommitted changes. Always creates a merge commit (`--no-ff`). Feature name is detected from CWD if omitted.
 
+### Lifecycle hooks
+
+Every project is bootstrapped with two hook scripts:
+
+- `.pm/hooks/post-create.sh` — runs in the feature's tmux session after `pm feat new`
+- `.pm/hooks/post-merge.sh` — runs in the main tmux session after `pm feat merge`
+
+Hooks run asynchronously in a dedicated `hook` window via `tmux send-keys` — pm does not block on their completion. The hook window is reused across invocations.
+
+Edit the scripts to add your own logic (install deps, run migrations, deploy, etc.). Removing a hook script disables it.
+
 ### Delete a feature
 
 ```sh
