@@ -119,6 +119,17 @@ pm perm merge --ours      # union merge, feature wins on conflicts
 
 Feature name is detected from CWD if omitted.
 
+### Claude Code session migration
+
+When registering or adopting repos, Claude Code sessions are automatically migrated from the old path to the new worktree path. Sessions are copied (not moved) so originals remain accessible.
+
+```sh
+pm claude migrate --from /old/path   # migrate sessions from old path to CWD
+pm feat adopt login --from /old/path # adopt branch and migrate sessions
+```
+
+`pm register` (both symlink and move modes) migrates sessions automatically — no extra flags needed.
+
 ### Other commands
 
 ```sh

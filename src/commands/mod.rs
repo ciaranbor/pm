@@ -1,3 +1,4 @@
+pub mod claude_migrate;
 pub mod feat_adopt;
 pub mod feat_delete;
 pub mod feat_list;

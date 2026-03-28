@@ -44,6 +44,9 @@ enum Commands {
     /// Claude Code permissions management
     #[command(subcommand)]
     Perm(PermCommands),
+    /// Claude Code session management
+    #[command(subcommand)]
+    Claude(ClaudeCommands),
 }
 
 #[derive(Subcommand)]
@@ -79,6 +82,16 @@ enum PermCommands {
 }
 
 #[derive(Subcommand)]
+enum ClaudeCommands {
+    /// Migrate Claude Code sessions from an old project path to the current directory
+    Migrate {
+        /// The old absolute path where the project previously lived
+        #[arg(long)]
+        from: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
 enum FeatCommands {
     /// Create a new feature (branch + worktree + tmux session)
     New {
@@ -95,6 +108,9 @@ enum FeatCommands {
         /// Initial context (literal text or path to a file)
         #[arg(long)]
         context: Option<String>,
+        /// Migrate Claude Code sessions from this old path
+        #[arg(long)]
+        from: Option<PathBuf>,
     },
     /// List all features with their status
     List,
@@ -147,7 +163,7 @@ fn run() -> pm::error::Result<()> {
         }
         Commands::Register { path, name, r#move } => {
             let projects_dir = paths::global_projects_dir()?;
-            commands::register::register(&path, name.as_deref(), &projects_dir, r#move, None)
+            commands::register::register(&path, name.as_deref(), &projects_dir, r#move, None, None)
         }
         Commands::List => {
             let projects_dir = paths::global_projects_dir()?;
@@ -222,11 +238,17 @@ fn run() -> pm::error::Result<()> {
                     println!("Created feature '{name}'");
                     Ok(())
                 }
-                FeatCommands::Adopt { name, context } => {
+                FeatCommands::Adopt {
+                    name,
+                    context,
+                    from,
+                } => {
                     commands::feat_adopt::feat_adopt(
                         &project_root,
                         &name,
                         context.as_deref(),
+                        from.as_deref(),
+                        None,
                         None,
                     )?;
                     println!("Adopted feature '{name}'");
@@ -281,5 +303,15 @@ fn run() -> pm::error::Result<()> {
                 }
             }
         }
+        Commands::Claude(claude_cmd) => match claude_cmd {
+            ClaudeCommands::Migrate { from } => {
+                let cwd = std::env::current_dir()?;
+                let messages = commands::claude_migrate::migrate_sessions(&from, &cwd, None)?;
+                for msg in messages {
+                    println!("{msg}");
+                }
+                Ok(())
+            }
+        },
     }
 }
