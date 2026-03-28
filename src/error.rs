@@ -43,6 +43,9 @@ pub enum PmError {
 
     #[error("tmux error: {0}")]
     Tmux(String),
+
+    #[error("gh error: {0}")]
+    Gh(String),
 }
 
 pub type Result<T> = std::result::Result<T, PmError>;

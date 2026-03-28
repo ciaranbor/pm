@@ -6,6 +6,7 @@ Terminal-based project manager built around tmux and git worktrees.
 
 - tmux
 - git
+- [gh](https://cli.github.com/) (for `pm feat pr`)
 
 ## Install
 
@@ -86,6 +87,24 @@ Every project is bootstrapped with two hook scripts:
 Hooks run asynchronously in a dedicated `hook` window via `tmux send-keys` — pm does not block on their completion. The hook window is reused across invocations.
 
 Edit the scripts to add your own logic (install deps, run migrations, deploy, etc.). Removing a hook script disables it.
+
+### Create a PR
+
+```sh
+pm feat pr login                # create a draft PR for the feature
+pm feat pr --ready              # create a non-draft PR (feature detected from CWD)
+```
+
+Pushes the branch to origin, then creates a GitHub PR via `gh`. Draft by default; use `--ready` for a non-draft PR. If a PR already exists for the branch, links it instead of creating a new one. Respects `.github/pull_request_template.md` if present. Stores the PR number in feature state. Draft PRs keep `wip` status; `--ready` sets status to `review`. Feature name is detected from CWD if omitted.
+
+### Mark a PR as ready for review
+
+```sh
+pm feat ready                   # mark current feature's PR as ready
+pm feat ready login             # mark a specific feature's PR as ready
+```
+
+Pushes latest commits, then calls `gh pr ready` to remove draft status. Sets feature status to `review`. Fails if the feature has no linked PR — run `pm feat pr` first.
 
 ### Delete a feature
 

@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod error;
+pub mod gh;
 pub mod git;
 pub mod hooks;
 pub mod state;
