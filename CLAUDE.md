@@ -44,6 +44,13 @@ TDD. Tests use real git repos and real tmux sessions, not mocks.
 - External commands (git, tmux, gh) go through thin wrapper functions in `git.rs` / `tmux.rs`, not scattered throughout command handlers.
 - All CLI commands and subcommands must support `--help` via clap derive.
 
+## Documentation
+
+When adding or changing commands/features, update:
+
+- `README.md` — user-facing usage examples and command reference
+- `CLAUDE.md` — architecture, development guidelines, and any new conventions
+
 ## Commits
 
 - Commit messages: imperative, concise, focused on "why"
