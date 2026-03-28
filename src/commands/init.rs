@@ -2,6 +2,7 @@ use std::path::Path;
 
 use crate::error::{PmError, Result};
 use crate::git;
+use crate::hooks;
 use crate::state::paths;
 use crate::state::project::{GithubConfig, ProjectConfig, ProjectEntry, ProjectInfo, SetupConfig};
 use crate::tmux;
@@ -53,6 +54,9 @@ pub fn init(path: &Path, projects_dir: &Path, tmux_server: Option<&str>) -> Resu
         github: GithubConfig::default(),
     };
     config.save(&pm_dir)?;
+
+    // Bootstrap default hook scripts
+    hooks::bootstrap(path)?;
 
     // Register in global registry
     let entry = ProjectEntry {
@@ -111,6 +115,19 @@ mod tests {
         assert!(project_path.join(".pm").exists());
         assert!(project_path.join(".pm").join("config.toml").exists());
         assert!(project_path.join(".pm").join("features").exists());
+    }
+
+    #[test]
+    fn init_bootstraps_hook_scripts() {
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().join("myapp");
+        let projects_dir = dir.path().join("registry");
+        let server = TestServer::new();
+
+        init(&project_path, &projects_dir, server.name()).unwrap();
+
+        assert!(project_path.join(hooks::POST_CREATE_PATH).is_file());
+        assert!(project_path.join(hooks::POST_MERGE_PATH).is_file());
     }
 
     #[test]
