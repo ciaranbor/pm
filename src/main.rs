@@ -48,6 +48,11 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum PermCommands {
+    /// List a feature's Claude Code permissions
+    List {
+        /// Feature name (detected from CWD if omitted)
+        name: Option<String>,
+    },
     /// Push feature's .claude/ settings to main
     Push {
         /// Feature name (detected from CWD if omitted)
@@ -165,6 +170,18 @@ fn run() -> pm::error::Result<()> {
         Commands::Perm(perm_cmd) => {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
             match perm_cmd {
+                PermCommands::List { name } => {
+                    let name = resolve_feature_name(name, &project_root)?;
+                    let lines = commands::permissions::list(&project_root, &name)?;
+                    if lines.is_empty() {
+                        println!("No permissions files found for feature '{name}'");
+                    } else {
+                        for line in lines {
+                            println!("{line}");
+                        }
+                    }
+                    Ok(())
+                }
                 PermCommands::Push { name } => {
                     let name = resolve_feature_name(name, &project_root)?;
                     commands::permissions::push(&project_root, &name)?;
