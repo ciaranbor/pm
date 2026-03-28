@@ -41,11 +41,12 @@ pub fn existing_pr_number(repo_dir: &Path, branch: &str) -> Result<Option<String
 }
 
 /// Create a PR for the given branch. Returns the PR number.
-/// Uses `--fill` to auto-populate title from commits (avoids interactive prompt).
+/// Uses `--fill-first` to auto-populate the title from the first commit
+/// without dumping all commit messages into the body.
 /// If `draft` is true, creates a draft PR.
-/// If `body` is Some, uses it as the PR body (overrides the `--fill` body).
+/// If `body` is Some, uses it as the PR body.
 pub fn create_pr(repo_dir: &Path, branch: &str, draft: bool, body: Option<&str>) -> Result<String> {
-    let mut args = vec!["pr", "create", "--fill", "--head", branch];
+    let mut args = vec!["pr", "create", "--fill-first", "--head", branch];
     if draft {
         args.push("--draft");
     }
@@ -56,6 +57,12 @@ pub fn create_pr(repo_dir: &Path, branch: &str, draft: bool, body: Option<&str>)
     let url = run_gh(repo_dir, &args)?;
     // gh pr create returns the URL; extract the number from the end
     Ok(pr_number_from_url(&url))
+}
+
+/// Mark an existing PR as ready for review.
+pub fn mark_pr_ready(repo_dir: &Path, branch: &str) -> Result<()> {
+    run_gh(repo_dir, &["pr", "ready", branch])?;
+    Ok(())
 }
 
 /// Extract the PR number from a gh PR URL (the last path segment).

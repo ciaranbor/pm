@@ -12,7 +12,8 @@ use crate::state::paths;
 /// - If a PR already exists for the branch, links it (stores PR number)
 /// - Otherwise creates a new PR (draft by default, non-draft with `ready`)
 /// - Respects `.github/pull_request_template.md` if present
-/// - Stores the PR number in feature state and sets status to Review
+/// - Stores the PR number in feature state
+/// - Sets status to Review only when `--ready`, keeps Wip for draft PRs
 pub fn feat_pr(project_root: &Path, name: &str, ready: bool) -> Result<()> {
     let features_dir = paths::features_dir(project_root);
     let mut state = FeatureState::load(&features_dir, name)?;
@@ -39,7 +40,9 @@ pub fn feat_pr(project_root: &Path, name: &str, ready: bool) -> Result<()> {
     };
 
     state.pr = pr_number;
-    state.status = FeatureStatus::Review;
+    if ready {
+        state.status = FeatureStatus::Review;
+    }
     state.last_active = chrono::Utc::now();
     state.save(&features_dir, name)?;
 
@@ -143,15 +146,14 @@ mod tests {
         let worktree = project_path.join("login");
         git::push_branch(&worktree, "login").unwrap();
 
-        // Simulate what feat_pr does after the gh interaction
+        // Simulate what feat_pr does after the gh interaction (draft PR — status stays wip)
         state.pr = "42".to_string();
-        state.status = FeatureStatus::Review;
         state.last_active = chrono::Utc::now();
         state.save(&features_dir, "login").unwrap();
 
         let reloaded = FeatureState::load(&features_dir, "login").unwrap();
         assert_eq!(reloaded.pr, "42");
-        assert_eq!(reloaded.status, FeatureStatus::Review);
+        assert_eq!(reloaded.status, FeatureStatus::Wip);
     }
 
     #[test]

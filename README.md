@@ -95,7 +95,16 @@ pm feat pr login                # create a draft PR for the feature
 pm feat pr --ready              # create a non-draft PR (feature detected from CWD)
 ```
 
-Pushes the branch to origin, then creates a GitHub PR via `gh`. Draft by default; use `--ready` for a non-draft PR. If a PR already exists for the branch, links it instead of creating a new one. Respects `.github/pull_request_template.md` if present. Stores the PR number in feature state and sets status to `review`. Feature name is detected from CWD if omitted.
+Pushes the branch to origin, then creates a GitHub PR via `gh`. Draft by default; use `--ready` for a non-draft PR. If a PR already exists for the branch, links it instead of creating a new one. Respects `.github/pull_request_template.md` if present. Stores the PR number in feature state. Draft PRs keep `wip` status; `--ready` sets status to `review`. Feature name is detected from CWD if omitted.
+
+### Mark a PR as ready for review
+
+```sh
+pm feat ready                   # mark current feature's PR as ready
+pm feat ready login             # mark a specific feature's PR as ready
+```
+
+Pushes latest commits, then calls `gh pr ready` to remove draft status. Sets feature status to `review`. Fails if the feature has no linked PR — run `pm feat pr` first.
 
 ### Delete a feature
 

@@ -143,6 +143,11 @@ enum FeatCommands {
         #[arg(long)]
         ready: bool,
     },
+    /// Mark a feature's PR as ready for review
+    Ready {
+        /// Feature name (detected from CWD if omitted)
+        name: Option<String>,
+    },
 }
 
 fn resolve_feature_name(
@@ -313,6 +318,12 @@ fn run() -> pm::error::Result<()> {
                     let name = resolve_feature_name(name, &project_root)?;
                     commands::feat_pr::feat_pr(&project_root, &name, ready)?;
                     println!("PR linked for feature '{name}'");
+                    Ok(())
+                }
+                FeatCommands::Ready { name } => {
+                    let name = resolve_feature_name(name, &project_root)?;
+                    commands::feat_ready::feat_ready(&project_root, &name)?;
+                    println!("PR marked ready for feature '{name}'");
                     Ok(())
                 }
             }
