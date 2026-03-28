@@ -17,6 +17,9 @@ pub enum PmError {
     #[error("Feature not found: {0}")]
     FeatureNotFound(String),
 
+    #[error("Branch not found: {0}")]
+    BranchNotFound(String),
+
     #[error("Feature already exists: {0}")]
     FeatureAlreadyExists(String),
 

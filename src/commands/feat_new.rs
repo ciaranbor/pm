@@ -10,7 +10,7 @@ use crate::{git, tmux};
 
 /// Resolve context: if the value is a path to an existing file, read its contents;
 /// otherwise treat it as literal text.
-fn resolve_context(context: &str) -> Result<String> {
+pub fn resolve_context(context: &str) -> Result<String> {
     let path = Path::new(context);
     if path.is_file() {
         Ok(std::fs::read_to_string(path)?)

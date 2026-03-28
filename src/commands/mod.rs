@@ -1,3 +1,4 @@
+pub mod feat_adopt;
 pub mod feat_delete;
 pub mod feat_list;
 pub mod feat_merge;
