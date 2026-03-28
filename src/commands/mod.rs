@@ -7,4 +7,5 @@ pub mod feat_switch;
 pub mod init;
 pub mod list;
 pub mod open;
+pub mod permissions;
 pub mod register;
