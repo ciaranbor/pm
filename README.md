@@ -93,6 +93,20 @@ pm open                          # open/reconstruct sessions for current project
 
 Creates tmux sessions for the main worktree and any active features that are missing sessions. Useful after a reboot or tmux server restart.
 
+### Permissions management
+
+Manage Claude Code settings (`settings.json`, `settings.local.json`) across worktrees. The main worktree's `.claude/` directory is the source of truth — new features are seeded from it automatically.
+
+```sh
+pm perm push              # push current feature's .claude/ settings to main
+pm perm pull              # pull main's .claude/ settings into current feature
+pm perm diff              # show differences between main and feature
+pm perm merge             # union merge feature settings into main (main wins on conflicts)
+pm perm merge --ours      # union merge, feature wins on conflicts
+```
+
+Feature name is detected from CWD if omitted.
+
 ### Other commands
 
 ```sh

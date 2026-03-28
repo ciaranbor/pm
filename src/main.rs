@@ -41,6 +41,36 @@ enum Commands {
     /// Feature management
     #[command(subcommand)]
     Feat(FeatCommands),
+    /// Claude Code permissions management
+    #[command(subcommand)]
+    Perm(PermCommands),
+}
+
+#[derive(Subcommand)]
+enum PermCommands {
+    /// Push feature's .claude/ settings to main
+    Push {
+        /// Feature name (detected from CWD if omitted)
+        name: Option<String>,
+    },
+    /// Pull main's .claude/ settings into a feature
+    Pull {
+        /// Feature name (detected from CWD if omitted)
+        name: Option<String>,
+    },
+    /// Show differences between template and feature permissions
+    Diff {
+        /// Feature name (detected from CWD if omitted)
+        name: Option<String>,
+    },
+    /// Merge feature and main permissions (union), writing result to main
+    Merge {
+        /// Feature name (detected from CWD if omitted)
+        name: Option<String>,
+        /// On scalar conflicts, let the feature (ours) win instead of main (theirs)
+        #[arg(long)]
+        ours: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -131,6 +161,41 @@ fn run() -> pm::error::Result<()> {
             commands::open::open(&project_root, None)?;
             println!("Project sessions opened");
             Ok(())
+        }
+        Commands::Perm(perm_cmd) => {
+            let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+            match perm_cmd {
+                PermCommands::Push { name } => {
+                    let name = resolve_feature_name(name, &project_root)?;
+                    commands::permissions::push(&project_root, &name)?;
+                    println!("Pushed permissions from feature '{name}' to main");
+                    Ok(())
+                }
+                PermCommands::Pull { name } => {
+                    let name = resolve_feature_name(name, &project_root)?;
+                    commands::permissions::pull(&project_root, &name)?;
+                    println!("Pulled permissions from main into feature '{name}'");
+                    Ok(())
+                }
+                PermCommands::Diff { name } => {
+                    let name = resolve_feature_name(name, &project_root)?;
+                    let lines = commands::permissions::diff(&project_root, &name)?;
+                    if lines.is_empty() {
+                        println!("No differences");
+                    } else {
+                        for line in lines {
+                            println!("{line}");
+                        }
+                    }
+                    Ok(())
+                }
+                PermCommands::Merge { name, ours } => {
+                    let name = resolve_feature_name(name, &project_root)?;
+                    commands::permissions::merge(&project_root, &name, ours)?;
+                    println!("Merged permissions from feature '{name}' into main");
+                    Ok(())
+                }
+            }
         }
         Commands::Feat(feat_cmd) => {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
