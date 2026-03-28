@@ -98,16 +98,8 @@ mod tests {
     fn add_feature_commit(project_path: &Path, feature_name: &str) {
         let worktree = project_path.join(feature_name);
         std::fs::write(worktree.join("feature.txt"), "feature work").unwrap();
-        std::process::Command::new("git")
-            .args(["-C", &worktree.to_string_lossy()])
-            .args(["add", "feature.txt"])
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["-C", &worktree.to_string_lossy()])
-            .args(["commit", "-m", "feature work"])
-            .output()
-            .unwrap();
+        git::stage_file(&worktree, "feature.txt").unwrap();
+        git::commit(&worktree, "feature work").unwrap();
     }
 
     #[test]
@@ -137,12 +129,7 @@ mod tests {
 
         // Check that the latest commit in main is a merge commit (has two parents)
         let main_repo = project_path.join("main");
-        let output = std::process::Command::new("git")
-            .args(["-C", &main_repo.to_string_lossy()])
-            .args(["cat-file", "-p", "HEAD"])
-            .output()
-            .unwrap();
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stdout = git::cat_file(&main_repo, "HEAD").unwrap();
         let parent_count = stdout.lines().filter(|l| l.starts_with("parent ")).count();
         assert_eq!(parent_count, 2, "merge commit should have two parents");
     }
@@ -156,11 +143,7 @@ mod tests {
         // Stage a file in the feature worktree (uncommitted change)
         let worktree = project_path.join("login");
         std::fs::write(worktree.join("dirty.txt"), "uncommitted").unwrap();
-        std::process::Command::new("git")
-            .args(["-C", &worktree.to_string_lossy()])
-            .args(["add", "dirty.txt"])
-            .output()
-            .unwrap();
+        git::stage_file(&worktree, "dirty.txt").unwrap();
 
         let result = feat_merge(&project_path, "login", false, server.name());
         assert!(result.is_err());
@@ -181,11 +164,7 @@ mod tests {
         // Stage a file in the main worktree (uncommitted change)
         let main_repo = project_path.join("main");
         std::fs::write(main_repo.join("dirty.txt"), "uncommitted").unwrap();
-        std::process::Command::new("git")
-            .args(["-C", &main_repo.to_string_lossy()])
-            .args(["add", "dirty.txt"])
-            .output()
-            .unwrap();
+        git::stage_file(&main_repo, "dirty.txt").unwrap();
 
         let result = feat_merge(&project_path, "login", false, server.name());
         assert!(result.is_err());
@@ -270,29 +249,13 @@ mod tests {
         // Create a conflicting file on both main and feature
         let main_repo = project_path.join("main");
         std::fs::write(main_repo.join("shared.txt"), "main content").unwrap();
-        std::process::Command::new("git")
-            .args(["-C", &main_repo.to_string_lossy()])
-            .args(["add", "shared.txt"])
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["-C", &main_repo.to_string_lossy()])
-            .args(["commit", "-m", "main change"])
-            .output()
-            .unwrap();
+        git::stage_file(&main_repo, "shared.txt").unwrap();
+        git::commit(&main_repo, "main change").unwrap();
 
         let worktree = project_path.join("login");
         std::fs::write(worktree.join("shared.txt"), "feature content").unwrap();
-        std::process::Command::new("git")
-            .args(["-C", &worktree.to_string_lossy()])
-            .args(["add", "shared.txt"])
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["-C", &worktree.to_string_lossy()])
-            .args(["commit", "-m", "feature change"])
-            .output()
-            .unwrap();
+        git::stage_file(&worktree, "shared.txt").unwrap();
+        git::commit(&worktree, "feature change").unwrap();
 
         let result = feat_merge(&project_path, "login", false, server.name());
         assert!(result.is_err());
@@ -372,16 +335,8 @@ mod tests {
         feat_new::feat_new(&project_path, "api", None, server.name()).unwrap();
         let worktree = project_path.join("api");
         std::fs::write(worktree.join("api.txt"), "api work").unwrap();
-        std::process::Command::new("git")
-            .args(["-C", &worktree.to_string_lossy()])
-            .args(["add", "api.txt"])
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["-C", &worktree.to_string_lossy()])
-            .args(["commit", "-m", "api work"])
-            .output()
-            .unwrap();
+        git::stage_file(&worktree, "api.txt").unwrap();
+        git::commit(&worktree, "api work").unwrap();
         feat_merge(&project_path, "api", false, server.name()).unwrap();
 
         // Should still have just 2 windows — the hook window was reused, not duplicated
