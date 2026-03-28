@@ -324,6 +324,38 @@ mod tests {
     }
 
     #[test]
+    fn register_worktree_checkout_where_git_is_a_file() {
+        let dir = tempdir().unwrap();
+        let main_repo = dir.path().join("main-repo");
+        create_git_repo(&main_repo);
+
+        // Create a branch and a worktree — its .git is a file, not a directory
+        git::create_branch(&main_repo, "wt-branch").unwrap();
+        let wt_path = dir.path().join("wt-checkout");
+        git::add_worktree(&main_repo, &wt_path, "wt-branch").unwrap();
+
+        // Sanity: .git should be a file in a worktree
+        assert!(wt_path.join(".git").is_file());
+
+        let projects_dir = dir.path().join("registry");
+        let server = TestServer::new();
+
+        register(
+            &wt_path,
+            Some("wt-proj"),
+            &projects_dir,
+            false,
+            server.name(),
+        )
+        .unwrap();
+
+        let wrapper = dir.path().join("wt-proj-pm");
+        assert!(wrapper.exists());
+        assert!(wrapper.join(".pm").join("config.toml").exists());
+        assert!(tmux::has_session(server.name(), "wt-proj/main").unwrap());
+    }
+
+    #[test]
     fn register_creates_main_tmux_session() {
         let dir = tempdir().unwrap();
         let repo_path = dir.path().join("myapp");

@@ -184,6 +184,26 @@ pub fn merge_no_ff(repo: &Path, branch: &str) -> Result<()> {
     Ok(())
 }
 
+/// Stage a file in the given repo/worktree (test helper).
+#[cfg(test)]
+pub(crate) fn stage_file(repo: &Path, file: &str) -> Result<()> {
+    run_git(repo, &["add", file])?;
+    Ok(())
+}
+
+/// Create a commit in the given repo/worktree (test helper).
+#[cfg(test)]
+pub(crate) fn commit(repo: &Path, message: &str) -> Result<()> {
+    run_git(repo, &["commit", "-m", message])?;
+    Ok(())
+}
+
+/// Return the raw `cat-file -p` output for a given revision (test helper).
+#[cfg(test)]
+pub(crate) fn cat_file(repo: &Path, rev: &str) -> Result<String> {
+    run_git(repo, &["cat-file", "-p", rev])
+}
+
 /// Check if a path is a git repository (has .git dir or file).
 pub fn is_git_repo(path: &Path) -> bool {
     let git_path = path.join(".git");
@@ -421,6 +441,65 @@ mod tests {
 
         // No remote, no upstream — should return false
         assert!(!has_unpushed_commits(&repo_path).unwrap());
+    }
+
+    #[test]
+    fn has_unpushed_commits_true_with_upstream() {
+        let dir = tempdir().unwrap();
+        // Create a "remote" bare repo
+        let bare_path = dir.path().join("remote.git");
+        std::fs::create_dir_all(&bare_path).unwrap();
+        Command::new("git")
+            .args(["init", "--bare", &bare_path.to_string_lossy()])
+            .output()
+            .unwrap();
+
+        // Clone it to get a repo with an upstream tracking branch
+        let clone_path = dir.path().join("clone");
+        Command::new("git")
+            .args([
+                "clone",
+                &bare_path.to_string_lossy(),
+                &clone_path.to_string_lossy(),
+            ])
+            .output()
+            .unwrap();
+
+        // Create an initial commit and push so upstream exists
+        run_git(&clone_path, &["commit", "--allow-empty", "-m", "initial"]).unwrap();
+        run_git(&clone_path, &["push", "-u", "origin", "main"]).unwrap();
+
+        // Add another commit locally without pushing
+        run_git(&clone_path, &["commit", "--allow-empty", "-m", "unpushed"]).unwrap();
+
+        assert!(has_unpushed_commits(&clone_path).unwrap());
+    }
+
+    #[test]
+    fn has_unpushed_commits_false_when_pushed() {
+        let dir = tempdir().unwrap();
+        let bare_path = dir.path().join("remote.git");
+        std::fs::create_dir_all(&bare_path).unwrap();
+        Command::new("git")
+            .args(["init", "--bare", &bare_path.to_string_lossy()])
+            .output()
+            .unwrap();
+
+        let clone_path = dir.path().join("clone");
+        Command::new("git")
+            .args([
+                "clone",
+                &bare_path.to_string_lossy(),
+                &clone_path.to_string_lossy(),
+            ])
+            .output()
+            .unwrap();
+
+        run_git(&clone_path, &["commit", "--allow-empty", "-m", "initial"]).unwrap();
+        run_git(&clone_path, &["push", "-u", "origin", "main"]).unwrap();
+
+        // Everything is pushed — should return false
+        assert!(!has_unpushed_commits(&clone_path).unwrap());
     }
 
     #[test]

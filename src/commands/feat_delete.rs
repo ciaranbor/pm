@@ -241,11 +241,7 @@ mod tests {
 
         let worktree = project_path.join("login");
         std::fs::write(worktree.join("test.txt"), "hello").unwrap();
-        std::process::Command::new("git")
-            .args(["-C", &worktree.to_string_lossy()])
-            .args(["add", "test.txt"])
-            .output()
-            .unwrap();
+        git::stage_file(&worktree, "test.txt").unwrap();
 
         let result = feat_delete(&project_path, "login", false, server.name());
         assert!(result.is_err());
@@ -262,11 +258,7 @@ mod tests {
 
         let worktree = project_path.join("login");
         std::fs::write(worktree.join("test.txt"), "hello").unwrap();
-        std::process::Command::new("git")
-            .args(["-C", &worktree.to_string_lossy()])
-            .args(["add", "test.txt"])
-            .output()
-            .unwrap();
+        git::stage_file(&worktree, "test.txt").unwrap();
 
         feat_delete(&project_path, "login", true, server.name()).unwrap();
 
@@ -282,11 +274,7 @@ mod tests {
 
         // Merge the feature branch into main
         let main_repo = project_path.join("main");
-        std::process::Command::new("git")
-            .args(["-C", &main_repo.to_string_lossy()])
-            .args(["merge", "login"])
-            .output()
-            .unwrap();
+        git::merge_no_ff(&main_repo, "login").unwrap();
 
         feat_delete(&project_path, "login", false, server.name()).unwrap();
 
@@ -302,11 +290,7 @@ mod tests {
 
         let worktree = project_path.join("login");
         std::fs::write(worktree.join("test.txt"), "hello").unwrap();
-        std::process::Command::new("git")
-            .args(["-C", &worktree.to_string_lossy()])
-            .args(["add", "test.txt"])
-            .output()
-            .unwrap();
+        git::stage_file(&worktree, "test.txt").unwrap();
 
         let _ = feat_delete(&project_path, "login", false, server.name());
 
@@ -351,16 +335,8 @@ mod tests {
 
         let worktree = project_path.join("login");
         std::fs::write(worktree.join("feature.txt"), "content").unwrap();
-        std::process::Command::new("git")
-            .args(["-C", &worktree.to_string_lossy()])
-            .args(["add", "feature.txt"])
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["-C", &worktree.to_string_lossy()])
-            .args(["commit", "-m", "feature work"])
-            .output()
-            .unwrap();
+        git::stage_file(&worktree, "feature.txt").unwrap();
+        git::commit(&worktree, "feature work").unwrap();
 
         let result = feat_delete(&project_path, "login", false, server.name());
         assert!(result.is_err());
