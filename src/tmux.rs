@@ -83,20 +83,28 @@ pub fn switch_client(server: Option<&str>, name: &str) -> Result<()> {
 
 /// Create a new window in an existing tmux session. Returns the new window's target
 /// (e.g. "session:1") for use with send_keys.
-pub fn new_window(server: Option<&str>, session: &str, start_dir: &Path) -> Result<String> {
-    run_tmux(
-        server,
-        &[
-            "new-window",
-            "-t",
-            session,
-            "-P",
-            "-F",
-            "#{session_name}:#{window_index}",
-            "-c",
-            &start_dir.to_string_lossy(),
-        ],
-    )
+pub fn new_window(
+    server: Option<&str>,
+    session: &str,
+    start_dir: &Path,
+    name: Option<&str>,
+) -> Result<String> {
+    let dir_lossy = start_dir.to_string_lossy();
+    let mut args = vec![
+        "new-window",
+        "-t",
+        session,
+        "-P",
+        "-F",
+        "#{session_name}:#{window_index}",
+        "-c",
+        &dir_lossy,
+    ];
+    if let Some(n) = name {
+        args.push("-n");
+        args.push(n);
+    }
+    run_tmux(server, &args)
 }
 
 /// Count the number of windows in a tmux session.
@@ -336,7 +344,7 @@ mod tests {
         let dir = tempdir().unwrap();
 
         create_session(server.name(), "win-test", dir.path()).unwrap();
-        let target = new_window(server.name(), "win-test", dir.path()).unwrap();
+        let target = new_window(server.name(), "win-test", dir.path(), None).unwrap();
 
         // Should return a target like "win-test:1"
         assert!(target.starts_with("win-test:"));
@@ -356,7 +364,7 @@ mod tests {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
 
-        let result = new_window(server.name(), "no-such", dir.path());
+        let result = new_window(server.name(), "no-such", dir.path(), None);
         assert!(result.is_err());
     }
 
@@ -368,7 +376,7 @@ mod tests {
         create_session(server.name(), "count-test", dir.path()).unwrap();
         assert_eq!(list_windows(server.name(), "count-test").unwrap(), 1);
 
-        new_window(server.name(), "count-test", dir.path()).unwrap();
+        new_window(server.name(), "count-test", dir.path(), None).unwrap();
         assert_eq!(list_windows(server.name(), "count-test").unwrap(), 2);
     }
 

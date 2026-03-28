@@ -83,7 +83,8 @@ pub fn feat_new(
 
     // Step 4.5: If context provided, open a claude session in a new window to read TASK.md
     if resolved_context.is_some() {
-        let window_target = tmux::new_window(tmux_server, &session_name, &worktree_path)?;
+        let window_target =
+            tmux::new_window(tmux_server, &session_name, &worktree_path, Some("claude"))?;
         tmux::send_keys(tmux_server, &window_target, "claude 'READ TASK.md'")?;
     }
 
