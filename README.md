@@ -6,7 +6,7 @@ Terminal-based project manager built around tmux and git worktrees.
 
 - tmux
 - git
-- [gh](https://cli.github.com/) (for `pm feat pr`)
+- [gh](https://cli.github.com/) (for `pm feat pr`, `pm feat sync`)
 
 ## Install
 
@@ -105,6 +105,15 @@ pm feat ready login             # mark a specific feature's PR as ready
 ```
 
 Pushes latest commits, then calls `gh pr ready` to remove draft status. Sets feature status to `review`. Fails if the feature has no linked PR — run `pm feat pr` first.
+
+### Sync feature statuses with GitHub
+
+```sh
+pm feat sync                    # sync all features with their linked PRs
+pm feat sync login              # sync a specific feature
+```
+
+Queries GitHub for each feature's PR state and updates the local status: draft PRs set `wip`, ready PRs set `review`, merged PRs set `merged`, closed PRs set `stale`. Reports changes and suggests `pm feat delete` for merged features. Feature name is detected from CWD if omitted; if not in a feature worktree, syncs all features.
 
 ### Delete a feature
 

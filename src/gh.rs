@@ -59,13 +59,39 @@ pub fn create_pr(repo_dir: &Path, branch: &str, draft: bool, body: Option<&str>)
     Ok(pr_number_from_url(&url))
 }
 
-/// Check if a PR has been merged on GitHub.
-pub fn pr_is_merged(repo_dir: &Path, pr_number: &str) -> Result<bool> {
+/// PR status info returned by a single `gh pr view` call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrInfo {
+    /// "OPEN", "MERGED", or "CLOSED"
+    pub state: String,
+    /// Whether the PR is a draft (only meaningful when state is "OPEN")
+    pub is_draft: bool,
+}
+
+/// Get the state and draft status of a PR in a single gh call.
+pub fn pr_info(repo_dir: &Path, pr_number: &str) -> Result<PrInfo> {
     let output = run_gh(
         repo_dir,
-        &["pr", "view", pr_number, "--json", "state", "--jq", ".state"],
+        &[
+            "pr",
+            "view",
+            pr_number,
+            "--json",
+            "state,isDraft",
+            "--jq",
+            "[.state, .isDraft] | @tsv",
+        ],
     )?;
-    Ok(output == "MERGED")
+    // Output is "STATE\ttrue/false"
+    let mut parts = output.split('\t');
+    let state = parts.next().unwrap_or("").to_string();
+    let is_draft = parts.next().unwrap_or("false") == "true";
+    Ok(PrInfo { state, is_draft })
+}
+
+/// Check if a PR has been merged on GitHub.
+pub fn pr_is_merged(repo_dir: &Path, pr_number: &str) -> Result<bool> {
+    Ok(pr_info(repo_dir, pr_number)?.state == "MERGED")
 }
 
 /// Mark an existing PR as ready for review.
