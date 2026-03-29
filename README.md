@@ -158,6 +158,21 @@ pm feat adopt login --from /old/path # adopt branch and migrate sessions
 
 `pm register` (both symlink and move modes) migrates sessions automatically — no extra flags needed.
 
+### Diagnose project health
+
+```sh
+pm doctor                        # check all features in current project
+```
+
+Audits every feature for drift between pm state and external reality:
+
+- Worktree directory exists on disk
+- Git worktree registration matches
+- Branch exists locally
+- Tmux session exists (for active features)
+- Status not stuck on "initializing"
+- PR status matches (calls `gh` for features with linked PRs)
+
 ### Other commands
 
 ```sh

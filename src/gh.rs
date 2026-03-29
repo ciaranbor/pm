@@ -100,6 +100,14 @@ pub fn mark_pr_ready(repo_dir: &Path, branch: &str) -> Result<()> {
     Ok(())
 }
 
+/// Get the state of a PR by number. Returns "OPEN", "CLOSED", or "MERGED".
+pub fn pr_state(repo_dir: &Path, pr_number: &str) -> Result<String> {
+    run_gh(
+        repo_dir,
+        &["pr", "view", pr_number, "--json", "state", "--jq", ".state"],
+    )
+}
+
 /// Extract the PR number from a gh PR URL (the last path segment).
 fn pr_number_from_url(url: &str) -> String {
     url.rsplit('/').next().unwrap_or(url).to_string()
