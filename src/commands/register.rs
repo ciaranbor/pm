@@ -360,6 +360,7 @@ mod tests {
             &projects_dir,
             false,
             server.name(),
+            None,
         )
         .unwrap();
 

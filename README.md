@@ -75,7 +75,7 @@ pm feat merge login             # merge into main
 pm feat merge --delete          # merge current feature and clean up
 ```
 
-Blocks if either the feature or main worktree has uncommitted changes. Always creates a merge commit (`--no-ff`). Feature name is detected from CWD if omitted.
+Blocks if either the feature or main worktree has uncommitted changes. Always creates a merge commit (`--no-ff`). Feature name is detected from CWD if omitted. If the branch was already merged (e.g. via GitHub PR), the local merge is skipped. If a merge conflict occurs, the merge is aborted and the main worktree is left clean.
 
 ### Lifecycle hooks
 
