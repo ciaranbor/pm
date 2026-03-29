@@ -45,8 +45,19 @@ pub fn feat_merge(
         ));
     }
 
-    // Perform the merge from the main worktree
-    git::merge_no_ff(&main_repo, &state.branch)?;
+    // Check if the branch is already merged into the base branch (e.g. via GitHub PR)
+    let already_merged = git::branch_merged_into(&main_repo, &state.branch, &state.base)?;
+
+    if !already_merged {
+        // Perform the merge from the main worktree
+        if let Err(e) = git::merge_no_ff(&main_repo, &state.branch) {
+            // Abort the failed merge to leave main worktree clean
+            if let Err(abort_err) = git::merge_abort(&main_repo) {
+                eprintln!("Warning: merge --abort failed: {abort_err}");
+            }
+            return Err(e);
+        }
+    }
 
     // Run post-merge hook in a named "hook" window within the main session
     let hook_path = project_root.join(hooks::POST_MERGE_PATH);
@@ -238,6 +249,54 @@ mod tests {
         let result = feat_merge(&project_path, "login", false, server.name());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("already merged"));
+    }
+
+    #[test]
+    fn merge_conflict_aborts_and_leaves_main_clean() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+
+        // Create a conflicting file on both main and feature
+        let main_repo = project_path.join("main");
+        std::fs::write(main_repo.join("shared.txt"), "main content").unwrap();
+        git::stage_file(&main_repo, "shared.txt").unwrap();
+        git::commit(&main_repo, "main change").unwrap();
+
+        let worktree = project_path.join("login");
+        std::fs::write(worktree.join("shared.txt"), "feature content").unwrap();
+        git::stage_file(&worktree, "shared.txt").unwrap();
+        git::commit(&worktree, "feature change").unwrap();
+
+        let result = feat_merge(&project_path, "login", false, server.name());
+        assert!(result.is_err());
+
+        // Main worktree should be clean — merge was aborted
+        assert!(!git::has_uncommitted_changes(&main_repo).unwrap());
+    }
+
+    #[test]
+    fn merge_skips_local_merge_when_already_merged_upstream() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+
+        // Simulate the branch being merged upstream by merging it directly in the main worktree via git
+        let main_repo = project_path.join("main");
+        let worktree = project_path.join("login");
+        std::fs::write(worktree.join("feature.txt"), "feature work").unwrap();
+        git::stage_file(&worktree, "feature.txt").unwrap();
+        git::commit(&worktree, "feature work").unwrap();
+
+        // Merge via git directly (simulating a GitHub PR merge)
+        git::merge_no_ff(&main_repo, "login").unwrap();
+
+        // Now pm feat merge --delete should succeed without attempting a redundant merge
+        feat_merge(&project_path, "login", true, server.name()).unwrap();
+
+        // Cleanup should have happened
+        assert!(!project_path.join("login").exists());
+        assert!(!git::branch_exists(&main_repo, "login").unwrap());
     }
 
     #[test]

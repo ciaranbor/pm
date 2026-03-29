@@ -184,6 +184,12 @@ pub fn merge_no_ff(repo: &Path, branch: &str) -> Result<()> {
     Ok(())
 }
 
+/// Abort an in-progress merge.
+pub fn merge_abort(repo: &Path) -> Result<()> {
+    run_git(repo, &["merge", "--abort"])?;
+    Ok(())
+}
+
 /// Stage a file in the given repo/worktree (test helper).
 #[cfg(test)]
 pub(crate) fn stage_file(repo: &Path, file: &str) -> Result<()> {
