@@ -47,6 +47,8 @@ enum Commands {
     /// Claude Code session management
     #[command(subcommand)]
     Claude(ClaudeCommands),
+    /// Diagnose project health and detect state drift
+    Doctor,
 }
 
 #[derive(Subcommand)]
@@ -345,6 +347,14 @@ fn run() -> pm::error::Result<()> {
                     Ok(())
                 }
             }
+        }
+        Commands::Doctor => {
+            let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+            let lines = commands::doctor::doctor(&project_root, None)?;
+            for line in lines {
+                println!("{line}");
+            }
+            Ok(())
         }
         Commands::Claude(claude_cmd) => match claude_cmd {
             ClaudeCommands::Migrate { from } => {
