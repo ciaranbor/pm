@@ -148,6 +148,11 @@ enum FeatCommands {
         /// Feature name (detected from CWD if omitted)
         name: Option<String>,
     },
+    /// Sync feature statuses with their linked GitHub PRs
+    Sync {
+        /// Feature name (syncs just this feature). Detected from CWD if omitted. If not in a feature worktree, syncs all features.
+        name: Option<String>,
+    },
 }
 
 fn resolve_feature_name(
@@ -324,6 +329,19 @@ fn run() -> pm::error::Result<()> {
                     let name = resolve_feature_name(name, &project_root)?;
                     commands::feat_ready::feat_ready(&project_root, &name)?;
                     println!("PR marked ready for feature '{name}'");
+                    Ok(())
+                }
+                FeatCommands::Sync { name } => {
+                    let name = name.or_else(|| {
+                        paths::detect_feature_from_cwd(
+                            &project_root,
+                            &std::env::current_dir().ok()?,
+                        )
+                    });
+                    let messages = commands::feat_sync::feat_sync(&project_root, name.as_deref())?;
+                    for msg in messages {
+                        println!("{msg}");
+                    }
                     Ok(())
                 }
             }
