@@ -113,7 +113,7 @@ pm feat delete login             # with safety checks
 pm feat delete --force           # delete current feature, skip safety checks
 ```
 
-Safety checks block deletion if the feature has uncommitted changes or commits not merged into main. Untracked files trigger a warning but don't block. Feature name is detected from CWD if omitted.
+Safety checks block deletion if the feature has uncommitted changes or commits not merged into main. If the feature has a linked PR that was merged on GitHub, the merge and unpushed checks are skipped (handles squash merges) and the post-merge hook is triggered. Untracked files trigger a warning but don't block. Feature name is detected from CWD if omitted.
 
 ### Open a project
 

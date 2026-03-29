@@ -59,6 +59,15 @@ pub fn create_pr(repo_dir: &Path, branch: &str, draft: bool, body: Option<&str>)
     Ok(pr_number_from_url(&url))
 }
 
+/// Check if a PR has been merged on GitHub.
+pub fn pr_is_merged(repo_dir: &Path, pr_number: &str) -> Result<bool> {
+    let output = run_gh(
+        repo_dir,
+        &["pr", "view", pr_number, "--json", "state", "--jq", ".state"],
+    )?;
+    Ok(output == "MERGED")
+}
+
 /// Mark an existing PR as ready for review.
 pub fn mark_pr_ready(repo_dir: &Path, branch: &str) -> Result<()> {
     run_gh(repo_dir, &["pr", "ready", branch])?;

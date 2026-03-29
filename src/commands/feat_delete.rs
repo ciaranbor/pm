@@ -4,7 +4,7 @@ use crate::error::{PmError, Result};
 use crate::state::feature::FeatureState;
 use crate::state::paths;
 use crate::state::project::ProjectConfig;
-use crate::{git, tmux};
+use crate::{gh, git, hooks, tmux};
 
 /// Parameters for feature cleanup.
 pub struct CleanupParams<'a> {
@@ -91,6 +91,32 @@ pub fn check_safety(
     })
 }
 
+/// Evaluate a safety report and return an error if deletion should be blocked.
+/// When `pr_merged` is true, the unmerged-commits and unpushed-commits checks
+/// are skipped (handles squash merges where git can't detect the merge).
+fn evaluate_safety(report: &SafetyReport, pr_merged: bool, name: &str) -> Result<()> {
+    if report.has_uncommitted_changes {
+        return Err(PmError::Git(format!(
+            "feature '{name}' has uncommitted changes. Use --force to override."
+        )));
+    }
+
+    if !report.is_merged && !pr_merged {
+        return Err(PmError::Git(format!(
+            "feature '{name}' has commits not merged into main. Use --force to override."
+        )));
+    }
+
+    // Skip unpushed check when PR is merged — the commits are on GitHub already
+    if report.has_unpushed_commits && !pr_merged {
+        return Err(PmError::Git(format!(
+            "feature '{name}' has unpushed commits. Use --force to override."
+        )));
+    }
+
+    Ok(())
+}
+
 /// Delete a feature: kill session, remove worktree, delete branch, remove state.
 pub fn feat_delete(
     project_root: &Path,
@@ -109,30 +135,15 @@ pub fn feat_delete(
     let worktree_path = project_root.join(&state.worktree);
     let main_repo = project_root.join("main");
 
+    // Check if the linked PR was merged on GitHub (handles squash merges
+    // where git can't detect the merge). Used for both safety bypass and hook.
+    let pr_merged =
+        !state.pr.is_empty() && gh::pr_is_merged(&main_repo, &state.pr).unwrap_or(false);
+
     // Run safety checks unless --force
     if !force {
         let report = check_safety(&worktree_path, &main_repo, &state.branch, "main")?;
-
-        // Always block on uncommitted changes, regardless of merge status
-        if report.has_uncommitted_changes {
-            return Err(PmError::Git(format!(
-                "feature '{name}' has uncommitted changes. Use --force to override."
-            )));
-        }
-
-        if !report.is_merged {
-            // Branch has commits not in main — block
-            return Err(PmError::Git(format!(
-                "feature '{name}' has commits not merged into main. Use --force to override."
-            )));
-        }
-
-        // Merged but has unpushed commits (local ahead of upstream)
-        if report.has_unpushed_commits {
-            return Err(PmError::Git(format!(
-                "feature '{name}' has unpushed commits. Use --force to override."
-            )));
-        }
+        evaluate_safety(&report, pr_merged, name)?;
 
         if report.has_warnings() {
             eprintln!(
@@ -162,7 +173,16 @@ pub fn feat_delete(
         project_name,
         force_worktree,
         tmux_server,
-    })
+    })?;
+
+    // Trigger post-merge hook when deleting a feature whose PR was merged
+    if pr_merged {
+        let hook_path = project_root.join(hooks::POST_MERGE_PATH);
+        let main_session = format!("{project_name}/main");
+        hooks::run_hook(tmux_server, &main_session, &main_repo, &hook_path);
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -343,5 +363,57 @@ mod tests {
 
         let features_dir = paths::features_dir(&project_path);
         assert!(FeatureState::exists(&features_dir, "login"));
+    }
+
+    // --- evaluate_safety unit tests ---
+
+    fn make_report(uncommitted: bool, merged: bool, unpushed: bool) -> SafetyReport {
+        SafetyReport {
+            has_uncommitted_changes: uncommitted,
+            untracked_files: vec![],
+            has_unpushed_commits: unpushed,
+            is_merged: merged,
+        }
+    }
+
+    #[test]
+    fn safety_clean_merged_branch_passes() {
+        let report = make_report(false, true, false);
+        assert!(evaluate_safety(&report, false, "feat").is_ok());
+    }
+
+    #[test]
+    fn safety_uncommitted_changes_always_blocks() {
+        // Blocks even when git-merged
+        let report = make_report(true, true, false);
+        assert!(evaluate_safety(&report, false, "feat").is_err());
+
+        // Blocks even when PR is merged
+        let report = make_report(true, false, false);
+        assert!(evaluate_safety(&report, true, "feat").is_err());
+    }
+
+    #[test]
+    fn safety_unmerged_branch_blocks_without_pr() {
+        let report = make_report(false, false, false);
+        assert!(evaluate_safety(&report, false, "feat").is_err());
+    }
+
+    #[test]
+    fn safety_unmerged_branch_passes_when_pr_merged() {
+        let report = make_report(false, false, false);
+        assert!(evaluate_safety(&report, true, "feat").is_ok());
+    }
+
+    #[test]
+    fn safety_unpushed_commits_block_without_pr() {
+        let report = make_report(false, true, true);
+        assert!(evaluate_safety(&report, false, "feat").is_err());
+    }
+
+    #[test]
+    fn safety_unpushed_commits_pass_when_pr_merged() {
+        let report = make_report(false, false, true);
+        assert!(evaluate_safety(&report, true, "feat").is_ok());
     }
 }
