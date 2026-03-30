@@ -54,6 +54,8 @@ mod tests {
             &project_path,
             "alpha",
             Some("fix the widget"),
+            None,
+            false,
             server.name(),
         )
         .unwrap();
@@ -88,11 +90,11 @@ mod tests {
         let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
         init::init(&project_path, &projects_dir, server.name()).unwrap();
-        feat_new::feat_new(&project_path, "beta", None, server.name()).unwrap();
+        feat_new::feat_new(&project_path, "beta", None, None, false, server.name()).unwrap();
 
         let lines = feat_info(&project_path, "beta").unwrap();
         let output = lines.join("\n");
-        assert!(!output.contains("base:"));
+        // base is always set (detected from CWD when not explicit)
         assert!(!output.contains("pr:"));
         assert!(!output.contains("context:"));
     }
