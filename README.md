@@ -100,8 +100,11 @@ Every project is bootstrapped with two hook scripts:
 
 - `.pm/hooks/post-create.sh` — runs in the feature's tmux session after `pm feat new`
 - `.pm/hooks/post-merge.sh` — runs in the base branch's tmux session after `pm feat merge`
+- `.pm/hooks/restore.sh` — runs in each session when `pm open` recreates it (e.g. after reboot)
 
 Hooks run asynchronously in a dedicated `hook` window via `tmux send-keys` — pm does not block on their completion. The hook window is reused across invocations.
+
+`post-create.sh` and `post-merge.sh` are created with defaults on `pm init`. `restore.sh` is opt-in — create it yourself for lightweight recovery tasks like reopening an editor.
 
 Edit the scripts to add your own logic (install deps, run migrations, deploy, etc.). Removing a hook script disables it.
 

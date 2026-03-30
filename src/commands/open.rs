@@ -30,6 +30,7 @@ pub fn open(project_root: &Path, tmux_server: Option<&str>) -> Result<()> {
 
     // Ensure <project>/main session exists
     let main_session = format!("{project_name}/main");
+    let restore_hook = project_root.join(hooks::RESTORE_PATH);
     if !tmux::has_session(tmux_server, &main_session)? {
         let main_path = project_root.join("main");
         if !main_path.exists() {
@@ -39,6 +40,7 @@ pub fn open(project_root: &Path, tmux_server: Option<&str>) -> Result<()> {
             )));
         }
         tmux::create_session(tmux_server, &main_session, &main_path)?;
+        hooks::run_hook(tmux_server, &main_session, &main_path, &restore_hook);
     }
 
     // Ensure sessions exist for all active features
@@ -60,6 +62,7 @@ pub fn open(project_root: &Path, tmux_server: Option<&str>) -> Result<()> {
                 continue;
             }
             tmux::create_session(tmux_server, &session_name, &worktree_path)?;
+            hooks::run_hook(tmux_server, &session_name, &worktree_path, &restore_hook);
         }
     }
 
@@ -242,6 +245,75 @@ mod tests {
 
         let result = open(&project_path, server.name());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn open_runs_restore_hook_for_new_sessions() {
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().join("myapp");
+        let projects_dir = dir.path().join("registry");
+        let server = TestServer::new();
+        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        feat_new::feat_new(&project_path, "login", None, None, false, server.name()).unwrap();
+
+        // Create a restore hook
+        let restore_path = project_path.join(hooks::RESTORE_PATH);
+        std::fs::write(&restore_path, "#!/bin/sh\necho restored\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&restore_path, std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+
+        // Kill all sessions to force recreation
+        tmux::kill_session(server.name(), "myapp/main").unwrap();
+        tmux::kill_session(server.name(), "myapp/login").unwrap();
+
+        open(&project_path, server.name()).unwrap();
+
+        // Verify sessions were created and hook windows exist (restore hook ran)
+        assert!(tmux::has_session(server.name(), "myapp/main").unwrap());
+        assert!(tmux::has_session(server.name(), "myapp/login").unwrap());
+        assert!(
+            tmux::find_window(server.name(), "myapp/main", "hook")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            tmux::find_window(server.name(), "myapp/login", "hook")
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn open_skips_restore_hook_for_existing_sessions() {
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().join("myapp");
+        let projects_dir = dir.path().join("registry");
+        let server = TestServer::new();
+        init::init(&project_path, &projects_dir, server.name()).unwrap();
+
+        // Create a restore hook
+        let restore_path = project_path.join(hooks::RESTORE_PATH);
+        std::fs::write(&restore_path, "#!/bin/sh\necho restored\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&restore_path, std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+
+        // Sessions already exist from init — open should NOT run restore hook
+        open(&project_path, server.name()).unwrap();
+
+        // No hook window should exist since sessions were not recreated
+        assert!(
+            tmux::find_window(server.name(), "myapp/main", "hook")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
