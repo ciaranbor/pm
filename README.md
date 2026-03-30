@@ -51,9 +51,10 @@ Restructures the repo in-place: moves it into `main/` within a new wrapper at th
 pm feat new login
 pm feat new login --context "Implement login page per issue #42"
 pm feat new login --context path/to/brief.md
+pm feat new child --base parent      # stack on another feature
 ```
 
-Creates a git branch, worktree, and tmux session (`myapp/login`). With `--context`, seeds a `TASK.md` in the worktree.
+Creates a git branch, worktree, and tmux session (`myapp/login`). With `--context`, seeds a `TASK.md` in the worktree. With `--base`, branches from the specified branch instead of the default. When `--base` is omitted, the current branch is detected from CWD — so running `pm feat new child` from within a feature worktree automatically stacks on that feature.
 
 ### List features
 
@@ -71,18 +72,18 @@ pm feat switch                   # interactive picker (tmux display-menu)
 ### Merge a feature
 
 ```sh
-pm feat merge login             # merge into main
+pm feat merge login             # merge into base branch (defaults to main)
 pm feat merge --delete          # merge current feature and clean up
 ```
 
-Blocks if either the feature or main worktree has uncommitted changes. Always creates a merge commit (`--no-ff`). Feature name is detected from CWD if omitted. If the branch was already merged (e.g. via GitHub PR), the local merge is skipped. If a merge conflict occurs, the merge is aborted and the main worktree is left clean.
+Merges the feature into its base branch (defaults to main; stacked features merge into their parent). Blocks if either the feature or base worktree has uncommitted changes. Always creates a merge commit (`--no-ff`). Feature name is detected from CWD if omitted. If the branch was already merged (e.g. via GitHub PR), the local merge is skipped. If a merge conflict occurs, the merge is aborted and the base worktree is left clean.
 
 ### Lifecycle hooks
 
 Every project is bootstrapped with two hook scripts:
 
 - `.pm/hooks/post-create.sh` — runs in the feature's tmux session after `pm feat new`
-- `.pm/hooks/post-merge.sh` — runs in the main tmux session after `pm feat merge`
+- `.pm/hooks/post-merge.sh` — runs in the base branch's tmux session after `pm feat merge`
 
 Hooks run asynchronously in a dedicated `hook` window via `tmux send-keys` — pm does not block on their completion. The hook window is reused across invocations.
 
@@ -95,7 +96,7 @@ pm feat pr login                # create a draft PR for the feature
 pm feat pr --ready              # create a non-draft PR (feature detected from CWD)
 ```
 
-Pushes the branch to origin, then creates a GitHub PR via `gh`. Draft by default; use `--ready` for a non-draft PR. If a PR already exists for the branch, links it instead of creating a new one. Respects `.github/pull_request_template.md` if present. Stores the PR number in feature state. Draft PRs keep `wip` status; `--ready` sets status to `review`. Feature name is detected from CWD if omitted.
+Pushes the branch to origin, then creates a GitHub PR via `gh`. Draft by default; use `--ready` for a non-draft PR. If a PR already exists for the branch, links it instead of creating a new one. For stacked features, the PR targets the base branch instead of main. Respects `.github/pull_request_template.md` if present. Stores the PR number in feature state. Draft PRs keep `wip` status; `--ready` sets status to `review`. Feature name is detected from CWD if omitted.
 
 ### Mark a PR as ready for review
 
@@ -122,7 +123,7 @@ pm feat delete login             # with safety checks
 pm feat delete --force           # delete current feature, skip safety checks
 ```
 
-Safety checks block deletion if the feature has uncommitted changes or commits not merged into main. If the feature has a linked PR that was merged on GitHub, the merge and unpushed checks are skipped (handles squash merges) and the post-merge hook is triggered. Untracked files trigger a warning but don't block. Feature name is detected from CWD if omitted.
+Safety checks block deletion if the feature has uncommitted changes or commits not merged into its base branch (defaults to main; stacked features check against their parent). If the feature has a linked PR that was merged on GitHub, the merge and unpushed checks are skipped (handles squash merges) and the post-merge hook is triggered. Untracked files trigger a warning but don't block. Feature name is detected from CWD if omitted.
 
 ### Open a project
 

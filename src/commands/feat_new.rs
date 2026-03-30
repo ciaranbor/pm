@@ -21,7 +21,28 @@ pub fn resolve_context(context: &str) -> Result<String> {
     }
 }
 
+/// Resolve the base branch for a new feature.
+/// If explicitly provided, use that. Otherwise detect the current branch from `cwd`.
+pub fn resolve_base(project_root: &Path, base: Option<&str>, cwd: &Path) -> Result<String> {
+    if let Some(b) = base {
+        return Ok(b.to_string());
+    }
+    // Detect from CWD: find which worktree we're in and get its branch
+    let main_worktree = project_root.join("main");
+    // Try CWD first, fall back to main worktree
+    let detect_from = if cwd.starts_with(project_root) {
+        cwd
+    } else {
+        main_worktree.as_path()
+    };
+    git::current_branch(detect_from).or_else(|_| Ok("main".to_string()))
+}
+
 /// Create a new feature: branch + worktree + tmux session + state file.
+///
+/// The `base` parameter specifies which branch to stack on. When `None`,
+/// the current branch is detected from CWD (enabling natural stacking from
+/// within a feature worktree).
 ///
 /// The tmux `server` parameter allows tests to use an isolated tmux server.
 /// In production, pass `None` to use the default server.
@@ -29,6 +50,7 @@ pub fn feat_new(
     project_root: &Path,
     name: &str,
     context: Option<&str>,
+    base: Option<&str>,
     tmux_server: Option<&str>,
 ) -> Result<()> {
     let features_dir = paths::features_dir(project_root);
@@ -46,13 +68,17 @@ pub fn feat_new(
     // Resolve context upfront (file contents or literal text)
     let resolved_context = context.map(resolve_context).transpose()?;
 
+    // Resolve base branch (explicit, or detected from CWD)
+    let cwd = std::env::current_dir()?;
+    let resolved_base = resolve_base(project_root, base, &cwd)?;
+
     // Step 1: Write state with status = initializing
     let now = Utc::now();
     let mut state = FeatureState {
         status: FeatureStatus::Initializing,
         branch: name.to_string(),
         worktree: name.to_string(),
-        base: String::new(),
+        base: resolved_base.clone(),
         pr: String::new(),
         context: resolved_context.clone().unwrap_or_default(),
         created: now,
@@ -67,8 +93,8 @@ pub fn feat_new(
     let hook_path = project_root.join(hooks::POST_CREATE_PATH);
 
     let result: Result<()> = (|| {
-        // Step 2: Create git branch
-        git::create_branch(&main_worktree, name)?;
+        // Step 2: Create git branch from the base branch
+        git::create_branch_from(&main_worktree, name, &resolved_base)?;
 
         // Step 3: Create git worktree
         git::add_worktree(&main_worktree, &worktree_path, name)?;
@@ -140,7 +166,7 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
-        feat_new(&project_path, "login", None, server.name()).unwrap();
+        feat_new(&project_path, "login", None, None, server.name()).unwrap();
 
         let features_dir = paths::features_dir(&project_path);
         let state = FeatureState::load(&features_dir, "login").unwrap();
@@ -153,7 +179,7 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
-        feat_new(&project_path, "login", None, server.name()).unwrap();
+        feat_new(&project_path, "login", None, None, server.name()).unwrap();
 
         let main_path = project_path.join("main");
         assert!(git::branch_exists(&main_path, "login").unwrap());
@@ -165,7 +191,7 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
-        feat_new(&project_path, "login", None, server.name()).unwrap();
+        feat_new(&project_path, "login", None, None, server.name()).unwrap();
 
         let worktree_path = project_path.join("login");
         assert!(worktree_path.exists());
@@ -178,7 +204,7 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
-        feat_new(&project_path, "login", None, server.name()).unwrap();
+        feat_new(&project_path, "login", None, None, server.name()).unwrap();
 
         assert!(tmux::has_session(server.name(), "myapp/login").unwrap());
     }
@@ -190,7 +216,7 @@ mod tests {
         let (project_path, _) = setup_project(dir.path(), &server);
         let before = Utc::now();
 
-        feat_new(&project_path, "login", None, server.name()).unwrap();
+        feat_new(&project_path, "login", None, None, server.name()).unwrap();
 
         let features_dir = paths::features_dir(&project_path);
         let state = FeatureState::load(&features_dir, "login").unwrap();
@@ -204,7 +230,7 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
-        feat_new(&project_path, "login", None, server.name()).unwrap();
+        feat_new(&project_path, "login", None, None, server.name()).unwrap();
 
         let features_dir = paths::features_dir(&project_path);
         let state = FeatureState::load(&features_dir, "login").unwrap();
@@ -218,8 +244,8 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
-        feat_new(&project_path, "login", None, server.name()).unwrap();
-        let result = feat_new(&project_path, "login", None, server.name());
+        feat_new(&project_path, "login", None, None, server.name()).unwrap();
+        let result = feat_new(&project_path, "login", None, None, server.name());
 
         assert!(result.is_err());
         assert!(matches!(
@@ -238,7 +264,7 @@ mod tests {
         // so create_session fails with "duplicate session"
         tmux::create_session(server.name(), "myapp/login", dir.path()).unwrap();
 
-        let result = feat_new(&project_path, "login", None, server.name());
+        let result = feat_new(&project_path, "login", None, None, server.name());
         assert!(result.is_err());
 
         // State file should be cleaned up
@@ -261,7 +287,7 @@ mod tests {
         std::fs::create_dir(project_path.join("login")).unwrap();
         std::fs::write(project_path.join("login").join("blocker.txt"), "").unwrap();
 
-        let result = feat_new(&project_path, "login", None, server.name());
+        let result = feat_new(&project_path, "login", None, None, server.name());
         assert!(result.is_err());
 
         // State file should be cleaned up
@@ -283,6 +309,7 @@ mod tests {
             &project_path,
             "login",
             Some("Implement login page per issue #42"),
+            None,
             server.name(),
         )
         .unwrap();
@@ -312,6 +339,7 @@ mod tests {
             &project_path,
             "login",
             Some(brief_path.to_str().unwrap()),
+            None,
             server.name(),
         )
         .unwrap();
@@ -336,6 +364,7 @@ mod tests {
             &project_path,
             "login",
             Some(brief_path.to_str().unwrap()),
+            None,
             server.name(),
         )
         .unwrap();
@@ -355,6 +384,7 @@ mod tests {
             &project_path,
             "login",
             Some("Build the login page"),
+            None,
             server.name(),
         )
         .unwrap();
@@ -370,7 +400,7 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
-        feat_new(&project_path, "login", None, server.name()).unwrap();
+        feat_new(&project_path, "login", None, None, server.name()).unwrap();
 
         // Session should have 2 windows: default shell + hook window
         let output = tmux::list_windows(server.name(), "myapp/login").unwrap();
@@ -383,7 +413,7 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
-        feat_new(&project_path, "login", None, server.name()).unwrap();
+        feat_new(&project_path, "login", None, None, server.name()).unwrap();
 
         let task_md = project_path.join("login").join("TASK.md");
         assert!(!task_md.exists());
@@ -399,7 +429,7 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
-        feat_new(&project_path, "login", None, server.name()).unwrap();
+        feat_new(&project_path, "login", None, None, server.name()).unwrap();
 
         // Session should have 2 windows: default shell + hook window
         let windows = tmux::list_windows(server.name(), "myapp/login").unwrap();
@@ -419,6 +449,7 @@ mod tests {
             &project_path,
             "login",
             Some("Build the login page"),
+            None,
             server.name(),
         )
         .unwrap();
@@ -437,10 +468,97 @@ mod tests {
         // Remove the bootstrapped hook script
         std::fs::remove_file(project_path.join(hooks::POST_CREATE_PATH)).unwrap();
 
-        feat_new(&project_path, "login", None, server.name()).unwrap();
+        feat_new(&project_path, "login", None, None, server.name()).unwrap();
 
         // Only 1 window — hook was skipped because file is missing
         let windows = tmux::list_windows(server.name(), "myapp/login").unwrap();
         assert_eq!(windows, 1);
+    }
+
+    #[test]
+    fn feat_new_with_base_stores_base_in_state() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = setup_project(dir.path(), &server);
+
+        feat_new(&project_path, "login", None, None, server.name()).unwrap();
+        feat_new(&project_path, "stacked", None, Some("login"), server.name()).unwrap();
+
+        let features_dir = paths::features_dir(&project_path);
+        let state = FeatureState::load(&features_dir, "stacked").unwrap();
+        assert_eq!(state.base, "login");
+    }
+
+    #[test]
+    fn feat_new_with_base_branches_from_parent() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = setup_project(dir.path(), &server);
+
+        // Create parent feature with a commit
+        feat_new(&project_path, "parent", None, None, server.name()).unwrap();
+        let parent_wt = project_path.join("parent");
+        std::fs::write(parent_wt.join("parent.txt"), "parent work").unwrap();
+        git::stage_file(&parent_wt, "parent.txt").unwrap();
+        git::commit(&parent_wt, "parent commit").unwrap();
+
+        // Create stacked feature based on parent
+        feat_new(&project_path, "child", None, Some("parent"), server.name()).unwrap();
+
+        // Child worktree should have the parent's file
+        let child_wt = project_path.join("child");
+        assert!(child_wt.join("parent.txt").exists());
+    }
+
+    #[test]
+    fn feat_new_without_base_defaults_to_main() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = setup_project(dir.path(), &server);
+
+        feat_new(&project_path, "login", None, None, server.name()).unwrap();
+
+        let features_dir = paths::features_dir(&project_path);
+        let state = FeatureState::load(&features_dir, "login").unwrap();
+        assert_eq!(state.base, "main");
+    }
+
+    #[test]
+    fn resolve_base_returns_explicit_base() {
+        let dir = tempdir().unwrap();
+        let result = resolve_base(dir.path(), Some("my-branch"), dir.path()).unwrap();
+        assert_eq!(result, "my-branch");
+    }
+
+    #[test]
+    fn resolve_base_detects_branch_from_worktree_cwd() {
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().join("myproject");
+        std::fs::create_dir_all(&project_path).unwrap();
+        let main_path = project_path.join("main");
+        git::init_repo(&main_path).unwrap();
+
+        git::create_branch(&main_path, "parent").unwrap();
+        let parent_wt = project_path.join("parent");
+        git::add_worktree(&main_path, &parent_wt, "parent").unwrap();
+
+        // Simulate CWD being inside the parent worktree
+        let result = resolve_base(&project_path, None, &parent_wt).unwrap();
+        assert_eq!(result, "parent");
+    }
+
+    #[test]
+    fn resolve_base_falls_back_to_main_when_outside_project() {
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().join("myproject");
+        std::fs::create_dir_all(&project_path).unwrap();
+        let main_path = project_path.join("main");
+        git::init_repo(&main_path).unwrap();
+
+        // CWD is outside the project
+        let outside = dir.path().join("elsewhere");
+        std::fs::create_dir_all(&outside).unwrap();
+        let result = resolve_base(&project_path, None, &outside).unwrap();
+        assert_eq!(result, "main");
     }
 }

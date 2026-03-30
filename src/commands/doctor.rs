@@ -306,7 +306,7 @@ fn apply_fix(
         FixAction::CleanupInitializing { worktree, branch } => {
             let worktree_path = project_root.join(worktree);
             feat_delete::cleanup_feature(&CleanupParams {
-                main_repo,
+                repo: main_repo,
                 worktree_path: &worktree_path,
                 branch,
                 features_dir,
@@ -351,7 +351,7 @@ mod tests {
         server: &TestServer,
     ) -> std::path::PathBuf {
         let project_path = setup_project(dir, server);
-        feat_new::feat_new(&project_path, feature_name, None, server.name()).unwrap();
+        feat_new::feat_new(&project_path, feature_name, None, None, server.name()).unwrap();
         project_path
     }
 
@@ -498,8 +498,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let project_path = setup_project(dir.path(), &server);
-        feat_new::feat_new(&project_path, "alpha", None, server.name()).unwrap();
-        feat_new::feat_new(&project_path, "beta", None, server.name()).unwrap();
+        feat_new::feat_new(&project_path, "alpha", None, None, server.name()).unwrap();
+        feat_new::feat_new(&project_path, "beta", None, None, server.name()).unwrap();
 
         let lines = doctor(&project_path, false, server.name()).unwrap();
         assert!(lines[0].contains("2 feature(s)"), "got: {:?}", lines);

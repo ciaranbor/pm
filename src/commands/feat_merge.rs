@@ -23,7 +23,8 @@ pub fn feat_merge(
     let config = ProjectConfig::load(&pm_dir)?;
     let project_name = &config.project.name;
 
-    let main_repo = project_root.join("main");
+    let base = state.base_or_default();
+    let base_repo = project_root.join(base);
     let worktree_path = project_root.join(&state.worktree);
 
     // Block if already merged
@@ -38,35 +39,35 @@ pub fn feat_merge(
         )));
     }
 
-    // Block if the main worktree has uncommitted changes
-    if git::has_uncommitted_changes(&main_repo)? {
-        return Err(PmError::Git(
-            "main worktree has uncommitted changes — commit or stash before merging".to_string(),
-        ));
+    // Block if the base worktree has uncommitted changes
+    if git::has_uncommitted_changes(&base_repo)? {
+        return Err(PmError::Git(format!(
+            "{base} worktree has uncommitted changes — commit or stash before merging"
+        )));
     }
 
     // Check if the branch is already merged into the base branch (e.g. via GitHub PR)
-    let already_merged = git::branch_merged_into(&main_repo, &state.branch, &state.base)?;
+    let already_merged = git::branch_merged_into(&base_repo, &state.branch, base)?;
 
     if !already_merged {
-        // Perform the merge from the main worktree
-        if let Err(e) = git::merge_no_ff(&main_repo, &state.branch) {
-            // Abort the failed merge to leave main worktree clean
-            if let Err(abort_err) = git::merge_abort(&main_repo) {
+        // Perform the merge from the base worktree
+        if let Err(e) = git::merge_no_ff(&base_repo, &state.branch) {
+            // Abort the failed merge to leave base worktree clean
+            if let Err(abort_err) = git::merge_abort(&base_repo) {
                 eprintln!("Warning: merge --abort failed: {abort_err}");
             }
             return Err(e);
         }
     }
 
-    // Run post-merge hook in a named "hook" window within the main session
+    // Run post-merge hook in a named "hook" window within the base session
     let hook_path = project_root.join(hooks::POST_MERGE_PATH);
-    let main_session = format!("{project_name}/main");
-    hooks::run_hook(tmux_server, &main_session, &main_repo, &hook_path);
+    let base_session = format!("{project_name}/{base}");
+    hooks::run_hook(tmux_server, &base_session, &base_repo, &hook_path);
 
     if delete {
         cleanup_feature(&CleanupParams {
-            main_repo: &main_repo,
+            repo: &base_repo,
             worktree_path: &worktree_path,
             branch: &state.branch,
             features_dir: &features_dir,
@@ -102,7 +103,7 @@ mod tests {
         let project_path = dir.join("myapp");
         let projects_dir = dir.join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
-        feat_new::feat_new(&project_path, feature_name, None, server.name()).unwrap();
+        feat_new::feat_new(&project_path, feature_name, None, None, server.name()).unwrap();
         project_path
     }
 
@@ -391,7 +392,7 @@ mod tests {
         feat_merge(&project_path, "login", false, server.name()).unwrap();
 
         // Create a second feature and merge it too
-        feat_new::feat_new(&project_path, "api", None, server.name()).unwrap();
+        feat_new::feat_new(&project_path, "api", None, None, server.name()).unwrap();
         let worktree = project_path.join("api");
         std::fs::write(worktree.join("api.txt"), "api work").unwrap();
         git::stage_file(&worktree, "api.txt").unwrap();
@@ -438,5 +439,52 @@ mod tests {
         let features_dir = paths::features_dir(&project_path);
         let state = FeatureState::load(&features_dir, "login").unwrap();
         assert_eq!(state.status, FeatureStatus::Merged);
+    }
+
+    #[test]
+    fn merge_stacked_feature_merges_into_parent_worktree() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let project_path = setup_project_with_feature(dir.path(), "parent", &server);
+
+        // Add a commit to parent
+        let parent_wt = project_path.join("parent");
+        std::fs::write(parent_wt.join("parent.txt"), "parent work").unwrap();
+        git::stage_file(&parent_wt, "parent.txt").unwrap();
+        git::commit(&parent_wt, "parent commit").unwrap();
+
+        // Create stacked feature based on parent
+        feat_new::feat_new(&project_path, "child", None, Some("parent"), server.name()).unwrap();
+        let child_wt = project_path.join("child");
+        std::fs::write(child_wt.join("child.txt"), "child work").unwrap();
+        git::stage_file(&child_wt, "child.txt").unwrap();
+        git::commit(&child_wt, "child commit").unwrap();
+
+        feat_merge(&project_path, "child", false, server.name()).unwrap();
+
+        // Child's changes should appear in parent worktree, not main
+        assert!(parent_wt.join("child.txt").exists());
+        let main_repo = project_path.join("main");
+        assert!(!main_repo.join("child.txt").exists());
+    }
+
+    #[test]
+    fn merge_stacked_feature_with_delete_cleans_up() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let project_path = setup_project_with_feature(dir.path(), "parent", &server);
+
+        feat_new::feat_new(&project_path, "child", None, Some("parent"), server.name()).unwrap();
+        let child_wt = project_path.join("child");
+        std::fs::write(child_wt.join("child.txt"), "child work").unwrap();
+        git::stage_file(&child_wt, "child.txt").unwrap();
+        git::commit(&child_wt, "child commit").unwrap();
+
+        feat_merge(&project_path, "child", true, server.name()).unwrap();
+
+        // Cleaned up
+        assert!(!project_path.join("child").exists());
+        let features_dir = paths::features_dir(&project_path);
+        assert!(!FeatureState::exists(&features_dir, "child"));
     }
 }
