@@ -159,6 +159,15 @@ pm feat adopt login --from /old/path # adopt branch and migrate sessions
 
 `pm register` (both symlink and move modes) migrates sessions automatically — no extra flags needed.
 
+### Project status dashboard
+
+```sh
+pm status                        # dashboard for current project
+pm status --project myapp        # dashboard for a specific project by name
+```
+
+Shows a project overview: name, root path, feature count, and a table of all features with their status. For features with linked PRs, displays the PR number and GitHub state (open, merged, closed, draft). Also surfaces any health issues that `pm doctor` would flag.
+
 ### Diagnose project health
 
 ```sh

@@ -47,6 +47,12 @@ enum Commands {
     /// Claude Code session management
     #[command(subcommand)]
     Claude(ClaudeCommands),
+    /// Show project dashboard (features, PR status, health)
+    Status {
+        /// Project name (defaults to current project from CWD)
+        #[arg(long)]
+        project: Option<String>,
+    },
     /// Diagnose project health and detect state drift
     Doctor {
         /// Auto-fix clear-cut issues (orphaned state, stuck initializing, missing tmux sessions)
@@ -367,6 +373,20 @@ fn run() -> pm::error::Result<()> {
                     Ok(())
                 }
             }
+        }
+        Commands::Status { project } => {
+            let project_root = if let Some(name) = project {
+                let projects_dir = paths::global_projects_dir()?;
+                let entry = pm::state::project::ProjectEntry::load(&projects_dir, &name)?;
+                PathBuf::from(&entry.root)
+            } else {
+                paths::find_project_root(&std::env::current_dir()?)?
+            };
+            let lines = commands::status::status(&project_root, None)?;
+            for line in lines {
+                println!("{line}");
+            }
+            Ok(())
         }
         Commands::Doctor { fix, project } => {
             let project_root = if let Some(name) = project {
