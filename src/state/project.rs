@@ -34,8 +34,6 @@ pub struct ProjectInfo {
 pub struct SetupConfig {
     #[serde(default)]
     pub script: String,
-    #[serde(default)]
-    pub restore_script: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -235,7 +233,6 @@ mod tests {
             },
             setup: SetupConfig {
                 script: "setup.sh".to_string(),
-                restore_script: String::new(),
             },
             github: GithubConfig {
                 repo: "owner/repo".to_string(),

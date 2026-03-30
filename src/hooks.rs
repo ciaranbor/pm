@@ -7,6 +7,7 @@ const HOOK_WINDOW_NAME: &str = "hook";
 
 pub const POST_CREATE_PATH: &str = ".pm/hooks/post-create.sh";
 pub const POST_MERGE_PATH: &str = ".pm/hooks/post-merge.sh";
+pub const RESTORE_PATH: &str = ".pm/hooks/restore.sh";
 
 pub const DEFAULT_POST_CREATE: &str = "\
 #!/bin/sh
