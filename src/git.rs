@@ -38,8 +38,7 @@ pub fn init_repo(path: &Path) -> Result<()> {
 
 /// Create a new branch from the current HEAD.
 pub fn create_branch(repo: &Path, name: &str) -> Result<()> {
-    run_git(repo, &["branch", name])?;
-    Ok(())
+    create_branch_from(repo, name, "HEAD")
 }
 
 /// Check if a branch exists in the repo.
@@ -208,6 +207,17 @@ pub(crate) fn commit(repo: &Path, message: &str) -> Result<()> {
 #[cfg(test)]
 pub(crate) fn cat_file(repo: &Path, rev: &str) -> Result<String> {
     run_git(repo, &["cat-file", "-p", rev])
+}
+
+/// Get the current branch name of a repo/worktree.
+pub fn current_branch(repo: &Path) -> Result<String> {
+    run_git(repo, &["rev-parse", "--abbrev-ref", "HEAD"])
+}
+
+/// Create a new branch from a specific start point.
+pub fn create_branch_from(repo: &Path, name: &str, start_point: &str) -> Result<()> {
+    run_git(repo, &["branch", name, start_point])?;
+    Ok(())
 }
 
 /// Push a branch to the remote (origin).
@@ -632,5 +642,58 @@ mod tests {
     fn is_git_repo_false_for_plain_dir() {
         let dir = tempdir().unwrap();
         assert!(!is_git_repo(dir.path()));
+    }
+
+    #[test]
+    fn current_branch_returns_default_branch() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().join("myrepo");
+        init_repo(&repo_path).unwrap();
+
+        let branch = current_branch(&repo_path).unwrap();
+        assert_eq!(branch, "main");
+    }
+
+    #[test]
+    fn current_branch_returns_checked_out_branch_in_worktree() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().join("main");
+        init_repo(&repo_path).unwrap();
+
+        create_branch(&repo_path, "feature").unwrap();
+        let wt_path = dir.path().join("feature");
+        add_worktree(&repo_path, &wt_path, "feature").unwrap();
+
+        assert_eq!(current_branch(&wt_path).unwrap(), "feature");
+    }
+
+    #[test]
+    fn create_branch_from_branches_at_specific_commit() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().join("main");
+        init_repo(&repo_path).unwrap();
+
+        // Make a second commit on main
+        std::fs::write(repo_path.join("file.txt"), "content").unwrap();
+        run_git(&repo_path, &["add", "file.txt"]).unwrap();
+        run_git(&repo_path, &["commit", "-m", "second commit"]).unwrap();
+
+        // Create a feature branch
+        create_branch(&repo_path, "feature").unwrap();
+        let wt_path = dir.path().join("feature");
+        add_worktree(&repo_path, &wt_path, "feature").unwrap();
+
+        // Add a commit on the feature branch
+        std::fs::write(wt_path.join("feat.txt"), "feat").unwrap();
+        run_git(&wt_path, &["add", "feat.txt"]).unwrap();
+        run_git(&wt_path, &["commit", "-m", "feature commit"]).unwrap();
+
+        // Branch from "feature", not from "main"
+        create_branch_from(&repo_path, "stacked", "feature").unwrap();
+        let stacked_wt = dir.path().join("stacked");
+        add_worktree(&repo_path, &stacked_wt, "stacked").unwrap();
+
+        // Stacked branch should have the feature file
+        assert!(stacked_wt.join("feat.txt").exists());
     }
 }

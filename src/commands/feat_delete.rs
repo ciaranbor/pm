@@ -8,7 +8,7 @@ use crate::{gh, git, hooks, tmux};
 
 /// Parameters for feature cleanup.
 pub struct CleanupParams<'a> {
-    pub main_repo: &'a Path,
+    pub repo: &'a Path,
     pub worktree_path: &'a Path,
     pub branch: &'a str,
     pub features_dir: &'a Path,
@@ -27,15 +27,15 @@ pub fn cleanup_feature(params: &CleanupParams) -> Result<()> {
     // Step 1: Remove git worktree
     if params.worktree_path.exists() {
         if params.force_worktree {
-            git::remove_worktree_force(params.main_repo, params.worktree_path)?;
+            git::remove_worktree_force(params.repo, params.worktree_path)?;
         } else {
-            git::remove_worktree(params.main_repo, params.worktree_path)?;
+            git::remove_worktree(params.repo, params.worktree_path)?;
         }
     }
 
     // Step 2: Delete branch
-    if git::branch_exists(params.main_repo, params.branch)? {
-        git::delete_branch(params.main_repo, params.branch)?;
+    if git::branch_exists(params.repo, params.branch)? {
+        git::delete_branch(params.repo, params.branch)?;
     }
 
     // Step 3: Remove state file
@@ -133,16 +133,17 @@ pub fn feat_delete(
     let project_name = &config.project.name;
 
     let worktree_path = project_root.join(&state.worktree);
-    let main_repo = project_root.join("main");
+    let base = state.base_or_default();
+    let base_repo = project_root.join(base);
 
     // Check if the linked PR was merged on GitHub (handles squash merges
     // where git can't detect the merge). Used for both safety bypass and hook.
     let pr_merged =
-        !state.pr.is_empty() && gh::pr_is_merged(&main_repo, &state.pr).unwrap_or(false);
+        !state.pr.is_empty() && gh::pr_is_merged(&base_repo, &state.pr).unwrap_or(false);
 
     // Run safety checks unless --force
     if !force {
-        let report = check_safety(&worktree_path, &main_repo, &state.branch, "main")?;
+        let report = check_safety(&worktree_path, &base_repo, &state.branch, base)?;
         evaluate_safety(&report, pr_merged, name)?;
 
         if report.has_warnings() {
@@ -165,7 +166,7 @@ pub fn feat_delete(
             .is_empty();
 
     cleanup_feature(&CleanupParams {
-        main_repo: &main_repo,
+        repo: &base_repo,
         worktree_path: &worktree_path,
         branch: &state.branch,
         features_dir: &features_dir,
@@ -178,8 +179,8 @@ pub fn feat_delete(
     // Trigger post-merge hook when deleting a feature whose PR was merged
     if pr_merged {
         let hook_path = project_root.join(hooks::POST_MERGE_PATH);
-        let main_session = format!("{project_name}/main");
-        hooks::run_hook(tmux_server, &main_session, &main_repo, &hook_path);
+        let base_session = format!("{project_name}/{base}");
+        hooks::run_hook(tmux_server, &base_session, &base_repo, &hook_path);
     }
 
     Ok(())
@@ -201,7 +202,7 @@ mod tests {
         let project_path = dir.join("myapp");
         let projects_dir = dir.join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
-        feat_new::feat_new(&project_path, feature_name, None, server.name()).unwrap();
+        feat_new::feat_new(&project_path, feature_name, None, None, server.name()).unwrap();
         project_path
     }
 
@@ -415,5 +416,46 @@ mod tests {
     fn safety_unpushed_commits_pass_when_pr_merged() {
         let report = make_report(false, false, true);
         assert!(evaluate_safety(&report, true, "feat").is_ok());
+    }
+
+    #[test]
+    fn delete_stacked_feature_merged_into_parent_succeeds() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let project_path = setup_project_with_feature(dir.path(), "parent", &server);
+
+        // Create stacked feature based on parent
+        feat_new::feat_new(&project_path, "child", None, Some("parent"), server.name()).unwrap();
+
+        // Merge child into parent so the safety check passes
+        let parent_wt = project_path.join("parent");
+        git::merge_no_ff(&parent_wt, "child").unwrap();
+
+        // Delete should succeed — child is merged into its base (parent), not main
+        feat_delete(&project_path, "child", false, server.name()).unwrap();
+
+        let features_dir = paths::features_dir(&project_path);
+        assert!(!FeatureState::exists(&features_dir, "child"));
+    }
+
+    #[test]
+    fn delete_stacked_feature_not_merged_into_parent_blocks() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let project_path = setup_project_with_feature(dir.path(), "parent", &server);
+
+        // Create stacked feature based on parent with a commit
+        feat_new::feat_new(&project_path, "child", None, Some("parent"), server.name()).unwrap();
+        let child_wt = project_path.join("child");
+        std::fs::write(child_wt.join("child.txt"), "child work").unwrap();
+        git::stage_file(&child_wt, "child.txt").unwrap();
+        git::commit(&child_wt, "child commit").unwrap();
+
+        // Don't merge into parent — should block
+        let result = feat_delete(&project_path, "child", false, server.name());
+        assert!(result.is_err());
+
+        let features_dir = paths::features_dir(&project_path);
+        assert!(FeatureState::exists(&features_dir, "child"));
     }
 }

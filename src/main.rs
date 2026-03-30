@@ -109,6 +109,9 @@ enum FeatCommands {
         /// Initial context (literal text or path to a file)
         #[arg(long)]
         context: Option<String>,
+        /// Base branch to stack on (defaults to current branch from CWD)
+        #[arg(long)]
+        base: Option<String>,
     },
     /// Adopt an existing branch as a feature (worktree + tmux session)
     Adopt {
@@ -260,8 +263,18 @@ fn run() -> pm::error::Result<()> {
         Commands::Feat(feat_cmd) => {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
             match feat_cmd {
-                FeatCommands::New { name, context } => {
-                    commands::feat_new::feat_new(&project_root, &name, context.as_deref(), None)?;
+                FeatCommands::New {
+                    name,
+                    context,
+                    base,
+                } => {
+                    commands::feat_new::feat_new(
+                        &project_root,
+                        &name,
+                        context.as_deref(),
+                        base.as_deref(),
+                        None,
+                    )?;
                     println!("Created feature '{name}'");
                     Ok(())
                 }

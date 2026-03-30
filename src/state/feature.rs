@@ -50,6 +50,15 @@ pub struct FeatureState {
 }
 
 impl FeatureState {
+    /// Return the base branch, defaulting to "main" when empty.
+    pub fn base_or_default(&self) -> &str {
+        if self.base.is_empty() {
+            "main"
+        } else {
+            &self.base
+        }
+    }
+
     /// Save the feature state to `.pm/features/<name>.toml` using atomic write.
     pub fn save(&self, features_dir: &Path, name: &str) -> Result<()> {
         std::fs::create_dir_all(features_dir)?;

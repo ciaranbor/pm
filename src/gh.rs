@@ -45,8 +45,18 @@ pub fn existing_pr_number(repo_dir: &Path, branch: &str) -> Result<Option<String
 /// without dumping all commit messages into the body.
 /// If `draft` is true, creates a draft PR.
 /// If `body` is Some, uses it as the PR body.
-pub fn create_pr(repo_dir: &Path, branch: &str, draft: bool, body: Option<&str>) -> Result<String> {
+pub fn create_pr(
+    repo_dir: &Path,
+    branch: &str,
+    draft: bool,
+    body: Option<&str>,
+    base: Option<&str>,
+) -> Result<String> {
     let mut args = vec!["pr", "create", "--fill-first", "--head", branch];
+    if let Some(base) = base {
+        args.push("--base");
+        args.push(base);
+    }
     if draft {
         args.push("--draft");
     }

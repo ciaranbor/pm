@@ -36,7 +36,15 @@ pub fn feat_pr(project_root: &Path, name: &str, ready: bool) -> Result<()> {
         };
 
         let draft = !ready;
-        gh::create_pr(&worktree_path, &state.branch, draft, template.as_deref())?
+        let base = state.base_or_default();
+        let base_arg = if base == "main" { None } else { Some(base) };
+        gh::create_pr(
+            &worktree_path,
+            &state.branch,
+            draft,
+            template.as_deref(),
+            base_arg,
+        )?
     };
 
     state.pr = pr_number;
@@ -87,7 +95,7 @@ mod tests {
             .output()
             .unwrap();
 
-        feat_new::feat_new(&project_path, feature_name, None, server.name()).unwrap();
+        feat_new::feat_new(&project_path, feature_name, None, None, server.name()).unwrap();
 
         project_path
     }
