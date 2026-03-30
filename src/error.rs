@@ -38,6 +38,9 @@ pub enum PmError {
     #[error("Repo already registered as project \"{0}\"")]
     RepoAlreadyRegistered(String),
 
+    #[error("Invalid feature name \"{0}\": must not contain '/'")]
+    InvalidFeatureName(String),
+
     #[error("Git error: {0}")]
     Git(String),
 

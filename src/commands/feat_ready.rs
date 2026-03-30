@@ -67,6 +67,7 @@ mod tests {
             "login",
             None,
             None,
+            None,
             false,
             server.name(),
         )

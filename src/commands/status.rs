@@ -113,8 +113,26 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let project_path = setup_project(dir.path(), &server);
-        feat_new::feat_new(&project_path, "alpha", None, None, false, server.name()).unwrap();
-        feat_new::feat_new(&project_path, "beta", None, None, false, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "alpha",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "beta",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         let lines = status(&project_path, server.name()).unwrap();
         assert!(lines[2].contains("Features: 2"));
@@ -135,7 +153,16 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let project_path = setup_project(dir.path(), &server);
-        feat_new::feat_new(&project_path, "login", None, None, false, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         let lines = status(&project_path, server.name()).unwrap();
         assert!(!lines.iter().any(|l| l.contains("Issues:")));
@@ -146,7 +173,16 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let project_path = setup_project(dir.path(), &server);
-        feat_new::feat_new(&project_path, "login", None, None, false, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         // Kill tmux session to create a doctor issue
         crate::tmux::kill_session(server.name(), "myapp/login").unwrap();
@@ -173,8 +209,26 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let project_path = setup_project(dir.path(), &server);
-        feat_new::feat_new(&project_path, "alpha", None, None, false, server.name()).unwrap();
-        feat_new::feat_new(&project_path, "beta", None, None, false, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "alpha",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "beta",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         // Break only beta's tmux session
         crate::tmux::kill_session(server.name(), "myapp/beta").unwrap();
@@ -212,7 +266,16 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let project_path = setup_project(dir.path(), &server);
-        feat_new::feat_new(&project_path, "login", None, None, false, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         // Manually set a PR number on the feature
         let features_dir = paths::features_dir(&project_path);

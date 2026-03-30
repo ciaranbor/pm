@@ -13,27 +13,31 @@ use crate::{git, tmux};
 ///
 /// The tmux `server` parameter allows tests to use an isolated tmux server.
 /// In production, pass `None` to use the default server.
+#[allow(clippy::too_many_arguments)]
 pub fn feat_adopt(
     project_root: &Path,
     name: &str,
+    name_override: Option<&str>,
     context: Option<&str>,
     from: Option<&Path>,
     no_edit: bool,
     tmux_server: Option<&str>,
     claude_base: Option<&Path>,
-) -> Result<()> {
+) -> Result<String> {
+    let branch = name;
+    let feature_name = super::feat_new::sanitize_feature_name(branch, name_override)?;
     let features_dir = paths::features_dir(project_root);
     let pm_dir = paths::pm_dir(project_root);
 
     // Check for duplicate
-    if FeatureState::exists(&features_dir, name) {
-        return Err(PmError::FeatureAlreadyExists(name.to_string()));
+    if FeatureState::exists(&features_dir, &feature_name) {
+        return Err(PmError::FeatureAlreadyExists(feature_name));
     }
 
     // Verify branch exists
     let main_worktree = project_root.join("main");
-    if !git::branch_exists(&main_worktree, name)? {
-        return Err(PmError::BranchNotFound(name.to_string()));
+    if !git::branch_exists(&main_worktree, branch)? {
+        return Err(PmError::BranchNotFound(branch.to_string()));
     }
 
     // Load project config for name
@@ -47,19 +51,19 @@ pub fn feat_adopt(
     let now = Utc::now();
     let mut state = FeatureState {
         status: FeatureStatus::Initializing,
-        branch: name.to_string(),
-        worktree: name.to_string(),
+        branch: branch.to_string(),
+        worktree: feature_name.clone(),
         base: String::new(),
         pr: String::new(),
         context: resolved_context.clone().unwrap_or_default(),
         created: now,
         last_active: now,
     };
-    state.save(&features_dir, name)?;
+    state.save(&features_dir, &feature_name)?;
 
     // Step 2: Create git worktree (skip branch creation — branch already exists)
-    let worktree_path = project_root.join(name);
-    git::add_worktree(&main_worktree, &worktree_path, name)?;
+    let worktree_path = project_root.join(&feature_name);
+    git::add_worktree(&main_worktree, &worktree_path, branch)?;
 
     // Step 2.5: Migrate Claude Code sessions from old path if provided
     if let Some(old_path) = from {
@@ -80,7 +84,7 @@ pub fn feat_adopt(
     }
 
     // Step 3: Create tmux session
-    let session_name = format!("{project_name}/{name}");
+    let session_name = format!("{project_name}/{feature_name}");
     tmux::create_session(tmux_server, &session_name, &worktree_path)?;
 
     // Step 3.5: If context provided, open a claude session in a new window to read TASK.md
@@ -97,9 +101,9 @@ pub fn feat_adopt(
     // Step 4: Update status to wip
     state.status = FeatureStatus::Wip;
     state.last_active = Utc::now();
-    state.save(&features_dir, name)?;
+    state.save(&features_dir, &feature_name)?;
 
-    Ok(())
+    Ok(feature_name)
 }
 
 #[cfg(test)]
@@ -134,6 +138,7 @@ mod tests {
             "login",
             None,
             None,
+            None,
             false,
             server.name(),
             None,
@@ -157,6 +162,7 @@ mod tests {
             "login",
             None,
             None,
+            None,
             false,
             server.name(),
             None,
@@ -178,6 +184,7 @@ mod tests {
         feat_adopt(
             &project_path,
             "login",
+            None,
             None,
             None,
             false,
@@ -205,6 +212,7 @@ mod tests {
             "login",
             None,
             None,
+            None,
             false,
             server.name(),
             None,
@@ -224,6 +232,7 @@ mod tests {
         let result = feat_adopt(
             &project_path,
             "nonexistent",
+            None,
             None,
             None,
             false,
@@ -247,6 +256,7 @@ mod tests {
             "login",
             None,
             None,
+            None,
             false,
             server.name(),
             None,
@@ -255,6 +265,7 @@ mod tests {
         let result = feat_adopt(
             &project_path,
             "login",
+            None,
             None,
             None,
             false,
@@ -279,6 +290,7 @@ mod tests {
         feat_adopt(
             &project_path,
             "login",
+            None,
             Some("Adopt existing login branch"),
             None,
             false,
@@ -306,6 +318,7 @@ mod tests {
             "login",
             None,
             None,
+            None,
             false,
             server.name(),
             None,
@@ -328,6 +341,7 @@ mod tests {
         feat_adopt(
             &project_path,
             "login",
+            None,
             Some("Adopt existing login branch"),
             None,
             false,
@@ -353,6 +367,7 @@ mod tests {
             "login",
             None,
             None,
+            None,
             false,
             server.name(),
             None,
@@ -376,6 +391,7 @@ mod tests {
         let result = feat_adopt(
             &project_path,
             "login",
+            None,
             None,
             None,
             false,
@@ -413,6 +429,7 @@ mod tests {
             &project_path,
             "login",
             None,
+            None,
             Some(old_path),
             false,
             server.name(),
@@ -428,5 +445,65 @@ mod tests {
         let content = std::fs::read_to_string(new_session_dir.join("session.jsonl")).unwrap();
         assert!(content.contains(&worktree_path.to_string_lossy().to_string()));
         assert!(!content.contains("/tmp/old-repo"));
+    }
+
+    #[test]
+    fn feat_adopt_slash_branch_sanitizes_feature_name() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let project_path = setup_project(dir.path(), &server);
+        create_branch(&project_path, "ciaran/login");
+
+        feat_adopt(
+            &project_path,
+            "ciaran/login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+            None,
+        )
+        .unwrap();
+
+        // Feature name should be sanitized
+        let features_dir = paths::features_dir(&project_path);
+        let state = FeatureState::load(&features_dir, "ciaran-login").unwrap();
+        assert_eq!(state.status, FeatureStatus::Wip);
+        assert_eq!(state.branch, "ciaran/login");
+        assert_eq!(state.worktree, "ciaran-login");
+
+        // Worktree dir uses sanitized name
+        assert!(project_path.join("ciaran-login").exists());
+
+        // Tmux session uses sanitized name
+        assert!(tmux::has_session(server.name(), "myapp/ciaran-login").unwrap());
+    }
+
+    #[test]
+    fn feat_adopt_with_name_override() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let project_path = setup_project(dir.path(), &server);
+        create_branch(&project_path, "ciaran/eval");
+
+        feat_adopt(
+            &project_path,
+            "ciaran/eval",
+            Some("eval"),
+            None,
+            None,
+            false,
+            server.name(),
+            None,
+        )
+        .unwrap();
+
+        let features_dir = paths::features_dir(&project_path);
+        let state = FeatureState::load(&features_dir, "eval").unwrap();
+        assert_eq!(state.branch, "ciaran/eval");
+        assert_eq!(state.worktree, "eval");
+        assert!(project_path.join("eval").exists());
+        assert!(tmux::has_session(server.name(), "myapp/eval").unwrap());
     }
 }

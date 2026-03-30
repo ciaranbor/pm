@@ -99,6 +99,7 @@ mod tests {
             feature_name,
             None,
             None,
+            None,
             false,
             server.name(),
         )
@@ -197,7 +198,16 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let project_path = setup_project_with_feature(dir.path(), "login", &server);
-        feat_new::feat_new(&project_path, "signup", None, None, false, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "signup",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         let result = feat_rename(&project_path, "login", "signup", server.name());
         assert!(matches!(

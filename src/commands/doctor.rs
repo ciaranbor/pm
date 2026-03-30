@@ -356,6 +356,7 @@ mod tests {
             feature_name,
             None,
             None,
+            None,
             false,
             server.name(),
         )
@@ -506,8 +507,26 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let project_path = setup_project(dir.path(), &server);
-        feat_new::feat_new(&project_path, "alpha", None, None, false, server.name()).unwrap();
-        feat_new::feat_new(&project_path, "beta", None, None, false, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "alpha",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "beta",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         let lines = doctor(&project_path, false, server.name()).unwrap();
         assert!(lines[0].contains("2 feature(s)"), "got: {:?}", lines);
