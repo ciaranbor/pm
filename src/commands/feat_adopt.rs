@@ -544,7 +544,7 @@ mod tests {
     fn feat_adopt_with_from_handles_existing_worktree() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, _) = setup_project(dir.path(), &server);
         create_branch(&project_path, "login");
 
         // Create an existing worktree for the branch (simulating a pre-existing checkout)
@@ -611,7 +611,7 @@ mod tests {
     fn feat_adopt_fails_with_worktree_conflict_without_from() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, _) = setup_project(dir.path(), &server);
         create_branch(&project_path, "login");
 
         // Create an existing worktree for the branch
