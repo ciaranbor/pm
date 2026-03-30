@@ -166,9 +166,9 @@ enum FeatCommands {
     Merge {
         /// Feature name (detected from CWD if omitted)
         name: Option<String>,
-        /// Clean up after merge (kill session, remove worktree, delete branch, remove state)
+        /// Keep the feature after merge (preserve session, worktree, branch, and state)
         #[arg(long)]
-        delete: bool,
+        keep: bool,
     },
     /// Create or link a GitHub PR for a feature
     Pr {
@@ -382,13 +382,13 @@ fn run() -> pm::error::Result<()> {
                     println!("Deleted feature '{name}'");
                     Ok(())
                 }
-                FeatCommands::Merge { name, delete } => {
+                FeatCommands::Merge { name, keep } => {
                     let name = resolve_feature_name(name, &project_root)?;
-                    commands::feat_merge::feat_merge(&project_root, &name, delete, None)?;
-                    if delete {
-                        println!("Merged and deleted feature '{name}'");
-                    } else {
+                    commands::feat_merge::feat_merge(&project_root, &name, keep, None)?;
+                    if keep {
                         println!("Merged feature '{name}'");
+                    } else {
+                        println!("Merged and deleted feature '{name}'");
                     }
                     Ok(())
                 }
