@@ -101,7 +101,7 @@ mod tests {
         feature_name: &str,
         server: &TestServer,
     ) -> std::path::PathBuf {
-        let project_path = dir.join("myapp");
+        let project_path = dir.join(server.scope("myapp"));
         let projects_dir = dir.join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
         feat_new::feat_new(
@@ -202,17 +202,18 @@ mod tests {
     fn merge_cleans_up_by_default() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
+        let project_name = server.scope("myapp");
         let project_path = setup_project_with_feature(dir.path(), "login", &server);
 
         add_feature_commit(&project_path, "login");
 
         // Verify session exists before merge
-        assert!(tmux_mod::has_session(server.name(), "myapp/login").unwrap());
+        assert!(tmux_mod::has_session(server.name(), &format!("{project_name}/login")).unwrap());
 
         feat_merge(&project_path, "login", false, server.name()).unwrap();
 
         // Session killed
-        assert!(!tmux_mod::has_session(server.name(), "myapp/login").unwrap());
+        assert!(!tmux_mod::has_session(server.name(), &format!("{project_name}/login")).unwrap());
         // Worktree removed
         assert!(!project_path.join("login").exists());
         // Branch deleted
@@ -227,6 +228,7 @@ mod tests {
     fn merge_with_keep_leaves_feature_intact() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
+        let project_name = server.scope("myapp");
         let project_path = setup_project_with_feature(dir.path(), "login", &server);
 
         add_feature_commit(&project_path, "login");
@@ -234,7 +236,7 @@ mod tests {
         feat_merge(&project_path, "login", true, server.name()).unwrap();
 
         // Session still exists
-        assert!(tmux_mod::has_session(server.name(), "myapp/login").unwrap());
+        assert!(tmux_mod::has_session(server.name(), &format!("{project_name}/login")).unwrap());
         // Worktree still exists
         assert!(project_path.join("login").exists());
         // Branch still exists
@@ -340,12 +342,13 @@ mod tests {
     fn merge_tolerates_missing_session() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
+        let project_name = server.scope("myapp");
         let project_path = setup_project_with_feature(dir.path(), "login", &server);
 
         add_feature_commit(&project_path, "login");
 
         // Kill the session before merging
-        tmux_mod::kill_session(server.name(), "myapp/login").unwrap();
+        tmux_mod::kill_session(server.name(), &format!("{project_name}/login")).unwrap();
 
         feat_merge(&project_path, "login", false, server.name()).unwrap();
 
@@ -360,9 +363,9 @@ mod tests {
     #[test]
     fn merge_nonexistent_feature_fails() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let project_path = dir.path().join(server.scope("myapp"));
+        let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
 
         let result = feat_merge(&project_path, "nonexistent", true, None);
@@ -374,21 +377,24 @@ mod tests {
     fn merge_runs_default_post_merge_hook_in_main_session() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
+        let project_name = server.scope("myapp");
         let project_path = setup_project_with_feature(dir.path(), "login", &server);
 
         add_feature_commit(&project_path, "login");
 
         // Main session should have 1 window before merge
-        let before = tmux_mod::list_windows(server.name(), "myapp/main").unwrap();
+        let before =
+            tmux_mod::list_windows(server.name(), &format!("{project_name}/main")).unwrap();
         assert_eq!(before, 1);
 
         feat_merge(&project_path, "login", true, server.name()).unwrap();
 
         // Main session should now have 2 windows: original + hook window
-        let after = tmux_mod::list_windows(server.name(), "myapp/main").unwrap();
+        let after = tmux_mod::list_windows(server.name(), &format!("{project_name}/main")).unwrap();
         assert_eq!(after, 2);
         // Hook window should be named "hook"
-        let target = tmux_mod::find_window(server.name(), "myapp/main", "hook").unwrap();
+        let target =
+            tmux_mod::find_window(server.name(), &format!("{project_name}/main"), "hook").unwrap();
         assert!(target.is_some());
     }
 
@@ -396,6 +402,7 @@ mod tests {
     fn merge_reuses_existing_hook_window() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
+        let project_name = server.scope("myapp");
         let project_path = setup_project_with_feature(dir.path(), "login", &server);
 
         add_feature_commit(&project_path, "login");
@@ -410,7 +417,8 @@ mod tests {
         feat_merge(&project_path, "api", true, server.name()).unwrap();
 
         // Should still have just 2 windows — the hook window was reused, not duplicated
-        let windows = tmux_mod::list_windows(server.name(), "myapp/main").unwrap();
+        let windows =
+            tmux_mod::list_windows(server.name(), &format!("{project_name}/main")).unwrap();
         assert_eq!(windows, 2);
     }
 
@@ -418,6 +426,7 @@ mod tests {
     fn merge_skips_hook_when_script_removed() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
+        let project_name = server.scope("myapp");
         let project_path = setup_project_with_feature(dir.path(), "login", &server);
 
         // Remove the bootstrapped hook script
@@ -427,7 +436,8 @@ mod tests {
         feat_merge(&project_path, "login", true, server.name()).unwrap();
 
         // Main session should still have just 1 window
-        let windows = tmux_mod::list_windows(server.name(), "myapp/main").unwrap();
+        let windows =
+            tmux_mod::list_windows(server.name(), &format!("{project_name}/main")).unwrap();
         assert_eq!(windows, 1);
     }
 
@@ -435,12 +445,13 @@ mod tests {
     fn merge_hook_succeeds_when_main_session_absent() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
+        let project_name = server.scope("myapp");
         let project_path = setup_project_with_feature(dir.path(), "login", &server);
 
         add_feature_commit(&project_path, "login");
 
         // Kill the main session before merging
-        tmux_mod::kill_session(server.name(), "myapp/main").unwrap();
+        tmux_mod::kill_session(server.name(), &format!("{project_name}/main")).unwrap();
 
         // Merge should still succeed — hook skip is non-fatal
         feat_merge(&project_path, "login", true, server.name()).unwrap();

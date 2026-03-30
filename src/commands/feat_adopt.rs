@@ -140,11 +140,17 @@ mod tests {
     use crate::testing::TestServer;
     use tempfile::tempdir;
 
-    fn setup_project(dir: &Path, server: &TestServer) -> std::path::PathBuf {
-        let project_path = dir.join("myapp");
+    fn setup_project(dir: &Path, server: &TestServer) -> (std::path::PathBuf, String) {
+        let project_path = dir.join(server.scope("myapp"));
         let projects_dir = dir.join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
-        project_path
+        let project_name = project_path
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        (project_path, project_name)
     }
 
     /// Create a branch on the main worktree so feat_adopt can find it.
@@ -157,7 +163,7 @@ mod tests {
     fn feat_adopt_creates_state_file_with_wip_status() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, _) = setup_project(dir.path(), &server);
         create_branch(&project_path, "login");
 
         feat_adopt(
@@ -181,7 +187,7 @@ mod tests {
     fn feat_adopt_creates_worktree() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, _) = setup_project(dir.path(), &server);
         create_branch(&project_path, "login");
 
         feat_adopt(
@@ -205,7 +211,7 @@ mod tests {
     fn feat_adopt_creates_tmux_session() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, project_name) = setup_project(dir.path(), &server);
         create_branch(&project_path, "login");
 
         feat_adopt(
@@ -220,14 +226,14 @@ mod tests {
         )
         .unwrap();
 
-        assert!(tmux::has_session(server.name(), "myapp/login").unwrap());
+        assert!(tmux::has_session(server.name(), &format!("{project_name}/login")).unwrap());
     }
 
     #[test]
     fn feat_adopt_does_not_create_branch() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, _) = setup_project(dir.path(), &server);
         create_branch(&project_path, "login");
 
         // Branch exists before adopt
@@ -254,7 +260,7 @@ mod tests {
     fn feat_adopt_fails_when_branch_does_not_exist() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, _) = setup_project(dir.path(), &server);
 
         let result = feat_adopt(
             &project_path,
@@ -275,7 +281,7 @@ mod tests {
     fn feat_adopt_fails_when_feature_already_exists() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, _) = setup_project(dir.path(), &server);
         create_branch(&project_path, "login");
 
         feat_adopt(
@@ -311,7 +317,7 @@ mod tests {
     fn feat_adopt_with_context_writes_task_md() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, _) = setup_project(dir.path(), &server);
         create_branch(&project_path, "login");
 
         feat_adopt(
@@ -336,7 +342,7 @@ mod tests {
     fn feat_adopt_sets_timestamps() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, _) = setup_project(dir.path(), &server);
         create_branch(&project_path, "login");
         let before = Utc::now();
 
@@ -362,7 +368,7 @@ mod tests {
     fn feat_adopt_with_context_creates_claude_window() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, project_name) = setup_project(dir.path(), &server);
         create_branch(&project_path, "login");
 
         feat_adopt(
@@ -378,7 +384,7 @@ mod tests {
         .unwrap();
 
         // Session should have 2 windows: the default shell + the claude window
-        let output = tmux::list_windows(server.name(), "myapp/login").unwrap();
+        let output = tmux::list_windows(server.name(), &format!("{project_name}/login")).unwrap();
         assert_eq!(output, 2);
     }
 
@@ -386,7 +392,7 @@ mod tests {
     fn feat_adopt_without_context_has_single_window() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, project_name) = setup_project(dir.path(), &server);
         create_branch(&project_path, "login");
 
         feat_adopt(
@@ -401,7 +407,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = tmux::list_windows(server.name(), "myapp/login").unwrap();
+        let output = tmux::list_windows(server.name(), &format!("{project_name}/login")).unwrap();
         assert_eq!(output, 1);
     }
 
@@ -409,11 +415,11 @@ mod tests {
     fn feat_adopt_tmux_failure_leaves_initializing_state() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, project_name) = setup_project(dir.path(), &server);
         create_branch(&project_path, "login");
 
         // Pre-create a tmux session to cause a conflict
-        tmux::create_session(server.name(), "myapp/login", dir.path()).unwrap();
+        tmux::create_session(server.name(), &format!("{project_name}/login"), dir.path()).unwrap();
 
         let result = feat_adopt(
             &project_path,
@@ -437,7 +443,7 @@ mod tests {
     fn feat_adopt_with_from_migrates_claude_sessions() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, _) = setup_project(dir.path(), &server);
         create_branch(&project_path, "login");
 
         // Set up fake Claude session data keyed to some old path
@@ -478,7 +484,7 @@ mod tests {
     fn feat_adopt_slash_branch_sanitizes_feature_name() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, project_name) = setup_project(dir.path(), &server);
         create_branch(&project_path, "ciaran/login");
 
         feat_adopt(
@@ -504,14 +510,14 @@ mod tests {
         assert!(project_path.join("ciaran-login").exists());
 
         // Tmux session uses sanitized name
-        assert!(tmux::has_session(server.name(), "myapp/ciaran-login").unwrap());
+        assert!(tmux::has_session(server.name(), &format!("{project_name}/ciaran-login")).unwrap());
     }
 
     #[test]
     fn feat_adopt_with_name_override() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, project_name) = setup_project(dir.path(), &server);
         create_branch(&project_path, "ciaran/eval");
 
         feat_adopt(
@@ -531,7 +537,7 @@ mod tests {
         assert_eq!(state.branch, "ciaran/eval");
         assert_eq!(state.worktree, "eval");
         assert!(project_path.join("eval").exists());
-        assert!(tmux::has_session(server.name(), "myapp/eval").unwrap());
+        assert!(tmux::has_session(server.name(), &format!("{project_name}/eval")).unwrap());
     }
 
     #[test]

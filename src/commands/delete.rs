@@ -172,43 +172,53 @@ mod tests {
     use crate::testing::TestServer;
     use tempfile::tempdir;
 
-    fn setup_project(dir: &Path, server: &TestServer) -> (std::path::PathBuf, std::path::PathBuf) {
-        let project_path = dir.join("myapp");
+    fn setup_project(
+        dir: &Path,
+        server: &TestServer,
+    ) -> (std::path::PathBuf, std::path::PathBuf, String) {
+        let project_path = dir.join(server.scope("myapp"));
         let projects_dir = dir.join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
-        (project_path, projects_dir)
+        let project_name = project_path
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
+        (project_path, projects_dir, project_name)
     }
 
     #[test]
     fn delete_empty_project_removes_pm_dir_and_registry() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, projects_dir) = setup_project(dir.path(), &server);
+        let (project_path, projects_dir, project_name) = setup_project(dir.path(), &server);
 
         delete(&project_path, &projects_dir, false, true, server.name()).unwrap();
 
         assert!(!paths::pm_dir(&project_path).exists());
-        assert!(!projects_dir.join("myapp.toml").exists());
+        assert!(!projects_dir.join(format!("{project_name}.toml")).exists());
     }
 
     #[test]
     fn delete_kills_main_tmux_session() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, projects_dir) = setup_project(dir.path(), &server);
+        let (project_path, projects_dir, project_name) = setup_project(dir.path(), &server);
+        let main_session = format!("{project_name}/main");
 
-        assert!(tmux::has_session(server.name(), "myapp/main").unwrap());
+        assert!(tmux::has_session(server.name(), &main_session).unwrap());
 
         delete(&project_path, &projects_dir, false, true, server.name()).unwrap();
 
-        assert!(!tmux::has_session(server.name(), "myapp/main").unwrap());
+        assert!(!tmux::has_session(server.name(), &main_session).unwrap());
     }
 
     #[test]
     fn delete_cleans_up_features() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, projects_dir) = setup_project(dir.path(), &server);
+        let (project_path, projects_dir, project_name) = setup_project(dir.path(), &server);
 
         feat_new::feat_new(
             &project_path,
@@ -227,8 +237,8 @@ mod tests {
         let features_dir = paths::features_dir(&project_path);
         assert!(!FeatureState::exists(&features_dir, "login"));
         assert!(!FeatureState::exists(&features_dir, "api"));
-        assert!(!tmux::has_session(server.name(), "myapp/login").unwrap());
-        assert!(!tmux::has_session(server.name(), "myapp/api").unwrap());
+        assert!(!tmux::has_session(server.name(), &format!("{project_name}/login")).unwrap());
+        assert!(!tmux::has_session(server.name(), &format!("{project_name}/api")).unwrap());
         assert!(!paths::pm_dir(&project_path).exists());
     }
 
@@ -236,7 +246,7 @@ mod tests {
     fn delete_blocked_by_uncommitted_changes() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, projects_dir) = setup_project(dir.path(), &server);
+        let (project_path, projects_dir, project_name) = setup_project(dir.path(), &server);
 
         feat_new::feat_new(
             &project_path,
@@ -258,14 +268,14 @@ mod tests {
 
         // Everything should still exist
         assert!(paths::pm_dir(&project_path).exists());
-        assert!(projects_dir.join("myapp.toml").exists());
+        assert!(projects_dir.join(format!("{project_name}.toml")).exists());
     }
 
     #[test]
     fn delete_blocked_by_unmerged_commits() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, projects_dir) = setup_project(dir.path(), &server);
+        let (project_path, projects_dir, _project_name) = setup_project(dir.path(), &server);
 
         feat_new::feat_new(
             &project_path,
@@ -293,7 +303,7 @@ mod tests {
     fn delete_force_bypasses_safety_checks_and_removes_worktrees() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, projects_dir) = setup_project(dir.path(), &server);
+        let (project_path, projects_dir, project_name) = setup_project(dir.path(), &server);
 
         feat_new::feat_new(
             &project_path,
@@ -313,7 +323,7 @@ mod tests {
         delete(&project_path, &projects_dir, true, true, server.name()).unwrap();
 
         assert!(!paths::pm_dir(&project_path).exists());
-        assert!(!projects_dir.join("myapp.toml").exists());
+        assert!(!projects_dir.join(format!("{project_name}.toml")).exists());
         // --force removes worktree directories from disk
         assert!(!project_path.join("login").exists());
     }
@@ -322,7 +332,7 @@ mod tests {
     fn delete_merged_features_succeeds_without_force() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, projects_dir) = setup_project(dir.path(), &server);
+        let (project_path, projects_dir, project_name) = setup_project(dir.path(), &server);
 
         feat_new::feat_new(
             &project_path,
@@ -342,7 +352,7 @@ mod tests {
         delete(&project_path, &projects_dir, false, true, server.name()).unwrap();
 
         assert!(!paths::pm_dir(&project_path).exists());
-        assert!(!projects_dir.join("myapp.toml").exists());
+        assert!(!projects_dir.join(format!("{project_name}.toml")).exists());
     }
 
     #[test]
@@ -360,7 +370,7 @@ mod tests {
     fn delete_without_force_leaves_worktree_directories_on_disk() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, projects_dir) = setup_project(dir.path(), &server);
+        let (project_path, projects_dir, project_name) = setup_project(dir.path(), &server);
 
         feat_new::feat_new(
             &project_path,
@@ -381,7 +391,7 @@ mod tests {
 
         // pm state and registry are cleaned up
         assert!(!paths::pm_dir(&project_path).exists());
-        assert!(!projects_dir.join("myapp.toml").exists());
+        assert!(!projects_dir.join(format!("{project_name}.toml")).exists());
         // Worktree directory is left on disk
         assert!(project_path.join("login").exists());
         // Git branch is also left intact
@@ -392,7 +402,7 @@ mod tests {
     fn delete_only_blocks_for_problematic_features() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, projects_dir) = setup_project(dir.path(), &server);
+        let (project_path, projects_dir, _project_name) = setup_project(dir.path(), &server);
 
         // Create two features — one clean (merged), one dirty
         feat_new::feat_new(

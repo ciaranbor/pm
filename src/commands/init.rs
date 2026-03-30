@@ -81,9 +81,10 @@ mod tests {
     #[test]
     fn init_creates_main_directory() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
 
         init(&project_path, &projects_dir, server.name()).unwrap();
 
@@ -94,9 +95,10 @@ mod tests {
     #[test]
     fn init_creates_git_repo_in_main() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
 
         init(&project_path, &projects_dir, server.name()).unwrap();
 
@@ -106,9 +108,10 @@ mod tests {
     #[test]
     fn init_creates_pm_directory_with_config_and_features() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
 
         init(&project_path, &projects_dir, server.name()).unwrap();
 
@@ -120,9 +123,10 @@ mod tests {
     #[test]
     fn init_bootstraps_hook_scripts() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
 
         init(&project_path, &projects_dir, server.name()).unwrap();
 
@@ -133,27 +137,29 @@ mod tests {
     #[test]
     fn init_writes_correct_project_name_in_config() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
 
         init(&project_path, &projects_dir, server.name()).unwrap();
 
         let pm_dir = project_path.join(".pm");
         let config = ProjectConfig::load(&pm_dir).unwrap();
-        assert_eq!(config.project.name, "myapp");
+        assert_eq!(config.project.name, name);
     }
 
     #[test]
     fn init_registers_project_in_global_registry() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
 
         init(&project_path, &projects_dir, server.name()).unwrap();
 
-        let entry = ProjectEntry::load(&projects_dir, "myapp").unwrap();
+        let entry = ProjectEntry::load(&projects_dir, &name).unwrap();
         assert_eq!(entry.root, project_path.to_string_lossy().to_string());
         assert_eq!(entry.main_branch, "main");
     }
@@ -174,9 +180,10 @@ mod tests {
     #[test]
     fn init_creates_initial_commit_so_branches_work() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
 
         init(&project_path, &projects_dir, server.name()).unwrap();
 
@@ -189,12 +196,13 @@ mod tests {
     #[test]
     fn init_creates_main_tmux_session() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
 
         init(&project_path, &projects_dir, server.name()).unwrap();
 
-        assert!(tmux::has_session(server.name(), "myapp/main").unwrap());
+        assert!(tmux::has_session(server.name(), &format!("{name}/main")).unwrap());
     }
 }

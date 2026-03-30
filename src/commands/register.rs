@@ -154,14 +154,15 @@ mod tests {
     #[test]
     fn register_creates_wrapper_directory() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("myapp");
+        let server = TestServer::new();
+        let name = server.scope("myapp");
+        let repo_path = dir.path().join(&name);
         create_git_repo(&repo_path);
         let projects_dir = dir.path().join("registry");
-        let server = TestServer::new();
 
         register(&repo_path, None, &projects_dir, false, server.name(), None).unwrap();
 
-        let wrapper = dir.path().join("myapp-pm");
+        let wrapper = dir.path().join(format!("{name}-pm"));
         assert!(wrapper.exists());
         assert!(wrapper.is_dir());
     }
@@ -169,14 +170,15 @@ mod tests {
     #[test]
     fn register_symlink_creates_symlink_to_original_repo() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("myapp");
+        let server = TestServer::new();
+        let name = server.scope("myapp");
+        let repo_path = dir.path().join(&name);
         create_git_repo(&repo_path);
         let projects_dir = dir.path().join("registry");
-        let server = TestServer::new();
 
         register(&repo_path, None, &projects_dir, false, server.name(), None).unwrap();
 
-        let symlink = dir.path().join("myapp-pm").join("main");
+        let symlink = dir.path().join(format!("{name}-pm")).join("main");
         assert!(symlink.exists());
         assert!(symlink.is_symlink());
         assert_eq!(
@@ -190,15 +192,16 @@ mod tests {
     #[test]
     fn register_move_moves_repo_into_wrapper() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("myapp");
+        let server = TestServer::new();
+        let name = server.scope("myapp");
+        let repo_path = dir.path().join(&name);
         create_git_repo(&repo_path);
         let projects_dir = dir.path().join("registry");
-        let server = TestServer::new();
 
         register(&repo_path, None, &projects_dir, true, server.name(), None).unwrap();
 
         // With --move, wrapper uses the project name directly (no -pm suffix)
-        let wrapper = dir.path().join("myapp");
+        let wrapper = dir.path().join(&name);
         let main_path = wrapper.join("main");
         assert!(main_path.exists());
         assert!(main_path.join(".git").exists());
@@ -210,14 +213,15 @@ mod tests {
     #[test]
     fn register_creates_pm_structure() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("myapp");
+        let server = TestServer::new();
+        let name = server.scope("myapp");
+        let repo_path = dir.path().join(&name);
         create_git_repo(&repo_path);
         let projects_dir = dir.path().join("registry");
-        let server = TestServer::new();
 
         register(&repo_path, None, &projects_dir, false, server.name(), None).unwrap();
 
-        let wrapper = dir.path().join("myapp-pm");
+        let wrapper = dir.path().join(format!("{name}-pm"));
         assert!(wrapper.join(".pm").exists());
         assert!(wrapper.join(".pm").join("config.toml").exists());
         assert!(wrapper.join(".pm").join("features").exists());
@@ -228,31 +232,38 @@ mod tests {
     #[test]
     fn register_writes_correct_root_in_registry() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("myapp");
+        let server = TestServer::new();
+        let name = server.scope("myapp");
+        let repo_path = dir.path().join(&name);
         create_git_repo(&repo_path);
         let projects_dir = dir.path().join("registry");
-        let server = TestServer::new();
 
         register(&repo_path, None, &projects_dir, false, server.name(), None).unwrap();
 
-        let entry = ProjectEntry::load(&projects_dir, "myapp").unwrap();
+        let entry = ProjectEntry::load(&projects_dir, &name).unwrap();
         // Compare canonicalized paths to handle /var vs /private/var on macOS
         let entry_root = Path::new(&entry.root).canonicalize().unwrap();
-        let expected = dir.path().join("myapp-pm").canonicalize().unwrap();
+        let expected = dir
+            .path()
+            .join(format!("{name}-pm"))
+            .canonicalize()
+            .unwrap();
         assert_eq!(entry_root, expected);
     }
 
     #[test]
     fn register_with_custom_name() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("myapp");
+        let server = TestServer::new();
+        let repo_name = server.scope("myapp");
+        let custom_name = server.scope("custom");
+        let repo_path = dir.path().join(&repo_name);
         create_git_repo(&repo_path);
         let projects_dir = dir.path().join("registry");
-        let server = TestServer::new();
 
         register(
             &repo_path,
-            Some("custom"),
+            Some(&custom_name),
             &projects_dir,
             false,
             server.name(),
@@ -260,9 +271,9 @@ mod tests {
         )
         .unwrap();
 
-        let wrapper = dir.path().join("custom-pm");
+        let wrapper = dir.path().join(format!("{custom_name}-pm"));
         assert!(wrapper.exists());
-        assert!(ProjectEntry::load(&projects_dir, "custom").is_ok());
+        assert!(ProjectEntry::load(&projects_dir, &custom_name).is_ok());
     }
 
     #[test]
@@ -295,10 +306,11 @@ mod tests {
     #[test]
     fn register_same_repo_twice_fails() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("myapp");
+        let server = TestServer::new();
+        let name = server.scope("myapp");
+        let repo_path = dir.path().join(&name);
         create_git_repo(&repo_path);
         let projects_dir = dir.path().join("registry");
-        let server = TestServer::new();
 
         register(&repo_path, None, &projects_dir, false, server.name(), None).unwrap();
 
@@ -314,17 +326,19 @@ mod tests {
     #[test]
     fn register_same_repo_different_name_fails() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("myapp");
+        let server = TestServer::new();
+        let name = server.scope("myapp");
+        let repo_path = dir.path().join(&name);
         create_git_repo(&repo_path);
         let projects_dir = dir.path().join("registry");
-        let server = TestServer::new();
 
         register(&repo_path, None, &projects_dir, false, server.name(), None).unwrap();
 
         // Try to register the same repo under a different name
+        let other_name = server.scope("other-name");
         let result = register(
             &repo_path,
-            Some("other-name"),
+            Some(&other_name),
             &projects_dir,
             false,
             server.name(),
@@ -332,7 +346,7 @@ mod tests {
         );
         assert!(result.is_err());
         match result.unwrap_err() {
-            PmError::RepoAlreadyRegistered(name) => assert_eq!(name, "myapp"),
+            PmError::RepoAlreadyRegistered(registered_name) => assert_eq!(registered_name, name),
             other => panic!("expected RepoAlreadyRegistered, got: {other}"),
         }
     }
@@ -340,6 +354,8 @@ mod tests {
     #[test]
     fn register_worktree_checkout_where_git_is_a_file() {
         let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let wt_proj_name = server.scope("wt-proj");
         let main_repo = dir.path().join("main-repo");
         create_git_repo(&main_repo);
 
@@ -352,11 +368,10 @@ mod tests {
         assert!(wt_path.join(".git").is_file());
 
         let projects_dir = dir.path().join("registry");
-        let server = TestServer::new();
 
         register(
             &wt_path,
-            Some("wt-proj"),
+            Some(&wt_proj_name),
             &projects_dir,
             false,
             server.name(),
@@ -364,32 +379,34 @@ mod tests {
         )
         .unwrap();
 
-        let wrapper = dir.path().join("wt-proj-pm");
+        let wrapper = dir.path().join(format!("{wt_proj_name}-pm"));
         assert!(wrapper.exists());
         assert!(wrapper.join(".pm").join("config.toml").exists());
-        assert!(tmux::has_session(server.name(), "wt-proj/main").unwrap());
+        assert!(tmux::has_session(server.name(), &format!("{wt_proj_name}/main")).unwrap());
     }
 
     #[test]
     fn register_creates_main_tmux_session() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("myapp");
+        let server = TestServer::new();
+        let name = server.scope("myapp");
+        let repo_path = dir.path().join(&name);
         create_git_repo(&repo_path);
         let projects_dir = dir.path().join("registry");
-        let server = TestServer::new();
 
         register(&repo_path, None, &projects_dir, false, server.name(), None).unwrap();
 
-        assert!(tmux::has_session(server.name(), "myapp/main").unwrap());
+        assert!(tmux::has_session(server.name(), &format!("{name}/main")).unwrap());
     }
 
     #[test]
     fn register_symlink_migrates_claude_sessions() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("myapp");
+        let server = TestServer::new();
+        let name = server.scope("myapp");
+        let repo_path = dir.path().join(&name);
         create_git_repo(&repo_path);
         let projects_dir = dir.path().join("registry");
-        let server = TestServer::new();
 
         // Set up fake Claude session data keyed to the original repo path
         let claude_base = dir.path().join("claude");
@@ -415,7 +432,7 @@ mod tests {
 
         // register canonicalizes repo_path, so wrapper_dir is built from canonical parent
         let canonical_parent = repo_canonical.parent().unwrap();
-        let new_main = canonical_parent.join("myapp-pm").join("main");
+        let new_main = canonical_parent.join(format!("{name}-pm")).join("main");
         let new_key = new_main.to_string_lossy().replace('/', "-");
         let new_session_dir = claude_base.join("projects").join(&new_key);
         assert!(new_session_dir.exists());
@@ -426,10 +443,11 @@ mod tests {
     #[test]
     fn register_move_migrates_claude_sessions() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("myapp");
+        let server = TestServer::new();
+        let name = server.scope("myapp");
+        let repo_path = dir.path().join(&name);
         create_git_repo(&repo_path);
         let projects_dir = dir.path().join("registry");
-        let server = TestServer::new();
 
         // Set up fake Claude session data keyed to the original repo path
         let claude_base = dir.path().join("claude");
@@ -453,9 +471,9 @@ mod tests {
         )
         .unwrap();
 
-        // With --move, wrapper is at canonical parent + "myapp", main inside it
+        // With --move, wrapper is at canonical parent + scoped name, main inside it
         let canonical_parent = repo_canonical.parent().unwrap();
-        let new_main = canonical_parent.join("myapp").join("main");
+        let new_main = canonical_parent.join(&name).join("main");
         let new_key = new_main.to_string_lossy().replace('/', "-");
         let new_session_dir = claude_base.join("projects").join(&new_key);
         assert!(new_session_dir.exists());

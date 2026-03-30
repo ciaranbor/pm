@@ -199,7 +199,7 @@ mod tests {
         feature_name: &str,
         server: &TestServer,
     ) -> std::path::PathBuf {
-        let project_path = dir.join("myapp");
+        let project_path = dir.join(server.scope("myapp"));
         let projects_dir = dir.join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
         feat_new::feat_new(
@@ -256,11 +256,12 @@ mod tests {
         let server = TestServer::new();
         let project_path = setup_project_with_feature(dir.path(), "login", &server);
 
-        assert!(tmux_mod::has_session(server.name(), "myapp/login").unwrap());
+        let scoped_name = server.scope("myapp");
+        assert!(tmux_mod::has_session(server.name(), &format!("{scoped_name}/login")).unwrap());
 
         feat_delete(&project_path, "login", false, server.name()).unwrap();
 
-        assert!(!tmux_mod::has_session(server.name(), "myapp/login").unwrap());
+        assert!(!tmux_mod::has_session(server.name(), &format!("{scoped_name}/login")).unwrap());
     }
 
     #[test]
@@ -332,9 +333,9 @@ mod tests {
     #[test]
     fn delete_nonexistent_feature_fails() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let project_path = dir.path().join(server.scope("myapp"));
+        let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
 
         let result = feat_delete(&project_path, "nonexistent", false, None);

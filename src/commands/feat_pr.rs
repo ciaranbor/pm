@@ -69,7 +69,7 @@ mod tests {
         feature_name: &str,
         server: &TestServer,
     ) -> std::path::PathBuf {
-        let project_path = dir.join("myapp");
+        let project_path = dir.join(server.scope("myapp"));
         let projects_dir = dir.join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
 
@@ -176,9 +176,9 @@ mod tests {
     #[test]
     fn feat_pr_fails_for_nonexistent_feature() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let project_path = dir.path().join(server.scope("myapp"));
+        let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
 
         let result = feat_pr(&project_path, "nonexistent", false);
