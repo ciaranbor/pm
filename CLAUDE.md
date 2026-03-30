@@ -26,6 +26,8 @@ cargo run -- <args>            # run pm with arguments
 
 Before completing any task, always run: `cargo fmt && cargo clippy && cargo test`
 
+**Important:** Never run `cargo test` from within parallel subagents. Tests create real tmux sessions that consume ptys, and concurrent test runs can exhaust the macOS pty limit (511), freezing the system. Always run tests sequentially in the main agent.
+
 ## Testing approach
 
 TDD. Tests use real git repos and real tmux sessions, not mocks.
