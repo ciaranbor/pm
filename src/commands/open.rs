@@ -254,7 +254,7 @@ mod tests {
         let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
         init::init(&project_path, &projects_dir, server.name()).unwrap();
-        feat_new::feat_new(&project_path, "login", None, None, false, server.name()).unwrap();
+        feat_new::feat_new(&project_path, "login", None, None, None, false, server.name()).unwrap();
 
         // Create a restore hook
         let restore_path = project_path.join(hooks::RESTORE_PATH);
