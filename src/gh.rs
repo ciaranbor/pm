@@ -118,6 +118,48 @@ pub fn pr_state(repo_dir: &Path, pr_number: &str) -> Result<String> {
     )
 }
 
+/// PR details returned by `gh pr view`.
+#[derive(Debug, Clone)]
+pub struct PrDetails {
+    pub number: String,
+    pub title: String,
+    pub body: String,
+    pub url: String,
+    pub head_ref: String,
+}
+
+/// Fetch full details for a PR by number or URL.
+pub fn pr_details(repo_dir: &Path, pr: &str) -> Result<PrDetails> {
+    let output = run_gh(
+        repo_dir,
+        &[
+            "pr",
+            "view",
+            pr,
+            "--json",
+            "number,title,body,url,headRefName",
+        ],
+    )?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).map_err(|e| PmError::Gh(format!("parse PR JSON: {e}")))?;
+    let number = parsed["number"]
+        .as_u64()
+        .map(|n| n.to_string())
+        .ok_or_else(|| PmError::Gh("PR response missing 'number' field".to_string()))?;
+    let head_ref = parsed["headRefName"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| PmError::Gh("PR response missing 'headRefName' field".to_string()))?
+        .to_string();
+    Ok(PrDetails {
+        number,
+        title: parsed["title"].as_str().unwrap_or("").to_string(),
+        body: parsed["body"].as_str().unwrap_or("").to_string(),
+        url: parsed["url"].as_str().unwrap_or("").to_string(),
+        head_ref,
+    })
+}
+
 /// Extract the PR number from a gh PR URL (the last path segment).
 fn pr_number_from_url(url: &str) -> String {
     url.rsplit('/').next().unwrap_or(url).to_string()

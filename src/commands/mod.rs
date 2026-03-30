@@ -9,6 +9,7 @@ pub mod feat_new;
 pub mod feat_pr;
 pub mod feat_ready;
 pub mod feat_rename;
+pub mod feat_review;
 pub mod feat_switch;
 pub mod feat_sync;
 pub mod init;

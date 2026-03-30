@@ -6,7 +6,7 @@ Terminal-based project manager built around tmux and git worktrees.
 
 - tmux
 - git
-- [gh](https://cli.github.com/) (for `pm feat pr`, `pm feat sync`)
+- [gh](https://cli.github.com/) (for `pm feat pr`, `pm feat review`, `pm feat sync`)
 
 ## Install
 
@@ -118,6 +118,15 @@ pm feat ready login             # mark a specific feature's PR as ready
 ```
 
 Pushes latest commits, then calls `gh pr ready` to remove draft status. Sets feature status to `review`. Fails if the feature has no linked PR — run `pm feat pr` first.
+
+### Review a PR
+
+```sh
+pm feat review 42                                    # by PR number
+pm feat review https://github.com/owner/repo/pull/42 # by URL
+```
+
+Fetches the PR commits, creates a worktree and tmux session (`myapp/review-42`), and seeds a `TASK.md` with the PR title, URL, and body. Opens a Claude session pointed at `TASK.md`. Feature status is set to `review` and the PR is linked automatically. Works for both same-repo and fork PRs. Use `pm feat delete` to clean up when done.
 
 ### Sync feature statuses with GitHub
 

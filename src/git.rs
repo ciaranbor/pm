@@ -240,6 +240,21 @@ pub fn create_branch_from(repo: &Path, name: &str, start_point: &str) -> Result<
     Ok(())
 }
 
+/// Fetch a PR by number from origin into a local branch.
+/// Uses GitHub's `pull/<number>/head` ref, which works for both same-repo and fork PRs.
+/// Creates or force-updates the local branch to match the PR head.
+pub fn fetch_pr(repo: &Path, pr_number: &str, local_branch: &str) -> Result<()> {
+    run_git(
+        repo,
+        &[
+            "fetch",
+            "origin",
+            &format!("pull/{pr_number}/head:{local_branch}"),
+        ],
+    )?;
+    Ok(())
+}
+
 /// Push a branch to the remote (origin).
 pub fn push_branch(repo: &Path, branch: &str) -> Result<()> {
     run_git(repo, &["push", "-u", "origin", branch])?;
