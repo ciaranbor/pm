@@ -184,6 +184,11 @@ enum FeatCommands {
         /// New feature name
         new_name: String,
     },
+    /// Check out a PR for review (fetch branch + worktree + tmux session)
+    Review {
+        /// PR number or GitHub PR URL
+        pr: String,
+    },
     /// Sync feature statuses with their linked GitHub PRs
     Sync {
         /// Feature name (syncs just this feature). Detected from CWD if omitted. If not in a feature worktree, syncs all features.
@@ -393,6 +398,12 @@ fn run() -> pm::error::Result<()> {
                     let old_name = resolve_feature_name(old_name, &project_root)?;
                     commands::feat_rename::feat_rename(&project_root, &old_name, &new_name, None)?;
                     println!("Renamed feature '{old_name}' to '{new_name}'");
+                    Ok(())
+                }
+                FeatCommands::Review { pr } => {
+                    let feature_name =
+                        commands::feat_review::feat_review(&project_root, &pr, None)?;
+                    println!("Created review feature '{feature_name}'");
                     Ok(())
                 }
                 FeatCommands::Sync { name } => {

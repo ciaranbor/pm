@@ -95,3 +95,13 @@ fn feat_merge_without_project_root_fails() {
         .failure()
         .stderr(predicate::str::contains("error"));
 }
+
+#[test]
+fn feat_review_without_project_root_fails() {
+    let dir = tempdir().unwrap();
+    pm().current_dir(dir.path())
+        .args(["feat", "review", "42"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("error"));
+}
