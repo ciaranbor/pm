@@ -10,10 +10,34 @@ pub fn feat_list(project_root: &Path) -> Result<Vec<String>> {
     let features_dir = paths::features_dir(project_root);
     let features = FeatureState::list(&features_dir)?;
 
-    let lines: Vec<String> = features
+    if features.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Calculate column widths
+    let name_w = features.iter().map(|(n, _)| n.len()).max().unwrap().max(4);
+    let status_w = features
         .iter()
-        .map(|(name, state)| format!("{name}\t{}", state.status))
-        .collect();
+        .map(|(_, s)| s.status.to_string().len())
+        .max()
+        .unwrap()
+        .max(6);
+
+    let mut lines = Vec::new();
+
+    for (name, state) in &features {
+        let mut line = format!("{:<name_w$}  {:<status_w$}", name, state.status);
+        if !state.branch.is_empty() && state.branch != *name {
+            line.push_str(&format!("  branch:{}", state.branch));
+        }
+        if !state.base.is_empty() {
+            line.push_str(&format!("  base:{}", state.base));
+        }
+        if !state.pr.is_empty() {
+            line.push_str(&format!("  pr:{}", state.pr));
+        }
+        lines.push(line);
+    }
 
     Ok(lines)
 }
@@ -35,6 +59,53 @@ mod tests {
 
         let lines = feat_list(&project_path).unwrap();
         assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn feat_list_shows_annotations_for_enriched_fields() {
+        use crate::state::feature::{FeatureState, FeatureStatus};
+        use chrono::Utc;
+
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().join("myapp");
+        let projects_dir = dir.path().join("registry");
+        let server = TestServer::new();
+        init::init(&project_path, &projects_dir, server.name()).unwrap();
+
+        // Create a feature with non-default branch, base, and pr
+        let features_dir = paths::features_dir(&project_path);
+        let state = FeatureState {
+            status: FeatureStatus::Review,
+            branch: "feature/login-v2".to_string(),
+            worktree: "login".to_string(),
+            base: "develop".to_string(),
+            pr: "https://github.com/org/repo/pull/42".to_string(),
+            context: String::new(),
+            created: Utc::now(),
+            last_active: Utc::now(),
+        };
+        state.save(&features_dir, "login").unwrap();
+
+        let lines = feat_list(&project_path).unwrap();
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("login"));
+        assert!(lines[0].contains("review"));
+        assert!(lines[0].contains("branch:feature/login-v2"));
+        assert!(lines[0].contains("base:develop"));
+        assert!(lines[0].contains("pr:https://github.com/org/repo/pull/42"));
+    }
+
+    #[test]
+    fn feat_list_omits_branch_when_same_as_name() {
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().join("myapp");
+        let projects_dir = dir.path().join("registry");
+        let server = TestServer::new();
+        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        feat_new::feat_new(&project_path, "alpha", None, server.name()).unwrap();
+
+        let lines = feat_list(&project_path).unwrap();
+        assert!(!lines[0].contains("branch:"));
     }
 
     #[test]

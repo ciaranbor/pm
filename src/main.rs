@@ -132,6 +132,11 @@ enum FeatCommands {
     },
     /// List all features with their status
     List,
+    /// Show detailed info for a feature
+    Info {
+        /// Feature name (detected from CWD if omitted)
+        name: Option<String>,
+    },
     /// Switch to a feature's tmux session
     Switch {
         /// Feature name (omit for interactive picker)
@@ -315,6 +320,14 @@ fn run() -> pm::error::Result<()> {
                         for line in lines {
                             println!("{line}");
                         }
+                    }
+                    Ok(())
+                }
+                FeatCommands::Info { name } => {
+                    let name = resolve_feature_name(name, &project_root)?;
+                    let lines = commands::feat_info::feat_info(&project_root, &name)?;
+                    for line in lines {
+                        println!("{line}");
                     }
                     Ok(())
                 }

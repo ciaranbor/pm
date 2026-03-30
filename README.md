@@ -62,6 +62,17 @@ Creates a git branch, worktree, and tmux session (`myapp/login`). With `--contex
 pm feat list
 ```
 
+Shows all features with status, plus branch (if different from name), base, and PR when set.
+
+### Show feature details
+
+```sh
+pm feat info login              # show details for a specific feature
+pm feat info                    # show details for current feature (detected from CWD)
+```
+
+Displays all state fields: name, status, branch, worktree, base, pr, context, created, last_active. Empty optional fields are omitted.
+
 ### Switch to a feature
 
 ```sh
