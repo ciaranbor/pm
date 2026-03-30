@@ -62,8 +62,15 @@ mod tests {
         let server = TestServer::new();
         init::init(&project_path, &projects_dir, server.name()).unwrap();
 
-        crate::commands::feat_new::feat_new(&project_path, "login", None, None, server.name())
-            .unwrap();
+        crate::commands::feat_new::feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         let result = feat_ready(&project_path, "login");
         assert!(result.is_err());

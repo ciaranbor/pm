@@ -70,7 +70,7 @@ mod tests {
         let server = TestServer::new();
         init::init(&project_path, &projects_dir, server.name()).unwrap();
 
-        feat_new::feat_new(&project_path, "login", None, None, server.name()).unwrap();
+        feat_new::feat_new(&project_path, "login", None, None, false, server.name()).unwrap();
 
         // switch_client will fail because we're not attached to a tmux client,
         // but the error should be a Tmux error (not a panic or FeatureNotFound)
@@ -90,8 +90,8 @@ mod tests {
         let server = TestServer::new();
         init::init(&project_path, &projects_dir, server.name()).unwrap();
 
-        feat_new::feat_new(&project_path, "login", None, None, server.name()).unwrap();
-        feat_new::feat_new(&project_path, "api", None, None, server.name()).unwrap();
+        feat_new::feat_new(&project_path, "login", None, None, false, server.name()).unwrap();
+        feat_new::feat_new(&project_path, "api", None, None, false, server.name()).unwrap();
 
         let items = feat_switch_menu(&project_path).unwrap();
 

@@ -103,7 +103,15 @@ mod tests {
         let project_path = dir.join("myapp");
         let projects_dir = dir.join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
-        feat_new::feat_new(&project_path, feature_name, None, None, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            feature_name,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
         project_path
     }
 
@@ -392,7 +400,7 @@ mod tests {
         feat_merge(&project_path, "login", false, server.name()).unwrap();
 
         // Create a second feature and merge it too
-        feat_new::feat_new(&project_path, "api", None, None, server.name()).unwrap();
+        feat_new::feat_new(&project_path, "api", None, None, false, server.name()).unwrap();
         let worktree = project_path.join("api");
         std::fs::write(worktree.join("api.txt"), "api work").unwrap();
         git::stage_file(&worktree, "api.txt").unwrap();
@@ -454,7 +462,15 @@ mod tests {
         git::commit(&parent_wt, "parent commit").unwrap();
 
         // Create stacked feature based on parent
-        feat_new::feat_new(&project_path, "child", None, Some("parent"), server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "child",
+            None,
+            Some("parent"),
+            false,
+            server.name(),
+        )
+        .unwrap();
         let child_wt = project_path.join("child");
         std::fs::write(child_wt.join("child.txt"), "child work").unwrap();
         git::stage_file(&child_wt, "child.txt").unwrap();
@@ -474,7 +490,15 @@ mod tests {
         let server = TestServer::new();
         let project_path = setup_project_with_feature(dir.path(), "parent", &server);
 
-        feat_new::feat_new(&project_path, "child", None, Some("parent"), server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "child",
+            None,
+            Some("parent"),
+            false,
+            server.name(),
+        )
+        .unwrap();
         let child_wt = project_path.join("child");
         std::fs::write(child_wt.join("child.txt"), "child work").unwrap();
         git::stage_file(&child_wt, "child.txt").unwrap();

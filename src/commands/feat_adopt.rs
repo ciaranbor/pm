@@ -18,6 +18,7 @@ pub fn feat_adopt(
     name: &str,
     context: Option<&str>,
     from: Option<&Path>,
+    no_edit: bool,
     tmux_server: Option<&str>,
     claude_base: Option<&Path>,
 ) -> Result<()> {
@@ -86,7 +87,11 @@ pub fn feat_adopt(
     if resolved_context.is_some() {
         let window_target =
             tmux::new_window(tmux_server, &session_name, &worktree_path, Some("claude"))?;
-        tmux::send_keys(tmux_server, &window_target, "claude 'READ TASK.md'")?;
+        tmux::send_keys(
+            tmux_server,
+            &window_target,
+            &super::feat_new::claude_read_task_cmd(no_edit),
+        )?;
     }
 
     // Step 4: Update status to wip
@@ -124,7 +129,16 @@ mod tests {
         let project_path = setup_project(dir.path(), &server);
         create_branch(&project_path, "login");
 
-        feat_adopt(&project_path, "login", None, None, server.name(), None).unwrap();
+        feat_adopt(
+            &project_path,
+            "login",
+            None,
+            None,
+            false,
+            server.name(),
+            None,
+        )
+        .unwrap();
 
         let features_dir = paths::features_dir(&project_path);
         let state = FeatureState::load(&features_dir, "login").unwrap();
@@ -138,7 +152,16 @@ mod tests {
         let project_path = setup_project(dir.path(), &server);
         create_branch(&project_path, "login");
 
-        feat_adopt(&project_path, "login", None, None, server.name(), None).unwrap();
+        feat_adopt(
+            &project_path,
+            "login",
+            None,
+            None,
+            false,
+            server.name(),
+            None,
+        )
+        .unwrap();
 
         let worktree_path = project_path.join("login");
         assert!(worktree_path.exists());
@@ -152,7 +175,16 @@ mod tests {
         let project_path = setup_project(dir.path(), &server);
         create_branch(&project_path, "login");
 
-        feat_adopt(&project_path, "login", None, None, server.name(), None).unwrap();
+        feat_adopt(
+            &project_path,
+            "login",
+            None,
+            None,
+            false,
+            server.name(),
+            None,
+        )
+        .unwrap();
 
         assert!(tmux::has_session(server.name(), "myapp/login").unwrap());
     }
@@ -168,7 +200,16 @@ mod tests {
         let main_wt = project_path.join("main");
         assert!(git::branch_exists(&main_wt, "login").unwrap());
 
-        feat_adopt(&project_path, "login", None, None, server.name(), None).unwrap();
+        feat_adopt(
+            &project_path,
+            "login",
+            None,
+            None,
+            false,
+            server.name(),
+            None,
+        )
+        .unwrap();
 
         // Branch still exists (not a new one, same one)
         assert!(git::branch_exists(&main_wt, "login").unwrap());
@@ -185,6 +226,7 @@ mod tests {
             "nonexistent",
             None,
             None,
+            false,
             server.name(),
             None,
         );
@@ -200,8 +242,25 @@ mod tests {
         let project_path = setup_project(dir.path(), &server);
         create_branch(&project_path, "login");
 
-        feat_adopt(&project_path, "login", None, None, server.name(), None).unwrap();
-        let result = feat_adopt(&project_path, "login", None, None, server.name(), None);
+        feat_adopt(
+            &project_path,
+            "login",
+            None,
+            None,
+            false,
+            server.name(),
+            None,
+        )
+        .unwrap();
+        let result = feat_adopt(
+            &project_path,
+            "login",
+            None,
+            None,
+            false,
+            server.name(),
+            None,
+        );
 
         assert!(result.is_err());
         assert!(matches!(
@@ -222,6 +281,7 @@ mod tests {
             "login",
             Some("Adopt existing login branch"),
             None,
+            false,
             server.name(),
             None,
         )
@@ -241,7 +301,16 @@ mod tests {
         create_branch(&project_path, "login");
         let before = Utc::now();
 
-        feat_adopt(&project_path, "login", None, None, server.name(), None).unwrap();
+        feat_adopt(
+            &project_path,
+            "login",
+            None,
+            None,
+            false,
+            server.name(),
+            None,
+        )
+        .unwrap();
 
         let features_dir = paths::features_dir(&project_path);
         let state = FeatureState::load(&features_dir, "login").unwrap();
@@ -261,6 +330,7 @@ mod tests {
             "login",
             Some("Adopt existing login branch"),
             None,
+            false,
             server.name(),
             None,
         )
@@ -278,7 +348,16 @@ mod tests {
         let project_path = setup_project(dir.path(), &server);
         create_branch(&project_path, "login");
 
-        feat_adopt(&project_path, "login", None, None, server.name(), None).unwrap();
+        feat_adopt(
+            &project_path,
+            "login",
+            None,
+            None,
+            false,
+            server.name(),
+            None,
+        )
+        .unwrap();
 
         let output = tmux::list_windows(server.name(), "myapp/login").unwrap();
         assert_eq!(output, 1);
@@ -294,7 +373,15 @@ mod tests {
         // Pre-create a tmux session to cause a conflict
         tmux::create_session(server.name(), "myapp/login", dir.path()).unwrap();
 
-        let result = feat_adopt(&project_path, "login", None, None, server.name(), None);
+        let result = feat_adopt(
+            &project_path,
+            "login",
+            None,
+            None,
+            false,
+            server.name(),
+            None,
+        );
         assert!(result.is_err());
 
         let features_dir = paths::features_dir(&project_path);
@@ -327,6 +414,7 @@ mod tests {
             "login",
             None,
             Some(old_path),
+            false,
             server.name(),
             Some(claude_base.as_path()),
         )

@@ -202,7 +202,15 @@ mod tests {
         let project_path = dir.join("myapp");
         let projects_dir = dir.join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
-        feat_new::feat_new(&project_path, feature_name, None, None, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            feature_name,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
         project_path
     }
 
@@ -425,7 +433,15 @@ mod tests {
         let project_path = setup_project_with_feature(dir.path(), "parent", &server);
 
         // Create stacked feature based on parent
-        feat_new::feat_new(&project_path, "child", None, Some("parent"), server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "child",
+            None,
+            Some("parent"),
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         // Merge child into parent so the safety check passes
         let parent_wt = project_path.join("parent");
@@ -445,7 +461,15 @@ mod tests {
         let project_path = setup_project_with_feature(dir.path(), "parent", &server);
 
         // Create stacked feature based on parent with a commit
-        feat_new::feat_new(&project_path, "child", None, Some("parent"), server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "child",
+            None,
+            Some("parent"),
+            false,
+            server.name(),
+        )
+        .unwrap();
         let child_wt = project_path.join("child");
         std::fs::write(child_wt.join("child.txt"), "child work").unwrap();
         git::stage_file(&child_wt, "child.txt").unwrap();
