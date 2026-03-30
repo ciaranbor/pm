@@ -10,6 +10,20 @@ use crate::state::paths;
 use crate::state::project::ProjectConfig;
 use crate::{git, tmux};
 
+/// Derive a feature name from a branch name, replacing `/` with `-`.
+/// If `name_override` is provided, validate it and use that instead.
+pub fn sanitize_feature_name(branch: &str, name_override: Option<&str>) -> Result<String> {
+    match name_override {
+        Some(name) => {
+            if name.contains('/') {
+                return Err(PmError::InvalidFeatureName(name.to_string()));
+            }
+            Ok(name.to_string())
+        }
+        None => Ok(branch.replace('/', "-")),
+    }
+}
+
 /// Resolve context: if the value is a path to an existing file, read its contents;
 /// otherwise treat it as literal text.
 pub fn resolve_context(context: &str) -> Result<String> {
@@ -58,17 +72,20 @@ pub fn claude_read_task_cmd(no_edit: bool) -> String {
 pub fn feat_new(
     project_root: &Path,
     name: &str,
+    name_override: Option<&str>,
     context: Option<&str>,
     base: Option<&str>,
     no_edit: bool,
     tmux_server: Option<&str>,
-) -> Result<()> {
+) -> Result<String> {
+    let branch = name;
+    let feature_name = sanitize_feature_name(branch, name_override)?;
     let features_dir = paths::features_dir(project_root);
     let pm_dir = paths::pm_dir(project_root);
 
     // Check for duplicate
-    if FeatureState::exists(&features_dir, name) {
-        return Err(PmError::FeatureAlreadyExists(name.to_string()));
+    if FeatureState::exists(&features_dir, &feature_name) {
+        return Err(PmError::FeatureAlreadyExists(feature_name));
     }
 
     // Load project config for name
@@ -86,28 +103,28 @@ pub fn feat_new(
     let now = Utc::now();
     let mut state = FeatureState {
         status: FeatureStatus::Initializing,
-        branch: name.to_string(),
-        worktree: name.to_string(),
+        branch: branch.to_string(),
+        worktree: feature_name.clone(),
         base: resolved_base.clone(),
         pr: String::new(),
         context: resolved_context.clone().unwrap_or_default(),
         created: now,
         last_active: now,
     };
-    state.save(&features_dir, name)?;
+    state.save(&features_dir, &feature_name)?;
 
     // Steps 2-5: Create resources, rolling back on failure
     let main_worktree = project_root.join("main");
-    let worktree_path = project_root.join(name);
-    let session_name = format!("{project_name}/{name}");
+    let worktree_path = project_root.join(&feature_name);
+    let session_name = format!("{project_name}/{feature_name}");
     let hook_path = project_root.join(hooks::POST_CREATE_PATH);
 
     let result: Result<()> = (|| {
-        // Step 2: Create git branch from the base branch
-        git::create_branch_from(&main_worktree, name, &resolved_base)?;
+        // Step 2: Create git branch from the base branch (uses actual branch name, may contain slashes)
+        git::create_branch_from(&main_worktree, branch, &resolved_base)?;
 
         // Step 3: Create git worktree
-        git::add_worktree(&main_worktree, &worktree_path, name)?;
+        git::add_worktree(&main_worktree, &worktree_path, branch)?;
 
         // Step 3.5: Seed Claude Code permissions from main worktree
         permissions::seed_feature_permissions(project_root, &worktree_path)?;
@@ -134,7 +151,7 @@ pub fn feat_new(
         // Step 5: Update status to wip
         state.status = FeatureStatus::Wip;
         state.last_active = Utc::now();
-        state.save(&features_dir, name)?;
+        state.save(&features_dir, &feature_name)?;
 
         Ok(())
     })();
@@ -145,14 +162,14 @@ pub fn feat_new(
         if worktree_path.exists() {
             let _ = git::remove_worktree_force(&main_worktree, &worktree_path);
         }
-        if git::branch_exists(&main_worktree, name).unwrap_or(false) {
-            let _ = git::delete_branch(&main_worktree, name);
+        if git::branch_exists(&main_worktree, branch).unwrap_or(false) {
+            let _ = git::delete_branch(&main_worktree, branch);
         }
-        let _ = FeatureState::delete(&features_dir, name);
+        let _ = FeatureState::delete(&features_dir, &feature_name);
         return Err(e);
     }
 
-    Ok(())
+    Ok(feature_name)
 }
 
 #[cfg(test)]
@@ -176,7 +193,16 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
-        feat_new(&project_path, "login", None, None, false, server.name()).unwrap();
+        feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         let features_dir = paths::features_dir(&project_path);
         let state = FeatureState::load(&features_dir, "login").unwrap();
@@ -189,7 +215,16 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
-        feat_new(&project_path, "login", None, None, false, server.name()).unwrap();
+        feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         let main_path = project_path.join("main");
         assert!(git::branch_exists(&main_path, "login").unwrap());
@@ -201,7 +236,16 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
-        feat_new(&project_path, "login", None, None, false, server.name()).unwrap();
+        feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         let worktree_path = project_path.join("login");
         assert!(worktree_path.exists());
@@ -214,7 +258,16 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
-        feat_new(&project_path, "login", None, None, false, server.name()).unwrap();
+        feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         assert!(tmux::has_session(server.name(), "myapp/login").unwrap());
     }
@@ -226,7 +279,16 @@ mod tests {
         let (project_path, _) = setup_project(dir.path(), &server);
         let before = Utc::now();
 
-        feat_new(&project_path, "login", None, None, false, server.name()).unwrap();
+        feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         let features_dir = paths::features_dir(&project_path);
         let state = FeatureState::load(&features_dir, "login").unwrap();
@@ -240,7 +302,16 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
-        feat_new(&project_path, "login", None, None, false, server.name()).unwrap();
+        feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         let features_dir = paths::features_dir(&project_path);
         let state = FeatureState::load(&features_dir, "login").unwrap();
@@ -254,8 +325,25 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
-        feat_new(&project_path, "login", None, None, false, server.name()).unwrap();
-        let result = feat_new(&project_path, "login", None, None, false, server.name());
+        feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
+        let result = feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        );
 
         assert!(result.is_err());
         assert!(matches!(
@@ -274,7 +362,15 @@ mod tests {
         // so create_session fails with "duplicate session"
         tmux::create_session(server.name(), "myapp/login", dir.path()).unwrap();
 
-        let result = feat_new(&project_path, "login", None, None, false, server.name());
+        let result = feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        );
         assert!(result.is_err());
 
         // State file should be cleaned up
@@ -297,7 +393,15 @@ mod tests {
         std::fs::create_dir(project_path.join("login")).unwrap();
         std::fs::write(project_path.join("login").join("blocker.txt"), "").unwrap();
 
-        let result = feat_new(&project_path, "login", None, None, false, server.name());
+        let result = feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        );
         assert!(result.is_err());
 
         // State file should be cleaned up
@@ -318,6 +422,7 @@ mod tests {
         feat_new(
             &project_path,
             "login",
+            None,
             Some("Implement login page per issue #42"),
             None,
             false,
@@ -349,6 +454,7 @@ mod tests {
         feat_new(
             &project_path,
             "login",
+            None,
             Some(brief_path.to_str().unwrap()),
             None,
             false,
@@ -375,6 +481,7 @@ mod tests {
         feat_new(
             &project_path,
             "login",
+            None,
             Some(brief_path.to_str().unwrap()),
             None,
             false,
@@ -396,6 +503,7 @@ mod tests {
         feat_new(
             &project_path,
             "login",
+            None,
             Some("Build the login page"),
             None,
             false,
@@ -414,7 +522,16 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
-        feat_new(&project_path, "login", None, None, false, server.name()).unwrap();
+        feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         // Session should have 2 windows: default shell + hook window
         let output = tmux::list_windows(server.name(), "myapp/login").unwrap();
@@ -427,7 +544,16 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
-        feat_new(&project_path, "login", None, None, false, server.name()).unwrap();
+        feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         let task_md = project_path.join("login").join("TASK.md");
         assert!(!task_md.exists());
@@ -443,7 +569,16 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
-        feat_new(&project_path, "login", None, None, false, server.name()).unwrap();
+        feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         // Session should have 2 windows: default shell + hook window
         let windows = tmux::list_windows(server.name(), "myapp/login").unwrap();
@@ -462,6 +597,7 @@ mod tests {
         feat_new(
             &project_path,
             "login",
+            None,
             Some("Build the login page"),
             None,
             false,
@@ -483,7 +619,16 @@ mod tests {
         // Remove the bootstrapped hook script
         std::fs::remove_file(project_path.join(hooks::POST_CREATE_PATH)).unwrap();
 
-        feat_new(&project_path, "login", None, None, false, server.name()).unwrap();
+        feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         // Only 1 window — hook was skipped because file is missing
         let windows = tmux::list_windows(server.name(), "myapp/login").unwrap();
@@ -496,10 +641,20 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
-        feat_new(&project_path, "login", None, None, false, server.name()).unwrap();
+        feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
         feat_new(
             &project_path,
             "stacked",
+            None,
             None,
             Some("login"),
             false,
@@ -519,7 +674,16 @@ mod tests {
         let (project_path, _) = setup_project(dir.path(), &server);
 
         // Create parent feature with a commit
-        feat_new(&project_path, "parent", None, None, false, server.name()).unwrap();
+        feat_new(
+            &project_path,
+            "parent",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
         let parent_wt = project_path.join("parent");
         std::fs::write(parent_wt.join("parent.txt"), "parent work").unwrap();
         git::stage_file(&parent_wt, "parent.txt").unwrap();
@@ -529,6 +693,7 @@ mod tests {
         feat_new(
             &project_path,
             "child",
+            None,
             None,
             Some("parent"),
             false,
@@ -547,7 +712,16 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = setup_project(dir.path(), &server);
 
-        feat_new(&project_path, "login", None, None, false, server.name()).unwrap();
+        feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         let features_dir = paths::features_dir(&project_path);
         let state = FeatureState::load(&features_dir, "login").unwrap();
@@ -605,5 +779,127 @@ mod tests {
         let cmd = claude_read_task_cmd(true);
         assert!(!cmd.contains("--permission-mode"));
         assert!(cmd.contains("READ TASK.md"));
+    }
+
+    #[test]
+    fn sanitize_replaces_slashes_with_dashes() {
+        assert_eq!(
+            sanitize_feature_name("ciaran/eval", None).unwrap(),
+            "ciaran-eval"
+        );
+        assert_eq!(
+            sanitize_feature_name("feat/deep/nested", None).unwrap(),
+            "feat-deep-nested"
+        );
+        assert_eq!(sanitize_feature_name("simple", None).unwrap(), "simple");
+    }
+
+    #[test]
+    fn sanitize_uses_override_when_provided() {
+        assert_eq!(
+            sanitize_feature_name("ciaran/eval", Some("eval")).unwrap(),
+            "eval"
+        );
+    }
+
+    #[test]
+    fn sanitize_rejects_override_with_slash() {
+        let result = sanitize_feature_name("ciaran/eval", Some("foo/bar"));
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            PmError::InvalidFeatureName(_)
+        ));
+    }
+
+    #[test]
+    fn feat_new_slash_collision_detected() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = setup_project(dir.path(), &server);
+
+        // Create "ciaran-login" first
+        feat_new(
+            &project_path,
+            "ciaran-login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
+
+        // "ciaran/login" sanitizes to "ciaran-login" — should conflict
+        let result = feat_new(
+            &project_path,
+            "ciaran/login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        );
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            PmError::FeatureAlreadyExists(_)
+        ));
+    }
+
+    #[test]
+    fn feat_new_slash_branch_sanitizes_feature_name() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = setup_project(dir.path(), &server);
+
+        feat_new(
+            &project_path,
+            "ciaran/login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
+
+        // Feature name should be sanitized
+        let features_dir = paths::features_dir(&project_path);
+        let state = FeatureState::load(&features_dir, "ciaran-login").unwrap();
+        assert_eq!(state.status, FeatureStatus::Wip);
+        assert_eq!(state.branch, "ciaran/login");
+        assert_eq!(state.worktree, "ciaran-login");
+
+        // Worktree dir uses sanitized name
+        assert!(project_path.join("ciaran-login").exists());
+
+        // Tmux session uses sanitized name
+        assert!(tmux::has_session(server.name(), "myapp/ciaran-login").unwrap());
+    }
+
+    #[test]
+    fn feat_new_with_name_override() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = setup_project(dir.path(), &server);
+
+        feat_new(
+            &project_path,
+            "ciaran/eval",
+            Some("eval"),
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
+
+        let features_dir = paths::features_dir(&project_path);
+        let state = FeatureState::load(&features_dir, "eval").unwrap();
+        assert_eq!(state.branch, "ciaran/eval");
+        assert_eq!(state.worktree, "eval");
+        assert!(project_path.join("eval").exists());
+        assert!(tmux::has_session(server.name(), "myapp/eval").unwrap());
     }
 }

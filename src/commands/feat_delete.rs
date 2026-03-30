@@ -207,6 +207,7 @@ mod tests {
             feature_name,
             None,
             None,
+            None,
             false,
             server.name(),
         )
@@ -437,6 +438,7 @@ mod tests {
             &project_path,
             "child",
             None,
+            None,
             Some("parent"),
             false,
             server.name(),
@@ -464,6 +466,7 @@ mod tests {
         feat_new::feat_new(
             &project_path,
             "child",
+            None,
             None,
             Some("parent"),
             false,

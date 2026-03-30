@@ -108,6 +108,7 @@ mod tests {
             feature_name,
             None,
             None,
+            None,
             false,
             server.name(),
         )
@@ -400,7 +401,7 @@ mod tests {
         feat_merge(&project_path, "login", false, server.name()).unwrap();
 
         // Create a second feature and merge it too
-        feat_new::feat_new(&project_path, "api", None, None, false, server.name()).unwrap();
+        feat_new::feat_new(&project_path, "api", None, None, None, false, server.name()).unwrap();
         let worktree = project_path.join("api");
         std::fs::write(worktree.join("api.txt"), "api work").unwrap();
         git::stage_file(&worktree, "api.txt").unwrap();
@@ -466,6 +467,7 @@ mod tests {
             &project_path,
             "child",
             None,
+            None,
             Some("parent"),
             false,
             server.name(),
@@ -493,6 +495,7 @@ mod tests {
         feat_new::feat_new(
             &project_path,
             "child",
+            None,
             None,
             Some("parent"),
             false,

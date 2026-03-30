@@ -100,6 +100,7 @@ mod tests {
             feature_name,
             None,
             None,
+            None,
             false,
             server.name(),
         )

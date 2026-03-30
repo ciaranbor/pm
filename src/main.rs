@@ -110,8 +110,11 @@ enum ClaudeCommands {
 enum FeatCommands {
     /// Create a new feature (branch + worktree + tmux session)
     New {
-        /// Feature name
+        /// Branch name (slashes are sanitized to dashes for the feature name)
         name: String,
+        /// Override the derived feature name
+        #[arg(long)]
+        feature_name: Option<String>,
         /// Initial context (literal text or path to a file)
         #[arg(long)]
         context: Option<String>,
@@ -124,8 +127,11 @@ enum FeatCommands {
     },
     /// Adopt an existing branch as a feature (worktree + tmux session)
     Adopt {
-        /// Branch name to adopt
+        /// Branch name to adopt (slashes are sanitized to dashes for the feature name)
         name: String,
+        /// Override the derived feature name
+        #[arg(long)]
+        feature_name: Option<String>,
         /// Initial context (literal text or path to a file)
         #[arg(long)]
         context: Option<String>,
@@ -294,37 +300,41 @@ fn run() -> pm::error::Result<()> {
             match feat_cmd {
                 FeatCommands::New {
                     name,
+                    feature_name,
                     context,
                     base,
                     no_edit,
                 } => {
-                    commands::feat_new::feat_new(
+                    let feat_name = commands::feat_new::feat_new(
                         &project_root,
                         &name,
+                        feature_name.as_deref(),
                         context.as_deref(),
                         base.as_deref(),
                         no_edit,
                         None,
                     )?;
-                    println!("Created feature '{name}'");
+                    println!("Created feature '{feat_name}'");
                     Ok(())
                 }
                 FeatCommands::Adopt {
                     name,
+                    feature_name,
                     context,
                     from,
                     no_edit,
                 } => {
-                    commands::feat_adopt::feat_adopt(
+                    let feat_name = commands::feat_adopt::feat_adopt(
                         &project_root,
                         &name,
+                        feature_name.as_deref(),
                         context.as_deref(),
                         from.as_deref(),
                         no_edit,
                         None,
                         None,
                     )?;
-                    println!("Adopted feature '{name}'");
+                    println!("Adopted feature '{feat_name}'");
                     Ok(())
                 }
                 FeatCommands::List => {

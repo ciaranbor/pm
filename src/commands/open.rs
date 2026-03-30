@@ -113,7 +113,16 @@ mod tests {
         let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
         init::init(&project_path, &projects_dir, server.name()).unwrap();
-        feat_new::feat_new(&project_path, "login", None, None, false, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         // Kill the feature session
         tmux::kill_session(server.name(), "myapp/login").unwrap();
@@ -131,7 +140,16 @@ mod tests {
         let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
         init::init(&project_path, &projects_dir, server.name()).unwrap();
-        feat_new::feat_new(&project_path, "login", None, None, false, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         // Feature session exists — open should not fail
         assert!(tmux::has_session(server.name(), "myapp/login").unwrap());
@@ -148,7 +166,16 @@ mod tests {
         let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
         init::init(&project_path, &projects_dir, server.name()).unwrap();
-        feat_new::feat_new(&project_path, "login", None, None, false, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         // Manually set feature status to merged
         let features_dir = paths::features_dir(&project_path);
@@ -224,8 +251,17 @@ mod tests {
         let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
         init::init(&project_path, &projects_dir, server.name()).unwrap();
-        feat_new::feat_new(&project_path, "login", None, None, false, server.name()).unwrap();
-        feat_new::feat_new(&project_path, "api", None, None, false, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
+        feat_new::feat_new(&project_path, "api", None, None, None, false, server.name()).unwrap();
 
         // Kill sessions and delete only login's worktree
         tmux::kill_session(server.name(), "myapp/login").unwrap();

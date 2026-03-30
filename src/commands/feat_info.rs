@@ -53,6 +53,7 @@ mod tests {
         feat_new::feat_new(
             &project_path,
             "alpha",
+            None,
             Some("fix the widget"),
             None,
             false,
@@ -90,7 +91,16 @@ mod tests {
         let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
         init::init(&project_path, &projects_dir, server.name()).unwrap();
-        feat_new::feat_new(&project_path, "beta", None, None, false, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "beta",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         let lines = feat_info(&project_path, "beta").unwrap();
         let output = lines.join("\n");

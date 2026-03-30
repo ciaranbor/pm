@@ -53,9 +53,13 @@ pm feat new login --context "Implement login page per issue #42"
 pm feat new login --context path/to/brief.md
 pm feat new child --base parent      # stack on another feature
 pm feat new login --context "task description" --no-edit
+pm feat new ciaran/login                        # feature name: ciaran-login
+pm feat new ciaran/login --feature-name eval    # feature name: eval
 ```
 
 Creates a git branch, worktree, and tmux session (`myapp/login`). With `--context`, seeds a `TASK.md` in the worktree and spawns a Claude session with auto-accept edits enabled. Use `--no-edit` to disable auto-accept edits. With `--base`, branches from the specified branch instead of the default. When `--base` is omitted, the current branch is detected from CWD — so running `pm feat new child` from within a feature worktree automatically stacks on that feature.
+
+Branch names with slashes are supported — slashes are automatically replaced with dashes for the feature name (used for the worktree directory, state file, and tmux session). Use `--feature-name` to override the derived name.
 
 ### List features
 
@@ -184,8 +188,9 @@ When registering or adopting repos, Claude Code sessions are automatically migra
 
 ```sh
 pm claude migrate --from /old/path   # migrate sessions from old path to CWD
-pm feat adopt login --from /old/path  # adopt branch and migrate sessions
-pm feat adopt login --context "..." --no-edit  # adopt without auto-accept edits
+pm feat adopt login --from /old/path          # adopt branch and migrate sessions
+pm feat adopt login --context "..." --no-edit # adopt without auto-accept edits
+pm feat adopt ciaran/eval --feature-name eval # adopt with custom feature name
 ```
 
 `pm register` (both symlink and move modes) migrates sessions automatically — no extra flags needed.
