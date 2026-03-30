@@ -1,4 +1,5 @@
 pub mod claude_migrate;
+pub mod delete;
 pub mod doctor;
 pub mod feat_adopt;
 pub mod feat_delete;

@@ -159,6 +159,16 @@ pm feat delete --force           # delete current feature, skip safety checks
 
 Safety checks block deletion if the feature has uncommitted changes or commits not merged into its base branch (defaults to main; stacked features check against their parent). If the feature has a linked PR that was merged on GitHub, the merge and unpushed checks are skipped (handles squash merges) and the post-merge hook is triggered. Untracked files trigger a warning but don't block. Feature name is detected from CWD if omitted.
 
+### Delete a project
+
+```sh
+pm delete                        # delete current project (with confirmation)
+pm delete --project myapp        # delete a specific project by name
+pm delete --force --yes          # skip safety checks and confirmation
+```
+
+Full project teardown: safety-checks all features, kills all tmux sessions, removes the `.pm/` directory, and removes the global registry entry. Blocks if any feature has uncommitted changes or unmerged commits unless `--force` is passed. Without `--force`, worktree directories and git branches are left on disk so you can continue using them as plain git repos. With `--force`, worktrees and branches are removed.
+
 ### Open a project
 
 ```sh
