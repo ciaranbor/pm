@@ -52,9 +52,10 @@ pm feat new login
 pm feat new login --context "Implement login page per issue #42"
 pm feat new login --context path/to/brief.md
 pm feat new child --base parent      # stack on another feature
+pm feat new login --context "task description" --no-edit
 ```
 
-Creates a git branch, worktree, and tmux session (`myapp/login`). With `--context`, seeds a `TASK.md` in the worktree. With `--base`, branches from the specified branch instead of the default. When `--base` is omitted, the current branch is detected from CWD — so running `pm feat new child` from within a feature worktree automatically stacks on that feature.
+Creates a git branch, worktree, and tmux session (`myapp/login`). With `--context`, seeds a `TASK.md` in the worktree and spawns a Claude session with auto-accept edits enabled. Use `--no-edit` to disable auto-accept edits. With `--base`, branches from the specified branch instead of the default. When `--base` is omitted, the current branch is detected from CWD — so running `pm feat new child` from within a feature worktree automatically stacks on that feature.
 
 ### List features
 
@@ -174,7 +175,8 @@ When registering or adopting repos, Claude Code sessions are automatically migra
 
 ```sh
 pm claude migrate --from /old/path   # migrate sessions from old path to CWD
-pm feat adopt login --from /old/path # adopt branch and migrate sessions
+pm feat adopt login --from /old/path  # adopt branch and migrate sessions
+pm feat adopt login --context "..." --no-edit  # adopt without auto-accept edits
 ```
 
 `pm register` (both symlink and move modes) migrates sessions automatically — no extra flags needed.

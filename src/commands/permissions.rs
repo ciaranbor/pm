@@ -394,7 +394,8 @@ mod tests {
     }
 
     fn create_feature(project_root: &Path, name: &str, server: &TestServer) {
-        crate::commands::feat_new::feat_new(project_root, name, None, None, server.name()).unwrap();
+        crate::commands::feat_new::feat_new(project_root, name, None, None, false, server.name())
+            .unwrap();
     }
 
     fn write_json(dir: &Path, filename: &str, content: &str) {

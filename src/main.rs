@@ -118,6 +118,9 @@ enum FeatCommands {
         /// Base branch to stack on (defaults to current branch from CWD)
         #[arg(long)]
         base: Option<String>,
+        /// Don't auto-accept edits in the spawned Claude session
+        #[arg(long)]
+        no_edit: bool,
     },
     /// Adopt an existing branch as a feature (worktree + tmux session)
     Adopt {
@@ -129,6 +132,9 @@ enum FeatCommands {
         /// Migrate Claude Code sessions from this old path
         #[arg(long)]
         from: Option<PathBuf>,
+        /// Don't auto-accept edits in the spawned Claude session
+        #[arg(long)]
+        no_edit: bool,
     },
     /// List all features with their status
     List,
@@ -285,12 +291,14 @@ fn run() -> pm::error::Result<()> {
                     name,
                     context,
                     base,
+                    no_edit,
                 } => {
                     commands::feat_new::feat_new(
                         &project_root,
                         &name,
                         context.as_deref(),
                         base.as_deref(),
+                        no_edit,
                         None,
                     )?;
                     println!("Created feature '{name}'");
@@ -300,12 +308,14 @@ fn run() -> pm::error::Result<()> {
                     name,
                     context,
                     from,
+                    no_edit,
                 } => {
                     commands::feat_adopt::feat_adopt(
                         &project_root,
                         &name,
                         context.as_deref(),
                         from.as_deref(),
+                        no_edit,
                         None,
                         None,
                     )?;

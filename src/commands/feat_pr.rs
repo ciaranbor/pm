@@ -95,7 +95,15 @@ mod tests {
             .output()
             .unwrap();
 
-        feat_new::feat_new(&project_path, feature_name, None, None, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            feature_name,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         project_path
     }
