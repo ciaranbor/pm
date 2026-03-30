@@ -126,11 +126,17 @@ mod tests {
     use crate::testing::TestServer;
     use tempfile::tempdir;
 
-    fn setup_project(dir: &Path, server: &TestServer) -> std::path::PathBuf {
-        let project_path = dir.join("myapp");
+    fn setup_project(dir: &Path, server: &TestServer) -> (std::path::PathBuf, String) {
+        let project_path = dir.join(server.scope("myapp"));
         let projects_dir = dir.join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
-        project_path
+        let project_name = project_path
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        (project_path, project_name)
     }
 
     fn sample_details() -> PrDetails {
@@ -154,7 +160,7 @@ mod tests {
     fn review_creates_state_file_with_review_status() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, _) = setup_project(dir.path(), &server);
         let details = sample_details();
         simulate_fetched_pr(&project_path, "review-42");
 
@@ -172,7 +178,7 @@ mod tests {
     fn review_creates_worktree() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, _) = setup_project(dir.path(), &server);
         let details = sample_details();
         simulate_fetched_pr(&project_path, "review-42");
 
@@ -187,20 +193,20 @@ mod tests {
     fn review_creates_tmux_session() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, project_name) = setup_project(dir.path(), &server);
         let details = sample_details();
         simulate_fetched_pr(&project_path, "review-42");
 
         setup_review(&project_path, &details, "review-42", server.name()).unwrap();
 
-        assert!(tmux::has_session(server.name(), "myapp/review-42").unwrap());
+        assert!(tmux::has_session(server.name(), &format!("{project_name}/review-42")).unwrap());
     }
 
     #[test]
     fn review_seeds_task_md() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, _) = setup_project(dir.path(), &server);
         let details = sample_details();
         simulate_fetched_pr(&project_path, "review-42");
 
@@ -218,7 +224,7 @@ mod tests {
     fn review_task_md_is_git_excluded() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, _) = setup_project(dir.path(), &server);
         let details = sample_details();
         simulate_fetched_pr(&project_path, "review-42");
 
@@ -233,14 +239,15 @@ mod tests {
     fn review_creates_claude_and_hook_windows() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, project_name) = setup_project(dir.path(), &server);
         let details = sample_details();
         simulate_fetched_pr(&project_path, "review-42");
 
         setup_review(&project_path, &details, "review-42", server.name()).unwrap();
 
         // 3 windows: default shell + claude + hook
-        let windows = tmux::list_windows(server.name(), "myapp/review-42").unwrap();
+        let windows =
+            tmux::list_windows(server.name(), &format!("{project_name}/review-42")).unwrap();
         assert_eq!(windows, 3);
     }
 
@@ -248,7 +255,7 @@ mod tests {
     fn review_duplicate_fails() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, _) = setup_project(dir.path(), &server);
         let details = sample_details();
         simulate_fetched_pr(&project_path, "review-42");
 
@@ -266,7 +273,7 @@ mod tests {
     fn review_sets_timestamps() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, _) = setup_project(dir.path(), &server);
         let details = sample_details();
         simulate_fetched_pr(&project_path, "review-42");
         let before = Utc::now();
@@ -283,12 +290,17 @@ mod tests {
     fn review_tmux_failure_cleans_up() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, project_name) = setup_project(dir.path(), &server);
         let details = sample_details();
         simulate_fetched_pr(&project_path, "review-42");
 
         // Pre-create the tmux session to force a conflict
-        tmux::create_session(server.name(), "myapp/review-42", dir.path()).unwrap();
+        tmux::create_session(
+            server.name(),
+            &format!("{project_name}/review-42"),
+            dir.path(),
+        )
+        .unwrap();
 
         let result = setup_review(&project_path, &details, "review-42", server.name());
         assert!(result.is_err());
@@ -309,7 +321,7 @@ mod tests {
     fn review_stores_context_in_state() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, _) = setup_project(dir.path(), &server);
         let details = sample_details();
         simulate_fetched_pr(&project_path, "review-42");
 

@@ -52,9 +52,9 @@ mod tests {
     #[test]
     fn feat_list_with_no_features_returns_empty() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let project_path = dir.path().join(server.scope("myapp"));
+        let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
 
         let lines = feat_list(&project_path).unwrap();
@@ -67,9 +67,9 @@ mod tests {
         use chrono::Utc;
 
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let project_path = dir.path().join(server.scope("myapp"));
+        let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
 
         // Create a feature with non-default branch, base, and pr
@@ -98,9 +98,9 @@ mod tests {
     #[test]
     fn feat_list_omits_branch_when_same_as_name() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let project_path = dir.path().join(server.scope("myapp"));
+        let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
         feat_new::feat_new(
             &project_path,
@@ -120,9 +120,9 @@ mod tests {
     #[test]
     fn feat_list_shows_all_features_with_status() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let project_path = dir.path().join(server.scope("myapp"));
+        let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
         feat_new::feat_new(
             &project_path,

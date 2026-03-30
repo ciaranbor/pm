@@ -387,7 +387,7 @@ mod tests {
     use tempfile::tempdir;
 
     fn setup_project(dir: &Path, server: &TestServer) -> std::path::PathBuf {
-        let project_path = dir.join("myapp");
+        let project_path = dir.join(server.scope("myapp"));
         let projects_dir = dir.join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
         project_path

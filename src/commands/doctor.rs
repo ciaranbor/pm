@@ -338,19 +338,25 @@ mod tests {
     use crate::testing::TestServer;
     use tempfile::tempdir;
 
-    fn setup_project(dir: &Path, server: &TestServer) -> std::path::PathBuf {
-        let project_path = dir.join("myapp");
+    fn setup_project(dir: &Path, server: &TestServer) -> (std::path::PathBuf, String) {
+        let project_path = dir.join(server.scope("myapp"));
         let projects_dir = dir.join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
-        project_path
+        let project_name = project_path
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        (project_path, project_name)
     }
 
     fn setup_project_with_feature(
         dir: &Path,
         feature_name: &str,
         server: &TestServer,
-    ) -> std::path::PathBuf {
-        let project_path = setup_project(dir, server);
+    ) -> (std::path::PathBuf, String) {
+        let (project_path, project_name) = setup_project(dir, server);
         feat_new::feat_new(
             &project_path,
             feature_name,
@@ -361,14 +367,14 @@ mod tests {
             server.name(),
         )
         .unwrap();
-        project_path
+        (project_path, project_name)
     }
 
     #[test]
     fn healthy_feature_reports_ok() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = setup_project_with_feature(dir.path(), "login", &server);
 
         let lines = doctor(&project_path, false, server.name()).unwrap();
         assert!(lines[0].contains("all healthy"), "got: {:?}", lines);
@@ -383,7 +389,7 @@ mod tests {
     fn no_features_reports_empty() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, _) = setup_project(dir.path(), &server);
 
         let lines = doctor(&project_path, false, server.name()).unwrap();
         assert_eq!(lines, vec!["No features to check"]);
@@ -393,7 +399,7 @@ mod tests {
     fn missing_worktree_directory_detected() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = setup_project_with_feature(dir.path(), "login", &server);
 
         // Remove directory on disk without telling git — simulates real drift
         std::fs::remove_dir_all(project_path.join("login")).unwrap();
@@ -418,7 +424,7 @@ mod tests {
     fn directory_exists_but_not_git_worktree() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = setup_project_with_feature(dir.path(), "login", &server);
 
         // Deregister worktree from git but leave directory on disk
         let main_repo = project_path.join("main");
@@ -438,7 +444,7 @@ mod tests {
     fn missing_branch_detected() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = setup_project_with_feature(dir.path(), "login", &server);
 
         // Remove worktree first (branch can't be deleted while checked out), then branch
         let main_repo = project_path.join("main");
@@ -465,16 +471,16 @@ mod tests {
     fn missing_tmux_session_detected() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, project_name) = setup_project_with_feature(dir.path(), "login", &server);
 
         // Kill the feature's tmux session
-        tmux::kill_session(server.name(), "myapp/login").unwrap();
+        tmux::kill_session(server.name(), &format!("{project_name}/login")).unwrap();
 
         let lines = doctor(&project_path, false, server.name()).unwrap();
         assert!(
             lines
                 .iter()
-                .any(|l| l.contains("tmux session 'myapp/login' missing")),
+                .any(|l| l.contains(&format!("tmux session '{project_name}/login' missing"))),
             "got: {lines:?}"
         );
     }
@@ -483,7 +489,7 @@ mod tests {
     fn stuck_initializing_detected() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = setup_project_with_feature(dir.path(), "login", &server);
 
         // Manually set the feature status to initializing
         let features_dir = paths::features_dir(&project_path);
@@ -506,7 +512,7 @@ mod tests {
     fn multiple_features_all_checked() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, _) = setup_project(dir.path(), &server);
         feat_new::feat_new(
             &project_path,
             "alpha",
@@ -538,13 +544,13 @@ mod tests {
     fn multiple_issues_on_same_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, project_name) = setup_project_with_feature(dir.path(), "login", &server);
 
         // Remove worktree + branch + tmux session — fully orphaned
         let main_repo = project_path.join("main");
         git::remove_worktree_force(&main_repo, &project_path.join("login")).unwrap();
         git::delete_branch(&main_repo, "login").unwrap();
-        tmux::kill_session(server.name(), "myapp/login").unwrap();
+        tmux::kill_session(server.name(), &format!("{project_name}/login")).unwrap();
 
         let lines = doctor(&project_path, false, server.name()).unwrap();
         // Orphan is reported as a single consolidated issue
@@ -558,11 +564,11 @@ mod tests {
     fn multiple_issues_non_orphan() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, project_name) = setup_project_with_feature(dir.path(), "login", &server);
 
         // Remove only the worktree directory — branch still exists, so not orphaned
         std::fs::remove_dir_all(project_path.join("login")).unwrap();
-        tmux::kill_session(server.name(), "myapp/login").unwrap();
+        tmux::kill_session(server.name(), &format!("{project_name}/login")).unwrap();
 
         let lines = doctor(&project_path, false, server.name()).unwrap();
         let issue_lines: Vec<_> = lines
@@ -581,10 +587,11 @@ mod tests {
     fn fix_recreates_missing_tmux_session() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, project_name) = setup_project_with_feature(dir.path(), "login", &server);
+        let session_name = format!("{project_name}/login");
 
-        tmux::kill_session(server.name(), "myapp/login").unwrap();
-        assert!(!tmux::has_session(server.name(), "myapp/login").unwrap());
+        tmux::kill_session(server.name(), &session_name).unwrap();
+        assert!(!tmux::has_session(server.name(), &session_name).unwrap());
 
         let lines = doctor(&project_path, true, server.name()).unwrap();
         assert!(
@@ -593,14 +600,14 @@ mod tests {
                 .any(|l| l.contains("fixed") && l.contains("tmux session")),
             "got: {lines:?}"
         );
-        assert!(tmux::has_session(server.name(), "myapp/login").unwrap());
+        assert!(tmux::has_session(server.name(), &session_name).unwrap());
     }
 
     #[test]
     fn fix_cleans_up_stuck_initializing() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, project_name) = setup_project_with_feature(dir.path(), "login", &server);
 
         let features_dir = paths::features_dir(&project_path);
         let mut state = FeatureState::load(&features_dir, "login").unwrap();
@@ -622,20 +629,20 @@ mod tests {
         let main_repo = project_path.join("main");
         assert!(!git::branch_exists(&main_repo, "login").unwrap());
         // Tmux session should be removed
-        assert!(!tmux::has_session(server.name(), "myapp/login").unwrap());
+        assert!(!tmux::has_session(server.name(), &format!("{project_name}/login")).unwrap());
     }
 
     #[test]
     fn fix_removes_orphaned_state() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, project_name) = setup_project_with_feature(dir.path(), "login", &server);
 
         // Remove worktree, branch, and tmux session — leaving only the state file
         let main_repo = project_path.join("main");
         git::remove_worktree_force(&main_repo, &project_path.join("login")).unwrap();
         git::delete_branch(&main_repo, "login").unwrap();
-        tmux::kill_session(server.name(), "myapp/login").unwrap();
+        tmux::kill_session(server.name(), &format!("{project_name}/login")).unwrap();
 
         let features_dir = paths::features_dir(&project_path);
         assert!(FeatureState::exists(&features_dir, "login"));
@@ -654,7 +661,7 @@ mod tests {
     fn fix_skips_ambiguous_issues() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = setup_project_with_feature(dir.path(), "login", &server);
 
         // Remove only the directory — branch and state still exist, ambiguous
         std::fs::remove_dir_all(project_path.join("login")).unwrap();
@@ -670,9 +677,9 @@ mod tests {
     fn fix_summary_shows_fixed_count() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, project_name) = setup_project_with_feature(dir.path(), "login", &server);
 
-        tmux::kill_session(server.name(), "myapp/login").unwrap();
+        tmux::kill_session(server.name(), &format!("{project_name}/login")).unwrap();
 
         let lines = doctor(&project_path, true, server.name()).unwrap();
         assert!(

@@ -52,9 +52,9 @@ mod tests {
     #[test]
     fn feat_switch_nonexistent_feature_fails() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let project_path = dir.path().join(server.scope("myapp"));
+        let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
 
         let result = feat_switch(&project_path, "nonexistent", server.name());
@@ -65,9 +65,9 @@ mod tests {
     #[test]
     fn feat_switch_existing_feature_constructs_correct_session() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let project_path = dir.path().join(server.scope("myapp"));
+        let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
 
         feat_new::feat_new(
@@ -94,9 +94,10 @@ mod tests {
     #[test]
     fn feat_switch_menu_includes_main_and_features() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let scoped = server.scope("myapp");
+        let project_path = dir.path().join(&scoped);
+        let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
 
         feat_new::feat_new(
@@ -115,10 +116,10 @@ mod tests {
 
         assert_eq!(items.len(), 3); // main + 2 features
         assert_eq!(items[0].0, "main");
-        assert_eq!(items[0].1, "myapp/main");
+        assert_eq!(items[0].1, format!("{scoped}/main"));
         assert_eq!(items[1].0, "api");
-        assert_eq!(items[1].1, "myapp/api");
+        assert_eq!(items[1].1, format!("{scoped}/api"));
         assert_eq!(items[2].0, "login");
-        assert_eq!(items[2].1, "myapp/login");
+        assert_eq!(items[2].1, format!("{scoped}/login"));
     }
 }

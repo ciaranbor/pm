@@ -79,42 +79,45 @@ mod tests {
     #[test]
     fn open_creates_main_session_when_missing() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
 
         // Kill the main session that init created
-        tmux::kill_session(server.name(), "myapp/main").unwrap();
-        assert!(!tmux::has_session(server.name(), "myapp/main").unwrap());
+        tmux::kill_session(server.name(), &format!("{name}/main")).unwrap();
+        assert!(!tmux::has_session(server.name(), &format!("{name}/main")).unwrap());
 
         open(&project_path, server.name()).unwrap();
 
-        assert!(tmux::has_session(server.name(), "myapp/main").unwrap());
+        assert!(tmux::has_session(server.name(), &format!("{name}/main")).unwrap());
     }
 
     #[test]
     fn open_skips_existing_main_session() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
 
         // Main session already exists from init — open should not fail
-        assert!(tmux::has_session(server.name(), "myapp/main").unwrap());
+        assert!(tmux::has_session(server.name(), &format!("{name}/main")).unwrap());
 
         open(&project_path, server.name()).unwrap();
 
-        assert!(tmux::has_session(server.name(), "myapp/main").unwrap());
+        assert!(tmux::has_session(server.name(), &format!("{name}/main")).unwrap());
     }
 
     #[test]
     fn open_recreates_missing_feature_sessions() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
         feat_new::feat_new(
             &project_path,
@@ -128,20 +131,21 @@ mod tests {
         .unwrap();
 
         // Kill the feature session
-        tmux::kill_session(server.name(), "myapp/login").unwrap();
-        assert!(!tmux::has_session(server.name(), "myapp/login").unwrap());
+        tmux::kill_session(server.name(), &format!("{name}/login")).unwrap();
+        assert!(!tmux::has_session(server.name(), &format!("{name}/login")).unwrap());
 
         open(&project_path, server.name()).unwrap();
 
-        assert!(tmux::has_session(server.name(), "myapp/login").unwrap());
+        assert!(tmux::has_session(server.name(), &format!("{name}/login")).unwrap());
     }
 
     #[test]
     fn open_skips_existing_feature_sessions() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
         feat_new::feat_new(
             &project_path,
@@ -155,19 +159,20 @@ mod tests {
         .unwrap();
 
         // Feature session exists — open should not fail
-        assert!(tmux::has_session(server.name(), "myapp/login").unwrap());
+        assert!(tmux::has_session(server.name(), &format!("{name}/login")).unwrap());
 
         open(&project_path, server.name()).unwrap();
 
-        assert!(tmux::has_session(server.name(), "myapp/login").unwrap());
+        assert!(tmux::has_session(server.name(), &format!("{name}/login")).unwrap());
     }
 
     #[test]
     fn open_skips_merged_features() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
         feat_new::feat_new(
             &project_path,
@@ -187,38 +192,44 @@ mod tests {
         state.save(&features_dir, "login").unwrap();
 
         // Kill the feature session
-        tmux::kill_session(server.name(), "myapp/login").unwrap();
+        tmux::kill_session(server.name(), &format!("{name}/login")).unwrap();
 
         open(&project_path, server.name()).unwrap();
 
         // Should NOT recreate session for merged feature
-        assert!(!tmux::has_session(server.name(), "myapp/login").unwrap());
+        assert!(!tmux::has_session(server.name(), &format!("{name}/login")).unwrap());
     }
 
     #[test]
     fn open_with_no_features_only_creates_main() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
 
         // Kill main
-        tmux::kill_session(server.name(), "myapp/main").unwrap();
+        tmux::kill_session(server.name(), &format!("{name}/main")).unwrap();
 
         open(&project_path, server.name()).unwrap();
 
-        let sessions = tmux::list_sessions(server.name()).unwrap();
+        let sessions: Vec<_> = tmux::list_sessions(server.name())
+            .unwrap()
+            .into_iter()
+            .filter(|s| s.starts_with(&format!("{name}/")))
+            .collect();
         assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0], "myapp/main");
+        assert_eq!(sessions[0], format!("{name}/main"));
     }
 
     #[test]
     fn open_backfills_hook_scripts_for_existing_projects() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
 
         // Simulate a pre-hooks project by removing the bootstrapped hooks
@@ -234,13 +245,14 @@ mod tests {
     #[test]
     fn open_errors_when_main_worktree_missing() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
 
         // Kill session and delete the main worktree
-        tmux::kill_session(server.name(), "myapp/main").unwrap();
+        tmux::kill_session(server.name(), &format!("{name}/main")).unwrap();
         std::fs::remove_dir_all(project_path.join("main")).unwrap();
 
         let result = open(&project_path, server.name());
@@ -250,9 +262,10 @@ mod tests {
     #[test]
     fn open_runs_restore_hook_for_new_sessions() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
         feat_new::feat_new(
             &project_path,
@@ -276,21 +289,21 @@ mod tests {
         }
 
         // Kill all sessions to force recreation
-        tmux::kill_session(server.name(), "myapp/main").unwrap();
-        tmux::kill_session(server.name(), "myapp/login").unwrap();
+        tmux::kill_session(server.name(), &format!("{name}/main")).unwrap();
+        tmux::kill_session(server.name(), &format!("{name}/login")).unwrap();
 
         open(&project_path, server.name()).unwrap();
 
         // Verify sessions were created and hook windows exist (restore hook ran)
-        assert!(tmux::has_session(server.name(), "myapp/main").unwrap());
-        assert!(tmux::has_session(server.name(), "myapp/login").unwrap());
+        assert!(tmux::has_session(server.name(), &format!("{name}/main")).unwrap());
+        assert!(tmux::has_session(server.name(), &format!("{name}/login")).unwrap());
         assert!(
-            tmux::find_window(server.name(), "myapp/main", "hook")
+            tmux::find_window(server.name(), &format!("{name}/main"), "hook")
                 .unwrap()
                 .is_some()
         );
         assert!(
-            tmux::find_window(server.name(), "myapp/login", "hook")
+            tmux::find_window(server.name(), &format!("{name}/login"), "hook")
                 .unwrap()
                 .is_some()
         );
@@ -299,9 +312,10 @@ mod tests {
     #[test]
     fn open_skips_restore_hook_for_existing_sessions() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
 
         // Create a restore hook
@@ -319,7 +333,7 @@ mod tests {
 
         // No hook window should exist since sessions were not recreated
         assert!(
-            tmux::find_window(server.name(), "myapp/main", "hook")
+            tmux::find_window(server.name(), &format!("{name}/main"), "hook")
                 .unwrap()
                 .is_none()
         );
@@ -328,9 +342,10 @@ mod tests {
     #[test]
     fn open_skips_feature_with_missing_worktree() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
         feat_new::feat_new(
             &project_path,
@@ -345,14 +360,14 @@ mod tests {
         feat_new::feat_new(&project_path, "api", None, None, None, false, server.name()).unwrap();
 
         // Kill sessions and delete only login's worktree
-        tmux::kill_session(server.name(), "myapp/login").unwrap();
-        tmux::kill_session(server.name(), "myapp/api").unwrap();
+        tmux::kill_session(server.name(), &format!("{name}/login")).unwrap();
+        tmux::kill_session(server.name(), &format!("{name}/api")).unwrap();
         std::fs::remove_dir_all(project_path.join("login")).unwrap();
 
         open(&project_path, server.name()).unwrap();
 
         // login skipped (missing worktree), api recreated
-        assert!(!tmux::has_session(server.name(), "myapp/login").unwrap());
-        assert!(tmux::has_session(server.name(), "myapp/api").unwrap());
+        assert!(!tmux::has_session(server.name(), &format!("{name}/login")).unwrap());
+        assert!(tmux::has_session(server.name(), &format!("{name}/api")).unwrap());
     }
 }

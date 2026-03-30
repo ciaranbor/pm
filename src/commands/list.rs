@@ -38,8 +38,18 @@ mod tests {
         let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
 
-        init::init(&dir.path().join("alpha"), &projects_dir, server.name()).unwrap();
-        init::init(&dir.path().join("beta"), &projects_dir, server.name()).unwrap();
+        init::init(
+            &dir.path().join(server.scope("alpha")),
+            &projects_dir,
+            server.name(),
+        )
+        .unwrap();
+        init::init(
+            &dir.path().join(server.scope("beta")),
+            &projects_dir,
+            server.name(),
+        )
+        .unwrap();
 
         let lines = list_projects(&projects_dir).unwrap();
         assert_eq!(lines.len(), 2);

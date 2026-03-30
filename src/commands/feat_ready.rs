@@ -45,9 +45,9 @@ mod tests {
     #[test]
     fn feat_ready_fails_for_nonexistent_feature() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let project_path = dir.path().join(server.scope("myapp"));
+        let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
 
         let result = feat_ready(&project_path, "nonexistent");
@@ -57,9 +57,9 @@ mod tests {
     #[test]
     fn feat_ready_fails_when_no_pr_linked() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let project_path = dir.path().join(server.scope("myapp"));
+        let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
 
         crate::commands::feat_new::feat_new(

@@ -46,9 +46,9 @@ mod tests {
     #[test]
     fn feat_info_shows_all_fields() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let project_path = dir.path().join(server.scope("myapp"));
+        let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
         feat_new::feat_new(
             &project_path,
@@ -75,9 +75,9 @@ mod tests {
     #[test]
     fn feat_info_nonexistent_returns_error() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let project_path = dir.path().join(server.scope("myapp"));
+        let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
 
         let result = feat_info(&project_path, "nonexistent");
@@ -87,9 +87,9 @@ mod tests {
     #[test]
     fn feat_info_omits_empty_optional_fields() {
         let dir = tempdir().unwrap();
-        let project_path = dir.path().join("myapp");
-        let projects_dir = dir.path().join("registry");
         let server = TestServer::new();
+        let project_path = dir.path().join(server.scope("myapp"));
+        let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
         feat_new::feat_new(
             &project_path,

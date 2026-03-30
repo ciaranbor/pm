@@ -90,7 +90,7 @@ mod tests {
     use tempfile::tempdir;
 
     fn setup_project(dir: &Path, server: &TestServer) -> std::path::PathBuf {
-        let project_path = dir.join("myapp");
+        let project_path = dir.join(server.scope("myapp"));
         let projects_dir = dir.join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
         project_path
@@ -103,7 +103,7 @@ mod tests {
         let project_path = setup_project(dir.path(), &server);
 
         let lines = status(&project_path, server.name()).unwrap();
-        assert!(lines[0].contains("Project:") && lines[0].contains("myapp"));
+        assert!(lines[0].contains("Project:") && lines[0].contains(&server.scope("myapp")));
         assert!(lines[1].contains("Root:"));
         assert!(lines[2].contains("Features: 0"));
     }
@@ -185,7 +185,8 @@ mod tests {
         .unwrap();
 
         // Kill tmux session to create a doctor issue
-        crate::tmux::kill_session(server.name(), "myapp/login").unwrap();
+        crate::tmux::kill_session(server.name(), &format!("{}/login", server.scope("myapp")))
+            .unwrap();
 
         let lines = status(&project_path, server.name()).unwrap();
         assert!(lines.iter().any(|l| l.contains("Issues:")));
@@ -231,7 +232,8 @@ mod tests {
         .unwrap();
 
         // Break only beta's tmux session
-        crate::tmux::kill_session(server.name(), "myapp/beta").unwrap();
+        crate::tmux::kill_session(server.name(), &format!("{}/beta", server.scope("myapp")))
+            .unwrap();
 
         let lines = status(&project_path, server.name()).unwrap();
         // Both features listed

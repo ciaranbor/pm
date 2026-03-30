@@ -180,18 +180,22 @@ mod tests {
     use crate::testing::TestServer;
     use tempfile::tempdir;
 
-    fn setup_project(dir: &Path, server: &TestServer) -> (std::path::PathBuf, std::path::PathBuf) {
-        let project_path = dir.join("myapp");
+    fn setup_project(
+        dir: &Path,
+        server: &TestServer,
+    ) -> (std::path::PathBuf, std::path::PathBuf, String) {
+        let name = server.scope("myapp");
+        let project_path = dir.join(&name);
         let projects_dir = dir.join("registry");
         init::init(&project_path, &projects_dir, server.name()).unwrap();
-        (project_path, projects_dir)
+        (project_path, projects_dir, name)
     }
 
     #[test]
     fn feat_new_creates_state_file_with_wip_status() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = setup_project(dir.path(), &server);
 
         feat_new(
             &project_path,
@@ -213,7 +217,7 @@ mod tests {
     fn feat_new_creates_git_branch() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = setup_project(dir.path(), &server);
 
         feat_new(
             &project_path,
@@ -234,7 +238,7 @@ mod tests {
     fn feat_new_creates_worktree() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = setup_project(dir.path(), &server);
 
         feat_new(
             &project_path,
@@ -256,7 +260,7 @@ mod tests {
     fn feat_new_creates_tmux_session() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = setup_project(dir.path(), &server);
 
         feat_new(
             &project_path,
@@ -269,14 +273,14 @@ mod tests {
         )
         .unwrap();
 
-        assert!(tmux::has_session(server.name(), "myapp/login").unwrap());
+        assert!(tmux::has_session(server.name(), &format!("{project_name}/login")).unwrap());
     }
 
     #[test]
     fn feat_new_sets_timestamps() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = setup_project(dir.path(), &server);
         let before = Utc::now();
 
         feat_new(
@@ -300,7 +304,7 @@ mod tests {
     fn feat_new_state_has_matching_branch_and_worktree() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = setup_project(dir.path(), &server);
 
         feat_new(
             &project_path,
@@ -323,7 +327,7 @@ mod tests {
     fn feat_new_duplicate_name_fails() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = setup_project(dir.path(), &server);
 
         feat_new(
             &project_path,
@@ -356,11 +360,11 @@ mod tests {
     fn feat_new_tmux_failure_cleans_up_all_resources() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = setup_project(dir.path(), &server);
 
         // Pre-create a tmux session with the name feat_new will use,
         // so create_session fails with "duplicate session"
-        tmux::create_session(server.name(), "myapp/login", dir.path()).unwrap();
+        tmux::create_session(server.name(), &format!("{project_name}/login"), dir.path()).unwrap();
 
         let result = feat_new(
             &project_path,
@@ -387,7 +391,7 @@ mod tests {
     fn feat_new_worktree_failure_cleans_up_branch_and_state() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = setup_project(dir.path(), &server);
 
         // Pre-create the worktree path so add_worktree fails
         std::fs::create_dir(project_path.join("login")).unwrap();
@@ -417,7 +421,7 @@ mod tests {
     fn feat_new_with_text_context_writes_task_md() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = setup_project(dir.path(), &server);
 
         feat_new(
             &project_path,
@@ -445,7 +449,7 @@ mod tests {
     fn feat_new_with_file_context_reads_file() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = setup_project(dir.path(), &server);
 
         // Create a temp file with context content
         let brief_path = dir.path().join("brief.md");
@@ -472,7 +476,7 @@ mod tests {
     fn feat_new_with_context_stores_resolved_content_in_state() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = setup_project(dir.path(), &server);
 
         // Pass a file path as context — state should store the file contents, not the path
         let brief_path = dir.path().join("brief.md");
@@ -498,7 +502,7 @@ mod tests {
     fn feat_new_with_context_creates_claude_window() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = setup_project(dir.path(), &server);
 
         feat_new(
             &project_path,
@@ -512,7 +516,7 @@ mod tests {
         .unwrap();
 
         // Session should have 3 windows: the default shell + the claude window + hook window
-        let output = tmux::list_windows(server.name(), "myapp/login").unwrap();
+        let output = tmux::list_windows(server.name(), &format!("{project_name}/login")).unwrap();
         assert_eq!(output, 3);
     }
 
@@ -520,7 +524,7 @@ mod tests {
     fn feat_new_without_context_has_shell_and_hook_windows() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = setup_project(dir.path(), &server);
 
         feat_new(
             &project_path,
@@ -534,7 +538,7 @@ mod tests {
         .unwrap();
 
         // Session should have 2 windows: default shell + hook window
-        let output = tmux::list_windows(server.name(), "myapp/login").unwrap();
+        let output = tmux::list_windows(server.name(), &format!("{project_name}/login")).unwrap();
         assert_eq!(output, 2);
     }
 
@@ -542,7 +546,7 @@ mod tests {
     fn feat_new_without_context_has_no_task_md() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = setup_project(dir.path(), &server);
 
         feat_new(
             &project_path,
@@ -567,7 +571,7 @@ mod tests {
     fn feat_new_runs_default_post_create_hook() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = setup_project(dir.path(), &server);
 
         feat_new(
             &project_path,
@@ -581,10 +585,11 @@ mod tests {
         .unwrap();
 
         // Session should have 2 windows: default shell + hook window
-        let windows = tmux::list_windows(server.name(), "myapp/login").unwrap();
+        let windows = tmux::list_windows(server.name(), &format!("{project_name}/login")).unwrap();
         assert_eq!(windows, 2);
         // Hook window should be named "hook"
-        let target = tmux::find_window(server.name(), "myapp/login", "hook").unwrap();
+        let target =
+            tmux::find_window(server.name(), &format!("{project_name}/login"), "hook").unwrap();
         assert!(target.is_some());
     }
 
@@ -592,7 +597,7 @@ mod tests {
     fn feat_new_with_context_and_hook_creates_three_windows() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = setup_project(dir.path(), &server);
 
         feat_new(
             &project_path,
@@ -606,7 +611,7 @@ mod tests {
         .unwrap();
 
         // 3 windows: default shell + claude window + hook window
-        let windows = tmux::list_windows(server.name(), "myapp/login").unwrap();
+        let windows = tmux::list_windows(server.name(), &format!("{project_name}/login")).unwrap();
         assert_eq!(windows, 3);
     }
 
@@ -614,7 +619,7 @@ mod tests {
     fn feat_new_skips_hook_when_script_removed() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = setup_project(dir.path(), &server);
 
         // Remove the bootstrapped hook script
         std::fs::remove_file(project_path.join(hooks::POST_CREATE_PATH)).unwrap();
@@ -631,7 +636,7 @@ mod tests {
         .unwrap();
 
         // Only 1 window — hook was skipped because file is missing
-        let windows = tmux::list_windows(server.name(), "myapp/login").unwrap();
+        let windows = tmux::list_windows(server.name(), &format!("{project_name}/login")).unwrap();
         assert_eq!(windows, 1);
     }
 
@@ -639,7 +644,7 @@ mod tests {
     fn feat_new_with_base_stores_base_in_state() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = setup_project(dir.path(), &server);
 
         feat_new(
             &project_path,
@@ -671,7 +676,7 @@ mod tests {
     fn feat_new_with_base_branches_from_parent() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = setup_project(dir.path(), &server);
 
         // Create parent feature with a commit
         feat_new(
@@ -710,7 +715,7 @@ mod tests {
     fn feat_new_without_base_defaults_to_main() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = setup_project(dir.path(), &server);
 
         feat_new(
             &project_path,
@@ -816,7 +821,7 @@ mod tests {
     fn feat_new_slash_collision_detected() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = setup_project(dir.path(), &server);
 
         // Create "ciaran-login" first
         feat_new(
@@ -851,7 +856,7 @@ mod tests {
     fn feat_new_slash_branch_sanitizes_feature_name() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = setup_project(dir.path(), &server);
 
         feat_new(
             &project_path,
@@ -875,14 +880,14 @@ mod tests {
         assert!(project_path.join("ciaran-login").exists());
 
         // Tmux session uses sanitized name
-        assert!(tmux::has_session(server.name(), "myapp/ciaran-login").unwrap());
+        assert!(tmux::has_session(server.name(), &format!("{project_name}/ciaran-login")).unwrap());
     }
 
     #[test]
     fn feat_new_with_name_override() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = setup_project(dir.path(), &server);
 
         feat_new(
             &project_path,
@@ -900,6 +905,6 @@ mod tests {
         assert_eq!(state.branch, "ciaran/eval");
         assert_eq!(state.worktree, "eval");
         assert!(project_path.join("eval").exists());
-        assert!(tmux::has_session(server.name(), "myapp/eval").unwrap());
+        assert!(tmux::has_session(server.name(), &format!("{project_name}/eval")).unwrap());
     }
 }
