@@ -166,6 +166,13 @@ enum FeatCommands {
         /// Feature name (detected from CWD if omitted)
         name: Option<String>,
     },
+    /// Rename a feature (branch, worktree, tmux session, state)
+    Rename {
+        /// Current feature name (detected from CWD if omitted)
+        old_name: Option<String>,
+        /// New feature name
+        new_name: String,
+    },
     /// Sync feature statuses with their linked GitHub PRs
     Sync {
         /// Feature name (syncs just this feature). Detected from CWD if omitted. If not in a feature worktree, syncs all features.
@@ -357,6 +364,12 @@ fn run() -> pm::error::Result<()> {
                     let name = resolve_feature_name(name, &project_root)?;
                     commands::feat_ready::feat_ready(&project_root, &name)?;
                     println!("PR marked ready for feature '{name}'");
+                    Ok(())
+                }
+                FeatCommands::Rename { old_name, new_name } => {
+                    let old_name = resolve_feature_name(old_name, &project_root)?;
+                    commands::feat_rename::feat_rename(&project_root, &old_name, &new_name, None)?;
+                    println!("Renamed feature '{old_name}' to '{new_name}'");
                     Ok(())
                 }
                 FeatCommands::Sync { name } => {

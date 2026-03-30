@@ -53,6 +53,12 @@ pub fn kill_session(server: Option<&str>, name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Rename a tmux session.
+pub fn rename_session(server: Option<&str>, old_name: &str, new_name: &str) -> Result<()> {
+    run_tmux(server, &["rename-session", "-t", old_name, new_name])?;
+    Ok(())
+}
+
 /// List all tmux session names.
 pub fn list_sessions(server: Option<&str>) -> Result<Vec<String>> {
     let result = run_tmux(server, &["list-sessions", "-F", "#{session_name}"]);

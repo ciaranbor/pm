@@ -97,6 +97,26 @@ pub fn list_worktrees(repo: &Path) -> Result<Vec<String>> {
     Ok(paths)
 }
 
+/// Rename a local branch.
+pub fn rename_branch(repo: &Path, old_name: &str, new_name: &str) -> Result<()> {
+    run_git(repo, &["branch", "-m", old_name, new_name])?;
+    Ok(())
+}
+
+/// Move a git worktree to a new path.
+pub fn move_worktree(repo: &Path, old_path: &Path, new_path: &Path) -> Result<()> {
+    run_git(
+        repo,
+        &[
+            "worktree",
+            "move",
+            &old_path.to_string_lossy(),
+            &new_path.to_string_lossy(),
+        ],
+    )?;
+    Ok(())
+}
+
 /// Delete a local branch.
 pub fn delete_branch(repo: &Path, name: &str) -> Result<()> {
     run_git(repo, &["branch", "-D", name])?;
