@@ -47,6 +47,18 @@ enum Commands {
     /// Claude Code session management
     #[command(subcommand)]
     Claude(ClaudeCommands),
+    /// Delete a project (teardown features, sessions, state, and registry entry)
+    Delete {
+        /// Project name (defaults to current project from CWD)
+        #[arg(long)]
+        project: Option<String>,
+        /// Skip safety checks and force-remove worktree directories
+        #[arg(long)]
+        force: bool,
+        /// Skip confirmation prompt
+        #[arg(short, long)]
+        yes: bool,
+    },
     /// Show project dashboard (features, PR status, health)
     Status {
         /// Project name (defaults to current project from CWD)
@@ -430,6 +442,23 @@ fn run() -> pm::error::Result<()> {
                     Ok(())
                 }
             }
+        }
+        Commands::Delete {
+            project,
+            force,
+            yes,
+        } => {
+            let projects_dir = paths::global_projects_dir()?;
+            let project_root = if let Some(name) = &project {
+                let entry = pm::state::project::ProjectEntry::load(&projects_dir, name)?;
+                PathBuf::from(&entry.root)
+            } else {
+                paths::find_project_root(&std::env::current_dir()?)?
+            };
+            let project_name =
+                commands::delete::delete(&project_root, &projects_dir, force, yes, None)?;
+            println!("Deleted project '{project_name}'");
+            Ok(())
         }
         Commands::Status { project } => {
             let project_root = if let Some(name) = project {
