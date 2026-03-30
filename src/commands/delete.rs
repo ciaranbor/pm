@@ -210,7 +210,16 @@ mod tests {
         let server = TestServer::new();
         let (project_path, projects_dir) = setup_project(dir.path(), &server);
 
-        feat_new::feat_new(&project_path, "login", None, None, None, false, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
         feat_new::feat_new(&project_path, "api", None, None, None, false, server.name()).unwrap();
 
         delete(&project_path, &projects_dir, false, true, server.name()).unwrap();
@@ -229,7 +238,16 @@ mod tests {
         let server = TestServer::new();
         let (project_path, projects_dir) = setup_project(dir.path(), &server);
 
-        feat_new::feat_new(&project_path, "login", None, None, None, false, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         let worktree = project_path.join("login");
         std::fs::write(worktree.join("dirty.txt"), "uncommitted").unwrap();
@@ -249,7 +267,16 @@ mod tests {
         let server = TestServer::new();
         let (project_path, projects_dir) = setup_project(dir.path(), &server);
 
-        feat_new::feat_new(&project_path, "login", None, None, None, false, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         let worktree = project_path.join("login");
         std::fs::write(worktree.join("feature.txt"), "content").unwrap();
@@ -268,7 +295,16 @@ mod tests {
         let server = TestServer::new();
         let (project_path, projects_dir) = setup_project(dir.path(), &server);
 
-        feat_new::feat_new(&project_path, "login", None, None, None, false, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         let worktree = project_path.join("login");
         std::fs::write(worktree.join("dirty.txt"), "uncommitted").unwrap();
@@ -288,7 +324,16 @@ mod tests {
         let server = TestServer::new();
         let (project_path, projects_dir) = setup_project(dir.path(), &server);
 
-        feat_new::feat_new(&project_path, "login", None, None, None, false, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         // Merge the feature branch into main so safety checks pass
         let main_repo = project_path.join("main");
@@ -317,7 +362,16 @@ mod tests {
         let server = TestServer::new();
         let (project_path, projects_dir) = setup_project(dir.path(), &server);
 
-        feat_new::feat_new(&project_path, "login", None, None, None, false, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         // Merge so safety checks pass without --force
         let main_repo = project_path.join("main");
@@ -341,8 +395,26 @@ mod tests {
         let (project_path, projects_dir) = setup_project(dir.path(), &server);
 
         // Create two features — one clean (merged), one dirty
-        feat_new::feat_new(&project_path, "clean", None, None, None, false, server.name()).unwrap();
-        feat_new::feat_new(&project_path, "dirty", None, None, None, false, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "clean",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "dirty",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         let main_repo = project_path.join("main");
         git::merge_no_ff(&main_repo, "clean").unwrap();
