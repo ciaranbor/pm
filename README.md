@@ -162,6 +162,8 @@ pm feat adopt login --from /old/path # adopt branch and migrate sessions
 
 ```sh
 pm doctor                        # check all features in current project
+pm doctor --project myapp        # check a specific project by name
+pm doctor --fix                  # auto-fix clear-cut issues
 ```
 
 Audits every feature for drift between pm state and external reality:
@@ -172,6 +174,8 @@ Audits every feature for drift between pm state and external reality:
 - Tmux session exists (for active features)
 - Status not stuck on "initializing"
 - PR status matches (calls `gh` for features with linked PRs)
+
+With `--fix`, auto-resolves clear-cut issues: removes orphaned state files (no worktree, no branch), cleans up stuck-initializing features, recreates missing tmux sessions, and updates status to match GitHub PR state. Ambiguous issues (e.g. missing directory but branch still exists) are skipped with a message.
 
 ### Other commands
 
