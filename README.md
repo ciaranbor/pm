@@ -116,6 +116,15 @@ pm feat sync login              # sync a specific feature
 
 Queries GitHub for each feature's PR state and updates the local status: draft PRs set `wip`, ready PRs set `review`, merged PRs set `merged`, closed PRs set `stale`. Reports changes and suggests `pm feat delete` for merged features. Feature name is detected from CWD if omitted; if not in a feature worktree, syncs all features.
 
+### Rename a feature
+
+```sh
+pm feat rename login auth        # rename feature "login" to "auth"
+pm feat rename new-name          # rename current feature (detected from CWD)
+```
+
+Renames the git branch, moves the worktree directory, renames the tmux session, and updates the state file. Blocks if the new name already exists as a feature or branch. Local only — does not touch remote branches or linked PRs.
+
 ### Delete a feature
 
 ```sh
