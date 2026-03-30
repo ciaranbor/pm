@@ -97,6 +97,32 @@ pub fn list_worktrees(repo: &Path) -> Result<Vec<String>> {
     Ok(paths)
 }
 
+/// Prune stale worktree entries (e.g. after a worktree directory is moved/deleted).
+pub fn prune_worktrees(repo: &Path) -> Result<()> {
+    run_git(repo, &["worktree", "prune"])?;
+    Ok(())
+}
+
+/// Find the worktree path where a given branch is checked out, if any.
+pub fn find_worktree_for_branch(repo: &Path, branch: &str) -> Result<Option<PathBuf>> {
+    let output = run_git(repo, &["worktree", "list", "--porcelain"])?;
+    let target_ref = format!("refs/heads/{branch}");
+    let mut current_path: Option<PathBuf> = None;
+
+    for line in output.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            current_path = Some(PathBuf::from(path));
+        } else if let Some(b) = line.strip_prefix("branch ") {
+            if b == target_ref {
+                return Ok(current_path);
+            }
+        } else if line.is_empty() {
+            current_path = None;
+        }
+    }
+    Ok(None)
+}
+
 /// Rename a local branch.
 pub fn rename_branch(repo: &Path, old_name: &str, new_name: &str) -> Result<()> {
     run_git(repo, &["branch", "-m", old_name, new_name])?;
@@ -419,6 +445,58 @@ mod tests {
 
         let worktrees = list_worktrees(&repo_path).unwrap();
         assert!(!worktrees.is_empty());
+    }
+
+    #[test]
+    fn find_worktree_for_branch_returns_path() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().join("main");
+        init_repo(&repo_path).unwrap();
+
+        create_branch(&repo_path, "feature").unwrap();
+        let wt_path = dir.path().join("feature");
+        add_worktree(&repo_path, &wt_path, "feature").unwrap();
+
+        let found = find_worktree_for_branch(&repo_path, "feature").unwrap();
+        assert!(found.is_some());
+        let found = found.unwrap().canonicalize().unwrap();
+        assert_eq!(found, wt_path.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn find_worktree_for_branch_returns_none_for_no_worktree() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().join("main");
+        init_repo(&repo_path).unwrap();
+
+        create_branch(&repo_path, "feature").unwrap();
+
+        let found = find_worktree_for_branch(&repo_path, "feature").unwrap();
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn prune_worktrees_cleans_stale_entry() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().join("main");
+        init_repo(&repo_path).unwrap();
+
+        create_branch(&repo_path, "feature").unwrap();
+        let wt_path = dir.path().join("feature");
+        add_worktree(&repo_path, &wt_path, "feature").unwrap();
+
+        // Manually remove the worktree directory (simulating a move/delete)
+        std::fs::remove_dir_all(&wt_path).unwrap();
+
+        // Before prune, git still thinks the worktree exists
+        let found = find_worktree_for_branch(&repo_path, "feature").unwrap();
+        assert!(found.is_some());
+
+        prune_worktrees(&repo_path).unwrap();
+
+        // After prune, the stale entry is gone
+        let found = find_worktree_for_branch(&repo_path, "feature").unwrap();
+        assert!(found.is_none());
     }
 
     #[test]

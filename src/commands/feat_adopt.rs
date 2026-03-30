@@ -63,9 +63,36 @@ pub fn feat_adopt(
 
     // Step 2: Create git worktree (skip branch creation — branch already exists)
     let worktree_path = project_root.join(&feature_name);
+
+    // If the branch already has a registered worktree, handle the conflict.
+    // With --from: back up the old worktree and prune so add_worktree can succeed.
+    // Without --from: fail with a clear error telling the user to use --from.
+    if let Some(existing_wt) = git::find_worktree_for_branch(&main_worktree, branch)? {
+        if from.is_some() {
+            if existing_wt.exists() {
+                let timestamp = Utc::now().format("%Y%m%d%H%M%S");
+                let backup = existing_wt.with_extension(format!("bak.{timestamp}"));
+                std::fs::rename(&existing_wt, &backup)?;
+                eprintln!(
+                    "Moved existing worktree {} → {}",
+                    existing_wt.display(),
+                    backup.display()
+                );
+            }
+            git::prune_worktrees(&main_worktree)?;
+        } else {
+            return Err(PmError::WorktreeConflict {
+                branch: branch.to_string(),
+                worktree: existing_wt,
+            });
+        }
+    }
+
     git::add_worktree(&main_worktree, &worktree_path, branch)?;
 
-    // Step 2.5: Migrate Claude Code sessions from old path if provided
+    // Step 2.5: Migrate Claude Code sessions from old path if provided.
+    // Always use the original --from path for migration since claude sessions
+    // are keyed by the original path, not the backup location.
     if let Some(old_path) = from {
         match super::claude_migrate::migrate_sessions(old_path, &worktree_path, claude_base) {
             Ok(msgs) => {
@@ -505,5 +532,103 @@ mod tests {
         assert_eq!(state.worktree, "eval");
         assert!(project_path.join("eval").exists());
         assert!(tmux::has_session(server.name(), "myapp/eval").unwrap());
+    }
+
+    #[test]
+    fn feat_adopt_with_from_handles_existing_worktree() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let project_path = setup_project(dir.path(), &server);
+        create_branch(&project_path, "login");
+
+        // Create an existing worktree for the branch (simulating a pre-existing checkout)
+        let old_worktree = dir.path().join("old-checkout");
+        let main_wt = project_path.join("main");
+        git::add_worktree(&main_wt, &old_worktree, "login").unwrap();
+        assert!(old_worktree.exists());
+
+        // Set up fake Claude session data keyed to the old worktree path
+        let claude_base = dir.path().join("claude");
+        let old_key = old_worktree.to_string_lossy().replace('/', "-");
+        let old_session_dir = claude_base.join("projects").join(&old_key);
+        std::fs::create_dir_all(&old_session_dir).unwrap();
+        std::fs::write(
+            old_session_dir.join("session.jsonl"),
+            format!("{{\"cwd\":\"{}\"}}\n", old_worktree.display()),
+        )
+        .unwrap();
+
+        // This should succeed despite the branch already having a worktree
+        feat_adopt(
+            &project_path,
+            "login",
+            None,
+            None,
+            Some(old_worktree.as_path()),
+            false,
+            server.name(),
+            Some(claude_base.as_path()),
+        )
+        .unwrap();
+
+        // New worktree should exist
+        let new_worktree = project_path.join("login");
+        assert!(new_worktree.exists());
+
+        // Old worktree should have been moved to a timestamped .bak
+        assert!(!old_worktree.exists());
+        let backups: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("old-checkout.bak.")
+            })
+            .collect();
+        assert_eq!(backups.len(), 1, "expected exactly one timestamped backup");
+
+        // Claude sessions should be migrated to the new path
+        let new_key = new_worktree.to_string_lossy().replace('/', "-");
+        let new_session_dir = claude_base.join("projects").join(&new_key);
+        assert!(new_session_dir.exists());
+        let content = std::fs::read_to_string(new_session_dir.join("session.jsonl")).unwrap();
+        assert!(content.contains(&new_worktree.to_string_lossy().to_string()));
+
+        // Feature state should be Wip
+        let features_dir = paths::features_dir(&project_path);
+        let state = FeatureState::load(&features_dir, "login").unwrap();
+        assert_eq!(state.status, FeatureStatus::Wip);
+    }
+
+    #[test]
+    fn feat_adopt_fails_with_worktree_conflict_without_from() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let project_path = setup_project(dir.path(), &server);
+        create_branch(&project_path, "login");
+
+        // Create an existing worktree for the branch
+        let old_worktree = dir.path().join("old-checkout");
+        let main_wt = project_path.join("main");
+        git::add_worktree(&main_wt, &old_worktree, "login").unwrap();
+
+        // Without --from, should fail with WorktreeConflict
+        let result = feat_adopt(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+            None,
+        );
+
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), PmError::WorktreeConflict { .. }),
+            "expected WorktreeConflict error"
+        );
     }
 }
