@@ -2,16 +2,20 @@
 
 ## What is this?
 
-`pm` is a terminal-based project manager built around tmux sessions and git worktrees. See `design.md` for the full spec and `idea.md` for the original brainstorm.
+`pm` is a terminal-based project manager built around tmux sessions and git worktrees.
 
 ## Architecture
 
 Rust CLI using clap (derive macros). The codebase is organized as:
 
-- `src/main.rs` — entry point, clap CLI definition
+- `src/main.rs` — entry point, clap CLI definition, command dispatch
 - `src/state/` — TOML state management (project entries, feature state, config)
 - `src/git.rs` — git operations (branch, worktree, status checks)
 - `src/tmux.rs` — tmux operations (session create/kill/switch, display-menu)
+- `src/gh.rs` — GitHub CLI wrapper (PR creation, status queries via `gh`)
+- `src/hooks.rs` — lifecycle hooks (post-create, post-merge, restore)
+- `src/error.rs` — error types (`PmError` enum, `thiserror`)
+- `src/testing.rs` — test utilities (shared tmux test server, RAII cleanup)
 - `src/commands/` — one module per command group (project, feat, permissions, claude, etc.)
 
 ## Development
@@ -43,7 +47,7 @@ TDD. Tests use real git repos and real tmux sessions, not mocks.
 - Use `thiserror` for error types. Propagate errors with `?`, don't panic in library code.
 - Keep modules focused. If a file grows past ~300 lines, split it.
 - No unnecessary abstractions — three similar lines is better than a premature trait.
-- External commands (git, tmux, gh) go through thin wrapper functions in `git.rs` / `tmux.rs`, not scattered throughout command handlers.
+- External commands (git, tmux, gh) go through thin wrapper functions in `git.rs` / `tmux.rs` / `gh.rs`, not scattered throughout command handlers.
 - All CLI commands and subcommands must support `--help` via clap derive.
 
 ## Documentation

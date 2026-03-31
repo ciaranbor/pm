@@ -88,11 +88,11 @@ pm feat switch                   # interactive picker (tmux display-menu)
 ### Merge a feature
 
 ```sh
-pm feat merge login             # merge into base branch (defaults to main)
-pm feat merge --delete          # merge current feature and clean up
+pm feat merge login             # merge and clean up (default)
+pm feat merge --keep            # merge but keep the feature (worktree, session, branch)
 ```
 
-Merges the feature into its base branch (defaults to main; stacked features merge into their parent). Blocks if either the feature or base worktree has uncommitted changes. Always creates a merge commit (`--no-ff`). Feature name is detected from CWD if omitted. If the branch was already merged (e.g. via GitHub PR), the local merge is skipped. If a merge conflict occurs, the merge is aborted and the base worktree is left clean.
+Merges the feature into its base branch (defaults to main; stacked features merge into their parent) and cleans up by default (kills session, removes worktree, deletes branch, removes state). Use `--keep` to preserve the feature after merging. Blocks if either the feature or base worktree has uncommitted changes. Always creates a merge commit (`--no-ff`). Feature name is detected from CWD if omitted. If the branch was already merged (e.g. via GitHub PR), the local merge is skipped. If a merge conflict occurs, the merge is aborted and the base worktree is left clean.
 
 ### Lifecycle hooks
 
@@ -254,4 +254,4 @@ cargo clippy
 cargo fmt
 ```
 
-See `design.md` for the full spec and `CLAUDE.md` for development guidelines.
+See `CLAUDE.md` for development guidelines.
