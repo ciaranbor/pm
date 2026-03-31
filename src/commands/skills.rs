@@ -79,6 +79,11 @@ pub fn skills_install(name: Option<&str>) -> Result<Vec<String>> {
     skills_install_in(&skills_dir()?, name)
 }
 
+pub fn skills_install_project(project_root: &Path, name: Option<&str>) -> Result<Vec<String>> {
+    let dir = project_root.join("main").join(".claude").join("skills");
+    skills_install_in(&dir, name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,6 +154,29 @@ mod tests {
 
         assert!(is_installed(&dir, "pm"));
         assert!(is_up_to_date(&dir, &BUNDLED_SKILLS[0]));
+    }
+
+    #[test]
+    fn install_project_writes_to_main_claude_skills() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project_root = tmp.path();
+        fs::create_dir_all(project_root.join("main")).unwrap();
+
+        let messages = skills_install_project(project_root, Some("pm")).unwrap();
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].contains("Installed"));
+
+        let skill_path = project_root
+            .join("main")
+            .join(".claude")
+            .join("skills")
+            .join("pm")
+            .join("SKILL.md");
+        assert!(skill_path.exists());
+        assert_eq!(
+            fs::read_to_string(&skill_path).unwrap(),
+            BUNDLED_SKILLS[0].content
+        );
     }
 
     #[test]
