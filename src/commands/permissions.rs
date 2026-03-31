@@ -66,7 +66,23 @@ fn require_feature(project_root: &Path, feature_name: &str) -> Result<()> {
 }
 
 /// Copy Claude Code settings from the main worktree's `.claude/` to a feature worktree's `.claude/`.
-/// Called during `feat new` to seed the new feature with the project's permissions.
+/// Recursively copy a directory tree from src to dst.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Called during `feat new` to seed the new feature with the project's permissions and skills.
 pub fn seed_feature_permissions(project_root: &Path, feature_worktree: &Path) -> Result<()> {
     let src = main_claude_dir(project_root);
     if !src.exists() {
@@ -75,6 +91,11 @@ pub fn seed_feature_permissions(project_root: &Path, feature_worktree: &Path) ->
     let dst = feature_worktree.join(".claude");
     for filename in SETTINGS_FILES {
         copy_settings_file(&src, &dst, filename)?;
+    }
+    // Copy skills directory if it exists
+    let skills_src = src.join("skills");
+    if skills_src.is_dir() {
+        copy_dir_recursive(&skills_src, &dst.join("skills"))?;
     }
     Ok(())
 }
