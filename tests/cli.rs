@@ -65,7 +65,8 @@ fn claude_subcommand_help() {
     pm().args(["claude", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("settings"));
+        .stdout(predicate::str::contains("settings"))
+        .stdout(predicate::str::contains("skills"));
 }
 
 #[test]

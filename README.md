@@ -185,12 +185,12 @@ Creates tmux sessions for the main worktree and any active features that are mis
 Manage Claude Code settings (`settings.json`, `settings.local.json`) across worktrees. The main worktree's `.claude/` directory is the source of truth — new features are seeded from it automatically.
 
 ```sh
-pm claude list              # show current feature's .claude/ settings
-pm claude push              # push current feature's .claude/ settings to main
-pm claude pull              # pull main's .claude/ settings into current feature
-pm claude diff              # show differences between main and feature
-pm claude merge             # union merge feature settings into main (main wins on conflicts)
-pm claude merge --ours      # union merge, feature wins on conflicts
+pm claude settings list              # show current feature's .claude/ settings
+pm claude settings push              # push current feature's .claude/ settings to main
+pm claude settings pull              # pull main's .claude/ settings into current feature
+pm claude settings diff              # show differences between main and feature
+pm claude settings merge             # union merge feature settings into main (main wins on conflicts)
+pm claude settings merge --ours      # union merge, feature wins on conflicts
 ```
 
 Feature name is detected from CWD if omitted.
@@ -238,15 +238,17 @@ With `--fix`, auto-resolves clear-cut issues: removes orphaned state files (no w
 
 ### Bundled skills
 
-pm ships with Claude Code skills that can be installed to `~/.claude/skills/`.
+pm ships with Claude Code skills that can be installed to a project or globally to `~/.claude/skills/`.
 
 ```sh
-pm skills list              # show available skills and install status
-pm skills install           # install all bundled skills
-pm skills install pm        # install a specific skill
+pm claude skills list                  # show available skills and install status
+pm claude skills install               # install all bundled skills to project (main/.claude/skills/)
+pm claude skills install pm            # install a specific skill to project
+pm claude skills install --global      # install all bundled skills to ~/.claude/skills/
+pm claude skills install pm --global   # install a specific skill globally
 ```
 
-The `pm` skill teaches Claude Code agents how to dispatch features via `pm feat new` and `pm feat adopt`.
+Project-level skills are seeded to new features automatically. The `pm` skill teaches Claude Code agents how to dispatch features via `pm feat new` and `pm feat adopt`.
 
 ### Other commands
 

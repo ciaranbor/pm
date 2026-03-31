@@ -41,12 +41,9 @@ enum Commands {
     /// Feature management
     #[command(subcommand)]
     Feat(FeatCommands),
-    /// Claude Code settings and session management
+    /// Claude Code settings, skills, and session management
     #[command(subcommand)]
     Claude(ClaudeCommands),
-    /// Manage bundled Claude Code skills
-    #[command(subcommand)]
-    Skills(SkillsCommands),
     /// Delete a project (teardown features, sessions, state, and registry entry)
     Delete {
         /// Project name (defaults to current project from CWD)
@@ -78,6 +75,22 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum ClaudeCommands {
+    /// Per-feature Claude Code settings
+    #[command(subcommand)]
+    Settings(ClaudeSettingsCommands),
+    /// Manage bundled Claude Code skills
+    #[command(subcommand)]
+    Skills(ClaudeSkillsCommands),
+    /// Migrate Claude Code sessions from an old project path to the current directory
+    Migrate {
+        /// The old absolute path where the project previously lived
+        #[arg(long)]
+        from: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum ClaudeSettingsCommands {
     /// List a feature's Claude Code settings
     List {
         /// Feature name (detected from CWD if omitted)
@@ -106,22 +119,19 @@ enum ClaudeCommands {
         #[arg(long)]
         ours: bool,
     },
-    /// Migrate Claude Code sessions from an old project path to the current directory
-    Migrate {
-        /// The old absolute path where the project previously lived
-        #[arg(long)]
-        from: PathBuf,
-    },
 }
 
 #[derive(Subcommand)]
-enum SkillsCommands {
+enum ClaudeSkillsCommands {
     /// List available bundled skills and their install status
     List,
-    /// Install bundled skills to ~/.claude/skills/
+    /// Install bundled skills (project-level by default, or --global for ~/.claude/skills/)
     Install {
         /// Skill name (installs all if omitted)
         name: Option<String>,
+        /// Install to ~/.claude/skills/ instead of the project
+        #[arg(long)]
+        global: bool,
     },
 }
 
@@ -267,61 +277,84 @@ fn run() -> pm::error::Result<()> {
             println!("Project sessions opened");
             Ok(())
         }
-        Commands::Claude(claude_cmd) => {
-            let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-            match claude_cmd {
-                ClaudeCommands::List { name } => {
-                    let name = resolve_feature_name(name, &project_root)?;
-                    let lines = commands::claude_settings::list(&project_root, &name)?;
-                    if lines.is_empty() {
-                        println!("No settings files found for feature '{name}'");
-                    } else {
-                        for line in lines {
-                            println!("{line}");
+        Commands::Claude(claude_cmd) => match claude_cmd {
+            ClaudeCommands::Settings(settings_cmd) => {
+                let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+                match settings_cmd {
+                    ClaudeSettingsCommands::List { name } => {
+                        let name = resolve_feature_name(name, &project_root)?;
+                        let lines = commands::claude_settings::list(&project_root, &name)?;
+                        if lines.is_empty() {
+                            println!("No settings files found for feature '{name}'");
+                        } else {
+                            for line in lines {
+                                println!("{line}");
+                            }
                         }
+                        Ok(())
+                    }
+                    ClaudeSettingsCommands::Push { name } => {
+                        let name = resolve_feature_name(name, &project_root)?;
+                        commands::claude_settings::push(&project_root, &name)?;
+                        println!("Pushed settings from feature '{name}' to main");
+                        Ok(())
+                    }
+                    ClaudeSettingsCommands::Pull { name } => {
+                        let name = resolve_feature_name(name, &project_root)?;
+                        commands::claude_settings::pull(&project_root, &name)?;
+                        println!("Pulled settings from main into feature '{name}'");
+                        Ok(())
+                    }
+                    ClaudeSettingsCommands::Diff { name } => {
+                        let name = resolve_feature_name(name, &project_root)?;
+                        let lines = commands::claude_settings::diff(&project_root, &name)?;
+                        if lines.is_empty() {
+                            println!("No differences");
+                        } else {
+                            for line in lines {
+                                println!("{line}");
+                            }
+                        }
+                        Ok(())
+                    }
+                    ClaudeSettingsCommands::Merge { name, ours } => {
+                        let name = resolve_feature_name(name, &project_root)?;
+                        commands::claude_settings::merge(&project_root, &name, ours)?;
+                        println!("Merged settings from feature '{name}' into main");
+                        Ok(())
+                    }
+                }
+            }
+            ClaudeCommands::Skills(skills_cmd) => match skills_cmd {
+                ClaudeSkillsCommands::List => {
+                    let lines = commands::skills::skills_list()?;
+                    for line in lines {
+                        println!("{line}");
                     }
                     Ok(())
                 }
-                ClaudeCommands::Push { name } => {
-                    let name = resolve_feature_name(name, &project_root)?;
-                    commands::claude_settings::push(&project_root, &name)?;
-                    println!("Pushed settings from feature '{name}' to main");
-                    Ok(())
-                }
-                ClaudeCommands::Pull { name } => {
-                    let name = resolve_feature_name(name, &project_root)?;
-                    commands::claude_settings::pull(&project_root, &name)?;
-                    println!("Pulled settings from main into feature '{name}'");
-                    Ok(())
-                }
-                ClaudeCommands::Diff { name } => {
-                    let name = resolve_feature_name(name, &project_root)?;
-                    let lines = commands::claude_settings::diff(&project_root, &name)?;
-                    if lines.is_empty() {
-                        println!("No differences");
+                ClaudeSkillsCommands::Install { name, global } => {
+                    let messages = if global {
+                        commands::skills::skills_install(name.as_deref())?
                     } else {
-                        for line in lines {
-                            println!("{line}");
-                        }
-                    }
-                    Ok(())
-                }
-                ClaudeCommands::Merge { name, ours } => {
-                    let name = resolve_feature_name(name, &project_root)?;
-                    commands::claude_settings::merge(&project_root, &name, ours)?;
-                    println!("Merged settings from feature '{name}' into main");
-                    Ok(())
-                }
-                ClaudeCommands::Migrate { from } => {
-                    let cwd = std::env::current_dir()?;
-                    let messages = commands::claude_migrate::migrate_sessions(&from, &cwd, None)?;
+                        let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+                        commands::skills::skills_install_project(&project_root, name.as_deref())?
+                    };
                     for msg in messages {
                         println!("{msg}");
                     }
                     Ok(())
                 }
+            },
+            ClaudeCommands::Migrate { from } => {
+                let cwd = std::env::current_dir()?;
+                let messages = commands::claude_migrate::migrate_sessions(&from, &cwd, None)?;
+                for msg in messages {
+                    println!("{msg}");
+                }
+                Ok(())
             }
-        }
+        },
         Commands::Feat(feat_cmd) => {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
             match feat_cmd {
@@ -503,21 +536,5 @@ fn run() -> pm::error::Result<()> {
             }
             Ok(())
         }
-        Commands::Skills(skills_cmd) => match skills_cmd {
-            SkillsCommands::List => {
-                let lines = commands::skills::skills_list()?;
-                for line in lines {
-                    println!("{line}");
-                }
-                Ok(())
-            }
-            SkillsCommands::Install { name } => {
-                let messages = commands::skills::skills_install(name.as_deref())?;
-                for msg in messages {
-                    println!("{msg}");
-                }
-                Ok(())
-            }
-        },
     }
 }
