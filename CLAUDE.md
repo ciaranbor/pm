@@ -16,7 +16,7 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 - `src/hooks.rs` — lifecycle hooks (post-create, post-merge, restore)
 - `src/error.rs` — error types (`PmError` enum, `thiserror`)
 - `src/testing.rs` — test utilities (shared tmux test server, RAII cleanup)
-- `src/commands/` — one module per command group (project, feat, permissions, claude, etc.)
+- `src/commands/` — one module per command group (project, feat, claude, etc.)
 
 ## Development
 

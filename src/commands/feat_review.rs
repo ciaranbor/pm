@@ -2,7 +2,7 @@ use std::path::Path;
 
 use chrono::Utc;
 
-use crate::commands::permissions;
+use crate::commands::claude_settings;
 use crate::error::{PmError, Result};
 use crate::gh::PrDetails;
 use crate::hooks;
@@ -79,8 +79,8 @@ fn setup_review(
         // Step 2: Create git worktree
         git::add_worktree(&main_worktree, &worktree_path, feature_name)?;
 
-        // Step 2.5: Seed Claude Code permissions from main worktree
-        permissions::seed_feature_permissions(project_root, &worktree_path)?;
+        // Step 2.5: Seed Claude Code settings from main worktree
+        claude_settings::seed_feature_claude(project_root, &worktree_path)?;
 
         // Step 2.6: Write TASK.md
         std::fs::write(worktree_path.join("TASK.md"), &context)?;
