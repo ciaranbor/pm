@@ -1,4 +1,5 @@
 pub mod claude_migrate;
+pub mod claude_settings;
 pub mod delete;
 pub mod doctor;
 pub mod feat_adopt;
@@ -16,7 +17,6 @@ pub mod feat_sync;
 pub mod init;
 pub mod list;
 pub mod open;
-pub mod permissions;
 pub mod register;
 pub mod skills;
 pub mod status;

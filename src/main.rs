@@ -41,10 +41,7 @@ enum Commands {
     /// Feature management
     #[command(subcommand)]
     Feat(FeatCommands),
-    /// Claude Code permissions management
-    #[command(subcommand)]
-    Perm(PermCommands),
-    /// Claude Code session management
+    /// Claude Code settings and session management
     #[command(subcommand)]
     Claude(ClaudeCommands),
     /// Manage bundled Claude Code skills
@@ -80,8 +77,8 @@ enum Commands {
 }
 
 #[derive(Subcommand)]
-enum PermCommands {
-    /// List a feature's Claude Code permissions
+enum ClaudeCommands {
+    /// List a feature's Claude Code settings
     List {
         /// Feature name (detected from CWD if omitted)
         name: Option<String>,
@@ -96,12 +93,12 @@ enum PermCommands {
         /// Feature name (detected from CWD if omitted)
         name: Option<String>,
     },
-    /// Show differences between template and feature permissions
+    /// Show differences between main and feature settings
     Diff {
         /// Feature name (detected from CWD if omitted)
         name: Option<String>,
     },
-    /// Merge feature and main permissions (union), writing result to main
+    /// Merge feature and main settings (union), writing result to main
     Merge {
         /// Feature name (detected from CWD if omitted)
         name: Option<String>,
@@ -109,10 +106,6 @@ enum PermCommands {
         #[arg(long)]
         ours: bool,
     },
-}
-
-#[derive(Subcommand)]
-enum ClaudeCommands {
     /// Migrate Claude Code sessions from an old project path to the current directory
     Migrate {
         /// The old absolute path where the project previously lived
@@ -274,14 +267,14 @@ fn run() -> pm::error::Result<()> {
             println!("Project sessions opened");
             Ok(())
         }
-        Commands::Perm(perm_cmd) => {
+        Commands::Claude(claude_cmd) => {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-            match perm_cmd {
-                PermCommands::List { name } => {
+            match claude_cmd {
+                ClaudeCommands::List { name } => {
                     let name = resolve_feature_name(name, &project_root)?;
-                    let lines = commands::permissions::list(&project_root, &name)?;
+                    let lines = commands::claude_settings::list(&project_root, &name)?;
                     if lines.is_empty() {
-                        println!("No permissions files found for feature '{name}'");
+                        println!("No settings files found for feature '{name}'");
                     } else {
                         for line in lines {
                             println!("{line}");
@@ -289,21 +282,21 @@ fn run() -> pm::error::Result<()> {
                     }
                     Ok(())
                 }
-                PermCommands::Push { name } => {
+                ClaudeCommands::Push { name } => {
                     let name = resolve_feature_name(name, &project_root)?;
-                    commands::permissions::push(&project_root, &name)?;
-                    println!("Pushed permissions from feature '{name}' to main");
+                    commands::claude_settings::push(&project_root, &name)?;
+                    println!("Pushed settings from feature '{name}' to main");
                     Ok(())
                 }
-                PermCommands::Pull { name } => {
+                ClaudeCommands::Pull { name } => {
                     let name = resolve_feature_name(name, &project_root)?;
-                    commands::permissions::pull(&project_root, &name)?;
-                    println!("Pulled permissions from main into feature '{name}'");
+                    commands::claude_settings::pull(&project_root, &name)?;
+                    println!("Pulled settings from main into feature '{name}'");
                     Ok(())
                 }
-                PermCommands::Diff { name } => {
+                ClaudeCommands::Diff { name } => {
                     let name = resolve_feature_name(name, &project_root)?;
-                    let lines = commands::permissions::diff(&project_root, &name)?;
+                    let lines = commands::claude_settings::diff(&project_root, &name)?;
                     if lines.is_empty() {
                         println!("No differences");
                     } else {
@@ -313,10 +306,18 @@ fn run() -> pm::error::Result<()> {
                     }
                     Ok(())
                 }
-                PermCommands::Merge { name, ours } => {
+                ClaudeCommands::Merge { name, ours } => {
                     let name = resolve_feature_name(name, &project_root)?;
-                    commands::permissions::merge(&project_root, &name, ours)?;
-                    println!("Merged permissions from feature '{name}' into main");
+                    commands::claude_settings::merge(&project_root, &name, ours)?;
+                    println!("Merged settings from feature '{name}' into main");
+                    Ok(())
+                }
+                ClaudeCommands::Migrate { from } => {
+                    let cwd = std::env::current_dir()?;
+                    let messages = commands::claude_migrate::migrate_sessions(&from, &cwd, None)?;
+                    for msg in messages {
+                        println!("{msg}");
+                    }
                     Ok(())
                 }
             }
@@ -512,16 +513,6 @@ fn run() -> pm::error::Result<()> {
             }
             SkillsCommands::Install { name } => {
                 let messages = commands::skills::skills_install(name.as_deref())?;
-                for msg in messages {
-                    println!("{msg}");
-                }
-                Ok(())
-            }
-        },
-        Commands::Claude(claude_cmd) => match claude_cmd {
-            ClaudeCommands::Migrate { from } => {
-                let cwd = std::env::current_dir()?;
-                let messages = commands::claude_migrate::migrate_sessions(&from, &cwd, None)?;
                 for msg in messages {
                     println!("{msg}");
                 }

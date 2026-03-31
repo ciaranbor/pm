@@ -65,7 +65,6 @@ fn require_feature(project_root: &Path, feature_name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Copy Claude Code settings from the main worktree's `.claude/` to a feature worktree's `.claude/`.
 /// Recursively copy a directory tree from src to dst.
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
     std::fs::create_dir_all(dst)?;
@@ -82,8 +81,8 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Called during `feat new` to seed the new feature with the project's permissions and skills.
-pub fn seed_feature_permissions(project_root: &Path, feature_worktree: &Path) -> Result<()> {
+/// Called during `feat new` to seed the new feature with the project's settings and skills.
+pub fn seed_feature_claude(project_root: &Path, feature_worktree: &Path) -> Result<()> {
     let src = main_claude_dir(project_root);
     if !src.exists() {
         return Ok(());
@@ -100,7 +99,7 @@ pub fn seed_feature_permissions(project_root: &Path, feature_worktree: &Path) ->
     Ok(())
 }
 
-/// List a feature's Claude Code permissions by displaying the contents of its `.claude/` settings files.
+/// List a feature's Claude Code settings by displaying the contents of its `.claude/` settings files.
 pub fn list(project_root: &Path, feature_name: &str) -> Result<Vec<String>> {
     require_feature(project_root, feature_name)?;
 
@@ -173,7 +172,7 @@ const BOLD: &str = "\x1b[1m";
 const DIM: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
 
-/// Diff main's permissions against a feature's permissions.
+/// Diff main's settings against a feature's settings.
 /// Returns a list of human-readable diff lines with ANSI colors. Empty vec means no differences.
 pub fn diff(project_root: &Path, feature_name: &str) -> Result<Vec<String>> {
     require_feature(project_root, feature_name)?;
@@ -205,7 +204,7 @@ pub fn diff(project_root: &Path, feature_name: &str) -> Result<Vec<String>> {
     Ok(lines)
 }
 
-/// Merge main and feature permissions with union semantics, writing result to main's `.claude/`.
+/// Merge main and feature settings with union semantics, writing result to main's `.claude/`.
 /// When `ours` is true, the feature (ours) wins on scalar conflicts; otherwise main (theirs)
 /// wins. Default should be theirs (main wins).
 pub fn merge(project_root: &Path, feature_name: &str, ours: bool) -> Result<()> {
@@ -523,7 +522,7 @@ mod tests {
         assert!(matches!(result.unwrap_err(), PmError::FeatureNotFound(_)));
     }
 
-    // --- seed_feature_permissions ---
+    // --- seed_feature_claude ---
 
     #[test]
     fn seed_copies_settings_from_main_worktree() {
@@ -537,7 +536,7 @@ mod tests {
 
         let feature_wt = project.join("login");
         std::fs::create_dir_all(&feature_wt).unwrap();
-        seed_feature_permissions(&project, &feature_wt).unwrap();
+        seed_feature_claude(&project, &feature_wt).unwrap();
 
         let dst = feature_wt.join(".claude");
         assert_eq!(
@@ -558,7 +557,7 @@ mod tests {
 
         let feature_wt = project.join("login");
         std::fs::create_dir_all(&feature_wt).unwrap();
-        seed_feature_permissions(&project, &feature_wt).unwrap();
+        seed_feature_claude(&project, &feature_wt).unwrap();
 
         assert!(!feature_wt.join(".claude").exists());
     }
@@ -574,7 +573,7 @@ mod tests {
 
         let feature_wt = project.join("login");
         std::fs::create_dir_all(&feature_wt).unwrap();
-        seed_feature_permissions(&project, &feature_wt).unwrap();
+        seed_feature_claude(&project, &feature_wt).unwrap();
 
         let dst = feature_wt.join(".claude");
         assert!(dst.join("settings.json").exists());

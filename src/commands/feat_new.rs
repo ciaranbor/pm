@@ -2,7 +2,7 @@ use std::path::Path;
 
 use chrono::Utc;
 
-use crate::commands::permissions;
+use crate::commands::claude_settings;
 use crate::error::{PmError, Result};
 use crate::hooks;
 use crate::state::feature::{FeatureState, FeatureStatus};
@@ -126,8 +126,8 @@ pub fn feat_new(
         // Step 3: Create git worktree
         git::add_worktree(&main_worktree, &worktree_path, branch)?;
 
-        // Step 3.5: Seed Claude Code permissions from main worktree
-        permissions::seed_feature_permissions(project_root, &worktree_path)?;
+        // Step 3.5: Seed Claude Code settings from main worktree
+        claude_settings::seed_feature_claude(project_root, &worktree_path)?;
 
         // Step 3.6: Write TASK.md if context provided
         if let Some(ref resolved) = resolved_context {

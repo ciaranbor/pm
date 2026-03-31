@@ -61,11 +61,11 @@ fn feat_subcommand_help() {
 }
 
 #[test]
-fn perm_subcommand_help() {
-    pm().args(["perm", "--help"])
+fn claude_subcommand_help() {
+    pm().args(["claude", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("permissions"));
+        .stdout(predicate::str::contains("settings"));
 }
 
 #[test]
