@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
+use crate::fs_utils::copy_dir_recursive;
 
 struct BundledSkill {
     name: &'static str,
@@ -82,6 +83,24 @@ pub fn skills_install(name: Option<&str>) -> Result<Vec<String>> {
 pub fn skills_install_project(project_root: &Path, name: Option<&str>) -> Result<Vec<String>> {
     let dir = project_root.join("main").join(".claude").join("skills");
     skills_install_in(&dir, name)
+}
+
+pub fn skills_pull(project_root: &Path, feature_name: &str) -> Result<()> {
+    super::claude_settings::require_feature(project_root, feature_name)?;
+
+    let src = project_root.join("main").join(".claude").join("skills");
+    if !src.is_dir() {
+        return Err(PmError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("no .claude/skills/ directory in main at {}", src.display()),
+        )));
+    }
+
+    let dst = project_root
+        .join(feature_name)
+        .join(".claude")
+        .join("skills");
+    copy_dir_recursive(&src, &dst)
 }
 
 #[cfg(test)]
@@ -177,6 +196,91 @@ mod tests {
             fs::read_to_string(&skill_path).unwrap(),
             BUNDLED_SKILLS[0].content
         );
+    }
+
+    #[test]
+    fn pull_copies_skills_from_main_to_feature() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project_root = tmp.path();
+
+        // Set up project structure with .pm/features and a feature state file
+        let features_dir = project_root.join(".pm").join("features");
+        fs::create_dir_all(&features_dir).unwrap();
+        fs::write(features_dir.join("my-feat.toml"), "branch = \"my-feat\"\n").unwrap();
+
+        // Set up main skills
+        let main_skills = project_root.join("main").join(".claude").join("skills");
+        fs::create_dir_all(main_skills.join("foo")).unwrap();
+        fs::write(main_skills.join("foo").join("SKILL.md"), "skill content").unwrap();
+
+        // Set up feature worktree dir
+        let feature_dir = project_root.join("my-feat");
+        fs::create_dir_all(&feature_dir).unwrap();
+
+        skills_pull(project_root, "my-feat").unwrap();
+
+        let dst = feature_dir
+            .join(".claude")
+            .join("skills")
+            .join("foo")
+            .join("SKILL.md");
+        assert!(dst.exists());
+        assert_eq!(fs::read_to_string(&dst).unwrap(), "skill content");
+    }
+
+    #[test]
+    fn pull_overwrites_existing_skills() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project_root = tmp.path();
+
+        let features_dir = project_root.join(".pm").join("features");
+        fs::create_dir_all(&features_dir).unwrap();
+        fs::write(features_dir.join("my-feat.toml"), "branch = \"my-feat\"\n").unwrap();
+
+        // Set up main skills
+        let main_skills = project_root.join("main").join(".claude").join("skills");
+        fs::create_dir_all(main_skills.join("foo")).unwrap();
+        fs::write(main_skills.join("foo").join("SKILL.md"), "updated content").unwrap();
+
+        // Set up feature with stale skill
+        let feature_skills = project_root
+            .join("my-feat")
+            .join(".claude")
+            .join("skills")
+            .join("foo");
+        fs::create_dir_all(&feature_skills).unwrap();
+        fs::write(feature_skills.join("SKILL.md"), "old content").unwrap();
+
+        skills_pull(project_root, "my-feat").unwrap();
+
+        let dst = feature_skills.join("SKILL.md");
+        assert_eq!(fs::read_to_string(&dst).unwrap(), "updated content");
+    }
+
+    #[test]
+    fn pull_errors_when_no_main_skills() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project_root = tmp.path();
+
+        let features_dir = project_root.join(".pm").join("features");
+        fs::create_dir_all(&features_dir).unwrap();
+        fs::write(features_dir.join("my-feat.toml"), "branch = \"my-feat\"\n").unwrap();
+
+        fs::create_dir_all(project_root.join("main")).unwrap();
+        fs::create_dir_all(project_root.join("my-feat")).unwrap();
+
+        let err = skills_pull(project_root, "my-feat").unwrap_err();
+        assert!(matches!(err, PmError::Io(_)));
+    }
+
+    #[test]
+    fn pull_errors_when_feature_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project_root = tmp.path();
+        fs::create_dir_all(project_root.join(".pm").join("features")).unwrap();
+
+        let err = skills_pull(project_root, "nonexistent").unwrap_err();
+        assert!(matches!(err, PmError::FeatureNotFound(_)));
     }
 
     #[test]

@@ -57,7 +57,7 @@ fn load_file_pairs(project_root: &Path, feature_name: &str) -> Result<Vec<FilePa
     Ok(pairs)
 }
 
-fn require_feature(project_root: &Path, feature_name: &str) -> Result<()> {
+pub fn require_feature(project_root: &Path, feature_name: &str) -> Result<()> {
     let features_dir = paths::features_dir(project_root);
     if !FeatureState::exists(&features_dir, feature_name) {
         return Err(PmError::FeatureNotFound(feature_name.to_string()));
@@ -65,21 +65,7 @@ fn require_feature(project_root: &Path, feature_name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Recursively copy a directory tree from src to dst.
-fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-        if src_path.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
-        } else {
-            std::fs::copy(&src_path, &dst_path)?;
-        }
-    }
-    Ok(())
-}
+use crate::fs_utils::copy_dir_recursive;
 
 /// Called during `feat new` to seed the new feature with the project's settings and skills.
 pub fn seed_feature_claude(project_root: &Path, feature_worktree: &Path) -> Result<()> {
