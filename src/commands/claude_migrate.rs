@@ -24,22 +24,7 @@ fn claude_base_dir() -> Result<PathBuf> {
     Ok(home.join(".claude"))
 }
 
-/// Recursively copy a directory tree from `src` to `dst`.
-fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-        if file_type.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
-        } else {
-            std::fs::copy(&src_path, &dst_path)?;
-        }
-    }
-    Ok(())
-}
+use crate::fs_utils::copy_dir_recursive;
 
 /// Replace all occurrences of `old_path` with `new_path` in a JSONL file, line by line.
 fn update_jsonl_file(path: &Path, old_path: &str, new_path: &str) -> Result<()> {

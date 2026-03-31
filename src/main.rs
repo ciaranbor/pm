@@ -133,6 +133,11 @@ enum ClaudeSkillsCommands {
         #[arg(long)]
         global: bool,
     },
+    /// Pull skills from main into a feature's .claude/skills/
+    Pull {
+        /// Feature name (detected from CWD if omitted)
+        name: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -343,6 +348,13 @@ fn run() -> pm::error::Result<()> {
                     for msg in messages {
                         println!("{msg}");
                     }
+                    Ok(())
+                }
+                ClaudeSkillsCommands::Pull { name } => {
+                    let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+                    let name = resolve_feature_name(name, &project_root)?;
+                    commands::skills::skills_pull(&project_root, &name)?;
+                    println!("Pulled skills from main into feature '{name}'");
                     Ok(())
                 }
             },

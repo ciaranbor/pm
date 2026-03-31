@@ -246,9 +246,11 @@ pm claude skills install               # install all bundled skills to project (
 pm claude skills install pm            # install a specific skill to project
 pm claude skills install --global      # install all bundled skills to ~/.claude/skills/
 pm claude skills install pm --global   # install a specific skill globally
+pm claude skills pull                  # pull main's skills into current feature
+pm claude skills pull my-feat          # pull into a specific feature
 ```
 
-Project-level skills are seeded to new features automatically. The `pm` skill teaches Claude Code agents how to dispatch features via `pm feat new` and `pm feat adopt`.
+Project-level skills are seeded to new features automatically. Use `pm claude skills pull` to sync skills added or updated on main after the feature was created. The `pm` skill teaches Claude Code agents how to dispatch features via `pm feat new` and `pm feat adopt`.
 
 ### Other commands
 
