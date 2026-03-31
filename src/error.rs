@@ -54,6 +54,12 @@ pub enum PmError {
 
     #[error("gh error: {0}")]
     Gh(String),
+
+    #[error("Skill not found: {0}")]
+    SkillNotFound(String),
+
+    #[error("Could not determine home directory")]
+    NoHomeDir,
 }
 
 pub type Result<T> = std::result::Result<T, PmError>;

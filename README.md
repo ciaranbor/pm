@@ -236,6 +236,18 @@ Audits every feature for drift between pm state and external reality:
 
 With `--fix`, auto-resolves clear-cut issues: removes orphaned state files (no worktree, no branch), cleans up stuck-initializing features, recreates missing tmux sessions, and updates status to match GitHub PR state. Ambiguous issues (e.g. missing directory but branch still exists) are skipped with a message.
 
+### Bundled skills
+
+pm ships with Claude Code skills that can be installed to `~/.claude/skills/`.
+
+```sh
+pm skills list              # show available skills and install status
+pm skills install           # install all bundled skills
+pm skills install pm        # install a specific skill
+```
+
+The `pm` skill teaches Claude Code agents how to dispatch features via `pm feat new` and `pm feat adopt`.
+
 ### Other commands
 
 ```sh

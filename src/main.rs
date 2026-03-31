@@ -47,6 +47,9 @@ enum Commands {
     /// Claude Code session management
     #[command(subcommand)]
     Claude(ClaudeCommands),
+    /// Manage bundled Claude Code skills
+    #[command(subcommand)]
+    Skills(SkillsCommands),
     /// Delete a project (teardown features, sessions, state, and registry entry)
     Delete {
         /// Project name (defaults to current project from CWD)
@@ -115,6 +118,17 @@ enum ClaudeCommands {
         /// The old absolute path where the project previously lived
         #[arg(long)]
         from: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum SkillsCommands {
+    /// List available bundled skills and their install status
+    List,
+    /// Install bundled skills to ~/.claude/skills/
+    Install {
+        /// Skill name (installs all if omitted)
+        name: Option<String>,
     },
 }
 
@@ -488,6 +502,22 @@ fn run() -> pm::error::Result<()> {
             }
             Ok(())
         }
+        Commands::Skills(skills_cmd) => match skills_cmd {
+            SkillsCommands::List => {
+                let lines = commands::skills::skills_list()?;
+                for line in lines {
+                    println!("{line}");
+                }
+                Ok(())
+            }
+            SkillsCommands::Install { name } => {
+                let messages = commands::skills::skills_install(name.as_deref())?;
+                for msg in messages {
+                    println!("{msg}");
+                }
+                Ok(())
+            }
+        },
         Commands::Claude(claude_cmd) => match claude_cmd {
             ClaudeCommands::Migrate { from } => {
                 let cwd = std::env::current_dir()?;
