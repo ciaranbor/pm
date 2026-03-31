@@ -90,7 +90,10 @@ pub fn feat_adopt(
 
     git::add_worktree(&main_worktree, &worktree_path, branch)?;
 
-    // Step 2.5: Migrate Claude Code sessions from old path if provided.
+    // Step 2.5: Seed Claude Code settings and skills from main worktree
+    super::claude_settings::seed_feature_claude(project_root, &worktree_path)?;
+
+    // Step 2.6: Migrate Claude Code sessions from old path if provided.
     // Always use the original --from path for migration since claude sessions
     // are keyed by the original path, not the backup location.
     if let Some(old_path) = from {
