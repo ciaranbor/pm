@@ -72,6 +72,21 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
 
     let mut findings: Vec<Finding> = Vec::new();
 
+    // Check main tmux session exists
+    let main_session = format!("{project_name}/main");
+    if !tmux::has_session(tmux_server, &main_session)? {
+        findings.push(Finding {
+            feature: "main".to_string(),
+            issues: vec![Issue {
+                message: format!("tmux session '{main_session}' missing (run `pm open` to fix)"),
+                fix: Fix::Auto(FixAction::RecreateTmuxSession {
+                    session_name: main_session,
+                    worktree_path: main_repo.clone(),
+                }),
+            }],
+        });
+    }
+
     for (name, state) in &features {
         let mut issues = Vec::new();
 
