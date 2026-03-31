@@ -168,31 +168,15 @@ pub fn delete(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::{feat_new, init};
+    use crate::commands::feat_new;
     use crate::testing::TestServer;
     use tempfile::tempdir;
-
-    fn setup_project(
-        dir: &Path,
-        server: &TestServer,
-    ) -> (std::path::PathBuf, std::path::PathBuf, String) {
-        let project_path = dir.join(server.scope("myapp"));
-        let projects_dir = dir.join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
-        let project_name = project_path
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_owned();
-        (project_path, projects_dir, project_name)
-    }
 
     #[test]
     fn delete_empty_project_removes_pm_dir_and_registry() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, projects_dir, project_name) = setup_project(dir.path(), &server);
+        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
 
         delete(&project_path, &projects_dir, false, true, server.name()).unwrap();
 
@@ -204,7 +188,7 @@ mod tests {
     fn delete_kills_main_tmux_session() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, projects_dir, project_name) = setup_project(dir.path(), &server);
+        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
         let main_session = format!("{project_name}/main");
 
         assert!(tmux::has_session(server.name(), &main_session).unwrap());
@@ -218,7 +202,7 @@ mod tests {
     fn delete_cleans_up_features() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, projects_dir, project_name) = setup_project(dir.path(), &server);
+        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
 
         feat_new::feat_new(
             &project_path,
@@ -246,7 +230,7 @@ mod tests {
     fn delete_blocked_by_uncommitted_changes() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, projects_dir, project_name) = setup_project(dir.path(), &server);
+        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
 
         feat_new::feat_new(
             &project_path,
@@ -275,7 +259,7 @@ mod tests {
     fn delete_blocked_by_unmerged_commits() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, projects_dir, _project_name) = setup_project(dir.path(), &server);
+        let (project_path, projects_dir, _project_name) = server.setup_project(dir.path());
 
         feat_new::feat_new(
             &project_path,
@@ -303,7 +287,7 @@ mod tests {
     fn delete_force_bypasses_safety_checks_and_removes_worktrees() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, projects_dir, project_name) = setup_project(dir.path(), &server);
+        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
 
         feat_new::feat_new(
             &project_path,
@@ -332,7 +316,7 @@ mod tests {
     fn delete_merged_features_succeeds_without_force() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, projects_dir, project_name) = setup_project(dir.path(), &server);
+        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
 
         feat_new::feat_new(
             &project_path,
@@ -370,7 +354,7 @@ mod tests {
     fn delete_without_force_leaves_worktree_directories_on_disk() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, projects_dir, project_name) = setup_project(dir.path(), &server);
+        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
 
         feat_new::feat_new(
             &project_path,
@@ -402,7 +386,7 @@ mod tests {
     fn delete_only_blocks_for_problematic_features() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, projects_dir, _project_name) = setup_project(dir.path(), &server);
+        let (project_path, projects_dir, _project_name) = server.setup_project(dir.path());
 
         // Create two features — one clean (merged), one dirty
         feat_new::feat_new(

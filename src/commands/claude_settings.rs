@@ -388,29 +388,8 @@ fn merge_values(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::init;
     use crate::testing::TestServer;
     use tempfile::tempdir;
-
-    fn setup_project(dir: &Path, server: &TestServer) -> std::path::PathBuf {
-        let project_path = dir.join(server.scope("myapp"));
-        let projects_dir = dir.join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
-        project_path
-    }
-
-    fn create_feature(project_root: &Path, name: &str, server: &TestServer) {
-        crate::commands::feat_new::feat_new(
-            project_root,
-            name,
-            None,
-            None,
-            None,
-            false,
-            server.name(),
-        )
-        .unwrap();
-    }
 
     fn write_json(dir: &Path, filename: &str, content: &str) {
         std::fs::create_dir_all(dir).unwrap();
@@ -429,8 +408,7 @@ mod tests {
     fn list_shows_feature_settings() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let feat_claude = project.join("login").join(".claude");
         write_json(
@@ -449,8 +427,7 @@ mod tests {
     fn list_shows_both_files() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let feat_claude = project.join("login").join(".claude");
         write_json(&feat_claude, "settings.json", r#"{"a":1}"#);
@@ -466,8 +443,7 @@ mod tests {
     fn list_returns_empty_when_no_claude_dir() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         // Remove .claude/ if seeded
         let feat_claude = project.join("login").join(".claude");
@@ -483,8 +459,7 @@ mod tests {
     fn list_only_local_settings_no_separator() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let feat_claude = project.join("login").join(".claude");
         // Remove settings.json if seeded, keep only settings.local.json
@@ -502,7 +477,7 @@ mod tests {
     fn list_fails_for_nonexistent_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
+        let (project, _, _) = server.setup_project(dir.path());
 
         let result = list(&project, "nonexistent");
         assert!(matches!(result.unwrap_err(), PmError::FeatureNotFound(_)));
@@ -514,7 +489,7 @@ mod tests {
     fn seed_copies_settings_from_main_worktree() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
+        let (project, _, _) = server.setup_project(dir.path());
 
         let main_claude = project.join("main").join(".claude");
         write_json(&main_claude, "settings.json", r#"{"permissions":true}"#);
@@ -539,7 +514,7 @@ mod tests {
     fn seed_noop_when_no_main_claude_dir() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
+        let (project, _, _) = server.setup_project(dir.path());
 
         let feature_wt = project.join("login");
         std::fs::create_dir_all(&feature_wt).unwrap();
@@ -552,7 +527,7 @@ mod tests {
     fn seed_copies_only_existing_files() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
+        let (project, _, _) = server.setup_project(dir.path());
 
         let main_claude = project.join("main").join(".claude");
         write_json(&main_claude, "settings.json", r#"{"only":"this"}"#);
@@ -572,12 +547,21 @@ mod tests {
     fn feat_new_copies_claude_settings_to_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
+        let (project, _, _) = server.setup_project(dir.path());
 
         let main_claude = project.join("main").join(".claude");
         write_json(&main_claude, "settings.json", r#"{"seeded":true}"#);
 
-        create_feature(&project, "login", &server);
+        crate::commands::feat_new::feat_new(
+            &project,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         let feat_settings = project.join("login").join(".claude").join("settings.json");
         assert!(feat_settings.exists());
@@ -593,8 +577,7 @@ mod tests {
     fn push_copies_feature_to_main() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let feat_claude = project.join("login").join(".claude");
         write_json(&feat_claude, "settings.json", r#"{"pushed":true}"#);
@@ -621,7 +604,7 @@ mod tests {
     fn push_fails_for_nonexistent_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
+        let (project, _, _) = server.setup_project(dir.path());
 
         let result = push(&project, "nonexistent");
         assert!(matches!(result.unwrap_err(), PmError::FeatureNotFound(_)));
@@ -631,8 +614,7 @@ mod tests {
     fn push_fails_when_feature_has_no_claude_dir() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         // Ensure no .claude/ dir in feature
         let feat_claude = project.join("login").join(".claude");
@@ -650,8 +632,7 @@ mod tests {
     fn pull_copies_main_to_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let main_claude = project.join("main").join(".claude");
         write_json(&main_claude, "settings.json", r#"{"pulled":true}"#);
@@ -669,7 +650,7 @@ mod tests {
     fn pull_fails_for_nonexistent_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
+        let (project, _, _) = server.setup_project(dir.path());
 
         let result = pull(&project, "nonexistent");
         assert!(matches!(result.unwrap_err(), PmError::FeatureNotFound(_)));
@@ -679,8 +660,7 @@ mod tests {
     fn pull_fails_when_main_has_no_claude_dir() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let result = pull(&project, "login");
         assert!(result.is_err());
@@ -701,8 +681,7 @@ mod tests {
     fn diff_no_differences() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let main_claude = project.join("main").join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -717,8 +696,7 @@ mod tests {
     fn diff_detects_value_difference() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let main_claude = project.join("main").join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -736,8 +714,7 @@ mod tests {
     fn diff_detects_key_only_in_main() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let main_claude = project.join("main").join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -752,8 +729,7 @@ mod tests {
     fn diff_detects_key_only_in_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let main_claude = project.join("main").join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -768,8 +744,7 @@ mod tests {
     fn diff_file_only_in_main() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let main_claude = project.join("main").join(".claude");
         write_json(&main_claude, "settings.json", r#"{"x":1}"#);
@@ -782,8 +757,7 @@ mod tests {
     fn diff_file_only_in_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let feat_claude = project.join("login").join(".claude");
         write_json(&feat_claude, "settings.json", r#"{"x":1}"#);
@@ -796,8 +770,7 @@ mod tests {
     fn diff_both_files_missing_no_output() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let result = diff(&project, "login").unwrap();
         assert!(result.is_empty());
@@ -807,7 +780,7 @@ mod tests {
     fn diff_fails_for_nonexistent_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
+        let (project, _, _) = server.setup_project(dir.path());
 
         let result = diff(&project, "nonexistent");
         assert!(matches!(result.unwrap_err(), PmError::FeatureNotFound(_)));
@@ -825,8 +798,7 @@ mod tests {
     fn merge_unions_object_keys() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let main_claude = project.join("main").join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -844,8 +816,7 @@ mod tests {
     fn merge_unions_arrays() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let main_claude = project.join("main").join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -876,8 +847,7 @@ mod tests {
     fn merge_default_theirs_main_wins_on_scalar_conflict() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let main_claude = project.join("main").join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -895,8 +865,7 @@ mod tests {
     fn merge_ours_feature_wins_on_scalar_conflict() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let main_claude = project.join("main").join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -913,8 +882,7 @@ mod tests {
     fn merge_only_feature_exists_copies_to_main() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let feat_claude = project.join("login").join(".claude");
         write_json(&feat_claude, "settings.json", r#"{"new":true}"#);
@@ -929,8 +897,7 @@ mod tests {
     fn merge_only_main_exists_keeps_main() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let main_claude = project.join("main").join(".claude");
         write_json(&main_claude, "settings.json", r#"{"existing":true}"#);
@@ -945,8 +912,7 @@ mod tests {
     fn merge_neither_exists_is_noop() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         merge(&project, "login", false).unwrap();
 
@@ -958,8 +924,7 @@ mod tests {
     fn merge_identical_files_is_noop() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let main_claude = project.join("main").join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -984,8 +949,7 @@ mod tests {
     fn merge_recurses_into_nested_objects() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let main_claude = project.join("main").join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -1011,7 +975,7 @@ mod tests {
     fn merge_fails_for_nonexistent_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
+        let (project, _, _) = server.setup_project(dir.path());
 
         let result = merge(&project, "nonexistent", false);
         assert!(matches!(result.unwrap_err(), PmError::FeatureNotFound(_)));
@@ -1021,8 +985,7 @@ mod tests {
     fn merge_malformed_json_winner_takes_all() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let main_claude = project.join("main").join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -1044,8 +1007,7 @@ mod tests {
     fn diff_reports_settings_local_json_independently() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let main_claude = project.join("main").join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -1064,8 +1026,7 @@ mod tests {
     fn merge_handles_settings_local_json_independently() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let main_claude = project.join("main").join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -1084,8 +1045,7 @@ mod tests {
     fn push_overwrites_main_with_feature_settings() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         // Main has old settings
         let main_claude = project.join("main").join(".claude");
@@ -1105,8 +1065,7 @@ mod tests {
     fn pull_overwrites_feature_with_main_settings() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project = setup_project(dir.path(), &server);
-        create_feature(&project, "login", &server);
+        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         // Feature has diverged settings
         let feat_claude = project.join("login").join(".claude");

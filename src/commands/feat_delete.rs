@@ -194,32 +194,11 @@ mod tests {
     use crate::tmux as tmux_mod;
     use tempfile::tempdir;
 
-    fn setup_project_with_feature(
-        dir: &Path,
-        feature_name: &str,
-        server: &TestServer,
-    ) -> std::path::PathBuf {
-        let project_path = dir.join(server.scope("myapp"));
-        let projects_dir = dir.join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
-        feat_new::feat_new(
-            &project_path,
-            feature_name,
-            None,
-            None,
-            None,
-            false,
-            server.name(),
-        )
-        .unwrap();
-        project_path
-    }
-
     #[test]
     fn delete_removes_state_file() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         feat_delete(&project_path, "login", false, server.name()).unwrap();
 
@@ -231,7 +210,7 @@ mod tests {
     fn delete_removes_worktree() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         feat_delete(&project_path, "login", false, server.name()).unwrap();
 
@@ -242,7 +221,7 @@ mod tests {
     fn delete_removes_branch() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         feat_delete(&project_path, "login", false, server.name()).unwrap();
 
@@ -254,7 +233,7 @@ mod tests {
     fn delete_removes_tmux_session() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let scoped_name = server.scope("myapp");
         assert!(tmux_mod::has_session(server.name(), &format!("{scoped_name}/login")).unwrap());
@@ -268,7 +247,7 @@ mod tests {
     fn delete_with_uncommitted_changes_is_blocked() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let worktree = project_path.join("login");
         std::fs::write(worktree.join("test.txt"), "hello").unwrap();
@@ -285,7 +264,7 @@ mod tests {
     fn delete_with_force_bypasses_safety_checks() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let worktree = project_path.join("login");
         std::fs::write(worktree.join("test.txt"), "hello").unwrap();
@@ -301,7 +280,7 @@ mod tests {
     fn delete_merged_branch_succeeds_without_force() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         // Merge the feature branch into main
         let main_repo = project_path.join("main");
@@ -317,7 +296,7 @@ mod tests {
     fn delete_state_persists_if_safety_check_blocks() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let worktree = project_path.join("login");
         std::fs::write(worktree.join("test.txt"), "hello").unwrap();
@@ -347,7 +326,7 @@ mod tests {
     fn delete_with_untracked_files_still_proceeds() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let worktree = project_path.join("login");
         std::fs::write(worktree.join("untracked.txt"), "hello").unwrap();
@@ -362,7 +341,7 @@ mod tests {
     fn delete_with_unmerged_commits_is_blocked() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let worktree = project_path.join("login");
         std::fs::write(worktree.join("feature.txt"), "content").unwrap();
@@ -432,7 +411,7 @@ mod tests {
     fn delete_stacked_feature_merged_into_parent_succeeds() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "parent", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "parent");
 
         // Create stacked feature based on parent
         feat_new::feat_new(
@@ -461,7 +440,7 @@ mod tests {
     fn delete_stacked_feature_not_merged_into_parent_blocks() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "parent", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "parent");
 
         // Create stacked feature based on parent with a commit
         feat_new::feat_new(

@@ -60,7 +60,6 @@ pub fn feat_pr(project_root: &Path, name: &str, ready: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::{feat_new, init};
     use crate::testing::TestServer;
     use tempfile::tempdir;
 
@@ -69,9 +68,7 @@ mod tests {
         feature_name: &str,
         server: &TestServer,
     ) -> std::path::PathBuf {
-        let project_path = dir.join(server.scope("myapp"));
-        let projects_dir = dir.join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        let (project_path, _) = server.setup_project_with_feature(dir, feature_name);
 
         // Create a bare remote to push to
         let remote_path = dir.join("remote.git");
@@ -95,33 +92,7 @@ mod tests {
             .output()
             .unwrap();
 
-        feat_new::feat_new(
-            &project_path,
-            feature_name,
-            None,
-            None,
-            None,
-            false,
-            server.name(),
-        )
-        .unwrap();
-
         project_path
-    }
-
-    fn add_feature_commit(project_path: &Path, feature_name: &str) {
-        let worktree = project_path.join(feature_name);
-        std::fs::write(worktree.join("feature.txt"), "feature work").unwrap();
-        std::process::Command::new("git")
-            .args(["-C", &worktree.to_string_lossy()])
-            .args(["add", "feature.txt"])
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["-C", &worktree.to_string_lossy()])
-            .args(["commit", "-m", "feature work"])
-            .output()
-            .unwrap();
     }
 
     #[test]
@@ -130,7 +101,7 @@ mod tests {
         let server = TestServer::new();
         let project_path = setup_project_with_feature_and_remote(dir.path(), "login", &server);
 
-        add_feature_commit(&project_path, "login");
+        TestServer::add_feature_commit(&project_path, "login");
 
         let worktree = project_path.join("login");
         git::push_branch(&worktree, "login").unwrap();
@@ -154,7 +125,7 @@ mod tests {
         let server = TestServer::new();
         let project_path = setup_project_with_feature_and_remote(dir.path(), "login", &server);
 
-        add_feature_commit(&project_path, "login");
+        TestServer::add_feature_commit(&project_path, "login");
 
         let features_dir = paths::features_dir(&project_path);
         let mut state = FeatureState::load(&features_dir, "login").unwrap();
@@ -177,9 +148,7 @@ mod tests {
     fn feat_pr_fails_for_nonexistent_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = dir.path().join(server.scope("myapp"));
-        let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        let (project_path, _, _) = server.setup_project(dir.path());
 
         let result = feat_pr(&project_path, "nonexistent", false);
         assert!(result.is_err());

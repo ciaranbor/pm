@@ -96,41 +96,13 @@ mod tests {
     use crate::tmux as tmux_mod;
     use tempfile::tempdir;
 
-    fn setup_project_with_feature(
-        dir: &Path,
-        feature_name: &str,
-        server: &TestServer,
-    ) -> std::path::PathBuf {
-        let project_path = dir.join(server.scope("myapp"));
-        let projects_dir = dir.join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
-        feat_new::feat_new(
-            &project_path,
-            feature_name,
-            None,
-            None,
-            None,
-            false,
-            server.name(),
-        )
-        .unwrap();
-        project_path
-    }
-
-    fn add_feature_commit(project_path: &Path, feature_name: &str) {
-        let worktree = project_path.join(feature_name);
-        std::fs::write(worktree.join("feature.txt"), "feature work").unwrap();
-        git::stage_file(&worktree, "feature.txt").unwrap();
-        git::commit(&worktree, "feature work").unwrap();
-    }
-
     #[test]
     fn merge_integrates_feature_commits_into_main() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        add_feature_commit(&project_path, "login");
+        TestServer::add_feature_commit(&project_path, "login");
 
         feat_merge(&project_path, "login", true, server.name()).unwrap();
 
@@ -143,9 +115,9 @@ mod tests {
     fn merge_creates_merge_commit() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        add_feature_commit(&project_path, "login");
+        TestServer::add_feature_commit(&project_path, "login");
 
         feat_merge(&project_path, "login", true, server.name()).unwrap();
 
@@ -160,7 +132,7 @@ mod tests {
     fn merge_blocks_on_dirty_feature_worktree() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         // Stage a file in the feature worktree (uncommitted change)
         let worktree = project_path.join("login");
@@ -181,7 +153,7 @@ mod tests {
     fn merge_blocks_on_dirty_main_worktree() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         // Stage a file in the main worktree (uncommitted change)
         let main_repo = project_path.join("main");
@@ -203,9 +175,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let project_name = server.scope("myapp");
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        add_feature_commit(&project_path, "login");
+        TestServer::add_feature_commit(&project_path, "login");
 
         // Verify session exists before merge
         assert!(tmux_mod::has_session(server.name(), &format!("{project_name}/login")).unwrap());
@@ -229,9 +201,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let project_name = server.scope("myapp");
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        add_feature_commit(&project_path, "login");
+        TestServer::add_feature_commit(&project_path, "login");
 
         feat_merge(&project_path, "login", true, server.name()).unwrap();
 
@@ -252,9 +224,9 @@ mod tests {
     fn merge_already_merged_feature_fails() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        add_feature_commit(&project_path, "login");
+        TestServer::add_feature_commit(&project_path, "login");
 
         feat_merge(&project_path, "login", true, server.name()).unwrap();
 
@@ -268,7 +240,7 @@ mod tests {
     fn merge_conflict_aborts_and_leaves_main_clean() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         // Create a conflicting file on both main and feature
         let main_repo = project_path.join("main");
@@ -292,7 +264,7 @@ mod tests {
     fn merge_skips_local_merge_when_already_merged_upstream() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         // Simulate the branch being merged upstream by merging it directly in the main worktree via git
         let main_repo = project_path.join("main");
@@ -316,7 +288,7 @@ mod tests {
     fn merge_conflict_leaves_state_unchanged() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         // Create a conflicting file on both main and feature
         let main_repo = project_path.join("main");
@@ -343,9 +315,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let project_name = server.scope("myapp");
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        add_feature_commit(&project_path, "login");
+        TestServer::add_feature_commit(&project_path, "login");
 
         // Kill the session before merging
         tmux_mod::kill_session(server.name(), &format!("{project_name}/login")).unwrap();
@@ -378,9 +350,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let project_name = server.scope("myapp");
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        add_feature_commit(&project_path, "login");
+        TestServer::add_feature_commit(&project_path, "login");
 
         // Main session should have 1 window before merge
         let before =
@@ -403,9 +375,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let project_name = server.scope("myapp");
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        add_feature_commit(&project_path, "login");
+        TestServer::add_feature_commit(&project_path, "login");
         feat_merge(&project_path, "login", true, server.name()).unwrap();
 
         // Create a second feature and merge it too
@@ -427,12 +399,12 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let project_name = server.scope("myapp");
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         // Remove the bootstrapped hook script
         std::fs::remove_file(project_path.join(hooks::POST_MERGE_PATH)).unwrap();
 
-        add_feature_commit(&project_path, "login");
+        TestServer::add_feature_commit(&project_path, "login");
         feat_merge(&project_path, "login", true, server.name()).unwrap();
 
         // Main session should still have just 1 window
@@ -446,9 +418,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let project_name = server.scope("myapp");
-        let project_path = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        add_feature_commit(&project_path, "login");
+        TestServer::add_feature_commit(&project_path, "login");
 
         // Kill the main session before merging
         tmux_mod::kill_session(server.name(), &format!("{project_name}/main")).unwrap();
@@ -466,7 +438,7 @@ mod tests {
     fn merge_stacked_feature_merges_into_parent_worktree() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "parent", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "parent");
 
         // Add a commit to parent
         let parent_wt = project_path.join("parent");
@@ -502,7 +474,7 @@ mod tests {
     fn merge_stacked_feature_cleans_up_by_default() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project_with_feature(dir.path(), "parent", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "parent");
 
         feat_new::feat_new(
             &project_path,

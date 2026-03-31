@@ -139,22 +139,8 @@ pub fn feat_adopt(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::init;
     use crate::testing::TestServer;
     use tempfile::tempdir;
-
-    fn setup_project(dir: &Path, server: &TestServer) -> (std::path::PathBuf, String) {
-        let project_path = dir.join(server.scope("myapp"));
-        let projects_dir = dir.join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
-        let project_name = project_path
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_string();
-        (project_path, project_name)
-    }
 
     /// Create a branch on the main worktree so feat_adopt can find it.
     fn create_branch(project_path: &Path, name: &str) {
@@ -166,7 +152,7 @@ mod tests {
     fn feat_adopt_creates_state_file_with_wip_status() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
         create_branch(&project_path, "login");
 
         feat_adopt(
@@ -190,7 +176,7 @@ mod tests {
     fn feat_adopt_creates_worktree() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
         create_branch(&project_path, "login");
 
         feat_adopt(
@@ -214,7 +200,7 @@ mod tests {
     fn feat_adopt_creates_tmux_session() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, project_name) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = server.setup_project(dir.path());
         create_branch(&project_path, "login");
 
         feat_adopt(
@@ -236,7 +222,7 @@ mod tests {
     fn feat_adopt_does_not_create_branch() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
         create_branch(&project_path, "login");
 
         // Branch exists before adopt
@@ -263,7 +249,7 @@ mod tests {
     fn feat_adopt_fails_when_branch_does_not_exist() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
 
         let result = feat_adopt(
             &project_path,
@@ -284,7 +270,7 @@ mod tests {
     fn feat_adopt_fails_when_feature_already_exists() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
         create_branch(&project_path, "login");
 
         feat_adopt(
@@ -320,7 +306,7 @@ mod tests {
     fn feat_adopt_with_context_writes_task_md() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
         create_branch(&project_path, "login");
 
         feat_adopt(
@@ -345,7 +331,7 @@ mod tests {
     fn feat_adopt_sets_timestamps() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
         create_branch(&project_path, "login");
         let before = Utc::now();
 
@@ -371,7 +357,7 @@ mod tests {
     fn feat_adopt_with_context_creates_claude_window() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, project_name) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = server.setup_project(dir.path());
         create_branch(&project_path, "login");
 
         feat_adopt(
@@ -395,7 +381,7 @@ mod tests {
     fn feat_adopt_without_context_has_single_window() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, project_name) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = server.setup_project(dir.path());
         create_branch(&project_path, "login");
 
         feat_adopt(
@@ -418,7 +404,7 @@ mod tests {
     fn feat_adopt_tmux_failure_leaves_initializing_state() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, project_name) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = server.setup_project(dir.path());
         create_branch(&project_path, "login");
 
         // Pre-create a tmux session to cause a conflict
@@ -446,7 +432,7 @@ mod tests {
     fn feat_adopt_with_from_migrates_claude_sessions() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
         create_branch(&project_path, "login");
 
         // Set up fake Claude session data keyed to some old path
@@ -487,7 +473,7 @@ mod tests {
     fn feat_adopt_slash_branch_sanitizes_feature_name() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, project_name) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = server.setup_project(dir.path());
         create_branch(&project_path, "ciaran/login");
 
         feat_adopt(
@@ -520,7 +506,7 @@ mod tests {
     fn feat_adopt_with_name_override() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, project_name) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = server.setup_project(dir.path());
         create_branch(&project_path, "ciaran/eval");
 
         feat_adopt(
@@ -547,7 +533,7 @@ mod tests {
     fn feat_adopt_with_from_handles_existing_worktree() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
         create_branch(&project_path, "login");
 
         // Create an existing worktree for the branch (simulating a pre-existing checkout)
@@ -614,7 +600,7 @@ mod tests {
     fn feat_adopt_fails_with_worktree_conflict_without_from() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
         create_branch(&project_path, "login");
 
         // Create an existing worktree for the branch

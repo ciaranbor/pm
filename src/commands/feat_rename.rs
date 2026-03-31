@@ -86,38 +86,11 @@ mod tests {
     use crate::testing::TestServer;
     use tempfile::tempdir;
 
-    fn setup_project_with_feature(
-        dir: &Path,
-        feature_name: &str,
-        server: &TestServer,
-    ) -> (std::path::PathBuf, String) {
-        let project_path = dir.join(server.scope("myapp"));
-        let projects_dir = dir.join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
-        feat_new::feat_new(
-            &project_path,
-            feature_name,
-            None,
-            None,
-            None,
-            false,
-            server.name(),
-        )
-        .unwrap();
-        let project_name = project_path
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_string();
-        (project_path, project_name)
-    }
-
     #[test]
     fn rename_updates_state_file() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         feat_rename(&project_path, "login", "auth", server.name()).unwrap();
 
@@ -134,7 +107,7 @@ mod tests {
     fn rename_updates_git_branch() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         feat_rename(&project_path, "login", "auth", server.name()).unwrap();
 
@@ -147,7 +120,7 @@ mod tests {
     fn rename_moves_worktree() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         feat_rename(&project_path, "login", "auth", server.name()).unwrap();
 
@@ -160,7 +133,7 @@ mod tests {
     fn rename_updates_tmux_session() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, project_name) = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
 
         feat_rename(&project_path, "login", "auth", server.name()).unwrap();
 
@@ -172,7 +145,7 @@ mod tests {
     fn rename_preserves_state_fields() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let features_dir = paths::features_dir(&project_path);
         let original = FeatureState::load(&features_dir, "login").unwrap();
@@ -203,7 +176,7 @@ mod tests {
     fn rename_to_existing_feature_fails() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
         feat_new::feat_new(
             &project_path,
             "signup",
@@ -230,7 +203,7 @@ mod tests {
     fn rename_to_existing_branch_fails() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project_with_feature(dir.path(), "login", &server);
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         // Create a branch without a feature
         let main_repo = project_path.join("main");
