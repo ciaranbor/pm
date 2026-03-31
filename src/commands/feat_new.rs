@@ -175,27 +175,15 @@ pub fn feat_new(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::init;
     use crate::hooks;
     use crate::testing::TestServer;
     use tempfile::tempdir;
-
-    fn setup_project(
-        dir: &Path,
-        server: &TestServer,
-    ) -> (std::path::PathBuf, std::path::PathBuf, String) {
-        let name = server.scope("myapp");
-        let project_path = dir.join(&name);
-        let projects_dir = dir.join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
-        (project_path, projects_dir, name)
-    }
 
     #[test]
     fn feat_new_creates_state_file_with_wip_status() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
 
         feat_new(
             &project_path,
@@ -217,7 +205,7 @@ mod tests {
     fn feat_new_creates_git_branch() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
 
         feat_new(
             &project_path,
@@ -238,7 +226,7 @@ mod tests {
     fn feat_new_creates_worktree() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
 
         feat_new(
             &project_path,
@@ -260,7 +248,7 @@ mod tests {
     fn feat_new_creates_tmux_session() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, project_name) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = server.setup_project(dir.path());
 
         feat_new(
             &project_path,
@@ -280,7 +268,7 @@ mod tests {
     fn feat_new_sets_timestamps() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
         let before = Utc::now();
 
         feat_new(
@@ -304,7 +292,7 @@ mod tests {
     fn feat_new_state_has_matching_branch_and_worktree() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
 
         feat_new(
             &project_path,
@@ -327,7 +315,7 @@ mod tests {
     fn feat_new_duplicate_name_fails() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
 
         feat_new(
             &project_path,
@@ -360,7 +348,7 @@ mod tests {
     fn feat_new_tmux_failure_cleans_up_all_resources() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, project_name) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = server.setup_project(dir.path());
 
         // Pre-create a tmux session with the name feat_new will use,
         // so create_session fails with "duplicate session"
@@ -391,7 +379,7 @@ mod tests {
     fn feat_new_worktree_failure_cleans_up_branch_and_state() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
 
         // Pre-create the worktree path so add_worktree fails
         std::fs::create_dir(project_path.join("login")).unwrap();
@@ -421,7 +409,7 @@ mod tests {
     fn feat_new_with_text_context_writes_task_md() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
 
         feat_new(
             &project_path,
@@ -449,7 +437,7 @@ mod tests {
     fn feat_new_with_file_context_reads_file() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
 
         // Create a temp file with context content
         let brief_path = dir.path().join("brief.md");
@@ -476,7 +464,7 @@ mod tests {
     fn feat_new_with_context_stores_resolved_content_in_state() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
 
         // Pass a file path as context — state should store the file contents, not the path
         let brief_path = dir.path().join("brief.md");
@@ -502,7 +490,7 @@ mod tests {
     fn feat_new_with_context_creates_claude_window() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, project_name) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = server.setup_project(dir.path());
 
         feat_new(
             &project_path,
@@ -524,7 +512,7 @@ mod tests {
     fn feat_new_without_context_has_shell_and_hook_windows() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, project_name) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = server.setup_project(dir.path());
 
         feat_new(
             &project_path,
@@ -546,7 +534,7 @@ mod tests {
     fn feat_new_without_context_has_no_task_md() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
 
         feat_new(
             &project_path,
@@ -571,7 +559,7 @@ mod tests {
     fn feat_new_runs_default_post_create_hook() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, project_name) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = server.setup_project(dir.path());
 
         feat_new(
             &project_path,
@@ -597,7 +585,7 @@ mod tests {
     fn feat_new_with_context_and_hook_creates_three_windows() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, project_name) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = server.setup_project(dir.path());
 
         feat_new(
             &project_path,
@@ -619,7 +607,7 @@ mod tests {
     fn feat_new_skips_hook_when_script_removed() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, project_name) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = server.setup_project(dir.path());
 
         // Remove the bootstrapped hook script
         std::fs::remove_file(project_path.join(hooks::POST_CREATE_PATH)).unwrap();
@@ -644,7 +632,7 @@ mod tests {
     fn feat_new_with_base_stores_base_in_state() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
 
         feat_new(
             &project_path,
@@ -676,7 +664,7 @@ mod tests {
     fn feat_new_with_base_branches_from_parent() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
 
         // Create parent feature with a commit
         feat_new(
@@ -715,7 +703,7 @@ mod tests {
     fn feat_new_without_base_defaults_to_main() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
 
         feat_new(
             &project_path,
@@ -821,7 +809,7 @@ mod tests {
     fn feat_new_slash_collision_detected() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
 
         // Create "ciaran-login" first
         feat_new(
@@ -856,7 +844,7 @@ mod tests {
     fn feat_new_slash_branch_sanitizes_feature_name() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, project_name) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = server.setup_project(dir.path());
 
         feat_new(
             &project_path,
@@ -887,7 +875,7 @@ mod tests {
     fn feat_new_with_name_override() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, project_name) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = server.setup_project(dir.path());
 
         feat_new(
             &project_path,

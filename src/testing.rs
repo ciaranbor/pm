@@ -23,6 +23,12 @@ pub struct TestServer {
     prefix: String,
 }
 
+impl Default for TestServer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TestServer {
     pub fn new() -> Self {
         let id = TMUX_SERVER_COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -40,6 +46,46 @@ impl TestServer {
     /// and direct session names to avoid collisions with other parallel tests.
     pub fn scope(&self, name: &str) -> String {
         format!("{}-{}", self.prefix, name)
+    }
+
+    /// Create a project with init, returning `(project_path, projects_dir, project_name)`.
+    pub fn setup_project(
+        &self,
+        dir: &std::path::Path,
+    ) -> (std::path::PathBuf, std::path::PathBuf, String) {
+        let name = self.scope("myapp");
+        let project_path = dir.join(&name);
+        let projects_dir = dir.join("registry");
+        crate::commands::init::init(&project_path, &projects_dir, self.name()).unwrap();
+        (project_path, projects_dir, name)
+    }
+
+    /// Create a project and a feature, returning `(project_path, project_name)`.
+    pub fn setup_project_with_feature(
+        &self,
+        dir: &std::path::Path,
+        feature_name: &str,
+    ) -> (std::path::PathBuf, String) {
+        let (project_path, _, project_name) = self.setup_project(dir);
+        crate::commands::feat_new::feat_new(
+            &project_path,
+            feature_name,
+            None,
+            None,
+            None,
+            false,
+            self.name(),
+        )
+        .unwrap();
+        (project_path, project_name)
+    }
+
+    /// Add a commit to a feature worktree.
+    pub fn add_feature_commit(project_path: &std::path::Path, feature_name: &str) {
+        let worktree = project_path.join(feature_name);
+        std::fs::write(worktree.join("feature.txt"), "feature work").unwrap();
+        crate::git::stage_file(&worktree, "feature.txt").unwrap();
+        crate::git::commit(&worktree, "feature work").unwrap();
     }
 }
 

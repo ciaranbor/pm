@@ -122,22 +122,8 @@ fn setup_review(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::init;
     use crate::testing::TestServer;
     use tempfile::tempdir;
-
-    fn setup_project(dir: &Path, server: &TestServer) -> (std::path::PathBuf, String) {
-        let project_path = dir.join(server.scope("myapp"));
-        let projects_dir = dir.join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
-        let project_name = project_path
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_string();
-        (project_path, project_name)
-    }
 
     fn sample_details() -> PrDetails {
         PrDetails {
@@ -160,7 +146,7 @@ mod tests {
     fn review_creates_state_file_with_review_status() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
         let details = sample_details();
         simulate_fetched_pr(&project_path, "review-42");
 
@@ -178,7 +164,7 @@ mod tests {
     fn review_creates_worktree() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
         let details = sample_details();
         simulate_fetched_pr(&project_path, "review-42");
 
@@ -193,7 +179,7 @@ mod tests {
     fn review_creates_tmux_session() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, project_name) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = server.setup_project(dir.path());
         let details = sample_details();
         simulate_fetched_pr(&project_path, "review-42");
 
@@ -206,7 +192,7 @@ mod tests {
     fn review_seeds_task_md() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
         let details = sample_details();
         simulate_fetched_pr(&project_path, "review-42");
 
@@ -224,7 +210,7 @@ mod tests {
     fn review_task_md_is_git_excluded() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
         let details = sample_details();
         simulate_fetched_pr(&project_path, "review-42");
 
@@ -239,7 +225,7 @@ mod tests {
     fn review_creates_claude_and_hook_windows() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, project_name) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = server.setup_project(dir.path());
         let details = sample_details();
         simulate_fetched_pr(&project_path, "review-42");
 
@@ -255,7 +241,7 @@ mod tests {
     fn review_duplicate_fails() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
         let details = sample_details();
         simulate_fetched_pr(&project_path, "review-42");
 
@@ -273,7 +259,7 @@ mod tests {
     fn review_sets_timestamps() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
         let details = sample_details();
         simulate_fetched_pr(&project_path, "review-42");
         let before = Utc::now();
@@ -290,7 +276,7 @@ mod tests {
     fn review_tmux_failure_cleans_up() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, project_name) = setup_project(dir.path(), &server);
+        let (project_path, _, project_name) = server.setup_project(dir.path());
         let details = sample_details();
         simulate_fetched_pr(&project_path, "review-42");
 
@@ -321,7 +307,7 @@ mod tests {
     fn review_stores_context_in_state() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
         let details = sample_details();
         simulate_fetched_pr(&project_path, "review-42");
 

@@ -84,23 +84,16 @@ pub fn status(project_root: &Path, tmux_server: Option<&str>) -> Result<Vec<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::{feat_new, init};
+    use crate::commands::feat_new;
     use crate::state::feature::FeatureStatus;
     use crate::testing::TestServer;
     use tempfile::tempdir;
-
-    fn setup_project(dir: &Path, server: &TestServer) -> std::path::PathBuf {
-        let project_path = dir.join(server.scope("myapp"));
-        let projects_dir = dir.join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
-        project_path
-    }
 
     #[test]
     fn status_shows_project_info() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
 
         let lines = status(&project_path, server.name()).unwrap();
         assert!(lines[0].contains("Project:") && lines[0].contains(&server.scope("myapp")));
@@ -112,7 +105,7 @@ mod tests {
     fn status_lists_features_with_status() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
         feat_new::feat_new(
             &project_path,
             "alpha",
@@ -152,7 +145,7 @@ mod tests {
     fn status_shows_no_issues_section_when_healthy() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
         feat_new::feat_new(
             &project_path,
             "login",
@@ -172,7 +165,7 @@ mod tests {
     fn status_shows_issues_when_unhealthy() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
         feat_new::feat_new(
             &project_path,
             "login",
@@ -197,7 +190,7 @@ mod tests {
     fn status_with_no_features() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
 
         let lines = status(&project_path, server.name()).unwrap();
         assert!(lines[2].contains("Features: 0"));
@@ -209,7 +202,7 @@ mod tests {
     fn status_mixed_healthy_and_unhealthy_features() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
         feat_new::feat_new(
             &project_path,
             "alpha",
@@ -267,7 +260,7 @@ mod tests {
     fn status_shows_pr_number_for_features_with_pr() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = setup_project(dir.path(), &server);
+        let (project_path, _, _) = server.setup_project(dir.path());
         feat_new::feat_new(
             &project_path,
             "login",
