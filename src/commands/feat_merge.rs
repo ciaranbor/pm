@@ -237,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_conflict_aborts_and_leaves_main_clean() {
+    fn merge_conflict_aborts_cleanly() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
@@ -258,6 +258,11 @@ mod tests {
 
         // Main worktree should be clean — merge was aborted
         assert!(!git::has_uncommitted_changes(&main_repo).unwrap());
+
+        // State should still be Wip, not Merged
+        let features_dir = paths::features_dir(&project_path);
+        let state = FeatureState::load(&features_dir, "login").unwrap();
+        assert_eq!(state.status, FeatureStatus::Wip);
     }
 
     #[test]
@@ -282,32 +287,6 @@ mod tests {
         // Cleanup should have happened
         assert!(!project_path.join("login").exists());
         assert!(!git::branch_exists(&main_repo, "login").unwrap());
-    }
-
-    #[test]
-    fn merge_conflict_leaves_state_unchanged() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-
-        // Create a conflicting file on both main and feature
-        let main_repo = project_path.join("main");
-        std::fs::write(main_repo.join("shared.txt"), "main content").unwrap();
-        git::stage_file(&main_repo, "shared.txt").unwrap();
-        git::commit(&main_repo, "main change").unwrap();
-
-        let worktree = project_path.join("login");
-        std::fs::write(worktree.join("shared.txt"), "feature content").unwrap();
-        git::stage_file(&worktree, "shared.txt").unwrap();
-        git::commit(&worktree, "feature change").unwrap();
-
-        let result = feat_merge(&project_path, "login", true, server.name());
-        assert!(result.is_err());
-
-        // State should still be Wip, not Merged
-        let features_dir = paths::features_dir(&project_path);
-        let state = FeatureState::load(&features_dir, "login").unwrap();
-        assert_eq!(state.status, FeatureStatus::Wip);
     }
 
     #[test]

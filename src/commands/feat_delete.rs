@@ -256,8 +256,10 @@ mod tests {
         let result = feat_delete(&project_path, "login", false, server.name());
         assert!(result.is_err());
 
+        // State and worktree should persist when safety check blocks
         let features_dir = paths::features_dir(&project_path);
         assert!(FeatureState::exists(&features_dir, "login"));
+        assert!(project_path.join("login").exists());
     }
 
     #[test]
@@ -290,23 +292,6 @@ mod tests {
 
         let features_dir = paths::features_dir(&project_path);
         assert!(!FeatureState::exists(&features_dir, "login"));
-    }
-
-    #[test]
-    fn delete_state_persists_if_safety_check_blocks() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-
-        let worktree = project_path.join("login");
-        std::fs::write(worktree.join("test.txt"), "hello").unwrap();
-        git::stage_file(&worktree, "test.txt").unwrap();
-
-        let _ = feat_delete(&project_path, "login", false, server.name());
-
-        let features_dir = paths::features_dir(&project_path);
-        assert!(FeatureState::exists(&features_dir, "login"));
-        assert!(project_path.join("login").exists());
     }
 
     #[test]

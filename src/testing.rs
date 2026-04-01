@@ -10,6 +10,10 @@ fn shared_server_name() -> &'static str {
         let name = format!("pm-test-{}", std::process::id());
         // Kill any stale server from a previous process with the same PID.
         let _ = crate::tmux::kill_server(Some(&name));
+        // Create a keepalive session so the server stays alive for the entire
+        // test run. Without this, the server shuts down each time a test cleans
+        // up its sessions (costing ~2s to cold-start per subsequent test).
+        let _ = crate::tmux::create_session(Some(&name), "keepalive", std::path::Path::new("/tmp"));
         name
     })
 }
