@@ -91,9 +91,9 @@ enum ClaudeCommands {
 
 #[derive(Subcommand)]
 enum ClaudeSettingsCommands {
-    /// List a feature's Claude Code settings
+    /// List Claude Code settings (main or feature)
     List {
-        /// Feature name (detected from CWD if omitted)
+        /// Feature name (detected from CWD if omitted; works from main worktree too)
         name: Option<String>,
     },
     /// Push feature's .claude/ settings to main
@@ -287,10 +287,20 @@ fn run() -> pm::error::Result<()> {
                 let project_root = paths::find_project_root(&std::env::current_dir()?)?;
                 match settings_cmd {
                     ClaudeSettingsCommands::List { name } => {
-                        let name = resolve_feature_name(name, &project_root)?;
-                        let lines = commands::claude_settings::list(&project_root, &name)?;
+                        let cwd = std::env::current_dir()?;
+                        let (label, lines) =
+                            if name.is_none() && paths::is_in_main_worktree(&project_root, &cwd) {
+                                (
+                                    "main".to_string(),
+                                    commands::claude_settings::list_main(&project_root)?,
+                                )
+                            } else {
+                                let name = resolve_feature_name(name, &project_root)?;
+                                let lines = commands::claude_settings::list(&project_root, &name)?;
+                                (name, lines)
+                            };
                         if lines.is_empty() {
-                            println!("No settings files found for feature '{name}'");
+                            println!("No settings files found for '{label}'");
                         } else {
                             for line in lines {
                                 println!("{line}");

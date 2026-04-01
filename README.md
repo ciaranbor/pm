@@ -185,7 +185,7 @@ Creates tmux sessions for the main worktree and any active features that are mis
 Manage Claude Code settings (`settings.json`, `settings.local.json`) across worktrees. The main worktree's `.claude/` directory is the source of truth — new features are seeded from it automatically.
 
 ```sh
-pm claude settings list              # show current feature's .claude/ settings
+pm claude settings list              # show .claude/ settings (works from main or feature worktree)
 pm claude settings push              # push current feature's .claude/ settings to main
 pm claude settings pull              # pull main's .claude/ settings into current feature
 pm claude settings diff              # show differences between main and feature
