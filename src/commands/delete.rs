@@ -173,19 +173,7 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn delete_empty_project_removes_pm_dir_and_registry() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
-
-        delete(&project_path, &projects_dir, false, true, server.name()).unwrap();
-
-        assert!(!paths::pm_dir(&project_path).exists());
-        assert!(!projects_dir.join(format!("{project_name}.toml")).exists());
-    }
-
-    #[test]
-    fn delete_kills_main_tmux_session() {
+    fn delete_empty_project_removes_all_resources() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
@@ -195,6 +183,8 @@ mod tests {
 
         delete(&project_path, &projects_dir, false, true, server.name()).unwrap();
 
+        assert!(!paths::pm_dir(&project_path).exists());
+        assert!(!projects_dir.join(format!("{project_name}.toml")).exists());
         assert!(!tmux::has_session(server.name(), &main_session).unwrap());
     }
 
@@ -313,7 +303,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_merged_features_succeeds_without_force() {
+    fn delete_merged_features_succeeds_but_leaves_worktrees_on_disk() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
@@ -335,8 +325,12 @@ mod tests {
 
         delete(&project_path, &projects_dir, false, true, server.name()).unwrap();
 
+        // pm state and registry are cleaned up
         assert!(!paths::pm_dir(&project_path).exists());
         assert!(!projects_dir.join(format!("{project_name}.toml")).exists());
+        // Without --force, worktree directory and branch are left on disk
+        assert!(project_path.join("login").exists());
+        assert!(git::branch_exists(&main_repo, "login").unwrap());
     }
 
     #[test]
@@ -348,38 +342,6 @@ mod tests {
 
         let result = delete(&project_path, &projects_dir, false, true, None);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn delete_without_force_leaves_worktree_directories_on_disk() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
-
-        feat_new::feat_new(
-            &project_path,
-            "login",
-            None,
-            None,
-            None,
-            false,
-            server.name(),
-        )
-        .unwrap();
-
-        // Merge so safety checks pass without --force
-        let main_repo = project_path.join("main");
-        git::merge_no_ff(&main_repo, "login").unwrap();
-
-        delete(&project_path, &projects_dir, false, true, server.name()).unwrap();
-
-        // pm state and registry are cleaned up
-        assert!(!paths::pm_dir(&project_path).exists());
-        assert!(!projects_dir.join(format!("{project_name}.toml")).exists());
-        // Worktree directory is left on disk
-        assert!(project_path.join("login").exists());
-        // Git branch is also left intact
-        assert!(git::branch_exists(&main_repo, "login").unwrap());
     }
 
     #[test]

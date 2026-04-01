@@ -180,95 +180,10 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn feat_new_creates_state_file_with_wip_status() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
-
-        feat_new(
-            &project_path,
-            "login",
-            None,
-            None,
-            None,
-            false,
-            server.name(),
-        )
-        .unwrap();
-
-        let features_dir = paths::features_dir(&project_path);
-        let state = FeatureState::load(&features_dir, "login").unwrap();
-        assert_eq!(state.status, FeatureStatus::Wip);
-    }
-
-    #[test]
-    fn feat_new_creates_git_branch() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
-
-        feat_new(
-            &project_path,
-            "login",
-            None,
-            None,
-            None,
-            false,
-            server.name(),
-        )
-        .unwrap();
-
-        let main_path = project_path.join("main");
-        assert!(git::branch_exists(&main_path, "login").unwrap());
-    }
-
-    #[test]
-    fn feat_new_creates_worktree() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
-
-        feat_new(
-            &project_path,
-            "login",
-            None,
-            None,
-            None,
-            false,
-            server.name(),
-        )
-        .unwrap();
-
-        let worktree_path = project_path.join("login");
-        assert!(worktree_path.exists());
-        assert!(worktree_path.is_dir());
-    }
-
-    #[test]
-    fn feat_new_creates_tmux_session() {
+    fn feat_new_creates_all_resources() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, project_name) = server.setup_project(dir.path());
-
-        feat_new(
-            &project_path,
-            "login",
-            None,
-            None,
-            None,
-            false,
-            server.name(),
-        )
-        .unwrap();
-
-        assert!(tmux::has_session(server.name(), &format!("{project_name}/login")).unwrap());
-    }
-
-    #[test]
-    fn feat_new_sets_timestamps() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
         let before = Utc::now();
 
         feat_new(
@@ -282,33 +197,26 @@ mod tests {
         )
         .unwrap();
 
+        // State file with correct status and fields
         let features_dir = paths::features_dir(&project_path);
         let state = FeatureState::load(&features_dir, "login").unwrap();
-        assert!(state.created >= before);
-        assert!(state.last_active >= state.created);
-    }
-
-    #[test]
-    fn feat_new_state_has_matching_branch_and_worktree() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
-
-        feat_new(
-            &project_path,
-            "login",
-            None,
-            None,
-            None,
-            false,
-            server.name(),
-        )
-        .unwrap();
-
-        let features_dir = paths::features_dir(&project_path);
-        let state = FeatureState::load(&features_dir, "login").unwrap();
+        assert_eq!(state.status, FeatureStatus::Wip);
         assert_eq!(state.branch, "login");
         assert_eq!(state.worktree, "login");
+        assert!(state.created >= before);
+        assert!(state.last_active >= state.created);
+
+        // Git branch exists
+        let main_path = project_path.join("main");
+        assert!(git::branch_exists(&main_path, "login").unwrap());
+
+        // Worktree directory exists
+        let worktree_path = project_path.join("login");
+        assert!(worktree_path.exists());
+        assert!(worktree_path.is_dir());
+
+        // Tmux session exists
+        assert!(tmux::has_session(server.name(), &format!("{project_name}/login")).unwrap());
     }
 
     #[test]
@@ -525,82 +433,20 @@ mod tests {
         )
         .unwrap();
 
-        // Session should have 2 windows: default shell + hook window
-        let output = tmux::list_windows(server.name(), &format!("{project_name}/login")).unwrap();
-        assert_eq!(output, 2);
-    }
+        // 2 windows: default shell + hook window
+        let session = format!("{project_name}/login");
+        let windows = tmux::list_windows(server.name(), &session).unwrap();
+        assert_eq!(windows, 2);
+        // Hook window should be named "hook"
+        let target = tmux::find_window(server.name(), &session, "hook").unwrap();
+        assert!(target.is_some());
 
-    #[test]
-    fn feat_new_without_context_has_no_task_md() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
-
-        feat_new(
-            &project_path,
-            "login",
-            None,
-            None,
-            None,
-            false,
-            server.name(),
-        )
-        .unwrap();
-
+        // No TASK.md or context without context arg
         let task_md = project_path.join("login").join("TASK.md");
         assert!(!task_md.exists());
-
         let features_dir = paths::features_dir(&project_path);
         let state = FeatureState::load(&features_dir, "login").unwrap();
         assert_eq!(state.context, "");
-    }
-
-    #[test]
-    fn feat_new_runs_default_post_create_hook() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project_path, _, project_name) = server.setup_project(dir.path());
-
-        feat_new(
-            &project_path,
-            "login",
-            None,
-            None,
-            None,
-            false,
-            server.name(),
-        )
-        .unwrap();
-
-        // Session should have 2 windows: default shell + hook window
-        let windows = tmux::list_windows(server.name(), &format!("{project_name}/login")).unwrap();
-        assert_eq!(windows, 2);
-        // Hook window should be named "hook"
-        let target =
-            tmux::find_window(server.name(), &format!("{project_name}/login"), "hook").unwrap();
-        assert!(target.is_some());
-    }
-
-    #[test]
-    fn feat_new_with_context_and_hook_creates_three_windows() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project_path, _, project_name) = server.setup_project(dir.path());
-
-        feat_new(
-            &project_path,
-            "login",
-            None,
-            Some("Build the login page"),
-            None,
-            false,
-            server.name(),
-        )
-        .unwrap();
-
-        // 3 windows: default shell + claude window + hook window
-        let windows = tmux::list_windows(server.name(), &format!("{project_name}/login")).unwrap();
-        assert_eq!(windows, 3);
     }
 
     #[test]
