@@ -85,15 +85,25 @@ pub fn seed_feature_claude(project_root: &Path, feature_worktree: &Path) -> Resu
     Ok(())
 }
 
+/// List main worktree's Claude Code settings.
+pub fn list_main(project_root: &Path) -> Result<Vec<String>> {
+    let claude_dir = main_claude_dir(project_root);
+    list_settings_dir(&claude_dir)
+}
+
 /// List a feature's Claude Code settings by displaying the contents of its `.claude/` settings files.
 pub fn list(project_root: &Path, feature_name: &str) -> Result<Vec<String>> {
     require_feature(project_root, feature_name)?;
 
     let feature_claude_dir = project_root.join(feature_name).join(".claude");
+    list_settings_dir(&feature_claude_dir)
+}
+
+fn list_settings_dir(claude_dir: &Path) -> Result<Vec<String>> {
     let mut lines = Vec::new();
 
     for &filename in SETTINGS_FILES {
-        let path = feature_claude_dir.join(filename);
+        let path = claude_dir.join(filename);
         if path.exists() {
             let content = std::fs::read_to_string(&path)?;
             if !lines.is_empty() {
@@ -400,6 +410,53 @@ mod tests {
     fn strip_ansi(s: &str) -> String {
         let re = regex::Regex::new(r"\x1b\[[0-9;]*m").unwrap();
         re.replace_all(s, "").to_string()
+    }
+
+    // --- list_main ---
+
+    #[test]
+    fn list_main_shows_settings() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, _, _) = server.setup_project(dir.path());
+
+        let main_claude = project.join("main").join(".claude");
+        write_json(
+            &main_claude,
+            "settings.json",
+            "{\n  \"permissions\": true\n}",
+        );
+
+        let lines = list_main(&project).unwrap();
+        let output = strip_ansi(&lines.join("\n"));
+        assert!(output.contains("settings.json"));
+        assert!(output.contains("\"permissions\": true"));
+    }
+
+    #[test]
+    fn list_main_shows_both_files() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, _, _) = server.setup_project(dir.path());
+
+        let main_claude = project.join("main").join(".claude");
+        write_json(&main_claude, "settings.json", r#"{"a":1}"#);
+        write_json(&main_claude, "settings.local.json", r#"{"b":2}"#);
+
+        let lines = list_main(&project).unwrap();
+        let output = strip_ansi(&lines.join("\n"));
+        assert!(output.contains("settings.json"));
+        assert!(output.contains("settings.local.json"));
+    }
+
+    #[test]
+    fn list_main_returns_empty_when_no_claude_dir() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, _, _) = server.setup_project(dir.path());
+
+        let lines = list_main(&project).unwrap();
+        assert!(lines.is_empty());
     }
 
     // --- list ---

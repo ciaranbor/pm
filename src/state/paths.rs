@@ -54,22 +54,37 @@ pub fn find_project_root(start: &Path) -> Result<PathBuf> {
     }
 }
 
+/// Returns the first path component of `cwd` relative to `project_root`.
+/// e.g. if project_root is `/a/b` and cwd is `/a/b/main/src`, returns `Some("main")`.
+fn first_relative_component(project_root: &Path, cwd: &Path) -> Option<String> {
+    let cwd = cwd.canonicalize().ok()?;
+    let root = project_root.canonicalize().ok()?;
+    let relative = cwd.strip_prefix(&root).ok()?;
+    relative
+        .components()
+        .next()?
+        .as_os_str()
+        .to_str()
+        .map(|s| s.to_string())
+}
+
+/// Returns true if CWD is inside the main worktree (`<project_root>/main/`).
+pub fn is_in_main_worktree(project_root: &Path, cwd: &Path) -> bool {
+    first_relative_component(project_root, cwd).as_deref() == Some("main")
+}
+
 /// Detect the current feature name from the working directory.
 /// Returns the feature name if CWD is inside a known feature worktree, None otherwise.
 pub fn detect_feature_from_cwd(project_root: &Path, cwd: &Path) -> Option<String> {
-    let cwd_canonical = cwd.canonicalize().ok()?;
-    let root_canonical = project_root.canonicalize().ok()?;
-    let relative = cwd_canonical.strip_prefix(&root_canonical).ok()?;
-    let first_component = relative.components().next()?;
-    let name = first_component.as_os_str().to_str()?;
+    let name = first_relative_component(project_root, cwd)?;
     if name == "main" || name == PM_DIR_NAME {
         return None;
     }
     let feat_dir = features_dir(project_root);
-    if !crate::state::feature::FeatureState::exists(&feat_dir, name) {
+    if !crate::state::feature::FeatureState::exists(&feat_dir, &name) {
         return None;
     }
-    Some(name.to_string())
+    Some(name)
 }
 
 #[cfg(test)]
@@ -211,6 +226,45 @@ mod tests {
 
         let result = detect_feature_from_cwd(root, other_dir.path());
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn is_in_main_worktree_true_in_main() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let main_dir = root.join("main").join("src");
+        std::fs::create_dir_all(&main_dir).unwrap();
+
+        assert!(is_in_main_worktree(root, &main_dir));
+    }
+
+    #[test]
+    fn is_in_main_worktree_true_at_main_root() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let main_dir = root.join("main");
+        std::fs::create_dir_all(&main_dir).unwrap();
+
+        assert!(is_in_main_worktree(root, &main_dir));
+    }
+
+    #[test]
+    fn is_in_main_worktree_false_in_feature() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let feature_dir = root.join("login");
+        std::fs::create_dir_all(&feature_dir).unwrap();
+
+        assert!(!is_in_main_worktree(root, &feature_dir));
+    }
+
+    #[test]
+    fn is_in_main_worktree_false_at_project_root() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join(".pm")).unwrap();
+
+        assert!(!is_in_main_worktree(root, root));
     }
 
     #[test]
