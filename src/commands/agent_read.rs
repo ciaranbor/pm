@@ -32,3 +32,40 @@ pub fn agent_read(
 
     Ok(lines)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::messages;
+    use std::path::PathBuf;
+    use tempfile::tempdir;
+
+    fn setup_project(dir: &Path) -> PathBuf {
+        let root = dir.to_path_buf();
+        std::fs::create_dir_all(root.join(".pm/features")).unwrap();
+        root
+    }
+
+    #[test]
+    fn read_formats_messages_with_header() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        let mdir = paths::messages_dir(&root);
+        messages::send(&mdir, "login", "reviewer", "implementer", "fix the bug").unwrap();
+
+        let lines = agent_read(&root, "login", "reviewer", None).unwrap();
+        assert!(lines[0].starts_with("--- from implementer [001]"));
+        assert!(lines[0].ends_with("UTC ---"));
+        assert_eq!(lines[1], "fix the bug");
+    }
+
+    #[test]
+    fn read_no_messages() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        let lines = agent_read(&root, "login", "reviewer", None).unwrap();
+        assert_eq!(lines, vec!["No new messages"]);
+    }
+}
