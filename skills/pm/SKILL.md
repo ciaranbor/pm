@@ -1,6 +1,6 @@
 ---
 name: pm
-description: Dispatch features and communicate with other agents using the pm project manager
+description: Dispatch features, send/check/read messages, and communicate with other agents using the pm project manager
 ---
 
 # pm — Feature Dispatch & Agent Communication
