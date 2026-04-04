@@ -1,0 +1,360 @@
+use std::path::Path;
+
+use crate::error::Result;
+use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
+use crate::state::paths;
+use crate::state::project::ProjectConfig;
+use crate::tmux;
+
+/// Build the claude command to launch an agent session.
+fn claude_agent_cmd(
+    agent_name: &str,
+    context: Option<&str>,
+    resume_session: Option<&str>,
+) -> String {
+    let mut parts = vec!["claude".to_string()];
+
+    parts.push("--agent".to_string());
+    parts.push(agent_name.to_string());
+
+    if let Some(session_id) = resume_session {
+        parts.push("--resume".to_string());
+        parts.push(session_id.to_string());
+    }
+
+    if let Some(ctx) = context {
+        // Pass context as the initial prompt
+        parts.push(tmux::shell_quote(ctx));
+    }
+
+    parts.join(" ")
+}
+
+/// Spawn a single agent in a tmux window within the feature session.
+/// Returns a status message.
+pub fn agent_spawn(
+    project_root: &Path,
+    feature: &str,
+    agent_name: &str,
+    context: Option<&str>,
+    tmux_server: Option<&str>,
+) -> Result<String> {
+    crate::messages::validate_name(agent_name, "agent")?;
+
+    let pm_dir = paths::pm_dir(project_root);
+    let agents_dir = paths::agents_dir(project_root);
+    let config = ProjectConfig::load(&pm_dir)?;
+    let session_name = format!("{}/{feature}", config.project.name);
+    let worktree_path = project_root.join(feature);
+
+    let mut registry = AgentRegistry::load(&agents_dir, feature)?;
+
+    // Check if this agent already exists in the registry
+    if let Some(entry) = registry.get(agent_name) {
+        let is_active = entry.active;
+        let resume_id = if entry.session_id.is_empty() {
+            None
+        } else {
+            Some(entry.session_id.clone())
+        };
+
+        if is_active
+            && let Some(target) = tmux::find_window(tmux_server, &session_name, agent_name)?
+        {
+            // Agent window exists — send context as a message instead
+            if let Some(ctx) = context {
+                let messages_dir = paths::messages_dir(project_root);
+                let sender = crate::messages::default_user_name();
+                crate::messages::send(&messages_dir, feature, agent_name, &sender, ctx)?;
+                return Ok(format!(
+                    "Agent '{agent_name}' already active in {target} — sent context as message"
+                ));
+            }
+            return Ok(format!("Agent '{agent_name}' already active in {target}"));
+        }
+
+        // Agent existed but window is gone — resume the session
+        let cmd = claude_agent_cmd(agent_name, context, resume_id.as_deref());
+        let window_target =
+            tmux::new_named_window(tmux_server, &session_name, agent_name, &worktree_path)?;
+        tmux::send_keys(tmux_server, &window_target, &cmd)?;
+
+        // Update registry
+        let entry = registry.get_mut(agent_name).unwrap();
+        entry.active = true;
+        entry.window = window_target.clone();
+        registry.save(&agents_dir, feature)?;
+
+        let msg = if resume_id.is_some() {
+            format!("Resumed agent '{agent_name}' in {window_target}")
+        } else {
+            format!("Spawned agent '{agent_name}' in {window_target}")
+        };
+        return Ok(msg);
+    }
+
+    // New agent — create window and register
+    let cmd = claude_agent_cmd(agent_name, context, None);
+    let window_target =
+        tmux::new_named_window(tmux_server, &session_name, agent_name, &worktree_path)?;
+    tmux::send_keys(tmux_server, &window_target, &cmd)?;
+
+    registry.register(
+        agent_name,
+        AgentEntry {
+            agent_type: AgentType::Agent,
+            session_id: String::new(), // Will be populated once we can capture it
+            window: window_target.clone(),
+            active: true,
+        },
+    );
+    registry.save(&agents_dir, feature)?;
+
+    Ok(format!("Spawned agent '{agent_name}' in {window_target}"))
+}
+
+/// Respawn all registered agents for a feature (excludes user-type entries).
+/// Returns status messages.
+pub fn agent_spawn_all(
+    project_root: &Path,
+    feature: &str,
+    tmux_server: Option<&str>,
+) -> Result<Vec<String>> {
+    let agents_dir = paths::agents_dir(project_root);
+    let registry = AgentRegistry::load(&agents_dir, feature)?;
+
+    let agent_names: Vec<String> = registry
+        .agents
+        .iter()
+        .filter(|(_, e)| e.agent_type == AgentType::Agent)
+        .map(|(n, _)| n.clone())
+        .collect();
+
+    if agent_names.is_empty() {
+        return Ok(vec!["No agents to respawn".to_string()]);
+    }
+
+    let mut messages = Vec::new();
+    for name in &agent_names {
+        let msg = agent_spawn(project_root, feature, name, None, tmux_server)?;
+        messages.push(msg);
+    }
+
+    Ok(messages)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::feature::{FeatureState, FeatureStatus};
+    use crate::testing::TestServer;
+    use chrono::Utc;
+    use tempfile::tempdir;
+
+    fn setup_project(dir: &Path, server: &TestServer) -> (String, String) {
+        let root = dir.to_path_buf();
+        let pm_dir = root.join(".pm");
+        let project_name = server.scope("proj");
+        let feature_name = "login";
+
+        std::fs::create_dir_all(pm_dir.join("features")).unwrap();
+
+        // Write project config
+        let config = ProjectConfig {
+            project: crate::state::project::ProjectInfo {
+                name: project_name.clone(),
+            },
+            setup: Default::default(),
+            github: Default::default(),
+        };
+        config.save(&pm_dir).unwrap();
+
+        // Create feature state
+        let now = Utc::now();
+        let state = FeatureState {
+            status: FeatureStatus::Wip,
+            branch: feature_name.to_string(),
+            worktree: feature_name.to_string(),
+            base: String::new(),
+            pr: String::new(),
+            context: String::new(),
+            created: now,
+            last_active: now,
+        };
+        state.save(&pm_dir.join("features"), feature_name).unwrap();
+
+        // Create worktree directory (simulated)
+        let worktree = root.join(feature_name);
+        std::fs::create_dir_all(&worktree).unwrap();
+
+        // Create tmux session for the feature
+        let session_name = format!("{project_name}/{feature_name}");
+        tmux::create_session(server.name(), &session_name, &worktree).unwrap();
+
+        (session_name, feature_name.to_string())
+    }
+
+    #[test]
+    fn spawn_creates_window_and_registers_agent() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+
+        let msg = agent_spawn(dir.path(), &feature, "reviewer", None, server.name()).unwrap();
+        assert!(msg.contains("Spawned agent 'reviewer'"));
+
+        // Verify window was created
+        let window = tmux::find_window(server.name(), &session_name, "reviewer").unwrap();
+        assert!(window.is_some());
+
+        // Verify agent is registered
+        let agents_dir = paths::agents_dir(dir.path());
+        let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        let entry = registry.get("reviewer").unwrap();
+        assert!(entry.active);
+        assert_eq!(entry.agent_type, AgentType::Agent);
+    }
+
+    #[test]
+    fn spawn_existing_active_agent_returns_already_active() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (_session_name, feature) = setup_project(dir.path(), &server);
+
+        agent_spawn(dir.path(), &feature, "reviewer", None, server.name()).unwrap();
+        let msg = agent_spawn(dir.path(), &feature, "reviewer", None, server.name()).unwrap();
+        assert!(msg.contains("already active"));
+    }
+
+    #[test]
+    fn spawn_existing_active_with_context_sends_message() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (_session_name, feature) = setup_project(dir.path(), &server);
+
+        agent_spawn(dir.path(), &feature, "reviewer", None, server.name()).unwrap();
+        let msg = agent_spawn(
+            dir.path(),
+            &feature,
+            "reviewer",
+            Some("focus on auth"),
+            server.name(),
+        )
+        .unwrap();
+        assert!(msg.contains("sent context as message"));
+
+        // Verify the message was delivered
+        let messages_dir = paths::messages_dir(dir.path());
+        let summaries = crate::messages::check(&messages_dir, &feature, "reviewer").unwrap();
+        assert_eq!(summaries.len(), 1);
+    }
+
+    #[test]
+    fn spawn_all_respawns_agents() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+
+        // Spawn two agents
+        agent_spawn(dir.path(), &feature, "reviewer", None, server.name()).unwrap();
+        agent_spawn(dir.path(), &feature, "tester", None, server.name()).unwrap();
+
+        // Mark them as inactive (simulating closed windows)
+        let agents_dir = paths::agents_dir(dir.path());
+        let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        for entry in registry.agents.values_mut() {
+            entry.active = false;
+        }
+        registry.save(&agents_dir, &feature).unwrap();
+
+        // Kill the session and recreate it (simulating restart)
+        tmux::kill_session(server.name(), &session_name).unwrap();
+        let worktree = dir.path().join("login");
+        tmux::create_session(server.name(), &session_name, &worktree).unwrap();
+
+        // Respawn all
+        let msgs = agent_spawn_all(dir.path(), &feature, server.name()).unwrap();
+        assert_eq!(msgs.len(), 2);
+    }
+
+    #[test]
+    fn spawn_all_no_agents_returns_message() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (_session_name, feature) = setup_project(dir.path(), &server);
+
+        let msgs = agent_spawn_all(dir.path(), &feature, server.name()).unwrap();
+        assert_eq!(msgs, vec!["No agents to respawn"]);
+    }
+
+    #[test]
+    fn spawn_resumes_dead_agent_with_session_id() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+
+        // Spawn agent, then manually set a session_id and mark inactive
+        agent_spawn(dir.path(), &feature, "reviewer", None, server.name()).unwrap();
+
+        let agents_dir = paths::agents_dir(dir.path());
+        let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        let entry = registry.get_mut("reviewer").unwrap();
+        entry.session_id = "sess-abc123".to_string();
+        entry.active = false;
+        registry.save(&agents_dir, &feature).unwrap();
+
+        // Kill the window (simulating it died)
+        // Kill and recreate the session to clear the window
+        tmux::kill_session(server.name(), &session_name).unwrap();
+        let worktree = dir.path().join("login");
+        tmux::create_session(server.name(), &session_name, &worktree).unwrap();
+
+        // Re-spawn should resume
+        let msg = agent_spawn(dir.path(), &feature, "reviewer", None, server.name()).unwrap();
+        assert!(msg.contains("Resumed agent 'reviewer'"));
+
+        // Verify it's marked active again
+        let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        assert!(registry.get("reviewer").unwrap().active);
+    }
+
+    #[test]
+    fn spawn_rejects_invalid_name() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (_session_name, feature) = setup_project(dir.path(), &server);
+
+        let result = agent_spawn(dir.path(), &feature, "foo:bar", None, server.name());
+        assert!(result.is_err());
+
+        let result = agent_spawn(dir.path(), &feature, "../evil", None, server.name());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn claude_agent_cmd_basic() {
+        let cmd = claude_agent_cmd("reviewer", None, None);
+        assert_eq!(cmd, "claude --agent reviewer");
+    }
+
+    #[test]
+    fn claude_agent_cmd_with_context() {
+        let cmd = claude_agent_cmd("reviewer", Some("review the auth module"), None);
+        assert_eq!(cmd, "claude --agent reviewer 'review the auth module'");
+    }
+
+    #[test]
+    fn claude_agent_cmd_with_resume() {
+        let cmd = claude_agent_cmd("reviewer", None, Some("abc123"));
+        assert_eq!(cmd, "claude --agent reviewer --resume abc123");
+    }
+
+    #[test]
+    fn claude_agent_cmd_with_context_and_resume() {
+        let cmd = claude_agent_cmd("reviewer", Some("continue review"), Some("abc123"));
+        assert_eq!(
+            cmd,
+            "claude --agent reviewer --resume abc123 'continue review'"
+        );
+    }
+}

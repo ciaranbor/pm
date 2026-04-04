@@ -150,7 +150,8 @@ pub fn find_window(server: Option<&str>, session: &str, name: &str) -> Result<Op
     Ok(None)
 }
 
-/// Create a new named window in an existing tmux session. Returns the window target.
+/// Create a new named window in an existing tmux session without switching to it.
+/// Returns the window target (e.g. "session:1").
 pub fn new_named_window(
     server: Option<&str>,
     session: &str,
@@ -161,6 +162,7 @@ pub fn new_named_window(
         server,
         &[
             "new-window",
+            "-d",
             "-t",
             session,
             "-n",

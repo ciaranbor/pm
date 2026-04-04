@@ -41,6 +41,9 @@ enum Commands {
     /// Feature management
     #[command(subcommand)]
     Feat(FeatCommands),
+    /// Agent communication and management
+    #[command(subcommand)]
+    Agent(AgentCommands),
     /// Claude Code settings, skills, and session management
     #[command(subcommand)]
     Claude(ClaudeCommands),
@@ -81,11 +84,39 @@ enum ClaudeCommands {
     /// Manage bundled Claude Code skills
     #[command(subcommand)]
     Skills(ClaudeSkillsCommands),
+    /// Manage bundled Claude Code agent definitions
+    #[command(subcommand)]
+    Agents(ClaudeAgentsCommands),
     /// Migrate Claude Code sessions from an old project path to the current directory
     Migrate {
         /// The old absolute path where the project previously lived
         #[arg(long)]
         from: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum ClaudeAgentsCommands {
+    /// List available bundled agent definitions and their install status
+    List,
+    /// Uninstall bundled agent definitions (project-level by default, or --global)
+    Uninstall {
+        /// Agent name (required unless --all is passed)
+        name: Option<String>,
+        /// Uninstall all bundled agent definitions
+        #[arg(long)]
+        all: bool,
+        /// Uninstall from ~/.claude/agents/ instead of the project
+        #[arg(long)]
+        global: bool,
+    },
+    /// Install bundled agent definitions (project-level by default, or --global for ~/.claude/agents/)
+    Install {
+        /// Agent name (installs all if omitted)
+        name: Option<String>,
+        /// Install to ~/.claude/agents/ instead of the project
+        #[arg(long)]
+        global: bool,
     },
 }
 
@@ -133,10 +164,64 @@ enum ClaudeSkillsCommands {
         #[arg(long)]
         global: bool,
     },
+    /// Uninstall bundled skills (project-level by default, or --global)
+    Uninstall {
+        /// Skill name (required unless --all is passed)
+        name: Option<String>,
+        /// Uninstall all bundled skills
+        #[arg(long)]
+        all: bool,
+        /// Uninstall from ~/.claude/skills/ instead of the project
+        #[arg(long)]
+        global: bool,
+    },
     /// Pull skills from main into a feature's .claude/skills/
     Pull {
         /// Feature name (detected from CWD if omitted)
         name: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum AgentCommands {
+    /// Spawn an agent in a tmux window
+    Spawn {
+        /// Agent name (omit to respawn all previously active agents)
+        name: Option<String>,
+        /// Initial context for the agent
+        #[arg(long)]
+        context: Option<String>,
+    },
+    /// Send a message to an agent's inbox
+    Send {
+        /// Recipient agent name
+        agent: String,
+        /// Message body
+        message: String,
+        /// Sender identity (defaults to $USER)
+        #[arg(long)]
+        as_agent: Option<String>,
+    },
+    /// Check for new messages in your inbox
+    Check {
+        /// Agent name (defaults to $USER)
+        #[arg(long)]
+        as_agent: Option<String>,
+    },
+    /// Read messages from your inbox
+    Read {
+        /// Only read messages from this sender
+        #[arg(long)]
+        from: Option<String>,
+        /// Agent name (defaults to $USER)
+        #[arg(long)]
+        as_agent: Option<String>,
+    },
+    /// List agents in the current feature
+    List {
+        /// Only show active agents
+        #[arg(long)]
+        active: bool,
     },
 }
 
@@ -342,7 +427,8 @@ fn run() -> pm::error::Result<()> {
             }
             ClaudeCommands::Skills(skills_cmd) => match skills_cmd {
                 ClaudeSkillsCommands::List => {
-                    let lines = commands::skills::skills_list()?;
+                    let project_root = paths::find_project_root(&std::env::current_dir()?).ok();
+                    let lines = commands::skills::skills_list(project_root.as_deref())?;
                     for line in lines {
                         println!("{line}");
                     }
@@ -360,11 +446,65 @@ fn run() -> pm::error::Result<()> {
                     }
                     Ok(())
                 }
+                ClaudeSkillsCommands::Uninstall { name, all, global } => {
+                    if name.is_none() && !all {
+                        eprintln!("Provide a skill name or use --all to uninstall all");
+                        std::process::exit(1);
+                    }
+                    let messages = if global {
+                        commands::skills::skills_uninstall(name.as_deref())?
+                    } else {
+                        let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+                        commands::skills::skills_uninstall_project(&project_root, name.as_deref())?
+                    };
+                    for msg in messages {
+                        println!("{msg}");
+                    }
+                    Ok(())
+                }
                 ClaudeSkillsCommands::Pull { name } => {
                     let project_root = paths::find_project_root(&std::env::current_dir()?)?;
                     let name = resolve_feature_name(name, &project_root)?;
                     commands::skills::skills_pull(&project_root, &name)?;
                     println!("Pulled skills from main into feature '{name}'");
+                    Ok(())
+                }
+            },
+            ClaudeCommands::Agents(agents_cmd) => match agents_cmd {
+                ClaudeAgentsCommands::List => {
+                    let project_root = paths::find_project_root(&std::env::current_dir()?).ok();
+                    let lines = commands::skills::agents_list(project_root.as_deref())?;
+                    for line in lines {
+                        println!("{line}");
+                    }
+                    Ok(())
+                }
+                ClaudeAgentsCommands::Install { name, global } => {
+                    let messages = if global {
+                        commands::skills::agents_install(name.as_deref())?
+                    } else {
+                        let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+                        commands::skills::agents_install_project(&project_root, name.as_deref())?
+                    };
+                    for msg in messages {
+                        println!("{msg}");
+                    }
+                    Ok(())
+                }
+                ClaudeAgentsCommands::Uninstall { name, all, global } => {
+                    if name.is_none() && !all {
+                        eprintln!("Provide an agent name or use --all to uninstall all");
+                        std::process::exit(1);
+                    }
+                    let messages = if global {
+                        commands::skills::agents_uninstall(name.as_deref())?
+                    } else {
+                        let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+                        commands::skills::agents_uninstall_project(&project_root, name.as_deref())?
+                    };
+                    for msg in messages {
+                        println!("{msg}");
+                    }
                     Ok(())
                 }
             },
@@ -377,6 +517,76 @@ fn run() -> pm::error::Result<()> {
                 Ok(())
             }
         },
+        Commands::Agent(agent_cmd) => {
+            let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+            let feature = resolve_feature_name(None, &project_root)?;
+            match agent_cmd {
+                AgentCommands::Send {
+                    agent,
+                    message,
+                    as_agent,
+                } => {
+                    let sender = as_agent.unwrap_or_else(pm::messages::default_user_name);
+                    let line = commands::agent_send::agent_send(
+                        &project_root,
+                        &feature,
+                        &agent,
+                        &sender,
+                        &message,
+                    )?;
+                    println!("{line}");
+                    Ok(())
+                }
+                AgentCommands::Check { as_agent } => {
+                    let agent = as_agent.unwrap_or_else(pm::messages::default_user_name);
+                    let lines =
+                        commands::agent_check::agent_check(&project_root, &feature, &agent)?;
+                    for line in lines {
+                        println!("{line}");
+                    }
+                    Ok(())
+                }
+                AgentCommands::Read { from, as_agent } => {
+                    let agent = as_agent.unwrap_or_else(pm::messages::default_user_name);
+                    let lines = commands::agent_read::agent_read(
+                        &project_root,
+                        &feature,
+                        &agent,
+                        from.as_deref(),
+                    )?;
+                    for line in lines {
+                        println!("{line}");
+                    }
+                    Ok(())
+                }
+                AgentCommands::Spawn { name, context } => {
+                    if let Some(agent_name) = name {
+                        let msg = commands::agent_spawn::agent_spawn(
+                            &project_root,
+                            &feature,
+                            &agent_name,
+                            context.as_deref(),
+                            None,
+                        )?;
+                        println!("{msg}");
+                    } else {
+                        let msgs =
+                            commands::agent_spawn::agent_spawn_all(&project_root, &feature, None)?;
+                        for msg in msgs {
+                            println!("{msg}");
+                        }
+                    }
+                    Ok(())
+                }
+                AgentCommands::List { active } => {
+                    let lines = commands::agent_list::agent_list(&project_root, &feature, active)?;
+                    for line in lines {
+                        println!("{line}");
+                    }
+                    Ok(())
+                }
+            }
+        }
         Commands::Feat(feat_cmd) => {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
             match feat_cmd {
