@@ -119,6 +119,7 @@ pub fn register(
         },
         setup: SetupConfig::default(),
         github: GithubConfig::default(),
+        agents: Default::default(),
     };
     config.save(&pm_dir)?;
 

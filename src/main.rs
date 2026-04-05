@@ -191,6 +191,9 @@ enum AgentCommands {
         /// Initial context for the agent
         #[arg(long)]
         context: Option<String>,
+        /// Enable acceptEdits permission mode
+        #[arg(long)]
+        edit: bool,
     },
     /// Send a message to an agent's inbox
     Send {
@@ -559,13 +562,18 @@ fn run() -> pm::error::Result<()> {
                     }
                     Ok(())
                 }
-                AgentCommands::Spawn { name, context } => {
+                AgentCommands::Spawn {
+                    name,
+                    context,
+                    edit,
+                } => {
                     if let Some(agent_name) = name {
                         let msg = commands::agent_spawn::agent_spawn(
                             &project_root,
                             &feature,
                             &agent_name,
                             context.as_deref(),
+                            edit,
                             None,
                         )?;
                         println!("{msg}");

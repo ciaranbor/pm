@@ -2,7 +2,7 @@ use std::path::Path;
 
 use chrono::Utc;
 
-use crate::commands::claude_settings;
+use crate::commands::{agent_spawn, claude_settings};
 use crate::error::{PmError, Result};
 use crate::hooks;
 use crate::state::feature::{FeatureState, FeatureStatus};
@@ -138,11 +138,26 @@ pub fn feat_new(
         // Step 4: Create tmux session
         tmux::create_session(tmux_server, &session_name, &worktree_path)?;
 
-        // Step 4.5: If context provided, open a claude session in a new window to read TASK.md
+        // Step 4.5: Spawn default agent if context provided and a default agent is configured
         if resolved_context.is_some() {
-            let window_target =
-                tmux::new_window(tmux_server, &session_name, &worktree_path, Some("claude"))?;
-            tmux::send_keys(tmux_server, &window_target, &claude_read_task_cmd(no_edit))?;
+            let default_agent = &config.agents.default;
+            if default_agent.is_empty() {
+                // No default agent configured — fall back to plain claude session
+                let window_target =
+                    tmux::new_window(tmux_server, &session_name, &worktree_path, Some("claude"))?;
+                tmux::send_keys(tmux_server, &window_target, &claude_read_task_cmd(no_edit))?;
+            } else {
+                // Spawn the configured default agent — the prompt tells it to read
+                // TASK.md (the agent reads the file itself, matching the plain claude path)
+                agent_spawn::agent_spawn(
+                    project_root,
+                    &feature_name,
+                    default_agent,
+                    Some("READ TASK.md"),
+                    !no_edit, // feat new defaults to editing enabled; --no-edit disables it
+                    tmux_server,
+                )?;
+            }
         }
 
         // Step 4.6: Run post-create hook in a named "hook" window (non-fatal)

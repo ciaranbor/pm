@@ -11,11 +11,17 @@ fn claude_agent_cmd(
     agent_name: &str,
     context: Option<&str>,
     resume_session: Option<&str>,
+    permission_mode: Option<&str>,
 ) -> String {
     let mut parts = vec!["claude".to_string()];
 
     parts.push("--agent".to_string());
     parts.push(agent_name.to_string());
+
+    if let Some(mode) = permission_mode {
+        parts.push("--permission-mode".to_string());
+        parts.push(mode.to_string());
+    }
 
     if let Some(session_id) = resume_session {
         parts.push("--resume".to_string());
@@ -31,12 +37,15 @@ fn claude_agent_cmd(
 }
 
 /// Spawn a single agent in a tmux window within the feature session.
+/// If `edit` is true, `--permission-mode acceptEdits` is passed.
+/// Otherwise, the permission mode is looked up from the project config.
 /// Returns a status message.
 pub fn agent_spawn(
     project_root: &Path,
     feature: &str,
     agent_name: &str,
     context: Option<&str>,
+    edit: bool,
     tmux_server: Option<&str>,
 ) -> Result<String> {
     crate::messages::validate_name(agent_name, "agent")?;
@@ -46,6 +55,18 @@ pub fn agent_spawn(
     let config = ProjectConfig::load(&pm_dir)?;
     let session_name = format!("{}/{feature}", config.project.name);
     let worktree_path = project_root.join(feature);
+
+    // Resolve permission mode: --edit flag > project config > none
+    let permission_mode = if edit {
+        Some("acceptEdits".to_string())
+    } else {
+        config
+            .agents
+            .permissions
+            .get(agent_name)
+            .filter(|s| !s.is_empty())
+            .cloned()
+    };
 
     let mut registry = AgentRegistry::load(&agents_dir, feature)?;
 
@@ -74,7 +95,12 @@ pub fn agent_spawn(
         }
 
         // Agent existed but window is gone — resume the session
-        let cmd = claude_agent_cmd(agent_name, context, resume_id.as_deref());
+        let cmd = claude_agent_cmd(
+            agent_name,
+            context,
+            resume_id.as_deref(),
+            permission_mode.as_deref(),
+        );
         let window_target =
             tmux::new_named_window(tmux_server, &session_name, agent_name, &worktree_path)?;
         tmux::send_keys(tmux_server, &window_target, &cmd)?;
@@ -94,7 +120,7 @@ pub fn agent_spawn(
     }
 
     // New agent — create window and register
-    let cmd = claude_agent_cmd(agent_name, context, None);
+    let cmd = claude_agent_cmd(agent_name, context, None, permission_mode.as_deref());
     let window_target =
         tmux::new_named_window(tmux_server, &session_name, agent_name, &worktree_path)?;
     tmux::send_keys(tmux_server, &window_target, &cmd)?;
@@ -136,7 +162,7 @@ pub fn agent_spawn_all(
 
     let mut messages = Vec::new();
     for name in &agent_names {
-        let msg = agent_spawn(project_root, feature, name, None, tmux_server)?;
+        let msg = agent_spawn(project_root, feature, name, None, false, tmux_server)?;
         messages.push(msg);
     }
 
@@ -166,6 +192,7 @@ mod tests {
             },
             setup: Default::default(),
             github: Default::default(),
+            agents: Default::default(),
         };
         config.save(&pm_dir).unwrap();
 
@@ -200,7 +227,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let (session_name, feature) = setup_project(dir.path(), &server);
 
-        let msg = agent_spawn(dir.path(), &feature, "reviewer", None, server.name()).unwrap();
+        let msg =
+            agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
         assert!(msg.contains("Spawned agent 'reviewer'"));
 
         // Verify window was created
@@ -221,8 +249,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let (_session_name, feature) = setup_project(dir.path(), &server);
 
-        agent_spawn(dir.path(), &feature, "reviewer", None, server.name()).unwrap();
-        let msg = agent_spawn(dir.path(), &feature, "reviewer", None, server.name()).unwrap();
+        agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
+        let msg =
+            agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
         assert!(msg.contains("already active"));
     }
 
@@ -232,12 +261,13 @@ mod tests {
         let dir = tempdir().unwrap();
         let (_session_name, feature) = setup_project(dir.path(), &server);
 
-        agent_spawn(dir.path(), &feature, "reviewer", None, server.name()).unwrap();
+        agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
         let msg = agent_spawn(
             dir.path(),
             &feature,
             "reviewer",
             Some("focus on auth"),
+            false,
             server.name(),
         )
         .unwrap();
@@ -256,8 +286,8 @@ mod tests {
         let (session_name, feature) = setup_project(dir.path(), &server);
 
         // Spawn two agents
-        agent_spawn(dir.path(), &feature, "reviewer", None, server.name()).unwrap();
-        agent_spawn(dir.path(), &feature, "tester", None, server.name()).unwrap();
+        agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
+        agent_spawn(dir.path(), &feature, "tester", None, false, server.name()).unwrap();
 
         // Mark them as inactive (simulating closed windows)
         let agents_dir = paths::agents_dir(dir.path());
@@ -294,7 +324,7 @@ mod tests {
         let (session_name, feature) = setup_project(dir.path(), &server);
 
         // Spawn agent, then manually set a session_id and mark inactive
-        agent_spawn(dir.path(), &feature, "reviewer", None, server.name()).unwrap();
+        agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
 
         let agents_dir = paths::agents_dir(dir.path());
         let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
@@ -310,7 +340,8 @@ mod tests {
         tmux::create_session(server.name(), &session_name, &worktree).unwrap();
 
         // Re-spawn should resume
-        let msg = agent_spawn(dir.path(), &feature, "reviewer", None, server.name()).unwrap();
+        let msg =
+            agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
         assert!(msg.contains("Resumed agent 'reviewer'"));
 
         // Verify it's marked active again
@@ -324,37 +355,46 @@ mod tests {
         let dir = tempdir().unwrap();
         let (_session_name, feature) = setup_project(dir.path(), &server);
 
-        let result = agent_spawn(dir.path(), &feature, "foo:bar", None, server.name());
+        let result = agent_spawn(dir.path(), &feature, "foo:bar", None, false, server.name());
         assert!(result.is_err());
 
-        let result = agent_spawn(dir.path(), &feature, "../evil", None, server.name());
+        let result = agent_spawn(dir.path(), &feature, "../evil", None, false, server.name());
         assert!(result.is_err());
     }
 
     #[test]
     fn claude_agent_cmd_basic() {
-        let cmd = claude_agent_cmd("reviewer", None, None);
+        let cmd = claude_agent_cmd("reviewer", None, None, None);
         assert_eq!(cmd, "claude --agent reviewer");
     }
 
     #[test]
     fn claude_agent_cmd_with_context() {
-        let cmd = claude_agent_cmd("reviewer", Some("review the auth module"), None);
+        let cmd = claude_agent_cmd("reviewer", Some("review the auth module"), None, None);
         assert_eq!(cmd, "claude --agent reviewer 'review the auth module'");
     }
 
     #[test]
     fn claude_agent_cmd_with_resume() {
-        let cmd = claude_agent_cmd("reviewer", None, Some("abc123"));
+        let cmd = claude_agent_cmd("reviewer", None, Some("abc123"), None);
         assert_eq!(cmd, "claude --agent reviewer --resume abc123");
     }
 
     #[test]
     fn claude_agent_cmd_with_context_and_resume() {
-        let cmd = claude_agent_cmd("reviewer", Some("continue review"), Some("abc123"));
+        let cmd = claude_agent_cmd("reviewer", Some("continue review"), Some("abc123"), None);
         assert_eq!(
             cmd,
             "claude --agent reviewer --resume abc123 'continue review'"
+        );
+    }
+
+    #[test]
+    fn claude_agent_cmd_with_permission_mode() {
+        let cmd = claude_agent_cmd("implementer", None, None, Some("acceptEdits"));
+        assert_eq!(
+            cmd,
+            "claude --agent implementer --permission-mode acceptEdits"
         );
     }
 }
