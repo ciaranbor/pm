@@ -58,6 +58,15 @@ pub enum PmError {
     #[error("Skill not found: {0}")]
     SkillNotFound(String),
 
+    #[error("Agent definition not found: {0}")]
+    AgentNotFound(String),
+
+    #[error("Invalid agent name: {0}")]
+    InvalidAgentName(String),
+
+    #[error("JSON error: {0}")]
+    Json(#[from] serde_json::Error),
+
     #[error("Could not determine home directory")]
     NoHomeDir,
 }

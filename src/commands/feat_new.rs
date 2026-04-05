@@ -2,7 +2,7 @@ use std::path::Path;
 
 use chrono::Utc;
 
-use crate::commands::claude_settings;
+use crate::commands::{agent_spawn, claude_settings};
 use crate::error::{PmError, Result};
 use crate::hooks;
 use crate::state::feature::{FeatureState, FeatureStatus};
@@ -50,15 +50,6 @@ pub fn resolve_base(project_root: &Path, base: Option<&str>, cwd: &Path) -> Resu
         main_worktree.as_path()
     };
     git::current_branch(detect_from).or_else(|_| Ok("main".to_string()))
-}
-
-/// Build the claude command to read TASK.md, optionally with auto-accept edits.
-pub fn claude_read_task_cmd(no_edit: bool) -> String {
-    if no_edit {
-        "claude 'READ TASK.md'".to_string()
-    } else {
-        "claude --permission-mode acceptEdits 'READ TASK.md'".to_string()
-    }
 }
 
 /// Create a new feature: branch + worktree + tmux session + state file.
@@ -138,11 +129,24 @@ pub fn feat_new(
         // Step 4: Create tmux session
         tmux::create_session(tmux_server, &session_name, &worktree_path)?;
 
-        // Step 4.5: If context provided, open a claude session in a new window to read TASK.md
+        // Step 4.5: Spawn a claude session to read TASK.md (if context was provided).
+        // Uses the configured default agent if set, otherwise a plain claude session.
         if resolved_context.is_some() {
-            let window_target =
-                tmux::new_window(tmux_server, &session_name, &worktree_path, Some("claude"))?;
-            tmux::send_keys(tmux_server, &window_target, &claude_read_task_cmd(no_edit))?;
+            let default_agent = &config.agents.default;
+            let agent = if default_agent.is_empty() {
+                None
+            } else {
+                Some(default_agent.as_str())
+            };
+            agent_spawn::spawn_claude_session(
+                project_root,
+                &feature_name,
+                agent,
+                Some("READ TASK.md"),
+                !no_edit, // feat new defaults to editing enabled; --no-edit disables it
+                None,
+                tmux_server,
+            )?;
         }
 
         // Step 4.6: Run post-create hook in a named "hook" window (non-fatal)
@@ -604,20 +608,6 @@ mod tests {
         std::fs::create_dir_all(&outside).unwrap();
         let result = resolve_base(&project_path, None, &outside).unwrap();
         assert_eq!(result, "main");
-    }
-
-    #[test]
-    fn claude_read_task_cmd_includes_accept_edits_by_default() {
-        let cmd = claude_read_task_cmd(false);
-        assert!(cmd.contains("--permission-mode acceptEdits"));
-        assert!(cmd.contains("READ TASK.md"));
-    }
-
-    #[test]
-    fn claude_read_task_cmd_no_edit_omits_permission_mode() {
-        let cmd = claude_read_task_cmd(true);
-        assert!(!cmd.contains("--permission-mode"));
-        assert!(cmd.contains("READ TASK.md"));
     }
 
     #[test]

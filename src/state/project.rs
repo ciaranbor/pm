@@ -23,6 +23,18 @@ pub struct ProjectConfig {
     pub setup: SetupConfig,
     #[serde(default)]
     pub github: GithubConfig,
+    #[serde(default)]
+    pub agents: AgentsConfig,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AgentsConfig {
+    /// Default agent to spawn on `feat new` (empty = no auto-spawn)
+    #[serde(default)]
+    pub default: String,
+    /// Per-agent permission modes (e.g. "acceptEdits")
+    #[serde(default)]
+    pub permissions: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -237,6 +249,7 @@ mod tests {
             github: GithubConfig {
                 repo: "owner/repo".to_string(),
             },
+            agents: Default::default(),
         };
         let serialized = toml::to_string_pretty(&config).unwrap();
         let deserialized: ProjectConfig = toml::from_str(&serialized).unwrap();
@@ -253,6 +266,35 @@ name = "myapp"
         assert_eq!(config.project.name, "myapp");
         assert_eq!(config.setup.script, "");
         assert_eq!(config.github.repo, "");
+        assert_eq!(config.agents.default, "");
+        assert!(config.agents.permissions.is_empty());
+    }
+
+    #[test]
+    fn project_config_agents_roundtrip() {
+        let toml_str = r#"
+[project]
+name = "myapp"
+
+[agents]
+default = "implementer"
+
+[agents.permissions]
+implementer = "acceptEdits"
+reviewer = ""
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.agents.default, "implementer");
+        assert_eq!(
+            config.agents.permissions.get("implementer").unwrap(),
+            "acceptEdits"
+        );
+        assert_eq!(config.agents.permissions.get("reviewer").unwrap(), "");
+
+        // Roundtrip
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let deserialized: ProjectConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(config, deserialized);
     }
 
     #[test]
@@ -266,6 +308,7 @@ name = "myapp"
             },
             setup: SetupConfig::default(),
             github: GithubConfig::default(),
+            agents: Default::default(),
         };
         config.save(&pm_dir).unwrap();
 

@@ -52,6 +52,7 @@ pub fn init(path: &Path, projects_dir: &Path, tmux_server: Option<&str>) -> Resu
         project: ProjectInfo { name: name.clone() },
         setup: SetupConfig::default(),
         github: GithubConfig::default(),
+        agents: Default::default(),
     };
     config.save(&pm_dir)?;
 
