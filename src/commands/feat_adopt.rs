@@ -117,14 +117,22 @@ pub fn feat_adopt(
     let session_name = format!("{project_name}/{feature_name}");
     tmux::create_session(tmux_server, &session_name, &worktree_path)?;
 
-    // Step 3.5: If context provided, open a claude session in a new window to read TASK.md
+    // Step 3.5: Spawn a claude session to read TASK.md (if context was provided)
     if resolved_context.is_some() {
-        let window_target =
-            tmux::new_window(tmux_server, &session_name, &worktree_path, Some("claude"))?;
-        tmux::send_keys(
+        let default_agent = &config.agents.default;
+        let agent = if default_agent.is_empty() {
+            None
+        } else {
+            Some(default_agent.as_str())
+        };
+        super::agent_spawn::spawn_claude_session(
+            project_root,
+            &feature_name,
+            agent,
+            Some("READ TASK.md"),
+            !no_edit,
+            None,
             tmux_server,
-            &window_target,
-            &super::feat_new::claude_read_task_cmd(no_edit),
         )?;
     }
 

@@ -6,17 +6,20 @@ use crate::state::paths;
 use crate::state::project::ProjectConfig;
 use crate::tmux;
 
-/// Build the claude command to launch an agent session.
-fn claude_agent_cmd(
-    agent_name: &str,
-    context: Option<&str>,
+/// Build a claude command. If `agent_name` is provided, uses `--agent`.
+/// Otherwise launches a plain claude session.
+fn build_claude_cmd(
+    agent_name: Option<&str>,
+    prompt: Option<&str>,
     resume_session: Option<&str>,
     permission_mode: Option<&str>,
 ) -> String {
     let mut parts = vec!["claude".to_string()];
 
-    parts.push("--agent".to_string());
-    parts.push(agent_name.to_string());
+    if let Some(name) = agent_name {
+        parts.push("--agent".to_string());
+        parts.push(name.to_string());
+    }
 
     if let Some(mode) = permission_mode {
         parts.push("--permission-mode".to_string());
@@ -28,15 +31,77 @@ fn claude_agent_cmd(
         parts.push(session_id.to_string());
     }
 
-    if let Some(ctx) = context {
-        // Pass context as the initial prompt
-        parts.push(tmux::shell_quote(ctx));
+    if let Some(p) = prompt {
+        parts.push(tmux::shell_quote(p));
     }
 
     parts.join(" ")
 }
 
-/// Spawn a single agent in a tmux window within the feature session.
+/// Spawn a claude session in a new tmux window. Works for both named agents
+/// and plain claude sessions (when `agent_name` is None).
+/// If `resume_session` is provided, passes `--resume` to claude.
+/// Returns the tmux window target.
+pub fn spawn_claude_session(
+    project_root: &Path,
+    feature: &str,
+    agent_name: Option<&str>,
+    prompt: Option<&str>,
+    edit: bool,
+    resume_session: Option<&str>,
+    tmux_server: Option<&str>,
+) -> Result<String> {
+    let pm_dir = paths::pm_dir(project_root);
+    let config = ProjectConfig::load(&pm_dir)?;
+    let session_name = format!("{}/{feature}", config.project.name);
+    let worktree_path = project_root.join(feature);
+
+    // Resolve permission mode: --edit flag > project config > none
+    let permission_mode = if edit {
+        Some("acceptEdits".to_string())
+    } else if let Some(name) = agent_name {
+        config
+            .agents
+            .permissions
+            .get(name)
+            .filter(|s| !s.is_empty())
+            .cloned()
+    } else {
+        None
+    };
+
+    let window_name = agent_name.unwrap_or("claude");
+    let cmd = build_claude_cmd(
+        agent_name,
+        prompt,
+        resume_session,
+        permission_mode.as_deref(),
+    );
+    let window_target =
+        tmux::new_named_window(tmux_server, &session_name, window_name, &worktree_path)?;
+    tmux::send_keys(tmux_server, &window_target, &cmd)?;
+
+    // Register in agent registry if this is a named agent
+    if let Some(name) = agent_name {
+        let agents_dir = paths::agents_dir(project_root);
+        let mut registry = AgentRegistry::load(&agents_dir, feature)?;
+        registry.register(
+            name,
+            AgentEntry {
+                agent_type: AgentType::Agent,
+                session_id: String::new(),
+                window: window_target.clone(),
+                active: true,
+            },
+        );
+        registry.save(&agents_dir, feature)?;
+    }
+
+    Ok(window_target)
+}
+
+/// Spawn a named agent in a tmux window within the feature session.
+/// Handles three cases: new agent, already-active agent, and dead-but-resumable agent.
 /// If `edit` is true, `--permission-mode acceptEdits` is passed.
 /// Otherwise, the permission mode is looked up from the project config.
 /// Returns a status message.
@@ -54,21 +119,8 @@ pub fn agent_spawn(
     let agents_dir = paths::agents_dir(project_root);
     let config = ProjectConfig::load(&pm_dir)?;
     let session_name = format!("{}/{feature}", config.project.name);
-    let worktree_path = project_root.join(feature);
 
-    // Resolve permission mode: --edit flag > project config > none
-    let permission_mode = if edit {
-        Some("acceptEdits".to_string())
-    } else {
-        config
-            .agents
-            .permissions
-            .get(agent_name)
-            .filter(|s| !s.is_empty())
-            .cloned()
-    };
-
-    let mut registry = AgentRegistry::load(&agents_dir, feature)?;
+    let registry = AgentRegistry::load(&agents_dir, feature)?;
 
     // Check if this agent already exists in the registry
     if let Some(entry) = registry.get(agent_name) {
@@ -94,22 +146,16 @@ pub fn agent_spawn(
             return Ok(format!("Agent '{agent_name}' already active in {target}"));
         }
 
-        // Agent existed but window is gone — resume the session
-        let cmd = claude_agent_cmd(
-            agent_name,
+        // Agent existed but window is gone — spawn with resume
+        let window_target = spawn_claude_session(
+            project_root,
+            feature,
+            Some(agent_name),
             context,
+            edit,
             resume_id.as_deref(),
-            permission_mode.as_deref(),
-        );
-        let window_target =
-            tmux::new_named_window(tmux_server, &session_name, agent_name, &worktree_path)?;
-        tmux::send_keys(tmux_server, &window_target, &cmd)?;
-
-        // Update registry
-        let entry = registry.get_mut(agent_name).unwrap();
-        entry.active = true;
-        entry.window = window_target.clone();
-        registry.save(&agents_dir, feature)?;
+            tmux_server,
+        )?;
 
         let msg = if resume_id.is_some() {
             format!("Resumed agent '{agent_name}' in {window_target}")
@@ -119,22 +165,16 @@ pub fn agent_spawn(
         return Ok(msg);
     }
 
-    // New agent — create window and register
-    let cmd = claude_agent_cmd(agent_name, context, None, permission_mode.as_deref());
-    let window_target =
-        tmux::new_named_window(tmux_server, &session_name, agent_name, &worktree_path)?;
-    tmux::send_keys(tmux_server, &window_target, &cmd)?;
-
-    registry.register(
-        agent_name,
-        AgentEntry {
-            agent_type: AgentType::Agent,
-            session_id: String::new(), // Will be populated once we can capture it
-            window: window_target.clone(),
-            active: true,
-        },
-    );
-    registry.save(&agents_dir, feature)?;
+    // New agent
+    let window_target = spawn_claude_session(
+        project_root,
+        feature,
+        Some(agent_name),
+        context,
+        edit,
+        None,
+        tmux_server,
+    )?;
 
     Ok(format!("Spawned agent '{agent_name}' in {window_target}"))
 }
@@ -363,26 +403,43 @@ mod tests {
     }
 
     #[test]
-    fn claude_agent_cmd_basic() {
-        let cmd = claude_agent_cmd("reviewer", None, None, None);
+    fn build_cmd_with_agent() {
+        let cmd = build_claude_cmd(Some("reviewer"), None, None, None);
         assert_eq!(cmd, "claude --agent reviewer");
     }
 
     #[test]
-    fn claude_agent_cmd_with_context() {
-        let cmd = claude_agent_cmd("reviewer", Some("review the auth module"), None, None);
+    fn build_cmd_plain_session() {
+        let cmd = build_claude_cmd(None, Some("READ TASK.md"), None, None);
+        assert_eq!(cmd, "claude 'READ TASK.md'");
+    }
+
+    #[test]
+    fn build_cmd_plain_session_with_permission() {
+        let cmd = build_claude_cmd(None, Some("READ TASK.md"), None, Some("acceptEdits"));
+        assert_eq!(cmd, "claude --permission-mode acceptEdits 'READ TASK.md'");
+    }
+
+    #[test]
+    fn build_cmd_with_context() {
+        let cmd = build_claude_cmd(Some("reviewer"), Some("review the auth module"), None, None);
         assert_eq!(cmd, "claude --agent reviewer 'review the auth module'");
     }
 
     #[test]
-    fn claude_agent_cmd_with_resume() {
-        let cmd = claude_agent_cmd("reviewer", None, Some("abc123"), None);
+    fn build_cmd_with_resume() {
+        let cmd = build_claude_cmd(Some("reviewer"), None, Some("abc123"), None);
         assert_eq!(cmd, "claude --agent reviewer --resume abc123");
     }
 
     #[test]
-    fn claude_agent_cmd_with_context_and_resume() {
-        let cmd = claude_agent_cmd("reviewer", Some("continue review"), Some("abc123"), None);
+    fn build_cmd_with_context_and_resume() {
+        let cmd = build_claude_cmd(
+            Some("reviewer"),
+            Some("continue review"),
+            Some("abc123"),
+            None,
+        );
         assert_eq!(
             cmd,
             "claude --agent reviewer --resume abc123 'continue review'"
@@ -390,8 +447,8 @@ mod tests {
     }
 
     #[test]
-    fn claude_agent_cmd_with_permission_mode() {
-        let cmd = claude_agent_cmd("implementer", None, None, Some("acceptEdits"));
+    fn build_cmd_with_permission_mode() {
+        let cmd = build_claude_cmd(Some("implementer"), None, None, Some("acceptEdits"));
         assert_eq!(
             cmd,
             "claude --agent implementer --permission-mode acceptEdits"

@@ -52,15 +52,6 @@ pub fn resolve_base(project_root: &Path, base: Option<&str>, cwd: &Path) -> Resu
     git::current_branch(detect_from).or_else(|_| Ok("main".to_string()))
 }
 
-/// Build the claude command to read TASK.md, optionally with auto-accept edits.
-pub fn claude_read_task_cmd(no_edit: bool) -> String {
-    if no_edit {
-        "claude 'READ TASK.md'".to_string()
-    } else {
-        "claude --permission-mode acceptEdits 'READ TASK.md'".to_string()
-    }
-}
-
 /// Create a new feature: branch + worktree + tmux session + state file.
 ///
 /// The `base` parameter specifies which branch to stack on. When `None`,
@@ -138,26 +129,24 @@ pub fn feat_new(
         // Step 4: Create tmux session
         tmux::create_session(tmux_server, &session_name, &worktree_path)?;
 
-        // Step 4.5: Spawn default agent if context provided and a default agent is configured
+        // Step 4.5: Spawn a claude session to read TASK.md (if context was provided).
+        // Uses the configured default agent if set, otherwise a plain claude session.
         if resolved_context.is_some() {
             let default_agent = &config.agents.default;
-            if default_agent.is_empty() {
-                // No default agent configured — fall back to plain claude session
-                let window_target =
-                    tmux::new_window(tmux_server, &session_name, &worktree_path, Some("claude"))?;
-                tmux::send_keys(tmux_server, &window_target, &claude_read_task_cmd(no_edit))?;
+            let agent = if default_agent.is_empty() {
+                None
             } else {
-                // Spawn the configured default agent — the prompt tells it to read
-                // TASK.md (the agent reads the file itself, matching the plain claude path)
-                agent_spawn::agent_spawn(
-                    project_root,
-                    &feature_name,
-                    default_agent,
-                    Some("READ TASK.md"),
-                    !no_edit, // feat new defaults to editing enabled; --no-edit disables it
-                    tmux_server,
-                )?;
-            }
+                Some(default_agent.as_str())
+            };
+            agent_spawn::spawn_claude_session(
+                project_root,
+                &feature_name,
+                agent,
+                Some("READ TASK.md"),
+                !no_edit, // feat new defaults to editing enabled; --no-edit disables it
+                None,
+                tmux_server,
+            )?;
         }
 
         // Step 4.6: Run post-create hook in a named "hook" window (non-fatal)
@@ -619,20 +608,6 @@ mod tests {
         std::fs::create_dir_all(&outside).unwrap();
         let result = resolve_base(&project_path, None, &outside).unwrap();
         assert_eq!(result, "main");
-    }
-
-    #[test]
-    fn claude_read_task_cmd_includes_accept_edits_by_default() {
-        let cmd = claude_read_task_cmd(false);
-        assert!(cmd.contains("--permission-mode acceptEdits"));
-        assert!(cmd.contains("READ TASK.md"));
-    }
-
-    #[test]
-    fn claude_read_task_cmd_no_edit_omits_permission_mode() {
-        let cmd = claude_read_task_cmd(true);
-        assert!(!cmd.contains("--permission-mode"));
-        assert!(cmd.contains("READ TASK.md"));
     }
 
     #[test]
