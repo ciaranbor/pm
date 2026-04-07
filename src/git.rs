@@ -286,6 +286,26 @@ pub fn push_branch(repo: &Path, branch: &str) -> Result<()> {
     run_git(repo, &["push", "-u", "origin", branch])?;
     Ok(())
 }
+
+/// Get the remote tracking branch for a local branch, if one exists.
+/// Returns `None` if the branch has no upstream configured.
+pub fn remote_tracking_branch(repo: &Path, branch: &str) -> Result<Option<String>> {
+    let result = run_git(
+        repo,
+        &[
+            "for-each-ref",
+            "--format=%(upstream:short)",
+            &format!("refs/heads/{branch}"),
+        ],
+    );
+    match result {
+        Ok(upstream) if upstream.is_empty() => Ok(None),
+        Ok(upstream) => Ok(Some(upstream)),
+        Err(PmError::Git(_)) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// Check if a path is a git repository (has .git dir or file).
 pub fn is_git_repo(path: &Path) -> bool {
     let git_path = path.join(".git");
