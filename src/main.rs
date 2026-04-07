@@ -536,6 +536,7 @@ fn run() -> pm::error::Result<()> {
                         &agent,
                         &sender,
                         &message,
+                        None,
                     )?;
                     println!("{line}");
                     Ok(())
