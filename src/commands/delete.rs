@@ -2,10 +2,11 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use crate::error::{PmError, Result};
+use crate::state::agent::AgentRegistry;
 use crate::state::feature::FeatureState;
 use crate::state::paths;
 use crate::state::project::ProjectConfig;
-use crate::{gh, git, tmux};
+use crate::{gh, git, messages, tmux};
 
 use super::feat_delete::{CleanupParams, check_safety, cleanup_feature};
 
@@ -135,6 +136,12 @@ pub fn delete(
             // the worktree directories and git branches intact so the user
             // can still use them as plain git repos.
             FeatureState::delete(&features_dir, name)?;
+
+            // Clean up per-feature agent registry and message queue
+            let agents_dir = paths::agents_dir(project_root);
+            AgentRegistry::delete(&agents_dir, name)?;
+            let messages_dir = paths::messages_dir(project_root);
+            messages::delete_feature(&messages_dir, name)?;
 
             let session_name = format!("{project_name}/{name}");
             if tmux::has_session(tmux_server, &session_name)? {

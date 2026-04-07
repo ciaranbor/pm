@@ -249,6 +249,16 @@ pub fn read(
     Ok(messages)
 }
 
+/// Delete all messages for a feature. No-op if the directory doesn't exist.
+pub fn delete_feature(messages_dir: &Path, feature: &str) -> Result<()> {
+    let dir = messages_dir.join(feature);
+    match std::fs::remove_dir_all(&dir) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// List all senders who have sent messages to an inbox.
 fn list_senders(inbox: &Path) -> Result<Vec<String>> {
     let mut senders = Vec::new();
@@ -521,6 +531,43 @@ mod tests {
 
         let result = send(&mdir, "my-feature", "code_reviewer", "impl-agent", "ok");
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn delete_feature_removes_all_messages() {
+        let dir = tempdir().unwrap();
+        let mdir = messages_dir(dir.path());
+
+        send(&mdir, "login", "reviewer", "implementer", "msg 1").unwrap();
+        send(&mdir, "login", "reviewer", "user", "msg 2").unwrap();
+        send(&mdir, "login", "implementer", "reviewer", "msg 3").unwrap();
+
+        assert!(mdir.join("login").exists());
+        delete_feature(&mdir, "login").unwrap();
+        assert!(!mdir.join("login").exists());
+    }
+
+    #[test]
+    fn delete_feature_missing_is_ok() {
+        let dir = tempdir().unwrap();
+        let mdir = messages_dir(dir.path());
+
+        // Should not error when directory doesn't exist
+        delete_feature(&mdir, "nonexistent").unwrap();
+    }
+
+    #[test]
+    fn delete_feature_does_not_affect_other_features() {
+        let dir = tempdir().unwrap();
+        let mdir = messages_dir(dir.path());
+
+        send(&mdir, "login", "reviewer", "implementer", "login msg").unwrap();
+        send(&mdir, "signup", "reviewer", "implementer", "signup msg").unwrap();
+
+        delete_feature(&mdir, "login").unwrap();
+
+        assert!(!mdir.join("login").exists());
+        assert!(mdir.join("signup").exists());
     }
 
     #[test]

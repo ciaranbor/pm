@@ -1,10 +1,11 @@
 use std::path::Path;
 
 use crate::error::{PmError, Result};
+use crate::state::agent::AgentRegistry;
 use crate::state::feature::FeatureState;
 use crate::state::paths;
 use crate::state::project::ProjectConfig;
-use crate::{gh, git, hooks, tmux};
+use crate::{gh, git, hooks, messages, tmux};
 
 /// Parameters for feature cleanup.
 pub struct CleanupParams<'a> {
@@ -18,7 +19,8 @@ pub struct CleanupParams<'a> {
     pub tmux_server: Option<&'a str>,
 }
 
-/// Remove a feature's worktree, branch, state file, and tmux session.
+/// Remove a feature's worktree, branch, state file, agent registry,
+/// message queue, and tmux session.
 ///
 /// The tmux session is killed last so that cleanup completes even when run
 /// from within the feature session (where killing the session would kill
@@ -41,7 +43,17 @@ pub fn cleanup_feature(params: &CleanupParams) -> Result<()> {
     // Step 3: Remove state file
     FeatureState::delete(params.features_dir, params.name)?;
 
-    // Step 4: Kill tmux session (last — see doc comment above)
+    // Step 4: Remove agent registry and message queue.
+    // Derive .pm/ dir from features_dir (which is <project_root>/.pm/features/).
+    if let Some(pm_dir) = params.features_dir.parent() {
+        let agents_dir = pm_dir.join("agents");
+        AgentRegistry::delete(&agents_dir, params.name)?;
+
+        let messages_dir = pm_dir.join("messages");
+        messages::delete_feature(&messages_dir, params.name)?;
+    }
+
+    // Step 5: Kill tmux session (last — see doc comment above)
     let session_name = format!("{}/{}", params.project_name, params.name);
     if tmux::has_session(params.tmux_server, &session_name)? {
         let main_session = format!("{}/main", params.project_name);
@@ -241,6 +253,48 @@ mod tests {
         feat_delete(&project_path, "login", false, server.name()).unwrap();
 
         assert!(!tmux_mod::has_session(server.name(), &format!("{scoped_name}/login")).unwrap());
+    }
+
+    #[test]
+    fn delete_removes_agent_registry() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+
+        // Create an agent registry for the feature
+        let agents_dir = paths::agents_dir(&project_path);
+        let mut registry = crate::state::agent::AgentRegistry::default();
+        registry.register(
+            "reviewer",
+            crate::state::agent::AgentEntry {
+                agent_type: crate::state::agent::AgentType::Agent,
+                session_id: "test".to_string(),
+                window: "reviewer".to_string(),
+                active: true,
+            },
+        );
+        registry.save(&agents_dir, "login").unwrap();
+        assert!(agents_dir.join("login.toml").exists());
+
+        feat_delete(&project_path, "login", false, server.name()).unwrap();
+
+        assert!(!agents_dir.join("login.toml").exists());
+    }
+
+    #[test]
+    fn delete_removes_messages() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+
+        // Create messages for the feature
+        let messages_dir = paths::messages_dir(&project_path);
+        crate::messages::send(&messages_dir, "login", "reviewer", "implementer", "hello").unwrap();
+        assert!(messages_dir.join("login").exists());
+
+        feat_delete(&project_path, "login", false, server.name()).unwrap();
+
+        assert!(!messages_dir.join("login").exists());
     }
 
     #[test]
