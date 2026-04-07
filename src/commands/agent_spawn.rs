@@ -84,8 +84,13 @@ pub fn spawn_claude_session(
         resume_session,
         permission_mode.as_deref(),
     );
-    let window_target =
-        tmux::new_named_window(tmux_server, &session_name, window_name, &worktree_path)?;
+    let window_target = tmux::new_window(
+        tmux_server,
+        &session_name,
+        &worktree_path,
+        Some(window_name),
+        true,
+    )?;
 
     // Set PM_AGENT_NAME so the agent's `pm agent send/check/read` calls
     // automatically identify as this agent without needing --as-agent.

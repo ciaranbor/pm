@@ -90,8 +90,13 @@ fn setup_review(
         tmux::create_session(tmux_server, &session_name, &worktree_path)?;
 
         // Step 3.5: Open a claude session in a new window to read TASK.md
-        let window_target =
-            tmux::new_window(tmux_server, &session_name, &worktree_path, Some("claude"))?;
+        let window_target = tmux::new_window(
+            tmux_server,
+            &session_name,
+            &worktree_path,
+            Some("claude"),
+            false,
+        )?;
         tmux::send_keys(tmux_server, &window_target, "claude 'READ TASK.md'")?;
 
         // Step 3.6: Run post-create hook

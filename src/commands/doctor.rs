@@ -181,7 +181,7 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
 
         // Check 6: PR status drift
         if !state.pr.is_empty() {
-            match gh::pr_state(&main_repo, &state.pr) {
+            match gh::pr_info(&main_repo, &state.pr).map(|i| i.state) {
                 Ok(gh_state) => match gh_state.as_str() {
                     "MERGED" if state.status != FeatureStatus::Merged => {
                         issues.push(Issue {
@@ -486,7 +486,7 @@ mod tests {
 
     // Check 6 (PR state drift) is not unit-tested because it requires `gh` CLI
     // authenticated against a real GitHub remote. The logic is exercised via the
-    // gh::pr_state wrapper; integration testing would need a mock or real repo.
+    // gh::pr_info wrapper; integration testing would need a mock or real repo.
 
     #[test]
     fn multiple_features_all_checked() {
