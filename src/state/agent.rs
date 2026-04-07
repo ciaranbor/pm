@@ -75,6 +75,16 @@ impl AgentRegistry {
         self.agents.keys().map(|s| s.as_str()).collect()
     }
 
+    /// Delete the agent registry file for a feature. No-op if missing.
+    pub fn delete(agents_dir: &Path, feature: &str) -> Result<()> {
+        let path = agents_dir.join(format!("{feature}.toml"));
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// List active agent names.
     pub fn active_names(&self) -> Vec<&str> {
         self.agents
@@ -168,6 +178,29 @@ mod tests {
 
         let entry = registry.get("ciaranorourke").unwrap();
         assert_eq!(entry.agent_type, AgentType::User);
+    }
+
+    #[test]
+    fn registry_delete_removes_file() {
+        let dir = tempdir().unwrap();
+        let agents_dir = dir.path().join("agents");
+
+        let mut registry = AgentRegistry::default();
+        registry.register("reviewer", make_agent("abc123", true));
+        registry.save(&agents_dir, "login").unwrap();
+
+        assert!(agents_dir.join("login.toml").exists());
+        AgentRegistry::delete(&agents_dir, "login").unwrap();
+        assert!(!agents_dir.join("login.toml").exists());
+    }
+
+    #[test]
+    fn registry_delete_missing_is_ok() {
+        let dir = tempdir().unwrap();
+        let agents_dir = dir.path().join("agents");
+
+        // Should not error when file doesn't exist
+        AgentRegistry::delete(&agents_dir, "nonexistent").unwrap();
     }
 
     #[test]
