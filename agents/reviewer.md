@@ -40,8 +40,8 @@ You are a code reviewer for this project. Your job is to review the working chan
 Use these exact commands for messaging (do NOT use `cargo run --` or cd to the project root — `pm` works from the worktree):
 
 ```sh
-pm agent check --as-agent reviewer          # check for new messages
-pm agent read --as-agent reviewer           # read messages
+pm agent check                              # check for new messages
+pm agent read                               # read messages
 pm agent send implementer "your findings"   # send findings to implementer
 ```
 

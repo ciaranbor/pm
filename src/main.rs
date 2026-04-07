@@ -201,13 +201,13 @@ enum AgentCommands {
         agent: String,
         /// Message body
         message: String,
-        /// Sender identity (defaults to $USER)
+        /// Sender identity (defaults to $PM_AGENT_NAME or $USER)
         #[arg(long)]
         as_agent: Option<String>,
     },
     /// Check for new messages in your inbox
     Check {
-        /// Agent name (defaults to $USER)
+        /// Agent name (defaults to $PM_AGENT_NAME or $USER)
         #[arg(long)]
         as_agent: Option<String>,
     },
@@ -216,7 +216,7 @@ enum AgentCommands {
         /// Only read messages from this sender
         #[arg(long)]
         from: Option<String>,
-        /// Agent name (defaults to $USER)
+        /// Agent name (defaults to $PM_AGENT_NAME or $USER)
         #[arg(long)]
         as_agent: Option<String>,
     },

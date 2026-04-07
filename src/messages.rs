@@ -26,9 +26,11 @@ pub struct UnreadSummary {
     pub count: u32,
 }
 
-/// Default user name from $USER environment variable.
+/// Default identity: PM_AGENT_NAME (set by `pm agent spawn`) > $USER > "user".
 pub fn default_user_name() -> String {
-    std::env::var("USER").unwrap_or_else(|_| "user".to_string())
+    std::env::var("PM_AGENT_NAME")
+        .or_else(|_| std::env::var("USER"))
+        .unwrap_or_else(|_| "user".to_string())
 }
 
 /// Cursor tracks the last-read index per sender.
