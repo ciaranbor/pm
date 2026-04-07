@@ -154,7 +154,7 @@ pub fn feat_delete(
         !state.pr.is_empty() && gh::pr_is_merged(&base_repo, &state.pr).unwrap_or(false);
 
     // Run safety checks unless --force
-    if !force {
+    let has_untracked = if !force {
         let report = check_safety(&worktree_path, &base_repo, &state.branch, base)?;
         evaluate_safety(&report, pr_merged, name)?;
 
@@ -167,15 +167,15 @@ pub fn feat_delete(
                 eprintln!("  {f}");
             }
         }
-    }
+        !report.untracked_files.is_empty()
+    } else {
+        false
+    };
 
     // Force-remove worktree if --force was passed or if there are untracked files
     // (git worktree remove refuses untracked files without --force, but we've
     // already warned the user about them in the safety checks above)
-    let force_worktree = force
-        || !git::untracked_files(&worktree_path)
-            .unwrap_or_default()
-            .is_empty();
+    let force_worktree = force || has_untracked;
 
     cleanup_feature(&CleanupParams {
         repo: &base_repo,

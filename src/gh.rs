@@ -112,11 +112,6 @@ pub fn mark_pr_ready(repo_dir: &Path, branch: &str) -> Result<()> {
     Ok(())
 }
 
-/// Get the state of a PR by number. Returns "OPEN", "CLOSED", or "MERGED".
-pub fn pr_state(repo_dir: &Path, pr_number: &str) -> Result<String> {
-    Ok(pr_info(repo_dir, pr_number)?.state)
-}
-
 /// PR details returned by `gh pr view`.
 #[derive(Debug, Clone)]
 pub struct PrDetails {

@@ -89,15 +89,20 @@ pub fn switch_client(server: Option<&str>, name: &str) -> Result<()> {
 
 /// Create a new window in an existing tmux session. Returns the new window's target
 /// (e.g. "session:1") for use with send_keys.
+/// When `detached` is true, the new window is created without switching to it.
 pub fn new_window(
     server: Option<&str>,
     session: &str,
     start_dir: &Path,
     name: Option<&str>,
+    detached: bool,
 ) -> Result<String> {
     let dir_lossy = start_dir.to_string_lossy();
-    let mut args = vec![
-        "new-window",
+    let mut args = vec!["new-window"];
+    if detached {
+        args.push("-d");
+    }
+    args.extend_from_slice(&[
         "-t",
         session,
         "-P",
@@ -105,7 +110,7 @@ pub fn new_window(
         "#{session_name}:#{window_index}",
         "-c",
         &dir_lossy,
-    ];
+    ]);
     if let Some(n) = name {
         args.push("-n");
         args.push(n);
@@ -150,32 +155,6 @@ pub fn find_window(server: Option<&str>, session: &str, name: &str) -> Result<Op
     Ok(None)
 }
 
-/// Create a new named window in an existing tmux session without switching to it.
-/// Returns the window target (e.g. "session:1").
-pub fn new_named_window(
-    server: Option<&str>,
-    session: &str,
-    name: &str,
-    start_dir: &Path,
-) -> Result<String> {
-    run_tmux(
-        server,
-        &[
-            "new-window",
-            "-d",
-            "-t",
-            session,
-            "-n",
-            name,
-            "-P",
-            "-F",
-            "#{session_name}:#{window_index}",
-            "-c",
-            &start_dir.to_string_lossy(),
-        ],
-    )
-}
-
 /// Find a named window in a session, or create it if it doesn't exist.
 pub fn find_or_create_window(
     server: Option<&str>,
@@ -186,7 +165,7 @@ pub fn find_or_create_window(
     if let Some(target) = find_window(server, session, name)? {
         Ok(target)
     } else {
-        new_named_window(server, session, name, start_dir)
+        new_window(server, session, start_dir, Some(name), true)
     }
 }
 
@@ -359,7 +338,7 @@ mod tests {
         let name = server.scope("win-test");
 
         create_session(server.name(), &name, dir.path()).unwrap();
-        let target = new_window(server.name(), &name, dir.path(), None).unwrap();
+        let target = new_window(server.name(), &name, dir.path(), None, false).unwrap();
 
         // Should return a target like "<name>:1"
         assert!(target.starts_with(&format!("{name}:")));
@@ -379,7 +358,13 @@ mod tests {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
 
-        let result = new_window(server.name(), &server.scope("no-such"), dir.path(), None);
+        let result = new_window(
+            server.name(),
+            &server.scope("no-such"),
+            dir.path(),
+            None,
+            false,
+        );
         assert!(result.is_err());
     }
 
@@ -392,7 +377,7 @@ mod tests {
         create_session(server.name(), &name, dir.path()).unwrap();
         assert_eq!(list_windows(server.name(), &name).unwrap(), 1);
 
-        new_window(server.name(), &name, dir.path(), None).unwrap();
+        new_window(server.name(), &name, dir.path(), None, false).unwrap();
         assert_eq!(list_windows(server.name(), &name).unwrap(), 2);
     }
 
