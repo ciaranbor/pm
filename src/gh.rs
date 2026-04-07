@@ -2,6 +2,7 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::error::{PmError, Result};
+use serde::Deserialize;
 
 fn run_gh(repo_dir: &Path, args: &[&str]) -> Result<String> {
     let output = Command::new("gh")
@@ -78,25 +79,26 @@ pub struct PrInfo {
     pub is_draft: bool,
 }
 
+/// Raw JSON shape returned by `gh pr view --json state,isDraft`.
+#[derive(Deserialize)]
+struct PrInfoJson {
+    state: String,
+    #[serde(rename = "isDraft")]
+    is_draft: bool,
+}
+
 /// Get the state and draft status of a PR in a single gh call.
 pub fn pr_info(repo_dir: &Path, pr_number: &str) -> Result<PrInfo> {
     let output = run_gh(
         repo_dir,
-        &[
-            "pr",
-            "view",
-            pr_number,
-            "--json",
-            "state,isDraft",
-            "--jq",
-            "[.state, .isDraft] | @tsv",
-        ],
+        &["pr", "view", pr_number, "--json", "state,isDraft"],
     )?;
-    // Output is "STATE\ttrue/false"
-    let mut parts = output.split('\t');
-    let state = parts.next().unwrap_or("").to_string();
-    let is_draft = parts.next().unwrap_or("false") == "true";
-    Ok(PrInfo { state, is_draft })
+    let parsed: PrInfoJson =
+        serde_json::from_str(&output).map_err(|e| PmError::Gh(format!("parse PR info: {e}")))?;
+    Ok(PrInfo {
+        state: parsed.state.to_uppercase(),
+        is_draft: parsed.is_draft,
+    })
 }
 
 /// Check if a PR has been merged on GitHub.
@@ -112,10 +114,7 @@ pub fn mark_pr_ready(repo_dir: &Path, branch: &str) -> Result<()> {
 
 /// Get the state of a PR by number. Returns "OPEN", "CLOSED", or "MERGED".
 pub fn pr_state(repo_dir: &Path, pr_number: &str) -> Result<String> {
-    run_gh(
-        repo_dir,
-        &["pr", "view", pr_number, "--json", "state", "--jq", ".state"],
-    )
+    Ok(pr_info(repo_dir, pr_number)?.state)
 }
 
 /// PR details returned by `gh pr view`.
@@ -189,5 +188,29 @@ mod tests {
             pr_number_from_url("https://github.com/owner/repo/pull/7/"),
             ""
         );
+    }
+
+    #[test]
+    fn pr_info_json_parses_open_non_draft() {
+        let json = r#"{"state":"OPEN","isDraft":false}"#;
+        let parsed: PrInfoJson = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.state, "OPEN");
+        assert!(!parsed.is_draft);
+    }
+
+    #[test]
+    fn pr_info_json_parses_open_draft() {
+        let json = r#"{"state":"OPEN","isDraft":true}"#;
+        let parsed: PrInfoJson = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.state, "OPEN");
+        assert!(parsed.is_draft);
+    }
+
+    #[test]
+    fn pr_info_json_parses_merged() {
+        let json = r#"{"state":"MERGED","isDraft":false}"#;
+        let parsed: PrInfoJson = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.state, "MERGED");
+        assert!(!parsed.is_draft);
     }
 }
