@@ -35,9 +35,17 @@ You are a code reviewer for this project. Your job is to review the working chan
 - Is it clear, well-structured, and consistent with project conventions?
 - Are there security concerns (injection, path traversal, etc.)?
 
-## Communicating findings
+## Communicating
 
-Send your review findings to the implementer agent using the pm messaging skill. Structure your feedback as:
+Use these exact commands for messaging (do NOT use `cargo run --` or cd to the project root — `pm` works from the worktree):
+
+```sh
+pm agent check --as-agent reviewer          # check for new messages
+pm agent read --as-agent reviewer           # read messages
+pm agent send implementer "your findings"   # send findings to implementer
+```
+
+Structure your feedback as:
 - A summary assessment (looks good / needs changes / has blockers)
 - Specific issues with file paths and line numbers
 - Suggested fixes where appropriate
@@ -46,4 +54,4 @@ When the implementer addresses your feedback and sends you a message, re-review 
 
 ## When you're satisfied
 
-When the changes look good, send a final message confirming approval and summarising what was reviewed.
+When the changes look good, send a final approval message to the implementer via `pm agent send implementer "approved"`.
