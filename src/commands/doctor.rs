@@ -182,34 +182,31 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
         // Check 6: PR status drift
         if !state.pr.is_empty() {
             match gh::pr_state(&main_repo, &state.pr) {
-                Ok(gh_state) => {
-                    let gh_state = gh_state.to_uppercase();
-                    match gh_state.as_str() {
-                        "MERGED" if state.status != FeatureStatus::Merged => {
-                            issues.push(Issue {
-                                message: format!(
-                                    "PR #{} is merged but status is '{}'",
-                                    state.pr, state.status
-                                ),
-                                fix: Fix::Auto(FixAction::UpdateStatus {
-                                    new_status: FeatureStatus::Merged,
-                                }),
-                            });
-                        }
-                        "CLOSED" if state.status.is_active() => {
-                            issues.push(Issue {
-                                message: format!(
-                                    "PR #{} is closed but status is '{}'",
-                                    state.pr, state.status
-                                ),
-                                fix: Fix::Auto(FixAction::UpdateStatus {
-                                    new_status: FeatureStatus::Stale,
-                                }),
-                            });
-                        }
-                        _ => {}
+                Ok(gh_state) => match gh_state.as_str() {
+                    "MERGED" if state.status != FeatureStatus::Merged => {
+                        issues.push(Issue {
+                            message: format!(
+                                "PR #{} is merged but status is '{}'",
+                                state.pr, state.status
+                            ),
+                            fix: Fix::Auto(FixAction::UpdateStatus {
+                                new_status: FeatureStatus::Merged,
+                            }),
+                        });
                     }
-                }
+                    "CLOSED" if state.status.is_active() => {
+                        issues.push(Issue {
+                            message: format!(
+                                "PR #{} is closed but status is '{}'",
+                                state.pr, state.status
+                            ),
+                            fix: Fix::Auto(FixAction::UpdateStatus {
+                                new_status: FeatureStatus::Stale,
+                            }),
+                        });
+                    }
+                    _ => {}
+                },
                 Err(_) => {
                     issues.push(Issue {
                         message: format!("could not check PR #{} (gh CLI failed)", state.pr),

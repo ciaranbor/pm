@@ -7,7 +7,7 @@ use crate::state::paths;
 
 /// Map a GitHub PR state to a feature status.
 fn status_from_pr(pr_info: &gh::PrInfo) -> Option<FeatureStatus> {
-    match pr_info.state.as_str() {
+    match pr_info.state.to_uppercase().as_str() {
         "MERGED" => Some(FeatureStatus::Merged),
         "CLOSED" => Some(FeatureStatus::Stale),
         "OPEN" if pr_info.is_draft => Some(FeatureStatus::Wip),
@@ -158,6 +158,28 @@ mod tests {
             is_draft: false,
         };
         assert_eq!(status_from_pr(&info), None);
+    }
+
+    #[test]
+    fn lowercase_state_maps_correctly() {
+        // gh CLI may return lowercase state in some versions
+        let info = PrInfo {
+            state: "open".to_string(),
+            is_draft: false,
+        };
+        assert_eq!(status_from_pr(&info), Some(FeatureStatus::Review));
+
+        let info = PrInfo {
+            state: "merged".to_string(),
+            is_draft: false,
+        };
+        assert_eq!(status_from_pr(&info), Some(FeatureStatus::Merged));
+
+        let info = PrInfo {
+            state: "closed".to_string(),
+            is_draft: false,
+        };
+        assert_eq!(status_from_pr(&info), Some(FeatureStatus::Stale));
     }
 
     // -- Integration-level tests (filesystem, no gh calls) --
