@@ -41,6 +41,13 @@ fn build_claude_cmd(
 /// Spawn a claude session in a new tmux window. Works for both named agents
 /// and plain claude sessions (when `agent_name` is None).
 /// If `resume_session` is provided, passes `--resume` to claude.
+/// Sets `PM_AGENT_NAME` in the spawned shell so the agent auto-identifies
+/// in `pm agent send/check/read` without `--as-agent`.
+///
+/// # Safety
+/// Callers must validate `agent_name` via `validate_name()` before calling —
+/// the name is interpolated into a shell command.
+///
 /// Returns the tmux window target.
 pub fn spawn_claude_session(
     project_root: &Path,
@@ -79,7 +86,15 @@ pub fn spawn_claude_session(
     );
     let window_target =
         tmux::new_named_window(tmux_server, &session_name, window_name, &worktree_path)?;
-    tmux::send_keys(tmux_server, &window_target, &cmd)?;
+
+    // Set PM_AGENT_NAME so the agent's `pm agent send/check/read` calls
+    // automatically identify as this agent without needing --as-agent.
+    if let Some(name) = agent_name {
+        let export_and_cmd = format!("export PM_AGENT_NAME={name} && {cmd}");
+        tmux::send_keys(tmux_server, &window_target, &export_and_cmd)?;
+    } else {
+        tmux::send_keys(tmux_server, &window_target, &cmd)?;
+    }
 
     // Register in agent registry if this is a named agent
     if let Some(name) = agent_name {
