@@ -2,7 +2,7 @@ use std::path::Path;
 
 use chrono::Utc;
 
-use crate::commands::claude_settings;
+use crate::commands::{agent_spawn, claude_settings, feat_new};
 use crate::error::{PmError, Result};
 use crate::gh::PrDetails;
 use crate::hooks;
@@ -20,13 +20,24 @@ pub fn feat_review(project_root: &Path, pr_arg: &str, tmux_server: Option<&str>)
 
     // Fetch PR details from GitHub (gh pr view accepts both numbers and URLs)
     let details = gh::pr_details(&main_worktree, pr_arg)?;
-    let feature_name = format!("review-{}", details.number);
+
+    let feature_name = derive_feature_name(&details);
 
     // Fetch PR commits into a local branch via GitHub's pull/<n>/head ref.
     // This works for both same-repo and fork PRs.
     git::fetch_pr(&main_worktree, &details.number, &feature_name)?;
 
     setup_review(project_root, &details, &feature_name, tmux_server)
+}
+
+/// Derive a feature name from PR details: use the branch name (sanitized),
+/// falling back to `review-<number>` if the branch is empty or invalid.
+fn derive_feature_name(details: &PrDetails) -> String {
+    if details.head_ref.is_empty() {
+        return format!("review-{}", details.number);
+    }
+    feat_new::sanitize_feature_name(&details.head_ref, None)
+        .unwrap_or_else(|_| format!("review-{}", details.number))
 }
 
 /// Set up the review feature given an already-available local branch.
@@ -89,15 +100,16 @@ fn setup_review(
         // Step 3: Create tmux session
         tmux::create_session(tmux_server, &session_name, &worktree_path)?;
 
-        // Step 3.5: Open a claude session in a new window to read TASK.md
-        let window_target = tmux::new_window(
+        // Step 3.5: Spawn reviewer agent to read TASK.md
+        agent_spawn::spawn_claude_session(
+            project_root,
+            feature_name,
+            Some("reviewer"),
+            Some("READ TASK.md"),
+            false, // reviews are read-only
+            None,
             tmux_server,
-            &session_name,
-            &worktree_path,
-            Some("claude"),
-            false,
         )?;
-        tmux::send_keys(tmux_server, &window_target, "claude 'READ TASK.md'")?;
 
         // Step 3.6: Run post-create hook
         hooks::run_hook(tmux_server, &session_name, &worktree_path, &hook_path);
@@ -321,5 +333,45 @@ mod tests {
         let features_dir = paths::features_dir(&project_path);
         let state = FeatureState::load(&features_dir, "review-42").unwrap();
         assert!(state.context.contains("Review PR #42"));
+    }
+
+    #[test]
+    fn derive_feature_name_uses_head_ref() {
+        let details = sample_details();
+        assert_eq!(derive_feature_name(&details), "feat-login");
+    }
+
+    #[test]
+    fn derive_feature_name_sanitizes_slashes() {
+        let details = PrDetails {
+            head_ref: "ciaran/login".to_string(),
+            ..sample_details()
+        };
+        assert_eq!(derive_feature_name(&details), "ciaran-login");
+    }
+
+    #[test]
+    fn derive_feature_name_falls_back_when_empty() {
+        let details = PrDetails {
+            head_ref: String::new(),
+            ..sample_details()
+        };
+        assert_eq!(derive_feature_name(&details), "review-42");
+    }
+
+    #[test]
+    fn review_registers_reviewer_agent() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, _) = server.setup_project(dir.path());
+        let details = sample_details();
+        simulate_fetched_pr(&project_path, "review-42");
+
+        setup_review(&project_path, &details, "review-42", server.name()).unwrap();
+
+        // The reviewer agent should be registered
+        let agents_dir = paths::agents_dir(&project_path);
+        let registry = crate::state::agent::AgentRegistry::load(&agents_dir, "review-42").unwrap();
+        assert!(registry.get("reviewer").is_some());
     }
 }
