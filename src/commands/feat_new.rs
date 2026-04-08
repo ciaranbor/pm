@@ -60,6 +60,7 @@ pub fn resolve_base(project_root: &Path, base: Option<&str>, cwd: &Path) -> Resu
 ///
 /// The tmux `server` parameter allows tests to use an isolated tmux server.
 /// In production, pass `None` to use the default server.
+#[allow(clippy::too_many_arguments)]
 pub fn feat_new(
     project_root: &Path,
     name: &str,
@@ -67,6 +68,7 @@ pub fn feat_new(
     context: Option<&str>,
     base: Option<&str>,
     no_edit: bool,
+    agent_override: Option<&str>,
     tmux_server: Option<&str>,
 ) -> Result<String> {
     let branch = name;
@@ -130,14 +132,12 @@ pub fn feat_new(
         tmux::create_session(tmux_server, &session_name, &worktree_path)?;
 
         // Step 4.5: Spawn a claude session to read TASK.md (if context was provided).
-        // Uses the configured default agent if set, otherwise a plain claude session.
+        // Uses --agent override if provided, then project default, then plain claude.
         if resolved_context.is_some() {
-            let default_agent = &config.agents.default;
-            let agent = if default_agent.is_empty() {
-                None
-            } else {
-                Some(default_agent.as_str())
-            };
+            let agent = agent_override.or_else(|| {
+                let d = &config.agents.default;
+                if d.is_empty() { None } else { Some(d.as_str()) }
+            });
             agent_spawn::spawn_claude_session(
                 project_root,
                 &feature_name,
@@ -197,6 +197,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -236,6 +237,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -246,6 +248,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         );
 
@@ -273,6 +276,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         );
         assert!(result.is_err());
@@ -304,6 +308,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         );
         assert!(result.is_err());
@@ -330,6 +335,7 @@ mod tests {
             Some("Implement login page per issue #42"),
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -362,6 +368,7 @@ mod tests {
             Some(brief_path.to_str().unwrap()),
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -389,6 +396,7 @@ mod tests {
             Some(brief_path.to_str().unwrap()),
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -411,6 +419,7 @@ mod tests {
             Some("Build the login page"),
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -418,6 +427,37 @@ mod tests {
         // Session should have 3 windows: the default shell + the claude window + hook window
         let output = tmux::list_windows(server.name(), &format!("{project_name}/login")).unwrap();
         assert_eq!(output, 3);
+    }
+
+    #[test]
+    fn feat_new_with_agent_override_spawns_named_agent() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, project_name) = server.setup_project(dir.path());
+
+        feat_new(
+            &project_path,
+            "login",
+            None,
+            Some("Build the login page"),
+            None,
+            false,
+            Some("researcher"),
+            server.name(),
+        )
+        .unwrap();
+
+        // The agent window should be named "researcher" (not "claude")
+        let session = format!("{project_name}/login");
+        let target = tmux::find_window(server.name(), &session, "researcher").unwrap();
+        assert!(target.is_some(), "expected a 'researcher' tmux window");
+
+        // The agent should be registered in the agent registry
+        let agents_dir = paths::agents_dir(&project_path);
+        let registry = crate::state::agent::AgentRegistry::load(&agents_dir, "login").unwrap();
+        let entry = registry.get("researcher");
+        assert!(entry.is_some(), "expected 'researcher' in agent registry");
+        assert!(entry.unwrap().active);
     }
 
     #[test]
@@ -433,6 +473,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -469,6 +510,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -491,6 +533,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -501,6 +544,7 @@ mod tests {
             None,
             Some("login"),
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -524,6 +568,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -540,6 +585,7 @@ mod tests {
             None,
             Some("parent"),
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -562,6 +608,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -655,6 +702,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -667,6 +715,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         );
         assert!(result.is_err());
@@ -689,6 +738,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -720,6 +770,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();

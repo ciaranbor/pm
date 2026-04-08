@@ -126,6 +126,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -154,6 +155,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -181,6 +183,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -274,6 +277,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -354,10 +358,21 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
-        feat_new::feat_new(&project_path, "api", None, None, None, false, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "api",
+            None,
+            None,
+            None,
+            false,
+            None,
+            server.name(),
+        )
+        .unwrap();
 
         // Kill sessions and delete only login's worktree
         tmux::kill_session(server.name(), &format!("{name}/login")).unwrap();

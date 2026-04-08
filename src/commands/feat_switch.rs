@@ -77,6 +77,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -107,10 +108,21 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
-        feat_new::feat_new(&project_path, "api", None, None, None, false, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "api",
+            None,
+            None,
+            None,
+            false,
+            None,
+            server.name(),
+        )
+        .unwrap();
 
         let items = feat_switch_menu(&project_path).unwrap();
 
