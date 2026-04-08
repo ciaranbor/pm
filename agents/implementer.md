@@ -18,6 +18,7 @@ You are the primary developer on this feature. Your job is to implement the task
 ## Addressing review feedback
 
 When you receive review feedback via pm messaging:
+
 - Read each item carefully
 - Address the issues in code
 - Run tests again to verify
@@ -25,7 +26,8 @@ When you receive review feedback via pm messaging:
 
 ## When you're done
 
-After the reviewer approves, send a message to the user summarising:
+After the reviewer approves, summarise:
+
 - What was implemented
 - What was changed during review
 - How to test the changes manually
