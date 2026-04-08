@@ -252,6 +252,86 @@ pm claude skills pull my-feat          # pull into a specific feature
 
 Project-level skills are seeded to new features automatically. Use `pm claude skills pull` to sync skills added or updated on main after the feature was created. The `pm` skill teaches Claude Code agents how to dispatch features via `pm feat new` and `pm feat adopt`.
 
+### Bundled agents
+
+pm ships with Claude Code agent definitions that can be installed to a project or globally to `~/.claude/agents/`.
+
+```sh
+pm claude agents list                 # show available agents and install status
+pm claude agents install              # install all bundled agents to project (main/.claude/agents/)
+pm claude agents install implementer  # install a specific agent to project
+pm claude agents install --global     # install all bundled agents to ~/.claude/agents/
+pm claude agents uninstall reviewer   # uninstall a specific agent from the project
+pm claude agents uninstall --all      # uninstall all bundled agents from the project
+```
+
+Bundled agents:
+
+| Agent | Description |
+|-------|-------------|
+| **implementer** | Primary developer — reads TASK.md, implements changes, runs tests, addresses reviewer feedback |
+| **reviewer** | Code reviewer — diffs the branch against base, evaluates quality/correctness, sends feedback |
+| **researcher** | Read-only explorer — analyses the problem space, refines TASK.md before implementation begins |
+
+### Agent communication
+
+Agents within a feature communicate through a file-based message queue managed by pm. Each agent has an inbox scoped to the current feature.
+
+```sh
+pm agent spawn reviewer                      # spawn the reviewer agent in a new tmux window
+pm agent spawn implementer --edit            # spawn with acceptEdits permission
+pm agent spawn implementer --context "..."   # spawn with initial context/prompt
+pm agent spawn                               # respawn all previously active agents
+
+pm agent send reviewer "ready for review"    # send a message to the reviewer's inbox
+pm agent send implementer "LGTM"             # send a message to the implementer
+pm agent send reviewer "msg" --as-agent impl # send as a specific identity
+
+pm agent check                               # check for unread messages in your inbox
+pm agent check --as-agent reviewer           # check a specific agent's inbox
+
+pm agent read                                # read all messages from your inbox
+pm agent read --from implementer             # read messages from a specific sender
+pm agent read --as-agent reviewer            # read as a specific agent
+
+pm agent list                                # list all agents in the current feature
+pm agent list --active                       # list only active agents
+```
+
+Identity is resolved automatically: `PM_AGENT_NAME` (set by `pm agent spawn`) > `$USER` > `"user"`. Spawned agents get `PM_AGENT_NAME` set in their environment, so they don't need `--as-agent`.
+
+#### Typical agent flow
+
+1. `pm feat new my-feature --context "task description"` — creates the feature and spawns the default agent (usually `implementer`)
+2. The implementer reads TASK.md, implements changes, runs tests
+3. The implementer sends `pm agent send reviewer "ready for review"` to request a review
+4. You (or the implementer) spawn the reviewer: `pm agent spawn reviewer`
+5. The reviewer diffs the branch, sends feedback back to the implementer
+6. The implementer addresses feedback, sends another "ready for review" message
+7. The reviewer approves, and the implementer notifies you
+
+#### Configuring the default agent
+
+Set the default agent in `.pm/config.toml` to auto-spawn it on `pm feat new`:
+
+```toml
+[agents]
+default = "implementer"
+
+[agents.permissions]
+implementer = "acceptEdits"
+reviewer = ""
+```
+
+When `agents.default` is set, `pm feat new --context "..."` spawns that agent automatically. Override per-feature with `--agent`:
+
+```sh
+pm feat new my-feature --context "task" --agent researcher   # spawn researcher instead of default
+pm feat new my-feature --context "task" --agent ""           # skip auto-spawn
+```
+
+The `agents.permissions` table controls the permission mode passed to `claude` for each agent. Set `"acceptEdits"` to auto-accept file edits, or leave empty for default permissions.
+
 ### Other commands
 
 ```sh
