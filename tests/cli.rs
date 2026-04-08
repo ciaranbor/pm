@@ -98,6 +98,22 @@ fn feat_merge_without_project_root_fails() {
 }
 
 #[test]
+fn agent_list_outside_worktree_shows_helpful_error() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    // Create a pm project but run from project root (not main/ or a feature/)
+    std::fs::create_dir(root.join(".pm")).unwrap();
+
+    pm().current_dir(root)
+        .args(["agent", "list"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Not in a feature or main worktree",
+        ));
+}
+
+#[test]
 fn feat_review_without_project_root_fails() {
     let dir = tempdir().unwrap();
     pm().current_dir(dir.path())

@@ -338,6 +338,25 @@ fn resolve_feature_name(
         .ok_or(PmError::NotInFeatureWorktree)
 }
 
+/// Resolve the scope for agent commands: feature name if in a feature worktree,
+/// "main" if in the main worktree, error otherwise.
+fn resolve_agent_scope(project_root: &std::path::Path) -> pm::error::Result<String> {
+    resolve_agent_scope_from(project_root, &std::env::current_dir()?)
+}
+
+fn resolve_agent_scope_from(
+    project_root: &std::path::Path,
+    cwd: &std::path::Path,
+) -> pm::error::Result<String> {
+    if let Some(feature) = paths::detect_feature_from_cwd(project_root, cwd) {
+        return Ok(feature);
+    }
+    if paths::is_in_main_worktree(project_root, cwd) {
+        return Ok("main".to_string());
+    }
+    Err(PmError::NotInWorktree)
+}
+
 fn main() {
     let result = run();
     if let Err(e) = result {
@@ -528,7 +547,7 @@ fn run() -> pm::error::Result<()> {
         },
         Commands::Agent(agent_cmd) => {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-            let feature = resolve_feature_name(None, &project_root)?;
+            let feature = resolve_agent_scope(&project_root)?;
             match agent_cmd {
                 AgentCommands::Send {
                     agent,
@@ -787,5 +806,53 @@ fn run() -> pm::error::Result<()> {
             }
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn create_feature_state(root: &std::path::Path, name: &str) {
+        let feat_dir = root.join(".pm").join("features");
+        std::fs::create_dir_all(&feat_dir).unwrap();
+        std::fs::write(feat_dir.join(format!("{name}.toml")), "").unwrap();
+    }
+
+    #[test]
+    fn agent_scope_returns_feature_name_in_feature_worktree() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join(".pm")).unwrap();
+        create_feature_state(root, "login");
+        let cwd = root.join("login").join("src");
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        let scope = resolve_agent_scope_from(root, &cwd).unwrap();
+        assert_eq!(scope, "login");
+    }
+
+    #[test]
+    fn agent_scope_returns_main_in_main_worktree() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join(".pm")).unwrap();
+        let cwd = root.join("main").join("src");
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        let scope = resolve_agent_scope_from(root, &cwd).unwrap();
+        assert_eq!(scope, "main");
+    }
+
+    #[test]
+    fn agent_scope_errors_outside_worktree() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join(".pm")).unwrap();
+
+        let result = resolve_agent_scope_from(root, root);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), PmError::NotInWorktree));
     }
 }
