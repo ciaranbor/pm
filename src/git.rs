@@ -363,6 +363,55 @@ pub fn remote_tracking_branch(repo: &Path, branch: &str) -> Result<Option<String
     }
 }
 
+/// Branch divergence info: how many commits ahead/behind relative to a base.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchDivergence {
+    pub ahead: usize,
+    pub behind: usize,
+}
+
+impl std::fmt::Display for BranchDivergence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (self.ahead, self.behind) {
+            (0, 0) => write!(f, "up to date"),
+            (a, 0) => write!(f, "{a} commit{} ahead", if a == 1 { "" } else { "s" }),
+            (0, b) => write!(f, "{b} commit{} behind", if b == 1 { "" } else { "s" }),
+            (a, b) => write!(
+                f,
+                "{a} commit{} ahead, {b} behind",
+                if a == 1 { "" } else { "s" }
+            ),
+        }
+    }
+}
+
+/// Count how many commits `branch` is ahead of and behind `base`.
+/// Uses `git rev-list --left-right --count base...branch`.
+pub fn branch_divergence(repo: &Path, branch: &str, base: &str) -> Result<BranchDivergence> {
+    let output = run_git(
+        repo,
+        &[
+            "rev-list",
+            "--left-right",
+            "--count",
+            &format!("{base}...{branch}"),
+        ],
+    )?;
+    let parts: Vec<&str> = output.split_whitespace().collect();
+    if parts.len() != 2 {
+        return Err(PmError::Git(format!(
+            "unexpected rev-list output: {output}"
+        )));
+    }
+    let behind: usize = parts[0]
+        .parse()
+        .map_err(|_| PmError::Git(format!("bad rev-list count: {}", parts[0])))?;
+    let ahead: usize = parts[1]
+        .parse()
+        .map_err(|_| PmError::Git(format!("bad rev-list count: {}", parts[1])))?;
+    Ok(BranchDivergence { ahead, behind })
+}
+
 /// Check if a path is a git repository (has .git dir or file).
 pub fn is_git_repo(path: &Path) -> bool {
     let git_path = path.join(".git");
@@ -885,5 +934,132 @@ mod tests {
 
         // Stacked branch should have the feature file
         assert!(stacked_wt.join("feat.txt").exists());
+    }
+
+    #[test]
+    fn branch_divergence_up_to_date() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().join("main");
+        init_repo(&repo_path).unwrap();
+
+        create_branch(&repo_path, "feature").unwrap();
+
+        let div = branch_divergence(&repo_path, "feature", "main").unwrap();
+        assert_eq!(
+            div,
+            BranchDivergence {
+                ahead: 0,
+                behind: 0
+            }
+        );
+        assert_eq!(div.to_string(), "up to date");
+    }
+
+    #[test]
+    fn branch_divergence_ahead() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().join("main");
+        init_repo(&repo_path).unwrap();
+
+        create_branch(&repo_path, "feature").unwrap();
+        let wt_path = dir.path().join("feature");
+        add_worktree(&repo_path, &wt_path, "feature").unwrap();
+
+        std::fs::write(wt_path.join("feat.txt"), "content").unwrap();
+        run_git(&wt_path, &["add", "feat.txt"]).unwrap();
+        run_git(&wt_path, &["commit", "-m", "feature commit"]).unwrap();
+
+        let div = branch_divergence(&repo_path, "feature", "main").unwrap();
+        assert_eq!(
+            div,
+            BranchDivergence {
+                ahead: 1,
+                behind: 0
+            }
+        );
+        assert_eq!(div.to_string(), "1 commit ahead");
+    }
+
+    #[test]
+    fn branch_divergence_behind() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().join("main");
+        init_repo(&repo_path).unwrap();
+
+        create_branch(&repo_path, "feature").unwrap();
+
+        // Add commit on main
+        std::fs::write(repo_path.join("main.txt"), "content").unwrap();
+        run_git(&repo_path, &["add", "main.txt"]).unwrap();
+        run_git(&repo_path, &["commit", "-m", "main commit"]).unwrap();
+
+        let div = branch_divergence(&repo_path, "feature", "main").unwrap();
+        assert_eq!(
+            div,
+            BranchDivergence {
+                ahead: 0,
+                behind: 1
+            }
+        );
+        assert_eq!(div.to_string(), "1 commit behind");
+    }
+
+    #[test]
+    fn branch_divergence_both() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().join("main");
+        init_repo(&repo_path).unwrap();
+
+        create_branch(&repo_path, "feature").unwrap();
+        let wt_path = dir.path().join("feature");
+        add_worktree(&repo_path, &wt_path, "feature").unwrap();
+
+        // Commit on feature
+        std::fs::write(wt_path.join("feat.txt"), "content").unwrap();
+        run_git(&wt_path, &["add", "feat.txt"]).unwrap();
+        run_git(&wt_path, &["commit", "-m", "feature commit"]).unwrap();
+
+        // Commit on main
+        std::fs::write(repo_path.join("main.txt"), "content").unwrap();
+        run_git(&repo_path, &["add", "main.txt"]).unwrap();
+        run_git(&repo_path, &["commit", "-m", "main commit"]).unwrap();
+
+        let div = branch_divergence(&repo_path, "feature", "main").unwrap();
+        assert_eq!(
+            div,
+            BranchDivergence {
+                ahead: 1,
+                behind: 1
+            }
+        );
+        assert_eq!(div.to_string(), "1 commit ahead, 1 behind");
+    }
+
+    #[test]
+    fn branch_divergence_display_plurals() {
+        assert_eq!(
+            BranchDivergence {
+                ahead: 3,
+                behind: 0
+            }
+            .to_string(),
+            "3 commits ahead"
+        );
+        assert_eq!(
+            BranchDivergence {
+                ahead: 0,
+                behind: 5
+            }
+            .to_string(),
+            "5 commits behind"
+        );
+        assert_eq!(
+            BranchDivergence {
+                ahead: 3,
+                behind: 5
+            }
+            .to_string(),
+            "3 commits ahead, 5 behind"
+        );
     }
 }

@@ -1,9 +1,21 @@
 use std::path::Path;
 
 use crate::error::Result;
+use crate::gh;
 use crate::git;
 use crate::state::feature::FeatureState;
 use crate::state::paths;
+
+/// Human-readable label for a PR state.
+fn pr_state_label(info: &gh::PrInfo) -> &'static str {
+    match info.state.as_str() {
+        "MERGED" => "merged",
+        "CLOSED" => "closed",
+        "OPEN" if info.is_draft => "draft",
+        "OPEN" => "open",
+        _ => "unknown",
+    }
+}
 
 /// Display full details for a single feature.
 /// Returns formatted lines for display.
@@ -27,8 +39,30 @@ pub fn feat_info(project_root: &Path, name: &str) -> Result<Vec<String>> {
         lines.push(format!("base:        {}", state.base));
     }
     if !state.pr.is_empty() {
-        lines.push(format!("pr:          {}", state.pr));
+        lines.push(format!("pr:          #{}", state.pr));
+
+        // Query GitHub for live PR state
+        match gh::pr_info(&main_repo, &state.pr) {
+            Ok(info) => {
+                lines.push(format!("pr_status:   {}", pr_state_label(&info)));
+            }
+            Err(_) => {
+                lines.push("pr_status:   (query failed)".to_string());
+            }
+        }
     }
+
+    // Show branch divergence from base
+    let base = state.base_or_default();
+    match git::branch_divergence(&main_repo, &state.branch, base) {
+        Ok(div) => {
+            lines.push(format!("divergence:  {} {base}", div));
+        }
+        Err(_) => {
+            // Silently skip if divergence check fails (e.g. base branch doesn't exist)
+        }
+    }
+
     if !state.context.is_empty() {
         lines.push(format!("context:     {}", state.context));
     }
@@ -201,5 +235,171 @@ mod tests {
         // base is always set (detected from CWD when not explicit)
         assert!(!output.contains("pr:"));
         assert!(!output.contains("context:"));
+    }
+
+    #[test]
+    fn feat_info_shows_divergence() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let project_path = dir.path().join(server.scope("myapp"));
+        let projects_dir = dir.path().join("registry");
+        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "diverge",
+            None,
+            None,
+            None,
+            false,
+            None,
+            server.name(),
+        )
+        .unwrap();
+
+        // Add a commit on the feature branch
+        let wt_path = project_path.join("diverge");
+        std::fs::write(wt_path.join("feat.txt"), "content").unwrap();
+        git::stage_file(&wt_path, "feat.txt").unwrap();
+        git::commit(&wt_path, "feature commit").unwrap();
+
+        let lines = feat_info(&project_path, "diverge").unwrap();
+        let output = lines.join("\n");
+        assert!(
+            output.contains("divergence:  1 commit ahead main"),
+            "expected divergence info, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn feat_info_shows_up_to_date_divergence() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let project_path = dir.path().join(server.scope("myapp"));
+        let projects_dir = dir.path().join("registry");
+        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "synced",
+            None,
+            None,
+            None,
+            false,
+            None,
+            server.name(),
+        )
+        .unwrap();
+
+        let lines = feat_info(&project_path, "synced").unwrap();
+        let output = lines.join("\n");
+        assert!(
+            output.contains("divergence:  up to date main"),
+            "expected up to date, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn feat_info_shows_behind_divergence() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let project_path = dir.path().join(server.scope("myapp"));
+        let projects_dir = dir.path().join("registry");
+        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "behind",
+            None,
+            None,
+            None,
+            false,
+            None,
+            server.name(),
+        )
+        .unwrap();
+
+        // Add a commit on main (the feature is now behind)
+        let main_repo = project_path.join("main");
+        std::fs::write(main_repo.join("main.txt"), "content").unwrap();
+        git::stage_file(&main_repo, "main.txt").unwrap();
+        git::commit(&main_repo, "main commit").unwrap();
+
+        let lines = feat_info(&project_path, "behind").unwrap();
+        let output = lines.join("\n");
+        assert!(
+            output.contains("divergence:  1 commit behind main"),
+            "expected behind info, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn feat_info_shows_ahead_and_behind() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let project_path = dir.path().join(server.scope("myapp"));
+        let projects_dir = dir.path().join("registry");
+        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "both",
+            None,
+            None,
+            None,
+            false,
+            None,
+            server.name(),
+        )
+        .unwrap();
+
+        // Add a commit on the feature branch
+        let wt_path = project_path.join("both");
+        std::fs::write(wt_path.join("feat.txt"), "content").unwrap();
+        git::stage_file(&wt_path, "feat.txt").unwrap();
+        git::commit(&wt_path, "feature commit").unwrap();
+
+        // Add a commit on main
+        let main_repo = project_path.join("main");
+        std::fs::write(main_repo.join("main.txt"), "content").unwrap();
+        git::stage_file(&main_repo, "main.txt").unwrap();
+        git::commit(&main_repo, "main commit").unwrap();
+
+        let lines = feat_info(&project_path, "both").unwrap();
+        let output = lines.join("\n");
+        assert!(
+            output.contains("divergence:  1 commit ahead, 1 behind main"),
+            "expected ahead and behind, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn pr_state_label_maps_correctly() {
+        use crate::gh::PrInfo;
+
+        assert_eq!(
+            pr_state_label(&PrInfo {
+                state: "OPEN".to_string(),
+                is_draft: false
+            }),
+            "open"
+        );
+        assert_eq!(
+            pr_state_label(&PrInfo {
+                state: "OPEN".to_string(),
+                is_draft: true
+            }),
+            "draft"
+        );
+        assert_eq!(
+            pr_state_label(&PrInfo {
+                state: "MERGED".to_string(),
+                is_draft: false
+            }),
+            "merged"
+        );
+        assert_eq!(
+            pr_state_label(&PrInfo {
+                state: "CLOSED".to_string(),
+                is_draft: false
+            }),
+            "closed"
+        );
     }
 }
