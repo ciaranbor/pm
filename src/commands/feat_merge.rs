@@ -47,10 +47,24 @@ pub fn feat_merge(
         )));
     }
 
-    // Check if the branch is already merged into the base branch (e.g. via GitHub PR)
-    let already_merged = git::branch_merged_into(&base_repo, &state.branch, base)?;
+    // Check if the branch is already merged locally
+    let mut already_merged = git::branch_merged_into(&base_repo, &state.branch, base)?;
 
-    if !already_merged {
+    // If not merged locally, fetch and check the remote tracking branch.
+    // The branch may have been merged upstream (e.g. via GitHub PR).
+    if !already_merged
+        && let Ok(()) = git::fetch(&base_repo)
+        && let Ok(Some(tracking)) = git::tracking_branch(&base_repo, base)
+    {
+        already_merged = git::branch_merged_into(&base_repo, &state.branch, &tracking)?;
+    }
+
+    if already_merged {
+        // Branch was merged (locally or upstream) — pull to update local base
+        if let Err(e) = git::pull(&base_repo) {
+            eprintln!("warning: git pull failed: {e}");
+        }
+    } else {
         // Perform the merge from the base worktree
         if let Err(e) = git::merge_no_ff(&base_repo, &state.branch) {
             // Abort the failed merge to leave base worktree clean
@@ -284,6 +298,54 @@ mod tests {
         // Now pm feat merge should succeed without attempting a redundant merge
         feat_merge(&project_path, "login", false, server.name()).unwrap();
 
+        // Cleanup should have happened
+        assert!(!project_path.join("login").exists());
+        assert!(!git::branch_exists(&main_repo, "login").unwrap());
+    }
+
+    #[test]
+    fn merge_detects_remote_merge_and_pulls() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+
+        let main_repo = project_path.join("main");
+        let worktree = project_path.join("login");
+
+        // Set up a bare repo as a fake remote
+        let remote_path = dir.path().join("remote.git");
+        git::init_bare(&remote_path).unwrap();
+        git::add_remote(&main_repo, "origin", &remote_path.to_string_lossy()).unwrap();
+        git::push(&main_repo, "origin", "main").unwrap();
+
+        // Add a commit on the feature branch and push it to the remote
+        // (worktrees share the same git repo, so origin is already configured)
+        std::fs::write(worktree.join("feature.txt"), "feature work").unwrap();
+        git::stage_file(&worktree, "feature.txt").unwrap();
+        git::commit(&worktree, "feature work").unwrap();
+        git::push(&worktree, "origin", "login").unwrap();
+
+        // Simulate a GitHub PR merge: clone the remote, merge feature into main, push back
+        let scratch = dir.path().join("scratch");
+        std::process::Command::new("git")
+            .args([
+                "clone",
+                &remote_path.to_string_lossy(),
+                &scratch.to_string_lossy(),
+            ])
+            .output()
+            .unwrap();
+        git::merge_no_ff(&scratch, "origin/login").unwrap();
+        git::push(&scratch, "origin", "main").unwrap();
+
+        // Local main does NOT have feature.txt — the merge only exists on the remote
+        assert!(!main_repo.join("feature.txt").exists());
+
+        // pm feat merge should fetch, detect the remote merge, pull, and clean up
+        feat_merge(&project_path, "login", false, server.name()).unwrap();
+
+        // Verify pull brought in the merged changes
+        assert!(main_repo.join("feature.txt").exists());
         // Cleanup should have happened
         assert!(!project_path.join("login").exists());
         assert!(!git::branch_exists(&main_repo, "login").unwrap());

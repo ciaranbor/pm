@@ -229,6 +229,35 @@ pub fn merge_no_ff(repo: &Path, branch: &str) -> Result<()> {
     Ok(())
 }
 
+/// Fetch from all remotes. Works from any worktree.
+pub fn fetch(repo: &Path) -> Result<()> {
+    run_git(repo, &["fetch"])?;
+    Ok(())
+}
+
+/// Pull from the remote (fast-forward only).
+pub fn pull(repo: &Path) -> Result<()> {
+    run_git(repo, &["pull", "--ff-only"])?;
+    Ok(())
+}
+
+/// Get the remote tracking branch for a local branch (e.g. "origin/main").
+/// Returns None if no upstream is configured.
+pub fn tracking_branch(repo: &Path, branch: &str) -> Result<Option<String>> {
+    match run_git(
+        repo,
+        &[
+            "rev-parse",
+            "--abbrev-ref",
+            &format!("{branch}@{{upstream}}"),
+        ],
+    ) {
+        Ok(tracking) => Ok(Some(tracking)),
+        Err(PmError::Git(_)) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// Abort an in-progress merge.
 pub fn merge_abort(repo: &Path) -> Result<()> {
     run_git(repo, &["merge", "--abort"])?;
@@ -253,6 +282,34 @@ pub(crate) fn commit(repo: &Path, message: &str) -> Result<()> {
 #[cfg(test)]
 pub(crate) fn cat_file(repo: &Path, rev: &str) -> Result<String> {
     run_git(repo, &["cat-file", "-p", rev])
+}
+
+/// Init a bare repo (test helper for simulating a remote).
+#[cfg(test)]
+pub(crate) fn init_bare(path: &Path) -> Result<()> {
+    std::fs::create_dir_all(path)?;
+    let output = std::process::Command::new("git")
+        .args(["init", "--bare", &path.to_string_lossy()])
+        .output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(PmError::Git(stderr));
+    }
+    Ok(())
+}
+
+/// Add a remote to a repo (test helper).
+#[cfg(test)]
+pub(crate) fn add_remote(repo: &Path, name: &str, url: &str) -> Result<()> {
+    run_git(repo, &["remote", "add", name, url])?;
+    Ok(())
+}
+
+/// Push a branch to a remote (test helper).
+#[cfg(test)]
+pub(crate) fn push(repo: &Path, remote: &str, branch: &str) -> Result<()> {
+    run_git(repo, &["push", "-u", remote, branch])?;
+    Ok(())
 }
 
 /// Get the current branch name of a repo/worktree.
