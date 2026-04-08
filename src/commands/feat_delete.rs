@@ -460,6 +460,7 @@ mod tests {
             None,
             Some("parent"),
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -489,6 +490,7 @@ mod tests {
             None,
             Some("parent"),
             false,
+            None,
             server.name(),
         )
         .unwrap();

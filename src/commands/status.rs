@@ -113,6 +113,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -123,6 +124,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -153,6 +155,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -173,6 +176,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -210,6 +214,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -220,6 +225,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -268,6 +274,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();

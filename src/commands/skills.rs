@@ -64,6 +64,12 @@ const BUNDLED_ITEMS: &[BundledItem] = &[
         rel_path: "implementer.md",
         content: include_str!("../../agents/implementer.md"),
     },
+    BundledItem {
+        kind: BundledKind::Agent,
+        name: "researcher",
+        rel_path: "researcher.md",
+        content: include_str!("../../agents/researcher.md"),
+    },
 ];
 
 fn items_of_kind(kind: BundledKind) -> impl Iterator<Item = &'static BundledItem> {

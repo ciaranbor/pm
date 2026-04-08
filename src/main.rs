@@ -246,6 +246,9 @@ enum FeatCommands {
         /// Don't auto-accept edits in the spawned Claude session
         #[arg(long)]
         no_edit: bool,
+        /// Agent to spawn (overrides project default)
+        #[arg(long)]
+        agent: Option<String>,
     },
     /// Adopt an existing branch as a feature (worktree + tmux session)
     Adopt {
@@ -263,6 +266,9 @@ enum FeatCommands {
         /// Don't auto-accept edits in the spawned Claude session
         #[arg(long)]
         no_edit: bool,
+        /// Agent to spawn (overrides project default)
+        #[arg(long)]
+        agent: Option<String>,
     },
     /// List all features with their status
     List,
@@ -605,6 +611,7 @@ fn run() -> pm::error::Result<()> {
                     context,
                     base,
                     no_edit,
+                    agent,
                 } => {
                     let feat_name = commands::feat_new::feat_new(
                         &project_root,
@@ -613,6 +620,7 @@ fn run() -> pm::error::Result<()> {
                         context.as_deref(),
                         base.as_deref(),
                         no_edit,
+                        agent.as_deref(),
                         None,
                     )?;
                     println!("Created feature '{feat_name}'");
@@ -624,6 +632,7 @@ fn run() -> pm::error::Result<()> {
                     context,
                     from,
                     no_edit,
+                    agent,
                 } => {
                     let feat_name = commands::feat_adopt::feat_adopt(
                         &project_root,
@@ -632,6 +641,7 @@ fn run() -> pm::error::Result<()> {
                         context.as_deref(),
                         from.as_deref(),
                         no_edit,
+                        agent.as_deref(),
                         None,
                         None,
                     )?;

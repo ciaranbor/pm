@@ -208,10 +208,21 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
-        feat_new::feat_new(&project_path, "api", None, None, None, false, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "api",
+            None,
+            None,
+            None,
+            false,
+            None,
+            server.name(),
+        )
+        .unwrap();
 
         delete(&project_path, &projects_dir, false, true, server.name()).unwrap();
 
@@ -236,6 +247,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -265,6 +277,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -293,6 +306,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -322,6 +336,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -365,6 +380,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();
@@ -375,6 +391,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
         )
         .unwrap();

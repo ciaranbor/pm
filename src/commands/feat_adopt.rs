@@ -21,6 +21,7 @@ pub fn feat_adopt(
     context: Option<&str>,
     from: Option<&Path>,
     no_edit: bool,
+    agent_override: Option<&str>,
     tmux_server: Option<&str>,
     claude_base: Option<&Path>,
 ) -> Result<String> {
@@ -117,14 +118,13 @@ pub fn feat_adopt(
     let session_name = format!("{project_name}/{feature_name}");
     tmux::create_session(tmux_server, &session_name, &worktree_path)?;
 
-    // Step 3.5: Spawn a claude session to read TASK.md (if context was provided)
+    // Step 3.5: Spawn a claude session to read TASK.md (if context was provided).
+    // Uses --agent override if provided, then project default, then plain claude.
     if resolved_context.is_some() {
-        let default_agent = &config.agents.default;
-        let agent = if default_agent.is_empty() {
-            None
-        } else {
-            Some(default_agent.as_str())
-        };
+        let agent = agent_override.or_else(|| {
+            let d = &config.agents.default;
+            if d.is_empty() { None } else { Some(d.as_str()) }
+        });
         super::agent_spawn::spawn_claude_session(
             project_root,
             &feature_name,
@@ -170,6 +170,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
             None,
         )
@@ -194,6 +195,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
             None,
         )
@@ -218,6 +220,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
             None,
         )
@@ -244,6 +247,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
             None,
         )
@@ -266,6 +270,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
             None,
         );
@@ -288,6 +293,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
             None,
         )
@@ -299,6 +305,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
             None,
         );
@@ -324,6 +331,7 @@ mod tests {
             Some("Adopt existing login branch"),
             None,
             false,
+            None,
             server.name(),
             None,
         )
@@ -350,6 +358,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
             None,
         )
@@ -375,6 +384,7 @@ mod tests {
             Some("Adopt existing login branch"),
             None,
             false,
+            None,
             server.name(),
             None,
         )
@@ -399,6 +409,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
             None,
         )
@@ -425,6 +436,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
             None,
         );
@@ -462,6 +474,7 @@ mod tests {
             None,
             Some(old_path),
             false,
+            None,
             server.name(),
             Some(claude_base.as_path()),
         )
@@ -491,6 +504,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
             None,
         )
@@ -524,6 +538,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
             None,
         )
@@ -569,6 +584,7 @@ mod tests {
             None,
             Some(old_worktree.as_path()),
             false,
+            None,
             server.name(),
             Some(claude_base.as_path()),
         )
@@ -624,6 +640,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             server.name(),
             None,
         );
