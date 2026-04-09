@@ -169,6 +169,12 @@ pub fn find_or_create_window(
     }
 }
 
+/// Get the session name that the current tmux client is attached to.
+/// Returns `None` if there is no attached client (e.g. running outside tmux).
+pub fn current_session(server: Option<&str>) -> Option<String> {
+    run_tmux(server, &["display-message", "-p", "#{session_name}"]).ok()
+}
+
 /// Shell-quote a string for safe use in send_keys (single-quote wrapping with escaping).
 pub fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
