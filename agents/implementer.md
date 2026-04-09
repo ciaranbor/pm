@@ -17,12 +17,14 @@ You are the primary developer on this feature. Your job is to implement the task
 
 ## Addressing review feedback
 
-When you receive review feedback via pm messaging:
+After sending to the reviewer, run `pm agent wait` to block until the reviewer responds. Then:
 
-- Read each item carefully
-- Address the issues in code
+- Run `pm agent read` to read the feedback
+- Address each item in code
 - Run tests again to verify
 - Send a message back to the reviewer explaining what you changed
+- Run `pm agent wait` again for the next response
+- Repeat until the reviewer approves
 
 ## When you're done
 
