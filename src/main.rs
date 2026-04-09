@@ -351,13 +351,13 @@ fn resolve_feature_name(
         .ok_or(PmError::NotInFeatureWorktree)
 }
 
-/// Resolve the scope for agent commands: feature name if in a feature worktree,
+/// Resolve the current scope: feature name if in a feature worktree,
 /// "main" if in the main worktree, error otherwise.
-fn resolve_agent_scope(project_root: &std::path::Path) -> pm::error::Result<String> {
-    resolve_agent_scope_from(project_root, &std::env::current_dir()?)
+fn resolve_scope(project_root: &std::path::Path) -> pm::error::Result<String> {
+    resolve_scope_from(project_root, &std::env::current_dir()?)
 }
 
-fn resolve_agent_scope_from(
+fn resolve_scope_from(
     project_root: &std::path::Path,
     cwd: &std::path::Path,
 ) -> pm::error::Result<String> {
@@ -413,18 +413,19 @@ fn run() -> pm::error::Result<()> {
                 let project_root = paths::find_project_root(&std::env::current_dir()?)?;
                 match settings_cmd {
                     ClaudeSettingsCommands::List { name } => {
-                        let cwd = std::env::current_dir()?;
-                        let (label, lines) =
-                            if name.is_none() && paths::is_in_main_worktree(&project_root, &cwd) {
-                                (
-                                    "main".to_string(),
-                                    commands::claude_settings::list_main(&project_root)?,
-                                )
-                            } else {
-                                let name = resolve_feature_name(name, &project_root)?;
-                                let lines = commands::claude_settings::list(&project_root, &name)?;
-                                (name, lines)
-                            };
+                        let scope = match name {
+                            Some(n) => n,
+                            None => resolve_scope(&project_root)?,
+                        };
+                        let (label, lines) = if scope == "main" {
+                            (
+                                "main".to_string(),
+                                commands::claude_settings::list_main(&project_root)?,
+                            )
+                        } else {
+                            let lines = commands::claude_settings::list(&project_root, &scope)?;
+                            (scope, lines)
+                        };
                         if lines.is_empty() {
                             println!("No settings files found for '{label}'");
                         } else {
@@ -560,7 +561,7 @@ fn run() -> pm::error::Result<()> {
         },
         Commands::Agent(agent_cmd) => {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-            let feature = resolve_agent_scope(&project_root)?;
+            let feature = resolve_scope(&project_root)?;
             match agent_cmd {
                 AgentCommands::Spawn {
                     name,
@@ -597,7 +598,7 @@ fn run() -> pm::error::Result<()> {
         }
         Commands::Msg(msg_cmd) => {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-            let feature = resolve_agent_scope(&project_root)?;
+            let feature = resolve_scope(&project_root)?;
             match msg_cmd {
                 MsgCommands::Send {
                     agent,
@@ -847,7 +848,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_scope_returns_feature_name_in_feature_worktree() {
+    fn scope_returns_feature_name_in_feature_worktree() {
         let dir = tempdir().unwrap();
         let root = dir.path();
         std::fs::create_dir(root.join(".pm")).unwrap();
@@ -855,29 +856,29 @@ mod tests {
         let cwd = root.join("login").join("src");
         std::fs::create_dir_all(&cwd).unwrap();
 
-        let scope = resolve_agent_scope_from(root, &cwd).unwrap();
+        let scope = resolve_scope_from(root, &cwd).unwrap();
         assert_eq!(scope, "login");
     }
 
     #[test]
-    fn agent_scope_returns_main_in_main_worktree() {
+    fn scope_returns_main_in_main_worktree() {
         let dir = tempdir().unwrap();
         let root = dir.path();
         std::fs::create_dir(root.join(".pm")).unwrap();
         let cwd = root.join("main").join("src");
         std::fs::create_dir_all(&cwd).unwrap();
 
-        let scope = resolve_agent_scope_from(root, &cwd).unwrap();
+        let scope = resolve_scope_from(root, &cwd).unwrap();
         assert_eq!(scope, "main");
     }
 
     #[test]
-    fn agent_scope_errors_outside_worktree() {
+    fn scope_errors_outside_worktree() {
         let dir = tempdir().unwrap();
         let root = dir.path();
         std::fs::create_dir(root.join(".pm")).unwrap();
 
-        let result = resolve_agent_scope_from(root, root);
+        let result = resolve_scope_from(root, root);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), PmError::NotInWorktree));
     }
