@@ -56,8 +56,14 @@ pub fn cleanup_feature(params: &CleanupParams) -> Result<()> {
     // Step 5: Kill tmux session (last — see doc comment above)
     let session_name = format!("{}/{}", params.project_name, params.name);
     if tmux::has_session(params.tmux_server, &session_name)? {
-        let main_session = format!("{}/main", params.project_name);
-        let _ = tmux::switch_client(params.tmux_server, &main_session);
+        // Only switch the client away if it's currently attached to the session
+        // being deleted. Otherwise we'd disrupt the user's active session.
+        if let Some(current) = tmux::current_session(params.tmux_server)
+            && current == session_name
+        {
+            let main_session = format!("{}/main", params.project_name);
+            let _ = tmux::switch_client(params.tmux_server, &main_session);
+        }
         tmux::kill_session(params.tmux_server, &session_name)?;
     }
 
