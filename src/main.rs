@@ -220,6 +220,12 @@ enum AgentCommands {
         #[arg(long)]
         as_agent: Option<String>,
     },
+    /// Block until a message arrives in your inbox
+    Wait {
+        /// Agent name (defaults to $PM_AGENT_NAME or $USER)
+        #[arg(long)]
+        as_agent: Option<String>,
+    },
     /// List agents in the current feature
     List {
         /// Only show active agents
@@ -610,6 +616,13 @@ fn run() -> pm::error::Result<()> {
                             println!("{msg}");
                         }
                     }
+                    Ok(())
+                }
+                AgentCommands::Wait { as_agent } => {
+                    let agent = as_agent.unwrap_or_else(pm::messages::default_user_name);
+                    let count =
+                        commands::agent_wait::agent_wait(&project_root, &feature, &agent, None)?;
+                    println!("{count} new message{}", if count == 1 { "" } else { "s" });
                     Ok(())
                 }
                 AgentCommands::List { active } => {
