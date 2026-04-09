@@ -41,9 +41,12 @@ enum Commands {
     /// Feature management
     #[command(subcommand)]
     Feat(FeatCommands),
-    /// Agent communication and management
+    /// Agent management (spawn, list)
     #[command(subcommand)]
     Agent(AgentCommands),
+    /// Inter-agent messaging (send, check, read, wait)
+    #[command(subcommand)]
+    Msg(MsgCommands),
     /// Claude Code settings, skills, and session management
     #[command(subcommand)]
     Claude(ClaudeCommands),
@@ -195,6 +198,16 @@ enum AgentCommands {
         #[arg(long)]
         edit: bool,
     },
+    /// List agents in the current feature
+    List {
+        /// Only show active agents
+        #[arg(long)]
+        active: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum MsgCommands {
     /// Send a message to an agent's inbox
     Send {
         /// Recipient agent name
@@ -225,12 +238,6 @@ enum AgentCommands {
         /// Agent name (defaults to $PM_AGENT_NAME or $USER)
         #[arg(long)]
         as_agent: Option<String>,
-    },
-    /// List agents in the current feature
-    List {
-        /// Only show active agents
-        #[arg(long)]
-        active: bool,
     },
 }
 
@@ -555,45 +562,6 @@ fn run() -> pm::error::Result<()> {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
             let feature = resolve_agent_scope(&project_root)?;
             match agent_cmd {
-                AgentCommands::Send {
-                    agent,
-                    message,
-                    as_agent,
-                } => {
-                    let sender = as_agent.unwrap_or_else(pm::messages::default_user_name);
-                    let line = commands::agent_send::agent_send(
-                        &project_root,
-                        &feature,
-                        &agent,
-                        &sender,
-                        &message,
-                        None,
-                    )?;
-                    println!("{line}");
-                    Ok(())
-                }
-                AgentCommands::Check { as_agent } => {
-                    let agent = as_agent.unwrap_or_else(pm::messages::default_user_name);
-                    let lines =
-                        commands::agent_check::agent_check(&project_root, &feature, &agent)?;
-                    for line in lines {
-                        println!("{line}");
-                    }
-                    Ok(())
-                }
-                AgentCommands::Read { from, as_agent } => {
-                    let agent = as_agent.unwrap_or_else(pm::messages::default_user_name);
-                    let lines = commands::agent_read::agent_read(
-                        &project_root,
-                        &feature,
-                        &agent,
-                        from.as_deref(),
-                    )?;
-                    for line in lines {
-                        println!("{line}");
-                    }
-                    Ok(())
-                }
                 AgentCommands::Spawn {
                     name,
                     context,
@@ -618,18 +586,63 @@ fn run() -> pm::error::Result<()> {
                     }
                     Ok(())
                 }
-                AgentCommands::Wait { as_agent } => {
-                    let agent = as_agent.unwrap_or_else(pm::messages::default_user_name);
-                    let count =
-                        commands::agent_wait::agent_wait(&project_root, &feature, &agent, None)?;
-                    println!("{count} new message{}", if count == 1 { "" } else { "s" });
-                    Ok(())
-                }
                 AgentCommands::List { active } => {
                     let lines = commands::agent_list::agent_list(&project_root, &feature, active)?;
                     for line in lines {
                         println!("{line}");
                     }
+                    Ok(())
+                }
+            }
+        }
+        Commands::Msg(msg_cmd) => {
+            let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+            let feature = resolve_agent_scope(&project_root)?;
+            match msg_cmd {
+                MsgCommands::Send {
+                    agent,
+                    message,
+                    as_agent,
+                } => {
+                    let sender = as_agent.unwrap_or_else(pm::messages::default_user_name);
+                    let line = commands::agent_send::agent_send(
+                        &project_root,
+                        &feature,
+                        &agent,
+                        &sender,
+                        &message,
+                        None,
+                    )?;
+                    println!("{line}");
+                    Ok(())
+                }
+                MsgCommands::Check { as_agent } => {
+                    let agent = as_agent.unwrap_or_else(pm::messages::default_user_name);
+                    let lines =
+                        commands::agent_check::agent_check(&project_root, &feature, &agent)?;
+                    for line in lines {
+                        println!("{line}");
+                    }
+                    Ok(())
+                }
+                MsgCommands::Read { from, as_agent } => {
+                    let agent = as_agent.unwrap_or_else(pm::messages::default_user_name);
+                    let lines = commands::agent_read::agent_read(
+                        &project_root,
+                        &feature,
+                        &agent,
+                        from.as_deref(),
+                    )?;
+                    for line in lines {
+                        println!("{line}");
+                    }
+                    Ok(())
+                }
+                MsgCommands::Wait { as_agent } => {
+                    let agent = as_agent.unwrap_or_else(pm::messages::default_user_name);
+                    let count =
+                        commands::agent_wait::agent_wait(&project_root, &feature, &agent, None)?;
+                    println!("{count} new message{}", if count == 1 { "" } else { "s" });
                     Ok(())
                 }
             }
