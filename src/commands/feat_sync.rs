@@ -6,7 +6,7 @@ use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
 
 /// Map a GitHub PR state to a feature status.
-fn status_from_pr(pr_info: &gh::PrInfo) -> Option<FeatureStatus> {
+pub fn status_from_pr(pr_info: &gh::PrInfo) -> Option<FeatureStatus> {
     match pr_info.state.to_uppercase().as_str() {
         "MERGED" => Some(FeatureStatus::Merged),
         "CLOSED" => Some(FeatureStatus::Stale),

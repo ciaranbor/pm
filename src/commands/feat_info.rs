@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use crate::commands::feat_sync::status_from_pr;
 use crate::error::Result;
 use crate::gh;
 use crate::git;
@@ -21,14 +22,39 @@ fn pr_state_label(info: &gh::PrInfo) -> &'static str {
 /// Returns formatted lines for display.
 pub fn feat_info(project_root: &Path, name: &str) -> Result<Vec<String>> {
     let features_dir = paths::features_dir(project_root);
-    let state = FeatureState::load(&features_dir, name)?;
+    let mut state = FeatureState::load(&features_dir, name)?;
+
+    let main_repo = project_root.join("main");
+
+    // If PR is linked, query GitHub and sync local status
+    let mut pr_status_line = None;
+    if !state.pr.is_empty() {
+        match gh::pr_info(&main_repo, &state.pr) {
+            Ok(info) => {
+                pr_status_line = Some(format!("pr_status:   {}", pr_state_label(&info)));
+
+                // Sync local feature status from PR state
+                if let Some(new_status) = status_from_pr(&info)
+                    && new_status != state.status
+                {
+                    state.status = new_status;
+                    if new_status.is_active() {
+                        state.last_active = chrono::Utc::now();
+                    }
+                    state.save(&features_dir, name)?;
+                }
+            }
+            Err(_) => {
+                pr_status_line = Some("pr_status:   (query failed)".to_string());
+            }
+        }
+    }
 
     let mut lines = Vec::new();
     lines.push(format!("name:        {name}"));
     lines.push(format!("status:      {}", state.status));
     lines.push(format!("branch:      {}", state.branch));
     lines.push(format!("worktree:    {}", state.worktree));
-    let main_repo = project_root.join("main");
     // Don't fail info display if remote lookup errors
     let remote = git::remote_tracking_branch(&main_repo, &state.branch).unwrap_or(None);
     lines.push(format!(
@@ -40,15 +66,8 @@ pub fn feat_info(project_root: &Path, name: &str) -> Result<Vec<String>> {
     }
     if !state.pr.is_empty() {
         lines.push(format!("pr:          #{}", state.pr));
-
-        // Query GitHub for live PR state
-        match gh::pr_info(&main_repo, &state.pr) {
-            Ok(info) => {
-                lines.push(format!("pr_status:   {}", pr_state_label(&info)));
-            }
-            Err(_) => {
-                lines.push("pr_status:   (query failed)".to_string());
-            }
+        if let Some(line) = pr_status_line {
+            lines.push(line);
         }
     }
 
