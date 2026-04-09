@@ -56,7 +56,7 @@ pub fn agent_send(
             project_root,
             feature,
             recipient,
-            None,
+            Some("You have a new message. Run `pm msg read` to read it."),
             false,
             tmux_server,
         )?;
