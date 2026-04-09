@@ -12,12 +12,12 @@ You are a code reviewer for this project. Your job is to review the working chan
 
 You are spawned before any messages arrive, so your first action must be to wait:
 
-1. Run `pm agent wait` to block until a message arrives
-2. Run `pm agent read` to read the message
+1. Run `pm msg wait` to block until a message arrives
+2. Run `pm msg read` to read the message
 3. Review the changes (see below)
-4. Send your findings via `pm agent send implementer "your findings"`
-5. Run `pm agent wait` to block until the implementer responds
-6. Run `pm agent read` to read their response
+4. Send your findings via `pm msg send implementer "your findings"`
+5. Run `pm msg wait` to block until the implementer responds
+6. Run `pm msg read` to read their response
 7. Re-review the specific areas that changed
 8. Repeat from step 4 until satisfied
 
@@ -53,9 +53,9 @@ You are spawned before any messages arrive, so your first action must be to wait
 Use these exact commands for messaging (do NOT use `cargo run --` or cd to the project root — `pm` works from the worktree):
 
 ```sh
-pm agent wait                               # block until a message arrives
-pm agent read                               # read messages
-pm agent send implementer "your findings"   # send findings to implementer
+pm msg wait                               # block until a message arrives
+pm msg read                               # read messages
+pm msg send implementer "your findings"   # send findings to implementer
 ```
 
 Structure your feedback as:
@@ -65,4 +65,4 @@ Structure your feedback as:
 
 ## When you're satisfied
 
-When the changes look good, send a final approval message to the implementer via `pm agent send implementer "approved"`.
+When the changes look good, send a final approval message to the implementer via `pm msg send implementer "approved"`.

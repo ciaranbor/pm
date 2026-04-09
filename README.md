@@ -273,9 +273,7 @@ Bundled agents:
 | **reviewer** | Code reviewer — diffs the branch against base, evaluates quality/correctness, sends feedback |
 | **researcher** | Read-only explorer — analyses the problem space, refines TASK.md before implementation begins |
 
-### Agent communication
-
-Agents within a feature communicate through a file-based message queue managed by pm. Each agent has an inbox scoped to the current feature.
+### Agent management
 
 ```sh
 pm agent spawn reviewer                      # spawn the reviewer agent in a new tmux window
@@ -283,19 +281,28 @@ pm agent spawn implementer --edit            # spawn with acceptEdits permission
 pm agent spawn implementer --context "..."   # spawn with initial context/prompt
 pm agent spawn                               # respawn all previously active agents
 
-pm agent send reviewer "ready for review"    # send a message to the reviewer's inbox
-pm agent send implementer "LGTM"             # send a message to the implementer
-pm agent send reviewer "msg" --as-agent impl # send as a specific identity
-
-pm agent check                               # check for unread messages in your inbox
-pm agent check --as-agent reviewer           # check a specific agent's inbox
-
-pm agent read                                # read all messages from your inbox
-pm agent read --from implementer             # read messages from a specific sender
-pm agent read --as-agent reviewer            # read as a specific agent
-
 pm agent list                                # list all agents in the current feature
 pm agent list --active                       # list only active agents
+```
+
+### Messaging
+
+Agents within a feature communicate through a file-based message queue managed by pm. Each agent has an inbox scoped to the current feature.
+
+```sh
+pm msg send reviewer "ready for review"    # send a message to the reviewer's inbox
+pm msg send implementer "LGTM"             # send a message to the implementer
+pm msg send reviewer "msg" --as-agent impl # send as a specific identity
+
+pm msg check                               # check for unread messages in your inbox
+pm msg check --as-agent reviewer           # check a specific agent's inbox
+
+pm msg read                                # read all messages from your inbox
+pm msg read --from implementer             # read messages from a specific sender
+pm msg read --as-agent reviewer            # read as a specific agent
+
+pm msg wait                                # block until a message arrives
+pm msg wait --as-agent reviewer            # wait as a specific agent
 ```
 
 Identity is resolved automatically: `PM_AGENT_NAME` (set by `pm agent spawn`) > `$USER` > `"user"`. Spawned agents get `PM_AGENT_NAME` set in their environment, so they don't need `--as-agent`.
@@ -304,7 +311,7 @@ Identity is resolved automatically: `PM_AGENT_NAME` (set by `pm agent spawn`) > 
 
 1. `pm feat new my-feature --context "task description"` — creates the feature and spawns the default agent (usually `implementer`)
 2. The implementer reads TASK.md, implements changes, runs tests
-3. The implementer sends `pm agent send reviewer "ready for review"` to request a review
+3. The implementer sends `pm msg send reviewer "ready for review"` to request a review
 4. You (or the implementer) spawn the reviewer: `pm agent spawn reviewer`
 5. The reviewer diffs the branch, sends feedback back to the implementer
 6. The implementer addresses feedback, sends another "ready for review" message

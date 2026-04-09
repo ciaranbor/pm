@@ -44,15 +44,16 @@ pm status             # project dashboard
 You may be working alongside other agents (reviewer, implementer, etc.) on the same feature. Use these commands to communicate:
 
 ```sh
-pm agent send <agent> "message"   # send a message to another agent
-pm agent check                    # check your inbox for new messages
-pm agent read                     # read new messages (marks them as read)
-pm agent read --from <sender>     # read only from a specific sender
-pm agent list                     # list agents in the current feature
+pm msg send <agent> "message"   # send a message to another agent
+pm msg check                    # check your inbox for new messages
+pm msg read                     # read new messages (marks them as read)
+pm msg read --from <sender>     # read only from a specific sender
+pm msg wait                     # block until a message arrives
+pm agent list                   # list agents in the current feature
 ```
 
 Guidelines:
-- Check your inbox (`pm agent check`) between tasks — other agents may have sent you messages
+- Check your inbox (`pm msg check`) between tasks — other agents may have sent you messages
 - When you finish a piece of work that another agent needs to know about, send them a message
 - Keep messages concise and actionable
 - When sending review findings, be specific about files and line numbers
@@ -63,4 +64,4 @@ Guidelines:
 - Do not run `pm feat merge`, `pm feat delete`, `pm delete`, or `pm doctor --fix`
 - Do not run `pm feat pr` or `pm feat ready`
 - Do not run `pm agent spawn` — only the user spawns agents
-- These are user-initiated operations — only create features, inspect status, and communicate with other agents
+- These are user-initiated operations — only create features, inspect status, and communicate with other agents via `pm msg`
