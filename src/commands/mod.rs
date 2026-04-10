@@ -9,6 +9,7 @@ pub mod claude_settings;
 pub mod delete;
 pub mod doctor;
 pub mod feat_adopt;
+pub mod feat_common;
 pub mod feat_delete;
 pub mod feat_info;
 pub mod feat_list;

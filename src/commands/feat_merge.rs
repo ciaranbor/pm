@@ -97,6 +97,8 @@ pub fn feat_merge(
             project_name,
             force_worktree: true, // always force — we already checked for uncommitted changes
             tmux_server,
+            delete_branch: true,
+            best_effort: false,
         })?;
     }
 

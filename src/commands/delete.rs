@@ -130,6 +130,8 @@ pub fn delete(
                 project_name: &project_name,
                 force_worktree: true,
                 tmux_server,
+                delete_branch: true,
+                best_effort: false,
             })?;
         } else {
             // Soft teardown: remove pm state and tmux session, but leave

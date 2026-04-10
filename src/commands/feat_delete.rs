@@ -17,6 +17,17 @@ pub struct CleanupParams<'a> {
     pub project_name: &'a str,
     pub force_worktree: bool,
     pub tmux_server: Option<&'a str>,
+    /// Whether to delete the branch as part of cleanup. Set this to `false`
+    /// when rolling back a `feat_adopt` failure, since the branch is owned by
+    /// the user and must not be destroyed.
+    pub delete_branch: bool,
+    /// When true, each cleanup step is run independently and errors are
+    /// swallowed. Used by creation-flow rollback where a failure in an
+    /// earlier step (e.g. removing a blocker directory that git doesn't
+    /// know about) must not prevent state/agent/message cleanup from
+    /// running. Regular `feat_delete` leaves this false so errors surface
+    /// to the user.
+    pub best_effort: bool,
 }
 
 /// Remove a feature's worktree, branch, state file, agent registry,
@@ -26,46 +37,71 @@ pub struct CleanupParams<'a> {
 /// from within the feature session (where killing the session would kill
 /// this process).
 pub fn cleanup_feature(params: &CleanupParams) -> Result<()> {
-    // Step 1: Remove git worktree
-    if params.worktree_path.exists() {
-        if params.force_worktree {
-            git::remove_worktree_force(params.repo, params.worktree_path)?;
-        } else {
-            git::remove_worktree(params.repo, params.worktree_path)?;
+    // Helper: run `step`, propagating errors only when `best_effort` is false.
+    let run = |step: &mut dyn FnMut() -> Result<()>| -> Result<()> {
+        match step() {
+            Ok(()) => Ok(()),
+            Err(e) if params.best_effort => {
+                eprintln!("warning: cleanup step failed (continuing): {e}");
+                Ok(())
+            }
+            Err(e) => Err(e),
         }
-    }
+    };
 
-    // Step 2: Delete branch
-    if git::branch_exists(params.repo, params.branch)? {
-        git::delete_branch(params.repo, params.branch)?;
-    }
+    // Step 1: Remove git worktree
+    run(&mut || {
+        if params.worktree_path.exists() {
+            if params.force_worktree {
+                git::remove_worktree_force(params.repo, params.worktree_path)?;
+            } else {
+                git::remove_worktree(params.repo, params.worktree_path)?;
+            }
+        }
+        Ok(())
+    })?;
+
+    // Step 2: Delete branch (skipped during feat_adopt rollback)
+    run(&mut || {
+        if params.delete_branch && git::branch_exists(params.repo, params.branch)? {
+            git::delete_branch(params.repo, params.branch)?;
+        }
+        Ok(())
+    })?;
 
     // Step 3: Remove state file
-    FeatureState::delete(params.features_dir, params.name)?;
+    run(&mut || FeatureState::delete(params.features_dir, params.name))?;
 
     // Step 4: Remove agent registry and message queue.
     // Derive .pm/ dir from features_dir (which is <project_root>/.pm/features/).
-    if let Some(pm_dir) = params.features_dir.parent() {
-        let agents_dir = pm_dir.join("agents");
-        AgentRegistry::delete(&agents_dir, params.name)?;
+    run(&mut || {
+        if let Some(pm_dir) = params.features_dir.parent() {
+            let agents_dir = pm_dir.join("agents");
+            AgentRegistry::delete(&agents_dir, params.name)?;
 
-        let messages_dir = pm_dir.join("messages");
-        messages::delete_feature(&messages_dir, params.name)?;
-    }
+            let messages_dir = pm_dir.join("messages");
+            messages::delete_feature(&messages_dir, params.name)?;
+        }
+        Ok(())
+    })?;
 
     // Step 5: Kill tmux session (last — see doc comment above)
-    let session_name = format!("{}/{}", params.project_name, params.name);
-    if tmux::has_session(params.tmux_server, &session_name)? {
-        // Only switch the client away if it's currently attached to the session
-        // being deleted. Otherwise we'd disrupt the user's active session.
-        if let Some(current) = tmux::current_session(params.tmux_server)
-            && current == session_name
-        {
-            let main_session = format!("{}/main", params.project_name);
-            let _ = tmux::switch_client(params.tmux_server, &main_session);
+    run(&mut || {
+        let session_name = format!("{}/{}", params.project_name, params.name);
+        if tmux::has_session(params.tmux_server, &session_name)? {
+            // Only switch the client away if it's currently attached to the
+            // session being deleted. Otherwise we'd disrupt the user's
+            // active session.
+            if let Some(current) = tmux::current_session(params.tmux_server)
+                && current == session_name
+            {
+                let main_session = format!("{}/main", params.project_name);
+                let _ = tmux::switch_client(params.tmux_server, &main_session);
+            }
+            tmux::kill_session(params.tmux_server, &session_name)?;
         }
-        tmux::kill_session(params.tmux_server, &session_name)?;
-    }
+        Ok(())
+    })?;
 
     Ok(())
 }
@@ -192,6 +228,8 @@ pub fn feat_delete(
         project_name,
         force_worktree,
         tmux_server,
+        delete_branch: true,
+        best_effort: false,
     })?;
 
     // Trigger post-merge hook when deleting a feature whose PR was merged

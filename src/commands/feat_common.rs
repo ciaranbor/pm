@@ -1,0 +1,132 @@
+//! Shared helpers for feature-creation commands (feat_new, feat_adopt, feat_review).
+//!
+//! Each creation flow is a linear recipe with small but meaningful divergences,
+//! so we expose plain helper functions rather than a builder or trait. Each
+//! helper captures a step that was byte-for-byte duplicated across the three
+//! flows; call sites continue to read as inspectable recipes.
+
+use std::path::Path;
+
+use chrono::Utc;
+
+use crate::commands::{agent_spawn, feat_delete};
+use crate::error::Result;
+use crate::git;
+use crate::state::feature::{FeatureState, FeatureStatus};
+use crate::state::paths;
+use crate::state::project::ProjectConfig;
+
+/// Fields needed to write an Initializing-status feature state file.
+pub struct InitStateFields<'a> {
+    pub branch: &'a str,
+    pub worktree: &'a str,
+    pub base: &'a str,
+    pub pr: &'a str,
+    pub context: &'a str,
+}
+
+/// Write a feature state file with `status = Initializing` and current timestamps.
+/// Returns the populated `FeatureState` so the caller can mutate it later
+/// (e.g. flip status to `Wip`/`Review` and re-save once setup succeeds).
+pub fn write_initializing_state(
+    features_dir: &Path,
+    name: &str,
+    fields: InitStateFields<'_>,
+) -> Result<FeatureState> {
+    let now = Utc::now();
+    let state = FeatureState {
+        status: FeatureStatus::Initializing,
+        branch: fields.branch.to_string(),
+        worktree: fields.worktree.to_string(),
+        base: fields.base.to_string(),
+        pr: fields.pr.to_string(),
+        context: fields.context.to_string(),
+        created: now,
+        last_active: now,
+    };
+    state.save(features_dir, name)?;
+    Ok(state)
+}
+
+/// Write a feature's TASK.md and add it to the worktree's git exclude file so
+/// it doesn't show up as untracked.
+pub fn write_task_md(worktree_path: &Path, content: &str) -> Result<()> {
+    std::fs::write(worktree_path.join("TASK.md"), content)?;
+    git::exclude_pattern(worktree_path, "TASK.md")?;
+    Ok(())
+}
+
+/// Resolve the agent to spawn for a feature-creation flow: explicit override
+/// first, then project default, then plain claude (None).
+pub fn resolve_default_agent<'a>(
+    agent_override: Option<&'a str>,
+    config: &'a ProjectConfig,
+) -> Option<&'a str> {
+    agent_override.or_else(|| {
+        let d = &config.agents.default;
+        if d.is_empty() { None } else { Some(d.as_str()) }
+    })
+}
+
+/// Spawn the default claude agent for a newly-created feature: resolves
+/// override → config default → plain claude, then calls
+/// `agent_spawn::spawn_claude_session` with a "READ TASK.md" prompt.
+///
+/// Only used by feat_new and feat_adopt. feat_review bypasses this because it
+/// always spawns the hardcoded `reviewer` agent in read-only mode.
+pub fn spawn_default_agent(
+    project_root: &Path,
+    feature_name: &str,
+    config: &ProjectConfig,
+    agent_override: Option<&str>,
+    no_edit: bool,
+    tmux_server: Option<&str>,
+) -> Result<()> {
+    let agent = resolve_default_agent(agent_override, config);
+    agent_spawn::spawn_claude_session(
+        project_root,
+        feature_name,
+        agent,
+        Some("READ TASK.md"),
+        !no_edit,
+        None,
+        tmux_server,
+    )?;
+    Ok(())
+}
+
+/// Best-effort rollback of a partial feature creation. Thin wrapper around
+/// `feat_delete::cleanup_feature` in `best_effort` mode, so every cleanup step
+/// (worktree removal, state file, agent registry, message queue, tmux
+/// session) runs even if an earlier one fails. Use `delete_branch = false`
+/// from `feat_adopt`, which must never destroy a user-owned branch.
+///
+/// `branch` is passed separately from `feature_name` because they can differ:
+/// `feat_new` may receive a slash-containing branch that sanitizes to a
+/// different feature name, while `feat_review` uses the sanitized feature
+/// name as both branch and feature id.
+pub fn rollback_creation(
+    project_root: &Path,
+    feature_name: &str,
+    branch: &str,
+    project_name: &str,
+    tmux_server: Option<&str>,
+    delete_branch: bool,
+) {
+    let main_worktree = project_root.join("main");
+    let worktree_path = project_root.join(feature_name);
+    let features_dir = paths::features_dir(project_root);
+
+    let _ = feat_delete::cleanup_feature(&feat_delete::CleanupParams {
+        repo: &main_worktree,
+        worktree_path: &worktree_path,
+        branch,
+        features_dir: &features_dir,
+        name: feature_name,
+        project_name,
+        force_worktree: true,
+        tmux_server,
+        delete_branch,
+        best_effort: true,
+    });
+}
