@@ -357,4 +357,6 @@ cargo clippy
 cargo fmt
 ```
 
+Tests spawn real tmux sessions. `cargo test` runs are capped at 4 threads via `.cargo/config.toml` to keep pty usage well under macOS limits. If you ever need to manually clean up stale test servers: `for s in /tmp/tmux-$(id -u)/pm-test-*; do tmux -L $(basename "$s") kill-server 2>/dev/null; rm -f "$s"; done`.
+
 See `CLAUDE.md` for development guidelines.
