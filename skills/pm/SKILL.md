@@ -57,7 +57,6 @@ Guidelines:
 - When you finish a piece of work that another agent needs to know about, send them a message
 - Keep messages concise and actionable
 - When sending review findings, be specific about files and line numbers
-- If you need the user's attention, send a message to them (their name appears in `pm agent list`)
 
 ## What NOT to do
 
