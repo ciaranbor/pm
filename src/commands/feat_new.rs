@@ -2,7 +2,8 @@ use std::path::Path;
 
 use chrono::Utc;
 
-use crate::commands::{agent_spawn, claude_settings};
+use crate::commands::claude_settings;
+use crate::commands::feat_common::{self, InitStateFields};
 use crate::error::{PmError, Result};
 use crate::hooks;
 use crate::state::feature::{FeatureState, FeatureStatus};
@@ -93,18 +94,17 @@ pub fn feat_new(
     let resolved_base = resolve_base(project_root, base, &cwd)?;
 
     // Step 1: Write state with status = initializing
-    let now = Utc::now();
-    let mut state = FeatureState {
-        status: FeatureStatus::Initializing,
-        branch: branch.to_string(),
-        worktree: feature_name.clone(),
-        base: resolved_base.clone(),
-        pr: String::new(),
-        context: resolved_context.clone().unwrap_or_default(),
-        created: now,
-        last_active: now,
-    };
-    state.save(&features_dir, &feature_name)?;
+    let mut state = feat_common::write_initializing_state(
+        &features_dir,
+        &feature_name,
+        InitStateFields {
+            branch,
+            worktree: &feature_name,
+            base: &resolved_base,
+            pr: "",
+            context: resolved_context.as_deref().unwrap_or(""),
+        },
+    )?;
 
     // Steps 2-5: Create resources, rolling back on failure
     let main_worktree = project_root.join("main");
@@ -124,27 +124,20 @@ pub fn feat_new(
 
         // Step 3.6: Write TASK.md if context provided
         if let Some(ref resolved) = resolved_context {
-            std::fs::write(worktree_path.join("TASK.md"), resolved)?;
-            git::exclude_pattern(&worktree_path, "TASK.md")?;
+            feat_common::write_task_md(&worktree_path, resolved)?;
         }
 
         // Step 4: Create tmux session
         tmux::create_session(tmux_server, &session_name, &worktree_path)?;
 
         // Step 4.5: Spawn a claude session to read TASK.md (if context was provided).
-        // Uses --agent override if provided, then project default, then plain claude.
         if resolved_context.is_some() {
-            let agent = agent_override.or_else(|| {
-                let d = &config.agents.default;
-                if d.is_empty() { None } else { Some(d.as_str()) }
-            });
-            agent_spawn::spawn_claude_session(
+            feat_common::spawn_default_agent(
                 project_root,
                 &feature_name,
-                agent,
-                Some("READ TASK.md"),
-                !no_edit, // feat new defaults to editing enabled; --no-edit disables it
-                None,
+                &config,
+                agent_override,
+                no_edit,
                 tmux_server,
             )?;
         }
@@ -161,15 +154,14 @@ pub fn feat_new(
     })();
 
     if let Err(e) = result {
-        // Best-effort cleanup of any resources created before the failure
-        let _ = tmux::kill_session(tmux_server, &session_name);
-        if worktree_path.exists() {
-            let _ = git::remove_worktree_force(&main_worktree, &worktree_path);
-        }
-        if git::branch_exists(&main_worktree, branch).unwrap_or(false) {
-            let _ = git::delete_branch(&main_worktree, branch);
-        }
-        let _ = FeatureState::delete(&features_dir, &feature_name);
+        feat_common::rollback_creation(
+            project_root,
+            &feature_name,
+            branch,
+            project_name,
+            tmux_server,
+            true, // feat_new owns the branch and may destroy it on failure
+        );
         return Err(e);
     }
 

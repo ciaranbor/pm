@@ -2,6 +2,7 @@ use std::path::Path;
 
 use chrono::Utc;
 
+use crate::commands::feat_common::{self, InitStateFields};
 use crate::commands::{agent_spawn, claude_settings, feat_new};
 use crate::error::{PmError, Result};
 use crate::gh::PrDetails;
@@ -68,20 +69,21 @@ fn setup_review(
     );
 
     // Step 1: Write state with status = initializing
-    let now = Utc::now();
-    let mut state = FeatureState {
-        status: FeatureStatus::Initializing,
-        branch: feature_name.to_string(),
-        worktree: feature_name.to_string(),
-        base: String::new(),
-        pr: details.number.clone(),
-        context: context.clone(),
-        created: now,
-        last_active: now,
-    };
-    state.save(&features_dir, feature_name)?;
+    let mut state = feat_common::write_initializing_state(
+        &features_dir,
+        feature_name,
+        InitStateFields {
+            branch: feature_name,
+            worktree: feature_name,
+            base: "",
+            pr: &details.number,
+            context: &context,
+        },
+    )?;
 
-    // Steps 2+: Create resources, rolling back on failure
+    // Steps 2+: Create resources, rolling back on failure.
+    // The local branch was created by `git::fetch_pr` in the caller, so we
+    // own it and rollback is free to delete it.
     let worktree_path = project_root.join(feature_name);
     let session_name = format!("{project_name}/{feature_name}");
     let hook_path = project_root.join(hooks::POST_CREATE_PATH);
@@ -94,13 +96,14 @@ fn setup_review(
         claude_settings::seed_feature_claude(project_root, &worktree_path)?;
 
         // Step 2.6: Write TASK.md
-        std::fs::write(worktree_path.join("TASK.md"), &context)?;
-        git::exclude_pattern(&worktree_path, "TASK.md")?;
+        feat_common::write_task_md(&worktree_path, &context)?;
 
         // Step 3: Create tmux session
         tmux::create_session(tmux_server, &session_name, &worktree_path)?;
 
-        // Step 3.5: Spawn reviewer agent to read TASK.md
+        // Step 3.5: Spawn reviewer agent to read TASK.md (always; read-only).
+        // We intentionally bypass feat_common::spawn_default_agent here
+        // because reviews always use the hardcoded `reviewer` agent.
         agent_spawn::spawn_claude_session(
             project_root,
             feature_name,
@@ -123,13 +126,14 @@ fn setup_review(
     })();
 
     if let Err(e) = result {
-        // Best-effort cleanup — branch is always ours to clean up
-        let _ = tmux::kill_session(tmux_server, &session_name);
-        if worktree_path.exists() {
-            let _ = git::remove_worktree_force(&main_worktree, &worktree_path);
-        }
-        let _ = git::delete_branch(&main_worktree, feature_name);
-        let _ = FeatureState::delete(&features_dir, feature_name);
+        feat_common::rollback_creation(
+            project_root,
+            feature_name,
+            feature_name,
+            project_name,
+            tmux_server,
+            true, // fetch_pr created the local branch, so we own it
+        );
         return Err(e);
     }
 

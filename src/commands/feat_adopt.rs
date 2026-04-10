@@ -2,7 +2,9 @@ use std::path::Path;
 
 use chrono::Utc;
 
+use crate::commands::feat_common::{self, InitStateFields};
 use crate::error::{PmError, Result};
+use crate::hooks;
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
 use crate::state::project::ProjectConfig;
@@ -48,26 +50,18 @@ pub fn feat_adopt(
     // Resolve context upfront (file contents or literal text)
     let resolved_context = context.map(super::feat_new::resolve_context).transpose()?;
 
-    // Step 1: Write state with status = initializing
-    let now = Utc::now();
-    let mut state = FeatureState {
-        status: FeatureStatus::Initializing,
-        branch: branch.to_string(),
-        worktree: feature_name.clone(),
-        base: String::new(),
-        pr: String::new(),
-        context: resolved_context.clone().unwrap_or_default(),
-        created: now,
-        last_active: now,
-    };
-    state.save(&features_dir, &feature_name)?;
+    // Resolve base branch (detected from CWD, or "main" fallback). Even though
+    // feat_adopt takes an existing branch, recording a base helps feat_sync /
+    // feat_merge know what to merge into.
+    let cwd = std::env::current_dir()?;
+    let resolved_base = super::feat_new::resolve_base(project_root, None, &cwd)?;
 
-    // Step 2: Create git worktree (skip branch creation — branch already exists)
-    let worktree_path = project_root.join(&feature_name);
-
-    // If the branch already has a registered worktree, handle the conflict.
-    // With --from: back up the old worktree and prune so add_worktree can succeed.
-    // Without --from: fail with a clear error telling the user to use --from.
+    // Handle pre-existing worktree for this branch up-front, *before* writing
+    // state. With --from: back up the old worktree and prune so add_worktree
+    // can succeed. Without --from: fail with a clear error. Running this
+    // before the state write keeps the on-disk state honest: we never leave a
+    // stale Initializing entry just because the branch was already checked
+    // out elsewhere.
     if let Some(existing_wt) = git::find_worktree_for_branch(&main_worktree, branch)? {
         if from.is_some() {
             if existing_wt.exists() {
@@ -89,57 +83,90 @@ pub fn feat_adopt(
         }
     }
 
-    git::add_worktree(&main_worktree, &worktree_path, branch)?;
+    // Step 1: Write state with status = initializing
+    let mut state = feat_common::write_initializing_state(
+        &features_dir,
+        &feature_name,
+        InitStateFields {
+            branch,
+            worktree: &feature_name,
+            base: &resolved_base,
+            pr: "",
+            context: resolved_context.as_deref().unwrap_or(""),
+        },
+    )?;
 
-    // Step 2.5: Seed Claude Code settings and skills from main worktree
-    super::claude_settings::seed_feature_claude(project_root, &worktree_path)?;
-
-    // Step 2.6: Migrate Claude Code sessions from old path if provided.
-    // Always use the original --from path for migration since claude sessions
-    // are keyed by the original path, not the backup location.
-    if let Some(old_path) = from {
-        match super::claude_migrate::migrate_sessions(old_path, &worktree_path, claude_base) {
-            Ok(msgs) => {
-                for msg in msgs {
-                    eprintln!("{msg}");
-                }
-            }
-            Err(e) => eprintln!("Warning: Claude session migration failed: {e}"),
-        }
-    }
-
-    // Step 2.6: Write TASK.md if context provided
-    if let Some(ref resolved) = resolved_context {
-        std::fs::write(worktree_path.join("TASK.md"), resolved)?;
-        git::exclude_pattern(&worktree_path, "TASK.md")?;
-    }
-
-    // Step 3: Create tmux session
+    // Steps 2+: Create resources, rolling back on failure.
+    //
+    // Invariant: `branch` is user-owned — it existed before feat_adopt ran —
+    // so rollback must NOT delete it. We pass `delete_branch: false` below.
+    let worktree_path = project_root.join(&feature_name);
     let session_name = format!("{project_name}/{feature_name}");
-    tmux::create_session(tmux_server, &session_name, &worktree_path)?;
+    let hook_path = project_root.join(hooks::POST_CREATE_PATH);
 
-    // Step 3.5: Spawn a claude session to read TASK.md (if context was provided).
-    // Uses --agent override if provided, then project default, then plain claude.
-    if resolved_context.is_some() {
-        let agent = agent_override.or_else(|| {
-            let d = &config.agents.default;
-            if d.is_empty() { None } else { Some(d.as_str()) }
-        });
-        super::agent_spawn::spawn_claude_session(
+    let result: Result<()> = (|| {
+        // Step 2: Create git worktree (skip branch creation — branch already exists)
+        git::add_worktree(&main_worktree, &worktree_path, branch)?;
+
+        // Step 2.5: Seed Claude Code settings and skills from main worktree
+        super::claude_settings::seed_feature_claude(project_root, &worktree_path)?;
+
+        // Step 2.6: Migrate Claude Code sessions from old path if provided.
+        // Always use the original --from path for migration since claude
+        // sessions are keyed by the original path, not the backup location.
+        if let Some(old_path) = from {
+            match super::claude_migrate::migrate_sessions(old_path, &worktree_path, claude_base) {
+                Ok(msgs) => {
+                    for msg in msgs {
+                        eprintln!("{msg}");
+                    }
+                }
+                Err(e) => eprintln!("Warning: Claude session migration failed: {e}"),
+            }
+        }
+
+        // Step 2.7: Write TASK.md if context provided
+        if let Some(ref resolved) = resolved_context {
+            feat_common::write_task_md(&worktree_path, resolved)?;
+        }
+
+        // Step 3: Create tmux session
+        tmux::create_session(tmux_server, &session_name, &worktree_path)?;
+
+        // Step 3.5: Spawn a claude session to read TASK.md (if context was provided).
+        if resolved_context.is_some() {
+            feat_common::spawn_default_agent(
+                project_root,
+                &feature_name,
+                &config,
+                agent_override,
+                no_edit,
+                tmux_server,
+            )?;
+        }
+
+        // Step 3.6: Run post-create hook in a named "hook" window (non-fatal)
+        hooks::run_hook(tmux_server, &session_name, &worktree_path, &hook_path);
+
+        // Step 4: Update status to wip
+        state.status = FeatureStatus::Wip;
+        state.last_active = Utc::now();
+        state.save(&features_dir, &feature_name)?;
+
+        Ok(())
+    })();
+
+    if let Err(e) = result {
+        feat_common::rollback_creation(
             project_root,
             &feature_name,
-            agent,
-            Some("READ TASK.md"),
-            !no_edit,
-            None,
+            branch,
+            project_name,
             tmux_server,
-        )?;
+            false, // user-owned branch — never delete it
+        );
+        return Err(e);
     }
-
-    // Step 4: Update status to wip
-    state.status = FeatureStatus::Wip;
-    state.last_active = Utc::now();
-    state.save(&features_dir, &feature_name)?;
 
     Ok(feature_name)
 }
@@ -390,13 +417,13 @@ mod tests {
         )
         .unwrap();
 
-        // Session should have 2 windows: the default shell + the claude window
+        // Session should have 3 windows: the default shell + claude + hook
         let output = tmux::list_windows(server.name(), &format!("{project_name}/login")).unwrap();
-        assert_eq!(output, 2);
+        assert_eq!(output, 3);
     }
 
     #[test]
-    fn feat_adopt_without_context_has_single_window() {
+    fn feat_adopt_without_context_has_shell_and_hook_windows() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, project_name) = server.setup_project(dir.path());
@@ -415,12 +442,16 @@ mod tests {
         )
         .unwrap();
 
-        let output = tmux::list_windows(server.name(), &format!("{project_name}/login")).unwrap();
-        assert_eq!(output, 1);
+        // 2 windows: default shell + hook
+        let session = format!("{project_name}/login");
+        let output = tmux::list_windows(server.name(), &session).unwrap();
+        assert_eq!(output, 2);
+        let target = tmux::find_window(server.name(), &session, "hook").unwrap();
+        assert!(target.is_some());
     }
 
     #[test]
-    fn feat_adopt_tmux_failure_leaves_initializing_state() {
+    fn feat_adopt_tmux_failure_cleans_up_but_preserves_branch() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, project_name) = server.setup_project(dir.path());
@@ -442,10 +473,51 @@ mod tests {
         );
         assert!(result.is_err());
 
+        // State file, worktree and our new tmux session should be rolled back...
         let features_dir = paths::features_dir(&project_path);
-        assert!(FeatureState::exists(&features_dir, "login"));
-        let state = FeatureState::load(&features_dir, "login").unwrap();
-        assert_eq!(state.status, FeatureStatus::Initializing);
+        assert!(!FeatureState::exists(&features_dir, "login"));
+        assert!(!project_path.join("login").exists());
+
+        // ...but the user-owned branch must NOT be deleted.
+        let main_wt = project_path.join("main");
+        assert!(
+            git::branch_exists(&main_wt, "login").unwrap(),
+            "feat_adopt rollback must preserve the user's branch"
+        );
+    }
+
+    #[test]
+    fn feat_adopt_worktree_failure_preserves_user_branch() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, _) = server.setup_project(dir.path());
+        create_branch(&project_path, "login");
+
+        // Pre-create the worktree path with a file inside so `git worktree add`
+        // fails. This exercises rollback before the worktree has been created.
+        std::fs::create_dir(project_path.join("login")).unwrap();
+        std::fs::write(project_path.join("login").join("blocker.txt"), "").unwrap();
+
+        let result = feat_adopt(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            None,
+            server.name(),
+            None,
+        );
+        assert!(result.is_err());
+
+        // State file should be cleaned up
+        let features_dir = paths::features_dir(&project_path);
+        assert!(!FeatureState::exists(&features_dir, "login"));
+
+        // Branch must still exist — it's the user's branch
+        let main_wt = project_path.join("main");
+        assert!(git::branch_exists(&main_wt, "login").unwrap());
     }
 
     #[test]

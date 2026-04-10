@@ -326,6 +326,8 @@ fn apply_fix(
                 project_name,
                 force_worktree: true,
                 tmux_server,
+                delete_branch: true,
+                best_effort: false,
             })?;
         }
         FixAction::RecreateTmuxSession {
