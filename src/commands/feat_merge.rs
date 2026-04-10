@@ -50,11 +50,13 @@ pub fn feat_merge(
     // Check if the branch is already merged locally
     let mut already_merged = git::branch_merged_into(&base_repo, &state.branch, base)?;
 
-    // If not merged locally, fetch and check the remote tracking branch.
-    // The branch may have been merged upstream (e.g. via GitHub PR).
+    // If not merged locally, check whether the base has an upstream and, if so,
+    // fetch and re-check against it. tracking_branch is a local lookup, so
+    // checking it first lets us skip the network fetch entirely when there is
+    // no upstream. The branch may have been merged upstream (e.g. via GitHub PR).
     if !already_merged
-        && let Ok(()) = git::fetch(&base_repo)
         && let Ok(Some(tracking)) = git::tracking_branch(&base_repo, base)
+        && let Ok(()) = git::fetch(&base_repo)
     {
         already_merged = git::branch_merged_into(&base_repo, &state.branch, &tracking)?;
     }
