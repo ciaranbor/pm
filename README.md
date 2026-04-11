@@ -289,21 +289,46 @@ pm agent list --active                       # list only active agents
 
 Agents within a feature communicate through a file-based message queue managed by pm. Each agent has an inbox scoped to the current feature.
 
+Each inbox holds an ordered queue per sender, and a per-sender cursor
+tracks "the last message I processed". Reading is a pure, single-message
+operation. Advancing through the queue is an explicit `next` step.
+
 ```sh
-pm msg send reviewer "ready for review"    # send a message to the reviewer's inbox
-pm msg send implementer "LGTM"             # send a message to the implementer
-pm msg send reviewer "msg" --as-agent impl # send as a specific identity
+pm msg send reviewer "ready for review"      # append to reviewer's inbox
+pm msg send reviewer "msg" --as-agent impl   # send as a specific identity
 
-pm msg check                               # check for unread messages in your inbox
-pm msg check --as-agent reviewer           # check a specific agent's inbox
+pm msg wait                                  # block until any new message arrives
+pm msg wait --from reviewer                  # block only on messages from reviewer
 
-pm msg read                                # read all messages from your inbox
-pm msg read --from implementer             # read messages from a specific sender
-pm msg read --as-agent reviewer            # read as a specific agent
+pm msg list                                  # enumerate inbox with cursor markers
+pm msg list --from reviewer                  # only show one sender's queue
 
-pm msg wait                                # block until a message arrives
-pm msg wait --as-agent reviewer            # wait as a specific agent
+pm msg read                                  # print the next unread message
+pm msg read --from reviewer                  # scope to one sender
+pm msg read --from reviewer --index 3        # absolute: message 3 from reviewer
+pm msg read --from reviewer --index +2       # peek ahead: cursor + 2
+pm msg read --from reviewer --index -1       # re-read the last processed message (the cursor itself)
+pm msg read --from reviewer --index -2       # one further back
+
+pm msg next                                  # advance the cursor by one
+pm msg next --from reviewer                  # scope to one sender
 ```
+
+Key properties:
+
+- **`read` never mutates.** Calling it ten times returns the same message.
+- **`next` is the only mutation.** It advances the cursor by exactly one.
+  Process a message, then call `next` to move on.
+- **`--from` is required only when ambiguous.** If your inbox has unread
+  messages from only one sender, `pm msg read` / `pm msg next` pick it
+  automatically. If multiple senders have unread, you'll get a clear
+  error asking you to disambiguate.
+- **`--index` always requires `--from`.** Absolute and relative indices
+  address a specific historical message — there's no "implicit sender"
+  for that mode.
+- **Re-reading is free.** Past messages stay on disk forever. Use
+  `pm msg list` to find their index and `pm msg read --from <s> --index <n>`
+  to dump them again.
 
 Identity is resolved automatically: `PM_AGENT_NAME` (set by `pm agent spawn`) > `$USER` > `"user"`. Spawned agents get `PM_AGENT_NAME` set in their environment, so they don't need `--as-agent`.
 

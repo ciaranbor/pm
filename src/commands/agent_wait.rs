@@ -5,12 +5,14 @@ use crate::error::Result;
 use crate::messages;
 use crate::state::paths;
 
-/// Poll for new messages in an agent's inbox, blocking until at least one arrives.
-/// Returns the unread count when messages are found.
+/// Poll for new messages in an agent's inbox, blocking until at least one
+/// arrives. Returns the total unread count when messages are found. If
+/// `from` is specified, only messages from that sender count.
 pub fn agent_wait(
     project_root: &Path,
     feature: &str,
     agent: &str,
+    from: Option<&str>,
     poll_interval: Option<Duration>,
 ) -> Result<u32> {
     let messages_dir = paths::messages_dir(project_root);
@@ -18,7 +20,11 @@ pub fn agent_wait(
 
     loop {
         let summaries = messages::check(&messages_dir, feature, agent)?;
-        let total: u32 = summaries.iter().map(|s| s.count).sum();
+        let total: u32 = summaries
+            .iter()
+            .filter(|s| from.is_none_or(|f| s.sender == f))
+            .map(|s| s.count)
+            .sum();
 
         if total > 0 {
             return Ok(total);
@@ -51,8 +57,14 @@ mod tests {
         let mdir = paths::messages_dir(&root);
         messages::send(&mdir, "login", "reviewer", "implementer", "hi").unwrap();
 
-        let count =
-            agent_wait(&root, "login", "reviewer", Some(Duration::from_millis(50))).unwrap();
+        let count = agent_wait(
+            &root,
+            "login",
+            "reviewer",
+            None,
+            Some(Duration::from_millis(50)),
+        )
+        .unwrap();
         assert_eq!(count, 1);
     }
 
@@ -66,8 +78,14 @@ mod tests {
         messages::send(&mdir, "login", "reviewer", "implementer", "two").unwrap();
         messages::send(&mdir, "login", "reviewer", "user", "three").unwrap();
 
-        let count =
-            agent_wait(&root, "login", "reviewer", Some(Duration::from_millis(50))).unwrap();
+        let count = agent_wait(
+            &root,
+            "login",
+            "reviewer",
+            None,
+            Some(Duration::from_millis(50)),
+        )
+        .unwrap();
         assert_eq!(count, 3);
     }
 
@@ -82,6 +100,7 @@ mod tests {
                 &root_clone,
                 "login",
                 "reviewer",
+                None,
                 Some(Duration::from_millis(50)),
             )
             .unwrap()
@@ -91,6 +110,35 @@ mod tests {
         std::thread::sleep(Duration::from_millis(150));
         let mdir = paths::messages_dir(&root);
         messages::send(&mdir, "login", "reviewer", "implementer", "hello").unwrap();
+
+        let count = handle.join().unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn wait_with_from_ignores_other_senders() {
+        let dir = tempdir().unwrap();
+        let root = Arc::new(setup_project(dir.path()));
+
+        let mdir = paths::messages_dir(&root);
+        // Noise from someone we don't care about.
+        messages::send(&mdir, "login", "reviewer", "user", "noise").unwrap();
+
+        let root_clone = Arc::clone(&root);
+        let handle = std::thread::spawn(move || {
+            agent_wait(
+                &root_clone,
+                "login",
+                "reviewer",
+                Some("implementer"),
+                Some(Duration::from_millis(50)),
+            )
+            .unwrap()
+        });
+
+        // The "noise" from user should not unblock the wait.
+        std::thread::sleep(Duration::from_millis(150));
+        messages::send(&mdir, "login", "reviewer", "implementer", "real").unwrap();
 
         let count = handle.join().unwrap();
         assert_eq!(count, 1);

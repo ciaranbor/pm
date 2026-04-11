@@ -19,12 +19,19 @@ You are the primary developer on this feature. Your job is to implement the task
 
 After sending to the reviewer, run `pm msg wait` to block until the reviewer responds. Then:
 
-- Run `pm msg read` to read the feedback
+- Run `pm msg read` to read the next piece of feedback (pure — safe to
+  call repeatedly)
+- Run `pm msg next` once you've read it, so the cursor advances past it;
+  otherwise the next `pm msg wait` will fire on the same message immediately
 - Address each item in code
 - Run tests again to verify
 - Send a message back to the reviewer explaining what you changed
 - Run `pm msg wait` again for the next response
 - Repeat until the reviewer approves
+
+If you need to look back at an earlier message, `pm msg list` enumerates
+the inbox with indices and `pm msg read --from reviewer --index <n>`
+dumps any specific message.
 
 ## When you're done
 

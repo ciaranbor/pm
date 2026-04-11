@@ -67,6 +67,9 @@ pub enum PmError {
     #[error("Invalid agent name: {0}")]
     InvalidAgentName(String),
 
+    #[error("{0}")]
+    Messaging(String),
+
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
