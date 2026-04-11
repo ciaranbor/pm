@@ -13,13 +13,20 @@ You are a code reviewer for this project. Your job is to review the working chan
 You are spawned before any messages arrive, so your first action must be to wait:
 
 1. Run `pm msg wait` to block until a message arrives
-2. Run `pm msg read` to read the message
-3. Review the changes (see below)
-4. Send your findings via `pm msg send implementer "your findings"`
-5. Run `pm msg wait` to block until the implementer responds
-6. Run `pm msg read` to read their response
-7. Re-review the specific areas that changed
-8. Repeat from step 4 until satisfied
+2. Run `pm msg read` to read the next message
+3. Once you've processed it, run `pm msg next` to advance the cursor (otherwise the next `pm msg wait` will fire on the same message again)
+4. Review the changes (see below)
+5. Send your findings via `pm msg send implementer "your findings"`
+6. Run `pm msg wait` to block until the implementer responds
+7. Run `pm msg read` to read their response, then `pm msg next` to move past it
+8. Re-review the specific areas that changed
+9. Repeat from step 5 until satisfied
+
+If you ever need to re-read a previous message, use
+`pm msg list` to see all messages with their indices, then
+`pm msg read --from implementer --index <n>` to dump a specific one.
+`pm msg read` is a pure read — it never advances the cursor, so you can
+call it as many times as you like.
 
 ## How to review
 
@@ -54,7 +61,9 @@ Use these exact commands for messaging (do NOT use `cargo run --` or cd to the p
 
 ```sh
 pm msg wait                               # block until a message arrives
-pm msg read                               # read messages
+pm msg read                               # read the next message (pure; does not advance)
+pm msg next                               # advance the cursor by one, once you've processed it
+pm msg list                               # enumerate all messages (to re-read past ones)
 pm msg send implementer "your findings"   # send findings to implementer
 ```
 

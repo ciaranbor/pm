@@ -44,7 +44,7 @@ enum Commands {
     /// Agent management (spawn, list)
     #[command(subcommand)]
     Agent(AgentCommands),
-    /// Inter-agent messaging (send, check, read, wait)
+    /// Inter-agent messaging (send, read, next, list, wait)
     #[command(subcommand)]
     Msg(MsgCommands),
     /// Claude Code settings, skills, and session management
@@ -218,15 +218,33 @@ enum MsgCommands {
         #[arg(long)]
         as_agent: Option<String>,
     },
-    /// Check for new messages in your inbox
-    Check {
+    /// Read a single message from your inbox (does not advance the cursor)
+    Read {
+        /// Which sender's queue to read from. Required with --index.
+        /// Without --index, inferred when exactly one sender has unread messages.
+        #[arg(long)]
+        from: Option<String>,
+        /// Absolute index ("3"), or relative to the cursor ("+2", "-1").
+        /// If omitted, reads the next unread message (cursor + 1).
+        #[arg(long, value_name = "SPEC")]
+        index: Option<String>,
         /// Agent name (defaults to $PM_AGENT_NAME or $USER)
         #[arg(long)]
         as_agent: Option<String>,
     },
-    /// Read messages from your inbox
-    Read {
-        /// Only read messages from this sender
+    /// Advance a sender's cursor by one message
+    Next {
+        /// Which sender's cursor to advance. Inferred when exactly one sender
+        /// has unread messages.
+        #[arg(long)]
+        from: Option<String>,
+        /// Agent name (defaults to $PM_AGENT_NAME or $USER)
+        #[arg(long)]
+        as_agent: Option<String>,
+    },
+    /// List all messages in your inbox, with cursor position markers
+    List {
+        /// Only show messages from this sender
         #[arg(long)]
         from: Option<String>,
         /// Agent name (defaults to $PM_AGENT_NAME or $USER)
@@ -235,6 +253,9 @@ enum MsgCommands {
     },
     /// Block until a message arrives in your inbox
     Wait {
+        /// Only block on messages from this sender
+        #[arg(long)]
+        from: Option<String>,
         /// Agent name (defaults to $PM_AGENT_NAME or $USER)
         #[arg(long)]
         as_agent: Option<String>,
@@ -617,18 +638,42 @@ fn run() -> pm::error::Result<()> {
                     println!("{line}");
                     Ok(())
                 }
-                MsgCommands::Check { as_agent } => {
+                MsgCommands::Read {
+                    from,
+                    index,
+                    as_agent,
+                } => {
                     let agent = as_agent.unwrap_or_else(pm::messages::default_user_name);
-                    let lines =
-                        commands::agent_check::agent_check(&project_root, &feature, &agent)?;
+                    let spec = index
+                        .as_deref()
+                        .map(commands::agent_read::IndexSpec::parse)
+                        .transpose()?;
+                    let lines = commands::agent_read::agent_read(
+                        &project_root,
+                        &feature,
+                        &agent,
+                        from.as_deref(),
+                        spec,
+                    )?;
                     for line in lines {
                         println!("{line}");
                     }
                     Ok(())
                 }
-                MsgCommands::Read { from, as_agent } => {
+                MsgCommands::Next { from, as_agent } => {
                     let agent = as_agent.unwrap_or_else(pm::messages::default_user_name);
-                    let lines = commands::agent_read::agent_read(
+                    let line = commands::agent_next::agent_next(
+                        &project_root,
+                        &feature,
+                        &agent,
+                        from.as_deref(),
+                    )?;
+                    println!("{line}");
+                    Ok(())
+                }
+                MsgCommands::List { from, as_agent } => {
+                    let agent = as_agent.unwrap_or_else(pm::messages::default_user_name);
+                    let lines = commands::msg_list::msg_list(
                         &project_root,
                         &feature,
                         &agent,
@@ -639,10 +684,15 @@ fn run() -> pm::error::Result<()> {
                     }
                     Ok(())
                 }
-                MsgCommands::Wait { as_agent } => {
+                MsgCommands::Wait { from, as_agent } => {
                     let agent = as_agent.unwrap_or_else(pm::messages::default_user_name);
-                    let count =
-                        commands::agent_wait::agent_wait(&project_root, &feature, &agent, None)?;
+                    let count = commands::agent_wait::agent_wait(
+                        &project_root,
+                        &feature,
+                        &agent,
+                        from.as_deref(),
+                        None,
+                    )?;
                     println!("{count} new message{}", if count == 1 { "" } else { "s" });
                     Ok(())
                 }
