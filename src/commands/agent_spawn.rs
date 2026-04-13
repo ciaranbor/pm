@@ -85,7 +85,7 @@ pub fn spawn_claude_session(
     // since they're interactive by design.
     let effective_prompt = match (prompt, agent_name) {
         (Some(p), _) => Some(p),
-        (None, Some(_)) => Some("continue"),
+        (None, Some(_)) => Some(" "),
         (None, None) => None,
     };
 
@@ -449,8 +449,8 @@ mod tests {
 
     #[test]
     fn build_cmd_with_agent() {
-        // Note: spawn_claude_session adds a "continue" sentinel when no
-        // prompt is provided for a named agent. build_claude_cmd itself is
+        // Note: spawn_claude_session adds a " " sentinel when no prompt
+        // is provided for a named agent. build_claude_cmd itself is
         // prompt-agnostic — the sentinel is injected by the caller.
         let cmd = build_claude_cmd(Some("reviewer"), None, None, None);
         assert_eq!(cmd, "claude --agent reviewer");
