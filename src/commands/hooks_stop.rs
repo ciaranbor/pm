@@ -20,7 +20,7 @@ use crate::commands::agent_wait;
 use crate::state::paths;
 
 /// Reason text when no background wait is running.
-const REASON: &str = "Run `pm msg wait` to wait for messages..";
+const REASON: &str = "No further instructions for now. Run `pm msg wait`.";
 
 /// Run the Stop hook logic. Prints JSON to stdout and returns the exit code.
 ///
