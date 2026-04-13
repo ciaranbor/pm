@@ -80,9 +80,9 @@ pub fn spawn_claude_session(
     // Named agents need a sentinel prompt when none is explicitly provided:
     // Claude with no positional prompt just waits for user input and never
     // completes a turn, so the Stop hook never fires. A trivial "continue"
-    // prompt causes an immediate first turn, letting the hook drive the
-    // agent into `pm msg wait`. Plain (unnamed) claude sessions don't need
-    // this since they're interactive by design.
+    // prompt causes an immediate first turn, letting the blocking Stop hook
+    // wait for messages. Plain (unnamed) claude sessions don't need this
+    // since they're interactive by design.
     let effective_prompt = match (prompt, agent_name) {
         (Some(p), _) => Some(p),
         (None, Some(_)) => Some("continue"),
@@ -138,10 +138,10 @@ pub fn spawn_claude_session(
 /// Otherwise, the permission mode is looked up from the project config.
 ///
 /// When `context` is provided, it is always enqueued as a message in the
-/// agent's inbox rather than passed as a positional prompt. The pm Stop
-/// hook delivers it on the agent's next `pm msg wait` tick, so the same
-/// path serves "spawn fresh with a brief", "spawn and nudge a dead agent",
-/// and "send a follow-up to an active agent".
+/// agent's inbox rather than passed as a positional prompt. The Stop hook
+/// blocks until the message is available, then tells the agent to read it.
+/// The same path serves "spawn fresh with a brief", "spawn and nudge a
+/// dead agent", and "send a follow-up to an active agent".
 ///
 /// Returns a status message.
 pub fn agent_spawn(
@@ -209,8 +209,8 @@ pub fn agent_spawn(
         return Ok(msg);
     }
 
-    // New agent, no positional prompt — the Stop hook will deliver any
-    // queued context via `pm msg wait` on the agent's first turn.
+    // New agent, no positional prompt — the Stop hook blocks until any
+    // queued context is available, then tells the agent to read it.
     let window_target = spawn_claude_session(
         project_root,
         feature,

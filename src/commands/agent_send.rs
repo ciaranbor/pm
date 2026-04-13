@@ -51,8 +51,8 @@ pub fn agent_send(
     let mut status = format!("Message {index:03} sent to '{recipient}' (from '{sender}')");
 
     // Auto-spawn the agent if it's not currently active. No positional
-    // prompt: the pm Stop hook drives the agent into `pm msg wait` on its
-    // empty first turn, which picks up the message we just queued above.
+    // prompt: the Stop hook blocks until the queued message is available,
+    // then tells the agent to read it.
     if !is_agent_active(project_root, feature, recipient, tmux_server)? {
         let spawn_msg = super::agent_spawn::agent_spawn(
             project_root,

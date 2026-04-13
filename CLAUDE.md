@@ -28,22 +28,23 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 pm agents are never-idle message processors, not one-shot scripts. This
 is implemented with a Claude Code **Stop hook** (`pm hooks stop`,
 installed by `pm hooks install` into `main/.claude/settings.json`). The
-hook checks a `.waiting` lock file managed by `pm msg wait`:
+hook blocks until messages are available by calling `agent_wait`
+directly, then returns:
 
-- **No lock file** → `block` + "run `pm msg wait`". The agent runs
-  `pm msg wait`, which returns immediately if messages are queued or
-  blocks until one arrives. The agent processes it, the turn ends, and
-  the hook fires again.
-- **Lock file present** → `approve`. A background `pm msg wait` is
-  already running. Claude stops; the background task wakes it via a
-  task-notification when a message arrives.
+```json
+{"decision": "block", "reason": "You have new messages. Run `pm msg read` …"}
+```
+
+Claude Code delivers this as a continuation prompt. The agent reads the
+message, processes it, the turn ends, and the hook fires again — blocking
+until the next message arrives.
 
 Initial context (`pm feat new --context <x>`, `pm agent spawn --context
 <x>`, `pm msg send <to> <body>` auto-spawn) all desugar to the same
 primitive: **enqueue a message, then spawn (or do nothing if already
-running).** The first turn is empty; the Stop hook drives the agent
-into reading the queued message. The first-turn flow is identical to
-every subsequent turn.
+running).** The first turn is empty; the Stop hook blocks until the
+queued message is available, then delivers it. The first-turn flow is
+identical to every subsequent turn.
 
 ### Own-scope notes vs cross-scope messaging
 
