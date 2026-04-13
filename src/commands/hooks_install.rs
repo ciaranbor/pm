@@ -1,14 +1,10 @@
 //! Install the pm Stop hook into `main/.claude/settings.json`.
 //!
-//! The Stop hook is `pm hooks stop`, a Rust command that checks the agent's
-//! inbox and the waiting lock file to decide whether Claude should stop:
-//!
-//! - **Unread messages** → `block` + "read your messages"
-//! - **No unread, no background wait** → `block` + "start `pm msg wait` in
-//!   background"
-//! - **No unread, background wait running** → `allow` — the background
-//!   `pm msg wait` will wake Claude via task-notification when a message
-//!   arrives.
+//! The Stop hook is `pm hooks stop`, a Rust command that blocks until
+//! the agent has unread messages (by calling `agent_wait` internally),
+//! then returns `{"decision":"block","reason":"You have new messages…"}`.
+//! Claude Code delivers the reason as a continuation prompt, the agent
+//! reads its messages, the turn ends, and the hook fires again.
 //!
 //! # Stop-hook prototype
 //!
@@ -29,7 +25,7 @@ use crate::error::{PmError, Result};
 pub const PM_HOOK_MARKER: &str = "pm hooks stop";
 
 /// The shell command registered as the Stop hook. Invokes `pm hooks stop`
-/// which checks the inbox and lock file, printing the appropriate JSON
+/// which blocks until unread messages are available, printing the JSON
 /// decision to stdout.
 pub fn stop_hook_command() -> String {
     "pm hooks stop".to_string()

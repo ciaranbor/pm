@@ -57,7 +57,7 @@ pm feat new ciaran/login                        # feature name: ciaran-login
 pm feat new ciaran/login --feature-name eval    # feature name: eval
 ```
 
-Creates a git branch, worktree, and tmux session (`myapp/login`). With `--context`, enqueues the provided text (or file contents) as the first message in the default agent's inbox and spawns a Claude session with auto-accept edits enabled. The Stop hook (installed by `pm init`, see below) drives the agent into `pm msg wait` on its first turn, which delivers the queued message. Use `--no-edit` to disable auto-accept edits. With `--base`, branches from the specified branch instead of the default. When `--base` is omitted, the current branch is detected from CWD — so running `pm feat new child` from within a feature worktree automatically stacks on that feature.
+Creates a git branch, worktree, and tmux session (`myapp/login`). With `--context`, enqueues the provided text (or file contents) as the first message in the default agent's inbox and spawns a Claude session with auto-accept edits enabled. The Stop hook (installed by `pm init`, see below) blocks until the queued message is available, then tells the agent to read it. Use `--no-edit` to disable auto-accept edits. With `--base`, branches from the specified branch instead of the default. When `--base` is omitted, the current branch is detected from CWD — so running `pm feat new child` from within a feature worktree automatically stacks on that feature.
 
 Branch names with slashes are supported — slashes are automatically replaced with dashes for the feature name (used for the worktree directory, state file, and tmux session). Use `--feature-name` to override the derived name.
 
@@ -133,7 +133,7 @@ pm feat review 42                                    # by PR number
 pm feat review https://github.com/owner/repo/pull/42 # by URL
 ```
 
-Fetches the PR commits, creates a worktree and tmux session (`myapp/review-42`), and enqueues the PR title, URL, and body as the first message in the `reviewer` agent's inbox. Spawns a read-only reviewer Claude session; the Stop hook drives it into `pm msg wait` on first turn, which delivers the queued context. Feature status is set to `review` and the PR is linked automatically. Works for both same-repo and fork PRs. Use `pm feat delete` to clean up when done.
+Fetches the PR commits, creates a worktree and tmux session (`myapp/review-42`), and enqueues the PR title, URL, and body as the first message in the `reviewer` agent's inbox. Spawns a read-only reviewer Claude session; the Stop hook blocks until the queued context is available, then tells the agent to read it. Feature status is set to `review` and the PR is linked automatically. Works for both same-repo and fork PRs. Use `pm feat delete` to clean up when done.
 
 ### Sync feature statuses with GitHub
 
@@ -334,7 +334,7 @@ Identity is resolved automatically: `PM_AGENT_NAME` (set by `pm agent spawn`) > 
 
 #### Typical agent flow
 
-1. `pm feat new my-feature --context "task description"` — creates the feature, enqueues `task description` as the first message for the default agent (usually `implementer`), and spawns it. The Stop hook drives the agent into `pm msg wait` on its first turn and the queued message is delivered
+1. `pm feat new my-feature --context "task description"` — creates the feature, enqueues `task description` as the first message for the default agent (usually `implementer`), and spawns it. The Stop hook blocks until the queued message is available, then tells the agent to read it
 2. The implementer reads the task, implements changes, runs tests
 3. The implementer sends `pm msg send reviewer "ready for review"` to request a review (auto-spawns the reviewer if it isn't already running)
 4. The reviewer diffs the branch and sends feedback back to the implementer
@@ -365,13 +365,13 @@ The `agents.permissions` table controls the permission mode passed to `claude` f
 
 ### The pm Stop hook
 
-`pm init` installs a Claude Code **Stop hook** into `main/.claude/settings.json`. Its only job is to stop Claude from going idle between turns: after every turn, the hook emits
+`pm init` installs a Claude Code **Stop hook** into `main/.claude/settings.json`. Its only job is to stop Claude from going idle between turns: after every turn, the hook blocks until the agent has unread messages (by calling `pm msg wait` internally), then emits
 
 ```json
-{ "decision": "block", "reason": "Your turn is not over. Run `pm msg wait` … " }
+{ "decision": "block", "reason": "You have new messages. Run `pm msg read` …" }
 ```
 
-which Claude Code delivers back to the agent as a new user message. The agent then runs `pm msg wait` → `pm msg read` → `pm msg next` as tool calls in its next turn, blocks on the empty inbox, and processes the next message when one arrives. This turns every pm-managed agent into a never-idle message processor; `--context` at feature creation just queues the initial message, and the Stop-hook loop delivers it exactly like any subsequent peer message.
+which Claude Code delivers back to the agent as a continuation prompt. The agent reads the message, processes it, the turn ends, and the hook fires again — blocking until the next message arrives. This turns every pm-managed agent into a never-idle message processor; `--context` at feature creation just queues the initial message, and the blocking Stop hook delivers it exactly like any subsequent peer message.
 
 To install or re-install the hook manually (after editing settings by hand, or after upgrading pm):
 

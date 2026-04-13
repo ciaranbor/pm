@@ -105,8 +105,7 @@ fn setup_review(
         tmux::create_session(tmux_server, &session_name, &worktree_path)?;
 
         // Step 3.5: Spawn the reviewer agent with no prompt; the Stop hook
-        // drives it into `pm msg wait`, which picks up the PR-review context
-        // queued above.
+        // blocks until the PR-review context queued above is available.
         agent_spawn::spawn_claude_session(
             project_root,
             feature_name,

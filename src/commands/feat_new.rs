@@ -139,8 +139,8 @@ pub fn feat_new(
         tmux::create_session(tmux_server, &session_name, &worktree_path)?;
 
         // Step 4.5: Spawn the default claude agent (if context was provided).
-        // The agent starts with no positional prompt; the Stop hook trampoline
-        // drives it into `pm msg wait` on its first stop.
+        // The agent starts with no positional prompt; the Stop hook blocks
+        // until the queued message is available, then tells it to read.
         if resolved_context.is_some() {
             feat_common::spawn_default_agent(
                 project_root,

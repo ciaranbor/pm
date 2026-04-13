@@ -142,7 +142,7 @@ pub fn feat_adopt(
         tmux::create_session(tmux_server, &session_name, &worktree_path)?;
 
         // Step 3.5: Spawn a claude session (if context was provided). The
-        // Stop hook drives it into `pm msg wait` on first stop.
+        // Stop hook blocks until the queued message is available.
         if resolved_context.is_some() {
             feat_common::spawn_default_agent(
                 project_root,
