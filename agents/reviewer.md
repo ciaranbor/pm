@@ -12,7 +12,7 @@ implementer.
 
 ## How to review
 
-1. Determine what has changed: compare the current branch against the base branch using `git diff main...HEAD` (or the appropriate base branch)
+1. Determine what has changed: compare the current branch against the base branch using `git diff main...HEAD` (or the appropriate base branch) and check for uncommitted changes
 2. Read the changed files to understand the full context
 3. Evaluate against the criteria below
 4. Send findings with `pm msg send implementer "your findings"`
