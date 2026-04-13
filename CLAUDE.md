@@ -16,11 +16,48 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 - `src/hooks.rs` — lifecycle hooks (post-create, post-merge, restore)
 - `src/error.rs` — error types (`PmError` enum, `thiserror`)
 - `src/testing.rs` — test utilities (shared tmux test server, RAII cleanup)
-- `src/messages.rs` — file-based message queue (send, check, read, name validation)
+- `src/messages.rs` — file-based message queue (send, read_at, next, list, wait, name validation)
 - `src/state/agent.rs` — per-feature agent registry (TOML state for spawned agents)
-- `src/commands/` — one module per command group (project, feat, claude, agent, msg, etc.)
-- `agents/` — bundled agent definitions (reviewer, implementer), embedded via `include_str!`
+- `src/commands/` — one module per command group (project, feat, claude, agent, msg, hooks_install, etc.)
+- `src/commands/hooks_install.rs` — installs the pm Stop hook into `main/.claude/settings.json`; see below
+- `agents/` — bundled agent definitions (reviewer, implementer, researcher), embedded via `include_str!`
 - `skills/` — bundled skill definitions (pm), embedded via `include_str!`
+
+### Agents as long-running message processors
+
+pm agents are never-idle message processors, not one-shot scripts. This
+is implemented with a Claude Code **Stop hook** (`pm hooks stop`,
+installed by `pm hooks install` into `main/.claude/settings.json`). The
+hook checks a `.waiting` lock file managed by `pm msg wait`:
+
+- **No lock file** → `block` + "run `pm msg wait`". The agent runs
+  `pm msg wait`, which returns immediately if messages are queued or
+  blocks until one arrives. The agent processes it, the turn ends, and
+  the hook fires again.
+- **Lock file present** → `approve`. A background `pm msg wait` is
+  already running. Claude stops; the background task wakes it via a
+  task-notification when a message arrives.
+
+Initial context (`pm feat new --context <x>`, `pm agent spawn --context
+<x>`, `pm msg send <to> <body>` auto-spawn) all desugar to the same
+primitive: **enqueue a message, then spawn (or do nothing if already
+running).** The first turn is empty; the Stop hook drives the agent
+into reading the queued message. The first-turn flow is identical to
+every subsequent turn.
+
+### Own-scope notes vs cross-scope messaging
+
+Two different things, don't collapse them:
+
+- **Information store** (future `pm note` / scratch state) is for
+  **own-scope jotting** — notes, running context, TODOs that belong to
+  the agent itself. Private. Persistent by default.
+- **Messaging** (`pm msg`) is for **cross-scope or cross-role
+  communication** — sending something to a *different* agent or a
+  *different* scope. A queue, not a database.
+
+Don't abuse messaging as persistent storage, and don't abuse notes as a
+mailbox.
 
 ## Development
 

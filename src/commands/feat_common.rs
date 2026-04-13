@@ -11,7 +11,7 @@ use chrono::Utc;
 
 use crate::commands::{agent_spawn, feat_delete};
 use crate::error::Result;
-use crate::git;
+use crate::messages;
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
 use crate::state::project::ProjectConfig;
@@ -48,14 +48,6 @@ pub fn write_initializing_state(
     Ok(state)
 }
 
-/// Write a feature's TASK.md and add it to the worktree's git exclude file so
-/// it doesn't show up as untracked.
-pub fn write_task_md(worktree_path: &Path, content: &str) -> Result<()> {
-    std::fs::write(worktree_path.join("TASK.md"), content)?;
-    git::exclude_pattern(worktree_path, "TASK.md")?;
-    Ok(())
-}
-
 /// Resolve the agent to spawn for a feature-creation flow: explicit override
 /// first, then project default, then plain claude (None).
 pub fn resolve_default_agent<'a>(
@@ -68,9 +60,33 @@ pub fn resolve_default_agent<'a>(
     })
 }
 
+/// Enqueue a feature's initial context as a message in the resolved default
+/// agent's inbox. The pm Stop hook will deliver it on the agent's empty first
+/// turn. Returns the name of the agent the message was queued for (if any).
+///
+/// With no default agent configured and no override, no message is enqueued
+/// — plain claude sessions don't have an inbox keyed by a named agent.
+pub fn enqueue_initial_context<'a>(
+    project_root: &Path,
+    feature_name: &str,
+    config: &'a ProjectConfig,
+    agent_override: Option<&'a str>,
+    context: &str,
+) -> Result<Option<&'a str>> {
+    let Some(agent) = resolve_default_agent(agent_override, config) else {
+        return Ok(None);
+    };
+    let messages_dir = paths::messages_dir(project_root);
+    let sender = messages::default_user_name();
+    messages::send(&messages_dir, feature_name, agent, &sender, context)?;
+    Ok(Some(agent))
+}
+
 /// Spawn the default claude agent for a newly-created feature: resolves
 /// override → config default → plain claude, then calls
-/// `agent_spawn::spawn_claude_session` with a "READ TASK.md" prompt.
+/// `agent_spawn::spawn_claude_session` with no initial prompt. The pm Stop
+/// hook is responsible for delivering any queued message on the empty first
+/// turn.
 ///
 /// Only used by feat_new and feat_adopt. feat_review bypasses this because it
 /// always spawns the hardcoded `reviewer` agent in read-only mode.
@@ -87,7 +103,7 @@ pub fn spawn_default_agent(
         project_root,
         feature_name,
         agent,
-        Some("READ TASK.md"),
+        None,
         !no_edit,
         None,
         tmux_server,

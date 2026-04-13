@@ -77,10 +77,22 @@ pub fn spawn_claude_session(
         None
     };
 
+    // Named agents need a sentinel prompt when none is explicitly provided:
+    // Claude with no positional prompt just waits for user input and never
+    // completes a turn, so the Stop hook never fires. A trivial "continue"
+    // prompt causes an immediate first turn, letting the hook drive the
+    // agent into `pm msg wait`. Plain (unnamed) claude sessions don't need
+    // this since they're interactive by design.
+    let effective_prompt = match (prompt, agent_name) {
+        (Some(p), _) => Some(p),
+        (None, Some(_)) => Some("continue"),
+        (None, None) => None,
+    };
+
     let window_name = agent_name.unwrap_or("claude");
     let cmd = build_claude_cmd(
         agent_name,
-        prompt,
+        effective_prompt,
         resume_session,
         permission_mode.as_deref(),
     );
@@ -124,6 +136,13 @@ pub fn spawn_claude_session(
 /// Handles three cases: new agent, already-active agent, and dead-but-resumable agent.
 /// If `edit` is true, `--permission-mode acceptEdits` is passed.
 /// Otherwise, the permission mode is looked up from the project config.
+///
+/// When `context` is provided, it is always enqueued as a message in the
+/// agent's inbox rather than passed as a positional prompt. The pm Stop
+/// hook delivers it on the agent's next `pm msg wait` tick, so the same
+/// path serves "spawn fresh with a brief", "spawn and nudge a dead agent",
+/// and "send a follow-up to an active agent".
+///
 /// Returns a status message.
 pub fn agent_spawn(
     project_root: &Path,
@@ -140,6 +159,15 @@ pub fn agent_spawn(
     let config = ProjectConfig::load(&pm_dir)?;
     let session_name = format!("{}/{feature}", config.project.name);
 
+    // Always queue context as a message before touching the session. That
+    // way it survives a failed spawn as a dead letter and auto-arrives on
+    // the empty first turn.
+    if let Some(ctx) = context {
+        let messages_dir = paths::messages_dir(project_root);
+        let sender = crate::messages::default_user_name();
+        crate::messages::send(&messages_dir, feature, agent_name, &sender, ctx)?;
+    }
+
     let registry = AgentRegistry::load(&agents_dir, feature)?;
 
     // Check if this agent already exists in the registry
@@ -154,11 +182,7 @@ pub fn agent_spawn(
         if is_active
             && let Some(target) = tmux::find_window(tmux_server, &session_name, agent_name)?
         {
-            // Agent window exists — send context as a message instead
-            if let Some(ctx) = context {
-                let messages_dir = paths::messages_dir(project_root);
-                let sender = crate::messages::default_user_name();
-                crate::messages::send(&messages_dir, feature, agent_name, &sender, ctx)?;
+            if context.is_some() {
                 return Ok(format!(
                     "Agent '{agent_name}' already active in {target} — sent context as message"
                 ));
@@ -166,12 +190,12 @@ pub fn agent_spawn(
             return Ok(format!("Agent '{agent_name}' already active in {target}"));
         }
 
-        // Agent existed but window is gone — spawn with resume
+        // Agent existed but window is gone — spawn with resume, no prompt.
         let window_target = spawn_claude_session(
             project_root,
             feature,
             Some(agent_name),
-            context,
+            None,
             edit,
             resume_id.as_deref(),
             tmux_server,
@@ -185,12 +209,13 @@ pub fn agent_spawn(
         return Ok(msg);
     }
 
-    // New agent
+    // New agent, no positional prompt — the Stop hook will deliver any
+    // queued context via `pm msg wait` on the agent's first turn.
     let window_target = spawn_claude_session(
         project_root,
         feature,
         Some(agent_name),
-        context,
+        None,
         edit,
         None,
         tmux_server,
@@ -424,20 +449,23 @@ mod tests {
 
     #[test]
     fn build_cmd_with_agent() {
+        // Note: spawn_claude_session adds a "continue" sentinel when no
+        // prompt is provided for a named agent. build_claude_cmd itself is
+        // prompt-agnostic — the sentinel is injected by the caller.
         let cmd = build_claude_cmd(Some("reviewer"), None, None, None);
         assert_eq!(cmd, "claude --agent reviewer");
     }
 
     #[test]
     fn build_cmd_plain_session() {
-        let cmd = build_claude_cmd(None, Some("READ TASK.md"), None, None);
-        assert_eq!(cmd, "claude 'READ TASK.md'");
+        let cmd = build_claude_cmd(None, None, None, None);
+        assert_eq!(cmd, "claude");
     }
 
     #[test]
     fn build_cmd_plain_session_with_permission() {
-        let cmd = build_claude_cmd(None, Some("READ TASK.md"), None, Some("acceptEdits"));
-        assert_eq!(cmd, "claude --permission-mode acceptEdits 'READ TASK.md'");
+        let cmd = build_claude_cmd(None, None, None, Some("acceptEdits"));
+        assert_eq!(cmd, "claude --permission-mode acceptEdits");
     }
 
     #[test]

@@ -13,10 +13,13 @@ This user manages projects with `pm`, a terminal-based project manager built aro
 pm feat new <name> --context "description of the task"
 ```
 
-This creates a git branch, worktree, tmux session, and seeds a `TASK.md` with the context. A Claude Code session is automatically started in the feature's tmux session to work on the task.
+This creates a git branch, worktree, and tmux session. A Claude Code
+session is automatically started in the feature's tmux session and the
+`--context` text is delivered to the default agent as its first message.
 
 Options:
-- `--context <text-or-file>` — seed TASK.md (required for agent-driven features)
+
+- `--context <text-or-file>` — initial message delivered to the default agent's inbox (required for agent-driven features)
 - `--base <branch>` — stack on another branch instead of main
 - `--name <override>` — override the derived feature name (useful for branches with slashes)
 - `--no-edit` — disable auto-accept edits in the spawned Claude session
@@ -44,16 +47,35 @@ pm status             # project dashboard
 You may be working alongside other agents (reviewer, implementer, etc.) on the same feature. Use these commands to communicate:
 
 ```sh
-pm msg send <agent> "message"   # send a message to another agent
-pm msg check                    # check your inbox for new messages
-pm msg read                     # read new messages (marks them as read)
-pm msg read --from <sender>     # read only from a specific sender
-pm msg wait                     # block until a message arrives
-pm agent list                   # list agents in the current feature
+pm msg send <agent> "message"         # send a message to another agent
+pm msg wait                           # block until a new message arrives
+pm msg wait --from <sender>           # block only on a specific sender
+pm msg list                           # enumerate your inbox with cursor markers
+pm msg list --from <sender>           # scope to one sender
+pm msg read                           # print the next unread message (pure)
+pm msg read --from <sender>           # scope to one sender
+pm msg read --from <sender> --index 3 # dump message 3 absolutely (pure)
+pm msg read --from <sender> --index +2  # peek: two past the cursor
+pm msg read --from <sender> --index -1  # re-read the one you just processed
+pm msg next                           # advance the cursor past the current message
+pm msg next --from <sender>           # scope to one sender
+pm agent list                         # list agents in the current feature
 ```
 
+`pm msg read` never advances the cursor — call it as many times as you like.
+Once you've actually processed a message, call `pm msg next` to move the
+cursor forward by one so the next `pm msg wait` / `pm msg read` moves on to
+the following message.
+
+`--from` is required only when the inbox is ambiguous — if only one sender
+has unread messages, `pm msg read` / `pm msg next` infer it. `--index`
+always requires an explicit `--from`. Past messages stay on disk: use
+`pm msg list` to find an index and `pm msg read --from <s> --index <n>` to
+revisit any message at any time.
+
 Guidelines:
-- Check your inbox (`pm msg check`) between tasks — other agents may have sent you messages
+
+- Check your inbox (`pm msg list`) between tasks — other agents may have sent you messages
 - When you finish a piece of work that another agent needs to know about, send them a message
 - Keep messages concise and actionable
 - When sending review findings, be specific about files and line numbers

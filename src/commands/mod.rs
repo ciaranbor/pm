@@ -1,5 +1,5 @@
-pub mod agent_check;
 pub mod agent_list;
+pub mod agent_next;
 pub mod agent_read;
 pub mod agent_send;
 pub mod agent_spawn;
@@ -21,8 +21,11 @@ pub mod feat_rename;
 pub mod feat_review;
 pub mod feat_switch;
 pub mod feat_sync;
+pub mod hooks_install;
+pub mod hooks_stop;
 pub mod init;
 pub mod list;
+pub mod msg_list;
 pub mod open;
 pub mod register;
 pub mod skills;

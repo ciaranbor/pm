@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use crate::commands::hooks_install;
 use crate::error::{PmError, Result};
 use crate::git;
 use crate::hooks;
@@ -58,6 +59,11 @@ pub fn init(path: &Path, projects_dir: &Path, tmux_server: Option<&str>) -> Resu
 
     // Bootstrap default hook scripts
     hooks::bootstrap(path)?;
+
+    // Install the pm Stop hook into main/.claude/settings.json so every
+    // agent spawned under this project runs as a never-idle message
+    // processor (see `commands::hooks_install`).
+    hooks_install::install(path)?;
 
     // Register in global registry
     let entry = ProjectEntry {

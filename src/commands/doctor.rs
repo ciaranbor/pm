@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::commands::feat_delete::{self, CleanupParams};
+use crate::commands::hooks_install;
 use crate::error::Result;
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
@@ -35,6 +36,8 @@ enum FixAction {
     },
     /// Update feature status to match GH PR state.
     UpdateStatus { new_status: FeatureStatus },
+    /// Install the pm Stop hook into main/.claude/settings.json.
+    InstallStopHook,
 }
 
 /// Diagnostic finding for a single feature.
@@ -72,18 +75,28 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
 
     let mut findings: Vec<Finding> = Vec::new();
 
-    // Check main tmux session exists
+    // Main-scope checks: stop hook installed, main tmux session present.
     let main_session = format!("{project_name}/main");
+    let mut main_issues: Vec<Issue> = Vec::new();
+    if !hooks_install::is_installed(project_root)? {
+        main_issues.push(Issue {
+            message: "pm Stop hook not installed (run `pm hooks install`)".to_string(),
+            fix: Fix::Auto(FixAction::InstallStopHook),
+        });
+    }
     if !tmux::has_session(tmux_server, &main_session)? {
+        main_issues.push(Issue {
+            message: format!("tmux session '{main_session}' missing (run `pm open` to fix)"),
+            fix: Fix::Auto(FixAction::RecreateTmuxSession {
+                session_name: main_session,
+                worktree_path: main_repo.clone(),
+            }),
+        });
+    }
+    if !main_issues.is_empty() {
         findings.push(Finding {
             feature: "main".to_string(),
-            issues: vec![Issue {
-                message: format!("tmux session '{main_session}' missing (run `pm open` to fix)"),
-                fix: Fix::Auto(FixAction::RecreateTmuxSession {
-                    session_name: main_session,
-                    worktree_path: main_repo.clone(),
-                }),
-            }],
+            issues: main_issues,
         });
     }
 
@@ -340,6 +353,9 @@ fn apply_fix(
             let mut state = FeatureState::load(features_dir, name)?;
             state.status = *new_status;
             state.save(features_dir, name)?;
+        }
+        FixAction::InstallStopHook => {
+            hooks_install::install(project_root)?;
         }
     }
     Ok(())

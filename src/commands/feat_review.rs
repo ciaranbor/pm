@@ -12,7 +12,7 @@ use crate::state::paths;
 use crate::state::project::ProjectConfig;
 use crate::{gh, git, tmux};
 
-/// Check out a PR for review: fetch PR commits, create worktree + tmux session, seed TASK.md.
+/// Check out a PR for review: fetch PR commits, create worktree + tmux session, enqueue PR context.
 ///
 /// The tmux `server` parameter allows tests to use an isolated tmux server.
 /// In production, pass `None` to use the default server.
@@ -62,7 +62,7 @@ fn setup_review(
     let config = ProjectConfig::load(&pm_dir)?;
     let project_name = &config.project.name;
 
-    // Build TASK.md content from PR details
+    // Build PR-review context from PR details
     let context = format!(
         "Review PR #{}: {}\n{}\n\n{}",
         details.number, details.title, details.url, details.body
@@ -95,20 +95,23 @@ fn setup_review(
         // Step 2.5: Seed Claude Code settings from main worktree
         claude_settings::seed_feature_claude(project_root, &worktree_path)?;
 
-        // Step 2.6: Write TASK.md
-        feat_common::write_task_md(&worktree_path, &context)?;
+        // Step 2.6: Enqueue PR-review context to the reviewer agent's inbox.
+        // The pm Stop hook will deliver it on the reviewer's empty first turn.
+        let messages_dir = paths::messages_dir(project_root);
+        let sender = crate::messages::default_user_name();
+        crate::messages::send(&messages_dir, feature_name, "reviewer", &sender, &context)?;
 
         // Step 3: Create tmux session
         tmux::create_session(tmux_server, &session_name, &worktree_path)?;
 
-        // Step 3.5: Spawn reviewer agent to read TASK.md (always; read-only).
-        // We intentionally bypass feat_common::spawn_default_agent here
-        // because reviews always use the hardcoded `reviewer` agent.
+        // Step 3.5: Spawn the reviewer agent with no prompt; the Stop hook
+        // drives it into `pm msg wait`, which picks up the PR-review context
+        // queued above.
         agent_spawn::spawn_claude_session(
             project_root,
             feature_name,
             Some("reviewer"),
-            Some("READ TASK.md"),
+            None,
             false, // reviews are read-only
             None,
             tmux_server,
@@ -210,7 +213,7 @@ mod tests {
     }
 
     #[test]
-    fn review_seeds_task_md() {
+    fn review_enqueues_pr_context_to_reviewer() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project(dir.path());
@@ -219,27 +222,26 @@ mod tests {
 
         setup_review(&project_path, &details, "review-42", server.name()).unwrap();
 
-        let task_md = project_path.join("review-42").join("TASK.md");
-        assert!(task_md.exists());
-        let content = std::fs::read_to_string(&task_md).unwrap();
-        assert!(content.contains("Review PR #42: Add login page"));
-        assert!(content.contains("https://github.com/owner/repo/pull/42"));
-        assert!(content.contains("Implements the login page per spec."));
-    }
+        // No TASK.md any more.
+        assert!(!project_path.join("review-42").join("TASK.md").exists());
 
-    #[test]
-    fn review_task_md_is_git_excluded() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
-        let details = sample_details();
-        simulate_fetched_pr(&project_path, "review-42");
-
-        setup_review(&project_path, &details, "review-42", server.name()).unwrap();
-
-        let worktree_path = project_path.join("review-42");
-        let untracked = git::untracked_files(&worktree_path).unwrap();
-        assert!(!untracked.contains(&"TASK.md".to_string()));
+        // Context is queued to the reviewer inbox.
+        let messages_dir = paths::messages_dir(&project_path);
+        let summaries =
+            crate::messages::list(&messages_dir, "review-42", "reviewer", None).unwrap();
+        assert_eq!(summaries.len(), 1);
+        let msg = crate::messages::read_at(
+            &messages_dir,
+            "review-42",
+            "reviewer",
+            &summaries[0].sender,
+            summaries[0].index,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(msg.body.contains("Review PR #42: Add login page"));
+        assert!(msg.body.contains("https://github.com/owner/repo/pull/42"));
+        assert!(msg.body.contains("Implements the login page per spec."));
     }
 
     #[test]
