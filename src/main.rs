@@ -50,6 +50,9 @@ enum Commands {
     /// Claude Code settings, skills, and session management
     #[command(subcommand)]
     Claude(ClaudeCommands),
+    /// Claude Code lifecycle hooks managed by pm
+    #[command(subcommand)]
+    Hooks(HooksCommands),
     /// Delete a project (teardown features, sessions, state, and registry entry)
     Delete {
         /// Project name (defaults to current project from CWD)
@@ -183,6 +186,14 @@ enum ClaudeSkillsCommands {
         /// Feature name (detected from CWD if omitted)
         name: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum HooksCommands {
+    /// Install the pm Stop hook into main/.claude/settings.json
+    Install,
+    /// Stop hook handler — called by Claude Code on every Stop event (not for direct use)
+    Stop,
 }
 
 #[derive(Subcommand)]
@@ -576,6 +587,21 @@ fn run() -> pm::error::Result<()> {
                 let messages = commands::claude_migrate::migrate_sessions(&from, &cwd, None)?;
                 for msg in messages {
                     println!("{msg}");
+                }
+                Ok(())
+            }
+        },
+        Commands::Hooks(hooks_cmd) => match hooks_cmd {
+            HooksCommands::Install => {
+                let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+                let msg = commands::hooks_install::install(&project_root)?;
+                println!("{msg}");
+                Ok(())
+            }
+            HooksCommands::Stop => {
+                let code = commands::hooks_stop::stop();
+                if code != 0 {
+                    std::process::exit(code);
                 }
                 Ok(())
             }

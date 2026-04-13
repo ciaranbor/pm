@@ -122,15 +122,25 @@ pub fn feat_new(
         // Step 3.5: Seed Claude Code settings from main worktree
         claude_settings::seed_feature_claude(project_root, &worktree_path)?;
 
-        // Step 3.6: Write TASK.md if context provided
+        // Step 3.6: Enqueue initial context as a message to the default agent
+        // (if context provided). The Stop hook will deliver it on the empty
+        // first turn after spawn. TASK.md is never written.
         if let Some(ref resolved) = resolved_context {
-            feat_common::write_task_md(&worktree_path, resolved)?;
+            feat_common::enqueue_initial_context(
+                project_root,
+                &feature_name,
+                &config,
+                agent_override,
+                resolved,
+            )?;
         }
 
         // Step 4: Create tmux session
         tmux::create_session(tmux_server, &session_name, &worktree_path)?;
 
-        // Step 4.5: Spawn a claude session to read TASK.md (if context was provided).
+        // Step 4.5: Spawn the default claude agent (if context was provided).
+        // The agent starts with no positional prompt; the Stop hook trampoline
+        // drives it into `pm msg wait` on its first stop.
         if resolved_context.is_some() {
             feat_common::spawn_default_agent(
                 project_root,
@@ -315,7 +325,7 @@ mod tests {
     }
 
     #[test]
-    fn feat_new_with_text_context_writes_task_md() {
+    fn feat_new_with_text_context_enqueues_message() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project(dir.path());
@@ -327,20 +337,28 @@ mod tests {
             Some("Implement login page per issue #42"),
             None,
             false,
-            None,
+            Some("implementer"),
             server.name(),
         )
         .unwrap();
 
-        let worktree_path = project_path.join("login");
-        let task_md = worktree_path.join("TASK.md");
-        assert!(task_md.exists());
-        let content = std::fs::read_to_string(&task_md).unwrap();
-        assert_eq!(content, "Implement login page per issue #42");
+        // No TASK.md on disk any more.
+        assert!(!project_path.join("login").join("TASK.md").exists());
 
-        // TASK.md should be excluded from untracked files
-        let untracked = git::untracked_files(&worktree_path).unwrap();
-        assert!(!untracked.contains(&"TASK.md".to_string()));
+        // The context is queued as a message in the resolved agent's inbox.
+        let messages_dir = paths::messages_dir(&project_path);
+        let summaries = crate::messages::list(&messages_dir, "login", "implementer", None).unwrap();
+        assert_eq!(summaries.len(), 1);
+        let msg = crate::messages::read_at(
+            &messages_dir,
+            "login",
+            "implementer",
+            &summaries[0].sender,
+            summaries[0].index,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(msg.body.contains("Implement login page per issue #42"));
     }
 
     #[test]
@@ -360,15 +378,26 @@ mod tests {
             Some(brief_path.to_str().unwrap()),
             None,
             false,
-            None,
+            Some("implementer"),
             server.name(),
         )
         .unwrap();
 
-        let task_md = project_path.join("login").join("TASK.md");
-        assert!(task_md.exists());
-        let content = std::fs::read_to_string(&task_md).unwrap();
-        assert_eq!(content, "# Login Feature\nBuild the login page");
+        // No TASK.md; content is queued to the resolved agent's inbox.
+        assert!(!project_path.join("login").join("TASK.md").exists());
+        let messages_dir = paths::messages_dir(&project_path);
+        let summaries = crate::messages::list(&messages_dir, "login", "implementer", None).unwrap();
+        assert_eq!(summaries.len(), 1);
+        let msg = crate::messages::read_at(
+            &messages_dir,
+            "login",
+            "implementer",
+            &summaries[0].sender,
+            summaries[0].index,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(msg.body.contains("# Login Feature\nBuild the login page"));
     }
 
     #[test]
@@ -478,7 +507,7 @@ mod tests {
         let target = tmux::find_window(server.name(), &session, "hook").unwrap();
         assert!(target.is_some());
 
-        // No TASK.md or context without context arg
+        // No context → no TASK.md (ever) and no queued messages.
         let task_md = project_path.join("login").join("TASK.md");
         assert!(!task_md.exists());
         let features_dir = paths::features_dir(&project_path);

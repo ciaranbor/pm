@@ -454,6 +454,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project, _, _) = server.setup_project(dir.path());
+        // `pm init` now installs the Stop hook into main/.claude/settings.json;
+        // strip it to exercise the "no .claude/ dir" branch.
+        let _ = std::fs::remove_dir_all(project.join("main").join(".claude"));
 
         let lines = list_main(&project).unwrap();
         assert!(lines.is_empty());
@@ -572,6 +575,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project, _, _) = server.setup_project(dir.path());
+        // `pm init` now installs the Stop hook into main/.claude/settings.json;
+        // strip it to exercise the "no source dir" branch.
+        let _ = std::fs::remove_dir_all(project.join("main").join(".claude"));
 
         let feature_wt = project.join("login");
         std::fs::create_dir_all(&feature_wt).unwrap();
@@ -719,6 +725,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        // Strip the Stop-hook settings.json seeded by `pm init`.
+        let _ = std::fs::remove_dir_all(project.join("main").join(".claude"));
 
         let result = pull(&project, "login");
         assert!(result.is_err());
@@ -971,6 +979,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        // Strip the Stop-hook settings.json seeded by `pm init` (and the
+        // feature copy seeded by seed_feature_claude during feat_new).
+        let _ = std::fs::remove_dir_all(project.join("main").join(".claude"));
+        let _ = std::fs::remove_dir_all(project.join("login").join(".claude"));
 
         merge(&project, "login", false).unwrap();
 

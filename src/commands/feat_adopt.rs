@@ -125,15 +125,24 @@ pub fn feat_adopt(
             }
         }
 
-        // Step 2.7: Write TASK.md if context provided
+        // Step 2.7: Enqueue the initial context as a message to the default
+        // agent (if context provided). The Stop hook delivers it on the agent's
+        // empty first turn; TASK.md is never written.
         if let Some(ref resolved) = resolved_context {
-            feat_common::write_task_md(&worktree_path, resolved)?;
+            feat_common::enqueue_initial_context(
+                project_root,
+                &feature_name,
+                &config,
+                agent_override,
+                resolved,
+            )?;
         }
 
         // Step 3: Create tmux session
         tmux::create_session(tmux_server, &session_name, &worktree_path)?;
 
-        // Step 3.5: Spawn a claude session to read TASK.md (if context was provided).
+        // Step 3.5: Spawn a claude session (if context was provided). The
+        // Stop hook drives it into `pm msg wait` on first stop.
         if resolved_context.is_some() {
             feat_common::spawn_default_agent(
                 project_root,
@@ -345,7 +354,7 @@ mod tests {
     }
 
     #[test]
-    fn feat_adopt_with_context_writes_task_md() {
+    fn feat_adopt_with_context_enqueues_message() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project(dir.path());
@@ -358,16 +367,29 @@ mod tests {
             Some("Adopt existing login branch"),
             None,
             false,
-            None,
+            Some("implementer"),
             server.name(),
             None,
         )
         .unwrap();
 
-        let task_md = project_path.join("login").join("TASK.md");
-        assert!(task_md.exists());
-        let content = std::fs::read_to_string(&task_md).unwrap();
-        assert_eq!(content, "Adopt existing login branch");
+        // No TASK.md is written any more.
+        assert!(!project_path.join("login").join("TASK.md").exists());
+
+        // The context is queued as a message in the resolved agent's inbox.
+        let messages_dir = paths::messages_dir(&project_path);
+        let summaries = crate::messages::list(&messages_dir, "login", "implementer", None).unwrap();
+        assert_eq!(summaries.len(), 1);
+        let msg = crate::messages::read_at(
+            &messages_dir,
+            "login",
+            "implementer",
+            &summaries[0].sender,
+            summaries[0].index,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(msg.body.contains("Adopt existing login branch"));
     }
 
     #[test]

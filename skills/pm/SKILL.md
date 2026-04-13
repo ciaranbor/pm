@@ -13,10 +13,13 @@ This user manages projects with `pm`, a terminal-based project manager built aro
 pm feat new <name> --context "description of the task"
 ```
 
-This creates a git branch, worktree, tmux session, and seeds a `TASK.md` with the context. A Claude Code session is automatically started in the feature's tmux session to work on the task.
+This creates a git branch, worktree, and tmux session. A Claude Code
+session is automatically started in the feature's tmux session and the
+`--context` text is delivered to the default agent as its first message.
 
 Options:
-- `--context <text-or-file>` — seed TASK.md (required for agent-driven features)
+
+- `--context <text-or-file>` — initial message delivered to the default agent's inbox (required for agent-driven features)
 - `--base <branch>` — stack on another branch instead of main
 - `--name <override>` — override the derived feature name (useful for branches with slashes)
 - `--no-edit` — disable auto-accept edits in the spawned Claude session
@@ -71,6 +74,7 @@ always requires an explicit `--from`. Past messages stay on disk: use
 revisit any message at any time.
 
 Guidelines:
+
 - Check your inbox (`pm msg list`) between tasks — other agents may have sent you messages
 - When you finish a piece of work that another agent needs to know about, send them a message
 - Keep messages concise and actionable

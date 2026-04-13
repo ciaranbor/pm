@@ -1,13 +1,48 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::error::Result;
 use crate::messages;
 use crate::state::paths;
 
+/// Path to the waiting lock file for a given agent inbox. The Stop hook
+/// checks for this file to know whether a background `pm msg wait` is
+/// already running.
+pub fn waiting_lock_path(messages_dir: &Path, feature: &str, agent: &str) -> PathBuf {
+    messages_dir.join(feature).join(agent).join(".waiting")
+}
+
+/// Check whether a live `pm msg wait` is running for this agent. Reads the
+/// PID from the lock file and checks if that process is still alive. Stale
+/// lock files (process died without cleanup, e.g. `tmux kill-window`) are
+/// automatically removed.
+pub fn is_waiting(messages_dir: &Path, feature: &str, agent: &str) -> bool {
+    let lock = waiting_lock_path(messages_dir, feature, agent);
+    let Ok(content) = std::fs::read_to_string(&lock) else {
+        return false;
+    };
+    let Ok(pid) = content.trim().parse::<i32>() else {
+        // Corrupt lock file — remove it.
+        let _ = std::fs::remove_file(&lock);
+        return false;
+    };
+    // SAFETY: `kill(pid, 0)` sends no signal — it only checks whether `pid`
+    // exists and is reachable. No side effects beyond updating errno.
+    let alive = unsafe { libc::kill(pid, 0) } == 0;
+    if !alive {
+        let _ = std::fs::remove_file(&lock);
+    }
+    alive
+}
+
 /// Poll for new messages in an agent's inbox, blocking until at least one
 /// arrives. Returns the total unread count when messages are found. If
 /// `from` is specified, only messages from that sender count.
+///
+/// While polling, a `.waiting` lock file is held in the agent's inbox
+/// directory. The Stop hook (`pm hooks stop`) checks for this file to
+/// decide whether to allow Claude to stop (background wait running) or
+/// block (no wait running, agent must start one).
 pub fn agent_wait(
     project_root: &Path,
     feature: &str,
@@ -18,8 +53,30 @@ pub fn agent_wait(
     let messages_dir = paths::messages_dir(project_root);
     let interval = poll_interval.unwrap_or(Duration::from_secs(2));
 
+    // Write lock file so the Stop hook knows a wait is active.
+    let lock = waiting_lock_path(&messages_dir, feature, agent);
+    if let Some(parent) = lock.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&lock, std::process::id().to_string())?;
+
+    let result = poll_loop(&messages_dir, feature, agent, from, interval);
+
+    // Always remove the lock, even on error.
+    let _ = std::fs::remove_file(&lock);
+
+    result
+}
+
+fn poll_loop(
+    messages_dir: &Path,
+    feature: &str,
+    agent: &str,
+    from: Option<&str>,
+    interval: Duration,
+) -> Result<u32> {
     loop {
-        let summaries = messages::check(&messages_dir, feature, agent)?;
+        let summaries = messages::check(messages_dir, feature, agent)?;
         let total: u32 = summaries
             .iter()
             .filter(|s| from.is_none_or(|f| s.sender == f))
