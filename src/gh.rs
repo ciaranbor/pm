@@ -77,27 +77,38 @@ pub struct PrInfo {
     pub state: String,
     /// Whether the PR is a draft (only meaningful when state is "OPEN")
     pub is_draft: bool,
+    /// Review decision: "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", or empty
+    pub review_decision: String,
 }
 
-/// Raw JSON shape returned by `gh pr view --json state,isDraft`.
+/// Raw JSON shape returned by `gh pr view --json state,isDraft,reviewDecision`.
 #[derive(Deserialize)]
 struct PrInfoJson {
     state: String,
     #[serde(rename = "isDraft")]
     is_draft: bool,
+    #[serde(rename = "reviewDecision", default)]
+    review_decision: String,
 }
 
 /// Get the state and draft status of a PR in a single gh call.
 pub fn pr_info(repo_dir: &Path, pr_number: &str) -> Result<PrInfo> {
     let output = run_gh(
         repo_dir,
-        &["pr", "view", pr_number, "--json", "state,isDraft"],
+        &[
+            "pr",
+            "view",
+            pr_number,
+            "--json",
+            "state,isDraft,reviewDecision",
+        ],
     )?;
     let parsed: PrInfoJson =
         serde_json::from_str(&output).map_err(|e| PmError::Gh(format!("parse PR info: {e}")))?;
     Ok(PrInfo {
         state: parsed.state.to_uppercase(),
         is_draft: parsed.is_draft,
+        review_decision: parsed.review_decision.to_uppercase(),
     })
 }
 
@@ -191,6 +202,7 @@ mod tests {
         let parsed: PrInfoJson = serde_json::from_str(json).unwrap();
         assert_eq!(parsed.state, "OPEN");
         assert!(!parsed.is_draft);
+        assert_eq!(parsed.review_decision, "");
     }
 
     #[test]
@@ -207,5 +219,21 @@ mod tests {
         let parsed: PrInfoJson = serde_json::from_str(json).unwrap();
         assert_eq!(parsed.state, "MERGED");
         assert!(!parsed.is_draft);
+    }
+
+    #[test]
+    fn pr_info_json_parses_review_decision() {
+        let json = r#"{"state":"OPEN","isDraft":false,"reviewDecision":"APPROVED"}"#;
+        let parsed: PrInfoJson = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.state, "OPEN");
+        assert!(!parsed.is_draft);
+        assert_eq!(parsed.review_decision, "APPROVED");
+    }
+
+    #[test]
+    fn pr_info_json_defaults_missing_review_decision() {
+        let json = r#"{"state":"OPEN","isDraft":false}"#;
+        let parsed: PrInfoJson = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.review_decision, "");
     }
 }

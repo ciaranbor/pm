@@ -1,20 +1,20 @@
 use std::path::Path;
 
-use crate::commands::feat_sync::status_from_pr;
+use crate::commands::feat_sync::sync_one;
 use crate::error::Result;
-use crate::gh;
 use crate::git;
-use crate::state::feature::FeatureState;
+use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
 
-/// Human-readable label for a PR state.
-fn pr_state_label(info: &gh::PrInfo) -> &'static str {
-    match info.state.as_str() {
-        "MERGED" => "merged",
-        "CLOSED" => "closed",
-        "OPEN" if info.is_draft => "draft",
-        "OPEN" => "open",
-        _ => "unknown",
+/// Human-readable label for a feature status derived from PR state.
+fn pr_status_label(status: FeatureStatus) -> &'static str {
+    match status {
+        FeatureStatus::Merged => "merged",
+        FeatureStatus::Stale => "closed",
+        FeatureStatus::Wip => "draft",
+        FeatureStatus::Approved => "approved",
+        FeatureStatus::Review => "open",
+        FeatureStatus::Initializing => "unknown",
     }
 }
 
@@ -29,20 +29,9 @@ pub fn feat_info(project_root: &Path, name: &str) -> Result<Vec<String>> {
     // If PR is linked, query GitHub and sync local status
     let mut pr_status_line = None;
     if !state.pr.is_empty() {
-        match gh::pr_info(&main_repo, &state.pr) {
-            Ok(info) => {
-                pr_status_line = Some(format!("pr_status:   {}", pr_state_label(&info)));
-
-                // Sync local feature status from PR state
-                if let Some(new_status) = status_from_pr(&info)
-                    && new_status != state.status
-                {
-                    state.status = new_status;
-                    if new_status.is_active() {
-                        state.last_active = chrono::Utc::now();
-                    }
-                    state.save(&features_dir, name)?;
-                }
+        match sync_one(&mut state, &features_dir, name, &main_repo) {
+            Ok(()) => {
+                pr_status_line = Some(format!("pr_status:   {}", pr_status_label(state.status)));
             }
             Err(_) => {
                 pr_status_line = Some("pr_status:   (query failed)".to_string());
@@ -389,36 +378,14 @@ mod tests {
     }
 
     #[test]
-    fn pr_state_label_maps_correctly() {
-        use crate::gh::PrInfo;
+    fn pr_status_label_maps_correctly() {
+        use crate::state::feature::FeatureStatus;
 
-        assert_eq!(
-            pr_state_label(&PrInfo {
-                state: "OPEN".to_string(),
-                is_draft: false
-            }),
-            "open"
-        );
-        assert_eq!(
-            pr_state_label(&PrInfo {
-                state: "OPEN".to_string(),
-                is_draft: true
-            }),
-            "draft"
-        );
-        assert_eq!(
-            pr_state_label(&PrInfo {
-                state: "MERGED".to_string(),
-                is_draft: false
-            }),
-            "merged"
-        );
-        assert_eq!(
-            pr_state_label(&PrInfo {
-                state: "CLOSED".to_string(),
-                is_draft: false
-            }),
-            "closed"
-        );
+        assert_eq!(pr_status_label(FeatureStatus::Review), "open");
+        assert_eq!(pr_status_label(FeatureStatus::Wip), "draft");
+        assert_eq!(pr_status_label(FeatureStatus::Approved), "approved");
+        assert_eq!(pr_status_label(FeatureStatus::Merged), "merged");
+        assert_eq!(pr_status_label(FeatureStatus::Stale), "closed");
+        assert_eq!(pr_status_label(FeatureStatus::Initializing), "unknown");
     }
 }

@@ -31,3 +31,4 @@ not try to message "main" or any agent outside this feature.
 
 - Do NOT use Claude Code subagents for reviews — the reviewer is an
   independent agent managed by pm.
+- Do NOT use git unless instructed

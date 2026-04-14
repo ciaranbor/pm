@@ -10,6 +10,7 @@ pub enum FeatureStatus {
     Initializing,
     Wip,
     Review,
+    Approved,
     Merged,
     Stale,
 }
@@ -18,7 +19,7 @@ impl FeatureStatus {
     /// Whether this feature status represents an active feature that should
     /// have a tmux session.
     pub fn is_active(&self) -> bool {
-        matches!(self, Self::Wip | Self::Review)
+        matches!(self, Self::Wip | Self::Review | Self::Approved)
     }
 }
 
@@ -28,6 +29,7 @@ impl std::fmt::Display for FeatureStatus {
             Self::Initializing => write!(f, "initializing"),
             Self::Wip => write!(f, "wip"),
             Self::Review => write!(f, "review"),
+            Self::Approved => write!(f, "approved"),
             Self::Merged => write!(f, "merged"),
             Self::Stale => write!(f, "stale"),
         }
@@ -161,6 +163,7 @@ mod tests {
             (FeatureStatus::Wip, "wip"),
             (FeatureStatus::Initializing, "initializing"),
             (FeatureStatus::Review, "review"),
+            (FeatureStatus::Approved, "approved"),
             (FeatureStatus::Merged, "merged"),
             (FeatureStatus::Stale, "stale"),
         ] {
@@ -179,6 +182,7 @@ mod tests {
             ("status = \"wip\"", FeatureStatus::Wip),
             ("status = \"initializing\"", FeatureStatus::Initializing),
             ("status = \"review\"", FeatureStatus::Review),
+            ("status = \"approved\"", FeatureStatus::Approved),
             ("status = \"merged\"", FeatureStatus::Merged),
             ("status = \"stale\"", FeatureStatus::Stale),
         ] {
@@ -191,6 +195,7 @@ mod tests {
     fn feature_status_is_active() {
         assert!(FeatureStatus::Wip.is_active());
         assert!(FeatureStatus::Review.is_active());
+        assert!(FeatureStatus::Approved.is_active());
         assert!(!FeatureStatus::Initializing.is_active());
         assert!(!FeatureStatus::Merged.is_active());
         assert!(!FeatureStatus::Stale.is_active());

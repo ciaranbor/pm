@@ -11,9 +11,30 @@ pub fn status_from_pr(pr_info: &gh::PrInfo) -> Option<FeatureStatus> {
         "MERGED" => Some(FeatureStatus::Merged),
         "CLOSED" => Some(FeatureStatus::Stale),
         "OPEN" if pr_info.is_draft => Some(FeatureStatus::Wip),
+        "OPEN" if pr_info.review_decision == "APPROVED" => Some(FeatureStatus::Approved),
         "OPEN" => Some(FeatureStatus::Review),
         _ => None,
     }
+}
+
+/// Query the PR linked to a feature and update its status in place.
+/// Saves to disk if the status changed. Caller must ensure `state.pr` is non-empty.
+pub fn sync_one(
+    state: &mut FeatureState,
+    features_dir: &Path,
+    name: &str,
+    repo_dir: &Path,
+) -> Result<()> {
+    let info = gh::pr_info(repo_dir, &state.pr)?;
+    let new_status = status_from_pr(&info).unwrap_or(state.status);
+    if new_status != state.status {
+        state.status = new_status;
+        if new_status.is_active() {
+            state.last_active = chrono::Utc::now();
+        }
+        state.save(features_dir, name)?;
+    }
+    Ok(())
 }
 
 /// Sync feature statuses with their linked GitHub PRs.
@@ -23,6 +44,7 @@ pub fn status_from_pr(pr_info: &gh::PrInfo) -> Option<FeatureStatus> {
 /// - MERGED -> Merged
 /// - CLOSED -> Stale
 /// - OPEN + draft -> Wip
+/// - OPEN + approved -> Approved
 /// - OPEN + ready -> Review
 ///
 /// If `name` is Some, syncs only that feature; otherwise syncs all features.
@@ -48,8 +70,12 @@ pub fn feat_sync(project_root: &Path, name: Option<&str>) -> Result<Vec<String>>
 
         let old_status = state.status;
 
-        let info = match gh::pr_info(&main_worktree, &state.pr) {
-            Ok(info) => info,
+        match sync_one(&mut state, &features_dir, &feat_name, &main_worktree) {
+            Ok(()) => {
+                if state.status != old_status {
+                    messages.push(format!("  {feat_name}: {old_status} -> {}", state.status));
+                }
+            }
             Err(e) => {
                 messages.push(format!(
                     "  {feat_name}: failed to query PR #{} — {e}",
@@ -57,22 +83,9 @@ pub fn feat_sync(project_root: &Path, name: Option<&str>) -> Result<Vec<String>>
                 ));
                 continue;
             }
-        };
-
-        let new_status = status_from_pr(&info).unwrap_or(old_status);
-
-        if new_status != old_status {
-            state.status = new_status;
-            // Only bump last_active for active (non-terminal) transitions.
-            // Merged/Stale are discovery, not user activity.
-            if new_status.is_active() {
-                state.last_active = chrono::Utc::now();
-            }
-            state.save(&features_dir, &feat_name)?;
-            messages.push(format!("  {feat_name}: {old_status} -> {new_status}"));
         }
 
-        if new_status == FeatureStatus::Merged {
+        if state.status == FeatureStatus::Merged {
             merged_features.push(feat_name);
         }
     }
@@ -120,6 +133,7 @@ mod tests {
         let info = PrInfo {
             state: "MERGED".to_string(),
             is_draft: false,
+            review_decision: String::new(),
         };
         assert_eq!(status_from_pr(&info), Some(FeatureStatus::Merged));
     }
@@ -129,6 +143,7 @@ mod tests {
         let info = PrInfo {
             state: "CLOSED".to_string(),
             is_draft: false,
+            review_decision: String::new(),
         };
         assert_eq!(status_from_pr(&info), Some(FeatureStatus::Stale));
     }
@@ -138,8 +153,19 @@ mod tests {
         let info = PrInfo {
             state: "OPEN".to_string(),
             is_draft: true,
+            review_decision: String::new(),
         };
         assert_eq!(status_from_pr(&info), Some(FeatureStatus::Wip));
+    }
+
+    #[test]
+    fn open_approved_pr_maps_to_approved() {
+        let info = PrInfo {
+            state: "OPEN".to_string(),
+            is_draft: false,
+            review_decision: "APPROVED".to_string(),
+        };
+        assert_eq!(status_from_pr(&info), Some(FeatureStatus::Approved));
     }
 
     #[test]
@@ -147,6 +173,7 @@ mod tests {
         let info = PrInfo {
             state: "OPEN".to_string(),
             is_draft: false,
+            review_decision: String::new(),
         };
         assert_eq!(status_from_pr(&info), Some(FeatureStatus::Review));
     }
@@ -156,6 +183,7 @@ mod tests {
         let info = PrInfo {
             state: "UNKNOWN".to_string(),
             is_draft: false,
+            review_decision: String::new(),
         };
         assert_eq!(status_from_pr(&info), None);
     }
@@ -166,18 +194,21 @@ mod tests {
         let info = PrInfo {
             state: "open".to_string(),
             is_draft: false,
+            review_decision: String::new(),
         };
         assert_eq!(status_from_pr(&info), Some(FeatureStatus::Review));
 
         let info = PrInfo {
             state: "merged".to_string(),
             is_draft: false,
+            review_decision: String::new(),
         };
         assert_eq!(status_from_pr(&info), Some(FeatureStatus::Merged));
 
         let info = PrInfo {
             state: "closed".to_string(),
             is_draft: false,
+            review_decision: String::new(),
         };
         assert_eq!(status_from_pr(&info), Some(FeatureStatus::Stale));
     }
