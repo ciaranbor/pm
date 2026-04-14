@@ -68,7 +68,7 @@ pub fn feat_new(
     name_override: Option<&str>,
     context: Option<&str>,
     base: Option<&str>,
-    no_edit: bool,
+    edit: bool,
     agent_override: Option<&str>,
     tmux_server: Option<&str>,
 ) -> Result<String> {
@@ -149,7 +149,7 @@ pub fn feat_new(
                 &feature_name,
                 &config,
                 agent_override,
-                no_edit,
+                edit,
                 Some(&reuse_target),
                 tmux_server,
             )?;

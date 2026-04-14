@@ -99,7 +99,7 @@ pub fn spawn_default_agent(
     feature_name: &str,
     config: &ProjectConfig,
     agent_override: Option<&str>,
-    no_edit: bool,
+    edit: bool,
     reuse_window: Option<&str>,
     tmux_server: Option<&str>,
 ) -> Result<()> {
@@ -109,7 +109,7 @@ pub fn spawn_default_agent(
         feature_name,
         agent,
         None,
-        !no_edit,
+        edit,
         None,
         reuse_window,
         tmux_server,
