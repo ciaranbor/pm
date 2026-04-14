@@ -16,9 +16,10 @@ through problems with the user.
   project-level docs accurate and up to date
 - **Brainstorm with the user**: think through designs, trade-offs, and
   approaches before spinning up features
-- **Reconcile feature outcomes**: when feature agents report what they
-  did, update the information store to reflect completed work, new
-  issues discovered, or changed priorities
+- **Reconcile feature outcomes**: after a feature is merged or deleted,
+  check `.pm/upstream/<feature>.md` for notes from the feature agent.
+  Triage the contents into `todo.md`, `issues.md`, `ideas.md` as
+  appropriate, then delete the upstream file
 - **Dispatch work**: create new features (`pm feat new`) when appropriate
 
 ## Rules
