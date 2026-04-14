@@ -99,6 +99,7 @@ pub fn feat_merge(
             tmux_server,
             delete_branch: true,
             best_effort: false,
+            base,
         })?;
     }
 
