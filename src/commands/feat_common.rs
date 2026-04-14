@@ -128,13 +128,14 @@ pub fn rollback_creation(
     project_name: &str,
     tmux_server: Option<&str>,
     delete_branch: bool,
+    base: &str,
 ) {
-    let main_worktree = project_root.join("main");
+    let base_worktree = project_root.join(base);
     let worktree_path = project_root.join(feature_name);
     let features_dir = paths::features_dir(project_root);
 
     let _ = feat_delete::cleanup_feature(&feat_delete::CleanupParams {
-        repo: &main_worktree,
+        repo: &base_worktree,
         worktree_path: &worktree_path,
         branch,
         features_dir: &features_dir,
@@ -144,5 +145,6 @@ pub fn rollback_creation(
         tmux_server,
         delete_branch,
         best_effort: true,
+        base,
     });
 }

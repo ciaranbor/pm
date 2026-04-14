@@ -28,6 +28,9 @@ pub struct CleanupParams<'a> {
     /// running. Regular `feat_delete` leaves this false so errors surface
     /// to the user.
     pub best_effort: bool,
+    /// The base worktree name (e.g. "main" or a parent feature name).
+    /// Used to navigate to the correct session after killing the feature session.
+    pub base: &'a str,
 }
 
 /// Remove a feature's worktree, branch, state file, agent registry,
@@ -95,8 +98,8 @@ pub fn cleanup_feature(params: &CleanupParams) -> Result<()> {
             if let Some(current) = tmux::current_session(params.tmux_server)
                 && current == session_name
             {
-                let main_session = format!("{}/main", params.project_name);
-                let _ = tmux::switch_client(params.tmux_server, &main_session);
+                let base_session = format!("{}/{}", params.project_name, params.base);
+                let _ = tmux::switch_client(params.tmux_server, &base_session);
             }
             tmux::kill_session(params.tmux_server, &session_name)?;
         }
@@ -230,6 +233,7 @@ pub fn feat_delete(
         tmux_server,
         delete_branch: true,
         best_effort: false,
+        base,
     })?;
 
     // Trigger post-merge hook when deleting a feature whose PR was merged

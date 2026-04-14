@@ -173,6 +173,7 @@ pub fn feat_adopt(
             project_name,
             tmux_server,
             false, // user-owned branch — never delete it
+            &resolved_base,
         );
         return Err(e);
     }

@@ -171,6 +171,7 @@ pub fn feat_new(
             project_name,
             tmux_server,
             true, // feat_new owns the branch and may destroy it on failure
+            &resolved_base,
         );
         return Err(e);
     }

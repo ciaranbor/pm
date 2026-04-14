@@ -135,6 +135,7 @@ fn setup_review(
             project_name,
             tmux_server,
             true, // fetch_pr created the local branch, so we own it
+            "main",
         );
         return Err(e);
     }

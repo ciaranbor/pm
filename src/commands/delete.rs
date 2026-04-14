@@ -132,6 +132,7 @@ pub fn delete(
                 tmux_server,
                 delete_branch: true,
                 best_effort: false,
+                base: state.base_or_default(),
             })?;
         } else {
             // Soft teardown: remove pm state and tmux session, but leave

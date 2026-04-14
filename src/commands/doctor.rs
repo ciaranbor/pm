@@ -28,7 +28,11 @@ enum FixAction {
     /// Remove the state file (orphaned feature).
     RemoveState,
     /// Clean up a stuck-initializing feature via cleanup_feature.
-    CleanupInitializing { worktree: String, branch: String },
+    CleanupInitializing {
+        worktree: String,
+        branch: String,
+        base: String,
+    },
     /// Recreate a missing tmux session.
     RecreateTmuxSession {
         session_name: String,
@@ -188,6 +192,7 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
                 fix: Fix::Auto(FixAction::CleanupInitializing {
                     worktree: state.worktree.clone(),
                     branch: state.branch.clone(),
+                    base: state.base_or_default().to_string(),
                 }),
             });
         }
@@ -328,7 +333,11 @@ fn apply_fix(
         FixAction::RemoveState => {
             FeatureState::delete(features_dir, name)?;
         }
-        FixAction::CleanupInitializing { worktree, branch } => {
+        FixAction::CleanupInitializing {
+            worktree,
+            branch,
+            base,
+        } => {
             let worktree_path = project_root.join(worktree);
             feat_delete::cleanup_feature(&CleanupParams {
                 repo: main_repo,
@@ -341,6 +350,7 @@ fn apply_fix(
                 tmux_server,
                 delete_branch: true,
                 best_effort: false,
+                base,
             })?;
         }
         FixAction::RecreateTmuxSession {
