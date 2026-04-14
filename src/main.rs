@@ -229,14 +229,15 @@ enum MsgCommands {
         #[arg(long)]
         as_agent: Option<String>,
     },
-    /// Read a single message from your inbox (does not advance the cursor)
+    /// Read the next unread message and advance the cursor
     Read {
         /// Which sender's queue to read from. Required with --index.
         /// Without --index, inferred when exactly one sender has unread messages.
         #[arg(long)]
         from: Option<String>,
+        /// Re-read a specific message without advancing the cursor.
         /// Absolute index ("3"), or relative to the cursor ("+2", "-1").
-        /// If omitted, reads the next unread message (cursor + 1).
+        /// If omitted, reads the next unread message and advances.
         #[arg(long, value_name = "SPEC")]
         index: Option<String>,
         /// Agent name (defaults to $PM_AGENT_NAME or $USER)

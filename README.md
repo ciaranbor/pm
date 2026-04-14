@@ -303,22 +303,25 @@ pm msg wait --from reviewer                  # block only on messages from revie
 pm msg list                                  # enumerate inbox with cursor markers
 pm msg list --from reviewer                  # only show one sender's queue
 
-pm msg read                                  # print the next unread message
+pm msg read                                  # read next unread message and advance cursor
 pm msg read --from reviewer                  # scope to one sender
-pm msg read --from reviewer --index 3        # absolute: message 3 from reviewer
-pm msg read --from reviewer --index +2       # peek ahead: cursor + 2
-pm msg read --from reviewer --index -1       # re-read the last processed message (the cursor itself)
+pm msg read --from reviewer --index 3        # re-read message 3 (does not advance)
+pm msg read --from reviewer --index +2       # peek ahead: cursor + 2 (does not advance)
+pm msg read --from reviewer --index -1       # re-read the last processed message
 pm msg read --from reviewer --index -2       # one further back
 
-pm msg next                                  # advance the cursor by one
+pm msg next                                  # advance the cursor by one (without printing)
 pm msg next --from reviewer                  # scope to one sender
 ```
 
 Key properties:
 
-- **`read` never mutates.** Calling it ten times returns the same message.
-- **`next` is the only mutation.** It advances the cursor by exactly one.
-  Process a message, then call `next` to move on.
+- **`read` reads and advances.** Each call returns the next unread message
+  and moves the cursor forward. No separate `next` call needed.
+- **`--index` is pure.** With `--index`, `read` returns the specified
+  message without touching the cursor — use this to re-read history.
+- **`next` still exists** for backwards compatibility and for advancing
+  without printing the message body.
 - **`--from` is required only when ambiguous.** If your inbox has unread
   messages from only one sender, `pm msg read` / `pm msg next` pick it
   automatically. If multiple senders have unread, you'll get a clear
