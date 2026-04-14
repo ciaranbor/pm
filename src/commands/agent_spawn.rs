@@ -38,17 +38,22 @@ fn build_claude_cmd(
     parts.join(" ")
 }
 
-/// Spawn a claude session in a new tmux window. Works for both named agents
+/// Spawn a claude session in a tmux window. Works for both named agents
 /// and plain claude sessions (when `agent_name` is None).
 /// If `resume_session` is provided, passes `--resume` to claude.
 /// Sets `PM_AGENT_NAME` in the spawned shell so the agent auto-identifies
 /// in `pm msg send/check/read` without `--as-agent`.
+///
+/// When `reuse_window` is `Some(target)`, the existing window at that target
+/// is renamed and reused instead of creating a new one. This is used during
+/// `feat new --context` to reuse the default shell at window :0.
 ///
 /// # Safety
 /// Callers must validate `agent_name` via `validate_name()` before calling —
 /// the name is interpolated into a shell command.
 ///
 /// Returns the tmux window target.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_claude_session(
     project_root: &Path,
     feature: &str,
@@ -56,6 +61,7 @@ pub fn spawn_claude_session(
     prompt: Option<&str>,
     edit: bool,
     resume_session: Option<&str>,
+    reuse_window: Option<&str>,
     tmux_server: Option<&str>,
 ) -> Result<String> {
     let pm_dir = paths::pm_dir(project_root);
@@ -96,13 +102,18 @@ pub fn spawn_claude_session(
         resume_session,
         permission_mode.as_deref(),
     );
-    let window_target = tmux::new_window(
-        tmux_server,
-        &session_name,
-        &worktree_path,
-        Some(window_name),
-        true,
-    )?;
+    let window_target = if let Some(target) = reuse_window {
+        tmux::rename_window(tmux_server, target, window_name)?;
+        target.to_string()
+    } else {
+        tmux::new_window(
+            tmux_server,
+            &session_name,
+            &worktree_path,
+            Some(window_name),
+            true,
+        )?
+    };
 
     // Set PM_AGENT_NAME so the agent's `pm msg send/check/read` calls
     // automatically identify as this agent without needing --as-agent.
@@ -198,6 +209,7 @@ pub fn agent_spawn(
             None,
             edit,
             resume_id.as_deref(),
+            None,
             tmux_server,
         )?;
 
@@ -217,6 +229,7 @@ pub fn agent_spawn(
         Some(agent_name),
         None,
         edit,
+        None,
         None,
         tmux_server,
     )?;

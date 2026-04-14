@@ -106,6 +106,8 @@ fn setup_review(
 
         // Step 3.5: Spawn the reviewer agent with no prompt; the Stop hook
         // blocks until the PR-review context queued above is available.
+        // Reuse window :0 so the reviewer takes over the default shell.
+        let reuse_target = format!("{session_name}:0");
         agent_spawn::spawn_claude_session(
             project_root,
             feature_name,
@@ -113,6 +115,7 @@ fn setup_review(
             None,
             false, // reviews are read-only
             None,
+            Some(&reuse_target),
             tmux_server,
         )?;
 
@@ -254,10 +257,10 @@ mod tests {
 
         setup_review(&project_path, &details, "review-42", server.name()).unwrap();
 
-        // 3 windows: default shell + claude + hook
+        // 2 windows: reused window :0 (now reviewer) + hook
         let windows =
             tmux::list_windows(server.name(), &format!("{project_name}/review-42")).unwrap();
-        assert_eq!(windows, 3);
+        assert_eq!(windows, 2);
     }
 
     #[test]

@@ -214,6 +214,12 @@ fn build_display_menu_args(
     args
 }
 
+/// Rename a window in a tmux session.
+pub fn rename_window(server: Option<&str>, target: &str, new_name: &str) -> Result<()> {
+    run_tmux(server, &["rename-window", "-t", target, new_name])?;
+    Ok(())
+}
+
 /// Kill the entire tmux server (used in tests for cleanup).
 pub fn kill_server(server: Option<&str>) -> Result<()> {
     let _ = run_tmux(server, &["kill-server"]);
@@ -437,6 +443,22 @@ mod tests {
         // display_menu swallows the tmux error (no client attached)
         let result = display_menu(server.name(), "Test", &items);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn rename_window_changes_window_name() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let name = server.scope("rename-win");
+
+        create_session(server.name(), &name, dir.path()).unwrap();
+        // Default window is at :0
+        let target = format!("{name}:0");
+        rename_window(server.name(), &target, "agent").unwrap();
+
+        // The window should now be findable by the new name
+        let found = find_window(server.name(), &name, "agent").unwrap();
+        assert!(found.is_some());
     }
 
     #[test]

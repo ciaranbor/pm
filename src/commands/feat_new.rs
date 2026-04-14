@@ -141,13 +141,16 @@ pub fn feat_new(
         // Step 4.5: Spawn the default claude agent (if context was provided).
         // The agent starts with no positional prompt; the Stop hook blocks
         // until the queued message is available, then tells it to read.
+        // Reuse window :0 (the default shell) so we don't leave an empty window.
         if resolved_context.is_some() {
+            let reuse_target = format!("{session_name}:0");
             feat_common::spawn_default_agent(
                 project_root,
                 &feature_name,
                 &config,
                 agent_override,
                 no_edit,
+                Some(&reuse_target),
                 tmux_server,
             )?;
         }
@@ -446,9 +449,9 @@ mod tests {
         )
         .unwrap();
 
-        // Session should have 3 windows: the default shell + the claude window + hook window
+        // Session should have 2 windows: the reused window :0 (now agent) + hook window
         let output = tmux::list_windows(server.name(), &format!("{project_name}/login")).unwrap();
-        assert_eq!(output, 3);
+        assert_eq!(output, 2);
     }
 
     #[test]
