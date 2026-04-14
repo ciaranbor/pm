@@ -317,7 +317,7 @@ mod tests {
             crate::state::agent::AgentEntry {
                 agent_type: crate::state::agent::AgentType::Agent,
                 session_id: "test".to_string(),
-                window: "reviewer".to_string(),
+                window_name: "reviewer".to_string(),
                 active: true,
             },
         );

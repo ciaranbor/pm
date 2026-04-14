@@ -133,7 +133,7 @@ pub fn spawn_claude_session(
             AgentEntry {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
-                window: window_target.clone(),
+                window_name: name.to_string(),
                 active: true,
             },
         );
@@ -238,12 +238,13 @@ pub fn agent_spawn(
 }
 
 /// Respawn all registered agents for a feature (excludes user-type entries).
-/// Returns status messages.
+/// Best-effort: tries every agent and collects errors rather than failing
+/// on the first bad entry. Returns `(successes, errors)`.
 pub fn agent_spawn_all(
     project_root: &Path,
     feature: &str,
     tmux_server: Option<&str>,
-) -> Result<Vec<String>> {
+) -> Result<(Vec<String>, Vec<String>)> {
     let agents_dir = paths::agents_dir(project_root);
     let registry = AgentRegistry::load(&agents_dir, feature)?;
 
@@ -255,16 +256,19 @@ pub fn agent_spawn_all(
         .collect();
 
     if agent_names.is_empty() {
-        return Ok(vec!["No agents to respawn".to_string()]);
+        return Ok((vec!["No agents to respawn".to_string()], vec![]));
     }
 
-    let mut messages = Vec::new();
+    let mut successes = Vec::new();
+    let mut errors = Vec::new();
     for name in &agent_names {
-        let msg = agent_spawn(project_root, feature, name, None, false, tmux_server)?;
-        messages.push(msg);
+        match agent_spawn(project_root, feature, name, None, false, tmux_server) {
+            Ok(msg) => successes.push(msg),
+            Err(e) => errors.push(format!("Failed to spawn '{name}': {e}")),
+        }
     }
 
-    Ok(messages)
+    Ok((successes, errors))
 }
 
 #[cfg(test)]
@@ -401,8 +405,9 @@ mod tests {
         tmux::create_session(server.name(), &session_name, &worktree).unwrap();
 
         // Respawn all
-        let msgs = agent_spawn_all(dir.path(), &feature, server.name()).unwrap();
-        assert_eq!(msgs.len(), 2);
+        let (successes, errors) = agent_spawn_all(dir.path(), &feature, server.name()).unwrap();
+        assert_eq!(successes.len(), 2);
+        assert!(errors.is_empty());
     }
 
     #[test]
@@ -411,8 +416,51 @@ mod tests {
         let dir = tempdir().unwrap();
         let (_session_name, feature) = setup_project(dir.path(), &server);
 
-        let msgs = agent_spawn_all(dir.path(), &feature, server.name()).unwrap();
-        assert_eq!(msgs, vec!["No agents to respawn"]);
+        let (successes, errors) = agent_spawn_all(dir.path(), &feature, server.name()).unwrap();
+        assert_eq!(successes, vec!["No agents to respawn"]);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn spawn_all_partial_failure_continues() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (_session_name, feature) = setup_project(dir.path(), &server);
+
+        // Spawn a good agent first
+        agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
+
+        // Manually register a second agent, then destroy the tmux session
+        // so that spawning new windows fails for both. But first, mark
+        // reviewer inactive and register a second agent.
+        let agents_dir = paths::agents_dir(dir.path());
+        let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        registry.register(
+            "tester",
+            AgentEntry {
+                agent_type: AgentType::Agent,
+                session_id: String::new(),
+                window_name: "tester".to_string(),
+                active: false,
+            },
+        );
+        registry.get_mut("reviewer").unwrap().active = false;
+        registry.save(&agents_dir, &feature).unwrap();
+
+        // Kill the session entirely — now both spawns will fail because
+        // there's no tmux session to create windows in.
+        let pm_dir = paths::pm_dir(dir.path());
+        let config = ProjectConfig::load(&pm_dir).unwrap();
+        let session_name = format!("{}/{feature}", config.project.name);
+        tmux::kill_session(server.name(), &session_name).unwrap();
+
+        let (successes, errors) = agent_spawn_all(dir.path(), &feature, server.name()).unwrap();
+
+        // Both should fail, but we get errors for both — not just the first
+        assert!(successes.is_empty());
+        assert_eq!(errors.len(), 2);
+        assert!(errors[0].contains("Failed to spawn"));
+        assert!(errors[1].contains("Failed to spawn"));
     }
 
     #[test]
