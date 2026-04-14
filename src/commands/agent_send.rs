@@ -1,11 +1,50 @@
 use std::path::Path;
 
-use crate::error::Result;
+use crate::error::{PmError, Result};
 use crate::messages;
 use crate::state::agent::AgentRegistry;
 use crate::state::paths;
 use crate::state::project::ProjectConfig;
 use crate::tmux;
+
+/// Check whether an agent definition file exists in any location that
+/// `claude --agent <name>` would resolve when running in a feature worktree:
+///   1. Feature worktree: `<project_root>/<feature>/.claude/agents/<name>.md`
+///   2. Main worktree: `<project_root>/main/.claude/agents/<name>.md`
+///      (where `pm agents install-project` writes; not committed to git but
+///      still resolvable by Claude Code from sibling worktrees)
+///   3. Global: `~/.claude/agents/<name>.md`
+fn has_agent_definition(project_root: &Path, feature: &str, agent_name: &str) -> bool {
+    let def_filename = format!("{agent_name}.md");
+
+    // Feature worktree
+    let feature_def = project_root
+        .join(feature)
+        .join(".claude/agents")
+        .join(&def_filename);
+    if feature_def.exists() {
+        return true;
+    }
+
+    // Main worktree (project-level install location)
+    let main_def = project_root
+        .join("main")
+        .join(".claude/agents")
+        .join(&def_filename);
+    if main_def.exists() {
+        return true;
+    }
+
+    // Global (~/.claude/agents/)
+    if let Some(home) = dirs::home_dir() {
+        let global_def = home.join(".claude/agents").join(&def_filename);
+        if global_def.exists() {
+            return true;
+        }
+    }
+
+    false
+}
 
 /// Check whether the recipient agent is currently active (registered and has a live tmux window).
 fn is_agent_active(
@@ -42,6 +81,17 @@ pub fn agent_send(
     body: &str,
     tmux_server: Option<&str>,
 ) -> Result<String> {
+    let is_active = is_agent_active(project_root, feature, recipient, tmux_server)?;
+
+    // If the agent isn't running and no definition exists, fail early —
+    // delivering a message that nobody can ever read is a mistake.
+    if !is_active && !has_agent_definition(project_root, feature, recipient) {
+        return Err(PmError::AgentNotFound(format!(
+            "No agent called '{recipient}' exists in this scope. \
+             Only agents with agent definitions are auto-spawned"
+        )));
+    }
+
     // Deliver the message first, then spawn. This ensures the message is durably
     // queued in the inbox before the agent starts, so it will be picked up on first read.
     // If spawn fails, the message remains as a "dead letter" — acceptable since the user
@@ -50,10 +100,8 @@ pub fn agent_send(
     let index = messages::send(&messages_dir, feature, recipient, sender, body)?;
     let mut status = format!("Message {index:03} sent to '{recipient}' (from '{sender}')");
 
-    // Auto-spawn the agent if it's not currently active. No positional
-    // prompt: the Stop hook blocks until the queued message is available,
-    // then tells the agent to read it.
-    if !is_agent_active(project_root, feature, recipient, tmux_server)? {
+    // Auto-spawn the agent if it's not currently active.
+    if !is_active {
         let spawn_msg = super::agent_spawn::agent_spawn(
             project_root,
             feature,
@@ -120,11 +168,25 @@ mod tests {
         (root, session_name, feature_name.to_string())
     }
 
+    /// Create an agent definition in the main worktree (where `pm agents install-project` writes).
+    fn create_agent_definition(root: &Path, agent_name: &str) {
+        let agent_def = root
+            .join("main")
+            .join(".claude/agents")
+            .join(format!("{agent_name}.md"));
+        std::fs::create_dir_all(agent_def.parent().unwrap()).unwrap();
+        std::fs::write(&agent_def, "# agent stub").unwrap();
+    }
+
     #[test]
     fn send_to_active_agent_does_not_spawn() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
         let (root, _session_name, feature) = setup_project_with_tmux(dir.path(), &server);
+
+        // Agent definition must exist so we're genuinely testing the
+        // "active agent skips spawn" path, not the "no definition" guard.
+        create_agent_definition(&root, "reviewer");
 
         // Spawn the agent first so it's active
         super::super::agent_spawn::agent_spawn(
@@ -157,6 +219,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let (root, _session_name, feature) = setup_project_with_tmux(dir.path(), &server);
 
+        // Agent definition must exist for auto-spawn
+        create_agent_definition(&root, "reviewer");
+
         // Send without spawning first — agent doesn't exist
         let msg = agent_send(
             &root,
@@ -182,6 +247,9 @@ mod tests {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
         let (root, session_name, feature) = setup_project_with_tmux(dir.path(), &server);
+
+        // Agent definition must exist for auto-spawn
+        create_agent_definition(&root, "reviewer");
 
         // Spawn agent, then mark it inactive (simulating window died)
         super::super::agent_spawn::agent_spawn(
@@ -218,10 +286,33 @@ mod tests {
     }
 
     #[test]
+    fn send_without_agent_definition_errors() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (root, _session_name, feature) = setup_project_with_tmux(dir.path(), &server);
+
+        // No agent definition — send should fail
+        let result = agent_send(
+            &root,
+            &feature,
+            "reviewer",
+            "implementer",
+            "hello",
+            server.name(),
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("No agent called 'reviewer' exists in this scope"));
+    }
+
+    #[test]
     fn send_increments_index_in_output() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
         let (root, _session_name, feature) = setup_project_with_tmux(dir.path(), &server);
+
+        // Agent definition must exist for auto-spawn on first send
+        create_agent_definition(&root, "reviewer");
 
         // First send will auto-spawn
         agent_send(
