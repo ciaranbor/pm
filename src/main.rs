@@ -77,6 +77,23 @@ enum Commands {
         #[arg(long)]
         project: Option<String>,
     },
+    /// Write an upstream doc from a feature worktree
+    Upstream {
+        #[command(subcommand)]
+        command: UpstreamCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum UpstreamCommands {
+    /// Write (or overwrite) the upstream doc for the current feature
+    Write {
+        /// Content to write
+        content: String,
+        /// Read content from a file instead
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -922,6 +939,16 @@ fn run() -> pm::error::Result<()> {
             }
             Ok(())
         }
+        Commands::Upstream { command } => match command {
+            UpstreamCommands::Write { content, file } => {
+                let body = if let Some(path) = file {
+                    std::fs::read_to_string(&path)?
+                } else {
+                    content
+                };
+                commands::upstream::run(&body)
+            }
+        },
     }
 }
 

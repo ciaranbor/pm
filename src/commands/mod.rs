@@ -30,3 +30,4 @@ pub mod open;
 pub mod register;
 pub mod skills;
 pub mod status;
+pub mod upstream;
