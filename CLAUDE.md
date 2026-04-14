@@ -26,8 +26,8 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 ### Agents as long-running message processors
 
 pm agents are never-idle message processors, not one-shot scripts. This
-is implemented with a Claude Code **Stop hook** (`pm hooks stop`,
-installed by `pm hooks install` into `main/.claude/settings.json`). The
+is implemented with a Claude Code **Stop hook** (`pm claude hooks stop`,
+installed by `pm claude hooks install` into `main/.claude/settings.json`). The
 hook blocks until messages are available by calling `agent_wait`
 directly, then returns:
 

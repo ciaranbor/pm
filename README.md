@@ -376,7 +376,7 @@ which Claude Code delivers back to the agent as a continuation prompt. The agent
 To install or re-install the hook manually (after editing settings by hand, or after upgrading pm):
 
 ```sh
-pm hooks install
+pm claude hooks install
 ```
 
 The install is idempotent and append-only — any other `Stop` hooks you've added are left alone. `pm doctor` flags a missing pm Stop hook and `pm doctor --fix` reinstalls it.

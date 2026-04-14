@@ -50,9 +50,6 @@ enum Commands {
     /// Claude Code settings, skills, and session management
     #[command(subcommand)]
     Claude(ClaudeCommands),
-    /// Claude Code lifecycle hooks managed by pm
-    #[command(subcommand)]
-    Hooks(HooksCommands),
     /// Delete a project (teardown features, sessions, state, and registry entry)
     Delete {
         /// Project name (defaults to current project from CWD)
@@ -93,6 +90,9 @@ enum ClaudeCommands {
     /// Manage bundled Claude Code agent definitions
     #[command(subcommand)]
     Agents(ClaudeAgentsCommands),
+    /// Claude Code lifecycle hooks managed by pm
+    #[command(subcommand)]
+    Hooks(HooksCommands),
     /// Migrate Claude Code sessions from an old project path to the current directory
     Migrate {
         /// The old absolute path where the project previously lived
@@ -582,26 +582,26 @@ fn run() -> pm::error::Result<()> {
                     Ok(())
                 }
             },
+            ClaudeCommands::Hooks(hooks_cmd) => match hooks_cmd {
+                HooksCommands::Install => {
+                    let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+                    let msg = commands::hooks_install::install(&project_root)?;
+                    println!("{msg}");
+                    Ok(())
+                }
+                HooksCommands::Stop => {
+                    let code = commands::hooks_stop::stop();
+                    if code != 0 {
+                        std::process::exit(code);
+                    }
+                    Ok(())
+                }
+            },
             ClaudeCommands::Migrate { from } => {
                 let cwd = std::env::current_dir()?;
                 let messages = commands::claude_migrate::migrate_sessions(&from, &cwd, None)?;
                 for msg in messages {
                     println!("{msg}");
-                }
-                Ok(())
-            }
-        },
-        Commands::Hooks(hooks_cmd) => match hooks_cmd {
-            HooksCommands::Install => {
-                let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-                let msg = commands::hooks_install::install(&project_root)?;
-                println!("{msg}");
-                Ok(())
-            }
-            HooksCommands::Stop => {
-                let code = commands::hooks_stop::stop();
-                if code != 0 {
-                    std::process::exit(code);
                 }
                 Ok(())
             }
