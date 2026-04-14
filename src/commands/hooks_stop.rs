@@ -1,4 +1,4 @@
-//! `pm hooks stop` — the Stop hook command invoked by Claude Code.
+//! `pm claude hooks stop` — the Stop hook command invoked by Claude Code.
 //!
 //! The hook blocks until the agent has unread messages, then returns
 //! `{"decision":"block","reason":"You have new messages. Run `pm msg read` …"}`

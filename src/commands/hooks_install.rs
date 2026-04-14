@@ -1,6 +1,6 @@
 //! Install the pm Stop hook into `main/.claude/settings.json`.
 //!
-//! The Stop hook is `pm hooks stop`, a Rust command that blocks until
+//! The Stop hook is `pm claude hooks stop`, a Rust command that blocks until
 //! the agent has unread messages (by calling `agent_wait` internally),
 //! then returns `{"decision":"block","reason":"You have new messages…"}`.
 //! Claude Code delivers the reason as a continuation prompt, the agent
@@ -21,14 +21,14 @@ use crate::error::{PmError, Result};
 
 /// Marker string used to identify pm-owned Stop hook entries in
 /// settings.json. Present in both the old `printf` command and the new
-/// `pm hooks stop` command so upgrades detect and replace either.
-pub const PM_HOOK_MARKER: &str = "pm hooks stop";
+/// `pm claude hooks stop` command so upgrades detect and replace either.
+pub const PM_HOOK_MARKER: &str = "pm claude hooks stop";
 
-/// The shell command registered as the Stop hook. Invokes `pm hooks stop`
+/// The shell command registered as the Stop hook. Invokes `pm claude hooks stop`
 /// which blocks until unread messages are available, printing the JSON
 /// decision to stdout.
 pub fn stop_hook_command() -> String {
-    "pm hooks stop".to_string()
+    "pm claude hooks stop".to_string()
 }
 
 /// Install the Stop hook into `main/.claude/settings.json`. Idempotent:
@@ -133,7 +133,7 @@ fn upsert_stop_hook(root: &mut Value) -> Result<bool> {
 }
 
 /// Heuristic: is this Stop entry one we own? Matches both the current
-/// `pm hooks stop` command and the old `printf` approach (which contained
+/// `pm claude hooks stop` command and the old `printf` approach (which contained
 /// our marker text in the reason string). Foreign entries are left alone.
 fn entry_is_pm_owned(entry: &Value) -> bool {
     let Some(inner) = entry.get("hooks").and_then(|v| v.as_array()) else {
@@ -142,7 +142,11 @@ fn entry_is_pm_owned(entry: &Value) -> bool {
     inner.iter().any(|hook| {
         hook.get("command")
             .and_then(|v| v.as_str())
-            .is_some_and(|cmd| cmd.contains(PM_HOOK_MARKER) || cmd.contains("pm msg wait"))
+            .is_some_and(|cmd| {
+                cmd.contains(PM_HOOK_MARKER)
+                    || cmd.contains("pm hooks stop")
+                    || cmd.contains("pm msg wait")
+            })
     })
 }
 
@@ -210,7 +214,7 @@ mod tests {
             .and_then(|h| h.get("command"))
             .and_then(|c| c.as_str())
             .unwrap();
-        assert_eq!(cmd, "pm hooks stop");
+        assert_eq!(cmd, "pm claude hooks stop");
     }
 
     #[test]
@@ -301,7 +305,7 @@ mod tests {
         let root = setup_project(dir.path());
 
         // Seed the old-style printf hook — install should replace it with
-        // `pm hooks stop`.
+        // `pm claude hooks stop`.
         let claude_dir = root.join("main").join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
         let old = json!({
@@ -341,7 +345,7 @@ mod tests {
             .and_then(|h| h.get("command"))
             .and_then(|c| c.as_str())
             .unwrap();
-        assert_eq!(cmd, "pm hooks stop");
+        assert_eq!(cmd, "pm claude hooks stop");
     }
 
     #[test]
@@ -375,6 +379,6 @@ mod tests {
 
     #[test]
     fn stop_hook_command_is_pm_hooks_stop() {
-        assert_eq!(stop_hook_command(), "pm hooks stop");
+        assert_eq!(stop_hook_command(), "pm claude hooks stop");
     }
 }
