@@ -350,6 +350,9 @@ enum FeatCommands {
         /// Create a non-draft (ready) PR instead of draft
         #[arg(long)]
         ready: bool,
+        /// PR body (literal text or path to a file; overrides template)
+        #[arg(long)]
+        body: Option<String>,
     },
     /// Mark a feature's PR as ready for review
     Ready {
@@ -825,9 +828,18 @@ fn run() -> pm::error::Result<()> {
                     }
                     Ok(())
                 }
-                FeatCommands::Pr { name, ready } => {
+                FeatCommands::Pr { name, ready, body } => {
                     let name = resolve_feature_name(name, &project_root)?;
-                    commands::feat_pr::feat_pr(&project_root, &name, ready)?;
+                    let resolved_body = body
+                        .as_deref()
+                        .map(commands::feat_new::resolve_context)
+                        .transpose()?;
+                    commands::feat_pr::feat_pr(
+                        &project_root,
+                        &name,
+                        ready,
+                        resolved_body.as_deref(),
+                    )?;
                     println!("PR linked for feature '{name}'");
                     Ok(())
                 }

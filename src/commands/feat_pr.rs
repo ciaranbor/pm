@@ -6,15 +6,32 @@ use crate::git;
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
 
+/// Resolve the PR body: explicit body wins, then PR template, then None.
+fn resolve_pr_body(worktree_path: &Path, body: Option<&str>) -> Result<Option<String>> {
+    match body {
+        Some(b) => Ok(Some(b.to_string())),
+        None => {
+            let template_path = worktree_path.join(".github/pull_request_template.md");
+            if template_path.exists() {
+                Ok(Some(std::fs::read_to_string(&template_path)?))
+            } else {
+                Ok(None)
+            }
+        }
+    }
+}
+
 /// Create or link a GitHub PR for a feature.
 ///
 /// - Pushes the branch to origin
 /// - If a PR already exists for the branch, links it (stores PR number)
+///   and updates the body if `body` is provided
 /// - Otherwise creates a new PR (draft by default, non-draft with `ready`)
-/// - Respects `.github/pull_request_template.md` if present
+/// - Explicit `body` overrides the PR template
+/// - Falls back to `.github/pull_request_template.md` if present
 /// - Stores the PR number in feature state
 /// - Sets status to Review only when `--ready`, keeps Wip for draft PRs
-pub fn feat_pr(project_root: &Path, name: &str, ready: bool) -> Result<()> {
+pub fn feat_pr(project_root: &Path, name: &str, ready: bool, body: Option<&str>) -> Result<()> {
     let features_dir = paths::features_dir(project_root);
     let mut state = FeatureState::load(&features_dir, name)?;
     let worktree_path = project_root.join(&state.worktree);
@@ -25,15 +42,13 @@ pub fn feat_pr(project_root: &Path, name: &str, ready: bool) -> Result<()> {
     // Check if a PR already exists for this branch
     let pr_number = if let Some(number) = gh::existing_pr_number(&worktree_path, &state.branch)? {
         eprintln!("PR #{number} already exists for branch '{}'", state.branch);
+        if let Some(b) = body {
+            gh::edit_pr_body(&worktree_path, &number, b)?;
+            eprintln!("Updated PR #{number} body");
+        }
         number
     } else {
-        // Read PR template if it exists
-        let template_path = worktree_path.join(".github/pull_request_template.md");
-        let template = if template_path.exists() {
-            Some(std::fs::read_to_string(&template_path)?)
-        } else {
-            None
-        };
+        let pr_body = resolve_pr_body(&worktree_path, body)?;
 
         let draft = !ready;
         let base = state.base_or_default();
@@ -42,7 +57,7 @@ pub fn feat_pr(project_root: &Path, name: &str, ready: bool) -> Result<()> {
             &worktree_path,
             &state.branch,
             draft,
-            template.as_deref(),
+            pr_body.as_deref(),
             base_arg,
         )?
     };
@@ -150,7 +165,7 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project(dir.path());
 
-        let result = feat_pr(&project_path, "nonexistent", false);
+        let result = feat_pr(&project_path, "nonexistent", false, None);
         assert!(result.is_err());
     }
 
@@ -175,5 +190,46 @@ mod tests {
         let content = std::fs::read_to_string(&template_path).unwrap();
         assert!(content.contains("## Description"));
         assert!(content.contains("## Test Plan"));
+    }
+
+    #[test]
+    fn resolve_body_explicit_overrides_template() {
+        let dir = tempdir().unwrap();
+        let worktree = dir.path();
+
+        // Create a PR template
+        std::fs::create_dir_all(worktree.join(".github")).unwrap();
+        std::fs::write(
+            worktree.join(".github/pull_request_template.md"),
+            "template body",
+        )
+        .unwrap();
+
+        // Explicit body should win over the template
+        let result = resolve_pr_body(worktree, Some("custom body")).unwrap();
+        assert_eq!(result.as_deref(), Some("custom body"));
+    }
+
+    #[test]
+    fn resolve_body_falls_back_to_template() {
+        let dir = tempdir().unwrap();
+        let worktree = dir.path();
+
+        std::fs::create_dir_all(worktree.join(".github")).unwrap();
+        std::fs::write(
+            worktree.join(".github/pull_request_template.md"),
+            "template body",
+        )
+        .unwrap();
+
+        let result = resolve_pr_body(worktree, None).unwrap();
+        assert_eq!(result.as_deref(), Some("template body"));
+    }
+
+    #[test]
+    fn resolve_body_none_when_no_template_and_no_body() {
+        let dir = tempdir().unwrap();
+        let result = resolve_pr_body(dir.path(), None).unwrap();
+        assert_eq!(result, None);
     }
 }

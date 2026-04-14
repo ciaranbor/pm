@@ -123,6 +123,12 @@ pub fn mark_pr_ready(repo_dir: &Path, branch: &str) -> Result<()> {
     Ok(())
 }
 
+/// Edit the body of an existing PR.
+pub fn edit_pr_body(repo_dir: &Path, pr_number: &str, body: &str) -> Result<()> {
+    run_gh(repo_dir, &["pr", "edit", pr_number, "--body", body])?;
+    Ok(())
+}
+
 /// PR details returned by `gh pr view`.
 #[derive(Debug, Clone)]
 pub struct PrDetails {
