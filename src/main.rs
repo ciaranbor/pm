@@ -647,10 +647,13 @@ fn run() -> pm::error::Result<()> {
                         )?;
                         println!("{msg}");
                     } else {
-                        let msgs =
+                        let (successes, errors) =
                             commands::agent_spawn::agent_spawn_all(&project_root, &feature, None)?;
-                        for msg in msgs {
+                        for msg in &successes {
                             println!("{msg}");
+                        }
+                        for err in &errors {
+                            eprintln!("error: {err}");
                         }
                     }
                     Ok(())

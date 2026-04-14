@@ -81,7 +81,7 @@ mod tests {
             AgentEntry {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
-                window: "testproj/login:1".to_string(),
+                window_name: "reviewer".to_string(),
                 active: true,
             },
         );
@@ -90,7 +90,7 @@ mod tests {
             AgentEntry {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
-                window: String::new(),
+                window_name: String::new(),
                 active: false,
             },
         );
@@ -121,7 +121,7 @@ mod tests {
             AgentEntry {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
-                window: String::new(),
+                window_name: String::new(),
                 active: true,
             },
         );
@@ -130,7 +130,7 @@ mod tests {
             AgentEntry {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
-                window: String::new(),
+                window_name: String::new(),
                 active: false,
             },
         );
@@ -153,7 +153,7 @@ mod tests {
             AgentEntry {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
-                window: String::new(),
+                window_name: String::new(),
                 active: false,
             },
         );
@@ -175,7 +175,7 @@ mod tests {
             AgentEntry {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
-                window: String::new(),
+                window_name: String::new(),
                 active: true,
             },
         );

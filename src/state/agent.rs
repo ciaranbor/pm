@@ -18,8 +18,12 @@ pub struct AgentEntry {
     pub agent_type: AgentType,
     #[serde(default)]
     pub session_id: String,
+    /// The tmux window name used to locate this agent's window via
+    /// `tmux::find_window`. Duplicates the registry key today, but is
+    /// stored explicitly so the TOML file is self-describing and the
+    /// lookup contract doesn't silently depend on the map key.
     #[serde(default)]
-    pub window: String,
+    pub window_name: String,
     #[serde(default)]
     pub active: bool,
 }
@@ -104,7 +108,7 @@ mod tests {
         AgentEntry {
             agent_type: AgentType::Agent,
             session_id: session_id.to_string(),
-            window: "reviewer".to_string(),
+            window_name: "reviewer".to_string(),
             active,
         }
     }
@@ -171,7 +175,7 @@ mod tests {
             AgentEntry {
                 agent_type: AgentType::User,
                 session_id: String::new(),
-                window: String::new(),
+                window_name: String::new(),
                 active: true,
             },
         );
@@ -212,7 +216,7 @@ mod tests {
             AgentEntry {
                 agent_type: AgentType::User,
                 session_id: String::new(),
-                window: String::new(),
+                window_name: String::new(),
                 active: true,
             },
         );
