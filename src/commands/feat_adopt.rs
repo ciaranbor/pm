@@ -22,7 +22,7 @@ pub fn feat_adopt(
     name_override: Option<&str>,
     context: Option<&str>,
     from: Option<&Path>,
-    no_edit: bool,
+    edit: bool,
     agent_override: Option<&str>,
     tmux_server: Option<&str>,
     claude_base: Option<&Path>,
@@ -151,7 +151,7 @@ pub fn feat_adopt(
                 &feature_name,
                 &config,
                 agent_override,
-                no_edit,
+                edit,
                 Some(&reuse_target),
                 tmux_server,
             )?;

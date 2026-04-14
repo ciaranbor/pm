@@ -306,9 +306,9 @@ enum FeatCommands {
         /// Base branch to stack on (defaults to current branch from CWD)
         #[arg(long)]
         base: Option<String>,
-        /// Don't auto-accept edits in the spawned Claude session
+        /// Force --permission-mode acceptEdits on the spawned Claude session
         #[arg(long)]
-        no_edit: bool,
+        edit: bool,
         /// Agent to spawn (overrides project default)
         #[arg(long)]
         agent: Option<String>,
@@ -326,9 +326,9 @@ enum FeatCommands {
         /// Migrate Claude Code sessions from this old path
         #[arg(long)]
         from: Option<PathBuf>,
-        /// Don't auto-accept edits in the spawned Claude session
+        /// Force --permission-mode acceptEdits on the spawned Claude session
         #[arg(long)]
-        no_edit: bool,
+        edit: bool,
         /// Agent to spawn (overrides project default)
         #[arg(long)]
         agent: Option<String>,
@@ -756,7 +756,7 @@ fn run() -> pm::error::Result<()> {
                     feature_name,
                     context,
                     base,
-                    no_edit,
+                    edit,
                     agent,
                 } => {
                     let feat_name = commands::feat_new::feat_new(
@@ -765,7 +765,7 @@ fn run() -> pm::error::Result<()> {
                         feature_name.as_deref(),
                         context.as_deref(),
                         base.as_deref(),
-                        no_edit,
+                        edit,
                         agent.as_deref(),
                         None,
                     )?;
@@ -777,7 +777,7 @@ fn run() -> pm::error::Result<()> {
                     feature_name,
                     context,
                     from,
-                    no_edit,
+                    edit,
                     agent,
                 } => {
                     let feat_name = commands::feat_adopt::feat_adopt(
@@ -786,7 +786,7 @@ fn run() -> pm::error::Result<()> {
                         feature_name.as_deref(),
                         context.as_deref(),
                         from.as_deref(),
-                        no_edit,
+                        edit,
                         agent.as_deref(),
                         None,
                         None,
