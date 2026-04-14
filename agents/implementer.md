@@ -21,10 +21,10 @@ the tasks described by messages in your inbox and address review feedback.
 
 ## When you're done
 
-Run `pm upstream write --file <path>` to send notes to the project
-maintainer. Write a markdown file with a brief recap, any out-of-scope
-bugs, feature suggestions, or refactoring ideas, then pass it via the
-command. Do not try to message "main" or any agent outside this feature.
+Write an `upstream.md` in the worktree root with a brief recap, any
+out-of-scope bugs, feature suggestions, or refactoring ideas. It will
+be automatically collected when the feature is merged or deleted.
+Do not try to message "main" or any agent outside this feature.
 
 ## Rules
 

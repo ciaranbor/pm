@@ -88,11 +88,8 @@ enum Commands {
 enum UpstreamCommands {
     /// Write (or overwrite) the upstream doc for the current feature
     Write {
-        /// Content to write
+        /// Content string or path to a file
         content: String,
-        /// Read content from a file instead
-        #[arg(long)]
-        file: Option<PathBuf>,
     },
 }
 
@@ -943,9 +940,10 @@ fn run() -> pm::error::Result<()> {
             Ok(())
         }
         Commands::Upstream { command } => match command {
-            UpstreamCommands::Write { content, file } => {
-                let body = if let Some(path) = file {
-                    std::fs::read_to_string(&path)?
+            UpstreamCommands::Write { content } => {
+                let path = std::path::Path::new(&content);
+                let body = if path.exists() {
+                    std::fs::read_to_string(path)?
                 } else {
                     content
                 };

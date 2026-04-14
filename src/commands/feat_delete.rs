@@ -52,6 +52,20 @@ pub fn cleanup_feature(params: &CleanupParams) -> Result<()> {
         }
     };
 
+    // Step 0: Move upstream.md from worktree to .pm/upstream/<feature>.md
+    run(&mut || {
+        let upstream_src = params.worktree_path.join("upstream.md");
+        if upstream_src.exists()
+            && let Some(pm_dir) = params.features_dir.parent()
+        {
+            let upstream_dir = pm_dir.join("upstream");
+            std::fs::create_dir_all(&upstream_dir)?;
+            let dst = upstream_dir.join(format!("{}.md", params.name));
+            std::fs::rename(&upstream_src, &dst)?;
+        }
+        Ok(())
+    })?;
+
     // Step 1: Remove git worktree
     run(&mut || {
         if params.worktree_path.exists() {
