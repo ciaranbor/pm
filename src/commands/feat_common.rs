@@ -88,6 +88,10 @@ pub fn enqueue_initial_context<'a>(
 /// hook is responsible for delivering any queued message on the empty first
 /// turn.
 ///
+/// When `reuse_window` is provided, the existing tmux window at that target
+/// is renamed and reused instead of creating a new window. This avoids
+/// leaving an empty default shell at window :0 during `feat new --context`.
+///
 /// Only used by feat_new and feat_adopt. feat_review bypasses this because it
 /// always spawns the hardcoded `reviewer` agent in read-only mode.
 pub fn spawn_default_agent(
@@ -96,6 +100,7 @@ pub fn spawn_default_agent(
     config: &ProjectConfig,
     agent_override: Option<&str>,
     no_edit: bool,
+    reuse_window: Option<&str>,
     tmux_server: Option<&str>,
 ) -> Result<()> {
     let agent = resolve_default_agent(agent_override, config);
@@ -106,6 +111,7 @@ pub fn spawn_default_agent(
         None,
         !no_edit,
         None,
+        reuse_window,
         tmux_server,
     )?;
     Ok(())
