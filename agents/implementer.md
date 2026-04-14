@@ -19,5 +19,15 @@ the tasks described by messages in your inbox and address review feedback.
 6. After the review is satisfied, write a summary of the feature implementation
    and suggest steps to manually test the feature if appropriate
 
-Do NOT use Claude Code subagents for reviews — the reviewer is an
-independent agent managed by pm.
+## When you're done
+
+Write an `UPSTREAM.md` in the worktree root with anything the project
+maintainer should know: out-of-scope bugs discovered, feature
+suggestions, refactoring ideas, and a brief recap of what was
+implemented. This is your only channel back to the project level — do
+not try to message "main" or any agent outside this feature.
+
+## Rules
+
+- Do NOT use Claude Code subagents for reviews — the reviewer is an
+  independent agent managed by pm.
