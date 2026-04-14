@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::error::Result;
+use crate::error::{PmError, Result};
 use crate::messages;
 use crate::state::agent::AgentRegistry;
 use crate::state::paths;
@@ -81,6 +81,17 @@ pub fn agent_send(
     body: &str,
     tmux_server: Option<&str>,
 ) -> Result<String> {
+    let is_active = is_agent_active(project_root, feature, recipient, tmux_server)?;
+
+    // If the agent isn't running and no definition exists, fail early —
+    // delivering a message that nobody can ever read is a mistake.
+    if !is_active && !has_agent_definition(project_root, feature, recipient) {
+        return Err(PmError::AgentNotFound(format!(
+            "No agent called '{recipient}' exists in this scope. \
+             Only agents with agent definitions are auto-spawned"
+        )));
+    }
+
     // Deliver the message first, then spawn. This ensures the message is durably
     // queued in the inbox before the agent starts, so it will be picked up on first read.
     // If spawn fails, the message remains as a "dead letter" — acceptable since the user
@@ -89,12 +100,8 @@ pub fn agent_send(
     let index = messages::send(&messages_dir, feature, recipient, sender, body)?;
     let mut status = format!("Message {index:03} sent to '{recipient}' (from '{sender}')");
 
-    // Auto-spawn the agent if it's not currently active AND an agent
-    // definition exists. Without a definition file spawning would create
-    // a nonsensical agent, so we just deliver the message silently.
-    if !is_agent_active(project_root, feature, recipient, tmux_server)?
-        && has_agent_definition(project_root, feature, recipient)
-    {
+    // Auto-spawn the agent if it's not currently active.
+    if !is_active {
         let spawn_msg = super::agent_spawn::agent_spawn(
             project_root,
             feature,
@@ -279,28 +286,23 @@ mod tests {
     }
 
     #[test]
-    fn send_without_agent_definition_does_not_spawn() {
+    fn send_without_agent_definition_errors() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
         let (root, _session_name, feature) = setup_project_with_tmux(dir.path(), &server);
 
-        // No agent definition — send should deliver but not spawn
-        let msg = agent_send(
+        // No agent definition — send should fail
+        let result = agent_send(
             &root,
             &feature,
             "reviewer",
             "implementer",
             "hello",
             server.name(),
-        )
-        .unwrap();
-        assert_eq!(msg, "Message 001 sent to 'reviewer' (from 'implementer')");
-        assert!(!msg.contains("Spawned"));
-
-        // Verify no agent was registered
-        let agents_dir = paths::agents_dir(&root);
-        let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
-        assert!(registry.get("reviewer").is_none());
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("No agent called 'reviewer' exists in this scope"));
     }
 
     #[test]
