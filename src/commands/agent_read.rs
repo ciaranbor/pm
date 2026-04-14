@@ -83,10 +83,14 @@ impl IndexSpec {
     }
 }
 
-/// Read a single message from an agent's inbox. Pure: does not advance the
-/// cursor. If `index` is `None` (no `--index` flag), the next unread message
-/// is returned (cursor + 1). Otherwise `--from` must be explicit and the
-/// resolved index is used.
+/// Read a single message from an agent's inbox.
+///
+/// Without `--index`: reads the next unread message (cursor + 1) and
+/// **advances the cursor** so that repeated calls walk through the queue.
+/// This collapses the old read-then-next two-step into one command.
+///
+/// With `--index`: reads a specific message without touching the cursor
+/// (pure historical lookup). `--from` must be explicit in this case.
 ///
 /// Returns formatted output lines suitable for printing.
 pub fn agent_read(
@@ -100,11 +104,11 @@ pub fn agent_read(
 
     match index {
         None => {
-            // Next-unread mode: resolve sender, then read cursor + 1.
-            // If nothing is unread (NoUnread, or --from given but the
-            // explicit sender has no new messages), emit the friendly
-            // "No new messages" output instead of the technical
-            // "No message [NNN]" form.
+            // Next-unread mode: resolve sender, read cursor + 1, then
+            // advance the cursor so the next call returns the following
+            // message. If nothing is unread (NoUnread, or --from given
+            // but the explicit sender has no new messages), emit the
+            // friendly "No new messages" output.
             let resolution = messages::resolve_sender(&messages_dir, feature, agent, from)?;
             if let SenderResolution::NoUnread = resolution {
                 return Ok(vec!["No new messages".to_string()]);
@@ -113,13 +117,18 @@ pub fn agent_read(
             let cur = messages::cursor_for(&messages_dir, feature, agent, &sender)?;
             let msg = messages::read_at(&messages_dir, feature, agent, &sender, cur + 1)?;
             match msg {
-                Some(m) => Ok(format_message(&m)),
+                Some(m) => {
+                    // Advance cursor past this message.
+                    messages::next(&messages_dir, feature, agent, &sender)?;
+                    Ok(format_message(&m))
+                }
                 None => Ok(vec![format!("No new messages from {sender}")]),
             }
         }
         Some(spec) => {
             // --index requires explicit --from: the caller is deliberately
             // addressing a historical message, not "the next unread".
+            // Does NOT advance the cursor.
             let sender = from.ok_or_else(|| {
                 PmError::Messaging("--index requires --from <sender>".to_string())
             })?;
@@ -238,16 +247,58 @@ mod tests {
     }
 
     #[test]
-    fn read_is_pure_cursor_unchanged() {
+    fn read_advances_cursor() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        let mdir = paths::messages_dir(&root);
+        messages::send(&mdir, "login", "reviewer", "implementer", "one").unwrap();
+        messages::send(&mdir, "login", "reviewer", "implementer", "two").unwrap();
+        messages::send(&mdir, "login", "reviewer", "implementer", "three").unwrap();
+
+        let lines = agent_read(&root, "login", "reviewer", None, None).unwrap();
+        assert!(lines[1].contains("one"));
+        assert_eq!(
+            messages::cursor_for(&mdir, "login", "reviewer", "implementer").unwrap(),
+            1
+        );
+
+        let lines = agent_read(&root, "login", "reviewer", None, None).unwrap();
+        assert!(lines[1].contains("two"));
+        assert_eq!(
+            messages::cursor_for(&mdir, "login", "reviewer", "implementer").unwrap(),
+            2
+        );
+
+        let lines = agent_read(&root, "login", "reviewer", None, None).unwrap();
+        assert!(lines[1].contains("three"));
+        assert_eq!(
+            messages::cursor_for(&mdir, "login", "reviewer", "implementer").unwrap(),
+            3
+        );
+
+        // After exhausting all messages, should say no new messages.
+        let lines = agent_read(&root, "login", "reviewer", None, None).unwrap();
+        assert_eq!(lines, vec!["No new messages"]);
+    }
+
+    #[test]
+    fn read_with_index_does_not_advance_cursor() {
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
         messages::send(&mdir, "login", "reviewer", "implementer", "msg").unwrap();
 
-        agent_read(&root, "login", "reviewer", None, None).unwrap();
-        agent_read(&root, "login", "reviewer", None, None).unwrap();
-        agent_read(&root, "login", "reviewer", None, None).unwrap();
+        // Reading with --index is pure: cursor stays at 0.
+        agent_read(
+            &root,
+            "login",
+            "reviewer",
+            Some("implementer"),
+            Some(IndexSpec::Absolute(1)),
+        )
+        .unwrap();
 
         assert_eq!(
             messages::cursor_for(&mdir, "login", "reviewer", "implementer").unwrap(),

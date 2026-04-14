@@ -52,20 +52,19 @@ pm msg wait                           # block until a new message arrives
 pm msg wait --from <sender>           # block only on a specific sender
 pm msg list                           # enumerate your inbox with cursor markers
 pm msg list --from <sender>           # scope to one sender
-pm msg read                           # print the next unread message (pure)
+pm msg read                           # read next unread message and advance cursor
 pm msg read --from <sender>           # scope to one sender
-pm msg read --from <sender> --index 3 # dump message 3 absolutely (pure)
-pm msg read --from <sender> --index +2  # peek: two past the cursor
-pm msg read --from <sender> --index -1  # re-read the one you just processed
-pm msg next                           # advance the cursor past the current message
+pm msg read --from <sender> --index 3 # re-read message 3 (does not advance)
+pm msg read --from <sender> --index +2  # peek: two past the cursor (does not advance)
+pm msg read --from <sender> --index -1  # re-read the last processed message (does not advance)
+pm msg next                           # advance the cursor by one (without printing)
 pm msg next --from <sender>           # scope to one sender
 pm agent list                         # list agents in the current feature
 ```
 
-`pm msg read` never advances the cursor — call it as many times as you like.
-Once you've actually processed a message, call `pm msg next` to move the
-cursor forward by one so the next `pm msg wait` / `pm msg read` moves on to
-the following message.
+`pm msg read` reads the next unread message **and advances the cursor** in
+one step. Repeated calls walk through the queue. Use `--index` to re-read
+a specific message without advancing.
 
 `--from` is required only when the inbox is ambiguous — if only one sender
 has unread messages, `pm msg read` / `pm msg next` infer it. `--index`
