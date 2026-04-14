@@ -21,13 +21,10 @@ the tasks described by messages in your inbox and address review feedback.
 
 ## When you're done
 
-Write a `.pm/upstream/<feature-name>.md` file (relative to the project
-root, e.g. `.pm/upstream/pr-body.md` for feature `pr-body`) with anything
-the project maintainer should know: out-of-scope bugs discovered, feature
+Write a `../.pm/upstream/<feature-name>.md` file with anything the
+project maintainer should know: out-of-scope bugs discovered, feature
 suggestions, refactoring ideas, and a brief recap of what was implemented.
-This file persists after the feature worktree is deleted. This is your
-only channel back to the project level — do not try to message "main" or
-any agent outside this feature.
+Do not try to message "main" or any agent outside this feature.
 
 ## Rules
 
