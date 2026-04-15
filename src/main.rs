@@ -210,10 +210,12 @@ enum ClaudeSkillsCommands {
 
 #[derive(Subcommand)]
 enum HooksCommands {
-    /// Install the pm Stop hook into main/.claude/settings.json
+    /// Install pm hooks (Stop + SessionStart) into main/.claude/settings.json
     Install,
     /// Stop hook handler — called by Claude Code on every Stop event (not for direct use)
     Stop,
+    /// SessionStart hook handler — called by Claude Code on session start (not for direct use)
+    SessionStart,
 }
 
 #[derive(Subcommand)]
@@ -611,6 +613,13 @@ fn run() -> pm::error::Result<()> {
                 }
                 HooksCommands::Stop => {
                     let code = commands::hooks_stop::stop();
+                    if code != 0 {
+                        std::process::exit(code);
+                    }
+                    Ok(())
+                }
+                HooksCommands::SessionStart => {
+                    let code = commands::hooks_session_start::session_start();
                     if code != 0 {
                         std::process::exit(code);
                     }

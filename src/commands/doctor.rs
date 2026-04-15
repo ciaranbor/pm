@@ -84,7 +84,7 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
     let mut main_issues: Vec<Issue> = Vec::new();
     if !hooks_install::is_installed(project_root)? {
         main_issues.push(Issue {
-            message: "pm Stop hook not installed (run `pm claude hooks install`)".to_string(),
+            message: "pm hooks not fully installed (run `pm claude hooks install`)".to_string(),
             fix: Fix::Auto(FixAction::InstallStopHook),
         });
     }
