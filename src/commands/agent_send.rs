@@ -3,6 +3,7 @@ use std::path::Path;
 use crate::error::{PmError, Result};
 use crate::messages;
 use crate::state::agent::AgentRegistry;
+use crate::state::feature::FeatureState;
 use crate::state::paths;
 use crate::state::project::ProjectConfig;
 use crate::tmux;
@@ -70,17 +71,41 @@ fn is_agent_active(
     Ok(false)
 }
 
+/// Resolve the `--upstream` flag to a concrete scope name by looking up
+/// the current feature's base. Errors if the current scope is "main"
+/// (no parent) or if the feature state cannot be loaded.
+pub fn resolve_upstream(project_root: &Path, current_scope: &str) -> Result<String> {
+    if current_scope == "main" {
+        return Err(PmError::Messaging(
+            "--upstream cannot be used from the main scope (there is no parent scope)".to_string(),
+        ));
+    }
+    let features_dir = paths::features_dir(project_root);
+    let state = FeatureState::load(&features_dir, current_scope)?;
+    Ok(state.base_or_default().to_string())
+}
+
 /// Send a message to an agent's inbox. If the recipient agent is not active,
 /// auto-spawns it first (equivalent to `pm agent spawn <name>`).
+///
+/// `target_scope` is the scope (feature or "main") the message is delivered
+/// to. When `None`, defaults to `sender_scope` (same-scope message).
+///
+/// `sender_scope` is the scope the sender is currently in, recorded in
+/// message metadata so the recipient knows where the message came from.
+///
 /// Returns status lines describing what happened.
 pub fn agent_send(
     project_root: &Path,
-    feature: &str,
+    sender_scope: &str,
+    target_scope: Option<&str>,
     recipient: &str,
     sender: &str,
     body: &str,
     tmux_server: Option<&str>,
 ) -> Result<String> {
+    let feature = target_scope.unwrap_or(sender_scope);
+
     let is_active = is_agent_active(project_root, feature, recipient, tmux_server)?;
 
     // If the agent isn't running and no definition exists, fail early —
@@ -97,8 +122,26 @@ pub fn agent_send(
     // If spawn fails, the message remains as a "dead letter" — acceptable since the user
     // can retry the spawn separately.
     let messages_dir = paths::messages_dir(project_root);
-    let index = messages::send(&messages_dir, feature, recipient, sender, body)?;
-    let mut status = format!("Message {index:03} sent to '{recipient}' (from '{sender}')");
+    let is_cross_scope = target_scope.is_some() && target_scope != Some(sender_scope);
+    let index = messages::send_with_scope(
+        &messages_dir,
+        feature,
+        recipient,
+        sender,
+        body,
+        if is_cross_scope {
+            Some(sender_scope)
+        } else {
+            None
+        },
+    )?;
+    let mut status = if is_cross_scope {
+        format!(
+            "Message {index:03} sent to '{recipient}@{feature}' (from '{sender}@{sender_scope}')"
+        )
+    } else {
+        format!("Message {index:03} sent to '{recipient}' (from '{sender}')")
+    };
 
     // Auto-spawn the agent if it's not currently active.
     if !is_active {
@@ -178,6 +221,88 @@ mod tests {
         std::fs::write(&agent_def, "# agent stub").unwrap();
     }
 
+    // --- resolve_upstream ---
+
+    fn setup_project_minimal(dir: &Path) -> PathBuf {
+        let root = dir.to_path_buf();
+        std::fs::create_dir_all(root.join(".pm/features")).unwrap();
+        root
+    }
+
+    #[test]
+    fn resolve_upstream_from_main_errors() {
+        let dir = tempdir().unwrap();
+        let root = setup_project_minimal(dir.path());
+
+        let err = resolve_upstream(&root, "main").unwrap_err();
+        assert!(format!("{err}").contains("--upstream cannot be used from the main scope"));
+    }
+
+    #[test]
+    fn resolve_upstream_returns_base_branch() {
+        let dir = tempdir().unwrap();
+        let root = setup_project_minimal(dir.path());
+
+        let now = Utc::now();
+        let state = FeatureState {
+            status: FeatureStatus::Wip,
+            branch: "login".to_string(),
+            worktree: "login".to_string(),
+            base: "main".to_string(),
+            pr: String::new(),
+            context: String::new(),
+            created: now,
+            last_active: now,
+        };
+        state.save(&root.join(".pm/features"), "login").unwrap();
+
+        assert_eq!(resolve_upstream(&root, "login").unwrap(), "main");
+    }
+
+    #[test]
+    fn resolve_upstream_stacked_feature() {
+        let dir = tempdir().unwrap();
+        let root = setup_project_minimal(dir.path());
+
+        let now = Utc::now();
+        let state = FeatureState {
+            status: FeatureStatus::Wip,
+            branch: "login-v2".to_string(),
+            worktree: "login-v2".to_string(),
+            base: "login".to_string(),
+            pr: String::new(),
+            context: String::new(),
+            created: now,
+            last_active: now,
+        };
+        state.save(&root.join(".pm/features"), "login-v2").unwrap();
+
+        assert_eq!(resolve_upstream(&root, "login-v2").unwrap(), "login");
+    }
+
+    #[test]
+    fn resolve_upstream_defaults_to_main_when_base_empty() {
+        let dir = tempdir().unwrap();
+        let root = setup_project_minimal(dir.path());
+
+        let now = Utc::now();
+        let state = FeatureState {
+            status: FeatureStatus::Wip,
+            branch: "login".to_string(),
+            worktree: "login".to_string(),
+            base: String::new(), // empty base defaults to "main"
+            pr: String::new(),
+            context: String::new(),
+            created: now,
+            last_active: now,
+        };
+        state.save(&root.join(".pm/features"), "login").unwrap();
+
+        assert_eq!(resolve_upstream(&root, "login").unwrap(), "main");
+    }
+
+    // --- agent_send ---
+
     #[test]
     fn send_to_active_agent_does_not_spawn() {
         let server = TestServer::new();
@@ -202,6 +327,7 @@ mod tests {
         let msg = agent_send(
             &root,
             &feature,
+            None,
             "reviewer",
             "implementer",
             "hello",
@@ -226,6 +352,7 @@ mod tests {
         let msg = agent_send(
             &root,
             &feature,
+            None,
             "reviewer",
             "implementer",
             "hello",
@@ -275,6 +402,7 @@ mod tests {
         let msg = agent_send(
             &root,
             &feature,
+            None,
             "reviewer",
             "implementer",
             "review this",
@@ -295,6 +423,7 @@ mod tests {
         let result = agent_send(
             &root,
             &feature,
+            None,
             "reviewer",
             "implementer",
             "hello",
@@ -318,6 +447,7 @@ mod tests {
         agent_send(
             &root,
             &feature,
+            None,
             "reviewer",
             "implementer",
             "first",
@@ -327,6 +457,7 @@ mod tests {
         let msg = agent_send(
             &root,
             &feature,
+            None,
             "reviewer",
             "implementer",
             "second",
@@ -334,5 +465,126 @@ mod tests {
         )
         .unwrap();
         assert!(msg.contains("Message 002"));
+    }
+
+    #[test]
+    fn send_cross_scope_shows_scopes_in_output() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (root, _session_name, _feature) = setup_project_with_tmux(dir.path(), &server);
+
+        // Create a "main" scope setup with tmux session and agent definition
+        let pm_dir = root.join(".pm");
+        let config = ProjectConfig::load(&pm_dir).unwrap();
+        let main_worktree = root.join("main");
+        std::fs::create_dir_all(&main_worktree).unwrap();
+        let main_session = format!("{}/main", config.project.name);
+        tmux::create_session(server.name(), &main_session, &main_worktree).unwrap();
+
+        // Need feature state for "main" scope so agent lookup works
+        let now = Utc::now();
+        let main_state = FeatureState {
+            status: FeatureStatus::Wip,
+            branch: "main".to_string(),
+            worktree: "main".to_string(),
+            base: String::new(),
+            pr: String::new(),
+            context: String::new(),
+            created: now,
+            last_active: now,
+        };
+        main_state.save(&pm_dir.join("features"), "main").unwrap();
+
+        // Agent definition in main worktree
+        create_agent_definition(&root, "implementer");
+
+        // Send from "login" scope to "main" scope
+        let msg = agent_send(
+            &root,
+            "login",
+            Some("main"),
+            "implementer",
+            "reviewer",
+            "please look at this",
+            server.name(),
+        )
+        .unwrap();
+
+        // Output should show cross-scope notation
+        assert!(msg.contains("implementer@main"));
+        assert!(msg.contains("reviewer@login"));
+    }
+
+    #[test]
+    fn send_same_scope_does_not_record_sender_scope() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (root, _session_name, feature) = setup_project_with_tmux(dir.path(), &server);
+
+        create_agent_definition(&root, "reviewer");
+
+        agent_send(
+            &root,
+            &feature,
+            None,
+            "reviewer",
+            "implementer",
+            "hello",
+            server.name(),
+        )
+        .unwrap();
+
+        let messages_dir = paths::messages_dir(&root);
+        let msg = messages::read_at(&messages_dir, &feature, "reviewer", "implementer", 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(msg.meta.sender_scope, None);
+    }
+
+    #[test]
+    fn send_cross_scope_records_sender_scope_in_metadata() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (root, _session_name, _feature) = setup_project_with_tmux(dir.path(), &server);
+
+        // Set up "main" scope with tmux session
+        let pm_dir = root.join(".pm");
+        let config = ProjectConfig::load(&pm_dir).unwrap();
+        let main_worktree = root.join("main");
+        std::fs::create_dir_all(&main_worktree).unwrap();
+        let main_session = format!("{}/main", config.project.name);
+        tmux::create_session(server.name(), &main_session, &main_worktree).unwrap();
+
+        let now = Utc::now();
+        let main_state = FeatureState {
+            status: FeatureStatus::Wip,
+            branch: "main".to_string(),
+            worktree: "main".to_string(),
+            base: String::new(),
+            pr: String::new(),
+            context: String::new(),
+            created: now,
+            last_active: now,
+        };
+        main_state.save(&pm_dir.join("features"), "main").unwrap();
+        create_agent_definition(&root, "implementer");
+
+        // Cross-scope: login → main
+        agent_send(
+            &root,
+            "login",
+            Some("main"),
+            "implementer",
+            "reviewer",
+            "cross-scope msg",
+            server.name(),
+        )
+        .unwrap();
+
+        let messages_dir = paths::messages_dir(&root);
+        let msg = messages::read_at(&messages_dir, "main", "implementer", "reviewer", 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(msg.meta.sender_scope.as_deref(), Some("login"));
     }
 }

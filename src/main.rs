@@ -248,6 +248,12 @@ enum MsgCommands {
         /// Sender identity (defaults to $PM_AGENT_NAME or $USER)
         #[arg(long)]
         as_agent: Option<String>,
+        /// Deliver to a different scope (feature name or "main")
+        #[arg(long)]
+        scope: Option<String>,
+        /// Deliver to the parent scope (base branch's feature). Shorthand for --scope <base>.
+        #[arg(long, conflicts_with = "scope")]
+        upstream: bool,
     },
     /// Read the next unread message and advance the cursor
     Read {
@@ -668,11 +674,22 @@ fn run() -> pm::error::Result<()> {
                     agent,
                     message,
                     as_agent,
+                    scope,
+                    upstream,
                 } => {
                     let sender = as_agent.unwrap_or_else(pm::messages::default_user_name);
+                    let target_scope = if upstream {
+                        Some(commands::agent_send::resolve_upstream(
+                            &project_root,
+                            &feature,
+                        )?)
+                    } else {
+                        scope
+                    };
                     let line = commands::agent_send::agent_send(
                         &project_root,
                         &feature,
+                        target_scope.as_deref(),
                         &agent,
                         &sender,
                         &message,
