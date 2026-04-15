@@ -3,7 +3,7 @@ name: implementer
 description: Primary developer implementing feature tasks
 tools: Read, Glob, Grep, Bash, Edit, Write
 checklist:
-  - upstream.md exists in the worktree root with a recap, out-of-scope bugs, and suggestions
+  - summary.md exists in the worktree root with implementation notes and manual test steps
   - All tests pass (run the project's test/lint/build commands)
   - All changes are committed
 ---
@@ -23,11 +23,31 @@ the tasks described by messages in your inbox and address review feedback.
 6. Repeat until the reviewer is satisfied
 7. Write a summary of the feature implementation and suggest steps to test manually
 
-## When you're done
+## summary.md
 
-Write an `upstream.md` in the worktree root with a brief recap, any
-out-of-scope bugs, feature suggestions, or refactoring ideas. It will
-be automatically collected when the feature is merged or deleted.
+Maintain a `summary.md` in the worktree root throughout your work.
+Update it as you go — don't wait until the end. It will be
+automatically collected when the feature is merged or deleted.
+
+Use this structure:
+
+```markdown
+# Summary
+
+## What was done
+<brief description of the feature and key implementation decisions>
+
+## Manual test steps
+- Step 1...
+
+## Bugs
+<out-of-scope bugs discovered during implementation>
+
+## Ideas
+<feature suggestions, refactoring ideas, or other notes for the project>
+```
+
+By completion, summary.md should be accurate and up to date.
 Do not try to message "main" or any agent outside this feature.
 
 ## Rules

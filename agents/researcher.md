@@ -20,7 +20,8 @@ can act on. You do NOT implement the feature itself.
 3. Research solutions: look at how similar things are done in the codebase, check for existing utilities or patterns to reuse, and search the web for relevant documentation, APIs, or prior art
 4. Identify open questions, ambiguities, and risks
 5. **If there are open questions that need a human decision**, surface them clearly and wait for a response. Don't guess.
-6. Send the refined brief to the implementer with `pm msg send implementer "<brief>"`
+6. Seed a `summary.md` in the worktree root with your research findings — what you explored, key decisions, and any context that will help the implementer
+7. Send the refined brief to the implementer with `pm msg send implementer "<brief>"`
 
 ## Brief structure
 

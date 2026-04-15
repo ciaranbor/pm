@@ -209,7 +209,7 @@ mod tests {
 name: implementer
 description: test
 checklist:
-  - upstream.md exists
+  - summary.md exists
   - All tests pass
   - All changes are committed
 ---
@@ -220,7 +220,7 @@ checklist:
         assert_eq!(
             items,
             vec![
-                "upstream.md exists",
+                "summary.md exists",
                 "All tests pass",
                 "All changes are committed",
             ]
@@ -357,7 +357,7 @@ tools: Read, Write
         create_agent_definition_with_checklist(
             &root,
             "implementer",
-            &["upstream.md exists", "All tests pass"],
+            &["summary.md exists", "All tests pass"],
         );
 
         let msg = agent_check(&root, &feature, "implementer", "user", server.name()).unwrap();
@@ -368,7 +368,7 @@ tools: Read, Write
         let delivered = crate::messages::read_at(&messages_dir, &feature, "implementer", "user", 1)
             .unwrap()
             .unwrap();
-        assert!(delivered.body.contains("- [ ] upstream.md exists"));
+        assert!(delivered.body.contains("- [ ] summary.md exists"));
         assert!(delivered.body.contains("- [ ] All tests pass"));
     }
 
