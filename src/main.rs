@@ -237,6 +237,11 @@ enum AgentCommands {
         #[arg(long)]
         active: bool,
     },
+    /// Send a checklist to an agent for self-verification (omit name to check all active agents)
+    Check {
+        /// Agent name (omit to check all active agents)
+        name: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -670,6 +675,33 @@ fn run() -> pm::error::Result<()> {
                     let lines = commands::agent_list::agent_list(&project_root, &feature, active)?;
                     for line in lines {
                         println!("{line}");
+                    }
+                    Ok(())
+                }
+                AgentCommands::Check { name } => {
+                    let sender = pm::messages::default_user_name();
+                    if let Some(agent_name) = name {
+                        let msg = commands::agent_check::agent_check(
+                            &project_root,
+                            &feature,
+                            &agent_name,
+                            &sender,
+                            None,
+                        )?;
+                        println!("{msg}");
+                    } else {
+                        let (successes, errors) = commands::agent_check::agent_check_all(
+                            &project_root,
+                            &feature,
+                            &sender,
+                            None,
+                        )?;
+                        for msg in &successes {
+                            println!("{msg}");
+                        }
+                        for err in &errors {
+                            eprintln!("error: {err}");
+                        }
                     }
                     Ok(())
                 }

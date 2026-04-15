@@ -2,6 +2,10 @@
 name: implementer
 description: Primary developer implementing feature tasks
 tools: Read, Glob, Grep, Bash, Edit, Write
+checklist:
+  - upstream.md exists in the worktree root with a recap, out-of-scope bugs, and suggestions
+  - All tests pass (run the project's test/lint/build commands)
+  - All changes are committed
 ---
 
 # Implementer

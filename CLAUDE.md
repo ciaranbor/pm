@@ -20,7 +20,8 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 - `src/state/agent.rs` — per-feature agent registry (TOML state for spawned agents)
 - `src/commands/` — one module per command group (project, feat, claude, agent, msg, hooks_install, etc.)
 - `src/commands/hooks_install.rs` — installs the pm Stop hook into `main/.claude/settings.json`; see below
-- `agents/` — bundled agent definitions (reviewer, implementer, researcher), embedded via `include_str!`
+- `src/commands/agent_check.rs` — assembles checklists from agent definition frontmatter + project-specific files, sends as message
+- `agents/` — bundled agent definitions (reviewer, implementer, researcher), embedded via `include_str!`. Frontmatter supports a `checklist:` field (YAML list of items for `pm agent check`)
 - `skills/` — bundled skill definitions (pm), embedded via `include_str!`
 
 ### Agents as long-running message processors
