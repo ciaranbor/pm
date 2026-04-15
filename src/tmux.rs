@@ -220,6 +220,25 @@ pub fn rename_window(server: Option<&str>, target: &str, new_name: &str) -> Resu
     Ok(())
 }
 
+/// Kill a specific tmux window.
+pub fn kill_window(server: Option<&str>, target: &str) -> Result<()> {
+    run_tmux(server, &["kill-window", "-t", target])?;
+    Ok(())
+}
+
+/// Get the current command running in the first pane of a window.
+/// Returns the process name (e.g. "claude", "zsh", "bash").
+pub fn pane_command(server: Option<&str>, target: &str) -> Result<String> {
+    run_tmux(
+        server,
+        &["list-panes", "-t", target, "-F", "#{pane_current_command}"],
+    )
+    .map(|output| {
+        // Take just the first pane's command
+        output.lines().next().unwrap_or("").to_string()
+    })
+}
+
 /// Kill the entire tmux server (used in tests for cleanup).
 pub fn kill_server(server: Option<&str>) -> Result<()> {
     let _ = run_tmux(server, &["kill-server"]);
@@ -459,6 +478,36 @@ mod tests {
         // The window should now be findable by the new name
         let found = find_window(server.name(), &name, "agent").unwrap();
         assert!(found.is_some());
+    }
+
+    #[test]
+    fn kill_window_removes_window() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let name = server.scope("kill-win");
+
+        create_session(server.name(), &name, dir.path()).unwrap();
+        // Create a second window so killing one doesn't destroy the session
+        let target = new_window(server.name(), &name, dir.path(), Some("doomed"), true).unwrap();
+
+        assert_eq!(list_windows(server.name(), &name).unwrap(), 2);
+        kill_window(server.name(), &target).unwrap();
+        assert_eq!(list_windows(server.name(), &name).unwrap(), 1);
+    }
+
+    #[test]
+    fn pane_command_returns_shell() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let name = server.scope("pane-cmd");
+
+        create_session(server.name(), &name, dir.path()).unwrap();
+        let target = format!("{name}:0");
+
+        let cmd = pane_command(server.name(), &target).unwrap();
+        // Default pane runs a shell (bash, zsh, etc.)
+        assert!(!cmd.is_empty());
+        assert_ne!(cmd, "claude");
     }
 
     #[test]
