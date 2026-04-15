@@ -384,6 +384,15 @@ pm claude hooks install
 
 The install is idempotent and append-only — any other `Stop` hooks you've added are left alone. `pm doctor` flags a missing pm Stop hook and `pm doctor --fix` reinstalls it.
 
+### Upgrade bundled assets
+
+```sh
+pm upgrade                       # reinstall hooks, skills, agents for current project
+pm upgrade --all                 # upgrade all registered projects
+```
+
+Reinstalls bundled assets (hooks, skills, agents) to each project's main worktree, then re-seeds `.claude/` settings into every active feature worktree. Always overwrites — useful after updating pm to pick up new agent definitions or skill files.
+
 ### Other commands
 
 ```sh
