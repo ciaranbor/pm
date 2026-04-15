@@ -264,16 +264,6 @@ enum MsgCommands {
         #[arg(long)]
         as_agent: Option<String>,
     },
-    /// Advance a sender's cursor by one message
-    Next {
-        /// Which sender's cursor to advance. Inferred when exactly one sender
-        /// has unread messages.
-        #[arg(long)]
-        from: Option<String>,
-        /// Agent name (defaults to $PM_AGENT_NAME or $USER)
-        #[arg(long)]
-        as_agent: Option<String>,
-    },
     /// List all messages in your inbox, with cursor position markers
     List {
         /// Only show messages from this sender
@@ -711,17 +701,6 @@ fn run() -> pm::error::Result<()> {
                     for line in lines {
                         println!("{line}");
                     }
-                    Ok(())
-                }
-                MsgCommands::Next { from, as_agent } => {
-                    let agent = as_agent.unwrap_or_else(pm::messages::default_user_name);
-                    let line = commands::agent_next::agent_next(
-                        &project_root,
-                        &feature,
-                        &agent,
-                        from.as_deref(),
-                    )?;
-                    println!("{line}");
                     Ok(())
                 }
                 MsgCommands::List { from, as_agent } => {
