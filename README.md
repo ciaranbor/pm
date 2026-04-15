@@ -296,6 +296,8 @@ operation. Advancing through the queue is an explicit `next` step.
 ```sh
 pm msg send reviewer "ready for review"      # append to reviewer's inbox
 pm msg send reviewer "msg" --as-agent impl   # send as a specific identity
+pm msg send impl "note" --scope main         # send to an agent in a different scope
+pm msg send impl "note" --upstream           # send to the parent scope (base branch)
 
 pm msg wait                                  # block until any new message arrives
 pm msg wait --from reviewer                  # block only on messages from reviewer

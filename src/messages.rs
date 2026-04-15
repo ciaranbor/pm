@@ -10,6 +10,10 @@ use crate::error::{PmError, Result};
 pub struct MessageMeta {
     pub sender: String,
     pub timestamp: DateTime<Utc>,
+    /// The scope (feature name or "main") the sender was in when the message
+    /// was sent. `None` for messages sent before cross-scope support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_scope: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -167,12 +171,28 @@ fn save_cursor(path: &Path, cursor: &Cursor) -> Result<()> {
 }
 
 /// Send a message to an agent's inbox. Returns the message index.
+///
+/// `sender_scope` is the scope (feature name or "main") the sender is in.
+/// Stored in message metadata so the recipient knows where the message
+/// originated. Pass `None` for same-scope messages (backward compat).
 pub fn send(
     messages_dir: &Path,
     feature: &str,
     recipient: &str,
     sender: &str,
     body: &str,
+) -> Result<u32> {
+    send_with_scope(messages_dir, feature, recipient, sender, body, None)
+}
+
+/// Like [`send`], but records the sender's scope in metadata.
+pub fn send_with_scope(
+    messages_dir: &Path,
+    feature: &str,
+    recipient: &str,
+    sender: &str,
+    body: &str,
+    sender_scope: Option<&str>,
 ) -> Result<u32> {
     validate_name(feature, "feature")?;
     validate_name(recipient, "recipient")?;
@@ -190,6 +210,7 @@ pub fn send(
     let meta = MessageMeta {
         sender: sender.to_string(),
         timestamp: Utc::now(),
+        sender_scope: sender_scope.map(|s| s.to_string()),
     };
 
     std::fs::write(&msg_path, body)?;
@@ -274,6 +295,7 @@ pub fn read_at(
         MessageMeta {
             sender: sender.to_string(),
             timestamp: Utc::now(),
+            sender_scope: None,
         }
     };
 

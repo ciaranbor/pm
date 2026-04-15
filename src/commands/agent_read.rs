@@ -144,10 +144,14 @@ pub fn agent_read(
 }
 
 fn format_message(m: &Message) -> Vec<String> {
+    let sender_display = match &m.meta.sender_scope {
+        Some(scope) => format!("{}@{}", m.sender, scope),
+        None => m.sender.clone(),
+    };
     vec![
         format!(
             "--- from {} [{:03}] {} ---",
-            m.sender,
+            sender_display,
             m.index,
             m.meta.timestamp.format("%Y-%m-%d %H:%M:%S UTC")
         ),
@@ -491,5 +495,42 @@ mod tests {
 
         let lines = agent_read(&root, "login", "reviewer", Some("implementer"), None).unwrap();
         assert_eq!(lines, vec!["No new messages from implementer"]);
+    }
+
+    #[test]
+    fn read_displays_sender_scope_when_present() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        let mdir = paths::messages_dir(&root);
+        // Use send_with_scope to set the sender scope
+        messages::send_with_scope(
+            &mdir,
+            "login",
+            "reviewer",
+            "implementer",
+            "cross-scope msg",
+            Some("other-feature"),
+        )
+        .unwrap();
+
+        let lines = agent_read(&root, "login", "reviewer", None, None).unwrap();
+        assert!(lines[0].starts_with("--- from implementer@other-feature [001]"));
+        assert_eq!(lines[1], "cross-scope msg");
+    }
+
+    #[test]
+    fn read_omits_scope_when_not_set() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        let mdir = paths::messages_dir(&root);
+        // Use plain send (no scope)
+        messages::send(&mdir, "login", "reviewer", "implementer", "same-scope msg").unwrap();
+
+        let lines = agent_read(&root, "login", "reviewer", None, None).unwrap();
+        // Should be "--- from implementer [001]" without any @scope
+        assert!(lines[0].starts_with("--- from implementer [001]"));
+        assert!(!lines[0].contains('@'));
     }
 }
