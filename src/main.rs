@@ -83,16 +83,16 @@ enum Commands {
         #[arg(long)]
         all: bool,
     },
-    /// Write an upstream doc from a feature worktree
-    Upstream {
+    /// Write a summary doc from a feature worktree
+    Summary {
         #[command(subcommand)]
-        command: UpstreamCommands,
+        command: SummaryCommands,
     },
 }
 
 #[derive(Subcommand)]
-enum UpstreamCommands {
-    /// Write (or overwrite) the upstream doc for the current feature
+enum SummaryCommands {
+    /// Write (or overwrite) the summary doc for the current feature
     Write {
         /// Content string or path to a file
         content: String,
@@ -989,15 +989,15 @@ fn run() -> pm::error::Result<()> {
             }
             Ok(())
         }
-        Commands::Upstream { command } => match command {
-            UpstreamCommands::Write { content } => {
+        Commands::Summary { command } => match command {
+            SummaryCommands::Write { content } => {
                 let path = std::path::Path::new(&content);
                 let body = if path.exists() {
                     std::fs::read_to_string(path)?
                 } else {
                     content
                 };
-                commands::upstream::run(&body)
+                commands::summary::run(&body)
             }
         },
     }

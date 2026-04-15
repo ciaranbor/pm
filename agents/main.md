@@ -23,9 +23,9 @@ Feature worktrees are siblings: `<project>/<feature>/`.
 - **Brainstorm with the user**: think through designs, trade-offs, and
   approaches before spinning up features
 - **Reconcile feature outcomes**: after a feature is merged or deleted,
-  check `.pm/upstream/<feature>.md` for notes from the feature agent.
+  check `.pm/summaries/<feature>.md` for notes from the feature agent.
   Triage the contents into `todo.md`, `issues.md`, `ideas.md` as
-  appropriate, then delete the upstream file
+  appropriate, then delete the summary file
 - **Dispatch work**: create new features with context so the agent
   knows what to do:
   `pm feat new <name> --context "detailed description of the task"`

@@ -52,16 +52,16 @@ pub fn cleanup_feature(params: &CleanupParams) -> Result<()> {
         }
     };
 
-    // Step 0: Move upstream.md from worktree to .pm/upstream/<feature>.md
+    // Step 0: Move summary.md from worktree to .pm/summaries/<feature>.md
     run(&mut || {
-        let upstream_src = params.worktree_path.join("upstream.md");
-        if upstream_src.exists()
+        let summary_src = params.worktree_path.join("summary.md");
+        if summary_src.exists()
             && let Some(pm_dir) = params.features_dir.parent()
         {
-            let upstream_dir = pm_dir.join("upstream");
-            std::fs::create_dir_all(&upstream_dir)?;
-            let dst = upstream_dir.join(format!("{}.md", params.name));
-            std::fs::rename(&upstream_src, &dst)?;
+            let summaries_dir = pm_dir.join("summaries");
+            std::fs::create_dir_all(&summaries_dir)?;
+            let dst = summaries_dir.join(format!("{}.md", params.name));
+            std::fs::rename(&summary_src, &dst)?;
         }
         Ok(())
     })?;
@@ -357,6 +357,29 @@ mod tests {
         feat_delete(&project_path, "login", false, server.name()).unwrap();
 
         assert!(!messages_dir.join("login").exists());
+    }
+
+    #[test]
+    fn delete_collects_summary_md() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+
+        let worktree = project_path.join("login");
+        std::fs::write(
+            worktree.join("summary.md"),
+            "# Summary\n\nFeature notes here.\n",
+        )
+        .unwrap();
+
+        feat_delete(&project_path, "login", false, server.name()).unwrap();
+
+        let collected = project_path.join(".pm/summaries/login.md");
+        assert!(collected.exists());
+        assert_eq!(
+            std::fs::read_to_string(collected).unwrap(),
+            "# Summary\n\nFeature notes here.\n"
+        );
     }
 
     #[test]

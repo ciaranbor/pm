@@ -1,6 +1,6 @@
-//! `pm upstream write` — write an upstream doc from a feature worktree.
+//! `pm summary write` — write a summary doc from a feature worktree.
 //!
-//! Writes to `.pm/upstream/<feature>.md` in the project root so the
+//! Writes to `.pm/summaries/<feature>.md` in the project root so the
 //! information persists after the feature worktree is deleted.
 //!
 //! NOTE: This resolves the feature name from CWD, which assumes a flat
@@ -13,13 +13,13 @@ use std::path::Path;
 use crate::error::{PmError, Result};
 use crate::state::paths;
 
-/// Write (or overwrite) the upstream doc for the current feature.
+/// Write (or overwrite) the summary doc for the current feature.
 pub fn write(project_root: &Path, feature: &str, content: &str) -> Result<()> {
-    let upstream_dir = paths::pm_dir(project_root).join("upstream");
-    std::fs::create_dir_all(&upstream_dir)?;
-    let path = upstream_dir.join(format!("{feature}.md"));
+    let summaries_dir = paths::pm_dir(project_root).join("summaries");
+    std::fs::create_dir_all(&summaries_dir)?;
+    let path = summaries_dir.join(format!("{feature}.md"));
     std::fs::write(&path, content)?;
-    eprintln!("Wrote upstream doc to {}", path.display());
+    eprintln!("Wrote summary doc to {}", path.display());
     Ok(())
 }
 
@@ -50,13 +50,13 @@ mod tests {
     }
 
     #[test]
-    fn write_creates_upstream_doc() {
+    fn write_creates_summary_doc() {
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
 
         write(&root, "my-feat", "some notes").unwrap();
 
-        let path = root.join(".pm/upstream/my-feat.md");
+        let path = root.join(".pm/summaries/my-feat.md");
         assert!(path.exists());
         assert_eq!(std::fs::read_to_string(path).unwrap(), "some notes");
     }
@@ -69,7 +69,7 @@ mod tests {
         write(&root, "my-feat", "first").unwrap();
         write(&root, "my-feat", "second").unwrap();
 
-        let content = std::fs::read_to_string(root.join(".pm/upstream/my-feat.md")).unwrap();
+        let content = std::fs::read_to_string(root.join(".pm/summaries/my-feat.md")).unwrap();
         assert_eq!(content, "second");
     }
 }

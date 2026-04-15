@@ -22,6 +22,7 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 - `src/commands/hooks_install.rs` — installs the pm Stop hook into `main/.claude/settings.json`; see below
 - `src/commands/agent_check.rs` — assembles checklists from agent definition frontmatter + project-specific files, sends as message
 - `agents/` — bundled agent definitions (reviewer, implementer, researcher), embedded via `include_str!`. Frontmatter supports a `checklist:` field (YAML list of items for `pm agent check`)
+- `src/commands/summary.rs` — `pm summary write` writes/overwrites `.pm/summaries/<feature>.md`
 - `skills/` — bundled skill definitions (pm), embedded via `include_str!`
 
 ### Agents as long-running message processors
@@ -60,6 +61,14 @@ Two different things, don't collapse them:
 
 Don't abuse messaging as persistent storage, and don't abuse notes as a
 mailbox.
+
+### Feature summary lifecycle
+
+Each feature maintains a `summary.md` in its worktree root as a living
+document. Agents update it throughout the feature lifecycle (the
+researcher seeds it, the implementer maintains it). On `feat delete`,
+`summary.md` is collected to `.pm/summaries/<feature>.md` so the
+orchestrator can triage its contents into project-level docs.
 
 ## Development
 
