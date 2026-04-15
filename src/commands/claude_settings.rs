@@ -65,9 +65,9 @@ pub fn require_feature(project_root: &Path, feature_name: &str) -> Result<()> {
     Ok(())
 }
 
-use crate::fs_utils::copy_dir_recursive;
-
-/// Called during `feat new` to seed the new feature with the project's settings and skills.
+/// Called during `feat new` to seed the new feature with the project's settings files.
+/// Note: agents/ and skills/ are resolved automatically by Claude Code from the main
+/// worktree (fixed in v2.1.47), so only settings files need copying.
 pub fn seed_feature_claude(project_root: &Path, feature_worktree: &Path) -> Result<()> {
     let src = main_claude_dir(project_root);
     if !src.exists() {
@@ -76,11 +76,6 @@ pub fn seed_feature_claude(project_root: &Path, feature_worktree: &Path) -> Resu
     let dst = feature_worktree.join(".claude");
     for filename in SETTINGS_FILES {
         copy_settings_file(&src, &dst, filename)?;
-    }
-    // Copy skills directory if it exists
-    let skills_src = src.join("skills");
-    if skills_src.is_dir() {
-        copy_dir_recursive(&skills_src, &dst.join("skills"))?;
     }
     Ok(())
 }
@@ -602,6 +597,33 @@ mod tests {
         let dst = feature_wt.join(".claude");
         assert!(dst.join("settings.json").exists());
         assert!(!dst.join("settings.local.json").exists());
+    }
+
+    #[test]
+    fn seed_does_not_copy_skills_or_agents() {
+        // Claude Code resolves agents/ and skills/ from the main worktree
+        // automatically (since v2.1.47), so pm should not duplicate them.
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, _, _) = server.setup_project(dir.path());
+
+        let main_claude = project.join("main").join(".claude");
+        write_json(&main_claude, "settings.json", r#"{"a":1}"#);
+        let skills_dir = main_claude.join("skills");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::write(skills_dir.join("pm.md"), "# pm skill").unwrap();
+        let agents_dir = main_claude.join("agents");
+        std::fs::create_dir_all(&agents_dir).unwrap();
+        std::fs::write(agents_dir.join("reviewer.md"), "# Reviewer").unwrap();
+
+        let feature_wt = project.join("login");
+        std::fs::create_dir_all(&feature_wt).unwrap();
+        seed_feature_claude(&project, &feature_wt).unwrap();
+
+        let dst = feature_wt.join(".claude");
+        assert!(dst.join("settings.json").exists());
+        assert!(!dst.join("skills").exists());
+        assert!(!dst.join("agents").exists());
     }
 
     // --- feat_new integration ---
