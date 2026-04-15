@@ -77,6 +77,12 @@ enum Commands {
         #[arg(long)]
         project: Option<String>,
     },
+    /// Reinstall bundled assets (hooks, skills, agents) to projects
+    Upgrade {
+        /// Upgrade all registered projects instead of just the current one
+        #[arg(long)]
+        all: bool,
+    },
     /// Write an upstream doc from a feature worktree
     Upstream {
         #[command(subcommand)]
@@ -934,6 +940,13 @@ fn run() -> pm::error::Result<()> {
                 paths::find_project_root(&std::env::current_dir()?)?
             };
             let lines = commands::doctor::doctor(&project_root, fix, None)?;
+            for line in lines {
+                println!("{line}");
+            }
+            Ok(())
+        }
+        Commands::Upgrade { all } => {
+            let lines = commands::upgrade::upgrade(all)?;
             for line in lines {
                 println!("{line}");
             }
