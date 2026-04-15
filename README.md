@@ -310,8 +310,6 @@ pm msg read --from reviewer --index +2       # peek ahead: cursor + 2 (does not 
 pm msg read --from reviewer --index -1       # re-read the last processed message
 pm msg read --from reviewer --index -2       # one further back
 
-pm msg next                                  # advance the cursor by one (without printing)
-pm msg next --from reviewer                  # scope to one sender
 ```
 
 Key properties:
@@ -320,10 +318,8 @@ Key properties:
   and moves the cursor forward. No separate `next` call needed.
 - **`--index` is pure.** With `--index`, `read` returns the specified
   message without touching the cursor — use this to re-read history.
-- **`next` still exists** for backwards compatibility and for advancing
-  without printing the message body.
 - **`--from` is required only when ambiguous.** If your inbox has unread
-  messages from only one sender, `pm msg read` / `pm msg next` pick it
+  messages from only one sender, `pm msg read` picks it
   automatically. If multiple senders have unread, you'll get a clear
   error asking you to disambiguate.
 - **`--index` always requires `--from`.** Absolute and relative indices
