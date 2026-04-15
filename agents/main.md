@@ -26,7 +26,11 @@ Feature worktrees are siblings: `<project>/<feature>/`.
   check `.pm/upstream/<feature>.md` for notes from the feature agent.
   Triage the contents into `todo.md`, `issues.md`, `ideas.md` as
   appropriate, then delete the upstream file
-- **Dispatch work**: create new features (`pm feat new`) when appropriate
+- **Dispatch work**: create new features with context so the agent
+  knows what to do:
+  `pm feat new <name> --context "detailed description of the task"`
+  Always provide `--context` — without it the feature agent has no
+  initial instructions. Use `--agent researcher` for investigation tasks.
 
 ## Rules
 
