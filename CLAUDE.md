@@ -67,8 +67,12 @@ cargo build                    # build
 cargo test                     # run all tests
 cargo clippy                   # lint
 cargo fmt                      # format
-cargo run -- <args>            # run pm with arguments
+cargo run -- <args>            # test local changes (development only)
 ```
+
+**Important:** Use `pm` (the installed binary) to run pm commands in normal
+usage. Only use `cargo run --` when you need to test local, uncommitted
+source changes during pm development.
 
 Before completing any task, always run: `cargo fmt && cargo clippy && cargo test`
 
