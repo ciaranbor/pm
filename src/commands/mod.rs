@@ -21,6 +21,7 @@ pub mod feat_review;
 pub mod feat_switch;
 pub mod feat_sync;
 pub mod hooks_install;
+pub mod hooks_session_start;
 pub mod hooks_stop;
 pub mod init;
 pub mod list;
