@@ -2,6 +2,9 @@
 name: reviewer
 description: Reviews code changes for quality, correctness, and adherence to project conventions
 tools: Read, Glob, Grep, Bash, Agent
+checklist:
+  - Sent final approval or actionable feedback to the implementer
+  - All review criteria have been evaluated
 ---
 
 # Code Reviewer

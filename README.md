@@ -283,7 +283,14 @@ pm agent spawn                               # respawn all previously active age
 
 pm agent list                                # list all agents in the current feature
 pm agent list --active                       # list only active agents
+
+pm agent check                               # send checklist to all active agents
+pm agent check implementer                   # send checklist to a specific agent
 ```
+
+Checklists are assembled from two sources:
+- **Agent definition frontmatter** — a `checklist:` field in the YAML frontmatter of `agents/<name>.md`
+- **Project-specific file** — `.pm/checklist/<agent>.txt` (one item per line, `#` comments and blank lines ignored)
 
 ### Messaging
 

@@ -8,14 +8,18 @@ use crate::state::paths;
 use crate::state::project::ProjectConfig;
 use crate::tmux;
 
-/// Check whether an agent definition file exists in any location that
+/// Find the path to an agent definition file, checking locations that
 /// `claude --agent <name>` would resolve when running in a feature worktree:
 ///   1. Feature worktree: `<project_root>/<feature>/.claude/agents/<name>.md`
 ///   2. Main worktree: `<project_root>/main/.claude/agents/<name>.md`
 ///      (where `pm agents install-project` writes; not committed to git but
 ///      still resolvable by Claude Code from sibling worktrees)
 ///   3. Global: `~/.claude/agents/<name>.md`
-fn has_agent_definition(project_root: &Path, feature: &str, agent_name: &str) -> bool {
+pub fn find_agent_definition_path(
+    project_root: &Path,
+    feature: &str,
+    agent_name: &str,
+) -> Option<std::path::PathBuf> {
     let def_filename = format!("{agent_name}.md");
 
     // Feature worktree
@@ -24,7 +28,7 @@ fn has_agent_definition(project_root: &Path, feature: &str, agent_name: &str) ->
         .join(".claude/agents")
         .join(&def_filename);
     if feature_def.exists() {
-        return true;
+        return Some(feature_def);
     }
 
     // Main worktree (project-level install location)
@@ -33,18 +37,23 @@ fn has_agent_definition(project_root: &Path, feature: &str, agent_name: &str) ->
         .join(".claude/agents")
         .join(&def_filename);
     if main_def.exists() {
-        return true;
+        return Some(main_def);
     }
 
     // Global (~/.claude/agents/)
     if let Some(home) = dirs::home_dir() {
         let global_def = home.join(".claude/agents").join(&def_filename);
         if global_def.exists() {
-            return true;
+            return Some(global_def);
         }
     }
 
-    false
+    None
+}
+
+/// Check whether an agent definition file exists in any resolved location.
+fn has_agent_definition(project_root: &Path, feature: &str, agent_name: &str) -> bool {
+    find_agent_definition_path(project_root, feature, agent_name).is_some()
 }
 
 /// Check whether the recipient agent is currently active (registered and has a live tmux window).
