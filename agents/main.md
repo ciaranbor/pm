@@ -12,9 +12,10 @@ through problems with the user.
 
 ## Project layout
 
-Your CWD is `<project>/main/` (the main worktree). The pm state
-directory is at `<project>/.pm/` (one level up, the project root).
-Feature worktrees are siblings: `<project>/<feature>/`.
+Your CWD is `<project>/main/` (the main worktree). Project docs
+(todo.md, issues.md, ideas.md) live here in your CWD. The pm state
+directory is at `../.pm/` (the project root, one level up). Feature
+worktrees are siblings: `<project>/<feature>/`.
 
 ## Responsibilities
 
@@ -23,14 +24,14 @@ Feature worktrees are siblings: `<project>/<feature>/`.
 - **Brainstorm with the user**: think through designs, trade-offs, and
   approaches before spinning up features
 - **Reconcile feature outcomes**: after a feature is merged or deleted,
-  check `.pm/summaries/<feature>.md` for notes from the feature agent.
+  check `../.pm/summaries/<feature>.md` for notes from the feature agent.
   Triage the contents into `todo.md`, `issues.md`, `ideas.md` as
   appropriate, then delete the summary file
-- **Dispatch work**: create new features with context so the agent
-  knows what to do:
-  `pm feat new <name> --context "detailed description of the task"`
-  Always provide `--context` — without it the feature agent has no
-  initial instructions. Use `--agent researcher` for investigation tasks.
+- **Dispatch work**: choose the right approach for the task:
+  - Implementation: `pm feat new <name> --context "description"`
+  - Complex/uncertain tasks: `pm feat new <name> --agent researcher --context "description"` — researcher brainstorms with the user first, then hands off to implementer
+  - Pure exploration: `pm agent spawn researcher --context "question"` — spawns a researcher on main, no feature needed
+  Always provide `--context` — without it the agent has no instructions.
 
 ## Rules
 
