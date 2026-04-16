@@ -100,7 +100,7 @@ pub fn spawn_claude_session(
     // since they're interactive by design.
     let effective_prompt = match (prompt, agent_name) {
         (Some(p), _) => Some(p),
-        (None, Some(_)) => Some("check messages"),
+        (None, Some(_)) => Some("Run `pm msg read` to check for messages."),
         (None, None) => None,
     };
 
