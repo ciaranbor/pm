@@ -102,6 +102,27 @@ pub fn cleanup_feature(params: &CleanupParams) -> Result<()> {
         Ok(())
     })?;
 
+    // Step 4.5: Notify main agent before killing the session (the session
+    // kill terminates this process if run from within the feature session)
+    run(&mut || {
+        if let Some(pm_dir) = params.features_dir.parent() {
+            let messages_dir = pm_dir.join("messages");
+            let body = format!(
+                "Feature '{}' was cleaned up. Check .pm/summaries/{}.md for the summary if one exists.",
+                params.name, params.name
+            );
+            messages::send_with_scope(
+                &messages_dir,
+                "main",
+                "main",
+                params.name,
+                &body,
+                Some(params.name),
+            )?;
+        }
+        Ok(())
+    })?;
+
     // Step 5: Kill tmux session (last — see doc comment above)
     run(&mut || {
         let session_name = format!("{}/{}", params.project_name, params.name);
@@ -255,17 +276,6 @@ pub fn feat_delete(
         let hook_path = project_root.join(hooks::POST_MERGE_PATH);
         let base_session = format!("{project_name}/{base}");
         hooks::run_hook(tmux_server, &base_session, &base_repo, &hook_path);
-    }
-
-    // Best-effort: notify main agent that the feature was deleted
-    let messages_dir = paths::messages_dir(project_root);
-    let body = format!(
-        "Feature '{name}' was deleted. Check .pm/summaries/{name}.md for the summary if one exists."
-    );
-    if let Err(e) =
-        messages::send_with_scope(&messages_dir, "main", "main", name, &body, Some(name))
-    {
-        eprintln!("warning: failed to notify main agent: {e}");
     }
 
     Ok(())

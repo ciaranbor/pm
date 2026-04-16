@@ -4,7 +4,6 @@ use crate::commands::feat_delete::{CleanupParams, cleanup_feature};
 use crate::error::{PmError, Result};
 use crate::git;
 use crate::hooks;
-use crate::messages;
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
 use crate::state::project::ProjectConfig;
@@ -102,17 +101,6 @@ pub fn feat_merge(
             best_effort: false,
             base,
         })?;
-
-        // Notify main agent — verified working
-        // Best-effort: notify main agent that the feature was merged
-        let messages_dir = paths::messages_dir(project_root);
-        let body =
-            format!("Feature '{name}' was merged. Check .pm/summaries/{name}.md for the summary.");
-        if let Err(e) =
-            messages::send_with_scope(&messages_dir, "main", "main", name, &body, Some(name))
-        {
-            eprintln!("warning: failed to notify main agent: {e}");
-        }
     }
 
     Ok(())
