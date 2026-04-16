@@ -103,6 +103,7 @@ pub fn feat_merge(
             base,
         })?;
 
+        // Notify main agent — verified working
         // Best-effort: notify main agent that the feature was merged
         let messages_dir = paths::messages_dir(project_root);
         let body =
