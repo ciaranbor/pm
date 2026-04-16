@@ -41,11 +41,11 @@ Use this structure:
 ## Manual test steps
 - Step 1...
 
-## Bugs
-<out-of-scope bugs discovered during implementation>
+## Issues
+<bugs, test failures, unexpected behaviour, edge cases>
 
 ## Ideas
-<feature suggestions, refactoring ideas, or other notes for the project>
+<feature suggestions, refactoring ideas, or other observations>
 ```
 
 By completion, summary.md should be accurate and up to date.
