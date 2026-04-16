@@ -257,6 +257,17 @@ pub fn feat_delete(
         hooks::run_hook(tmux_server, &base_session, &base_repo, &hook_path);
     }
 
+    // Best-effort: notify main agent that the feature was deleted
+    let messages_dir = paths::messages_dir(project_root);
+    let body = format!(
+        "Feature '{name}' was deleted. Check .pm/summaries/{name}.md for the summary if one exists."
+    );
+    if let Err(e) =
+        messages::send_with_scope(&messages_dir, "main", "main", name, &body, Some(name))
+    {
+        eprintln!("warning: failed to notify main agent: {e}");
+    }
+
     Ok(())
 }
 
