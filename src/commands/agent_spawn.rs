@@ -365,24 +365,71 @@ mod tests {
         assert_eq!(entry.agent_type, AgentType::Agent);
     }
 
+    /// Poll `pane_command` until the predicate returns true, or panic
+    /// after ~5 s. This replaces fixed `thread::sleep` calls that were
+    /// the root cause of flaky timing failures.
+    fn wait_for_pane<F: Fn(&str) -> bool>(server: Option<&str>, target: &str, pred: F, desc: &str) {
+        for _ in 0..100 {
+            if let Ok(cmd) = tmux::pane_command(server, target) {
+                if pred(&cmd) {
+                    return;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let actual = tmux::pane_command(server, target).unwrap_or_default();
+        panic!("timed out waiting for pane to satisfy '{desc}' (last saw '{actual}')");
+    }
+
+    /// Set up a fake "active" agent: create a window named after the agent
+    /// running `sleep 999` (a non-shell process), and register it as active
+    /// in the agent registry. This avoids going through `agent_spawn` for
+    /// the first call, which would launch a real `claude` process.
+    fn setup_active_agent(
+        server: &TestServer,
+        dir: &Path,
+        session_name: &str,
+        feature: &str,
+        agent_name: &str,
+    ) -> String {
+        let worktree = dir.join(feature);
+        let target = tmux::new_window(
+            server.name(),
+            session_name,
+            &worktree,
+            Some(agent_name),
+            true,
+        )
+        .unwrap();
+        tmux::send_keys(server.name(), &target, "exec sleep 999").unwrap();
+
+        // Register agent as active
+        let agents_dir = paths::agents_dir(dir);
+        let mut registry = AgentRegistry::load(&agents_dir, feature).unwrap();
+        registry.register(
+            agent_name,
+            AgentEntry {
+                agent_type: AgentType::Agent,
+                session_id: String::new(),
+                window_name: agent_name.to_string(),
+                active: true,
+            },
+        );
+        registry.save(&agents_dir, feature).unwrap();
+
+        // Wait for `exec sleep` to take effect so the pane reports a
+        // non-shell process.
+        wait_for_pane(server.name(), &target, |c| c == "sleep", "sleep");
+        target
+    }
+
     #[test]
     fn spawn_existing_active_agent_returns_already_active() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
         let (session_name, feature) = setup_project(dir.path(), &server);
 
-        agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
-
-        // The first spawn sends `claude` via send_keys. In tests `claude` is
-        // not installed, so after failing the shell returns. We need the pane
-        // to be running a non-shell process. Wait for the shell to settle then
-        // start a long-running process.
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        let target = tmux::find_window(server.name(), &session_name, "reviewer")
-            .unwrap()
-            .unwrap();
-        tmux::send_keys(server.name(), &target, "exec sleep 999").unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        setup_active_agent(&server, dir.path(), &session_name, &feature, "reviewer");
 
         let msg =
             agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
@@ -493,15 +540,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let (session_name, feature) = setup_project(dir.path(), &server);
 
-        agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
-
-        // Same as above: wait for shell to settle, then start a non-shell process.
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        let target = tmux::find_window(server.name(), &session_name, "reviewer")
-            .unwrap()
-            .unwrap();
-        tmux::send_keys(server.name(), &target, "exec sleep 999").unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        setup_active_agent(&server, dir.path(), &session_name, &feature, "reviewer");
 
         let msg = agent_spawn(
             dir.path(),
