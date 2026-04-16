@@ -51,6 +51,12 @@ const BUNDLED_ITEMS: &[BundledItem] = &[
         rel_path: "pm/SKILL.md",
         content: include_str!("../../skills/pm/SKILL.md"),
     },
+    BundledItem {
+        kind: BundledKind::Skill,
+        name: "messaging",
+        rel_path: "messaging/SKILL.md",
+        content: include_str!("../../skills/messaging/SKILL.md"),
+    },
     // Agents
     BundledItem {
         kind: BundledKind::Agent,
@@ -406,6 +412,20 @@ mod tests {
     }
 
     // --- Skills-specific tests ---
+
+    #[test]
+    fn install_messaging_skill() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("claude");
+
+        let messages = install_in(&dir, BundledKind::Skill, Some("messaging")).unwrap();
+        assert!(messages[0].contains("Installed"));
+        assert!(dir.join("messaging/SKILL.md").exists());
+
+        let content = fs::read_to_string(dir.join("messaging/SKILL.md")).unwrap();
+        assert!(content.contains("pm msg read"));
+        assert!(content.contains("pm msg send"));
+    }
 
     #[test]
     fn install_project_writes_to_main_claude_skills() {
