@@ -23,6 +23,11 @@ use serde_json::{Value, json};
 
 use crate::error::{PmError, Result};
 
+/// Timeout in seconds for the Stop hook. Claude Code's default is 600s
+/// (10 minutes), which is too short for agents that block waiting for
+/// messages. 24 hours gives ample headroom.
+pub const STOP_HOOK_TIMEOUT_SECS: u64 = 86400;
+
 /// Marker string used to identify pm-owned Stop hook entries in
 /// settings.json. Present in both the old `printf` command and the new
 /// `pm claude hooks stop` command so upgrades detect and replace either.
@@ -102,6 +107,7 @@ fn upsert_stop_hook(root: &mut Value) -> Result<bool> {
             {
                 "type": "command",
                 "command": command,
+                "timeout": STOP_HOOK_TIMEOUT_SECS,
             }
         ]
     });
@@ -563,5 +569,70 @@ mod tests {
     #[test]
     fn stop_hook_command_is_pm_hooks_stop() {
         assert_eq!(stop_hook_command(), "pm claude hooks stop");
+    }
+
+    #[test]
+    fn stop_hook_has_timeout() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        install(&root).unwrap();
+
+        let path = root.join("main").join(".claude").join("settings.json");
+        let content = std::fs::read_to_string(&path).unwrap();
+        let parsed: Value = serde_json::from_str(&content).unwrap();
+
+        let timeout = parsed
+            .pointer("/hooks/Stop/0/hooks/0/timeout")
+            .and_then(|v| v.as_u64())
+            .unwrap();
+        assert_eq!(timeout, STOP_HOOK_TIMEOUT_SECS);
+    }
+
+    #[test]
+    fn install_upgrades_hook_without_timeout() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        // Seed a pm-owned stop hook that lacks the timeout field (old format)
+        let claude_dir = root.join("main").join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        let old = json!({
+            "hooks": {
+                "Stop": [
+                    {
+                        "hooks": [
+                            { "type": "command", "command": "pm claude hooks stop" }
+                        ]
+                    }
+                ],
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            { "type": "command", "command": "pm claude hooks session-start" }
+                        ]
+                    }
+                ]
+            }
+        });
+        std::fs::write(
+            claude_dir.join("settings.json"),
+            serde_json::to_string_pretty(&old).unwrap(),
+        )
+        .unwrap();
+
+        let msg = install(&root).unwrap();
+        assert!(
+            msg.contains("Installed"),
+            "should detect missing timeout as a change"
+        );
+
+        let content = std::fs::read_to_string(claude_dir.join("settings.json")).unwrap();
+        let parsed: Value = serde_json::from_str(&content).unwrap();
+        let timeout = parsed
+            .pointer("/hooks/Stop/0/hooks/0/timeout")
+            .and_then(|v| v.as_u64())
+            .unwrap();
+        assert_eq!(timeout, STOP_HOOK_TIMEOUT_SECS);
     }
 }
