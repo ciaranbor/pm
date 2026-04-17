@@ -239,6 +239,12 @@ pub fn pane_command(server: Option<&str>, target: &str) -> Result<String> {
     })
 }
 
+/// Select (focus) a specific window in a session.
+pub fn select_window(server: Option<&str>, target: &str) -> Result<()> {
+    run_tmux(server, &["select-window", "-t", target])?;
+    Ok(())
+}
+
 /// Kill the entire tmux server (used in tests for cleanup).
 pub fn kill_server(server: Option<&str>) -> Result<()> {
     let _ = run_tmux(server, &["kill-server"]);

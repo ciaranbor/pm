@@ -468,8 +468,15 @@ fn run() -> pm::error::Result<()> {
         }
         Commands::Open => {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-            commands::open::open(&project_root, None)?;
-            println!("Project sessions opened");
+            let result = commands::open::open(&project_root, None)?;
+            if result.sessions_restored == 0 && result.agents_respawned == 0 {
+                println!("Project sessions opened");
+            } else {
+                println!(
+                    "Restored {} sessions. Respawned {} agents.",
+                    result.sessions_restored, result.agents_respawned
+                );
+            }
             Ok(())
         }
         Commands::Claude(claude_cmd) => match claude_cmd {
@@ -665,12 +672,12 @@ fn run() -> pm::error::Result<()> {
                         )?;
                         println!("{msg}");
                     } else {
-                        let (successes, errors) =
+                        let result =
                             commands::agent_spawn::agent_spawn_all(&project_root, &feature, None)?;
-                        for msg in &successes {
+                        for msg in &result.successes {
                             println!("{msg}");
                         }
-                        for err in &errors {
+                        for err in &result.errors {
                             eprintln!("error: {err}");
                         }
                     }
