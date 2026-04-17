@@ -34,6 +34,17 @@ revisit any message at any time.
 pm msg send <agent> "message"         # send a message to another agent
 ```
 
+For multi-line messages, use a heredoc to avoid permission prompts
+(newline + `#` in a regular quoted arg triggers Claude Code's comment-injection heuristic):
+
+```sh
+pm msg send <agent> "$(cat <<'EOF'
+# Section one
+Details here.
+EOF
+)"
+```
+
 ## Listing and waiting
 
 ```sh
