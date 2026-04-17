@@ -178,6 +178,7 @@ pub fn agent_send(
 pub fn agent_send_cross_project(
     target_project_name: &str,
     sender_scope: &str,
+    sender_project: &str,
     target_scope: &str,
     recipient: &str,
     sender: &str,
@@ -188,6 +189,7 @@ pub fn agent_send_cross_project(
         &projects_dir,
         target_project_name,
         sender_scope,
+        sender_project,
         target_scope,
         recipient,
         sender,
@@ -196,10 +198,12 @@ pub fn agent_send_cross_project(
 }
 
 /// Inner implementation that accepts an explicit `projects_dir` for testability.
+#[allow(clippy::too_many_arguments)]
 fn agent_send_cross_project_with_dir(
     projects_dir: &Path,
     target_project_name: &str,
     sender_scope: &str,
+    sender_project: &str,
     target_scope: &str,
     recipient: &str,
     sender: &str,
@@ -209,18 +213,19 @@ fn agent_send_cross_project_with_dir(
     let target_root = PathBuf::from(&entry.root);
 
     let messages_dir = paths::messages_dir(&target_root);
-    let index = messages::send_with_scope(
+    let index = messages::send_full(
         &messages_dir,
         target_scope,
         recipient,
         sender,
         body,
         Some(sender_scope),
+        Some(sender_project),
     )?;
 
     Ok(format!(
         "Message {index:03} sent to '{recipient}@{target_scope}' in project '{target_project_name}' \
-         (from '{sender}@{sender_scope}')"
+         (from '{sender}@{sender_scope}' in project '{sender_project}')"
     ))
 }
 
@@ -680,6 +685,7 @@ mod tests {
             projects_dir.path(),
             "exo",
             "login",
+            "myapp",
             "main",
             "implementer",
             "reviewer",
@@ -691,6 +697,7 @@ mod tests {
         assert!(result.contains("implementer@main"));
         assert!(result.contains("project 'exo'"));
         assert!(result.contains("reviewer@login"));
+        assert!(result.contains("project 'myapp'"));
 
         // Verify message was actually delivered to the target project
         let messages_dir = paths::messages_dir(&target_root);
@@ -699,6 +706,7 @@ mod tests {
             .unwrap();
         assert_eq!(msg.body, "found a bug in the auth module");
         assert_eq!(msg.meta.sender_scope.as_deref(), Some("login"));
+        assert_eq!(msg.meta.sender_project.as_deref(), Some("myapp"));
     }
 
     #[test]
@@ -710,6 +718,7 @@ mod tests {
             projects_dir.path(),
             "nonexistent",
             "login",
+            "myapp",
             "main",
             "implementer",
             "reviewer",
@@ -720,7 +729,7 @@ mod tests {
     }
 
     #[test]
-    fn cross_project_send_records_sender_scope() {
+    fn cross_project_send_records_sender_metadata() {
         let target_dir = tempdir().unwrap();
         let projects_dir = tempdir().unwrap();
 
@@ -736,6 +745,7 @@ mod tests {
             projects_dir.path(),
             "exo",
             "my-feature",
+            "myapp",
             "main",
             "bot",
             "human",
@@ -747,8 +757,8 @@ mod tests {
         let msg = messages::read_at(&messages_dir, "main", "bot", "human", 1)
             .unwrap()
             .unwrap();
-        // Cross-project always records sender_scope
         assert_eq!(msg.meta.sender_scope.as_deref(), Some("my-feature"));
+        assert_eq!(msg.meta.sender_project.as_deref(), Some("myapp"));
     }
 
     #[test]
@@ -768,6 +778,7 @@ mod tests {
             projects_dir.path(),
             "exo",
             "feat",
+            "myapp",
             "main",
             "bot",
             "human",
@@ -780,6 +791,7 @@ mod tests {
             projects_dir.path(),
             "exo",
             "feat",
+            "myapp",
             "main",
             "bot",
             "human",

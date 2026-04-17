@@ -14,6 +14,10 @@ pub struct MessageMeta {
     /// was sent. `None` for messages sent before cross-scope support.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender_scope: Option<String>,
+    /// The project the sender was in when the message was sent.
+    /// Only set for cross-project messages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_project: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -185,7 +189,7 @@ pub fn send(
     send_with_scope(messages_dir, feature, recipient, sender, body, None)
 }
 
-/// Like [`send`], but records the sender's scope in metadata.
+/// Like [`send`], but records the sender's scope and optionally project in metadata.
 pub fn send_with_scope(
     messages_dir: &Path,
     feature: &str,
@@ -193,6 +197,27 @@ pub fn send_with_scope(
     sender: &str,
     body: &str,
     sender_scope: Option<&str>,
+) -> Result<u32> {
+    send_full(
+        messages_dir,
+        feature,
+        recipient,
+        sender,
+        body,
+        sender_scope,
+        None,
+    )
+}
+
+/// Full send with all metadata fields. Use [`send`] or [`send_with_scope`] for common cases.
+pub fn send_full(
+    messages_dir: &Path,
+    feature: &str,
+    recipient: &str,
+    sender: &str,
+    body: &str,
+    sender_scope: Option<&str>,
+    sender_project: Option<&str>,
 ) -> Result<u32> {
     validate_name(feature, "feature")?;
     validate_name(recipient, "recipient")?;
@@ -211,6 +236,7 @@ pub fn send_with_scope(
         sender: sender.to_string(),
         timestamp: Utc::now(),
         sender_scope: sender_scope.map(|s| s.to_string()),
+        sender_project: sender_project.map(|s| s.to_string()),
     };
 
     std::fs::write(&msg_path, body)?;
@@ -296,6 +322,7 @@ pub fn read_at(
             sender: sender.to_string(),
             timestamp: Utc::now(),
             sender_scope: None,
+            sender_project: None,
         }
     };
 

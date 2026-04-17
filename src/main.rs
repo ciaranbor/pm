@@ -730,9 +730,14 @@ fn run() -> pm::error::Result<()> {
                         // Cross-project delivery: resolve target project root,
                         // deliver message, but do NOT auto-spawn.
                         let target_scope = scope.as_deref().unwrap_or("main");
+                        let pm_dir = paths::pm_dir(&project_root);
+                        let sender_project_config =
+                            pm::state::project::ProjectConfig::load(&pm_dir)?;
+                        let sender_project_name = &sender_project_config.project.name;
                         let line = commands::agent_send::agent_send_cross_project(
                             proj_name,
                             &feature,
+                            sender_project_name,
                             target_scope,
                             &agent,
                             &sender,
