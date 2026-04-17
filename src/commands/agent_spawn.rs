@@ -257,14 +257,24 @@ pub fn agent_spawn(
     Ok(format!("Spawned agent '{agent_name}' in {window_target}"))
 }
 
+/// Result of `agent_spawn_all`, providing structured counts alongside messages.
+pub struct SpawnAllResult {
+    /// Human-readable success messages (one per spawned agent).
+    pub successes: Vec<String>,
+    /// Human-readable error messages (one per failed agent).
+    pub errors: Vec<String>,
+    /// Number of agents successfully spawned.
+    pub spawned_count: usize,
+}
+
 /// Respawn all registered agents for a feature (excludes user-type entries).
 /// Best-effort: tries every agent and collects errors rather than failing
-/// on the first bad entry. Returns `(successes, errors)`.
+/// on the first bad entry.
 pub fn agent_spawn_all(
     project_root: &Path,
     feature: &str,
     tmux_server: Option<&str>,
-) -> Result<(Vec<String>, Vec<String>)> {
+) -> Result<SpawnAllResult> {
     let agents_dir = paths::agents_dir(project_root);
     let registry = AgentRegistry::load(&agents_dir, feature)?;
 
@@ -276,7 +286,11 @@ pub fn agent_spawn_all(
         .collect();
 
     if agent_names.is_empty() {
-        return Ok((vec!["No agents to respawn".to_string()], vec![]));
+        return Ok(SpawnAllResult {
+            successes: vec!["No agents to respawn".to_string()],
+            errors: vec![],
+            spawned_count: 0,
+        });
     }
 
     let mut successes = Vec::new();
@@ -288,7 +302,12 @@ pub fn agent_spawn_all(
         }
     }
 
-    Ok((successes, errors))
+    let spawned_count = successes.len();
+    Ok(SpawnAllResult {
+        successes,
+        errors,
+        spawned_count,
+    })
 }
 
 #[cfg(test)]
@@ -583,9 +602,10 @@ mod tests {
         tmux::create_session(server.name(), &session_name, &worktree).unwrap();
 
         // Respawn all
-        let (successes, errors) = agent_spawn_all(dir.path(), &feature, server.name()).unwrap();
-        assert_eq!(successes.len(), 2);
-        assert!(errors.is_empty());
+        let result = agent_spawn_all(dir.path(), &feature, server.name()).unwrap();
+        assert_eq!(result.spawned_count, 2);
+        assert_eq!(result.successes.len(), 2);
+        assert!(result.errors.is_empty());
     }
 
     #[test]
@@ -594,9 +614,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let (_session_name, feature) = setup_project(dir.path(), &server);
 
-        let (successes, errors) = agent_spawn_all(dir.path(), &feature, server.name()).unwrap();
-        assert_eq!(successes, vec!["No agents to respawn"]);
-        assert!(errors.is_empty());
+        let result = agent_spawn_all(dir.path(), &feature, server.name()).unwrap();
+        assert_eq!(result.spawned_count, 0);
+        assert_eq!(result.successes, vec!["No agents to respawn"]);
+        assert!(result.errors.is_empty());
     }
 
     #[test]
@@ -632,13 +653,14 @@ mod tests {
         let session_name = format!("{}/{feature}", config.project.name);
         tmux::kill_session(server.name(), &session_name).unwrap();
 
-        let (successes, errors) = agent_spawn_all(dir.path(), &feature, server.name()).unwrap();
+        let result = agent_spawn_all(dir.path(), &feature, server.name()).unwrap();
 
         // Both should fail, but we get errors for both — not just the first
-        assert!(successes.is_empty());
-        assert_eq!(errors.len(), 2);
-        assert!(errors[0].contains("Failed to spawn"));
-        assert!(errors[1].contains("Failed to spawn"));
+        assert_eq!(result.spawned_count, 0);
+        assert!(result.successes.is_empty());
+        assert_eq!(result.errors.len(), 2);
+        assert!(result.errors[0].contains("Failed to spawn"));
+        assert!(result.errors[1].contains("Failed to spawn"));
     }
 
     #[test]

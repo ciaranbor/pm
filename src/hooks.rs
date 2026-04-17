@@ -23,10 +23,27 @@ pub const DEFAULT_POST_MERGE: &str = "\
 echo \"post-merge hook: edit .pm/hooks/post-merge.sh to customize\"
 ";
 
+pub const DEFAULT_RESTORE: &str = "\
+#!/bin/sh
+# restore hook — runs in each session after 'pm open' recreates it
+# Uncomment and customize for your project:
+#
+# # Reinstall dependencies
+# npm install
+#
+# # Start dev server in a split pane
+# tmux split-window -h -t \"$PM_SESSION\" 'npm run dev'
+#
+# # Reattach to a running process
+# # (agents are respawned automatically by pm open)
+echo \"restore hook: edit .pm/hooks/restore.sh to customize\"
+";
+
 /// Bootstrap default hook scripts into a project's .pm/hooks/ directory.
 pub fn bootstrap(project_root: &Path) -> Result<()> {
     write_default_hook(project_root, POST_CREATE_PATH, DEFAULT_POST_CREATE)?;
     write_default_hook(project_root, POST_MERGE_PATH, DEFAULT_POST_MERGE)?;
+    write_default_hook(project_root, RESTORE_PATH, DEFAULT_RESTORE)?;
     Ok(())
 }
 
