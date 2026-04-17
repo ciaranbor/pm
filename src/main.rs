@@ -261,6 +261,11 @@ enum MsgCommands {
         /// Deliver to the parent scope (base branch's feature). Shorthand for --scope <base>.
         #[arg(long, conflicts_with = "scope")]
         upstream: bool,
+        /// Deliver to a different project (by registered name). Resolves the
+        /// target project's root from ~/.config/pm/projects/<name>.toml and
+        /// delivers there. Auto-spawn is disabled for cross-project messages.
+        #[arg(long, conflicts_with = "upstream")]
+        project: Option<String>,
     },
     /// Read the next unread message and advance the cursor
     Read {
@@ -717,26 +722,48 @@ fn run() -> pm::error::Result<()> {
                     as_agent,
                     scope,
                     upstream,
+                    project: target_project,
                 } => {
                     let sender = as_agent.unwrap_or_else(pm::messages::default_user_name);
-                    let target_scope = if upstream {
-                        Some(commands::agent_send::resolve_upstream(
+
+                    if let Some(ref proj_name) = target_project {
+                        // Cross-project delivery: resolve target project root,
+                        // deliver message, but do NOT auto-spawn.
+                        let target_scope = scope.as_deref().unwrap_or("main");
+                        let pm_dir = paths::pm_dir(&project_root);
+                        let sender_project_config =
+                            pm::state::project::ProjectConfig::load(&pm_dir)?;
+                        let sender_project_name = &sender_project_config.project.name;
+                        let line = commands::agent_send::agent_send_cross_project(
+                            proj_name,
+                            &feature,
+                            sender_project_name,
+                            target_scope,
+                            &agent,
+                            &sender,
+                            &message,
+                        )?;
+                        println!("{line}");
+                    } else {
+                        let target_scope = if upstream {
+                            Some(commands::agent_send::resolve_upstream(
+                                &project_root,
+                                &feature,
+                            )?)
+                        } else {
+                            scope
+                        };
+                        let line = commands::agent_send::agent_send(
                             &project_root,
                             &feature,
-                        )?)
-                    } else {
-                        scope
-                    };
-                    let line = commands::agent_send::agent_send(
-                        &project_root,
-                        &feature,
-                        target_scope.as_deref(),
-                        &agent,
-                        &sender,
-                        &message,
-                        None,
-                    )?;
-                    println!("{line}");
+                            target_scope.as_deref(),
+                            &agent,
+                            &sender,
+                            &message,
+                            None,
+                        )?;
+                        println!("{line}");
+                    }
                     Ok(())
                 }
                 MsgCommands::Read {

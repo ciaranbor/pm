@@ -144,10 +144,13 @@ pub fn agent_read(
 }
 
 fn format_message(m: &Message) -> Vec<String> {
-    let sender_display = match &m.meta.sender_scope {
+    let mut sender_display = match &m.meta.sender_scope {
         Some(scope) => format!("{}@{}", m.sender, scope),
         None => m.sender.clone(),
     };
+    if let Some(project) = &m.meta.sender_project {
+        sender_display = format!("{sender_display} (project: {project})");
+    }
     vec![
         format!(
             "--- from {} [{:03}] {} ---",
@@ -517,6 +520,28 @@ mod tests {
         let lines = agent_read(&root, "login", "reviewer", None, None).unwrap();
         assert!(lines[0].starts_with("--- from implementer@other-feature [001]"));
         assert_eq!(lines[1], "cross-scope msg");
+    }
+
+    #[test]
+    fn read_displays_sender_project_when_present() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        let mdir = paths::messages_dir(&root);
+        messages::send_full(
+            &mdir,
+            "main",
+            "reviewer",
+            "implementer",
+            "cross-project msg",
+            Some("login"),
+            Some("other-app"),
+        )
+        .unwrap();
+
+        let lines = agent_read(&root, "main", "reviewer", None, None).unwrap();
+        assert!(lines[0].contains("implementer@login (project: other-app)"));
+        assert_eq!(lines[1], "cross-project msg");
     }
 
     #[test]

@@ -1,11 +1,11 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
 use crate::messages;
 use crate::state::agent::AgentRegistry;
 use crate::state::feature::FeatureState;
 use crate::state::paths;
-use crate::state::project::ProjectConfig;
+use crate::state::project::{ProjectConfig, ProjectEntry};
 use crate::tmux;
 
 /// Find the path to an agent definition file, checking locations that
@@ -166,6 +166,67 @@ pub fn agent_send(
     }
 
     Ok(status)
+}
+
+/// Send a message to an agent in a different project. Looks up the target
+/// project from the global registry, delivers the message to its
+/// `.pm/messages/` directory, but does NOT auto-spawn the recipient
+/// (we can't safely spawn agents in a foreign project).
+///
+/// `sender_scope` is the scope the sender is in (used for metadata).
+/// `target_scope` is the scope within the target project to deliver to.
+pub fn agent_send_cross_project(
+    target_project_name: &str,
+    sender_scope: &str,
+    sender_project: &str,
+    target_scope: &str,
+    recipient: &str,
+    sender: &str,
+    body: &str,
+) -> Result<String> {
+    let projects_dir = paths::global_projects_dir()?;
+    agent_send_cross_project_with_dir(
+        &projects_dir,
+        target_project_name,
+        sender_scope,
+        sender_project,
+        target_scope,
+        recipient,
+        sender,
+        body,
+    )
+}
+
+/// Inner implementation that accepts an explicit `projects_dir` for testability.
+#[allow(clippy::too_many_arguments)]
+fn agent_send_cross_project_with_dir(
+    projects_dir: &Path,
+    target_project_name: &str,
+    sender_scope: &str,
+    sender_project: &str,
+    target_scope: &str,
+    recipient: &str,
+    sender: &str,
+    body: &str,
+) -> Result<String> {
+    let entry = ProjectEntry::load(projects_dir, target_project_name)?;
+    let target_root = PathBuf::from(&entry.root);
+
+    let messages_dir = paths::messages_dir(&target_root);
+    let index = messages::send_full(
+        &messages_dir,
+        target_scope,
+        recipient,
+        sender,
+        body,
+        Some(sender_scope),
+        Some(sender_project),
+    )?;
+
+    Ok(format!(
+        "Message {index:03} sent to '{recipient}@{target_scope}' in project '{target_project_name}' \
+         (from '{sender}@{sender_scope}' in project '{sender_project}')"
+    ))
 }
 
 #[cfg(test)]
@@ -595,5 +656,148 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(msg.meta.sender_scope.as_deref(), Some("login"));
+    }
+
+    // --- agent_send_cross_project ---
+
+    /// Helper: set up a minimal project root with .pm dir.
+    fn setup_target_project(dir: &Path) -> PathBuf {
+        let root = dir.to_path_buf();
+        std::fs::create_dir_all(root.join(".pm/messages")).unwrap();
+        root
+    }
+
+    #[test]
+    fn cross_project_send_delivers_message() {
+        let target_dir = tempdir().unwrap();
+        let projects_dir = tempdir().unwrap();
+
+        let target_root = setup_target_project(target_dir.path());
+
+        // Register target project in the projects directory
+        let entry = ProjectEntry {
+            root: target_root.to_str().unwrap().to_string(),
+            main_branch: "main".to_string(),
+        };
+        entry.save(projects_dir.path(), "exo").unwrap();
+
+        let result = agent_send_cross_project_with_dir(
+            projects_dir.path(),
+            "exo",
+            "login",
+            "myapp",
+            "main",
+            "implementer",
+            "reviewer",
+            "found a bug in the auth module",
+        )
+        .unwrap();
+
+        assert!(result.contains("Message 001"));
+        assert!(result.contains("implementer@main"));
+        assert!(result.contains("project 'exo'"));
+        assert!(result.contains("reviewer@login"));
+        assert!(result.contains("project 'myapp'"));
+
+        // Verify message was actually delivered to the target project
+        let messages_dir = paths::messages_dir(&target_root);
+        let msg = messages::read_at(&messages_dir, "main", "implementer", "reviewer", 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(msg.body, "found a bug in the auth module");
+        assert_eq!(msg.meta.sender_scope.as_deref(), Some("login"));
+        assert_eq!(msg.meta.sender_project.as_deref(), Some("myapp"));
+    }
+
+    #[test]
+    fn cross_project_send_to_nonexistent_project_errors() {
+        let projects_dir = tempdir().unwrap();
+        std::fs::create_dir_all(projects_dir.path()).unwrap();
+
+        let result = agent_send_cross_project_with_dir(
+            projects_dir.path(),
+            "nonexistent",
+            "login",
+            "myapp",
+            "main",
+            "implementer",
+            "reviewer",
+            "hello",
+        );
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), PmError::ProjectNotFound(_)));
+    }
+
+    #[test]
+    fn cross_project_send_records_sender_metadata() {
+        let target_dir = tempdir().unwrap();
+        let projects_dir = tempdir().unwrap();
+
+        let target_root = setup_target_project(target_dir.path());
+
+        let entry = ProjectEntry {
+            root: target_root.to_str().unwrap().to_string(),
+            main_branch: "main".to_string(),
+        };
+        entry.save(projects_dir.path(), "exo").unwrap();
+
+        agent_send_cross_project_with_dir(
+            projects_dir.path(),
+            "exo",
+            "my-feature",
+            "myapp",
+            "main",
+            "bot",
+            "human",
+            "test message",
+        )
+        .unwrap();
+
+        let messages_dir = paths::messages_dir(&target_root);
+        let msg = messages::read_at(&messages_dir, "main", "bot", "human", 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(msg.meta.sender_scope.as_deref(), Some("my-feature"));
+        assert_eq!(msg.meta.sender_project.as_deref(), Some("myapp"));
+    }
+
+    #[test]
+    fn cross_project_send_increments_index() {
+        let target_dir = tempdir().unwrap();
+        let projects_dir = tempdir().unwrap();
+
+        let target_root = setup_target_project(target_dir.path());
+
+        let entry = ProjectEntry {
+            root: target_root.to_str().unwrap().to_string(),
+            main_branch: "main".to_string(),
+        };
+        entry.save(projects_dir.path(), "exo").unwrap();
+
+        let r1 = agent_send_cross_project_with_dir(
+            projects_dir.path(),
+            "exo",
+            "feat",
+            "myapp",
+            "main",
+            "bot",
+            "human",
+            "first",
+        )
+        .unwrap();
+        assert!(r1.contains("Message 001"));
+
+        let r2 = agent_send_cross_project_with_dir(
+            projects_dir.path(),
+            "exo",
+            "feat",
+            "myapp",
+            "main",
+            "bot",
+            "human",
+            "second",
+        )
+        .unwrap();
+        assert!(r2.contains("Message 002"));
     }
 }
