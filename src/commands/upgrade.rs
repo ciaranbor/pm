@@ -18,6 +18,10 @@ pub fn upgrade_project(project_root: &Path) -> Result<String> {
     let _ = hooks_install::install(project_root)?;
     updated.push("hooks");
 
+    // Bootstrap information store (idempotent)
+    super::docs::bootstrap(project_root)?;
+    updated.push("docs");
+
     // Install skills to main
     let _ = skills::skills_install_project(project_root, None)?;
     updated.push("skills");
@@ -219,5 +223,19 @@ last_active = "2026-01-01T00:00:00Z"
         // Both should succeed
         assert!(first.contains("Upgraded"));
         assert!(second.contains("Upgraded"));
+    }
+
+    #[test]
+    fn upgrade_bootstraps_docs() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        let summary = upgrade_project(&root).unwrap();
+        assert!(summary.contains("docs"));
+
+        let docs_dir = root.join(".pm").join("docs");
+        assert!(docs_dir.join("categories.toml").exists());
+        assert!(docs_dir.join("todo.md").exists());
+        assert!(docs_dir.join(".git").exists());
     }
 }

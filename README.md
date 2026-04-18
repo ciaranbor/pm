@@ -405,7 +405,31 @@ pm upgrade                       # reinstall hooks, skills, agents for current p
 pm upgrade --all                 # upgrade all registered projects
 ```
 
-Reinstalls bundled assets (hooks, skills, agents) to each project's main worktree, then re-seeds `.claude/` settings into every active feature worktree. Always overwrites — useful after updating pm to pick up new agent definitions or skill files.
+Reinstalls bundled assets (hooks, skills, agents, information store) to each project's main worktree, then re-seeds `.claude/` settings into every active feature worktree. Always overwrites — useful after updating pm to pick up new agent definitions or skill files.
+
+### Information store
+
+Each project has a git-backed information store at `.pm/docs/` for project-level documentation. The store is bootstrapped by `pm init` with default categories (todo, issues, ideas) defined in `categories.toml`.
+
+```sh
+pm docs sync                     # commit all changes (and push if remote configured)
+pm docs remote <url>             # set the git remote for the information store
+pm docs pull                     # pull from the remote
+```
+
+The orchestrator agent manages the store directly — reading `categories.toml` to discover categories and editing the corresponding markdown files. `pm docs sync` stages and commits all changes in the `.pm/docs/` git repo. The store has its own git history, separate from the project repo.
+
+When a remote is configured (`pm docs remote <url>`), `pm docs sync` automatically pulls before committing and pushes after. If a pull conflict occurs, the merge is aborted, local changes are preserved, and a message is sent to the main agent describing the conflict.
+
+Default categories after bootstrap:
+
+| File | Description |
+|------|-------------|
+| `todo.md` | Ordered task list. Actionable items with clear next steps. |
+| `issues.md` | Concrete bugs and unexpected behaviours discovered during usage. |
+| `ideas.md` | Thoughts and design questions that aren't yet actionable. |
+
+Add custom categories by editing `categories.toml` and creating the corresponding markdown file.
 
 ### Other commands
 

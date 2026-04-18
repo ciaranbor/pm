@@ -86,11 +86,27 @@ enum Commands {
         #[arg(long)]
         all: bool,
     },
+    /// Information store management
+    #[command(subcommand)]
+    Docs(DocsCommands),
     /// Write a summary doc from a feature worktree
     Summary {
         #[command(subcommand)]
         command: SummaryCommands,
     },
+}
+
+#[derive(Subcommand)]
+enum DocsCommands {
+    /// Commit all changes in the information store (and push if remote configured)
+    Sync,
+    /// Set the git remote for the information store
+    Remote {
+        /// Remote URL (e.g. a bare git repo or GitHub URL)
+        url: String,
+    },
+    /// Pull from the information store's remote
+    Pull,
 }
 
 #[derive(Subcommand)]
@@ -1025,6 +1041,26 @@ fn run() -> pm::error::Result<()> {
                 println!("{line}");
             }
             Ok(())
+        }
+        Commands::Docs(docs_cmd) => {
+            let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+            match docs_cmd {
+                DocsCommands::Sync => {
+                    let msg = commands::docs::sync(&project_root)?;
+                    println!("{msg}");
+                    Ok(())
+                }
+                DocsCommands::Remote { url } => {
+                    let msg = commands::docs::set_remote(&project_root, &url)?;
+                    println!("{msg}");
+                    Ok(())
+                }
+                DocsCommands::Pull => {
+                    let msg = commands::docs::pull(&project_root)?;
+                    println!("{msg}");
+                    Ok(())
+                }
+            }
         }
         Commands::Summary { command } => match command {
             SummaryCommands::Write { content } => {

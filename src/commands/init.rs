@@ -82,6 +82,9 @@ pub fn init(
     // Bootstrap default hook scripts
     hooks::bootstrap(path)?;
 
+    // Bootstrap the information store (.pm/docs/)
+    super::docs::bootstrap(path)?;
+
     // Install the pm Stop hook into main/.claude/settings.json so every
     // agent spawned under this project runs as a never-idle message
     // processor (see `commands::hooks_install`).
@@ -194,6 +197,24 @@ mod tests {
             .join("agents")
             .join("reviewer.md");
         assert!(agent_path.exists(), "reviewer agent should be installed");
+    }
+
+    #[test]
+    fn init_bootstraps_docs() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
+
+        init(&project_path, &projects_dir, None, server.name()).unwrap();
+
+        let docs_dir = project_path.join(".pm").join("docs");
+        assert!(docs_dir.join("categories.toml").exists());
+        assert!(docs_dir.join("todo.md").exists());
+        assert!(docs_dir.join("issues.md").exists());
+        assert!(docs_dir.join("ideas.md").exists());
+        assert!(docs_dir.join(".git").exists());
     }
 
     #[test]
