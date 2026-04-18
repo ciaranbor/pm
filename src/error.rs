@@ -70,6 +70,9 @@ pub enum PmError {
     #[error("{0}")]
     Messaging(String),
 
+    #[error("Export/import error: {0}")]
+    ExportImport(String),
+
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 

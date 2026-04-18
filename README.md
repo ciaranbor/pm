@@ -217,6 +217,19 @@ pm feat adopt ciaran/eval --feature-name eval # adopt with custom feature name
 
 `pm register` (both symlink and move modes) migrates sessions automatically — no extra flags needed.
 
+### Claude Code session export/import
+
+Transfer Claude Code sessions between machines:
+
+```sh
+pm claude export                     # export sessions for the current project
+pm claude export --all               # export sessions for all registered projects
+pm claude export -o backup.tar.gz    # custom output path
+pm claude import backup.tar.gz      # import sessions from a tarball
+```
+
+Export creates a tarball containing session data and a manifest mapping project names to paths. Import looks up each project by name in the local registry and rewrites embedded paths if the project lives at a different location on the target machine.
+
 ### Project status dashboard
 
 ```sh
