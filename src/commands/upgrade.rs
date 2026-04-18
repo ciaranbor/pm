@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::error::Result;
 use crate::state::paths;
@@ -61,7 +61,17 @@ pub fn upgrade_all() -> Result<Vec<String>> {
 
     let mut lines = Vec::new();
     for (name, entry) in &projects {
-        let root = PathBuf::from(&entry.root);
+        // Migrate absolute paths to portable ~/… format on re-save
+        let portable = crate::path_utils::to_portable(&entry.root_path());
+        if portable != entry.root {
+            let migrated = ProjectEntry {
+                root: portable,
+                ..entry.clone()
+            };
+            migrated.save(&projects_dir, name)?;
+        }
+
+        let root = entry.root_path();
         if !root.exists() {
             lines.push(format!("{name}: skipped (root does not exist)"));
             continue;
@@ -89,6 +99,7 @@ pub fn upgrade(all: bool) -> Result<Vec<String>> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::PathBuf;
     use tempfile::tempdir;
 
     fn setup_project(dir: &std::path::Path) -> PathBuf {

@@ -9,7 +9,7 @@ pub fn list_projects(projects_dir: &Path) -> Result<Vec<String>> {
 
     let lines: Vec<String> = projects
         .iter()
-        .map(|(name, entry)| format!("{name}\t{}", entry.root))
+        .map(|(name, entry)| format!("{name}\t{}", entry.root_path().display()))
         .collect();
 
     Ok(lines)

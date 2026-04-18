@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
 
@@ -55,6 +55,11 @@ pub struct GithubConfig {
 }
 
 impl ProjectEntry {
+    /// Resolve `root` to an absolute path, expanding `~/` if present.
+    pub fn root_path(&self) -> PathBuf {
+        crate::path_utils::resolve(&self.root)
+    }
+
     /// Save to the global registry using atomic write.
     pub fn save(&self, projects_dir: &Path, name: &str) -> Result<()> {
         std::fs::create_dir_all(projects_dir)?;

@@ -5,6 +5,7 @@ pub mod gh;
 pub mod git;
 pub mod hooks;
 pub mod messages;
+pub mod path_utils;
 pub mod state;
 #[cfg(test)]
 pub mod testing;

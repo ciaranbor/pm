@@ -85,7 +85,7 @@ pub fn init(
 
     // Register in global registry
     let entry = ProjectEntry {
-        root: path.to_string_lossy().to_string(),
+        root: crate::path_utils::to_portable(path),
         main_branch,
     };
     entry.save(projects_dir, &name)?;
@@ -167,7 +167,7 @@ mod tests {
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
 
-        init(&project_path, &projects_dir, server.name()).unwrap();
+        init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         // Skills should be installed into main/.claude/skills/
         let skill_path = project_path
@@ -213,7 +213,7 @@ mod tests {
         init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         let entry = ProjectEntry::load(&projects_dir, &name).unwrap();
-        assert_eq!(entry.root, project_path.to_string_lossy().to_string());
+        assert_eq!(entry.root, crate::path_utils::to_portable(&project_path));
         assert_eq!(entry.main_branch, "main");
     }
 

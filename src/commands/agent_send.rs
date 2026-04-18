@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::error::{PmError, Result};
 use crate::messages;
@@ -210,7 +210,7 @@ fn agent_send_cross_project_with_dir(
     body: &str,
 ) -> Result<String> {
     let entry = ProjectEntry::load(projects_dir, target_project_name)?;
-    let target_root = PathBuf::from(&entry.root);
+    let target_root = entry.root_path();
 
     let messages_dir = paths::messages_dir(&target_root);
     let index = messages::send_full(
