@@ -6,7 +6,9 @@ use crate::error::{PmError, Result};
 use crate::git;
 use crate::hooks;
 use crate::state::paths;
-use crate::state::project::{GithubConfig, ProjectConfig, ProjectEntry, ProjectInfo, SetupConfig};
+use crate::state::project::{
+    AgentsConfig, GithubConfig, ProjectConfig, ProjectEntry, ProjectInfo, SetupConfig,
+};
 use crate::tmux;
 
 /// Initialize a new pm project at the given path.
@@ -66,7 +68,14 @@ pub fn init(
         project: ProjectInfo { name: name.clone() },
         setup: SetupConfig::default(),
         github: GithubConfig::default(),
-        agents: Default::default(),
+        agents: {
+            let mut permissions = std::collections::BTreeMap::new();
+            permissions.insert("implementer".to_string(), "acceptEdits".to_string());
+            AgentsConfig {
+                default: "implementer".to_string(),
+                permissions,
+            }
+        },
     };
     config.save(&pm_dir)?;
 
