@@ -138,6 +138,20 @@ enum ClaudeCommands {
         #[arg(long)]
         from: PathBuf,
     },
+    /// Export Claude Code sessions for transfer to another machine
+    Export {
+        /// Export sessions for all registered projects (default: current project only)
+        #[arg(long)]
+        all: bool,
+        /// Output tarball path (default: pm-claude-<name>.tar.gz in current directory)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Import Claude Code sessions from an exported tarball
+    Import {
+        /// Path to the tarball created by `pm claude export`
+        tarball: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -665,6 +679,33 @@ fn run() -> pm::error::Result<()> {
             ClaudeCommands::Migrate { from } => {
                 let cwd = std::env::current_dir()?;
                 let messages = commands::claude_migrate::migrate_sessions(&from, &cwd, None)?;
+                for msg in messages {
+                    println!("{msg}");
+                }
+                Ok(())
+            }
+            ClaudeCommands::Export { all, output } => {
+                let projects_dir = paths::global_projects_dir()?;
+                let project_root = if all {
+                    None
+                } else {
+                    Some(paths::find_project_root(&std::env::current_dir()?)?)
+                };
+                let (_, messages) = commands::claude_export::export(
+                    project_root.as_deref(),
+                    &projects_dir,
+                    all,
+                    output.as_deref(),
+                    None,
+                )?;
+                for msg in messages {
+                    println!("{msg}");
+                }
+                Ok(())
+            }
+            ClaudeCommands::Import { tarball } => {
+                let projects_dir = paths::global_projects_dir()?;
+                let messages = commands::claude_import::import(&tarball, &projects_dir, None)?;
                 for msg in messages {
                     println!("{msg}");
                 }
