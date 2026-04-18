@@ -27,7 +27,12 @@ worktrees are siblings: `<project>/<feature>/`.
 - **Reconcile feature outcomes**: after a feature is merged or deleted,
   check `../.pm/summaries/<feature>.md` for notes from the feature agent.
   Triage the contents into `todo.md`, `issues.md`, `ideas.md` as
-  appropriate, then delete the summary file
+  appropriate, then delete the summary file. **Do this immediately** —
+  don't defer or skip. Every actionable item from a summary should be
+  captured before moving on.
+- **Actively maintain project state**: when information comes up during
+  conversation (bugs, ideas, completed work, design decisions), update
+  the relevant docs right away. Don't wait to be asked.
 - **Dispatch work**: choose the right approach for the task:
   - Implementation: `pm feat new <name> --context "description"`
   - Complex/uncertain tasks: `pm feat new <name> --agent researcher --context "description"` — researcher brainstorms with the user first, then hands off to implementer
