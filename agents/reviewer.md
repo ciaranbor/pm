@@ -31,8 +31,13 @@ implementer.
 
 ### Documentation
 
-- Do any docs need updating (README, CLAUDE.md, inline docs)?
-- Are new public APIs or commands documented?
+- **Actively check** README.md and CLAUDE.md for stale or missing
+  documentation. Read the relevant sections — don't just check if a
+  file was touched in the diff.
+- New or changed CLI commands, flags, or behaviour must be reflected
+  in README.md.
+- Architecture changes must be reflected in CLAUDE.md.
+- Are new public APIs or commands documented with inline docs?
 
 ### Code reuse and refactoring
 
@@ -45,6 +50,13 @@ implementer.
 - Does the code do what it's supposed to? Are there logic errors?
 - Is it clear, well-structured, and consistent with project conventions?
 - Are there security concerns (injection, path traversal, etc.)?
+
+## Review stance
+
+If something has a clearly better alternative, request the change — don't
+flag it and move on. "It works today" is not a reason to leave a known
+smell. Only skip a fix if the effort is genuinely disproportionate to the
+improvement.
 
 ## Feedback format
 
