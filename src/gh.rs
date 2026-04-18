@@ -171,6 +171,47 @@ pub fn pr_details(repo_dir: &Path, pr: &str) -> Result<PrDetails> {
     })
 }
 
+/// Create a private GitHub repo and return its SSH URL.
+/// `name` is the repo name (e.g. "myproject-pm-state").
+pub fn create_private_repo(name: &str) -> Result<String> {
+    let output = Command::new("gh")
+        .args(["repo", "create", name, "--private", "--confirm"])
+        .output()?;
+
+    if output.status.success() {
+        // gh repo create prints the URL to stdout
+        let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if url.is_empty() {
+            // Older gh versions may not print the URL; construct it
+            let whoami = Command::new("gh")
+                .args(["api", "user", "--jq", ".login"])
+                .output()?;
+            if whoami.status.success() {
+                let login = String::from_utf8_lossy(&whoami.stdout).trim().to_string();
+                Ok(format!("git@github.com:{login}/{name}.git"))
+            } else {
+                Err(PmError::Gh(
+                    "could not determine GitHub username".to_string(),
+                ))
+            }
+        } else {
+            Ok(url)
+        }
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(PmError::Gh(stderr))
+    }
+}
+
+/// Check if `gh` CLI is available and authenticated.
+pub fn is_available() -> bool {
+    Command::new("gh")
+        .args(["auth", "status"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 /// Extract the PR number from a gh PR URL (the last path segment).
 fn pr_number_from_url(url: &str) -> String {
     url.rsplit('/').next().unwrap_or(url).to_string()

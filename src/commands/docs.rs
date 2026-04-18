@@ -44,28 +44,24 @@ fn default_categories_toml() -> String {
     out
 }
 
-fn require_docs_repo(project_root: &Path) -> Result<std::path::PathBuf> {
-    let docs_dir = paths::docs_dir(project_root);
-    if !docs_dir.join(".git").exists() {
+fn require_state_repo(project_root: &Path) -> Result<std::path::PathBuf> {
+    let pm_dir = paths::pm_dir(project_root);
+    if !pm_dir.join(".git").exists() {
         return Err(PmError::Git(
-            "information store not initialised (run `pm init` or `pm upgrade`)".to_string(),
+            "state repo not initialised (run `pm state init`)".to_string(),
         ));
     }
-    Ok(docs_dir)
+    Ok(pm_dir)
 }
 
 /// Bootstrap the information store at `.pm/docs/`.
 ///
-/// Creates the directory, writes default `categories.toml` and category
-/// markdown files, and initialises a git repo. Idempotent — if the docs
-/// directory already contains a git repo, this is a no-op.
+/// Creates the directory and writes default `categories.toml` and category
+/// markdown files. Does NOT create a separate git repo — docs are tracked
+/// by the parent `.pm/` state repo (initialised by `pm state init`).
+/// Idempotent — won't overwrite existing files.
 pub fn bootstrap(project_root: &Path) -> Result<()> {
     let docs_dir = paths::docs_dir(project_root);
-
-    // Idempotent: if already initialised, skip
-    if docs_dir.join(".git").exists() {
-        return Ok(());
-    }
 
     std::fs::create_dir_all(&docs_dir)?;
 
@@ -83,94 +79,47 @@ pub fn bootstrap(project_root: &Path) -> Result<()> {
         }
     }
 
-    // Init git repo and commit bootstrapped files
-    git::init_repo(&docs_dir)?;
-    git::add_all(&docs_dir)?;
-    git::commit_with_message(&docs_dir, "bootstrap information store")?;
-
     Ok(())
-}
-
-/// Set the remote URL for the information store.
-///
-/// Configures `origin` on the `.pm/docs/` git repo. Errors if a remote
-/// named `origin` already exists.
-pub fn set_remote(project_root: &Path, url: &str) -> Result<String> {
-    let docs_dir = require_docs_repo(project_root)?;
-
-    if git::has_remote(&docs_dir, "origin")? {
-        return Err(PmError::Git(
-            "remote 'origin' already exists (remove it with `git -C .pm/docs remote remove origin` to reset)".to_string(),
-        ));
-    }
-
-    git::add_remote(&docs_dir, "origin", url)?;
-    Ok(format!("Set docs remote to {url}"))
-}
-
-/// Pull from the remote into the information store.
-///
-/// Fetches and merges from origin. If a merge conflict occurs, aborts and
-/// sends a message to the main agent describing the conflict.
-pub fn pull(project_root: &Path) -> Result<String> {
-    let docs_dir = require_docs_repo(project_root)?;
-
-    if !git::has_remote(&docs_dir, "origin")? {
-        return Err(PmError::Git(
-            "no remote configured (run `pm docs remote <url>`)".to_string(),
-        ));
-    }
-
-    match git::pull(&docs_dir) {
-        Ok(()) => Ok("Pulled information store from remote".to_string()),
-        Err(e) => {
-            // Abort any in-progress merge to leave the repo clean
-            let _ = git::merge_abort(&docs_dir);
-            notify_conflict(project_root, &format!("pull failed: {e}"))?;
-            Err(PmError::Git(format!(
-                "pull failed — message sent to main agent: {e}"
-            )))
-        }
-    }
 }
 
 /// Stage all changes and commit if there's anything to commit.
 /// Returns `true` if a commit was created.
-fn commit_staged(docs_dir: &Path) -> Result<bool> {
-    git::add_all(docs_dir)?;
-    if git::has_staged_changes(docs_dir)? {
-        let changed = git::staged_file_names(docs_dir)?;
+fn commit_staged(pm_dir: &Path) -> Result<bool> {
+    git::add_all(pm_dir)?;
+    if git::has_staged_changes(pm_dir)? {
+        let changed = git::staged_file_names(pm_dir)?;
         let msg = if changed.is_empty() {
             "sync".to_string()
         } else {
             format!("sync ({})", changed.join(", "))
         };
-        git::commit_with_message(docs_dir, &msg)?;
+        git::commit_with_message(pm_dir, &msg)?;
         Ok(true)
     } else {
         Ok(false)
     }
 }
 
-/// Sync the information store: pull (if remote), commit, push (if remote).
+/// Sync the information store: commit changes in `.pm/` and push if remote configured.
 ///
-/// If a pull fails, aborts any in-progress merge, sends a message to the
-/// main agent, and returns an error. Local changes are preserved.
+/// Operates on the `.pm/` state repo. If a remote is configured, pulls first
+/// then pushes after committing. On pull conflict, aborts and notifies the
+/// main agent.
 pub fn sync(project_root: &Path) -> Result<String> {
-    let docs_dir = require_docs_repo(project_root)?;
-    let has_remote = git::has_remote(&docs_dir, "origin")?;
+    let pm_dir = require_state_repo(project_root)?;
+    let has_remote = git::has_remote(&pm_dir, "origin")?;
 
     let mut committed = false;
 
     // Pull first if remote exists
     if has_remote {
         // Commit any local changes before pulling to avoid losing them
-        if commit_staged(&docs_dir)? {
+        if commit_staged(&pm_dir)? {
             committed = true;
         }
 
-        if let Err(e) = git::pull(&docs_dir) {
-            let _ = git::merge_abort(&docs_dir);
+        if let Err(e) = git::pull(&pm_dir) {
+            let _ = git::merge_abort(&pm_dir);
             notify_conflict(project_root, &format!("docs sync pull failed: {e}"))?;
             return Err(PmError::Git(format!(
                 "pull failed — message sent to main agent: {e}"
@@ -179,14 +128,14 @@ pub fn sync(project_root: &Path) -> Result<String> {
     }
 
     // Stage and commit any remaining changes (or changes from a no-remote flow)
-    if commit_staged(&docs_dir)? {
+    if commit_staged(&pm_dir)? {
         committed = true;
     }
 
     // Push if remote exists and we have something new
     if has_remote && committed {
-        let branch = git::current_branch(&docs_dir)?;
-        if let Err(e) = git::push(&docs_dir, "origin", &branch) {
+        let branch = git::current_branch(&pm_dir)?;
+        if let Err(e) = git::push(&pm_dir, "origin", &branch) {
             return Err(PmError::Git(format!("push failed: {e}")));
         }
         Ok("Synced information store (pushed to remote)".to_string())
@@ -205,7 +154,7 @@ fn notify_conflict(project_root: &Path, detail: &str) -> Result<()> {
          The docs sync pull failed and was aborted.\n\
          Local changes are preserved but not pushed.\n\n\
          Detail: {detail}\n\n\
-         To resolve: `cd .pm/docs && git pull` and fix any conflicts manually, \
+         To resolve: `cd .pm && git pull` and fix any conflicts manually, \
          then `pm docs sync`."
     );
     messages::send(&messages_dir, "main", "main", "pm", &body)?;
@@ -215,12 +164,27 @@ fn notify_conflict(project_root: &Path, detail: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::state_cmd;
     use tempfile::tempdir;
 
     fn setup_project(dir: &std::path::Path) -> std::path::PathBuf {
         let root = dir.to_path_buf();
         std::fs::create_dir_all(root.join(".pm").join("features")).unwrap();
         std::fs::create_dir_all(root.join("main")).unwrap();
+        root
+    }
+
+    /// Setup a project with state repo initialised (required for docs sync).
+    fn setup_with_state(dir: &std::path::Path) -> std::path::PathBuf {
+        let root = setup_project(dir);
+        state_cmd::init(&root).unwrap();
+        bootstrap(&root).unwrap();
+        // Commit the bootstrapped docs
+        let pm_dir = paths::pm_dir(&root);
+        git::add_all(&pm_dir).unwrap();
+        if git::has_staged_changes(&pm_dir).unwrap() {
+            git::commit_with_message(&pm_dir, "bootstrap docs").unwrap();
+        }
         root
     }
 
@@ -267,13 +231,14 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_inits_git_repo() {
+    fn bootstrap_does_not_create_git_repo() {
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
 
         bootstrap(&root).unwrap();
 
-        assert!(paths::docs_dir(&root).join(".git").exists());
+        // No separate git repo in docs
+        assert!(!paths::docs_dir(&root).join(".git").exists());
     }
 
     #[test]
@@ -297,9 +262,7 @@ mod tests {
     #[test]
     fn sync_commits_changes() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
-
-        bootstrap(&root).unwrap();
+        let root = setup_with_state(dir.path());
 
         // Write to a file
         let docs = paths::docs_dir(&root);
@@ -309,13 +272,14 @@ mod tests {
         assert_eq!(msg, "Synced information store");
 
         // Verify latest commit message includes file name
+        let pm_dir = paths::pm_dir(&root);
         let output = std::process::Command::new("git")
-            .args(["-C", &docs.to_string_lossy(), "log", "--oneline", "-1"])
+            .args(["-C", &pm_dir.to_string_lossy(), "log", "--oneline", "-1"])
             .output()
             .unwrap();
         let log = String::from_utf8_lossy(&output.stdout);
         assert!(
-            log.contains("sync (todo.md)"),
+            log.contains("todo.md"),
             "commit message should include changed file name, got: {log}"
         );
     }
@@ -323,16 +287,14 @@ mod tests {
     #[test]
     fn sync_with_no_changes_succeeds() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
-
-        bootstrap(&root).unwrap();
+        let root = setup_with_state(dir.path());
 
         let msg = sync(&root).unwrap();
         assert_eq!(msg, "Nothing to sync");
     }
 
     #[test]
-    fn sync_without_init_returns_error() {
+    fn sync_without_state_init_returns_error() {
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
 
@@ -340,56 +302,21 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn set_remote_configures_origin() {
-        let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
-        bootstrap(&root).unwrap();
-
-        let msg = set_remote(&root, "https://example.com/docs.git").unwrap();
-        assert!(msg.contains("https://example.com/docs.git"));
-
-        let docs_dir = paths::docs_dir(&root);
-        assert!(git::has_remote(&docs_dir, "origin").unwrap());
-    }
-
-    #[test]
-    fn set_remote_errors_if_already_set() {
-        let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
-        bootstrap(&root).unwrap();
-
-        set_remote(&root, "https://example.com/docs.git").unwrap();
-        let result = set_remote(&root, "https://other.com/docs.git");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn pull_errors_without_remote() {
-        let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
-        bootstrap(&root).unwrap();
-
-        let result = pull(&root);
-        assert!(result.is_err());
-    }
-
-    /// Helper: create a bare remote repo and push the docs repo to it.
+    /// Helper: create a bare remote repo and push the state repo to it.
     fn setup_remote(root: &Path) -> std::path::PathBuf {
-        let docs_dir = paths::docs_dir(root);
-        let bare_path = root.join("remote-docs.git");
+        let pm_dir = paths::pm_dir(root);
+        let bare_path = root.join("remote-state.git");
         git::init_bare(&bare_path).unwrap();
-        git::add_remote(&docs_dir, "origin", &bare_path.to_string_lossy()).unwrap();
-        let branch = git::current_branch(&docs_dir).unwrap();
-        git::push(&docs_dir, "origin", &branch).unwrap();
+        git::add_remote(&pm_dir, "origin", &bare_path.to_string_lossy()).unwrap();
+        let branch = git::current_branch(&pm_dir).unwrap();
+        git::push(&pm_dir, "origin", &branch).unwrap();
         bare_path
     }
 
     #[test]
     fn sync_with_remote_pushes() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
-        bootstrap(&root).unwrap();
+        let root = setup_with_state(dir.path());
         let _bare = setup_remote(&root);
 
         let docs = paths::docs_dir(&root);
@@ -405,8 +332,7 @@ mod tests {
     #[test]
     fn sync_with_remote_no_changes_skips_push() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
-        bootstrap(&root).unwrap();
+        let root = setup_with_state(dir.path());
         let _bare = setup_remote(&root);
 
         let msg = sync(&root).unwrap();
@@ -416,14 +342,17 @@ mod tests {
     #[test]
     fn sync_with_remote_pulls_remote_changes() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
-        bootstrap(&root).unwrap();
+        let root = setup_with_state(dir.path());
         let bare = setup_remote(&root);
 
         // Clone the bare repo elsewhere and push a change
         let other = dir.path().join("other-clone");
         git::clone_repo(&bare.to_string_lossy(), &other).unwrap();
-        std::fs::write(other.join("issues.md"), "# Issues\n- remote issue\n").unwrap();
+        std::fs::write(
+            other.join("docs").join("issues.md"),
+            "# Issues\n- remote issue\n",
+        )
+        .unwrap();
         git::add_all(&other).unwrap();
         git::commit_with_message(&other, "remote change").unwrap();
         let branch = git::current_branch(&other).unwrap();
@@ -445,14 +374,17 @@ mod tests {
     #[test]
     fn sync_conflict_sends_message_to_main() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
-        bootstrap(&root).unwrap();
+        let root = setup_with_state(dir.path());
         let bare = setup_remote(&root);
 
         // Push a conflicting change from another clone
         let other = dir.path().join("other-clone");
         git::clone_repo(&bare.to_string_lossy(), &other).unwrap();
-        std::fs::write(other.join("todo.md"), "# Todo\n- remote version\n").unwrap();
+        std::fs::write(
+            other.join("docs").join("todo.md"),
+            "# Todo\n- remote version\n",
+        )
+        .unwrap();
         git::add_all(&other).unwrap();
         git::commit_with_message(&other, "remote conflicting change").unwrap();
         let branch = git::current_branch(&other).unwrap();

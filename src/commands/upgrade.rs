@@ -18,8 +18,9 @@ pub fn upgrade_project(project_root: &Path) -> Result<String> {
     let _ = hooks_install::install(project_root)?;
     updated.push("hooks");
 
-    // Bootstrap information store (idempotent)
+    // Bootstrap information store and state repo (both idempotent)
     super::docs::bootstrap(project_root)?;
+    super::state_cmd::init(project_root)?;
     updated.push("docs");
 
     // Install skills to main
@@ -236,6 +237,8 @@ last_active = "2026-01-01T00:00:00Z"
         let docs_dir = root.join(".pm").join("docs");
         assert!(docs_dir.join("categories.toml").exists());
         assert!(docs_dir.join("todo.md").exists());
-        assert!(docs_dir.join(".git").exists());
+        // Docs are tracked by the parent .pm/ state repo, not a separate git repo
+        assert!(!docs_dir.join(".git").exists());
+        assert!(root.join(".pm").join(".git").exists());
     }
 }

@@ -82,8 +82,9 @@ pub fn init(
     // Bootstrap default hook scripts
     hooks::bootstrap(path)?;
 
-    // Bootstrap the information store (.pm/docs/)
+    // Bootstrap the information store (.pm/docs/) and state repo (.pm/)
     super::docs::bootstrap(path)?;
+    super::state_cmd::init(path)?;
 
     // Install the pm Stop hook into main/.claude/settings.json so every
     // agent spawned under this project runs as a never-idle message
@@ -214,7 +215,9 @@ mod tests {
         assert!(docs_dir.join("todo.md").exists());
         assert!(docs_dir.join("issues.md").exists());
         assert!(docs_dir.join("ideas.md").exists());
-        assert!(docs_dir.join(".git").exists());
+        // Docs tracked by parent .pm/ state repo, not a separate git repo
+        assert!(!docs_dir.join(".git").exists());
+        assert!(project_path.join(".pm").join(".git").exists());
     }
 
     #[test]

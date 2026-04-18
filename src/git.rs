@@ -479,6 +479,11 @@ pub fn list_remotes(repo: &Path) -> Result<String> {
     run_git(repo, &["remote", "-v"])
 }
 
+/// Get short status output (`git status --short`).
+pub fn status_short(repo: &Path) -> Result<String> {
+    run_git(repo, &["status", "--short"])
+}
+
 /// Check if a path is a git repository (has .git dir or file).
 pub fn is_git_repo(path: &Path) -> bool {
     let git_path = path.join(".git");
