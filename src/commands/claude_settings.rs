@@ -653,6 +653,11 @@ mod tests {
         let main_claude = project.join("main").join(".claude");
         write_json(&main_claude, "settings.json", r#"{"a":1}"#);
 
+        // Remove skills/agents that init installs, so we can test the
+        // seed-noop path where main has neither directory.
+        let _ = std::fs::remove_dir_all(main_claude.join("skills"));
+        let _ = std::fs::remove_dir_all(main_claude.join("agents"));
+
         let feature_wt = project.join("login");
         std::fs::create_dir_all(&feature_wt).unwrap();
         seed_feature_claude(&project, &feature_wt).unwrap();
