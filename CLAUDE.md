@@ -16,6 +16,7 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 - `src/hooks.rs` — lifecycle hooks (post-create, post-merge, restore)
 - `src/error.rs` — error types (`PmError` enum, `thiserror`)
 - `src/testing.rs` — test utilities (shared tmux test server, RAII cleanup)
+- `src/path_utils.rs` — portable path conversion (`~/` ↔ `$HOME`) for registry entries
 - `src/messages.rs` — file-based message queue (send, read_at, next, list, wait, name validation). Supports cross-scope messaging: `send_with_scope` records the sender's scope in metadata, and `pm msg send --scope <name>` / `--upstream` deliver to a different feature's inbox.
 - `src/state/agent.rs` — per-feature agent registry (TOML state for spawned agents)
 - `src/commands/` — one module per command group (project, feat, claude, agent, msg, hooks_install, etc.)

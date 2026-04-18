@@ -982,7 +982,7 @@ fn run() -> pm::error::Result<()> {
             let projects_dir = paths::global_projects_dir()?;
             let project_root = if let Some(name) = &project {
                 let entry = pm::state::project::ProjectEntry::load(&projects_dir, name)?;
-                PathBuf::from(&entry.root)
+                entry.root_path()
             } else {
                 paths::find_project_root(&std::env::current_dir()?)?
             };
@@ -995,7 +995,7 @@ fn run() -> pm::error::Result<()> {
             let project_root = if let Some(name) = project {
                 let projects_dir = paths::global_projects_dir()?;
                 let entry = pm::state::project::ProjectEntry::load(&projects_dir, &name)?;
-                PathBuf::from(&entry.root)
+                entry.root_path()
             } else {
                 paths::find_project_root(&std::env::current_dir()?)?
             };
@@ -1009,7 +1009,7 @@ fn run() -> pm::error::Result<()> {
             let project_root = if let Some(name) = project {
                 let projects_dir = paths::global_projects_dir()?;
                 let entry = pm::state::project::ProjectEntry::load(&projects_dir, &name)?;
-                PathBuf::from(&entry.root)
+                entry.root_path()
             } else {
                 paths::find_project_root(&std::env::current_dir()?)?
             };

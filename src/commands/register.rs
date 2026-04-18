@@ -51,7 +51,7 @@ pub fn register(
 
     // Check if this repo is already registered under a different name
     for (existing_name, entry) in ProjectEntry::list(projects_dir)? {
-        let existing_main = Path::new(&entry.root).join("main");
+        let existing_main = entry.root_path().join("main");
         if let Ok(existing_canonical) = existing_main.canonicalize()
             && existing_canonical == repo_path
         {
@@ -128,7 +128,7 @@ pub fn register(
 
     // Register in global registry
     let entry = ProjectEntry {
-        root: wrapper_dir.to_string_lossy().to_string(),
+        root: crate::path_utils::to_portable(&wrapper_dir),
         main_branch: "main".to_string(),
     };
     entry.save(projects_dir, &project_name)?;
@@ -243,7 +243,7 @@ mod tests {
 
         let entry = ProjectEntry::load(&projects_dir, &name).unwrap();
         // Compare canonicalized paths to handle /var vs /private/var on macOS
-        let entry_root = Path::new(&entry.root).canonicalize().unwrap();
+        let entry_root = entry.root_path().canonicalize().unwrap();
         let expected = dir
             .path()
             .join(format!("{name}-pm"))
