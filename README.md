@@ -25,7 +25,7 @@ pm init ~/projects/myapp
 cd ~/projects/myapp/main
 ```
 
-Creates a project root with a git repo in `main/` and a `.pm/` state directory.
+Creates a project root with a git repo in `main/`, a `.pm/` state directory, and installs bundled hooks, skills, and agent definitions into `main/.claude/`.
 
 ### Option B: Clone a remote repo
 

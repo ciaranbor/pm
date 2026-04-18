@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use crate::commands::hooks_install;
+use crate::commands::skills;
 use crate::error::{PmError, Result};
 use crate::git;
 use crate::hooks;
@@ -77,6 +78,11 @@ pub fn init(
     // processor (see `commands::hooks_install`).
     hooks_install::install(path)?;
 
+    // Install bundled skills and agent definitions into main/.claude/
+    // so the project is immediately ready for agent workflows.
+    skills::skills_install_project(path, None)?;
+    skills::agents_install_project(path, None)?;
+
     // Register in global registry
     let entry = ProjectEntry {
         root: path.to_string_lossy().to_string(),
@@ -151,6 +157,34 @@ mod tests {
 
         assert!(project_path.join(hooks::POST_CREATE_PATH).is_file());
         assert!(project_path.join(hooks::POST_MERGE_PATH).is_file());
+    }
+
+    #[test]
+    fn init_installs_skills_and_agents() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
+
+        init(&project_path, &projects_dir, server.name()).unwrap();
+
+        // Skills should be installed into main/.claude/skills/
+        let skill_path = project_path
+            .join("main")
+            .join(".claude")
+            .join("skills")
+            .join("pm")
+            .join("SKILL.md");
+        assert!(skill_path.exists(), "pm skill should be installed");
+
+        // Agent definitions should be installed into main/.claude/agents/
+        let agent_path = project_path
+            .join("main")
+            .join(".claude")
+            .join("agents")
+            .join("reviewer.md");
+        assert!(agent_path.exists(), "reviewer agent should be installed");
     }
 
     #[test]
