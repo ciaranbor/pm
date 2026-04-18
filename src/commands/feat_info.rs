@@ -99,7 +99,7 @@ mod tests {
         let server = TestServer::new();
         let project_path = dir.path().join(server.scope("myapp"));
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(
             &project_path,
             "alpha",
@@ -142,7 +142,7 @@ mod tests {
         // Init project (creates a real git repo at project_path/main)
         let project_path = dir.path().join(server.scope("myapp"));
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         let main_repo = project_path.join("main");
 
@@ -213,7 +213,7 @@ mod tests {
         let server = TestServer::new();
         let project_path = dir.path().join(server.scope("myapp"));
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         let result = feat_info(&project_path, "nonexistent");
         assert!(result.is_err());
@@ -225,7 +225,7 @@ mod tests {
         let server = TestServer::new();
         let project_path = dir.path().join(server.scope("myapp"));
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(
             &project_path,
             "beta",
@@ -251,7 +251,7 @@ mod tests {
         let server = TestServer::new();
         let project_path = dir.path().join(server.scope("myapp"));
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(
             &project_path,
             "diverge",
@@ -284,7 +284,7 @@ mod tests {
         let server = TestServer::new();
         let project_path = dir.path().join(server.scope("myapp"));
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(
             &project_path,
             "synced",
@@ -311,7 +311,7 @@ mod tests {
         let server = TestServer::new();
         let project_path = dir.path().join(server.scope("myapp"));
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(
             &project_path,
             "behind",
@@ -344,7 +344,7 @@ mod tests {
         let server = TestServer::new();
         let project_path = dir.path().join(server.scope("myapp"));
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(
             &project_path,
             "both",

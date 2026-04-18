@@ -205,7 +205,7 @@ impl TestServer {
         let name = self.scope("myapp");
         let project_path = dir.join(&name);
         let projects_dir = dir.join("registry");
-        crate::commands::init::init(&project_path, &projects_dir, self.name()).unwrap();
+        crate::commands::init::init(&project_path, &projects_dir, None, self.name()).unwrap();
         (project_path, projects_dir, name)
     }
 

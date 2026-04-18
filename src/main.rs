@@ -22,6 +22,9 @@ enum Commands {
     Init {
         /// Path for the new project root
         path: PathBuf,
+        /// Clone a remote repo instead of running git init
+        #[arg(long)]
+        git: Option<String>,
     },
     /// Register an existing git repo as a pm project
     Register {
@@ -446,9 +449,9 @@ fn run() -> pm::error::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Init { path } => {
+        Commands::Init { path, git } => {
             let projects_dir = paths::global_projects_dir()?;
-            commands::init::init(&path, &projects_dir, None)
+            commands::init::init(&path, &projects_dir, git.as_deref(), None)
         }
         Commands::Register { path, name, r#move } => {
             let projects_dir = paths::global_projects_dir()?;

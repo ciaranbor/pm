@@ -55,7 +55,7 @@ mod tests {
         let server = TestServer::new();
         let project_path = dir.path().join(server.scope("myapp"));
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         let lines = feat_list(&project_path).unwrap();
         assert!(lines.is_empty());
@@ -70,7 +70,7 @@ mod tests {
         let server = TestServer::new();
         let project_path = dir.path().join(server.scope("myapp"));
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         // Create a feature with non-default branch, base, and pr
         let features_dir = paths::features_dir(&project_path);
@@ -101,7 +101,7 @@ mod tests {
         let server = TestServer::new();
         let project_path = dir.path().join(server.scope("myapp"));
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(
             &project_path,
             "alpha",
@@ -124,7 +124,7 @@ mod tests {
         let server = TestServer::new();
         let project_path = dir.path().join(server.scope("myapp"));
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(
             &project_path,
             "alpha",

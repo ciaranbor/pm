@@ -36,6 +36,20 @@ pub fn init_repo(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Clone a remote git repository into the given path.
+pub fn clone_repo(url: &str, path: &Path) -> Result<()> {
+    let output = Command::new("git")
+        .args(["clone", url, &path.to_string_lossy()])
+        .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(PmError::Git(stderr));
+    }
+
+    Ok(())
+}
+
 /// Create a new branch from the current HEAD.
 pub fn create_branch(repo: &Path, name: &str) -> Result<()> {
     create_branch_from(repo, name, "HEAD")
@@ -412,6 +426,22 @@ pub fn branch_divergence(repo: &Path, branch: &str, base: &str) -> Result<Branch
     Ok(BranchDivergence { ahead, behind })
 }
 
+/// Detect the default branch of a cloned repo by reading `refs/remotes/origin/HEAD`.
+/// Returns the branch name (e.g. "main", "master") or an error if no remote HEAD is set.
+pub fn default_branch(repo: &Path) -> Result<String> {
+    let output = run_git(repo, &["symbolic-ref", "refs/remotes/origin/HEAD"])?;
+    // Output is like "refs/remotes/origin/main"
+    let branch = output
+        .strip_prefix("refs/remotes/origin/")
+        .unwrap_or(&output);
+    Ok(branch.to_string())
+}
+
+/// List remotes with their URLs.
+pub fn list_remotes(repo: &Path) -> Result<String> {
+    run_git(repo, &["remote", "-v"])
+}
+
 /// Check if a path is a git repository (has .git dir or file).
 pub fn is_git_repo(path: &Path) -> bool {
     let git_path = path.join(".git");
@@ -443,6 +473,39 @@ mod tests {
         // git log should succeed and show at least one commit
         let output = run_git(&repo_path, &["log", "--oneline"]).unwrap();
         assert!(!output.is_empty());
+    }
+
+    #[test]
+    fn clone_repo_creates_clone() {
+        let dir = tempdir().unwrap();
+
+        // Create a bare repo as remote
+        let bare_path = dir.path().join("remote.git");
+        init_bare(&bare_path).unwrap();
+
+        // Push content to it
+        let staging = dir.path().join("staging");
+        init_repo(&staging).unwrap();
+        add_remote(&staging, "origin", &bare_path.to_string_lossy()).unwrap();
+        push(&staging, "origin", "main").unwrap();
+
+        // Clone it
+        let clone_path = dir.path().join("cloned");
+        clone_repo(&bare_path.to_string_lossy(), &clone_path).unwrap();
+
+        assert!(clone_path.join(".git").exists());
+        // Should have the commit from staging
+        let log = run_git(&clone_path, &["log", "--oneline"]).unwrap();
+        assert!(!log.is_empty());
+    }
+
+    #[test]
+    fn clone_repo_fails_for_invalid_url() {
+        let dir = tempdir().unwrap();
+        let clone_path = dir.path().join("cloned");
+
+        let result = clone_repo("/nonexistent/repo.git", &clone_path);
+        assert!(result.is_err());
     }
 
     #[test]
