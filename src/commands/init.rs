@@ -12,7 +12,7 @@ use crate::tmux;
 ///
 /// Creates:
 /// - `<path>/` — project root
-/// - `<path>/main/` — main worktree with git init
+/// - `<path>/main/` — main worktree with git init (or git clone if `git_url` provided)
 /// - `<path>/.pm/` — project state directory
 /// - `<path>/.pm/config.toml` — project config
 /// - `<path>/.pm/features/` — empty features directory
@@ -20,7 +20,12 @@ use crate::tmux;
 /// - `<name>/main` tmux session pointing at the main worktree
 ///
 /// The `tmux_server` parameter allows tests to use an isolated tmux server.
-pub fn init(path: &Path, projects_dir: &Path, tmux_server: Option<&str>) -> Result<()> {
+pub fn init(
+    path: &Path,
+    projects_dir: &Path,
+    git_url: Option<&str>,
+    tmux_server: Option<&str>,
+) -> Result<()> {
     if path.exists() {
         return Err(PmError::PathAlreadyExists(path.to_path_buf()));
     }
@@ -39,9 +44,16 @@ pub fn init(path: &Path, projects_dir: &Path, tmux_server: Option<&str>) -> Resu
     // Create project root
     std::fs::create_dir_all(path)?;
 
-    // Init git repo in main/
+    // Init or clone git repo in main/
     let main_path = path.join("main");
-    git::init_repo(&main_path)?;
+    let main_branch = if let Some(url) = git_url {
+        git::clone_repo(url, &main_path)?;
+        // Detect default branch from the cloned remote
+        git::default_branch(&main_path).unwrap_or_else(|_| "main".to_string())
+    } else {
+        git::init_repo(&main_path)?;
+        "main".to_string()
+    };
 
     // Create .pm/ structure
     let pm_dir = paths::pm_dir(path);
@@ -68,7 +80,7 @@ pub fn init(path: &Path, projects_dir: &Path, tmux_server: Option<&str>) -> Resu
     // Register in global registry
     let entry = ProjectEntry {
         root: path.to_string_lossy().to_string(),
-        main_branch: "main".to_string(),
+        main_branch,
     };
     entry.save(projects_dir, &name)?;
 
@@ -93,7 +105,7 @@ mod tests {
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
 
-        init(&project_path, &projects_dir, server.name()).unwrap();
+        init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         assert!(project_path.join("main").exists());
         assert!(project_path.join("main").is_dir());
@@ -107,7 +119,7 @@ mod tests {
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
 
-        init(&project_path, &projects_dir, server.name()).unwrap();
+        init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         assert!(project_path.join("main").join(".git").exists());
     }
@@ -120,7 +132,7 @@ mod tests {
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
 
-        init(&project_path, &projects_dir, server.name()).unwrap();
+        init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         assert!(project_path.join(".pm").exists());
         assert!(project_path.join(".pm").join("config.toml").exists());
@@ -135,7 +147,7 @@ mod tests {
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
 
-        init(&project_path, &projects_dir, server.name()).unwrap();
+        init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         assert!(project_path.join(hooks::POST_CREATE_PATH).is_file());
         assert!(project_path.join(hooks::POST_MERGE_PATH).is_file());
@@ -149,7 +161,7 @@ mod tests {
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
 
-        init(&project_path, &projects_dir, server.name()).unwrap();
+        init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         let pm_dir = project_path.join(".pm");
         let config = ProjectConfig::load(&pm_dir).unwrap();
@@ -164,7 +176,7 @@ mod tests {
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
 
-        init(&project_path, &projects_dir, server.name()).unwrap();
+        init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         let entry = ProjectEntry::load(&projects_dir, &name).unwrap();
         assert_eq!(entry.root, project_path.to_string_lossy().to_string());
@@ -179,7 +191,7 @@ mod tests {
 
         std::fs::create_dir(&project_path).unwrap();
 
-        let result = init(&project_path, &projects_dir, None);
+        let result = init(&project_path, &projects_dir, None, None);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), PmError::PathAlreadyExists(_)));
     }
@@ -192,7 +204,7 @@ mod tests {
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
 
-        init(&project_path, &projects_dir, server.name()).unwrap();
+        init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         // Should be able to create a branch (requires at least one commit)
         let main_path = project_path.join("main");
@@ -208,8 +220,135 @@ mod tests {
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
 
-        init(&project_path, &projects_dir, server.name()).unwrap();
+        init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         assert!(tmux::has_session(server.name(), &format!("{name}/main")).unwrap());
+    }
+
+    #[test]
+    fn init_with_git_url_clones_repo() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+
+        // Create a bare repo to act as the remote
+        let bare_path = dir.path().join("remote.git");
+        crate::git::init_bare(&bare_path).unwrap();
+
+        // Push an initial commit to it so it has content
+        let staging = dir.path().join("staging");
+        crate::git::init_repo(&staging).unwrap();
+        crate::git::add_remote(&staging, "origin", &bare_path.to_string_lossy()).unwrap();
+        crate::git::push(&staging, "origin", "main").unwrap();
+
+        let name = server.scope("cloned");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
+
+        init(
+            &project_path,
+            &projects_dir,
+            Some(&bare_path.to_string_lossy()),
+            server.name(),
+        )
+        .unwrap();
+
+        // main/ should exist and be a git repo
+        assert!(project_path.join("main").join(".git").exists());
+        // .pm/ structure should exist
+        assert!(project_path.join(".pm").join("config.toml").exists());
+        assert!(project_path.join(".pm").join("features").exists());
+        // tmux session should exist
+        assert!(tmux::has_session(server.name(), &format!("{name}/main")).unwrap());
+    }
+
+    #[test]
+    fn init_with_git_url_cloned_repo_has_remote() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+
+        let bare_path = dir.path().join("remote.git");
+        crate::git::init_bare(&bare_path).unwrap();
+
+        let staging = dir.path().join("staging");
+        crate::git::init_repo(&staging).unwrap();
+        crate::git::add_remote(&staging, "origin", &bare_path.to_string_lossy()).unwrap();
+        crate::git::push(&staging, "origin", "main").unwrap();
+
+        let name = server.scope("cloned");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
+
+        init(
+            &project_path,
+            &projects_dir,
+            Some(&bare_path.to_string_lossy()),
+            server.name(),
+        )
+        .unwrap();
+
+        // The cloned repo should have an origin remote
+        let main_path = project_path.join("main");
+        let remotes = crate::git::list_remotes(&main_path).unwrap();
+        assert!(remotes.contains("origin"));
+    }
+
+    #[test]
+    fn init_with_git_url_detects_default_branch() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+
+        // Create a bare repo with "master" as default branch
+        let bare_path = dir.path().join("remote.git");
+        std::fs::create_dir_all(&bare_path).unwrap();
+        std::process::Command::new("git")
+            .args([
+                "init",
+                "--bare",
+                "--initial-branch=master",
+                &bare_path.to_string_lossy().to_string(),
+            ])
+            .output()
+            .unwrap();
+
+        // Push content so the remote has a HEAD
+        let staging = dir.path().join("staging");
+        std::fs::create_dir_all(&staging).unwrap();
+        std::process::Command::new("git")
+            .args([
+                "init",
+                "--initial-branch=master",
+                &staging.to_string_lossy().to_string(),
+            ])
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args([
+                "-C",
+                &staging.to_string_lossy(),
+                "commit",
+                "--allow-empty",
+                "-m",
+                "init",
+            ])
+            .output()
+            .unwrap();
+        crate::git::add_remote(&staging, "origin", &bare_path.to_string_lossy()).unwrap();
+        crate::git::push_branch(&staging, "master").unwrap();
+
+        let name = server.scope("masterproj");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
+
+        init(
+            &project_path,
+            &projects_dir,
+            Some(&bare_path.to_string_lossy()),
+            server.name(),
+        )
+        .unwrap();
+
+        // Registry should record "master" as the main branch
+        let entry = ProjectEntry::load(&projects_dir, &name).unwrap();
+        assert_eq!(entry.main_branch, "master");
     }
 }

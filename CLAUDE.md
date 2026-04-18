@@ -10,7 +10,7 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 
 - `src/main.rs` — entry point, clap CLI definition, command dispatch
 - `src/state/` — TOML state management (project entries, feature state, config)
-- `src/git.rs` — git operations (branch, worktree, status checks)
+- `src/git.rs` — git operations (branch, worktree, clone, status checks)
 - `src/tmux.rs` — tmux operations (session create/kill/switch, display-menu)
 - `src/gh.rs` — GitHub CLI wrapper (PR creation, status queries via `gh`)
 - `src/hooks.rs` — lifecycle hooks (post-create, post-merge, restore)
@@ -19,6 +19,7 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 - `src/messages.rs` — file-based message queue (send, read_at, next, list, wait, name validation). Supports cross-scope messaging: `send_with_scope` records the sender's scope in metadata, and `pm msg send --scope <name>` / `--upstream` deliver to a different feature's inbox.
 - `src/state/agent.rs` — per-feature agent registry (TOML state for spawned agents)
 - `src/commands/` — one module per command group (project, feat, claude, agent, msg, hooks_install, etc.)
+- `src/commands/init.rs` — `pm init` with optional `--git <url>` for cloning; auto-detects default branch from remote
 - `src/commands/open.rs` — reopens project sessions; after recreating missing tmux sessions, walks each feature's agent registry to clear stale active flags and respawn agents
 - `src/commands/hooks_install.rs` — installs the pm Stop hook into `main/.claude/settings.json`; see below
 - `src/commands/agent_check.rs` — assembles checklists from agent definition frontmatter + project-specific files, sends as message

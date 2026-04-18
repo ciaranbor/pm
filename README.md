@@ -27,7 +27,16 @@ cd ~/projects/myapp/main
 
 Creates a project root with a git repo in `main/` and a `.pm/` state directory.
 
-### Option B: Register an existing repo (symlink)
+### Option B: Clone a remote repo
+
+```sh
+pm init ~/projects/myapp --git https://github.com/org/myapp.git
+cd ~/projects/myapp/main
+```
+
+Creates a project root with a clone in `main/` and a `.pm/` state directory. The default branch is auto-detected from the remote.
+
+### Option C: Register an existing repo (symlink)
 
 ```sh
 pm register ~/code/myapp --name myapp
@@ -36,7 +45,7 @@ cd ~/code/myapp-pm/main
 
 Creates a wrapper directory (`myapp-pm/`) with a symlink to the original repo as `main/`. The original repo is untouched.
 
-### Option C: Register an existing repo (move)
+### Option D: Register an existing repo (move)
 
 ```sh
 pm register ~/code/myapp --name myapp --move

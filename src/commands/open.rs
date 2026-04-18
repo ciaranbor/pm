@@ -164,7 +164,7 @@ mod tests {
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         // Kill the main session that init created
         tmux::kill_session(server.name(), &format!("{name}/main")).unwrap();
@@ -182,7 +182,7 @@ mod tests {
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         // Main session already exists from init — open should not fail
         assert!(tmux::has_session(server.name(), &format!("{name}/main")).unwrap());
@@ -199,7 +199,7 @@ mod tests {
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(
             &project_path,
             "login",
@@ -228,7 +228,7 @@ mod tests {
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(
             &project_path,
             "login",
@@ -256,7 +256,7 @@ mod tests {
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(
             &project_path,
             "login",
@@ -291,7 +291,7 @@ mod tests {
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         // Kill main
         tmux::kill_session(server.name(), &format!("{name}/main")).unwrap();
@@ -314,7 +314,7 @@ mod tests {
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         // Simulate a pre-hooks project by removing the bootstrapped hooks
         std::fs::remove_dir_all(project_path.join(".pm/hooks")).unwrap();
@@ -334,7 +334,7 @@ mod tests {
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         // Kill session and delete the main worktree
         tmux::kill_session(server.name(), &format!("{name}/main")).unwrap();
@@ -351,7 +351,7 @@ mod tests {
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(
             &project_path,
             "login",
@@ -402,7 +402,7 @@ mod tests {
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         // Create a restore hook
         let restore_path = project_path.join(hooks::RESTORE_PATH);
@@ -432,7 +432,7 @@ mod tests {
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(
             &project_path,
             "login",
@@ -475,7 +475,7 @@ mod tests {
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         // All sessions already exist from init
         let result = open(&project_path, server.name()).unwrap();
@@ -490,7 +490,7 @@ mod tests {
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(
             &project_path,
             "login",
@@ -519,7 +519,7 @@ mod tests {
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(
             &project_path,
             "login",
@@ -570,7 +570,7 @@ mod tests {
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(
             &project_path,
             "login",

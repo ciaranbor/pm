@@ -384,7 +384,7 @@ mod tests {
         let server = TestServer::new();
         let project_path = dir.path().join(server.scope("myapp"));
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         let result = feat_merge(&project_path, "nonexistent", true, None);
         assert!(result.is_err());

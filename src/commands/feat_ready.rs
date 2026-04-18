@@ -48,7 +48,7 @@ mod tests {
         let server = TestServer::new();
         let project_path = dir.path().join(server.scope("myapp"));
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         let result = feat_ready(&project_path, "nonexistent");
         assert!(result.is_err());
@@ -60,7 +60,7 @@ mod tests {
         let server = TestServer::new();
         let project_path = dir.path().join(server.scope("myapp"));
         let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, server.name()).unwrap();
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         crate::commands::feat_new::feat_new(
             &project_path,

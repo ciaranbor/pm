@@ -41,12 +41,14 @@ mod tests {
         init::init(
             &dir.path().join(server.scope("alpha")),
             &projects_dir,
+            None,
             server.name(),
         )
         .unwrap();
         init::init(
             &dir.path().join(server.scope("beta")),
             &projects_dir,
+            None,
             server.name(),
         )
         .unwrap();
