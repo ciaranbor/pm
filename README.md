@@ -422,17 +422,15 @@ Reinstalls bundled assets (hooks, skills, agents, information store) to each pro
 
 ### Information store
 
-Each project has a git-backed information store at `.pm/docs/` for project-level documentation. The store is bootstrapped by `pm init` with default categories (todo, issues, ideas) defined in `categories.toml`.
+Each project has an information store at `.pm/docs/` for project-level documentation. The store is bootstrapped by `pm init` with default categories (todo, issues, ideas) defined in `categories.toml`.
 
 ```sh
-pm docs sync                     # commit all changes (and push if remote configured)
-pm docs remote <url>             # set the git remote for the information store
-pm docs pull                     # pull from the remote
+pm docs sync                     # commit all changes (and push if remote configured via pm state)
 ```
 
-The orchestrator agent manages the store directly — reading `categories.toml` to discover categories and editing the corresponding markdown files. `pm docs sync` stages and commits all changes in the `.pm/docs/` git repo. The store has its own git history, separate from the project repo.
+The orchestrator agent manages the store directly — reading `categories.toml` to discover categories and editing the corresponding markdown files. `pm docs sync` stages and commits all changes in the `.pm/` state repo. The docs are tracked alongside all other project state.
 
-When a remote is configured (`pm docs remote <url>`), `pm docs sync` automatically pulls before committing and pushes after. If a pull conflict occurs, the merge is aborted, local changes are preserved, and a message is sent to the main agent describing the conflict.
+When a remote is configured (`pm state remote <url>`), `pm docs sync` automatically pulls before committing and pushes after. If a pull conflict occurs, the merge is aborted, local changes are preserved, and a message is sent to the main agent describing the conflict.
 
 Default categories after bootstrap:
 
@@ -443,6 +441,22 @@ Default categories after bootstrap:
 | `ideas.md` | Thoughts and design questions that aren't yet actionable. |
 
 Add custom categories by editing `categories.toml` and creating the corresponding markdown file.
+
+### State backup and sync
+
+The `.pm/` directory holds all project state (features, agents, messages, config, summaries, docs). A single git repo backs everything up:
+
+```sh
+pm state init                    # initialise git repo in .pm/ (prompts for remote setup)
+pm state remote <url>            # set the git remote for the state repo
+pm state push                    # auto-commit and push state to the remote
+pm state pull                    # pull state from the remote
+pm state status                  # show git status of the state repo
+```
+
+`pm state init` creates a git repo inside `.pm/`, commits existing state, and offers to set up a remote — either creating a private GitHub repo via `gh` or using an existing URL. It's also called automatically by `pm init` and `pm upgrade`.
+
+`pm state push` stages all changes, commits with a message listing changed files, and pushes. `pm state pull` commits any local changes first (to avoid conflicts with dirty state), then pulls with fast-forward only.
 
 ### Other commands
 

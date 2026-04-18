@@ -33,6 +33,7 @@ pub mod msg_list;
 pub mod open;
 pub mod register;
 pub mod skills;
+pub mod state_cmd;
 pub mod status;
 pub mod summary;
 pub mod upgrade;

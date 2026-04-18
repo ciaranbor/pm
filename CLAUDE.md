@@ -28,7 +28,8 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 - `src/commands/claude_export.rs` — `pm claude export` tars Claude session data with a manifest for cross-machine transfer
 - `src/commands/claude_import.rs` — `pm claude import` extracts tarball, resolves local paths from registry, rewrites embedded paths
 - `src/commands/summary.rs` — `pm summary write` writes/overwrites `.pm/summaries/<feature>.md`
-- `src/commands/docs.rs` — information store management (`bootstrap`, `sync` for `.pm/docs/`)
+- `src/commands/docs.rs` — information store management (`bootstrap`, `sync`)
+- `src/commands/state_cmd.rs` — git-backed `.pm/` state backup and sync (`init`, `remote`, `push`, `pull`, `status`)
 - `skills/` — bundled skill definitions (pm), embedded via `include_str!`
 
 ### Agents as long-running message processors
@@ -60,9 +61,9 @@ Two different things, don't collapse them:
 
 - **Information store** (`.pm/docs/`) is for **project-level persistent
   knowledge** — todos, issues, ideas, and any other categories defined in
-  `categories.toml`. Git-backed, managed by the orchestrator agent.
-  `pm docs sync` commits changes. Bootstrapped by `pm init` and
-  `pm upgrade`.
+  `categories.toml`. Tracked by the `.pm/` state repo, managed by the
+  orchestrator agent. `pm docs sync` commits changes via the state repo.
+  Bootstrapped by `pm init` and `pm upgrade`.
 - **Messaging** (`pm msg`) is for **cross-scope or cross-role
   communication** — sending something to a *different* agent or a
   *different* scope. A queue, not a database.

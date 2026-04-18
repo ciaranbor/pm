@@ -86,6 +86,9 @@ enum Commands {
         #[arg(long)]
         all: bool,
     },
+    /// Git-backed state management (.pm/ backup and sync)
+    #[command(subcommand)]
+    State(StateCommands),
     /// Information store management
     #[command(subcommand)]
     Docs(DocsCommands),
@@ -97,16 +100,26 @@ enum Commands {
 }
 
 #[derive(Subcommand)]
-enum DocsCommands {
-    /// Commit all changes in the information store (and push if remote configured)
-    Sync,
-    /// Set the git remote for the information store
+enum StateCommands {
+    /// Initialise git repo in .pm/ for state backup and sync
+    Init,
+    /// Set the git remote for the state repo
     Remote {
         /// Remote URL (e.g. a bare git repo or GitHub URL)
         url: String,
     },
-    /// Pull from the information store's remote
+    /// Auto-commit and push state to the remote
+    Push,
+    /// Pull state from the remote
     Pull,
+    /// Show git status of the state repo
+    Status,
+}
+
+#[derive(Subcommand)]
+enum DocsCommands {
+    /// Commit all changes in the information store (and push if remote configured via `pm state remote`)
+    Sync,
 }
 
 #[derive(Subcommand)]
@@ -1083,21 +1096,41 @@ fn run() -> pm::error::Result<()> {
             }
             Ok(())
         }
+        Commands::State(state_cmd) => {
+            let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+            match state_cmd {
+                StateCommands::Init => {
+                    let msg = commands::state_cmd::init_interactive(&project_root)?;
+                    println!("{msg}");
+                    Ok(())
+                }
+                StateCommands::Remote { url } => {
+                    let msg = commands::state_cmd::remote(&project_root, &url)?;
+                    println!("{msg}");
+                    Ok(())
+                }
+                StateCommands::Push => {
+                    let msg = commands::state_cmd::push(&project_root)?;
+                    println!("{msg}");
+                    Ok(())
+                }
+                StateCommands::Pull => {
+                    let msg = commands::state_cmd::pull(&project_root)?;
+                    println!("{msg}");
+                    Ok(())
+                }
+                StateCommands::Status => {
+                    let msg = commands::state_cmd::status(&project_root)?;
+                    println!("{msg}");
+                    Ok(())
+                }
+            }
+        }
         Commands::Docs(docs_cmd) => {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
             match docs_cmd {
                 DocsCommands::Sync => {
                     let msg = commands::docs::sync(&project_root)?;
-                    println!("{msg}");
-                    Ok(())
-                }
-                DocsCommands::Remote { url } => {
-                    let msg = commands::docs::set_remote(&project_root, &url)?;
-                    println!("{msg}");
-                    Ok(())
-                }
-                DocsCommands::Pull => {
-                    let msg = commands::docs::pull(&project_root)?;
                     println!("{msg}");
                     Ok(())
                 }
