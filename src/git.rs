@@ -278,6 +278,39 @@ pub fn merge_abort(repo: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Stage all changes in the given repo/worktree (`git add -A`).
+pub fn add_all(repo: &Path) -> Result<()> {
+    run_git(repo, &["add", "-A"])?;
+    Ok(())
+}
+
+/// List file names with staged changes.
+pub fn staged_file_names(repo: &Path) -> Result<Vec<String>> {
+    let output = run_git(repo, &["diff", "--cached", "--name-only"])?;
+    Ok(output
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| l.to_string())
+        .collect())
+}
+
+/// Check if there are staged changes ready to commit.
+/// Returns `true` if there are staged changes.
+pub fn has_staged_changes(repo: &Path) -> Result<bool> {
+    let output = Command::new("git")
+        .args(["-C", &repo.to_string_lossy()])
+        .args(["diff", "--cached", "--quiet"])
+        .output()?;
+    // exit code 1 means there ARE changes
+    Ok(!output.status.success())
+}
+
+/// Create a commit with the given message.
+pub fn commit_with_message(repo: &Path, message: &str) -> Result<()> {
+    run_git(repo, &["commit", "-m", message])?;
+    Ok(())
+}
+
 /// Stage a file in the given repo/worktree (test helper).
 #[cfg(test)]
 pub(crate) fn stage_file(repo: &Path, file: &str) -> Result<()> {
@@ -312,16 +345,20 @@ pub(crate) fn init_bare(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Add a remote to a repo (test helper).
-#[cfg(test)]
-pub(crate) fn add_remote(repo: &Path, name: &str, url: &str) -> Result<()> {
+/// Add a remote to a repo.
+pub fn add_remote(repo: &Path, name: &str, url: &str) -> Result<()> {
     run_git(repo, &["remote", "add", name, url])?;
     Ok(())
 }
 
-/// Push a branch to a remote (test helper).
-#[cfg(test)]
-pub(crate) fn push(repo: &Path, remote: &str, branch: &str) -> Result<()> {
+/// Check if a named remote exists in the repo.
+pub fn has_remote(repo: &Path, name: &str) -> Result<bool> {
+    let remotes = run_git(repo, &["remote"])?;
+    Ok(remotes.lines().any(|l| l.trim() == name))
+}
+
+/// Push a branch to a remote.
+pub fn push(repo: &Path, remote: &str, branch: &str) -> Result<()> {
     run_git(repo, &["push", "-u", remote, branch])?;
     Ok(())
 }

@@ -26,6 +26,7 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 - `src/commands/agent_check.rs` — assembles checklists from agent definition frontmatter + project-specific files, sends as message
 - `agents/` — bundled agent definitions (reviewer, implementer, researcher), embedded via `include_str!`. Frontmatter supports a `checklist:` field (YAML list of items for `pm agent check`)
 - `src/commands/summary.rs` — `pm summary write` writes/overwrites `.pm/summaries/<feature>.md`
+- `src/commands/docs.rs` — information store management (`bootstrap`, `sync` for `.pm/docs/`)
 - `skills/` — bundled skill definitions (pm), embedded via `include_str!`
 
 ### Agents as long-running message processors
@@ -51,19 +52,21 @@ running).** The first turn is empty; the Stop hook blocks until the
 queued message is available, then delivers it. The first-turn flow is
 identical to every subsequent turn.
 
-### Own-scope notes vs cross-scope messaging
+### Information store vs messaging
 
 Two different things, don't collapse them:
 
-- **Information store** (future `pm note` / scratch state) is for
-  **own-scope jotting** — notes, running context, TODOs that belong to
-  the agent itself. Private. Persistent by default.
+- **Information store** (`.pm/docs/`) is for **project-level persistent
+  knowledge** — todos, issues, ideas, and any other categories defined in
+  `categories.toml`. Git-backed, managed by the orchestrator agent.
+  `pm docs sync` commits changes. Bootstrapped by `pm init` and
+  `pm upgrade`.
 - **Messaging** (`pm msg`) is for **cross-scope or cross-role
   communication** — sending something to a *different* agent or a
   *different* scope. A queue, not a database.
 
-Don't abuse messaging as persistent storage, and don't abuse notes as a
-mailbox.
+Don't abuse messaging as persistent storage, and don't abuse the
+information store as a mailbox.
 
 ### Feature summary lifecycle
 

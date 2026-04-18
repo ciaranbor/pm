@@ -7,6 +7,7 @@ pub mod agent_wait;
 pub mod claude_migrate;
 pub mod claude_settings;
 pub mod delete;
+pub mod docs;
 pub mod doctor;
 pub mod feat_adopt;
 pub mod feat_common;

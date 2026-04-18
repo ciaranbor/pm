@@ -43,6 +43,11 @@ pub fn agents_dir(project_root: &Path) -> PathBuf {
     pm_dir(project_root).join("agents")
 }
 
+/// Returns the docs (information store) directory for a given project root.
+pub fn docs_dir(project_root: &Path) -> PathBuf {
+    pm_dir(project_root).join("docs")
+}
+
 /// Walk up from `start` to find the project root (directory containing `.pm/`).
 /// Returns `None` if no `.pm/` directory is found.
 pub fn find_project_root(start: &Path) -> Result<PathBuf> {
