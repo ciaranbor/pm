@@ -95,10 +95,32 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
         main_issues.push(Issue {
             message: format!("tmux session '{main_session}' missing (run `pm open` to fix)"),
             fix: Fix::Auto(FixAction::RecreateTmuxSession {
-                session_name: main_session,
+                session_name: main_session.clone(),
                 worktree_path: main_repo.clone(),
             }),
         });
+    } else {
+        // Check main-scope agent windows
+        let agents_dir = paths::agents_dir(project_root);
+        if let Ok(registry) = AgentRegistry::load(&agents_dir, "main") {
+            for (agent_name, entry) in &registry.agents {
+                if entry.agent_type != AgentType::Agent || !entry.active {
+                    continue;
+                }
+                let window_alive =
+                    tmux::find_window(tmux_server, &main_session, &entry.window_name)?.is_some();
+                if !window_alive {
+                    main_issues.push(Issue {
+                        message: format!(
+                            "agent '{agent_name}' registered as active but window missing"
+                        ),
+                        fix: Fix::Auto(FixAction::RespawnAgent {
+                            agent_name: agent_name.clone(),
+                        }),
+                    });
+                }
+            }
+        }
     }
     if !main_issues.is_empty() {
         findings.push(Finding {

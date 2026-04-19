@@ -17,6 +17,62 @@ pub struct OpenResult {
     pub agents_respawned: usize,
 }
 
+/// Clear stale active flags and respawn agents for a given scope.
+///
+/// Returns the number of agents successfully respawned. If `select_window_zero`
+/// is true and no agents were respawned, selects window 0 as the landing window.
+fn respawn_agents_for_scope(
+    project_root: &Path,
+    scope: &str,
+    session_name: &str,
+    agents_dir: &Path,
+    tmux_server: Option<&str>,
+    select_window_zero: bool,
+) -> Result<usize> {
+    let mut registry = AgentRegistry::load(agents_dir, scope)?;
+    let mut dirty = false;
+    for (name, entry) in registry.agents.iter_mut() {
+        if entry.agent_type != AgentType::Agent || !entry.active {
+            continue;
+        }
+        let window_exists = tmux::find_window(tmux_server, session_name, &entry.window_name)?;
+        if window_exists.is_none() {
+            entry.active = false;
+            dirty = true;
+            eprintln!("info: cleared stale active flag for agent '{name}' in '{scope}'");
+        }
+    }
+    if dirty {
+        registry.save(agents_dir, scope)?;
+    }
+
+    let spawn_result = agent_spawn::agent_spawn_all(project_root, scope, tmux_server)?;
+    let spawned = spawn_result.spawned_count;
+    for err in &spawn_result.errors {
+        eprintln!("warning: {err}");
+    }
+
+    if spawned > 0 {
+        let registry = AgentRegistry::load(agents_dir, scope)?;
+        let first_agent = registry
+            .agents
+            .iter()
+            .filter(|(_, e)| e.agent_type == AgentType::Agent)
+            .find_map(|(_, e)| {
+                tmux::find_window(tmux_server, session_name, &e.window_name)
+                    .ok()
+                    .flatten()
+            });
+        if let Some(target) = first_agent {
+            let _ = tmux::select_window(tmux_server, &target);
+        }
+    } else if select_window_zero {
+        let _ = tmux::select_window(tmux_server, &format!("{session_name}:0"));
+    }
+
+    Ok(spawned)
+}
+
 /// Open a project: ensure all tmux sessions exist, then respawn agents.
 ///
 /// Creates the `<project>/main` session if missing, then creates sessions for
@@ -47,6 +103,7 @@ pub fn open(project_root: &Path, tmux_server: Option<&str>) -> Result<OpenResult
 
     let mut sessions_restored: usize = 0;
     let mut agents_respawned: usize = 0;
+    let agents_dir = paths::agents_dir(project_root);
 
     // Ensure <project>/main session exists
     let main_session = format!("{project_name}/main");
@@ -63,6 +120,19 @@ pub fn open(project_root: &Path, tmux_server: Option<&str>) -> Result<OpenResult
         hooks::run_hook(tmux_server, &main_session, &main_path, &restore_hook);
         sessions_restored += 1;
     }
+
+    // Respawn agents for the main scope.
+    // The main session may have been preserved by tmux-resurrect with dead agent
+    // windows, or it may have just been recreated above — either way, we need to
+    // clear stale active flags and respawn registered agents.
+    agents_respawned += respawn_agents_for_scope(
+        project_root,
+        "main",
+        &main_session,
+        &agents_dir,
+        tmux_server,
+        false,
+    )?;
 
     // Ensure sessions exist for all active features
     let features_dir = paths::features_dir(project_root);
@@ -96,55 +166,16 @@ pub fn open(project_root: &Path, tmux_server: Option<&str>) -> Result<OpenResult
     // Sessions preserved by tmux-resurrect may have dead agent windows that
     // need respawning. agent_spawn handles zombie detection (window exists
     // but process is dead) so this is safe for already-running agents too.
-    let agents_dir = paths::agents_dir(project_root);
     for feature in &active_features {
         let session_name = format!("{project_name}/{feature}");
-
-        // Clear active flag for agents whose windows no longer exist
-        let mut registry = AgentRegistry::load(&agents_dir, feature)?;
-        let mut dirty = false;
-        for (name, entry) in registry.agents.iter_mut() {
-            if entry.agent_type != AgentType::Agent || !entry.active {
-                continue;
-            }
-            let window_exists = tmux::find_window(tmux_server, &session_name, &entry.window_name)?;
-            if window_exists.is_none() {
-                entry.active = false;
-                dirty = true;
-                eprintln!("info: cleared stale active flag for agent '{name}' in '{feature}'");
-            }
-        }
-        if dirty {
-            registry.save(&agents_dir, feature)?;
-        }
-
-        // Respawn all registered agents
-        let spawn_result = agent_spawn::agent_spawn_all(project_root, feature, tmux_server)?;
-        let feature_agents_respawned = spawn_result.spawned_count;
-        agents_respawned += feature_agents_respawned;
-        for err in &spawn_result.errors {
-            eprintln!("warning: {err}");
-        }
-
-        // Select a sensible landing window: first agent window if any, else window 0
-        if feature_agents_respawned > 0 {
-            // Find the first agent window
-            let registry = AgentRegistry::load(&agents_dir, feature)?;
-            let first_agent = registry
-                .agents
-                .iter()
-                .filter(|(_, e)| e.agent_type == AgentType::Agent)
-                .find_map(|(_, e)| {
-                    tmux::find_window(tmux_server, &session_name, &e.window_name)
-                        .ok()
-                        .flatten()
-                });
-            if let Some(target) = first_agent {
-                let _ = tmux::select_window(tmux_server, &target);
-            }
-        } else {
-            let _ = tmux::select_window(tmux_server, &format!("{session_name}:0"));
-        }
+        agents_respawned += respawn_agents_for_scope(
+            project_root,
+            feature,
+            &session_name,
+            &agents_dir,
+            tmux_server,
+            true,
+        )?;
     }
 
     Ok(OpenResult {
@@ -609,6 +640,46 @@ mod tests {
         let registry = AgentRegistry::load(&agents_dir, "login").unwrap();
         let entry = registry.get("reviewer").unwrap();
         assert!(entry.active);
+    }
+
+    #[test]
+    fn open_respawns_agents_for_main_scope() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+
+        // Register an agent in the main scope
+        let agents_dir = paths::agents_dir(&project_path);
+        let mut registry = AgentRegistry::default();
+        registry.register(
+            "orchestrator",
+            crate::state::agent::AgentEntry {
+                agent_type: AgentType::Agent,
+                session_id: String::new(),
+                window_name: "orchestrator".to_string(),
+                active: true,
+            },
+        );
+        registry.save(&agents_dir, "main").unwrap();
+
+        // Kill the main session (simulating reboot)
+        tmux::kill_session(server.name(), &format!("{name}/main")).unwrap();
+
+        let result = open(&project_path, server.name()).unwrap();
+
+        // Session restored and agent respawned
+        assert_eq!(result.sessions_restored, 1);
+        assert_eq!(result.agents_respawned, 1);
+
+        // Agent window should exist in the restored main session
+        assert!(
+            tmux::find_window(server.name(), &format!("{name}/main"), "orchestrator")
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
