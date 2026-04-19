@@ -255,6 +255,29 @@ pub fn pull(repo: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Fetch from a specific remote.
+pub fn fetch_remote(repo: &Path, remote: &str) -> Result<()> {
+    run_git(repo, &["fetch", remote])?;
+    Ok(())
+}
+
+/// Hard-reset the current branch to a given ref (e.g. `origin/main`).
+pub fn reset_hard(repo: &Path, refspec: &str) -> Result<()> {
+    run_git(repo, &["reset", "--hard", refspec])?;
+    Ok(())
+}
+
+/// List remote tracking branches (e.g. `origin/main`).
+/// Returns branch names as they appear in `git branch -r` output.
+pub fn list_remote_branches(repo: &Path) -> Result<Vec<String>> {
+    let output = run_git(repo, &["branch", "-r"])?;
+    Ok(output
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty() && !l.contains("->"))
+        .collect())
+}
+
 /// Get the remote tracking branch for a local branch (e.g. "origin/main").
 /// Returns None if no upstream is configured.
 pub fn tracking_branch(repo: &Path, branch: &str) -> Result<Option<String>> {
