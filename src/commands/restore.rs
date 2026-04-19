@@ -94,12 +94,23 @@ fn restore_project(
     if let Some(ref state_remote_url) = entry.state_remote {
         if pm_dir.join(".git").exists() {
             if !git::has_remote(&pm_dir, "origin")? {
-                git::add_remote(&pm_dir, "origin", state_remote_url)?;
-                messages.push(format!("{name}: set .pm/ remote to {state_remote_url}"));
-            }
-
-            // Pull state if remote is configured
-            if git::has_remote(&pm_dir, "origin")? {
+                // Fresh remote: use fetch + reset (not pull) since there's no
+                // tracking branch configured yet.
+                match super::state_cmd::apply_remote_and_pull(
+                    &pm_dir,
+                    state_remote_url,
+                    "state",
+                    true,
+                ) {
+                    Ok(msg) => {
+                        messages.push(format!("{name}: {msg}"));
+                    }
+                    Err(e) => {
+                        messages.push(format!("{name}: .pm/ pull failed: {e}"));
+                    }
+                }
+            } else {
+                // Remote already configured — normal pull
                 match git::pull(&pm_dir) {
                     Ok(()) => {
                         messages.push(format!("{name}: pulled .pm/ state"));
@@ -271,7 +282,8 @@ mod tests {
 
         let msgs = restore_with_dir(&projects_dir, server.name()).unwrap();
         assert!(
-            msgs.iter().any(|m| m.contains("set .pm/ remote")),
+            msgs.iter()
+                .any(|m| m.contains("Set state remote to") && m.contains("and pulled")),
             "{msgs:?}"
         );
         assert!(crate::git::has_remote(&pm_dir, "origin").unwrap());
