@@ -14,6 +14,43 @@ static ATEXIT_PID: AtomicU32 = AtomicU32::new(0);
 /// recovery command instead of silently exhausting the system pty budget.
 const MAX_TEST_SESSIONS: usize = 200;
 
+/// System-wide pty ceiling. If the total number of allocated ptys on the
+/// system reaches this threshold, tests abort before creating more. The
+/// macOS hard limit is 511; this leaves headroom for the user's own
+/// sessions and agents.
+const MAX_SYSTEM_PTYS: usize = 300;
+
+/// Count system-wide allocated ptys by reading `/dev/ttys*` entries.
+/// Returns `None` if the count cannot be determined.
+fn system_pty_count() -> Option<usize> {
+    let entries = std::fs::read_dir("/dev").ok()?;
+    let count = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with("ttys"))
+        })
+        .count();
+    Some(count)
+}
+
+/// Check the system-wide pty count and return an error message if it
+/// exceeds the safety threshold.
+fn enforce_system_pty_cap() -> Result<(), String> {
+    if let Some(count) = system_pty_count() {
+        if count >= MAX_SYSTEM_PTYS {
+            return Err(format!(
+                "system-wide pty count is {count} (threshold: {MAX_SYSTEM_PTYS}, macOS limit: 511). \
+                 Aborting test to prevent pty exhaustion. \
+                 Check for leaked tmux sessions: tmux list-sessions; \
+                 kill test servers: for s in /tmp/tmux-$(id -u)/pm-test-*; do tmux -L $(basename \"$s\") kill-server; done"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Directory tmux uses for its unix sockets. Honours `TMUX_TMPDIR` (matching
 /// tmux itself) and falls back to `/tmp/tmux-<uid>`.
 fn tmux_socket_dir() -> std::path::PathBuf {
@@ -167,6 +204,12 @@ impl Default for TestServer {
 
 impl TestServer {
     pub fn new() -> Self {
+        // System-wide pty check: abort before creating any new sessions
+        // if we're approaching the macOS pty limit.
+        if let Err(msg) = enforce_system_pty_cap() {
+            panic!("{msg}");
+        }
+
         let id = TMUX_SERVER_COUNTER.fetch_add(1, Ordering::SeqCst);
         let server = Self {
             prefix: format!("t{id}"),

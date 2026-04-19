@@ -96,7 +96,7 @@ source changes during pm development.
 
 Before completing any task, always run: `cargo fmt && cargo clippy && cargo test`
 
-**Important:** Never run `cargo test` from within parallel subagents. Tests create real tmux sessions that consume ptys, and concurrent test runs can exhaust the macOS pty limit (511), freezing the system. Always run tests sequentially in the main agent.
+**Important:** Tests create real tmux sessions that consume ptys. A safety check in `TestServer::new()` aborts the test run if system-wide pty count reaches 300 (macOS limit is 511). If tests fail with a pty budget message, check for leaked tmux sessions.
 
 `cargo test` runs are capped at 4 threads via `.cargo/config.toml` (`RUST_TEST_THREADS=4`) to keep peak pty usage well under the macOS limit. Each test binary owns one `pm-test-<pid>` tmux server with a `keepalive` session; dead-pid servers from prior runs are reaped at startup of the next run, and the current run's server is killed via a `libc::atexit` handler on exit. If you ever need to manually recover from a runaway test run: `tmux -L pm-test-<pid> kill-server` (or `for s in /tmp/tmux-$(id -u)/pm-test-*; do tmux -L $(basename "$s") kill-server; rm -f "$s"; done`).
 
