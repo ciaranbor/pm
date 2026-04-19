@@ -423,7 +423,12 @@ pub fn global_status() -> Result<String> {
 /// authoritative — we fetch and reset to the remote branch instead of
 /// trying to merge. When `fresh` is false the repo already has meaningful
 /// local commits so we commit dirty state, fetch, and fast-forward pull.
-fn apply_remote_and_pull(dir: &Path, url: &str, label: &str, fresh: bool) -> Result<String> {
+pub(crate) fn apply_remote_and_pull(
+    dir: &Path,
+    url: &str,
+    label: &str,
+    fresh: bool,
+) -> Result<String> {
     git::add_remote(dir, "origin", url)?;
     git::fetch_remote(dir, "origin")?;
 
