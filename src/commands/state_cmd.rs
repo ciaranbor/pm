@@ -175,7 +175,7 @@ fn init_inner(project_root: &Path, interactive: bool, remote_url: Option<&str>) 
                 ));
             }
             let mut result = "State repo already initialised".to_string();
-            let remote_msg = apply_remote_and_pull(&pm_dir, url, "state")?;
+            let remote_msg = apply_remote_and_pull(&pm_dir, url, "state", false)?;
             result.push('\n');
             result.push_str(&remote_msg);
             if let Err(e) = persist_state_remote_to_registry(project_root) {
@@ -204,17 +204,20 @@ fn init_inner(project_root: &Path, interactive: bool, remote_url: Option<&str>) 
     // Init the repo (creates initial empty commit)
     git::init_repo(&pm_dir)?;
 
-    // Stage everything and commit the current state
-    git::add_all(&pm_dir)?;
-    if git::has_staged_changes(&pm_dir)? {
-        git::commit_with_message(&pm_dir, "init state repo")?;
+    // When --remote is given, skip committing local state — the remote is
+    // authoritative and apply_remote_and_pull will fetch + reset to it.
+    if remote_url.is_none() {
+        git::add_all(&pm_dir)?;
+        if git::has_staged_changes(&pm_dir)? {
+            git::commit_with_message(&pm_dir, "init state repo")?;
+        }
     }
 
     let mut result = "Initialised state repo in .pm/".to_string();
 
     // Explicit remote URL takes precedence over interactive prompt
     if let Some(url) = remote_url {
-        let remote_msg = apply_remote_and_pull(&pm_dir, url, "state")?;
+        let remote_msg = apply_remote_and_pull(&pm_dir, url, "state", true)?;
         result.push('\n');
         result.push_str(&remote_msg);
         if let Err(e) = persist_state_remote_to_registry(project_root) {
@@ -337,7 +340,7 @@ fn global_init_at(dir: &Path, interactive: bool, remote_url: Option<&str>) -> Re
                 ));
             }
             let mut result = "Global registry repo already initialised".to_string();
-            let remote_msg = apply_remote_and_pull(dir, url, "global registry")?;
+            let remote_msg = apply_remote_and_pull(dir, url, "global registry", false)?;
             result.push('\n');
             result.push_str(&remote_msg);
             return Ok(result);
@@ -359,17 +362,20 @@ fn global_init_at(dir: &Path, interactive: bool, remote_url: Option<&str>) -> Re
 
     git::init_repo(dir)?;
 
-    // Stage everything and commit
-    git::add_all(dir)?;
-    if git::has_staged_changes(dir)? {
-        git::commit_with_message(dir, "init global registry repo")?;
+    // When --remote is given, skip committing local state — the remote is
+    // authoritative and apply_remote_and_pull will fetch + reset to it.
+    if remote_url.is_none() {
+        git::add_all(dir)?;
+        if git::has_staged_changes(dir)? {
+            git::commit_with_message(dir, "init global registry repo")?;
+        }
     }
 
     let mut result = format!("Initialised global registry repo in {}", dir.display());
 
     // Explicit remote URL takes precedence over interactive prompt
     if let Some(url) = remote_url {
-        let remote_msg = apply_remote_and_pull(dir, url, "global registry")?;
+        let remote_msg = apply_remote_and_pull(dir, url, "global registry", true)?;
         result.push('\n');
         result.push_str(&remote_msg);
     } else if interactive
@@ -412,24 +418,55 @@ pub fn global_status() -> Result<String> {
 // ---------------------------------------------------------------------------
 
 /// Set the remote URL and pull. Used by `--remote` flag on init.
-fn apply_remote_and_pull(dir: &Path, url: &str, label: &str) -> Result<String> {
+///
+/// When `fresh` is true the repo was just created and the remote is
+/// authoritative — we fetch and reset to the remote branch instead of
+/// trying to merge. When `fresh` is false the repo already has meaningful
+/// local commits so we commit dirty state, fetch, and fast-forward pull.
+fn apply_remote_and_pull(dir: &Path, url: &str, label: &str, fresh: bool) -> Result<String> {
     git::add_remote(dir, "origin", url)?;
+    git::fetch_remote(dir, "origin")?;
 
-    commit_if_dirty(&RepoContext {
-        dir,
-        label,
-        init_hint: "",
-        remote_hint: "",
-    })?;
+    // Find the remote's branch (e.g. origin/main).
+    let remote_branches = git::list_remote_branches(dir)?;
 
-    match git::pull(dir) {
-        Ok(()) => Ok(format!("Set {label} remote to {url} and pulled")),
-        Err(e) => {
-            let _ = git::merge_abort(dir);
-            Err(PmError::Git(format!(
-                "set remote to {url} but pull failed: {e}"
-            )))
-        }
+    if remote_branches.is_empty() {
+        // Remote is empty — nothing to pull, just set up the remote.
+        return Ok(format!("Set {label} remote to {url} (remote is empty)"));
+    }
+
+    // Pick the remote branch — prefer origin/main, then origin/master,
+    // fall back to the first listed branch.
+    let remote_ref = remote_branches
+        .iter()
+        .find(|b| *b == "origin/main")
+        .or_else(|| remote_branches.iter().find(|b| *b == "origin/master"))
+        .or_else(|| remote_branches.first())
+        .cloned()
+        .unwrap(); // safe: we checked non-empty above
+
+    if fresh {
+        // Remote is authoritative: reset to the remote branch.
+        git::reset_hard(dir, &remote_ref)?;
+        Ok(format!("Set {label} remote to {url} and pulled"))
+    } else {
+        // Existing repo connecting to a remote for the first time.
+        // Commit dirty state so it's preserved in the reflog, then reset
+        // to the remote branch. On first connect, local and remote will
+        // have independent root commits, so ff-only pull can't work.
+        commit_if_dirty(&RepoContext {
+            dir,
+            label,
+            init_hint: "",
+            remote_hint: "",
+        })?;
+
+        eprintln!(
+            "warning: resetting {label} to remote — local state is overwritten \
+             (previous commits are preserved in git reflog)"
+        );
+        git::reset_hard(dir, &remote_ref)?;
+        Ok(format!("Set {label} remote to {url} and pulled"))
     }
 }
 
@@ -890,23 +927,68 @@ mod tests {
         assert_eq!(name, "my-cool-project");
     }
 
+    // -- helpers for remote tests --
+
+    /// Create a bare repo with content pushed to it (simulates a real remote).
+    fn create_populated_bare(bare_path: &std::path::Path) {
+        git::init_bare(bare_path).unwrap();
+
+        // Clone, add content, push
+        let staging = bare_path.parent().unwrap().join("staging");
+        git::clone_repo(&bare_path.to_string_lossy(), &staging).unwrap();
+        // git clone of empty bare may not have a branch; create initial commit
+        std::fs::write(staging.join("remote-file.txt"), "from remote").unwrap();
+        git::add_all(&staging).unwrap();
+        git::commit_with_message(&staging, "seed remote content").unwrap();
+        let branch = git::current_branch(&staging).unwrap();
+        git::push(&staging, "origin", &branch).unwrap();
+        // Clean up staging clone
+        std::fs::remove_dir_all(&staging).unwrap();
+    }
+
     // -- init --remote tests (project-level) --
 
     #[test]
-    fn init_with_remote_sets_origin_and_pulls() {
+    fn init_with_remote_empty_bare() {
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
 
-        // Create a bare remote to pull from
+        // Empty bare remote — no content to pull
         let bare = dir.path().join("state-remote.git");
         git::init_bare(&bare).unwrap();
 
         let msg = init_inner(&root, false, Some(&bare.to_string_lossy())).unwrap();
         assert!(msg.contains("Initialised"));
-        assert!(msg.contains("pulled"));
+        // Empty remote: message says "remote is empty"
+        assert!(
+            msg.contains("remote is empty") || msg.contains("pulled"),
+            "unexpected message: {msg}"
+        );
 
         let pm_dir = paths::pm_dir(&root);
         assert!(git::has_remote(&pm_dir, "origin").unwrap());
+    }
+
+    #[test]
+    fn init_with_remote_populated_bare() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        // Populated remote — has content
+        let bare = dir.path().join("state-remote.git");
+        create_populated_bare(&bare);
+
+        let msg = init_inner(&root, false, Some(&bare.to_string_lossy())).unwrap();
+        assert!(msg.contains("Initialised"), "unexpected message: {msg}");
+        assert!(msg.contains("pulled"), "unexpected message: {msg}");
+
+        // Remote content should be present locally
+        let pm_dir = paths::pm_dir(&root);
+        assert!(git::has_remote(&pm_dir, "origin").unwrap());
+        assert!(
+            pm_dir.join("remote-file.txt").exists(),
+            "remote content should have been pulled"
+        );
     }
 
     #[test]
@@ -917,16 +999,39 @@ mod tests {
         // Init first without remote
         init(&root).unwrap();
 
-        // Create a bare remote
+        // Create an empty bare remote
         let bare = dir.path().join("state-remote.git");
         git::init_bare(&bare).unwrap();
 
         let msg = init_inner(&root, false, Some(&bare.to_string_lossy())).unwrap();
         assert!(msg.contains("already initialised"));
-        assert!(msg.contains("pulled"));
 
         let pm_dir = paths::pm_dir(&root);
         assert!(git::has_remote(&pm_dir, "origin").unwrap());
+    }
+
+    #[test]
+    fn init_with_remote_on_existing_repo_populated_bare() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        // Init first without remote
+        init(&root).unwrap();
+
+        // Create a populated bare remote
+        let bare = dir.path().join("state-remote.git");
+        create_populated_bare(&bare);
+
+        let msg = init_inner(&root, false, Some(&bare.to_string_lossy())).unwrap();
+        assert!(msg.contains("already initialised"), "unexpected: {msg}");
+
+        let pm_dir = paths::pm_dir(&root);
+        assert!(git::has_remote(&pm_dir, "origin").unwrap());
+        // Remote content should be present (reset to remote on diverge)
+        assert!(
+            pm_dir.join("remote-file.txt").exists(),
+            "remote content should have been pulled/reset"
+        );
     }
 
     #[test]
@@ -949,7 +1054,7 @@ mod tests {
     // -- init --remote tests (global) --
 
     #[test]
-    fn global_init_with_remote_sets_origin_and_pulls() {
+    fn global_init_with_remote_empty_bare() {
         let dir = tempdir().unwrap();
         let global = dir.path().join("config-pm");
         std::fs::create_dir_all(global.join("projects")).unwrap();
@@ -959,8 +1064,26 @@ mod tests {
 
         let msg = global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
         assert!(msg.contains("Initialised"));
-        assert!(msg.contains("pulled"));
         assert!(git::has_remote(&global, "origin").unwrap());
+    }
+
+    #[test]
+    fn global_init_with_remote_populated_bare() {
+        let dir = tempdir().unwrap();
+        let global = dir.path().join("config-pm");
+        std::fs::create_dir_all(global.join("projects")).unwrap();
+
+        let bare = dir.path().join("registry-remote.git");
+        create_populated_bare(&bare);
+
+        let msg = global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        assert!(msg.contains("Initialised"), "unexpected: {msg}");
+        assert!(msg.contains("pulled"), "unexpected: {msg}");
+        assert!(git::has_remote(&global, "origin").unwrap());
+        assert!(
+            global.join("remote-file.txt").exists(),
+            "remote content should have been pulled"
+        );
     }
 
     #[test]
@@ -976,8 +1099,27 @@ mod tests {
 
         let msg = global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
         assert!(msg.contains("already initialised"));
-        assert!(msg.contains("pulled"));
         assert!(git::has_remote(&global, "origin").unwrap());
+    }
+
+    #[test]
+    fn global_init_with_remote_on_existing_repo_populated_bare() {
+        let dir = tempdir().unwrap();
+        let global = dir.path().join("config-pm");
+        std::fs::create_dir_all(global.join("projects")).unwrap();
+
+        global_init_at(&global, false, None).unwrap();
+
+        let bare = dir.path().join("registry-remote.git");
+        create_populated_bare(&bare);
+
+        let msg = global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        assert!(msg.contains("already initialised"), "unexpected: {msg}");
+        assert!(git::has_remote(&global, "origin").unwrap());
+        assert!(
+            global.join("remote-file.txt").exists(),
+            "remote content should have been pulled/reset"
+        );
     }
 
     #[test]
