@@ -1,5 +1,6 @@
 use crate::error::Result;
 use crate::git;
+use crate::state::feature::FeatureState;
 use crate::state::paths;
 use crate::state::project::ProjectEntry;
 
@@ -158,6 +159,44 @@ fn restore_project(
             messages.push(format!(
                 "{name}: .pm/ does not exist (run `pm init` in the project)"
             ));
+        }
+    }
+
+    // Step 2.5: Recreate missing feature worktrees
+    let features_dir = paths::features_dir(&root);
+    let main_worktree = root.join("main");
+    if main_worktree.exists() {
+        match FeatureState::list(&features_dir) {
+            Ok(features) => {
+                for (feat_name, feat_state) in &features {
+                    if !feat_state.status.is_active() {
+                        continue;
+                    }
+                    let wt_path = root.join(&feat_state.worktree);
+                    if wt_path.exists() {
+                        continue;
+                    }
+                    // git worktree add has DWIM mode: if the local branch
+                    // doesn't exist but origin/<branch> does (common after
+                    // clone on a fresh machine), git auto-creates the local
+                    // branch from the remote tracking ref.
+                    match git::add_worktree(&main_worktree, &wt_path, &feat_state.branch) {
+                        Ok(()) => {
+                            messages.push(format!(
+                                "{name}: recreated worktree for feature '{feat_name}'"
+                            ));
+                        }
+                        Err(e) => {
+                            messages.push(format!(
+                                "{name}: warning: failed to recreate worktree for '{feat_name}': {e}"
+                            ));
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                messages.push(format!("{name}: warning: could not list features: {e}"));
+            }
         }
     }
 
@@ -424,6 +463,141 @@ mod tests {
         );
         // .pm/.git should now exist
         assert!(pm_dir.join(".git").exists());
+    }
+
+    #[test]
+    fn restore_recreates_missing_feature_worktrees() {
+        use crate::state::feature::{FeatureState, FeatureStatus};
+        use chrono::Utc;
+
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("projects");
+        let server = TestServer::new();
+        let name = server.scope("wtrec");
+
+        // Create a real project via init
+        let project_path = dir.path().join(&name);
+        super::super::init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+
+        let main_worktree = project_path.join("main");
+
+        // Create a feature branch and worktree
+        git::create_branch(&main_worktree, "feat-login").unwrap();
+        let wt_path = project_path.join("login");
+        git::add_worktree(&main_worktree, &wt_path, "feat-login").unwrap();
+        assert!(wt_path.exists());
+
+        // Register feature state in .pm/features/
+        let features_dir = paths::features_dir(&project_path);
+        let now = Utc::now();
+        let feat_state = FeatureState {
+            status: FeatureStatus::Wip,
+            branch: "feat-login".to_string(),
+            worktree: "login".to_string(),
+            base: "main".to_string(),
+            pr: String::new(),
+            context: String::new(),
+            created: now,
+            last_active: now,
+        };
+        feat_state.save(&features_dir, "login").unwrap();
+
+        // Remove the worktree directory to simulate a fresh machine
+        git::remove_worktree(&main_worktree, &wt_path).unwrap();
+        assert!(!wt_path.exists());
+
+        // Kill the session so open doesn't complain
+        let _ = crate::tmux::kill_session(server.name(), &format!("{name}/main"));
+
+        let msgs = restore_with_dir(&projects_dir, server.name()).unwrap();
+        assert!(
+            msgs.iter()
+                .any(|m| m.contains("recreated worktree for feature 'login'")),
+            "expected worktree recreation message but got: {msgs:?}"
+        );
+        // Worktree directory should exist again
+        assert!(wt_path.exists());
+    }
+
+    #[test]
+    fn restore_skips_worktree_for_merged_feature() {
+        use crate::state::feature::{FeatureState, FeatureStatus};
+        use chrono::Utc;
+
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("projects");
+        let server = TestServer::new();
+        let name = server.scope("wtmerged");
+
+        let project_path = dir.path().join(&name);
+        super::super::init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+
+        let main_worktree = project_path.join("main");
+        git::create_branch(&main_worktree, "feat-old").unwrap();
+
+        // Register a merged feature — its worktree should NOT be recreated
+        let features_dir = paths::features_dir(&project_path);
+        let now = Utc::now();
+        let feat_state = FeatureState {
+            status: FeatureStatus::Merged,
+            branch: "feat-old".to_string(),
+            worktree: "old-feat".to_string(),
+            base: "main".to_string(),
+            pr: String::new(),
+            context: String::new(),
+            created: now,
+            last_active: now,
+        };
+        feat_state.save(&features_dir, "old-feat").unwrap();
+
+        let _ = crate::tmux::kill_session(server.name(), &format!("{name}/main"));
+
+        let msgs = restore_with_dir(&projects_dir, server.name()).unwrap();
+        // Should NOT contain any worktree recreation message
+        assert!(
+            !msgs.iter().any(|m| m.contains("recreated worktree")),
+            "merged feature worktree should not be recreated: {msgs:?}"
+        );
+        // Worktree directory should not exist
+        assert!(!project_path.join("old-feat").exists());
+    }
+
+    #[test]
+    fn restore_warns_on_missing_branch() {
+        use crate::state::feature::{FeatureState, FeatureStatus};
+        use chrono::Utc;
+
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("projects");
+        let server = TestServer::new();
+        let name = server.scope("wtmissing");
+
+        let project_path = dir.path().join(&name);
+        super::super::init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+
+        // Register a feature with a branch that doesn't exist
+        let features_dir = paths::features_dir(&project_path);
+        let now = Utc::now();
+        let feat_state = FeatureState {
+            status: FeatureStatus::Wip,
+            branch: "nonexistent-branch".to_string(),
+            worktree: "ghost-feat".to_string(),
+            base: "main".to_string(),
+            pr: String::new(),
+            context: String::new(),
+            created: now,
+            last_active: now,
+        };
+        feat_state.save(&features_dir, "ghost-feat").unwrap();
+
+        let _ = crate::tmux::kill_session(server.name(), &format!("{name}/main"));
+
+        let msgs = restore_with_dir(&projects_dir, server.name()).unwrap();
+        assert!(
+            msgs.iter()
+                .any(|m| m.contains("warning: failed to recreate worktree for 'ghost-feat'")),
+            "expected warning for missing branch but got: {msgs:?}"
+        );
     }
 
     #[test]

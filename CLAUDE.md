@@ -30,7 +30,7 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 - `src/commands/summary.rs` — `pm summary write` writes/overwrites `.pm/summaries/<feature>.md`
 - `src/commands/docs.rs` — information store management (`bootstrap`, `sync`)
 - `src/commands/state_cmd.rs` — git-backed state backup and sync (`init`, `remote`, `push`, `pull`, `status`, `backfill`). Supports both per-project `.pm/` and global registry `~/.config/pm/` via `--global` flag. Shared `RepoContext` eliminates duplication between the two modes. `backfill` reads origin URLs from existing projects and writes `repo_url`/`state_remote` into the global registry.
-- `src/commands/restore.rs` — `pm restore` rebuilds all projects on a fresh machine from the global registry, cloning repos (`repo_url`), pulling `.pm/` state (`state_remote`), and opening tmux sessions.
+- `src/commands/restore.rs` — `pm restore` rebuilds all projects on a fresh machine from the global registry, cloning repos (`repo_url`), pulling `.pm/` state (`state_remote`), recreating missing feature worktrees, and opening tmux sessions.
 - `skills/` — bundled skill definitions (pm), embedded via `include_str!`
 
 ### Agents as long-running message processors

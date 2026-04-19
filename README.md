@@ -485,7 +485,7 @@ URLs are also auto-persisted going forward: `pm init --git <url>` saves `repo_ur
 
 #### Restore projects on a fresh machine
 
-`pm restore` rebuilds all projects from the global registry. For each entry it clones the repo (if `repo_url` is set and the directory is missing), sets up the `.pm/` state remote and pulls (if `state_remote` is set), then runs `pm open` to recreate tmux sessions.
+`pm restore` rebuilds all projects from the global registry. For each entry it clones the repo (if `repo_url` is set and the directory is missing), sets up the `.pm/` state remote and pulls (if `state_remote` is set), recreates missing worktrees for active features from `.pm/features/` state, then runs `pm open` to recreate tmux sessions.
 
 ```sh
 # On the new machine:
