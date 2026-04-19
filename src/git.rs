@@ -534,6 +534,13 @@ pub fn ref_exists(repo: &Path, refspec: &str) -> Result<bool> {
     }
 }
 
+/// Remove a path from the git index without deleting it from disk.
+/// Equivalent to `git rm --cached -r <path>`.
+pub fn rm_cached(repo: &Path, path: &str) -> Result<()> {
+    run_git(repo, &["rm", "--cached", "-r", path])?;
+    Ok(())
+}
+
 /// Get short status output (`git status --short`).
 pub fn status_short(repo: &Path) -> Result<String> {
     run_git(repo, &["status", "--short"])

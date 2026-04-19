@@ -21,7 +21,12 @@ pub fn upgrade_project(project_root: &Path) -> Result<String> {
     // Bootstrap information store and state repo (both idempotent)
     super::docs::bootstrap(project_root)?;
     super::state_cmd::init(project_root)?;
-    updated.push("docs");
+    // Migrate docs submodule to regular files if needed
+    if super::docs::migrate_docs_submodule(project_root).unwrap_or(false) {
+        updated.push("docs (migrated from submodule)");
+    } else {
+        updated.push("docs");
+    }
 
     // Install skills to main
     let _ = skills::skills_install_project(project_root, None)?;
