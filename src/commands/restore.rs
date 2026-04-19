@@ -143,9 +143,20 @@ fn restore_project(
                     }
                 }
             }
+        } else if pm_dir.exists() {
+            // .pm/ exists but isn't a git repo (e.g. registered via `pm register --move`).
+            // Initialise it and pull from the remote.
+            match super::state_cmd::init_with_remote(&root, Some(state_remote_url)) {
+                Ok(msg) => {
+                    messages.push(format!("{name}: {msg}"));
+                }
+                Err(e) => {
+                    messages.push(format!("{name}: .pm/ state init failed: {e}"));
+                }
+            }
         } else {
             messages.push(format!(
-                "{name}: .pm/ has no git repo (run `pm state init` in the project)"
+                "{name}: .pm/ does not exist (run `pm init` in the project)"
             ));
         }
     }
@@ -374,6 +385,45 @@ mod tests {
             msgs.iter().any(|m| m.contains("pulled .pm/ state")),
             "expected 'pulled .pm/ state' message but got: {msgs:?}"
         );
+    }
+
+    #[test]
+    fn restore_inits_pm_state_when_no_git_repo() {
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("projects");
+        let server = TestServer::new();
+        let name = server.scope("nogit");
+
+        // Create a real project so .pm/ exists with a .git
+        let project_path = dir.path().join(&name);
+        super::super::init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+
+        let pm_dir = paths::pm_dir(&project_path);
+
+        // Create a bare repo for the state remote and push .pm/ state to it
+        let state_bare = dir.path().join("state-remote.git");
+        crate::git::init_bare(&state_bare).unwrap();
+        crate::git::add_remote(&pm_dir, "origin", &state_bare.to_string_lossy()).unwrap();
+        let branch = crate::git::current_branch(&pm_dir).unwrap();
+        crate::git::push(&pm_dir, "origin", &branch).unwrap();
+
+        // Remove .pm/.git to simulate a `pm register --move` scenario
+        std::fs::remove_dir_all(pm_dir.join(".git")).unwrap();
+        assert!(!pm_dir.join(".git").exists());
+        assert!(pm_dir.exists());
+
+        // Update registry entry with state_remote
+        let mut entry = ProjectEntry::load(&projects_dir, &name).unwrap();
+        entry.state_remote = Some(state_bare.to_string_lossy().to_string());
+        entry.save(&projects_dir, &name).unwrap();
+
+        let msgs = restore_with_dir(&projects_dir, server.name()).unwrap();
+        assert!(
+            msgs.iter().any(|m| m.contains("Initialised state repo")),
+            "expected state repo init message but got: {msgs:?}"
+        );
+        // .pm/.git should now exist
+        assert!(pm_dir.join(".git").exists());
     }
 
     #[test]
