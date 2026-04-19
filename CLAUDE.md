@@ -23,6 +23,7 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 - `src/commands/init.rs` — `pm init` with optional `--git <url>` for cloning; auto-detects default branch from remote
 - `src/commands/open.rs` — reopens project sessions; after recreating missing tmux sessions, walks the main scope's and each feature's agent registry to clear stale active flags and respawn agents
 - `src/commands/hooks_install.rs` — installs the pm Stop hook into `main/.claude/settings.json`; see below
+- `src/commands/agent_stop.rs` — `pm agent stop` (kill window, mark inactive in registry)
 - `src/commands/agent_check.rs` — assembles checklists from agent definition frontmatter + project-specific files, sends as message
 - `agents/` — bundled agent definitions (reviewer, implementer, researcher), embedded via `include_str!`. Frontmatter supports a `checklist:` field (YAML list of items for `pm agent check`)
 - `src/commands/claude_export.rs` — `pm claude export` tars Claude session data with a manifest for cross-machine transfer

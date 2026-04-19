@@ -309,6 +309,14 @@ enum AgentCommands {
         #[arg(long)]
         active: bool,
     },
+    /// Stop a running agent (kill window, mark inactive)
+    Stop {
+        /// Agent name
+        name: String,
+        /// Target scope (feature name or "main"; defaults to current scope)
+        #[arg(long)]
+        scope: Option<String>,
+    },
     /// Send a checklist to an agent for self-verification (omit name to check all active agents)
     Check {
         /// Agent name (omit to check all active agents)
@@ -780,6 +788,17 @@ fn run() -> pm::error::Result<()> {
                             eprintln!("error: {err}");
                         }
                     }
+                    Ok(())
+                }
+                AgentCommands::Stop { name, scope } => {
+                    let target_scope = scope.unwrap_or(feature);
+                    let msg = commands::agent_stop::agent_stop(
+                        &project_root,
+                        &target_scope,
+                        &name,
+                        None,
+                    )?;
+                    println!("{msg}");
                     Ok(())
                 }
                 AgentCommands::List { active } => {
