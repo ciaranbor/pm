@@ -517,6 +517,23 @@ pub fn remote_url(repo: &Path, name: &str) -> Result<Option<String>> {
     }
 }
 
+/// Set the upstream tracking branch for the current branch.
+/// Equivalent to `git branch --set-upstream-to=<upstream>`.
+pub fn set_upstream(repo: &Path, upstream: &str) -> Result<()> {
+    run_git(repo, &["branch", "--set-upstream-to", upstream])?;
+    Ok(())
+}
+
+/// Check if a ref exists in the repo (e.g. `origin/main`, `refs/remotes/origin/main`).
+pub fn ref_exists(repo: &Path, refspec: &str) -> Result<bool> {
+    let result = run_git(repo, &["rev-parse", "--verify", refspec]);
+    match result {
+        Ok(_) => Ok(true),
+        Err(PmError::Git(_)) => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
 /// Get short status output (`git status --short`).
 pub fn status_short(repo: &Path) -> Result<String> {
     run_git(repo, &["status", "--short"])
