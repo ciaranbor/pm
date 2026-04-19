@@ -68,8 +68,8 @@ pub fn open(project_root: &Path, tmux_server: Option<&str>) -> Result<OpenResult
     let features_dir = paths::features_dir(project_root);
     let features = FeatureState::list(&features_dir)?;
 
-    // Track which features had their sessions restored (need agent respawn)
-    let mut restored_features: Vec<String> = Vec::new();
+    // Track which features have active sessions (for agent respawn)
+    let mut active_features: Vec<String> = Vec::new();
 
     for (name, state) in &features {
         if !state.status.is_active() {
@@ -88,13 +88,16 @@ pub fn open(project_root: &Path, tmux_server: Option<&str>) -> Result<OpenResult
             tmux::create_session(tmux_server, &session_name, &worktree_path)?;
             hooks::run_hook(tmux_server, &session_name, &worktree_path, &restore_hook);
             sessions_restored += 1;
-            restored_features.push(name.clone());
         }
+        active_features.push(name.clone());
     }
 
-    // Respawn agents for restored feature sessions
+    // Respawn agents for ALL active features (not just restored sessions).
+    // Sessions preserved by tmux-resurrect may have dead agent windows that
+    // need respawning. agent_spawn handles zombie detection (window exists
+    // but process is dead) so this is safe for already-running agents too.
     let agents_dir = paths::agents_dir(project_root);
-    for feature in &restored_features {
+    for feature in &active_features {
         let session_name = format!("{project_name}/{feature}");
 
         // Clear active flag for agents whose windows no longer exist
@@ -606,5 +609,60 @@ mod tests {
         let registry = AgentRegistry::load(&agents_dir, "login").unwrap();
         let entry = registry.get("reviewer").unwrap();
         assert!(entry.active);
+    }
+
+    #[test]
+    fn open_respawns_agents_when_session_already_exists() {
+        // This is the core bug fix: when tmux-resurrect preserves the session
+        // but the agent window is gone, open should still respawn agents.
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+        feat_new::feat_new(
+            &project_path,
+            "login",
+            None,
+            None,
+            None,
+            false,
+            None,
+            server.name(),
+        )
+        .unwrap();
+
+        // Register an agent marked active (simulating a previously running agent)
+        let agents_dir = paths::agents_dir(&project_path);
+        let mut registry = AgentRegistry::default();
+        registry.register(
+            "reviewer",
+            crate::state::agent::AgentEntry {
+                agent_type: AgentType::Agent,
+                session_id: String::new(),
+                window_name: "reviewer".to_string(),
+                active: true,
+            },
+        );
+        registry.save(&agents_dir, "login").unwrap();
+
+        // Session still exists (NOT killed) — simulates tmux-resurrect preserving it.
+        // But the agent window doesn't exist (it was in a different window that wasn't preserved).
+        assert!(tmux::has_session(server.name(), &format!("{name}/login")).unwrap());
+
+        let result = open(&project_path, server.name()).unwrap();
+
+        // Session was NOT restored (it already existed)
+        assert_eq!(result.sessions_restored, 0);
+        // But agent should still be respawned (exactly one registered)
+        assert_eq!(result.agents_respawned, 1);
+
+        // Agent window should exist
+        assert!(
+            tmux::find_window(server.name(), &format!("{name}/login"), "reviewer")
+                .unwrap()
+                .is_some()
+        );
     }
 }

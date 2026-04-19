@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use crate::commands::feat_delete::{self, CleanupParams};
-use crate::commands::hooks_install;
+use crate::commands::{agent_spawn, hooks_install};
 use crate::error::Result;
+use crate::state::agent::{AgentRegistry, AgentType};
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
 use crate::state::project::ProjectConfig;
@@ -42,6 +43,8 @@ enum FixAction {
     UpdateStatus { new_status: FeatureStatus },
     /// Install the pm Stop hook into main/.claude/settings.json.
     InstallStopHook,
+    /// Clear stale active flag and respawn a dead agent.
+    RespawnAgent { agent_name: String },
 }
 
 /// Diagnostic finding for a single feature.
@@ -182,6 +185,29 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
                     message: format!("tmux session '{session_name}' missing"),
                     fix: fix_action,
                 });
+            } else {
+                // Check 4b: agent windows alive within existing session
+                let agents_dir = paths::agents_dir(project_root);
+                if let Ok(registry) = AgentRegistry::load(&agents_dir, name) {
+                    for (agent_name, entry) in &registry.agents {
+                        if entry.agent_type != AgentType::Agent || !entry.active {
+                            continue;
+                        }
+                        let window_alive =
+                            tmux::find_window(tmux_server, &session_name, &entry.window_name)?
+                                .is_some();
+                        if !window_alive {
+                            issues.push(Issue {
+                                message: format!(
+                                    "agent '{agent_name}' registered as active but window missing"
+                                ),
+                                fix: Fix::Auto(FixAction::RespawnAgent {
+                                    agent_name: agent_name.clone(),
+                                }),
+                            });
+                        }
+                    }
+                }
             }
         }
 
@@ -366,6 +392,16 @@ fn apply_fix(
         }
         FixAction::InstallStopHook => {
             hooks_install::install(project_root)?;
+        }
+        FixAction::RespawnAgent { agent_name } => {
+            // Clear stale active flag so agent_spawn treats it as dead
+            let agents_dir = paths::agents_dir(project_root);
+            let mut registry = AgentRegistry::load(&agents_dir, name)?;
+            if let Some(entry) = registry.get_mut(agent_name) {
+                entry.active = false;
+                registry.save(&agents_dir, name)?;
+            }
+            agent_spawn::agent_spawn(project_root, name, agent_name, None, false, tmux_server)?;
         }
     }
     Ok(())
@@ -697,5 +733,105 @@ mod tests {
             "summary should mention fixed count, got: {:?}",
             lines[0]
         );
+    }
+
+    #[test]
+    fn detects_dead_agent_window_in_existing_session() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _project_name) = server.setup_project_with_feature(dir.path(), "login");
+
+        // Register an agent as active, but don't create its window
+        let agents_dir = paths::agents_dir(&project_path);
+        let mut registry = AgentRegistry::default();
+        registry.register(
+            "reviewer",
+            crate::state::agent::AgentEntry {
+                agent_type: AgentType::Agent,
+                session_id: String::new(),
+                window_name: "reviewer".to_string(),
+                active: true,
+            },
+        );
+        registry.save(&agents_dir, "login").unwrap();
+
+        let lines = doctor(&project_path, false, server.name()).unwrap();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("agent 'reviewer'") && l.contains("window missing")),
+            "got: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn fix_respawns_dead_agent() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+
+        // Register an agent as active, but don't create its window
+        let agents_dir = paths::agents_dir(&project_path);
+        let mut registry = AgentRegistry::default();
+        registry.register(
+            "reviewer",
+            crate::state::agent::AgentEntry {
+                agent_type: AgentType::Agent,
+                session_id: String::new(),
+                window_name: "reviewer".to_string(),
+                active: true,
+            },
+        );
+        registry.save(&agents_dir, "login").unwrap();
+
+        let lines = doctor(&project_path, true, server.name()).unwrap();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("fixed") && l.contains("agent 'reviewer'")),
+            "got: {lines:?}"
+        );
+
+        // Agent window should now exist
+        assert!(
+            tmux::find_window(server.name(), &format!("{project_name}/login"), "reviewer")
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn healthy_agent_not_flagged() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+
+        // Register an agent AND create its window
+        let agents_dir = paths::agents_dir(&project_path);
+        let session_name = format!("{project_name}/login");
+        let worktree = project_path.join("login");
+        tmux::new_window(
+            server.name(),
+            &session_name,
+            &worktree,
+            Some("reviewer"),
+            true,
+        )
+        .unwrap();
+
+        let mut registry = AgentRegistry::default();
+        registry.register(
+            "reviewer",
+            crate::state::agent::AgentEntry {
+                agent_type: AgentType::Agent,
+                session_id: String::new(),
+                window_name: "reviewer".to_string(),
+                active: true,
+            },
+        );
+        registry.save(&agents_dir, "login").unwrap();
+
+        let lines = doctor(&project_path, false, server.name()).unwrap();
+        assert!(lines[0].contains("all healthy"), "got: {lines:?}");
     }
 }
