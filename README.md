@@ -458,6 +458,20 @@ pm state status                  # show git status of the state repo
 
 `pm state push` stages all changes, commits with a message listing changed files, and pushes. `pm state pull` commits any local changes first (to avoid conflicts with dirty state), then pulls with fast-forward only.
 
+#### Global registry backup
+
+The global registry at `~/.config/pm/` (project entries, cross-project config) can also be git-backed. Pass `--global` to any state command:
+
+```sh
+pm state init --global           # initialise git repo in ~/.config/pm/
+pm state remote --global <url>   # set remote for the global registry repo
+pm state push --global           # auto-commit and push the global registry
+pm state pull --global           # pull global registry from remote
+pm state status --global         # show git status of the global registry
+```
+
+This completes the migration story: back up both per-project state (`.pm/`) and the global registry (`~/.config/pm/`) to git remotes, then restore on a new machine with `git clone` + `pm state pull`.
+
 ### Other commands
 
 ```sh

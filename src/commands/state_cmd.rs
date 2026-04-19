@@ -5,15 +5,145 @@ use crate::error::{PmError, Result};
 use crate::git;
 use crate::state::paths;
 
-/// Ensure the .pm/ state repo exists and return its path.
-fn require_state_repo(project_root: &Path) -> Result<std::path::PathBuf> {
-    let pm_dir = paths::pm_dir(project_root);
-    if !pm_dir.join(".git").exists() {
-        return Err(PmError::Git(
-            "state repo not initialised (run `pm state init`)".to_string(),
-        ));
+/// Context for operating on a git-backed state directory.
+///
+/// Both project-level (`.pm/`) and global (`~/.config/pm/`) state repos
+/// use the same logic — only labels and hint messages differ.
+struct RepoContext<'a> {
+    dir: &'a Path,
+    label: &'a str,
+    init_hint: &'a str,
+    remote_hint: &'a str,
+}
+
+/// Verify the directory has a git repo.
+fn require_repo(ctx: &RepoContext) -> Result<()> {
+    if !ctx.dir.join(".git").exists() {
+        return Err(PmError::Git(format!(
+            "{} repo not initialised (run `{}`)",
+            ctx.label, ctx.init_hint
+        )));
     }
-    Ok(pm_dir)
+    Ok(())
+}
+
+/// Set the remote URL for a state repo.
+fn set_remote(ctx: &RepoContext, url: &str) -> Result<String> {
+    require_repo(ctx)?;
+
+    if git::has_remote(ctx.dir, "origin")? {
+        return Err(PmError::Git(format!(
+            "remote 'origin' already exists (remove it with `git -C {} remote remove origin` to reset)",
+            ctx.dir.display()
+        )));
+    }
+
+    git::add_remote(ctx.dir, "origin", url)?;
+    Ok(format!("Set {} remote to {url}", ctx.label))
+}
+
+/// Auto-commit and push a state repo.
+fn push_repo(ctx: &RepoContext) -> Result<String> {
+    require_repo(ctx)?;
+
+    if !git::has_remote(ctx.dir, "origin")? {
+        return Err(PmError::Git(format!(
+            "no remote configured (run `{}`)",
+            ctx.remote_hint
+        )));
+    }
+
+    git::add_all(ctx.dir)?;
+    let committed = if git::has_staged_changes(ctx.dir)? {
+        let changed = git::staged_file_names(ctx.dir)?;
+        let msg = if changed.is_empty() {
+            format!("{} sync", ctx.label)
+        } else {
+            format!("{} sync ({})", ctx.label, changed.join(", "))
+        };
+        git::commit_with_message(ctx.dir, &msg)?;
+        true
+    } else {
+        false
+    };
+
+    let branch = git::current_branch(ctx.dir)?;
+    git::push(ctx.dir, "origin", &branch)?;
+
+    if committed {
+        Ok(format!("Committed and pushed {}", ctx.label))
+    } else {
+        Ok(format!("Pushed {} (no new changes to commit)", ctx.label))
+    }
+}
+
+/// Pull state from the remote, auto-committing dirty state first.
+fn pull_repo(ctx: &RepoContext) -> Result<String> {
+    require_repo(ctx)?;
+
+    if !git::has_remote(ctx.dir, "origin")? {
+        return Err(PmError::Git(format!(
+            "no remote configured (run `{}`)",
+            ctx.remote_hint
+        )));
+    }
+
+    commit_if_dirty(ctx)?;
+
+    match git::pull(ctx.dir) {
+        Ok(()) => Ok(format!("Pulled {} from remote", ctx.label)),
+        Err(e) => {
+            let _ = git::merge_abort(ctx.dir);
+            Err(PmError::Git(format!("{} pull failed: {e}", ctx.label)))
+        }
+    }
+}
+
+/// Show git status of a state repo.
+fn status_repo(ctx: &RepoContext) -> Result<String> {
+    require_repo(ctx)?;
+    let output = git::status_short(ctx.dir)?;
+    if output.is_empty() {
+        Ok(format!("{} repo is clean", capitalize(ctx.label)))
+    } else {
+        Ok(output)
+    }
+}
+
+/// Stage all changes and commit if there's anything to commit.
+fn commit_if_dirty(ctx: &RepoContext) -> Result<()> {
+    git::add_all(ctx.dir)?;
+    if git::has_staged_changes(ctx.dir)? {
+        let changed = git::staged_file_names(ctx.dir)?;
+        let msg = if changed.is_empty() {
+            format!("{} sync (pre-pull)", ctx.label)
+        } else {
+            format!("{} sync ({})", ctx.label, changed.join(", "))
+        };
+        git::commit_with_message(ctx.dir, &msg)?;
+    }
+    Ok(())
+}
+
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        None => String::new(),
+        Some(f) => f.to_uppercase().to_string() + c.as_str(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Project-level state repo (.pm/)
+// ---------------------------------------------------------------------------
+
+fn project_ctx(pm_dir: &Path) -> RepoContext<'_> {
+    RepoContext {
+        dir: pm_dir,
+        label: "state",
+        init_hint: "pm state init",
+        remote_hint: "pm state remote <url>",
+    }
 }
 
 /// Initialise a git repo in `.pm/` for state backup/sync.
@@ -71,6 +201,156 @@ fn init_inner(project_root: &Path, interactive: bool) -> Result<String> {
     Ok(result)
 }
 
+/// Set the remote URL for the state repo.
+///
+/// If `url` is `Some`, sets the remote directly. If `None`, runs the
+/// interactive prompt (create GitHub repo / use existing URL / skip).
+pub fn remote(project_root: &Path, url: Option<&str>) -> Result<String> {
+    let pm_dir = paths::pm_dir(project_root);
+    let ctx = project_ctx(&pm_dir);
+    require_repo(&ctx)?;
+
+    if git::has_remote(ctx.dir, "origin")? {
+        return Err(PmError::Git(format!(
+            "remote 'origin' already exists (remove it with `git -C {} remote remove origin` to reset)",
+            ctx.dir.display()
+        )));
+    }
+
+    match url {
+        Some(url) => {
+            git::add_remote(ctx.dir, "origin", url)?;
+            Ok(format!("Set {} remote to {url}", ctx.label))
+        }
+        None => match prompt_remote_setup(project_root, ctx.dir)? {
+            Some(msg) => Ok(msg),
+            None => Ok("Skipped remote setup".to_string()),
+        },
+    }
+}
+
+/// Auto-commit and push the state repo.
+pub fn push(project_root: &Path) -> Result<String> {
+    let pm_dir = paths::pm_dir(project_root);
+    push_repo(&project_ctx(&pm_dir))
+}
+
+/// Pull state from the remote.
+pub fn pull(project_root: &Path) -> Result<String> {
+    let pm_dir = paths::pm_dir(project_root);
+    pull_repo(&project_ctx(&pm_dir))
+}
+
+/// Show git status of the state repo.
+pub fn status(project_root: &Path) -> Result<String> {
+    let pm_dir = paths::pm_dir(project_root);
+    status_repo(&project_ctx(&pm_dir))
+}
+
+// ---------------------------------------------------------------------------
+// Global registry repo (~/.config/pm/)
+// ---------------------------------------------------------------------------
+
+/// Default .gitignore for the global registry.
+///
+/// The project-level `.pm/` directory doesn't need a `.gitignore` because
+/// pm controls all files there. The global registry may accumulate
+/// machine-specific ephemeral files (lock files, pid files) that should
+/// not be committed.
+const GLOBAL_GITIGNORE: &str = "\
+# Ephemeral / machine-specific state
+*.lock
+*.pid
+";
+
+fn global_ctx(dir: &Path) -> RepoContext<'_> {
+    RepoContext {
+        dir,
+        label: "global registry",
+        init_hint: "pm state init --global",
+        remote_hint: "pm state remote --global <url>",
+    }
+}
+
+/// Initialise a git repo in ~/.config/pm/ for global registry backup.
+/// Non-interactive variant for programmatic use (e.g. `pm upgrade`).
+pub fn global_init() -> Result<String> {
+    let dir = paths::global_config_dir()?;
+    global_init_at(&dir, false)
+}
+
+/// Initialise with interactive remote setup prompt.
+pub fn global_init_interactive() -> Result<String> {
+    let dir = paths::global_config_dir()?;
+    global_init_at(&dir, true)
+}
+
+fn global_init_at(dir: &Path, interactive: bool) -> Result<String> {
+    if dir.join(".git").exists() {
+        return Ok("Global registry repo already initialised".to_string());
+    }
+
+    if !dir.exists() {
+        return Err(PmError::Git(
+            "~/.config/pm/ does not exist — run `pm init` first to create a project".to_string(),
+        ));
+    }
+
+    // Write .gitignore before first commit
+    let gitignore_path = dir.join(".gitignore");
+    if !gitignore_path.exists() {
+        std::fs::write(&gitignore_path, GLOBAL_GITIGNORE)?;
+    }
+
+    git::init_repo(dir)?;
+
+    // Stage everything and commit
+    git::add_all(dir)?;
+    if git::has_staged_changes(dir)? {
+        git::commit_with_message(dir, "init global registry repo")?;
+    }
+
+    let mut result = format!("Initialised global registry repo in {}", dir.display());
+
+    if interactive
+        && let Some(remote_msg) =
+            prompt_remote_setup_common(dir, "global registry", "pm-global-registry")?
+    {
+        result.push('\n');
+        result.push_str(&remote_msg);
+    }
+
+    Ok(result)
+}
+
+/// Set the remote URL for the global registry repo.
+pub fn global_remote(url: &str) -> Result<String> {
+    let dir = paths::global_config_dir()?;
+    set_remote(&global_ctx(&dir), url)
+}
+
+/// Auto-commit and push the global registry repo.
+pub fn global_push() -> Result<String> {
+    let dir = paths::global_config_dir()?;
+    push_repo(&global_ctx(&dir))
+}
+
+/// Pull global registry from the remote.
+pub fn global_pull() -> Result<String> {
+    let dir = paths::global_config_dir()?;
+    pull_repo(&global_ctx(&dir))
+}
+
+/// Show git status of the global registry repo.
+pub fn global_status() -> Result<String> {
+    let dir = paths::global_config_dir()?;
+    status_repo(&global_ctx(&dir))
+}
+
+// ---------------------------------------------------------------------------
+// Interactive remote setup (shared)
+// ---------------------------------------------------------------------------
+
 /// Remote setup choices.
 enum RemoteChoice {
     GitHub,
@@ -78,12 +358,10 @@ enum RemoteChoice {
     Skip,
 }
 
-/// Prompt the user to set up a remote for the state repo.
-/// Returns None if skipped, or a message describing what was done.
-fn prompt_remote_setup(project_root: &Path, pm_dir: &Path) -> Result<Option<String>> {
+/// Read the user's remote setup choice from stdin.
+fn read_remote_choice() -> Result<RemoteChoice> {
     let gh_available = crate::gh::is_available();
 
-    eprintln!("Back up project state to a remote?");
     if gh_available {
         eprintln!("  1) Create a private GitHub repo");
     }
@@ -96,49 +374,65 @@ fn prompt_remote_setup(project_root: &Path, pm_dir: &Path) -> Result<Option<Stri
     io::stdin().read_line(&mut answer)?;
     let answer = answer.trim();
 
-    let choice = if answer.is_empty() {
-        if gh_available {
+    if answer.is_empty() {
+        return Ok(if gh_available {
             RemoteChoice::GitHub
         } else {
             RemoteChoice::Skip
-        }
-    } else {
-        match answer {
-            "1" if gh_available => RemoteChoice::GitHub,
-            "2" => {
-                eprint!("Remote URL: ");
-                io::stderr().flush()?;
-                let mut url = String::new();
-                io::stdin().read_line(&mut url)?;
-                let url = url.trim().to_string();
-                if url.is_empty() {
-                    RemoteChoice::Skip
-                } else {
-                    RemoteChoice::Url(url)
-                }
+        });
+    }
+
+    match answer {
+        "1" if gh_available => Ok(RemoteChoice::GitHub),
+        "2" => {
+            eprint!("Remote URL: ");
+            io::stderr().flush()?;
+            let mut url = String::new();
+            io::stdin().read_line(&mut url)?;
+            let url = url.trim().to_string();
+            if url.is_empty() {
+                Ok(RemoteChoice::Skip)
+            } else {
+                Ok(RemoteChoice::Url(url))
             }
-            _ => RemoteChoice::Skip,
         }
-    };
+        _ => Ok(RemoteChoice::Skip),
+    }
+}
+
+/// Shared remote setup prompt. `what` describes what's being backed up
+/// (e.g. "project state", "global registry"). `gh_repo_name` is used
+/// when the user chooses to create a GitHub repo.
+fn prompt_remote_setup_common(
+    dir: &Path,
+    what: &str,
+    gh_repo_name: &str,
+) -> Result<Option<String>> {
+    eprintln!("Back up {what} to a remote?");
+    let choice = read_remote_choice()?;
 
     match choice {
         RemoteChoice::GitHub => {
-            let project_name = derive_project_name(project_root);
-            let repo_name = format!("{project_name}-pm-state");
-            eprintln!("Creating private repo '{repo_name}'...");
-            let url = crate::gh::create_private_repo(&repo_name)?;
-            git::add_remote(pm_dir, "origin", &url)?;
-            // Push initial state
-            let branch = git::current_branch(pm_dir)?;
-            git::push(pm_dir, "origin", &branch)?;
+            eprintln!("Creating private repo '{gh_repo_name}'...");
+            let url = crate::gh::create_private_repo(gh_repo_name)?;
+            git::add_remote(dir, "origin", &url)?;
+            let branch = git::current_branch(dir)?;
+            git::push(dir, "origin", &branch)?;
             Ok(Some(format!("Created GitHub repo and pushed: {url}")))
         }
         RemoteChoice::Url(url) => {
-            git::add_remote(pm_dir, "origin", &url)?;
-            Ok(Some(format!("Set state remote to {url}")))
+            git::add_remote(dir, "origin", &url)?;
+            Ok(Some(format!("Set remote to {url}")))
         }
         RemoteChoice::Skip => Ok(None),
     }
+}
+
+/// Project-level remote setup prompt (derives repo name from project).
+fn prompt_remote_setup(project_root: &Path, pm_dir: &Path) -> Result<Option<String>> {
+    let project_name = derive_project_name(project_root);
+    let repo_name = format!("{project_name}-pm-state");
+    prompt_remote_setup_common(pm_dir, "project state", &repo_name)
 }
 
 /// Derive a project name from the project root for repo naming.
@@ -154,121 +448,6 @@ fn derive_project_name(project_root: &Path) -> String {
         .and_then(|n| n.to_str())
         .unwrap_or("project")
         .to_string()
-}
-
-/// Set the remote URL for the state repo.
-///
-/// If `url` is `Some`, sets the remote directly. If `None`, runs the
-/// interactive prompt (create GitHub repo / use existing URL / skip).
-pub fn remote(project_root: &Path, url: Option<&str>) -> Result<String> {
-    let pm_dir = require_state_repo(project_root)?;
-
-    if git::has_remote(&pm_dir, "origin")? {
-        return Err(PmError::Git(
-            "remote 'origin' already exists (remove it with `git -C .pm remote remove origin` to reset)".to_string(),
-        ));
-    }
-
-    match url {
-        Some(url) => {
-            git::add_remote(&pm_dir, "origin", url)?;
-            Ok(format!("Set state remote to {url}"))
-        }
-        None => {
-            // Interactive mode
-            match prompt_remote_setup(project_root, &pm_dir)? {
-                Some(msg) => Ok(msg),
-                None => Ok("Skipped remote setup".to_string()),
-            }
-        }
-    }
-}
-
-/// Auto-commit and push the state repo.
-pub fn push(project_root: &Path) -> Result<String> {
-    let pm_dir = require_state_repo(project_root)?;
-
-    if !git::has_remote(&pm_dir, "origin")? {
-        return Err(PmError::Git(
-            "no remote configured (run `pm state remote <url>`)".to_string(),
-        ));
-    }
-
-    // Stage and commit any changes
-    git::add_all(&pm_dir)?;
-    let committed = if git::has_staged_changes(&pm_dir)? {
-        let changed = git::staged_file_names(&pm_dir)?;
-        let msg = if changed.is_empty() {
-            "state sync".to_string()
-        } else {
-            format!("state sync ({})", changed.join(", "))
-        };
-        git::commit_with_message(&pm_dir, &msg)?;
-        true
-    } else {
-        false
-    };
-
-    // Push
-    let branch = git::current_branch(&pm_dir)?;
-    git::push(&pm_dir, "origin", &branch)?;
-
-    if committed {
-        Ok("Committed and pushed state".to_string())
-    } else {
-        Ok("Pushed state (no new changes to commit)".to_string())
-    }
-}
-
-/// Pull state from the remote.
-///
-/// Commits any local changes first so `git pull --ff-only` doesn't
-/// fail on a dirty working tree.
-pub fn pull(project_root: &Path) -> Result<String> {
-    let pm_dir = require_state_repo(project_root)?;
-
-    if !git::has_remote(&pm_dir, "origin")? {
-        return Err(PmError::Git(
-            "no remote configured (run `pm state remote <url>`)".to_string(),
-        ));
-    }
-
-    // Commit any dirty state before pulling to avoid conflicts
-    commit_if_dirty(&pm_dir)?;
-
-    match git::pull(&pm_dir) {
-        Ok(()) => Ok("Pulled state from remote".to_string()),
-        Err(e) => {
-            let _ = git::merge_abort(&pm_dir);
-            Err(PmError::Git(format!("state pull failed: {e}")))
-        }
-    }
-}
-
-/// Stage all changes and commit if there's anything to commit.
-fn commit_if_dirty(pm_dir: &Path) -> Result<()> {
-    git::add_all(pm_dir)?;
-    if git::has_staged_changes(pm_dir)? {
-        let changed = git::staged_file_names(pm_dir)?;
-        let msg = if changed.is_empty() {
-            "state sync (pre-pull)".to_string()
-        } else {
-            format!("state sync ({})", changed.join(", "))
-        };
-        git::commit_with_message(pm_dir, &msg)?;
-    }
-    Ok(())
-}
-
-/// Show git status of the state repo.
-pub fn status(project_root: &Path) -> Result<String> {
-    let pm_dir = require_state_repo(project_root)?;
-    let output = git::status_short(&pm_dir)?;
-    if output.is_empty() {
-        Ok("State repo is clean".to_string())
-    } else {
-        Ok(output)
-    }
 }
 
 #[cfg(test)]
@@ -543,5 +722,194 @@ mod tests {
 
         let name = derive_project_name(&root);
         assert_eq!(name, "my-cool-project");
+    }
+
+    // -- Global registry tests --
+
+    fn setup_global_dir(dir: &std::path::Path) -> std::path::PathBuf {
+        let global = dir.join("config-pm");
+        std::fs::create_dir_all(global.join("projects")).unwrap();
+        global
+    }
+
+    #[test]
+    fn global_init_creates_git_repo() {
+        let dir = tempdir().unwrap();
+        let global = setup_global_dir(dir.path());
+
+        let msg = global_init_at(&global, false).unwrap();
+        assert!(msg.contains("Initialised"));
+        assert!(global.join(".git").exists());
+        assert!(global.join(".gitignore").exists());
+    }
+
+    #[test]
+    fn global_init_is_idempotent() {
+        let dir = tempdir().unwrap();
+        let global = setup_global_dir(dir.path());
+
+        global_init_at(&global, false).unwrap();
+        let msg = global_init_at(&global, false).unwrap();
+        assert!(msg.contains("already initialised"));
+    }
+
+    #[test]
+    fn global_init_errors_without_dir() {
+        let dir = tempdir().unwrap();
+        let global = dir.path().join("nonexistent");
+
+        let result = global_init_at(&global, false);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn global_status_shows_clean_after_init() {
+        let dir = tempdir().unwrap();
+        let global = setup_global_dir(dir.path());
+
+        global_init_at(&global, false).unwrap();
+        let ctx = global_ctx(&global);
+        let msg = status_repo(&ctx).unwrap();
+        assert!(msg.contains("clean"));
+    }
+
+    #[test]
+    fn global_status_shows_changes_after_modification() {
+        let dir = tempdir().unwrap();
+        let global = setup_global_dir(dir.path());
+
+        global_init_at(&global, false).unwrap();
+        std::fs::write(global.join("projects").join("test.toml"), "x").unwrap();
+
+        let ctx = global_ctx(&global);
+        let msg = status_repo(&ctx).unwrap();
+        assert!(!msg.contains("clean"), "should show changes, got: {msg}");
+    }
+
+    #[test]
+    fn global_status_errors_without_init() {
+        let dir = tempdir().unwrap();
+        let global = setup_global_dir(dir.path());
+
+        let ctx = global_ctx(&global);
+        let result = status_repo(&ctx);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn global_remote_sets_origin() {
+        let dir = tempdir().unwrap();
+        let global = setup_global_dir(dir.path());
+        global_init_at(&global, false).unwrap();
+
+        let ctx = global_ctx(&global);
+        let msg = set_remote(&ctx, "https://example.com/registry.git").unwrap();
+        assert!(msg.contains("https://example.com/registry.git"));
+        assert!(git::has_remote(&global, "origin").unwrap());
+    }
+
+    #[test]
+    fn global_remote_errors_if_already_set() {
+        let dir = tempdir().unwrap();
+        let global = setup_global_dir(dir.path());
+        global_init_at(&global, false).unwrap();
+
+        let ctx = global_ctx(&global);
+        set_remote(&ctx, "https://example.com/registry.git").unwrap();
+        let result = set_remote(&ctx, "https://other.com/registry.git");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn global_push_errors_without_remote() {
+        let dir = tempdir().unwrap();
+        let global = setup_global_dir(dir.path());
+        global_init_at(&global, false).unwrap();
+
+        let ctx = global_ctx(&global);
+        let result = push_repo(&ctx);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn global_pull_errors_without_remote() {
+        let dir = tempdir().unwrap();
+        let global = setup_global_dir(dir.path());
+        global_init_at(&global, false).unwrap();
+
+        let ctx = global_ctx(&global);
+        let result = pull_repo(&ctx);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn global_push_commits_and_pushes() {
+        let dir = tempdir().unwrap();
+        let global = setup_global_dir(dir.path());
+        global_init_at(&global, false).unwrap();
+
+        // Create a bare remote
+        let bare = dir.path().join("registry-remote.git");
+        git::init_bare(&bare).unwrap();
+        git::add_remote(&global, "origin", &bare.to_string_lossy()).unwrap();
+
+        // Push initial state
+        let branch = git::current_branch(&global).unwrap();
+        git::push(&global, "origin", &branch).unwrap();
+
+        // Make a change
+        std::fs::write(global.join("projects").join("new.toml"), "x").unwrap();
+
+        let ctx = global_ctx(&global);
+        let msg = push_repo(&ctx).unwrap();
+        assert!(msg.contains("Committed and pushed"));
+    }
+
+    #[test]
+    fn global_pull_fetches_remote_changes() {
+        let dir = tempdir().unwrap();
+        let global = setup_global_dir(dir.path());
+        global_init_at(&global, false).unwrap();
+
+        // Create bare remote and push
+        let bare = dir.path().join("registry-remote.git");
+        git::init_bare(&bare).unwrap();
+        git::add_remote(&global, "origin", &bare.to_string_lossy()).unwrap();
+        let branch = git::current_branch(&global).unwrap();
+        git::push(&global, "origin", &branch).unwrap();
+
+        // Clone bare elsewhere, push a change
+        let other = dir.path().join("other-clone");
+        git::clone_repo(&bare.to_string_lossy(), &other).unwrap();
+        std::fs::write(other.join("extra.txt"), "remote data").unwrap();
+        git::add_all(&other).unwrap();
+        git::commit_with_message(&other, "remote change").unwrap();
+        let other_branch = git::current_branch(&other).unwrap();
+        git::push(&other, "origin", &other_branch).unwrap();
+
+        // Pull
+        let ctx = global_ctx(&global);
+        let msg = pull_repo(&ctx).unwrap();
+        assert!(msg.contains("Pulled"));
+        assert!(global.join("extra.txt").exists());
+    }
+
+    #[test]
+    fn global_init_commits_existing_state() {
+        let dir = tempdir().unwrap();
+        let global = setup_global_dir(dir.path());
+
+        // Create some state before init
+        std::fs::write(
+            global.join("projects").join("myproject.toml"),
+            "[project]\nname = \"myproject\"\n",
+        )
+        .unwrap();
+
+        global_init_at(&global, false).unwrap();
+
+        let ctx = global_ctx(&global);
+        let msg = status_repo(&ctx).unwrap();
+        assert!(msg.contains("clean"), "state should be committed: {msg}");
     }
 }
