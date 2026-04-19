@@ -306,6 +306,9 @@ pm agent spawn                               # respawn all previously active age
 pm agent list                                # list all agents in the current feature
 pm agent list --active                       # list only active agents
 
+pm agent stop reviewer                       # stop an agent (kill window, mark inactive)
+pm agent stop reviewer --scope other-feat    # stop an agent in a different scope
+
 pm agent check                               # send checklist to all active agents
 pm agent check implementer                   # send checklist to a specific agent
 ```

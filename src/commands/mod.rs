@@ -3,6 +3,7 @@ pub mod agent_list;
 pub mod agent_read;
 pub mod agent_send;
 pub mod agent_spawn;
+pub mod agent_stop;
 pub mod agent_wait;
 pub mod claude_export;
 pub mod claude_import;
