@@ -430,7 +430,7 @@ pm docs sync                     # commit all changes (and push if remote config
 
 The orchestrator agent manages the store directly — reading `categories.toml` to discover categories and editing the corresponding markdown files. `pm docs sync` stages and commits all changes in the `.pm/` state repo. The docs are tracked alongside all other project state.
 
-When a remote is configured (`pm state remote <url>`), `pm docs sync` automatically pulls before committing and pushes after. If a pull conflict occurs, the merge is aborted, local changes are preserved, and a message is sent to the main agent describing the conflict.
+When a remote is configured (`pm state remote [url]`), `pm docs sync` automatically pulls before committing and pushes after. If a pull conflict occurs, the merge is aborted, local changes are preserved, and a message is sent to the main agent describing the conflict.
 
 Default categories after bootstrap:
 
@@ -448,7 +448,7 @@ The `.pm/` directory holds all project state (features, agents, messages, config
 
 ```sh
 pm state init                    # initialise git repo in .pm/ (prompts for remote setup)
-pm state remote <url>            # set the git remote for the state repo
+pm state remote [url]            # set the git remote (interactive if no URL given)
 pm state push                    # auto-commit and push state to the remote
 pm state pull                    # pull state from the remote
 pm state status                  # show git status of the state repo

@@ -103,10 +103,10 @@ enum Commands {
 enum StateCommands {
     /// Initialise git repo in .pm/ for state backup and sync
     Init,
-    /// Set the git remote for the state repo
+    /// Set the git remote for the state repo (interactive if no URL given)
     Remote {
-        /// Remote URL (e.g. a bare git repo or GitHub URL)
-        url: String,
+        /// Remote URL (e.g. a bare git repo or GitHub URL). Omit for interactive setup.
+        url: Option<String>,
     },
     /// Auto-commit and push state to the remote
     Push,
@@ -1105,7 +1105,7 @@ fn run() -> pm::error::Result<()> {
                     Ok(())
                 }
                 StateCommands::Remote { url } => {
-                    let msg = commands::state_cmd::remote(&project_root, &url)?;
+                    let msg = commands::state_cmd::remote(&project_root, url.as_deref())?;
                     println!("{msg}");
                     Ok(())
                 }
