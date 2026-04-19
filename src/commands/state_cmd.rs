@@ -33,6 +33,15 @@ fn init_inner(project_root: &Path, interactive: bool) -> Result<String> {
     let pm_dir = paths::pm_dir(project_root);
 
     if pm_dir.join(".git").exists() {
+        // Already initialised — but if interactive and no remote, offer remote setup
+        if interactive && !git::has_remote(&pm_dir, "origin")? {
+            let mut result = "State repo already initialised".to_string();
+            if let Some(remote_msg) = prompt_remote_setup(project_root, &pm_dir)? {
+                result.push('\n');
+                result.push_str(&remote_msg);
+            }
+            return Ok(result);
+        }
         return Ok("State repo already initialised".to_string());
     }
 
@@ -148,7 +157,10 @@ fn derive_project_name(project_root: &Path) -> String {
 }
 
 /// Set the remote URL for the state repo.
-pub fn remote(project_root: &Path, url: &str) -> Result<String> {
+///
+/// If `url` is `Some`, sets the remote directly. If `None`, runs the
+/// interactive prompt (create GitHub repo / use existing URL / skip).
+pub fn remote(project_root: &Path, url: Option<&str>) -> Result<String> {
     let pm_dir = require_state_repo(project_root)?;
 
     if git::has_remote(&pm_dir, "origin")? {
@@ -157,8 +169,19 @@ pub fn remote(project_root: &Path, url: &str) -> Result<String> {
         ));
     }
 
-    git::add_remote(&pm_dir, "origin", url)?;
-    Ok(format!("Set state remote to {url}"))
+    match url {
+        Some(url) => {
+            git::add_remote(&pm_dir, "origin", url)?;
+            Ok(format!("Set state remote to {url}"))
+        }
+        None => {
+            // Interactive mode
+            match prompt_remote_setup(project_root, &pm_dir)? {
+                Some(msg) => Ok(msg),
+                None => Ok("Skipped remote setup".to_string()),
+            }
+        }
+    }
 }
 
 /// Auto-commit and push the state repo.
@@ -329,7 +352,7 @@ mod tests {
         let root = setup_project(dir.path());
         init(&root).unwrap();
 
-        let msg = remote(&root, "https://example.com/state.git").unwrap();
+        let msg = remote(&root, Some("https://example.com/state.git")).unwrap();
         assert!(msg.contains("https://example.com/state.git"));
 
         let pm_dir = paths::pm_dir(&root);
@@ -342,9 +365,30 @@ mod tests {
         let root = setup_project(dir.path());
         init(&root).unwrap();
 
-        remote(&root, "https://example.com/state.git").unwrap();
-        let result = remote(&root, "https://other.com/state.git");
+        remote(&root, Some("https://example.com/state.git")).unwrap();
+        let result = remote(&root, Some("https://other.com/state.git"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn remote_none_with_closed_stdin_skips() {
+        // When stdin is closed (as in tests), read_line returns empty string.
+        // If gh is not available, the default choice is Skip.
+        if crate::gh::is_available() {
+            // Skip: empty stdin + gh available would default to creating a
+            // real GitHub repo, which we don't want in tests.
+            return;
+        }
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        init(&root).unwrap();
+
+        let msg = remote(&root, None).unwrap();
+        assert_eq!(msg, "Skipped remote setup");
+
+        // No remote should have been set
+        let pm_dir = paths::pm_dir(&root);
+        assert!(!git::has_remote(&pm_dir, "origin").unwrap());
     }
 
     #[test]
