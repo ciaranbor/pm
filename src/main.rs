@@ -101,19 +101,38 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum StateCommands {
-    /// Initialise git repo in .pm/ for state backup and sync
-    Init,
+    /// Initialise git repo in .pm/ (or ~/.config/pm/ with --global) for state backup and sync
+    Init {
+        /// Operate on the global registry (~/.config/pm/) instead of the project .pm/
+        #[arg(long)]
+        global: bool,
+    },
     /// Set the git remote for the state repo (interactive if no URL given)
     Remote {
         /// Remote URL (e.g. a bare git repo or GitHub URL). Omit for interactive setup.
         url: Option<String>,
+        /// Operate on the global registry (~/.config/pm/) instead of the project .pm/
+        #[arg(long)]
+        global: bool,
     },
     /// Auto-commit and push state to the remote
-    Push,
+    Push {
+        /// Operate on the global registry (~/.config/pm/) instead of the project .pm/
+        #[arg(long)]
+        global: bool,
+    },
     /// Pull state from the remote
-    Pull,
+    Pull {
+        /// Operate on the global registry (~/.config/pm/) instead of the project .pm/
+        #[arg(long)]
+        global: bool,
+    },
     /// Show git status of the state repo
-    Status,
+    Status {
+        /// Operate on the global registry (~/.config/pm/) instead of the project .pm/
+        #[arg(long)]
+        global: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1096,36 +1115,63 @@ fn run() -> pm::error::Result<()> {
             }
             Ok(())
         }
-        Commands::State(state_cmd) => {
-            let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-            match state_cmd {
-                StateCommands::Init => {
-                    let msg = commands::state_cmd::init_interactive(&project_root)?;
-                    println!("{msg}");
-                    Ok(())
-                }
-                StateCommands::Remote { url } => {
-                    let msg = commands::state_cmd::remote(&project_root, url.as_deref())?;
-                    println!("{msg}");
-                    Ok(())
-                }
-                StateCommands::Push => {
-                    let msg = commands::state_cmd::push(&project_root)?;
-                    println!("{msg}");
-                    Ok(())
-                }
-                StateCommands::Pull => {
-                    let msg = commands::state_cmd::pull(&project_root)?;
-                    println!("{msg}");
-                    Ok(())
-                }
-                StateCommands::Status => {
-                    let msg = commands::state_cmd::status(&project_root)?;
-                    println!("{msg}");
-                    Ok(())
-                }
+        Commands::State(state_cmd) => match state_cmd {
+            StateCommands::Init { global } => {
+                let msg = if global {
+                    commands::state_cmd::global_init_interactive()?
+                } else {
+                    let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+                    commands::state_cmd::init_interactive(&project_root)?
+                };
+                println!("{msg}");
+                Ok(())
             }
-        }
+            StateCommands::Remote { url, global } => {
+                let msg = if global {
+                    let u = url.ok_or_else(|| {
+                        PmError::Git(
+                            "--global requires a URL (interactive mode not supported for global registry)".to_string(),
+                        )
+                    })?;
+                    commands::state_cmd::global_remote(&u)?
+                } else {
+                    let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+                    commands::state_cmd::remote(&project_root, url.as_deref())?
+                };
+                println!("{msg}");
+                Ok(())
+            }
+            StateCommands::Push { global } => {
+                let msg = if global {
+                    commands::state_cmd::global_push()?
+                } else {
+                    let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+                    commands::state_cmd::push(&project_root)?
+                };
+                println!("{msg}");
+                Ok(())
+            }
+            StateCommands::Pull { global } => {
+                let msg = if global {
+                    commands::state_cmd::global_pull()?
+                } else {
+                    let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+                    commands::state_cmd::pull(&project_root)?
+                };
+                println!("{msg}");
+                Ok(())
+            }
+            StateCommands::Status { global } => {
+                let msg = if global {
+                    commands::state_cmd::global_status()?
+                } else {
+                    let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+                    commands::state_cmd::status(&project_root)?
+                };
+                println!("{msg}");
+                Ok(())
+            }
+        },
         Commands::Docs(docs_cmd) => {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
             match docs_cmd {

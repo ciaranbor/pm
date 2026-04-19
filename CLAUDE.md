@@ -29,7 +29,7 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 - `src/commands/claude_import.rs` — `pm claude import` extracts tarball, resolves local paths from registry, rewrites embedded paths
 - `src/commands/summary.rs` — `pm summary write` writes/overwrites `.pm/summaries/<feature>.md`
 - `src/commands/docs.rs` — information store management (`bootstrap`, `sync`)
-- `src/commands/state_cmd.rs` — git-backed `.pm/` state backup and sync (`init`, `remote`, `push`, `pull`, `status`)
+- `src/commands/state_cmd.rs` — git-backed state backup and sync (`init`, `remote`, `push`, `pull`, `status`). Supports both per-project `.pm/` and global registry `~/.config/pm/` via `--global` flag. Shared `RepoContext` eliminates duplication between the two modes.
 - `skills/` — bundled skill definitions (pm), embedded via `include_str!`
 
 ### Agents as long-running message processors
