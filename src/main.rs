@@ -108,6 +108,9 @@ enum StateCommands {
         /// Operate on the global registry (~/.config/pm/) instead of the project .pm/
         #[arg(long)]
         global: bool,
+        /// Set remote URL and pull after initialising (combines init + remote + pull)
+        #[arg(long)]
+        remote: Option<String>,
     },
     /// Set the git remote for the state repo (interactive if no URL given)
     Remote {
@@ -1127,12 +1130,12 @@ fn run() -> pm::error::Result<()> {
             Ok(())
         }
         Commands::State(state_cmd) => match state_cmd {
-            StateCommands::Init { global } => {
+            StateCommands::Init { global, remote } => {
                 let msg = if global {
-                    commands::state_cmd::global_init_interactive()?
+                    commands::state_cmd::global_init_with_remote(remote.as_deref())?
                 } else {
                     let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-                    commands::state_cmd::init_interactive(&project_root)?
+                    commands::state_cmd::init_with_remote(&project_root, remote.as_deref())?
                 };
                 println!("{msg}");
                 Ok(())
