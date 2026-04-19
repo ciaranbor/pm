@@ -151,19 +151,39 @@ fn project_ctx(pm_dir: &Path) -> RepoContext<'_> {
 /// Commits the current state. Idempotent. When called non-interactively
 /// (e.g. from `pm init` or `pm upgrade`), skips the remote setup prompt.
 pub fn init(project_root: &Path) -> Result<String> {
-    init_inner(project_root, false)
+    init_inner(project_root, false, None)
 }
 
-/// Initialise with interactive remote setup prompt.
-pub fn init_interactive(project_root: &Path) -> Result<String> {
-    init_inner(project_root, true)
+/// Initialise with an explicit remote URL (combines init + remote + pull).
+pub fn init_with_remote(project_root: &Path, remote_url: Option<&str>) -> Result<String> {
+    match remote_url {
+        Some(url) => init_inner(project_root, false, Some(url)),
+        None => init_inner(project_root, true, None),
+    }
 }
 
-fn init_inner(project_root: &Path, interactive: bool) -> Result<String> {
+fn init_inner(project_root: &Path, interactive: bool, remote_url: Option<&str>) -> Result<String> {
     let pm_dir = paths::pm_dir(project_root);
 
     if pm_dir.join(".git").exists() {
-        // Already initialised — but if interactive and no remote, offer remote setup
+        // Already initialised — if --remote given, configure it if possible
+        if let Some(url) = remote_url {
+            if git::has_remote(&pm_dir, "origin")? {
+                return Err(PmError::Git(
+                    "state repo already initialised with a remote (remove it first to reset)"
+                        .to_string(),
+                ));
+            }
+            let mut result = "State repo already initialised".to_string();
+            let remote_msg = apply_remote_and_pull(&pm_dir, url, "state")?;
+            result.push('\n');
+            result.push_str(&remote_msg);
+            if let Err(e) = persist_state_remote_to_registry(project_root) {
+                eprintln!("warning: failed to persist state_remote to registry: {e}");
+            }
+            return Ok(result);
+        }
+        // If interactive and no remote, offer remote setup
         if interactive && !git::has_remote(&pm_dir, "origin")? {
             let mut result = "State repo already initialised".to_string();
             if let Some(remote_msg) = prompt_remote_setup(project_root, &pm_dir)? {
@@ -192,8 +212,15 @@ fn init_inner(project_root: &Path, interactive: bool) -> Result<String> {
 
     let mut result = "Initialised state repo in .pm/".to_string();
 
-    // Interactive remote setup
-    if interactive && let Some(remote_msg) = prompt_remote_setup(project_root, &pm_dir)? {
+    // Explicit remote URL takes precedence over interactive prompt
+    if let Some(url) = remote_url {
+        let remote_msg = apply_remote_and_pull(&pm_dir, url, "state")?;
+        result.push('\n');
+        result.push_str(&remote_msg);
+        if let Err(e) = persist_state_remote_to_registry(project_root) {
+            eprintln!("warning: failed to persist state_remote to registry: {e}");
+        }
+    } else if interactive && let Some(remote_msg) = prompt_remote_setup(project_root, &pm_dir)? {
         result.push('\n');
         result.push_str(&remote_msg);
     }
@@ -287,17 +314,34 @@ fn global_ctx(dir: &Path) -> RepoContext<'_> {
 /// Non-interactive variant for programmatic use (e.g. `pm upgrade`).
 pub fn global_init() -> Result<String> {
     let dir = paths::global_config_dir()?;
-    global_init_at(&dir, false)
+    global_init_at(&dir, false, None)
 }
 
-/// Initialise with interactive remote setup prompt.
-pub fn global_init_interactive() -> Result<String> {
+/// Initialise with an explicit remote URL (combines init + remote + pull).
+pub fn global_init_with_remote(remote_url: Option<&str>) -> Result<String> {
     let dir = paths::global_config_dir()?;
-    global_init_at(&dir, true)
+    match remote_url {
+        Some(url) => global_init_at(&dir, false, Some(url)),
+        None => global_init_at(&dir, true, None),
+    }
 }
 
-fn global_init_at(dir: &Path, interactive: bool) -> Result<String> {
+fn global_init_at(dir: &Path, interactive: bool, remote_url: Option<&str>) -> Result<String> {
     if dir.join(".git").exists() {
+        // Already initialised — if --remote given, configure it if possible
+        if let Some(url) = remote_url {
+            if git::has_remote(dir, "origin")? {
+                return Err(PmError::Git(
+                    "global registry repo already initialised with a remote (remove it first to reset)"
+                        .to_string(),
+                ));
+            }
+            let mut result = "Global registry repo already initialised".to_string();
+            let remote_msg = apply_remote_and_pull(dir, url, "global registry")?;
+            result.push('\n');
+            result.push_str(&remote_msg);
+            return Ok(result);
+        }
         return Ok("Global registry repo already initialised".to_string());
     }
 
@@ -323,7 +367,12 @@ fn global_init_at(dir: &Path, interactive: bool) -> Result<String> {
 
     let mut result = format!("Initialised global registry repo in {}", dir.display());
 
-    if interactive
+    // Explicit remote URL takes precedence over interactive prompt
+    if let Some(url) = remote_url {
+        let remote_msg = apply_remote_and_pull(dir, url, "global registry")?;
+        result.push('\n');
+        result.push_str(&remote_msg);
+    } else if interactive
         && let Some(remote_msg) =
             prompt_remote_setup_common(dir, "global registry", "pm-global-registry")?
     {
@@ -356,6 +405,32 @@ pub fn global_pull() -> Result<String> {
 pub fn global_status() -> Result<String> {
     let dir = paths::global_config_dir()?;
     status_repo(&global_ctx(&dir))
+}
+
+// ---------------------------------------------------------------------------
+// Non-interactive remote + pull (for --remote flag)
+// ---------------------------------------------------------------------------
+
+/// Set the remote URL and pull. Used by `--remote` flag on init.
+fn apply_remote_and_pull(dir: &Path, url: &str, label: &str) -> Result<String> {
+    git::add_remote(dir, "origin", url)?;
+
+    commit_if_dirty(&RepoContext {
+        dir,
+        label,
+        init_hint: "",
+        remote_hint: "",
+    })?;
+
+    match git::pull(dir) {
+        Ok(()) => Ok(format!("Set {label} remote to {url} and pulled")),
+        Err(e) => {
+            let _ = git::merge_abort(dir);
+            Err(PmError::Git(format!(
+                "set remote to {url} but pull failed: {e}"
+            )))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -815,6 +890,112 @@ mod tests {
         assert_eq!(name, "my-cool-project");
     }
 
+    // -- init --remote tests (project-level) --
+
+    #[test]
+    fn init_with_remote_sets_origin_and_pulls() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        // Create a bare remote to pull from
+        let bare = dir.path().join("state-remote.git");
+        git::init_bare(&bare).unwrap();
+
+        let msg = init_inner(&root, false, Some(&bare.to_string_lossy())).unwrap();
+        assert!(msg.contains("Initialised"));
+        assert!(msg.contains("pulled"));
+
+        let pm_dir = paths::pm_dir(&root);
+        assert!(git::has_remote(&pm_dir, "origin").unwrap());
+    }
+
+    #[test]
+    fn init_with_remote_on_existing_repo_without_remote() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        // Init first without remote
+        init(&root).unwrap();
+
+        // Create a bare remote
+        let bare = dir.path().join("state-remote.git");
+        git::init_bare(&bare).unwrap();
+
+        let msg = init_inner(&root, false, Some(&bare.to_string_lossy())).unwrap();
+        assert!(msg.contains("already initialised"));
+        assert!(msg.contains("pulled"));
+
+        let pm_dir = paths::pm_dir(&root);
+        assert!(git::has_remote(&pm_dir, "origin").unwrap());
+    }
+
+    #[test]
+    fn init_with_remote_errors_when_origin_already_set() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        // Init with remote
+        let bare = dir.path().join("state-remote.git");
+        git::init_bare(&bare).unwrap();
+        init_inner(&root, false, Some(&bare.to_string_lossy())).unwrap();
+
+        // Try again with a different remote
+        let bare2 = dir.path().join("other-remote.git");
+        git::init_bare(&bare2).unwrap();
+        let result = init_inner(&root, false, Some(&bare2.to_string_lossy()));
+        assert!(result.is_err());
+    }
+
+    // -- init --remote tests (global) --
+
+    #[test]
+    fn global_init_with_remote_sets_origin_and_pulls() {
+        let dir = tempdir().unwrap();
+        let global = dir.path().join("config-pm");
+        std::fs::create_dir_all(global.join("projects")).unwrap();
+
+        let bare = dir.path().join("registry-remote.git");
+        git::init_bare(&bare).unwrap();
+
+        let msg = global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        assert!(msg.contains("Initialised"));
+        assert!(msg.contains("pulled"));
+        assert!(git::has_remote(&global, "origin").unwrap());
+    }
+
+    #[test]
+    fn global_init_with_remote_on_existing_repo_without_remote() {
+        let dir = tempdir().unwrap();
+        let global = dir.path().join("config-pm");
+        std::fs::create_dir_all(global.join("projects")).unwrap();
+
+        global_init_at(&global, false, None).unwrap();
+
+        let bare = dir.path().join("registry-remote.git");
+        git::init_bare(&bare).unwrap();
+
+        let msg = global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        assert!(msg.contains("already initialised"));
+        assert!(msg.contains("pulled"));
+        assert!(git::has_remote(&global, "origin").unwrap());
+    }
+
+    #[test]
+    fn global_init_with_remote_errors_when_origin_already_set() {
+        let dir = tempdir().unwrap();
+        let global = dir.path().join("config-pm");
+        std::fs::create_dir_all(global.join("projects")).unwrap();
+
+        let bare = dir.path().join("registry-remote.git");
+        git::init_bare(&bare).unwrap();
+        global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+
+        let bare2 = dir.path().join("other-remote.git");
+        git::init_bare(&bare2).unwrap();
+        let result = global_init_at(&global, false, Some(&bare2.to_string_lossy()));
+        assert!(result.is_err());
+    }
+
     // -- Global registry tests --
 
     fn setup_global_dir(dir: &std::path::Path) -> std::path::PathBuf {
@@ -828,7 +1009,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let global = setup_global_dir(dir.path());
 
-        let msg = global_init_at(&global, false).unwrap();
+        let msg = global_init_at(&global, false, None).unwrap();
         assert!(msg.contains("Initialised"));
         assert!(global.join(".git").exists());
         assert!(global.join(".gitignore").exists());
@@ -839,8 +1020,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let global = setup_global_dir(dir.path());
 
-        global_init_at(&global, false).unwrap();
-        let msg = global_init_at(&global, false).unwrap();
+        global_init_at(&global, false, None).unwrap();
+        let msg = global_init_at(&global, false, None).unwrap();
         assert!(msg.contains("already initialised"));
     }
 
@@ -849,7 +1030,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let global = dir.path().join("nonexistent");
 
-        let result = global_init_at(&global, false);
+        let result = global_init_at(&global, false, None);
         assert!(result.is_err());
     }
 
@@ -858,7 +1039,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let global = setup_global_dir(dir.path());
 
-        global_init_at(&global, false).unwrap();
+        global_init_at(&global, false, None).unwrap();
         let ctx = global_ctx(&global);
         let msg = status_repo(&ctx).unwrap();
         assert!(msg.contains("clean"));
@@ -869,7 +1050,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let global = setup_global_dir(dir.path());
 
-        global_init_at(&global, false).unwrap();
+        global_init_at(&global, false, None).unwrap();
         std::fs::write(global.join("projects").join("test.toml"), "x").unwrap();
 
         let ctx = global_ctx(&global);
@@ -891,7 +1072,7 @@ mod tests {
     fn global_remote_sets_origin() {
         let dir = tempdir().unwrap();
         let global = setup_global_dir(dir.path());
-        global_init_at(&global, false).unwrap();
+        global_init_at(&global, false, None).unwrap();
 
         let ctx = global_ctx(&global);
         let msg = set_remote(&ctx, "https://example.com/registry.git").unwrap();
@@ -903,7 +1084,7 @@ mod tests {
     fn global_remote_errors_if_already_set() {
         let dir = tempdir().unwrap();
         let global = setup_global_dir(dir.path());
-        global_init_at(&global, false).unwrap();
+        global_init_at(&global, false, None).unwrap();
 
         let ctx = global_ctx(&global);
         set_remote(&ctx, "https://example.com/registry.git").unwrap();
@@ -915,7 +1096,7 @@ mod tests {
     fn global_push_errors_without_remote() {
         let dir = tempdir().unwrap();
         let global = setup_global_dir(dir.path());
-        global_init_at(&global, false).unwrap();
+        global_init_at(&global, false, None).unwrap();
 
         let ctx = global_ctx(&global);
         let result = push_repo(&ctx);
@@ -926,7 +1107,7 @@ mod tests {
     fn global_pull_errors_without_remote() {
         let dir = tempdir().unwrap();
         let global = setup_global_dir(dir.path());
-        global_init_at(&global, false).unwrap();
+        global_init_at(&global, false, None).unwrap();
 
         let ctx = global_ctx(&global);
         let result = pull_repo(&ctx);
@@ -937,7 +1118,7 @@ mod tests {
     fn global_push_commits_and_pushes() {
         let dir = tempdir().unwrap();
         let global = setup_global_dir(dir.path());
-        global_init_at(&global, false).unwrap();
+        global_init_at(&global, false, None).unwrap();
 
         // Create a bare remote
         let bare = dir.path().join("registry-remote.git");
@@ -960,7 +1141,7 @@ mod tests {
     fn global_pull_fetches_remote_changes() {
         let dir = tempdir().unwrap();
         let global = setup_global_dir(dir.path());
-        global_init_at(&global, false).unwrap();
+        global_init_at(&global, false, None).unwrap();
 
         // Create bare remote and push
         let bare = dir.path().join("registry-remote.git");
@@ -997,7 +1178,7 @@ mod tests {
         )
         .unwrap();
 
-        global_init_at(&global, false).unwrap();
+        global_init_at(&global, false, None).unwrap();
 
         let ctx = global_ctx(&global);
         let msg = status_repo(&ctx).unwrap();

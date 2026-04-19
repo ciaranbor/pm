@@ -448,6 +448,7 @@ The `.pm/` directory holds all project state (features, agents, messages, config
 
 ```sh
 pm state init                    # initialise git repo in .pm/ (prompts for remote setup)
+pm state init --remote <url>     # initialise, set remote, and pull (combines init + remote + pull)
 pm state remote [url]            # set the git remote (interactive if no URL given)
 pm state push                    # auto-commit and push state to the remote
 pm state pull                    # pull state from the remote
@@ -464,6 +465,7 @@ The global registry at `~/.config/pm/` (project entries, cross-project config) c
 
 ```sh
 pm state init --global           # initialise git repo in ~/.config/pm/
+pm state init --global --remote <url>  # initialise, set remote, and pull
 pm state remote --global <url>   # set remote for the global registry repo
 pm state push --global           # auto-commit and push the global registry
 pm state pull --global           # pull global registry from remote
@@ -487,13 +489,11 @@ URLs are also auto-persisted going forward: `pm init --git <url>` saves `repo_ur
 
 ```sh
 # On the new machine:
-pm state init --global
-pm state remote --global <global-registry-url>
-pm state pull --global
+pm state init --global --remote <global-registry-url>
 pm restore
 ```
 
-This completes the migration story: back up both per-project state (`.pm/`) and the global registry (`~/.config/pm/`) to git remotes, then restore everything on a new machine with four commands.
+This completes the migration story: back up both per-project state (`.pm/`) and the global registry (`~/.config/pm/`) to git remotes, then restore everything on a new machine with two commands.
 
 ### Other commands
 
