@@ -179,23 +179,31 @@ pub fn create_private_repo(name: &str) -> Result<String> {
         .output()?;
 
     if output.status.success() {
-        // gh repo create prints the URL to stdout
-        let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if url.is_empty() {
-            // Older gh versions may not print the URL; construct it
-            let whoami = Command::new("gh")
-                .args(["api", "user", "--jq", ".login"])
-                .output()?;
-            if whoami.status.success() {
-                let login = String::from_utf8_lossy(&whoami.stdout).trim().to_string();
-                Ok(format!("git@github.com:{login}/{name}.git"))
-            } else {
-                Err(PmError::Gh(
-                    "could not determine GitHub username".to_string(),
-                ))
+        // gh repo create prints an HTTPS URL to stdout, but we need the SSH
+        // URL because many setups only have SSH auth configured. Query the
+        // repo we just created for its sshUrl.
+        let ssh_output = Command::new("gh")
+            .args(["repo", "view", name, "--json", "sshUrl", "--jq", ".sshUrl"])
+            .output()?;
+        if ssh_output.status.success() {
+            let ssh_url = String::from_utf8_lossy(&ssh_output.stdout)
+                .trim()
+                .to_string();
+            if !ssh_url.is_empty() {
+                return Ok(ssh_url);
             }
+        }
+        // Fallback: construct SSH URL from username
+        let whoami = Command::new("gh")
+            .args(["api", "user", "--jq", ".login"])
+            .output()?;
+        if whoami.status.success() {
+            let login = String::from_utf8_lossy(&whoami.stdout).trim().to_string();
+            Ok(format!("git@github.com:{login}/{name}.git"))
         } else {
-            Ok(url)
+            Err(PmError::Gh(
+                "could not determine GitHub username".to_string(),
+            ))
         }
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
