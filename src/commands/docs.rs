@@ -54,6 +54,57 @@ fn require_state_repo(project_root: &Path) -> Result<std::path::PathBuf> {
     Ok(pm_dir)
 }
 
+/// Migrate `.pm/docs/` from a git submodule (nested repo) to regular files
+/// tracked by the parent `.pm/` state repo.
+///
+/// Idempotent — does nothing if docs is already a plain directory.
+/// Returns `true` if migration was performed.
+pub fn migrate_docs_submodule(project_root: &Path) -> Result<bool> {
+    let docs_dir = paths::docs_dir(project_root);
+    let nested_git = docs_dir.join(".git");
+
+    // Nothing to migrate if there's no nested .git
+    if !nested_git.exists() {
+        return Ok(false);
+    }
+
+    let pm_dir = paths::pm_dir(project_root);
+
+    // Bail out if the state repo isn't initialised — we can't run git
+    // operations without it, and removing the nested .git first would
+    // leave things in a broken half-migrated state.
+    if !pm_dir.join(".git").exists() {
+        return Ok(false);
+    }
+
+    // 1. Remove the nested .git (could be a dir or a file depending on git version)
+    if nested_git.is_dir() {
+        std::fs::remove_dir_all(&nested_git)?;
+    } else {
+        std::fs::remove_file(&nested_git)?;
+    }
+
+    // 2. Remove .gitmodules if present
+    let gitmodules = pm_dir.join(".gitmodules");
+    if gitmodules.exists() {
+        std::fs::remove_file(&gitmodules)?;
+    }
+
+    // 3. Remove docs from the parent index (it's currently tracked as a submodule)
+    //    This may fail if docs isn't in the index yet — that's fine.
+    let _ = git::rm_cached(&pm_dir, "docs");
+
+    // 4. Stage the docs files as regular files in the parent repo
+    git::add_all(&pm_dir)?;
+
+    // 5. Commit the migration if there are staged changes
+    if git::has_staged_changes(&pm_dir)? {
+        git::commit_with_message(&pm_dir, "migrate docs from submodule to regular files")?;
+    }
+
+    Ok(true)
+}
+
 /// Bootstrap the information store at `.pm/docs/`.
 ///
 /// Creates the directory and writes default `categories.toml` and category
@@ -107,6 +158,10 @@ fn commit_staged(pm_dir: &Path) -> Result<bool> {
 /// main agent.
 pub fn sync(project_root: &Path) -> Result<String> {
     let pm_dir = require_state_repo(project_root)?;
+
+    // Migrate docs submodule to regular files if needed (lazy migration)
+    migrate_docs_submodule(project_root)?;
+
     let has_remote = git::has_remote(&pm_dir, "origin")?;
 
     let mut committed = false;
@@ -228,6 +283,88 @@ mod tests {
 
         let todo = std::fs::read_to_string(docs.join("todo.md")).unwrap();
         assert!(todo.starts_with("# Todo"));
+    }
+
+    #[test]
+    fn migrate_docs_submodule_converts_nested_repo() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        // Initialise state repo
+        state_cmd::init(&root).unwrap();
+
+        // Simulate old behaviour: create a nested git repo inside docs
+        let docs = paths::docs_dir(&root);
+        std::fs::create_dir_all(&docs).unwrap();
+        crate::git::init_repo(&docs).unwrap();
+        std::fs::write(docs.join("todo.md"), "# Todo\n").unwrap();
+        crate::git::add_all(&docs).unwrap();
+        crate::git::commit_with_message(&docs, "init docs").unwrap();
+
+        // Parent repo sees docs as a submodule — commit that state
+        let pm_dir = paths::pm_dir(&root);
+        crate::git::add_all(&pm_dir).unwrap();
+        crate::git::commit_with_message(&pm_dir, "add docs submodule").unwrap();
+
+        // Verify nested .git exists before migration
+        assert!(docs.join(".git").exists());
+
+        // Run migration
+        let migrated = migrate_docs_submodule(&root).unwrap();
+        assert!(migrated, "should report migration was performed");
+
+        // Nested .git should be gone
+        assert!(!docs.join(".git").exists());
+
+        // docs files should still exist
+        assert!(docs.join("todo.md").exists());
+
+        // docs should now be tracked as regular files in parent repo
+        let status = crate::git::status_short(&pm_dir).unwrap();
+        assert!(
+            status.is_empty(),
+            "should be clean after migration commit, got: {status}"
+        );
+    }
+
+    #[test]
+    fn migrate_docs_submodule_is_idempotent() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        state_cmd::init(&root).unwrap();
+        bootstrap(&root).unwrap();
+
+        // No nested git — migration should be a no-op
+        let migrated = migrate_docs_submodule(&root).unwrap();
+        assert!(!migrated);
+    }
+
+    #[test]
+    fn sync_migrates_submodule_lazily() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        state_cmd::init(&root).unwrap();
+
+        // Simulate old submodule setup
+        let docs = paths::docs_dir(&root);
+        std::fs::create_dir_all(&docs).unwrap();
+        crate::git::init_repo(&docs).unwrap();
+        std::fs::write(docs.join("todo.md"), "# Todo\n").unwrap();
+        crate::git::add_all(&docs).unwrap();
+        crate::git::commit_with_message(&docs, "init docs").unwrap();
+
+        let pm_dir = paths::pm_dir(&root);
+        crate::git::add_all(&pm_dir).unwrap();
+        crate::git::commit_with_message(&pm_dir, "add docs submodule").unwrap();
+
+        // Sync should migrate the submodule and succeed
+        let msg = sync(&root).unwrap();
+        assert!(!docs.join(".git").exists(), "nested .git should be removed");
+        // The migration commit counts as a sync
+        assert!(
+            msg == "Nothing to sync" || msg == "Synced information store",
+            "unexpected sync result: {msg}"
+        );
     }
 
     #[test]
