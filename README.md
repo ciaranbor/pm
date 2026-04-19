@@ -256,7 +256,7 @@ Audits every feature for drift between pm state and external reality:
 - Status not stuck on "initializing"
 - PR status matches (calls `gh` for features with linked PRs)
 
-With `--fix`, auto-resolves clear-cut issues: removes orphaned state files (no worktree, no branch), cleans up stuck-initializing features, recreates missing tmux sessions, and updates status to match GitHub PR state. Ambiguous issues (e.g. missing directory but branch still exists) are skipped with a message.
+With `--fix`, auto-resolves clear-cut issues: removes orphaned state files (no worktree, no branch), recreates missing worktree directories (when the branch exists), cleans up stuck-initializing features, recreates missing tmux sessions, and updates status to match GitHub PR state. Ambiguous issues (e.g. missing directory with stale git worktree registration) are skipped with a message.
 
 ### Bundled skills
 

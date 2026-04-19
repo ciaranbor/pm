@@ -43,6 +43,11 @@ enum FixAction {
     UpdateStatus { new_status: FeatureStatus },
     /// Install the pm Stop hook into main/.claude/settings.json.
     InstallStopHook,
+    /// Recreate a missing worktree from its branch.
+    RecreateWorktree {
+        worktree_path: PathBuf,
+        branch: String,
+    },
     /// Clear stale active flag and respawn a dead agent.
     RespawnAgent { agent_name: String },
 }
@@ -167,9 +172,19 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
 
         // Report individual check failures (non-orphan)
         if !dir_exists {
+            // Auto-fix only when the branch exists and git doesn't have a
+            // stale worktree registration (which would cause add to fail).
+            let fix = if branch_exists && !in_git_worktrees {
+                Fix::Auto(FixAction::RecreateWorktree {
+                    worktree_path: worktree_path.clone(),
+                    branch: state.branch.clone(),
+                })
+            } else {
+                Fix::Skip
+            };
             issues.push(Issue {
                 message: "worktree directory missing from disk".to_string(),
-                fix: Fix::Skip,
+                fix,
             });
         }
         if dir_exists && !in_git_worktrees {
@@ -411,6 +426,12 @@ fn apply_fix(
             let mut state = FeatureState::load(features_dir, name)?;
             state.status = *new_status;
             state.save(features_dir, name)?;
+        }
+        FixAction::RecreateWorktree {
+            worktree_path,
+            branch,
+        } => {
+            git::add_worktree(main_repo, worktree_path, branch)?;
         }
         FixAction::InstallStopHook => {
             hooks_install::install(project_root)?;
@@ -726,19 +747,25 @@ mod tests {
     }
 
     #[test]
-    fn fix_skips_ambiguous_issues() {
+    fn fix_recreates_missing_worktree() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        // Remove only the directory — branch and state still exist, ambiguous
-        std::fs::remove_dir_all(project_path.join("login")).unwrap();
+        // Remove worktree directory — branch still exists, so doctor can recreate
+        let main_repo = project_path.join("main");
+        git::remove_worktree_force(&main_repo, &project_path.join("login")).unwrap();
+        assert!(!project_path.join("login").exists());
 
         let lines = doctor(&project_path, true, server.name()).unwrap();
         assert!(
-            lines.iter().any(|l| l.contains("skipped (ambiguous)")),
+            lines
+                .iter()
+                .any(|l| l.contains("fixed") && l.contains("worktree directory missing")),
             "got: {lines:?}"
         );
+        // Worktree should be recreated
+        assert!(project_path.join("login").exists());
     }
 
     #[test]
