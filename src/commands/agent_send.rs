@@ -678,6 +678,8 @@ mod tests {
         let entry = ProjectEntry {
             root: target_root.to_str().unwrap().to_string(),
             main_branch: "main".to_string(),
+            repo_url: None,
+            state_remote: None,
         };
         entry.save(projects_dir.path(), "exo").unwrap();
 
@@ -738,6 +740,8 @@ mod tests {
         let entry = ProjectEntry {
             root: target_root.to_str().unwrap().to_string(),
             main_branch: "main".to_string(),
+            repo_url: None,
+            state_remote: None,
         };
         entry.save(projects_dir.path(), "exo").unwrap();
 
@@ -771,6 +775,8 @@ mod tests {
         let entry = ProjectEntry {
             root: target_root.to_str().unwrap().to_string(),
             main_branch: "main".to_string(),
+            repo_url: None,
+            state_remote: None,
         };
         entry.save(projects_dir.path(), "exo").unwrap();
 

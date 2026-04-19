@@ -470,7 +470,30 @@ pm state pull --global           # pull global registry from remote
 pm state status --global         # show git status of the global registry
 ```
 
-This completes the migration story: back up both per-project state (`.pm/`) and the global registry (`~/.config/pm/`) to git remotes, then restore on a new machine with `git clone` + `pm state pull`.
+#### Backfill registry URLs
+
+Existing projects may not have `repo_url` or `state_remote` recorded in their registry entries. `pm state backfill` reads origin URLs from each project's main worktree and `.pm/` remote, and writes them into the global registry:
+
+```sh
+pm state backfill                # backfill repo_url and state_remote for all projects
+pm state push --global           # push the enriched registry
+```
+
+URLs are also auto-persisted going forward: `pm init --git <url>` saves `repo_url`, `pm register` reads origin from the worktree, and `pm state remote` saves `state_remote`.
+
+#### Restore projects on a fresh machine
+
+`pm restore` rebuilds all projects from the global registry. For each entry it clones the repo (if `repo_url` is set and the directory is missing), sets up the `.pm/` state remote and pulls (if `state_remote` is set), then runs `pm open` to recreate tmux sessions.
+
+```sh
+# On the new machine:
+pm state init --global
+pm state remote --global <global-registry-url>
+pm state pull --global
+pm restore
+```
+
+This completes the migration story: back up both per-project state (`.pm/`) and the global registry (`~/.config/pm/`) to git remotes, then restore everything on a new machine with four commands.
 
 ### Other commands
 

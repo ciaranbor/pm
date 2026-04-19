@@ -9,6 +9,12 @@ pub struct ProjectEntry {
     pub root: String,
     #[serde(default = "default_main_branch")]
     pub main_branch: String,
+    /// The project's git remote origin URL (from the main worktree).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_url: Option<String>,
+    /// The .pm/ state repo's remote URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_remote: Option<String>,
 }
 
 fn default_main_branch() -> String {
@@ -147,10 +153,53 @@ mod tests {
         let entry = ProjectEntry {
             root: "/home/user/projects/myapp".to_string(),
             main_branch: "main".to_string(),
+            repo_url: None,
+            state_remote: None,
         };
         let serialized = toml::to_string_pretty(&entry).unwrap();
         let deserialized: ProjectEntry = toml::from_str(&serialized).unwrap();
         assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn project_entry_roundtrip_toml_with_urls() {
+        let entry = ProjectEntry {
+            root: "/home/user/projects/myapp".to_string(),
+            main_branch: "main".to_string(),
+            repo_url: Some("https://github.com/user/myapp.git".to_string()),
+            state_remote: Some("https://github.com/user/myapp-pm-state.git".to_string()),
+        };
+        let serialized = toml::to_string_pretty(&entry).unwrap();
+        assert!(serialized.contains("repo_url"));
+        assert!(serialized.contains("state_remote"));
+        let deserialized: ProjectEntry = toml::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn project_entry_roundtrip_none_urls_omitted() {
+        let entry = ProjectEntry {
+            root: "/home/user/projects/myapp".to_string(),
+            main_branch: "main".to_string(),
+            repo_url: None,
+            state_remote: None,
+        };
+        let serialized = toml::to_string_pretty(&entry).unwrap();
+        // None fields should not appear in serialized output
+        assert!(!serialized.contains("repo_url"));
+        assert!(!serialized.contains("state_remote"));
+    }
+
+    #[test]
+    fn project_entry_deserialize_old_format_without_url_fields() {
+        // Simulates loading a TOML file from before the new fields were added
+        let toml_str = r#"
+root = "/home/user/projects/myapp"
+main_branch = "main"
+"#;
+        let entry: ProjectEntry = toml::from_str(toml_str).unwrap();
+        assert_eq!(entry.repo_url, None);
+        assert_eq!(entry.state_remote, None);
     }
 
     #[test]
@@ -168,6 +217,8 @@ mod tests {
         let entry = ProjectEntry {
             root: "/home/user/projects/myapp".to_string(),
             main_branch: "main".to_string(),
+            repo_url: None,
+            state_remote: None,
         };
         entry.save(&projects_dir, "myapp").unwrap();
 
@@ -183,6 +234,8 @@ mod tests {
         let entry = ProjectEntry {
             root: "/tmp/test".to_string(),
             main_branch: "main".to_string(),
+            repo_url: None,
+            state_remote: None,
         };
         entry.save(&projects_dir, "test").unwrap();
 
@@ -208,10 +261,14 @@ mod tests {
         let entry_a = ProjectEntry {
             root: "/tmp/alpha".to_string(),
             main_branch: "main".to_string(),
+            repo_url: None,
+            state_remote: None,
         };
         let entry_b = ProjectEntry {
             root: "/tmp/beta".to_string(),
             main_branch: "develop".to_string(),
+            repo_url: None,
+            state_remote: None,
         };
 
         entry_a.save(&projects_dir, "alpha").unwrap();

@@ -189,6 +189,8 @@ mod tests {
         let entry = ProjectEntry {
             root: root.to_string_lossy().to_string(),
             main_branch: "main".to_string(),
+            repo_url: None,
+            state_remote: None,
         };
         entry.save(projects_dir, name).unwrap();
         main_path
@@ -222,6 +224,8 @@ mod tests {
         let entry = ProjectEntry {
             root: project_dir.path().to_string_lossy().to_string(),
             main_branch: "main".to_string(),
+            repo_url: None,
+            state_remote: None,
         };
         entry.save(dst_projects_dir.path(), "myapp").unwrap();
 
@@ -340,6 +344,8 @@ mod tests {
         let entry = ProjectEntry {
             root: project_dir.path().to_string_lossy().to_string(),
             main_branch: "main".to_string(),
+            repo_url: None,
+            state_remote: None,
         };
         entry.save(dst_projects_dir.path(), "myapp").unwrap();
         setup_claude_sessions(claude_dst.path(), &main_path);

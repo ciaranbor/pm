@@ -479,6 +479,21 @@ pub fn list_remotes(repo: &Path) -> Result<String> {
     run_git(repo, &["remote", "-v"])
 }
 
+/// Get the URL of a named remote (e.g. "origin").
+/// Returns `None` if the remote doesn't exist.
+pub fn remote_url(repo: &Path, name: &str) -> Result<Option<String>> {
+    if !has_remote(repo, name)? {
+        return Ok(None);
+    }
+    let url = run_git(repo, &["remote", "get-url", name])?;
+    let url = url.trim();
+    if url.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(url.to_string()))
+    }
+}
+
 /// Get short status output (`git status --short`).
 pub fn status_short(repo: &Path) -> Result<String> {
     run_git(repo, &["status", "--short"])
