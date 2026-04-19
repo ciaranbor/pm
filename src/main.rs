@@ -86,6 +86,8 @@ enum Commands {
         #[arg(long)]
         all: bool,
     },
+    /// Restore all projects on a fresh machine from the global registry
+    Restore,
     /// Git-backed state management (.pm/ backup and sync)
     #[command(subcommand)]
     State(StateCommands),
@@ -133,6 +135,8 @@ enum StateCommands {
         #[arg(long)]
         global: bool,
     },
+    /// Backfill repo_url and state_remote in global registry from existing projects
+    Backfill,
 }
 
 #[derive(Subcommand)]
@@ -1115,6 +1119,13 @@ fn run() -> pm::error::Result<()> {
             }
             Ok(())
         }
+        Commands::Restore => {
+            let messages = commands::restore::restore(None)?;
+            for msg in messages {
+                println!("{msg}");
+            }
+            Ok(())
+        }
         Commands::State(state_cmd) => match state_cmd {
             StateCommands::Init { global } => {
                 let msg = if global {
@@ -1169,6 +1180,13 @@ fn run() -> pm::error::Result<()> {
                     commands::state_cmd::status(&project_root)?
                 };
                 println!("{msg}");
+                Ok(())
+            }
+            StateCommands::Backfill => {
+                let messages = commands::state_cmd::backfill()?;
+                for msg in messages {
+                    println!("{msg}");
+                }
                 Ok(())
             }
         },

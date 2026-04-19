@@ -32,6 +32,7 @@ pub mod list;
 pub mod msg_list;
 pub mod open;
 pub mod register;
+pub mod restore;
 pub mod skills;
 pub mod state_cmd;
 pub mod status;

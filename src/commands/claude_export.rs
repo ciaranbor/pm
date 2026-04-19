@@ -184,6 +184,8 @@ mod tests {
         let entry = ProjectEntry {
             root: root.to_string_lossy().to_string(),
             main_branch: "main".to_string(),
+            repo_url: None,
+            state_remote: None,
         };
         entry.save(projects_dir, name).unwrap();
         main_path

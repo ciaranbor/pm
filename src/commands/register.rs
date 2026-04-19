@@ -127,9 +127,18 @@ pub fn register(
     hooks::bootstrap(&wrapper_dir)?;
 
     // Register in global registry
+    // Try to read the origin URL from the main worktree
+    let main_path_reg = wrapper_dir.join("main");
+    let repo_url = if crate::git::is_git_repo(&main_path_reg) {
+        crate::git::remote_url(&main_path_reg, "origin").unwrap_or(None)
+    } else {
+        None
+    };
     let entry = ProjectEntry {
         root: crate::path_utils::to_portable(&wrapper_dir),
         main_branch: "main".to_string(),
+        repo_url,
+        state_remote: None,
     };
     entry.save(projects_dir, &project_name)?;
 

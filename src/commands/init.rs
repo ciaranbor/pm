@@ -100,6 +100,8 @@ pub fn init(
     let entry = ProjectEntry {
         root: crate::path_utils::to_portable(path),
         main_branch,
+        repo_url: git_url.map(|u| u.to_string()),
+        state_remote: None,
     };
     entry.save(projects_dir, &name)?;
 
