@@ -110,7 +110,17 @@ fn restore_project(
                     }
                 }
             } else {
-                // Remote already configured — normal pull
+                // Remote already configured — ensure upstream tracking is set
+                // before pulling (a previous restore run may have added the
+                // remote but failed before pulling, leaving no tracking branch).
+                let branch = git::current_branch(&pm_dir)?;
+                if git::tracking_branch(&pm_dir, &branch)?.is_none() {
+                    let upstream_ref = format!("refs/remotes/origin/{branch}");
+                    git::fetch_remote(&pm_dir, "origin")?;
+                    if git::ref_exists(&pm_dir, &upstream_ref)? {
+                        git::set_upstream(&pm_dir, &upstream_ref)?;
+                    }
+                }
                 match git::pull(&pm_dir) {
                     Ok(()) => {
                         messages.push(format!("{name}: pulled .pm/ state"));
@@ -287,6 +297,71 @@ mod tests {
             "{msgs:?}"
         );
         assert!(crate::git::has_remote(&pm_dir, "origin").unwrap());
+    }
+
+    #[test]
+    fn restore_pulls_pm_state_when_remote_exists_but_no_tracking() {
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("projects");
+        let server = TestServer::new();
+        let name = server.scope("notrack");
+
+        // Create a real project
+        let project_path = dir.path().join(&name);
+        super::super::init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+
+        // Create a bare repo for the .pm/ state remote
+        let state_bare = dir.path().join("state-remote.git");
+        crate::git::init_bare(&state_bare).unwrap();
+
+        // Push initial .pm/ state to the bare remote
+        let pm_dir = paths::pm_dir(&project_path);
+        crate::git::add_remote(&pm_dir, "origin", &state_bare.to_string_lossy()).unwrap();
+        let branch = crate::git::current_branch(&pm_dir).unwrap();
+        crate::git::push(&pm_dir, "origin", &branch).unwrap();
+
+        // Remove upstream tracking but keep the remote configured.
+        // This simulates a previous restore that added the remote but
+        // failed before pulling, leaving no tracking branch.
+        std::process::Command::new("git")
+            .args([
+                "-C",
+                &pm_dir.to_string_lossy(),
+                "config",
+                "--unset",
+                &format!("branch.{branch}.remote"),
+            ])
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args([
+                "-C",
+                &pm_dir.to_string_lossy(),
+                "config",
+                "--unset",
+                &format!("branch.{branch}.merge"),
+            ])
+            .output()
+            .unwrap();
+
+        // Verify remote exists but tracking does not
+        assert!(crate::git::has_remote(&pm_dir, "origin").unwrap());
+        assert!(
+            crate::git::tracking_branch(&pm_dir, &branch)
+                .unwrap()
+                .is_none()
+        );
+
+        // Update registry entry with state_remote
+        let mut entry = ProjectEntry::load(&projects_dir, &name).unwrap();
+        entry.state_remote = Some(state_bare.to_string_lossy().to_string());
+        entry.save(&projects_dir, &name).unwrap();
+
+        let msgs = restore_with_dir(&projects_dir, server.name()).unwrap();
+        assert!(
+            msgs.iter().any(|m| m.contains("pulled .pm/ state")),
+            "expected 'pulled .pm/ state' message but got: {msgs:?}"
+        );
     }
 
     #[test]
