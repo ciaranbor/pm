@@ -121,13 +121,25 @@ fn restore_project(
                         git::set_upstream(&pm_dir, &upstream_ref)?;
                     }
                 }
+                // During restore, remote is authoritative. Try pull first;
+                // if histories diverge, reset to remote branch.
                 match git::pull(&pm_dir) {
                     Ok(()) => {
                         messages.push(format!("{name}: pulled .pm/ state"));
                     }
-                    Err(e) => {
+                    Err(_) => {
                         let _ = git::merge_abort(&pm_dir);
-                        messages.push(format!("{name}: .pm/ pull failed: {e}"));
+                        let upstream = format!("origin/{branch}");
+                        if git::ref_exists(&pm_dir, &upstream)? {
+                            git::reset_hard(&pm_dir, &upstream)?;
+                            messages.push(format!(
+                                "{name}: reset .pm/ to remote state (local and remote diverged)"
+                            ));
+                        } else {
+                            messages.push(format!(
+                                "{name}: .pm/ pull failed and no remote branch to reset to"
+                            ));
+                        }
                     }
                 }
             }
