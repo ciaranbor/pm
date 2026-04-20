@@ -42,39 +42,6 @@ fn set_remote(ctx: &RepoContext, url: &str) -> Result<String> {
     Ok(format!("Set {} remote to {url}", ctx.label))
 }
 
-/// Auto-commit, and push if a remote is configured.
-/// Unlike `push_repo`, this does not error when no remote is present.
-fn sync_repo(ctx: &RepoContext) -> Result<String> {
-    require_repo(ctx)?;
-
-    git::add_all(ctx.dir)?;
-    let committed = if git::has_staged_changes(ctx.dir)? {
-        let changed = git::staged_file_names(ctx.dir)?;
-        let msg = if changed.is_empty() {
-            format!("{} sync", ctx.label)
-        } else {
-            format!("{} sync ({})", ctx.label, changed.join(", "))
-        };
-        git::commit_with_message(ctx.dir, &msg)?;
-        true
-    } else {
-        false
-    };
-
-    let has_remote = git::has_remote(ctx.dir, "origin")?;
-    if has_remote && committed {
-        let branch = git::current_branch(ctx.dir)?;
-        git::push(ctx.dir, "origin", &branch)?;
-        Ok(format!("Committed and pushed {}", ctx.label))
-    } else if has_remote {
-        Ok(format!("Nothing to sync ({})", ctx.label))
-    } else if committed {
-        Ok(format!("Committed {} (no remote configured)", ctx.label))
-    } else {
-        Ok(format!("Nothing to sync ({})", ctx.label))
-    }
-}
-
 /// Auto-commit and push a state repo.
 fn push_repo(ctx: &RepoContext) -> Result<String> {
     require_repo(ctx)?;
@@ -307,13 +274,6 @@ pub fn remote(project_root: &Path, url: Option<&str>) -> Result<String> {
 pub fn push(project_root: &Path) -> Result<String> {
     let pm_dir = paths::pm_dir(project_root);
     push_repo(&project_ctx(&pm_dir))
-}
-
-/// Auto-commit, and push if a remote is configured.
-/// Does not error when no remote is present (local-only projects).
-pub fn sync(project_root: &Path) -> Result<String> {
-    let pm_dir = paths::pm_dir(project_root);
-    sync_repo(&project_ctx(&pm_dir))
 }
 
 /// Pull state from the remote.
