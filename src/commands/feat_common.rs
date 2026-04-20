@@ -54,10 +54,7 @@ pub fn resolve_default_agent<'a>(
     agent_override: Option<&'a str>,
     config: &'a ProjectConfig,
 ) -> Option<&'a str> {
-    agent_override.or_else(|| {
-        let d = &config.agents.default;
-        if d.is_empty() { None } else { Some(d.as_str()) }
-    })
+    agent_override.or(config.agents.default.as_deref())
 }
 
 /// Enqueue a feature's initial context as a message in the resolved default

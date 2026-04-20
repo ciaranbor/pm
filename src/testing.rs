@@ -273,6 +273,52 @@ impl TestServer {
         (project_path, project_name)
     }
 
+    /// Create a tmux window running `sleep 999` (a non-shell process) to
+    /// simulate an active agent. Registers the agent in the registry and waits
+    /// until `pane_command` reports "sleep" so callers can immediately query
+    /// liveness. Returns the tmux window target.
+    pub fn spawn_fake_agent(
+        &self,
+        project_root: &std::path::Path,
+        session_name: &str,
+        feature: &str,
+        agent_name: &str,
+    ) -> String {
+        use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
+        use crate::state::paths;
+
+        let worktree = project_root.join(feature);
+        let target =
+            crate::tmux::new_window(self.name(), session_name, &worktree, Some(agent_name), true)
+                .unwrap();
+        crate::tmux::send_keys(self.name(), &target, "exec sleep 999").unwrap();
+
+        // Wait for sleep to take effect
+        for _ in 0..100 {
+            if let Ok(cmd) = crate::tmux::pane_command(self.name(), &target) {
+                if cmd == "sleep" {
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        // Register in agent registry
+        let agents_dir = paths::agents_dir(project_root);
+        let mut registry = AgentRegistry::load(&agents_dir, feature).unwrap();
+        registry.register(
+            agent_name,
+            AgentEntry {
+                agent_type: AgentType::Agent,
+                session_id: String::new(),
+                window_name: agent_name.to_string(),
+            },
+        );
+        registry.save(&agents_dir, feature).unwrap();
+
+        target
+    }
+
     /// Add a commit to a feature worktree.
     pub fn add_feature_commit(project_path: &std::path::Path, feature_name: &str) {
         let worktree = project_path.join(feature_name);

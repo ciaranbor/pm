@@ -8,7 +8,7 @@ use crate::tmux;
 
 /// Returns true if the process name is a common shell, indicating the agent
 /// process has exited and the pane has fallen back to a shell prompt.
-fn is_shell_process(cmd: &str) -> bool {
+pub fn is_shell_process(cmd: &str) -> bool {
     matches!(
         cmd,
         "bash" | "zsh" | "sh" | "fish" | "dash" | "ksh" | "csh" | "tcsh"
@@ -75,6 +75,32 @@ pub fn spawn_claude_session(
 ) -> Result<String> {
     let pm_dir = paths::pm_dir(project_root);
     let config = ProjectConfig::load(&pm_dir)?;
+    spawn_claude_session_with_config(
+        project_root,
+        feature,
+        agent_name,
+        prompt,
+        edit,
+        resume_session,
+        reuse_window,
+        tmux_server,
+        &config,
+    )
+}
+
+/// Inner implementation that accepts a pre-loaded config to avoid redundant loads.
+#[allow(clippy::too_many_arguments)]
+fn spawn_claude_session_with_config(
+    project_root: &Path,
+    feature: &str,
+    agent_name: Option<&str>,
+    prompt: Option<&str>,
+    edit: bool,
+    resume_session: Option<&str>,
+    reuse_window: Option<&str>,
+    tmux_server: Option<&str>,
+    config: &ProjectConfig,
+) -> Result<String> {
     let session_name = format!("{}/{feature}", config.project.name);
     let worktree_path = project_root.join(feature);
 
@@ -143,7 +169,6 @@ pub fn spawn_claude_session(
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
                 window_name: name.to_string(),
-                active: true,
             },
         );
         registry.save(&agents_dir, feature)?;
@@ -178,6 +203,20 @@ pub fn agent_spawn(
     let agents_dir = paths::agents_dir(project_root);
     let config = ProjectConfig::load(&pm_dir)?;
     let session_name = format!("{}/{feature}", config.project.name);
+    // Use _with_config helper to avoid reloading config in spawn_claude_session
+    let spawn = |prompt: Option<&str>, resume: Option<&str>| {
+        spawn_claude_session_with_config(
+            project_root,
+            feature,
+            Some(agent_name),
+            prompt,
+            edit,
+            resume,
+            None,
+            tmux_server,
+            &config,
+        )
+    };
 
     // Always queue context as a message before touching the session. That
     // way it survives a failed spawn as a dead letter and auto-arrives on
@@ -192,16 +231,14 @@ pub fn agent_spawn(
 
     // Check if this agent already exists in the registry
     if let Some(entry) = registry.get(agent_name) {
-        let is_active = entry.active;
         let resume_id = if entry.session_id.is_empty() {
             None
         } else {
             Some(entry.session_id.clone())
         };
 
-        if is_active
-            && let Some(target) = tmux::find_window(tmux_server, &session_name, agent_name)?
-        {
+        // Check if the agent's tmux window still exists
+        if let Some(target) = tmux::find_window(tmux_server, &session_name, agent_name)? {
             // Check if a claude process is actually running in the pane.
             // If the pane's current command is just a shell, the agent process
             // has exited and this is a zombie window — kill it and respawn.
@@ -222,16 +259,7 @@ pub fn agent_spawn(
         }
 
         // Agent existed but window is gone — spawn with resume, no prompt.
-        let window_target = spawn_claude_session(
-            project_root,
-            feature,
-            Some(agent_name),
-            None,
-            edit,
-            resume_id.as_deref(),
-            None,
-            tmux_server,
-        )?;
+        let window_target = spawn(None, resume_id.as_deref())?;
 
         let msg = if resume_id.is_some() {
             format!("Resumed agent '{agent_name}' in {window_target}")
@@ -243,16 +271,7 @@ pub fn agent_spawn(
 
     // New agent, no positional prompt — the Stop hook blocks until any
     // queued context is available, then tells the agent to read it.
-    let window_target = spawn_claude_session(
-        project_root,
-        feature,
-        Some(agent_name),
-        None,
-        edit,
-        None,
-        None,
-        tmux_server,
-    )?;
+    let window_target = spawn(None, None)?;
 
     Ok(format!("Spawned agent '{agent_name}' in {window_target}"))
 }
@@ -380,30 +399,10 @@ mod tests {
         let agents_dir = paths::agents_dir(dir.path());
         let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
         let entry = registry.get("reviewer").unwrap();
-        assert!(entry.active);
         assert_eq!(entry.agent_type, AgentType::Agent);
     }
 
-    /// Poll `pane_command` until the predicate returns true, or panic
-    /// after ~5 s. This replaces fixed `thread::sleep` calls that were
-    /// the root cause of flaky timing failures.
-    fn wait_for_pane<F: Fn(&str) -> bool>(server: Option<&str>, target: &str, pred: F, desc: &str) {
-        for _ in 0..100 {
-            if let Ok(cmd) = tmux::pane_command(server, target) {
-                if pred(&cmd) {
-                    return;
-                }
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-        let actual = tmux::pane_command(server, target).unwrap_or_default();
-        panic!("timed out waiting for pane to satisfy '{desc}' (last saw '{actual}')");
-    }
-
-    /// Set up a fake "active" agent: create a window named after the agent
-    /// running `sleep 999` (a non-shell process), and register it as active
-    /// in the agent registry. This avoids going through `agent_spawn` for
-    /// the first call, which would launch a real `claude` process.
+    /// Set up a fake "active" agent using the shared TestServer helper.
     fn setup_active_agent(
         server: &TestServer,
         dir: &Path,
@@ -411,35 +410,7 @@ mod tests {
         feature: &str,
         agent_name: &str,
     ) -> String {
-        let worktree = dir.join(feature);
-        let target = tmux::new_window(
-            server.name(),
-            session_name,
-            &worktree,
-            Some(agent_name),
-            true,
-        )
-        .unwrap();
-        tmux::send_keys(server.name(), &target, "exec sleep 999").unwrap();
-
-        // Register agent as active
-        let agents_dir = paths::agents_dir(dir);
-        let mut registry = AgentRegistry::load(&agents_dir, feature).unwrap();
-        registry.register(
-            agent_name,
-            AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: agent_name.to_string(),
-                active: true,
-            },
-        );
-        registry.save(&agents_dir, feature).unwrap();
-
-        // Wait for `exec sleep` to take effect so the pane reports a
-        // non-shell process.
-        wait_for_pane(server.name(), &target, |c| c == "sleep", "sleep");
-        target
+        server.spawn_fake_agent(dir, session_name, feature, agent_name)
     }
 
     #[test]
@@ -482,7 +453,6 @@ mod tests {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
                 window_name: "reviewer".to_string(),
-                active: true,
             },
         );
         registry.save(&agents_dir, &feature).unwrap();
@@ -527,7 +497,6 @@ mod tests {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
                 window_name: "reviewer".to_string(),
-                active: true,
             },
         );
         registry.save(&agents_dir, &feature).unwrap();
@@ -588,15 +557,7 @@ mod tests {
         agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
         agent_spawn(dir.path(), &feature, "tester", None, false, server.name()).unwrap();
 
-        // Mark them as inactive (simulating closed windows)
-        let agents_dir = paths::agents_dir(dir.path());
-        let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
-        for entry in registry.agents.values_mut() {
-            entry.active = false;
-        }
-        registry.save(&agents_dir, &feature).unwrap();
-
-        // Kill the session and recreate it (simulating restart)
+        // Kill the session and recreate it (simulating restart — windows gone)
         tmux::kill_session(server.name(), &session_name).unwrap();
         let worktree = dir.path().join("login");
         tmux::create_session(server.name(), &session_name, &worktree).unwrap();
@@ -630,8 +591,7 @@ mod tests {
         agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
 
         // Manually register a second agent, then destroy the tmux session
-        // so that spawning new windows fails for both. But first, mark
-        // reviewer inactive and register a second agent.
+        // so that spawning new windows fails for both.
         let agents_dir = paths::agents_dir(dir.path());
         let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
         registry.register(
@@ -640,10 +600,8 @@ mod tests {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
                 window_name: "tester".to_string(),
-                active: false,
             },
         );
-        registry.get_mut("reviewer").unwrap().active = false;
         registry.save(&agents_dir, &feature).unwrap();
 
         // Kill the session entirely — now both spawns will fail because
@@ -669,14 +627,13 @@ mod tests {
         let dir = tempdir().unwrap();
         let (session_name, feature) = setup_project(dir.path(), &server);
 
-        // Spawn agent, then manually set a session_id and mark inactive
+        // Spawn agent, then manually set a session_id
         agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
 
         let agents_dir = paths::agents_dir(dir.path());
         let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
         let entry = registry.get_mut("reviewer").unwrap();
         entry.session_id = "sess-abc123".to_string();
-        entry.active = false;
         registry.save(&agents_dir, &feature).unwrap();
 
         // Kill the window (simulating it died)
@@ -689,10 +646,6 @@ mod tests {
         let msg =
             agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
         assert!(msg.contains("Resumed agent 'reviewer'"));
-
-        // Verify it's marked active again
-        let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
-        assert!(registry.get("reviewer").unwrap().active);
     }
 
     #[test]

@@ -21,7 +21,7 @@ pub fn agent_stop(
     let config = ProjectConfig::load(&pm_dir)?;
     let session_name = format!("{}/{feature}", config.project.name);
 
-    let mut registry = AgentRegistry::load(&agents_dir, feature)?;
+    let registry = AgentRegistry::load(&agents_dir, feature)?;
 
     // Verify agent exists in the registry
     if registry.get(agent_name).is_none() {
@@ -29,14 +29,6 @@ pub fn agent_stop(
             "'{agent_name}' not found in scope '{feature}'"
         )));
     }
-
-    // Mark inactive in the registry BEFORE killing the window. If this
-    // command is running inside the agent's own tmux window, the kill would
-    // terminate this process — so all side effects must complete first.
-    if let Some(entry) = registry.get_mut(agent_name) {
-        entry.active = false;
-    }
-    registry.save(&agents_dir, feature)?;
 
     // Kill the tmux window if it exists (idempotent, must be last)
     if let Some(target) = tmux::find_window(tmux_server, &session_name, agent_name)? {
@@ -95,7 +87,7 @@ mod tests {
         (session_name, feature_name.to_string())
     }
 
-    fn register_agent(dir: &Path, feature: &str, name: &str, active: bool) {
+    fn register_agent(dir: &Path, feature: &str, name: &str) {
         let agents_dir = paths::agents_dir(dir);
         let mut registry = AgentRegistry::load(&agents_dir, feature).unwrap();
         registry.register(
@@ -104,7 +96,6 @@ mod tests {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
                 window_name: name.to_string(),
-                active,
             },
         );
         registry.save(&agents_dir, feature).unwrap();
@@ -126,7 +117,7 @@ mod tests {
             true,
         )
         .unwrap();
-        register_agent(dir.path(), &feature, "reviewer", true);
+        register_agent(dir.path(), &feature, "reviewer");
 
         let msg = agent_stop(dir.path(), &feature, "reviewer", server.name()).unwrap();
         assert!(msg.contains("Stopped agent 'reviewer'"));
@@ -134,11 +125,6 @@ mod tests {
         // Window should be gone
         let window = tmux::find_window(server.name(), &session_name, "reviewer").unwrap();
         assert!(window.is_none());
-
-        // Registry should show inactive
-        let agents_dir = paths::agents_dir(dir.path());
-        let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
-        assert!(!registry.get("reviewer").unwrap().active);
     }
 
     #[test]
@@ -148,14 +134,10 @@ mod tests {
         let (_session_name, feature) = setup_project(dir.path(), &server);
 
         // Register agent but don't create a window
-        register_agent(dir.path(), &feature, "reviewer", true);
+        register_agent(dir.path(), &feature, "reviewer");
 
         let msg = agent_stop(dir.path(), &feature, "reviewer", server.name()).unwrap();
         assert!(msg.contains("Stopped agent 'reviewer'"));
-
-        let agents_dir = paths::agents_dir(dir.path());
-        let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
-        assert!(!registry.get("reviewer").unwrap().active);
     }
 
     #[test]

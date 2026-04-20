@@ -109,16 +109,27 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
         let agents_dir = paths::agents_dir(project_root);
         if let Ok(registry) = AgentRegistry::load(&agents_dir, "main") {
             for (agent_name, entry) in &registry.agents {
-                if entry.agent_type != AgentType::Agent || !entry.active {
+                if entry.agent_type != AgentType::Agent {
                     continue;
                 }
-                let window_alive =
-                    tmux::find_window(tmux_server, &main_session, &entry.window_name)?.is_some();
-                if !window_alive {
+                let issue = if let Some(target) =
+                    tmux::find_window(tmux_server, &main_session, &entry.window_name)?
+                {
+                    // Window exists — check if it's a zombie (shell process)
+                    match tmux::pane_command(tmux_server, &target) {
+                        Ok(cmd) if agent_spawn::is_shell_process(&cmd) => Some(format!(
+                            "agent '{agent_name}' window is a zombie (shell process, not running)"
+                        )),
+                        _ => None,
+                    }
+                } else {
+                    Some(format!(
+                        "agent '{agent_name}' registered but window missing"
+                    ))
+                };
+                if let Some(message) = issue {
                     main_issues.push(Issue {
-                        message: format!(
-                            "agent '{agent_name}' registered as active but window missing"
-                        ),
+                        message,
                         fix: Fix::Auto(FixAction::RespawnAgent {
                             agent_name: agent_name.clone(),
                         }),
@@ -227,17 +238,26 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
                 let agents_dir = paths::agents_dir(project_root);
                 if let Ok(registry) = AgentRegistry::load(&agents_dir, name) {
                     for (agent_name, entry) in &registry.agents {
-                        if entry.agent_type != AgentType::Agent || !entry.active {
+                        if entry.agent_type != AgentType::Agent {
                             continue;
                         }
-                        let window_alive =
+                        let issue = if let Some(target) =
                             tmux::find_window(tmux_server, &session_name, &entry.window_name)?
-                                .is_some();
-                        if !window_alive {
+                        {
+                            match tmux::pane_command(tmux_server, &target) {
+                                Ok(cmd) if agent_spawn::is_shell_process(&cmd) => Some(format!(
+                                    "agent '{agent_name}' window is a zombie (shell process, not running)"
+                                )),
+                                _ => None,
+                            }
+                        } else {
+                            Some(format!(
+                                "agent '{agent_name}' registered but window missing"
+                            ))
+                        };
+                        if let Some(message) = issue {
                             issues.push(Issue {
-                                message: format!(
-                                    "agent '{agent_name}' registered as active but window missing"
-                                ),
+                                message,
                                 fix: Fix::Auto(FixAction::RespawnAgent {
                                     agent_name: agent_name.clone(),
                                 }),
@@ -437,13 +457,6 @@ fn apply_fix(
             hooks_install::install(project_root)?;
         }
         FixAction::RespawnAgent { agent_name } => {
-            // Clear stale active flag so agent_spawn treats it as dead
-            let agents_dir = paths::agents_dir(project_root);
-            let mut registry = AgentRegistry::load(&agents_dir, name)?;
-            if let Some(entry) = registry.get_mut(agent_name) {
-                entry.active = false;
-                registry.save(&agents_dir, name)?;
-            }
             agent_spawn::agent_spawn(project_root, name, agent_name, None, false, tmux_server)?;
         }
     }
@@ -799,7 +812,6 @@ mod tests {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
                 window_name: "reviewer".to_string(),
-                active: true,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -828,7 +840,6 @@ mod tests {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
                 window_name: "reviewer".to_string(),
-                active: true,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -855,30 +866,9 @@ mod tests {
         let server = TestServer::new();
         let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
 
-        // Register an agent AND create its window
-        let agents_dir = paths::agents_dir(&project_path);
+        // Register an agent AND create its window with a non-shell process
         let session_name = format!("{project_name}/login");
-        let worktree = project_path.join("login");
-        tmux::new_window(
-            server.name(),
-            &session_name,
-            &worktree,
-            Some("reviewer"),
-            true,
-        )
-        .unwrap();
-
-        let mut registry = AgentRegistry::default();
-        registry.register(
-            "reviewer",
-            crate::state::agent::AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: "reviewer".to_string(),
-                active: true,
-            },
-        );
-        registry.save(&agents_dir, "login").unwrap();
+        server.spawn_fake_agent(&project_path, &session_name, "login", "reviewer");
 
         let lines = doctor(&project_path, false, server.name()).unwrap();
         assert!(lines[0].contains("all healthy"), "got: {lines:?}");

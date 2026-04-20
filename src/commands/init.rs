@@ -72,7 +72,7 @@ pub fn init(
             let mut permissions = std::collections::BTreeMap::new();
             permissions.insert("implementer".to_string(), "acceptEdits".to_string());
             AgentsConfig {
-                default: "implementer".to_string(),
+                default: Some("implementer".to_string()),
                 permissions,
             }
         },

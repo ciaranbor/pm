@@ -151,7 +151,7 @@ enum StateCommands {
 
 #[derive(Subcommand)]
 enum DocsCommands {
-    /// Commit all changes in the information store (and push if remote configured via `pm state remote`)
+    /// Commit changes in the information store (and push if remote configured)
     Sync,
 }
 
@@ -810,7 +810,8 @@ fn run() -> pm::error::Result<()> {
                     Ok(())
                 }
                 AgentCommands::List { active } => {
-                    let lines = commands::agent_list::agent_list(&project_root, &feature, active)?;
+                    let lines =
+                        commands::agent_list::agent_list(&project_root, &feature, active, None)?;
                     for line in lines {
                         println!("{line}");
                     }
@@ -1224,7 +1225,7 @@ fn run() -> pm::error::Result<()> {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
             match docs_cmd {
                 DocsCommands::Sync => {
-                    let msg = commands::docs::sync(&project_root)?;
+                    let msg = commands::state_cmd::sync(&project_root)?;
                     println!("{msg}");
                     Ok(())
                 }

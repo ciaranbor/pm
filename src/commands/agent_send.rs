@@ -66,14 +66,17 @@ fn is_agent_active(
     let agents_dir = paths::agents_dir(project_root);
     let registry = AgentRegistry::load(&agents_dir, feature)?;
 
-    if let Some(entry) = registry.get(agent_name)
-        && entry.active
-    {
+    if registry.get(agent_name).is_some() {
         let pm_dir = paths::pm_dir(project_root);
         let config = ProjectConfig::load(&pm_dir)?;
         let session_name = format!("{}/{feature}", config.project.name);
-        if tmux::find_window(tmux_server, &session_name, agent_name)?.is_some() {
-            return Ok(true);
+        if let Some(target) = tmux::find_window(tmux_server, &session_name, agent_name)? {
+            // Verify the pane is running a non-shell process
+            if let Ok(cmd) = tmux::pane_command(tmux_server, &target)
+                && !super::agent_spawn::is_shell_process(&cmd)
+            {
+                return Ok(true);
+            }
         }
     }
 
@@ -377,22 +380,14 @@ mod tests {
     fn send_to_active_agent_does_not_spawn() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (root, _session_name, feature) = setup_project_with_tmux(dir.path(), &server);
+        let (root, session_name, feature) = setup_project_with_tmux(dir.path(), &server);
 
         // Agent definition must exist so we're genuinely testing the
         // "active agent skips spawn" path, not the "no definition" guard.
         create_agent_definition(&root, "reviewer");
 
-        // Spawn the agent first so it's active
-        super::super::agent_spawn::agent_spawn(
-            &root,
-            &feature,
-            "reviewer",
-            None,
-            false,
-            server.name(),
-        )
-        .unwrap();
+        // Create a fake active agent (window running sleep, not a shell)
+        server.spawn_fake_agent(&root, &session_name, &feature, "reviewer");
 
         let msg = agent_send(
             &root,
@@ -432,11 +427,10 @@ mod tests {
         assert!(msg.contains("Message 001 sent to 'reviewer'"));
         assert!(msg.contains("Spawned agent 'reviewer'"));
 
-        // Verify the agent is now registered and active
+        // Verify the agent is now registered
         let agents_dir = paths::agents_dir(&root);
         let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
-        let entry = registry.get("reviewer").unwrap();
-        assert!(entry.active);
+        assert!(registry.get("reviewer").is_some());
     }
 
     #[test]
@@ -448,7 +442,7 @@ mod tests {
         // Agent definition must exist for auto-spawn
         create_agent_definition(&root, "reviewer");
 
-        // Spawn agent, then mark it inactive (simulating window died)
+        // Spawn agent, then kill its window (simulating it died)
         super::super::agent_spawn::agent_spawn(
             &root,
             &feature,
@@ -458,11 +452,6 @@ mod tests {
             server.name(),
         )
         .unwrap();
-
-        let agents_dir = paths::agents_dir(&root);
-        let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
-        registry.get_mut("reviewer").unwrap().active = false;
-        registry.save(&agents_dir, &feature).unwrap();
 
         // Kill and recreate session to remove the window
         tmux::kill_session(server.name(), &session_name).unwrap();

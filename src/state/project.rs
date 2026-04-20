@@ -35,9 +35,9 @@ pub struct ProjectConfig {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentsConfig {
-    /// Default agent to spawn on `feat new` (empty = no auto-spawn)
-    #[serde(default)]
-    pub default: String,
+    /// Default agent to spawn on `feat new` (None = no auto-spawn)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
     /// Per-agent permission modes (e.g. "acceptEdits")
     #[serde(default)]
     pub permissions: std::collections::BTreeMap<String, String>,
@@ -328,7 +328,7 @@ name = "myapp"
         assert_eq!(config.project.name, "myapp");
         assert_eq!(config.setup.script, "");
         assert_eq!(config.github.repo, "");
-        assert_eq!(config.agents.default, "");
+        assert_eq!(config.agents.default, None);
         assert!(config.agents.permissions.is_empty());
     }
 
@@ -346,7 +346,7 @@ implementer = "acceptEdits"
 reviewer = ""
 "#;
         let config: ProjectConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.agents.default, "implementer");
+        assert_eq!(config.agents.default, Some("implementer".to_string()));
         assert_eq!(
             config.agents.permissions.get("implementer").unwrap(),
             "acceptEdits"
