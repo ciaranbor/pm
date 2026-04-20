@@ -427,11 +427,7 @@ Reinstalls bundled assets (hooks, skills, agents, information store) to each pro
 
 Each project has an information store at `.pm/docs/` for project-level documentation. The store is bootstrapped by `pm init` with default categories (todo, issues, ideas) defined in `categories.toml`.
 
-```sh
-pm docs sync                     # commit changes (and push if remote configured via pm state)
-```
-
-The orchestrator agent manages the store directly — reading `categories.toml` to discover categories and editing the corresponding markdown files. `pm docs sync` stages and commits all changes in the `.pm/` state repo. When a remote is configured (`pm state remote [url]`), it also pushes. The docs are tracked alongside all other project state.
+The orchestrator agent manages the store directly — reading `categories.toml` to discover categories and editing the corresponding markdown files. Use `pm state push` to commit and push all changes in the `.pm/` state repo. When a remote is configured (`pm state remote [url]`), it also pushes. The docs are tracked alongside all other project state.
 
 Default categories after bootstrap:
 

@@ -29,7 +29,7 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 - `src/commands/claude_export.rs` — `pm claude export` tars Claude session data with a manifest for cross-machine transfer
 - `src/commands/claude_import.rs` — `pm claude import` extracts tarball, resolves local paths from registry, rewrites embedded paths
 - `src/commands/summary.rs` — `pm summary write` writes/overwrites `.pm/summaries/<feature>.md`
-- `src/commands/docs.rs` — information store management (`bootstrap`, `sync`)
+- `src/commands/docs.rs` — information store management (`bootstrap`, submodule migration)
 - `src/commands/state_cmd.rs` — git-backed state backup and sync (`init`, `remote`, `push`, `pull`, `status`, `backfill`). Supports both per-project `.pm/` and global registry `~/.config/pm/` via `--global` flag. Shared `RepoContext` eliminates duplication between the two modes. `backfill` reads origin URLs from existing projects and writes `repo_url`/`state_remote` into the global registry.
 - `src/commands/restore.rs` — `pm restore` rebuilds all projects on a fresh machine from the global registry, cloning repos (`repo_url`), pulling `.pm/` state (`state_remote`), recreating missing feature worktrees, and opening tmux sessions.
 - `skills/` — bundled skill definitions (pm), embedded via `include_str!`
@@ -64,7 +64,7 @@ Two different things, don't collapse them:
 - **Information store** (`.pm/docs/`) is for **project-level persistent
   knowledge** — todos, issues, ideas, and any other categories defined in
   `categories.toml`. Tracked by the `.pm/` state repo, managed by the
-  orchestrator agent. `pm docs sync` (alias for `pm state push`) commits and pushes changes.
+  orchestrator agent. Use `pm state push` to commit and push changes.
   Bootstrapped by `pm init` and `pm upgrade`.
 - **Messaging** (`pm msg`) is for **cross-scope or cross-role
   communication** — sending something to a *different* agent or a

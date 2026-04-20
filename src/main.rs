@@ -92,9 +92,6 @@ enum Commands {
     /// Git-backed state management (.pm/ backup and sync)
     #[command(subcommand)]
     State(StateCommands),
-    /// Information store management
-    #[command(subcommand)]
-    Docs(DocsCommands),
     /// Write a summary doc from a feature worktree
     Summary {
         #[command(subcommand)]
@@ -147,12 +144,6 @@ enum StateCommands {
     },
     /// Backfill repo_url and state_remote in global registry from existing projects
     Backfill,
-}
-
-#[derive(Subcommand)]
-enum DocsCommands {
-    /// Commit changes in the information store (and push if remote configured)
-    Sync,
 }
 
 #[derive(Subcommand)]
@@ -1221,16 +1212,6 @@ fn run() -> pm::error::Result<()> {
                 Ok(())
             }
         },
-        Commands::Docs(docs_cmd) => {
-            let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-            match docs_cmd {
-                DocsCommands::Sync => {
-                    let msg = commands::state_cmd::sync(&project_root)?;
-                    println!("{msg}");
-                    Ok(())
-                }
-            }
-        }
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
             clap_complete::generate(shell, &mut cmd, "pm", &mut std::io::stdout());
