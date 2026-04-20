@@ -57,6 +57,7 @@ pm agent list                         # list agents in the current feature
 
 ## Guidelines
 
+- **Never `cd` before running `pm` commands** — all pm commands auto-detect the project root from the current directory. Running `pm msg read` from your worktree is correct; `cd`-ing to the project root is unnecessary and triggers permission prompts.
 - Check your inbox (`pm msg list`) between tasks — other agents may have sent you messages
 - When you finish a piece of work that another agent needs to know about, send them a message
 - Keep messages concise and actionable
