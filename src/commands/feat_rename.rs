@@ -27,7 +27,9 @@ pub fn feat_rename(
     // Validate: new name must not already exist as a branch
     let main_repo = project_root.join("main");
     if git::branch_exists(&main_repo, new_name)? {
-        return Err(PmError::Git(format!("branch '{new_name}' already exists")));
+        return Err(PmError::SafetyCheck(format!(
+            "branch '{new_name}' already exists"
+        )));
     }
 
     let config = ProjectConfig::load(&pm_dir)?;

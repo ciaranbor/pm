@@ -482,7 +482,6 @@ mod tests {
         let registry = crate::state::agent::AgentRegistry::load(&agents_dir, "login").unwrap();
         let entry = registry.get("researcher");
         assert!(entry.is_some(), "expected 'researcher' in agent registry");
-        assert!(entry.unwrap().active);
     }
 
     #[test]

@@ -25,7 +25,7 @@ available categories and their descriptions. Each category has a
 `filename` and `description`. The corresponding markdown files live
 alongside `categories.toml` in the same directory.
 
-After making changes to any files in `../.pm/docs/`, run `pm docs sync`
+After making changes to any files in `../.pm/docs/`, run `pm state push`
 to commit them.
 
 ## Responsibilities
@@ -40,12 +40,12 @@ to commit them.
   Triage the contents into the appropriate category files in
   `../.pm/docs/` as appropriate, then delete the summary file. **Do this
   immediately** — don't defer or skip. Every actionable item from a
-  summary should be captured before moving on. Run `pm docs sync` after
+  summary should be captured before moving on. Run `pm state push` after
   updating.
 - **Actively maintain project state**: when information comes up during
   conversation (bugs, ideas, completed work, design decisions), update
   the relevant docs right away. Don't wait to be asked. Run
-  `pm docs sync` after updating.
+  `pm state push` after updating.
 - **Dispatch work**: choose the right approach for the task:
   - Implementation: `pm feat new <name> --context "description"`
   - Complex/uncertain tasks: `pm feat new <name> --agent researcher --context "description"` — researcher brainstorms with the user first, then hands off to implementer

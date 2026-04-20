@@ -188,20 +188,20 @@ pub fn check_safety(
 /// are skipped (handles squash merges where git can't detect the merge).
 fn evaluate_safety(report: &SafetyReport, pr_merged: bool, name: &str) -> Result<()> {
     if report.has_uncommitted_changes {
-        return Err(PmError::Git(format!(
+        return Err(PmError::SafetyCheck(format!(
             "feature '{name}' has uncommitted changes. Use --force to override."
         )));
     }
 
     if !report.is_merged && !pr_merged {
-        return Err(PmError::Git(format!(
+        return Err(PmError::SafetyCheck(format!(
             "feature '{name}' has commits not merged into main. Use --force to override."
         )));
     }
 
     // Skip unpushed check when PR is merged — the commits are on GitHub already
     if report.has_unpushed_commits && !pr_merged {
-        return Err(PmError::Git(format!(
+        return Err(PmError::SafetyCheck(format!(
             "feature '{name}' has unpushed commits. Use --force to override."
         )));
     }
@@ -353,7 +353,6 @@ mod tests {
                 agent_type: crate::state::agent::AgentType::Agent,
                 session_id: "test".to_string(),
                 window_name: "reviewer".to_string(),
-                active: true,
             },
         );
         registry.save(&agents_dir, "login").unwrap();

@@ -2,8 +2,10 @@ use std::fs;
 use std::path::Path;
 
 use crate::error::{PmError, Result};
-use crate::state::agent::AgentRegistry;
+use crate::state::agent::{AgentRegistry, AgentType};
 use crate::state::paths;
+use crate::state::project::ProjectConfig;
+use crate::tmux;
 
 /// Parse the YAML frontmatter from an agent definition and extract checklist items.
 ///
@@ -148,12 +150,26 @@ pub fn agent_check_all(
     tmux_server: Option<&str>,
 ) -> Result<(Vec<String>, Vec<String>)> {
     let agents_dir = paths::agents_dir(project_root);
+    let pm_dir = paths::pm_dir(project_root);
+    let config = ProjectConfig::load(&pm_dir)?;
+    let session_name = format!("{}/{feature}", config.project.name);
     let registry = AgentRegistry::load(&agents_dir, feature)?;
 
     let active_agents: Vec<&str> = registry
         .agents
         .iter()
-        .filter(|(_, entry)| entry.active)
+        .filter(|(_, entry)| entry.agent_type == AgentType::Agent)
+        .filter(|(name, _)| {
+            tmux::find_window(tmux_server, &session_name, name)
+                .ok()
+                .flatten()
+                .and_then(|target| {
+                    tmux::pane_command(tmux_server, &target)
+                        .ok()
+                        .map(|cmd| !super::agent_spawn::is_shell_process(&cmd))
+                })
+                .unwrap_or(false)
+        })
         .map(|(name, _)| name.as_str())
         .collect();
 
@@ -193,7 +209,6 @@ pub fn agent_check_all(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::agent::{AgentEntry, AgentType};
     use crate::state::feature::{FeatureState, FeatureStatus};
     use crate::state::project::{ProjectConfig, ProjectInfo};
     use crate::testing::TestServer;
@@ -441,19 +456,16 @@ tools: Read, Write
 
     // --- agent_check_all tests ---
 
-    fn register_active_agent(root: &std::path::Path, feature: &str, agent_name: &str) {
-        let agents_dir = paths::agents_dir(root);
-        let mut registry = AgentRegistry::load(&agents_dir, feature).unwrap();
-        registry.register(
-            agent_name,
-            AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: agent_name.to_string(),
-                active: true,
-            },
-        );
-        registry.save(&agents_dir, feature).unwrap();
+    fn register_active_agent(
+        root: &std::path::Path,
+        feature: &str,
+        agent_name: &str,
+        server: &TestServer,
+    ) {
+        let pm_dir = paths::pm_dir(root);
+        let config = ProjectConfig::load(&pm_dir).unwrap();
+        let session_name = format!("{}/{feature}", config.project.name);
+        server.spawn_fake_agent(root, &session_name, feature, agent_name);
     }
 
     #[test]
@@ -465,8 +477,8 @@ tools: Read, Write
         create_agent_definition_with_checklist(&root, "implementer", &["Tests pass"]);
         create_agent_definition_with_checklist(&root, "reviewer", &["Sent approval"]);
 
-        register_active_agent(&root, &feature, "implementer");
-        register_active_agent(&root, &feature, "reviewer");
+        register_active_agent(&root, &feature, "implementer", &server);
+        register_active_agent(&root, &feature, "reviewer", &server);
 
         let (successes, errors) = agent_check_all(&root, &feature, "user", server.name()).unwrap();
         assert_eq!(successes.len(), 2);
@@ -485,8 +497,8 @@ tools: Read, Write
         // reviewer has no checklist
         create_agent_definition_with_checklist(&root, "reviewer", &[]);
 
-        register_active_agent(&root, &feature, "implementer");
-        register_active_agent(&root, &feature, "reviewer");
+        register_active_agent(&root, &feature, "implementer", &server);
+        register_active_agent(&root, &feature, "reviewer", &server);
 
         let (successes, errors) = agent_check_all(&root, &feature, "user", server.name()).unwrap();
         assert_eq!(successes.len(), 1);
@@ -513,7 +525,7 @@ tools: Read, Write
         let (root, feature) = setup_project(dir.path(), &server);
 
         create_agent_definition_with_checklist(&root, "implementer", &[]);
-        register_active_agent(&root, &feature, "implementer");
+        register_active_agent(&root, &feature, "implementer", &server);
 
         let result = agent_check_all(&root, &feature, "user", server.name());
         assert!(result.is_err());

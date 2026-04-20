@@ -64,7 +64,7 @@ Two different things, don't collapse them:
 - **Information store** (`.pm/docs/`) is for **project-level persistent
   knowledge** — todos, issues, ideas, and any other categories defined in
   `categories.toml`. Tracked by the `.pm/` state repo, managed by the
-  orchestrator agent. `pm docs sync` commits changes via the state repo.
+  orchestrator agent. `pm docs sync` (alias for `pm state push`) commits and pushes changes.
   Bootstrapped by `pm init` and `pm upgrade`.
 - **Messaging** (`pm msg`) is for **cross-scope or cross-role
   communication** — sending something to a *different* agent or a

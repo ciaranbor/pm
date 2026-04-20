@@ -4,11 +4,37 @@ use crate::error::Result;
 use crate::messages;
 use crate::state::agent::AgentRegistry;
 use crate::state::paths;
+use crate::state::project::ProjectConfig;
+use crate::tmux;
+
+/// Returns true if the agent has a live (non-shell) process in its tmux window.
+fn is_agent_active(
+    tmux_server: Option<&str>,
+    session_name: &str,
+    window_name: &str,
+) -> Result<bool> {
+    if let Some(target) = tmux::find_window(tmux_server, session_name, window_name)? {
+        match tmux::pane_command(tmux_server, &target) {
+            Ok(cmd) => Ok(!super::agent_spawn::is_shell_process(&cmd)),
+            Err(_) => Ok(false),
+        }
+    } else {
+        Ok(false)
+    }
+}
 
 /// List all agents for a feature from the agent registry.
-pub fn agent_list(project_root: &Path, feature: &str, active_only: bool) -> Result<Vec<String>> {
+pub fn agent_list(
+    project_root: &Path,
+    feature: &str,
+    active_only: bool,
+    tmux_server: Option<&str>,
+) -> Result<Vec<String>> {
     let agents_dir = paths::agents_dir(project_root);
     let messages_dir = paths::messages_dir(project_root);
+    let pm_dir = paths::pm_dir(project_root);
+    let config = ProjectConfig::load(&pm_dir)?;
+    let session_name = format!("{}/{feature}", config.project.name);
     let registry = AgentRegistry::load(&agents_dir, feature)?;
 
     if registry.agents.is_empty() {
@@ -17,12 +43,14 @@ pub fn agent_list(project_root: &Path, feature: &str, active_only: bool) -> Resu
 
     let mut lines = vec![format!("Agents in '{feature}':")];
 
-    for (name, entry) in &registry.agents {
-        if active_only && !entry.active {
+    for name in registry.agents.keys() {
+        let active = is_agent_active(tmux_server, &session_name, name)?;
+
+        if active_only && !active {
             continue;
         }
 
-        let status_str = if entry.active { "active" } else { "inactive" };
+        let status_str = if active { "active" } else { "inactive" };
         let summaries = messages::check(&messages_dir, feature, name)?;
         let unread: u32 = summaries.iter().map(|s| s.count).sum();
         let unread_str = if unread > 0 {
@@ -51,52 +79,70 @@ mod tests {
     use super::*;
     use crate::messages;
     use crate::state::agent::{AgentEntry, AgentType};
-    use std::path::PathBuf;
+    use crate::testing::TestServer;
     use tempfile::tempdir;
 
-    fn setup_project(dir: &std::path::Path) -> PathBuf {
+    fn setup_project(dir: &std::path::Path, server: &TestServer) -> String {
         let root = dir.to_path_buf();
-        std::fs::create_dir_all(root.join(".pm/features")).unwrap();
-        root
+        let pm_dir = root.join(".pm");
+        let project_name = server.scope("proj");
+
+        std::fs::create_dir_all(pm_dir.join("features")).unwrap();
+
+        let config = ProjectConfig {
+            project: crate::state::project::ProjectInfo {
+                name: project_name.clone(),
+            },
+            setup: Default::default(),
+            github: Default::default(),
+            agents: Default::default(),
+        };
+        config.save(&pm_dir).unwrap();
+
+        // Create worktree directory and tmux session
+        let feature = "login";
+        let worktree = root.join(feature);
+        std::fs::create_dir_all(&worktree).unwrap();
+        let session_name = format!("{project_name}/{feature}");
+        tmux::create_session(server.name(), &session_name, &worktree).unwrap();
+
+        project_name
     }
 
     #[test]
     fn list_no_agents_returns_no_agents() {
+        let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        setup_project(dir.path(), &server);
 
-        let lines = agent_list(&root, "login", false).unwrap();
+        let lines = agent_list(dir.path(), "login", false, server.name()).unwrap();
         assert_eq!(lines, vec!["No agents"]);
     }
 
     #[test]
     fn list_from_registry_shows_status() {
+        let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let project_name = setup_project(dir.path(), &server);
 
-        let agents_dir = paths::agents_dir(&root);
-        let mut registry = AgentRegistry::default();
-        registry.register(
-            "reviewer",
-            AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: "reviewer".to_string(),
-                active: true,
-            },
-        );
+        let session_name = format!("{project_name}/login");
+
+        // Spawn reviewer as active (non-shell process), tester registered but no window
+        server.spawn_fake_agent(dir.path(), &session_name, "login", "reviewer");
+
+        let agents_dir = paths::agents_dir(dir.path());
+        let mut registry = AgentRegistry::load(&agents_dir, "login").unwrap();
         registry.register(
             "tester",
             AgentEntry {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
-                window_name: String::new(),
-                active: false,
+                window_name: "tester".to_string(),
             },
         );
         registry.save(&agents_dir, "login").unwrap();
 
-        let lines = agent_list(&root, "login", false).unwrap();
+        let lines = agent_list(dir.path(), "login", false, server.name()).unwrap();
         assert!(
             lines
                 .iter()
@@ -110,82 +156,28 @@ mod tests {
     }
 
     #[test]
-    fn list_active_only_filters() {
-        let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
-
-        let agents_dir = paths::agents_dir(&root);
-        let mut registry = AgentRegistry::default();
-        registry.register(
-            "reviewer",
-            AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: String::new(),
-                active: true,
-            },
-        );
-        registry.register(
-            "tester",
-            AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: String::new(),
-                active: false,
-            },
-        );
-        registry.save(&agents_dir, "login").unwrap();
-
-        let lines = agent_list(&root, "login", true).unwrap();
-        assert!(lines.iter().any(|l| l.contains("reviewer")));
-        assert!(!lines.iter().any(|l| l.contains("tester")));
-    }
-
-    #[test]
-    fn list_active_only_none_active() {
-        let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
-
-        let agents_dir = paths::agents_dir(&root);
-        let mut registry = AgentRegistry::default();
-        registry.register(
-            "reviewer",
-            AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: String::new(),
-                active: false,
-            },
-        );
-        registry.save(&agents_dir, "login").unwrap();
-
-        let lines = agent_list(&root, "login", true).unwrap();
-        assert_eq!(lines, vec!["No active agents"]);
-    }
-
-    #[test]
     fn list_shows_unread_counts() {
+        let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        setup_project(dir.path(), &server);
 
-        let agents_dir = paths::agents_dir(&root);
+        let agents_dir = paths::agents_dir(dir.path());
         let mut registry = AgentRegistry::default();
         registry.register(
             "reviewer",
             AgentEntry {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
-                window_name: String::new(),
-                active: true,
+                window_name: "reviewer".to_string(),
             },
         );
         registry.save(&agents_dir, "login").unwrap();
 
-        let mdir = paths::messages_dir(&root);
+        let mdir = paths::messages_dir(dir.path());
         messages::send(&mdir, "login", "reviewer", "implementer", "msg 1").unwrap();
         messages::send(&mdir, "login", "reviewer", "implementer", "msg 2").unwrap();
 
-        let lines = agent_list(&root, "login", false).unwrap();
+        let lines = agent_list(dir.path(), "login", false, server.name()).unwrap();
         assert!(
             lines
                 .iter()

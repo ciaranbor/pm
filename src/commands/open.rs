@@ -17,7 +17,7 @@ pub struct OpenResult {
     pub agents_respawned: usize,
 }
 
-/// Clear stale active flags and respawn agents for a given scope.
+/// Respawn agents for a given scope.
 ///
 /// Returns the number of agents successfully respawned. If `select_window_zero`
 /// is true and no agents were respawned, selects window 0 as the landing window.
@@ -29,23 +29,6 @@ fn respawn_agents_for_scope(
     tmux_server: Option<&str>,
     select_window_zero: bool,
 ) -> Result<usize> {
-    let mut registry = AgentRegistry::load(agents_dir, scope)?;
-    let mut dirty = false;
-    for (name, entry) in registry.agents.iter_mut() {
-        if entry.agent_type != AgentType::Agent || !entry.active {
-            continue;
-        }
-        let window_exists = tmux::find_window(tmux_server, session_name, &entry.window_name)?;
-        if window_exists.is_none() {
-            entry.active = false;
-            dirty = true;
-            eprintln!("info: cleared stale active flag for agent '{name}' in '{scope}'");
-        }
-    }
-    if dirty {
-        registry.save(agents_dir, scope)?;
-    }
-
     let spawn_result = agent_spawn::agent_spawn_all(project_root, scope, tmux_server)?;
     let spawned = spawn_result.spawned_count;
     for err in &spawn_result.errors {
@@ -575,7 +558,6 @@ mod tests {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
                 window_name: "reviewer".to_string(),
-                active: true,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -626,7 +608,6 @@ mod tests {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
                 window_name: "reviewer".to_string(),
-                active: true,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -636,10 +617,10 @@ mod tests {
 
         open(&project_path, server.name()).unwrap();
 
-        // After open, the agent should be active again (respawned)
-        let registry = AgentRegistry::load(&agents_dir, "login").unwrap();
-        let entry = registry.get("reviewer").unwrap();
-        assert!(entry.active);
+        // After open, the agent should be respawned (window exists)
+        let session_name = format!("{name}/login");
+        let window = tmux::find_window(server.name(), &session_name, "reviewer").unwrap();
+        assert!(window.is_some(), "reviewer window should be respawned");
     }
 
     #[test]
@@ -660,7 +641,6 @@ mod tests {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
                 window_name: "orchestrator".to_string(),
-                active: true,
             },
         );
         registry.save(&agents_dir, "main").unwrap();
@@ -713,7 +693,6 @@ mod tests {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
                 window_name: "reviewer".to_string(),
-                active: true,
             },
         );
         registry.save(&agents_dir, "login").unwrap();

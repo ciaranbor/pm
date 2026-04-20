@@ -76,7 +76,7 @@ pub fn delete(
                 msg.push_str(&format!("\n  - {b}"));
             }
             msg.push_str("\n\nUse --force to override.");
-            return Err(PmError::Git(msg));
+            return Err(PmError::SafetyCheck(msg));
         }
     }
 

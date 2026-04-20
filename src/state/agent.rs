@@ -24,8 +24,6 @@ pub struct AgentEntry {
     /// lookup contract doesn't silently depend on the map key.
     #[serde(default)]
     pub window_name: String,
-    #[serde(default)]
-    pub active: bool,
 }
 
 /// Agent registry for a feature. Stored at `.pm/agents/<feature>.toml`.
@@ -88,15 +86,6 @@ impl AgentRegistry {
             Err(e) => Err(e.into()),
         }
     }
-
-    /// List active agent names.
-    pub fn active_names(&self) -> Vec<&str> {
-        self.agents
-            .iter()
-            .filter(|(_, e)| e.active)
-            .map(|(n, _)| n.as_str())
-            .collect()
-    }
 }
 
 #[cfg(test)]
@@ -104,12 +93,11 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
-    fn make_agent(session_id: &str, active: bool) -> AgentEntry {
+    fn make_agent(session_id: &str) -> AgentEntry {
         AgentEntry {
             agent_type: AgentType::Agent,
             session_id: session_id.to_string(),
             window_name: "reviewer".to_string(),
-            active,
         }
     }
 
@@ -119,7 +107,7 @@ mod tests {
         let agents_dir = dir.path().join("agents");
 
         let mut registry = AgentRegistry::default();
-        registry.register("reviewer", make_agent("abc123", true));
+        registry.register("reviewer", make_agent("abc123"));
 
         registry.save(&agents_dir, "login").unwrap();
 
@@ -139,7 +127,7 @@ mod tests {
     #[test]
     fn registry_get_and_update() {
         let mut registry = AgentRegistry::default();
-        registry.register("reviewer", make_agent("abc", true));
+        registry.register("reviewer", make_agent("abc"));
 
         assert_eq!(registry.get("reviewer").unwrap().session_id, "abc");
 
@@ -150,21 +138,11 @@ mod tests {
     #[test]
     fn registry_names_sorted() {
         let mut registry = AgentRegistry::default();
-        registry.register("reviewer", make_agent("a", true));
-        registry.register("implementer", make_agent("b", true));
+        registry.register("reviewer", make_agent("a"));
+        registry.register("implementer", make_agent("b"));
 
         let names = registry.names();
         assert_eq!(names, vec!["implementer", "reviewer"]);
-    }
-
-    #[test]
-    fn registry_active_names_filters() {
-        let mut registry = AgentRegistry::default();
-        registry.register("reviewer", make_agent("a", true));
-        registry.register("implementer", make_agent("b", false));
-
-        let active = registry.active_names();
-        assert_eq!(active, vec!["reviewer"]);
     }
 
     #[test]
@@ -176,7 +154,6 @@ mod tests {
                 agent_type: AgentType::User,
                 session_id: String::new(),
                 window_name: String::new(),
-                active: true,
             },
         );
 
@@ -190,7 +167,7 @@ mod tests {
         let agents_dir = dir.path().join("agents");
 
         let mut registry = AgentRegistry::default();
-        registry.register("reviewer", make_agent("abc123", true));
+        registry.register("reviewer", make_agent("abc123"));
         registry.save(&agents_dir, "login").unwrap();
 
         assert!(agents_dir.join("login.toml").exists());
@@ -210,14 +187,13 @@ mod tests {
     #[test]
     fn registry_toml_roundtrip() {
         let mut registry = AgentRegistry::default();
-        registry.register("reviewer", make_agent("abc123", true));
+        registry.register("reviewer", make_agent("abc123"));
         registry.register(
             "ciaranorourke",
             AgentEntry {
                 agent_type: AgentType::User,
                 session_id: String::new(),
                 window_name: String::new(),
-                active: true,
             },
         );
 

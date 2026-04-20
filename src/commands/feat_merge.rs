@@ -30,19 +30,21 @@ pub fn feat_merge(
 
     // Block if already merged
     if state.status == FeatureStatus::Merged {
-        return Err(PmError::Git(format!("feature '{name}' is already merged")));
+        return Err(PmError::SafetyCheck(format!(
+            "feature '{name}' is already merged"
+        )));
     }
 
     // Block if the feature worktree has uncommitted changes
     if git::has_uncommitted_changes(&worktree_path)? {
-        return Err(PmError::Git(format!(
+        return Err(PmError::SafetyCheck(format!(
             "feature '{name}' has uncommitted changes — commit or stash before merging"
         )));
     }
 
     // Block if the base worktree has uncommitted changes
     if git::has_uncommitted_changes(&base_repo)? {
-        return Err(PmError::Git(format!(
+        return Err(PmError::SafetyCheck(format!(
             "{base} worktree has uncommitted changes — commit or stash before merging"
         )));
     }

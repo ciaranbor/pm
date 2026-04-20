@@ -52,6 +52,9 @@ pub enum PmError {
     #[error("Git error: {0}")]
     Git(String),
 
+    #[error("{0}")]
+    SafetyCheck(String),
+
     #[error("tmux error: {0}")]
     Tmux(String),
 
