@@ -2,6 +2,22 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::tempdir;
 
+#[test]
+fn completions_generates_zsh_output() {
+    pm().args(["completions", "zsh"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("#compdef pm"));
+}
+
+#[test]
+fn completions_generates_bash_output() {
+    pm().args(["completions", "bash"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("_pm"));
+}
+
 fn pm() -> Command {
     Command::cargo_bin("pm").unwrap()
 }

@@ -1,4 +1,5 @@
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 use std::path::PathBuf;
 
 use pm::commands;
@@ -98,6 +99,12 @@ enum Commands {
     Summary {
         #[command(subcommand)]
         command: SummaryCommands,
+    },
+    /// Generate shell completion scripts
+    #[command(hide = true)]
+    Completions {
+        /// Shell to generate completions for
+        shell: Shell,
     },
 }
 
@@ -470,10 +477,11 @@ enum FeatCommands {
     },
     /// Rename a feature (branch, worktree, tmux session, state)
     Rename {
-        /// Current feature name (detected from CWD if omitted)
-        old_name: Option<String>,
         /// New feature name
         new_name: String,
+        /// Current feature name (detected from CWD if omitted)
+        #[arg(long)]
+        old_name: Option<String>,
     },
     /// Check out a PR for review (fetch branch + worktree + tmux session)
     Review {
@@ -1221,6 +1229,11 @@ fn run() -> pm::error::Result<()> {
                     Ok(())
                 }
             }
+        }
+        Commands::Completions { shell } => {
+            let mut cmd = Cli::command();
+            clap_complete::generate(shell, &mut cmd, "pm", &mut std::io::stdout());
+            Ok(())
         }
         Commands::Summary { command } => match command {
             SummaryCommands::Write { content } => {
