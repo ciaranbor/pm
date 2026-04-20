@@ -156,8 +156,8 @@ Queries GitHub for each feature's PR state and updates the local status: draft P
 ### Rename a feature
 
 ```sh
-pm feat rename login auth        # rename feature "login" to "auth"
-pm feat rename new-name          # rename current feature (detected from CWD)
+pm feat rename auth --old-name login  # rename feature "login" to "auth"
+pm feat rename new-name              # rename current feature (detected from CWD)
 ```
 
 Renames the git branch, moves the worktree directory, renames the tmux session, and updates the state file. Blocks if the new name already exists as a feature or branch. Local only — does not touch remote branches or linked PRs.
@@ -505,6 +505,26 @@ pm list                          # list all registered projects
 pm open                          # open/reconstruct tmux sessions
 pm --help                        # full help
 pm feat --help                   # feature subcommand help
+```
+
+## Shell completions
+
+Generate completion scripts for your shell and place them in the appropriate directory:
+
+```sh
+# Zsh — place in any directory on your fpath (run `echo $fpath` to see options)
+pm completions zsh > /usr/local/share/zsh/site-functions/_pm
+# Then clear the completion cache and reload:
+rm -f ~/.zcompdump* && exec zsh
+
+# Bash
+pm completions bash > "${BASH_COMPLETION_USER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions}/pm"
+
+# Fish
+pm completions fish > ~/.config/fish/completions/pm.fish
+
+# Elvish
+pm completions elvish > ~/.elvish/lib/pm.elv
 ```
 
 ## Development
