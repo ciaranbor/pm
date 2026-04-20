@@ -155,12 +155,6 @@ pub fn delete(
         }
     }
 
-    // --- Kill main tmux session ---
-    let main_session = format!("{project_name}/main");
-    if tmux::has_session(tmux_server, &main_session)? {
-        tmux::kill_session(tmux_server, &main_session)?;
-    }
-
     // --- Remove .pm/ directory ---
     if pm_dir.exists() {
         std::fs::remove_dir_all(&pm_dir)?;
@@ -170,6 +164,13 @@ pub fn delete(
     let registry_file = projects_dir.join(format!("{project_name}.toml"));
     if registry_file.exists() {
         std::fs::remove_file(&registry_file)?;
+    }
+
+    // --- Kill main tmux session (must be last — if the caller is inside this
+    // session, the kill terminates this process) ---
+    let main_session = format!("{project_name}/main");
+    if tmux::has_session(tmux_server, &main_session)? {
+        tmux::kill_session(tmux_server, &main_session)?;
     }
 
     Ok(project_name)
