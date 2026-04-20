@@ -30,16 +30,18 @@ pub fn agent_stop(
         )));
     }
 
-    // Kill the tmux window if it exists (idempotent)
-    if let Some(target) = tmux::find_window(tmux_server, &session_name, agent_name)? {
-        let _ = tmux::kill_window(tmux_server, &target);
-    }
-
-    // Mark inactive in the registry
+    // Mark inactive in the registry BEFORE killing the window. If this
+    // command is running inside the agent's own tmux window, the kill would
+    // terminate this process — so all side effects must complete first.
     if let Some(entry) = registry.get_mut(agent_name) {
         entry.active = false;
     }
     registry.save(&agents_dir, feature)?;
+
+    // Kill the tmux window if it exists (idempotent, must be last)
+    if let Some(target) = tmux::find_window(tmux_server, &session_name, agent_name)? {
+        let _ = tmux::kill_window(tmux_server, &target);
+    }
 
     Ok(format!("Stopped agent '{agent_name}' in {feature}"))
 }
