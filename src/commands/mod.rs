@@ -9,6 +9,7 @@ pub mod claude_export;
 pub mod claude_import;
 pub mod claude_migrate;
 pub mod claude_settings;
+pub mod close;
 pub mod delete;
 pub mod docs;
 pub mod doctor;
