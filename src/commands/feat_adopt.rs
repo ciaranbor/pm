@@ -10,27 +10,29 @@ use crate::state::paths;
 use crate::state::project::ProjectConfig;
 use crate::{git, tmux};
 
+/// Parameters for adopting an existing branch as a pm feature.
+pub struct FeatAdoptParams<'a> {
+    pub project_root: &'a Path,
+    pub name: &'a str,
+    pub name_override: Option<&'a str>,
+    pub context: Option<&'a str>,
+    /// Path to an existing worktree to migrate Claude sessions from.
+    pub from: Option<&'a Path>,
+    pub edit: bool,
+    pub agent_override: Option<&'a str>,
+    /// Allows tests to use an isolated tmux server. Pass `None` in production.
+    pub tmux_server: Option<&'a str>,
+    /// Base path for Claude session data (for migration).
+    pub claude_base: Option<&'a Path>,
+}
+
 /// Adopt an existing branch as a pm feature: worktree + tmux session + state file.
 /// Unlike `feat_new`, this does not create a branch — it must already exist.
-///
-/// The tmux `server` parameter allows tests to use an isolated tmux server.
-/// In production, pass `None` to use the default server.
-#[allow(clippy::too_many_arguments)]
-pub fn feat_adopt(
-    project_root: &Path,
-    name: &str,
-    name_override: Option<&str>,
-    context: Option<&str>,
-    from: Option<&Path>,
-    edit: bool,
-    agent_override: Option<&str>,
-    tmux_server: Option<&str>,
-    claude_base: Option<&Path>,
-) -> Result<String> {
-    let branch = name;
-    let feature_name = super::feat_new::sanitize_feature_name(branch, name_override)?;
-    let features_dir = paths::features_dir(project_root);
-    let pm_dir = paths::pm_dir(project_root);
+pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
+    let branch = params.name;
+    let feature_name = super::feat_new::sanitize_feature_name(branch, params.name_override)?;
+    let features_dir = paths::features_dir(params.project_root);
+    let pm_dir = paths::pm_dir(params.project_root);
 
     // Check for duplicate
     if FeatureState::exists(&features_dir, &feature_name) {
@@ -38,7 +40,7 @@ pub fn feat_adopt(
     }
 
     // Verify branch exists
-    let main_worktree = project_root.join("main");
+    let main_worktree = params.project_root.join("main");
     if !git::branch_exists(&main_worktree, branch)? {
         return Err(PmError::BranchNotFound(branch.to_string()));
     }
@@ -48,13 +50,16 @@ pub fn feat_adopt(
     let project_name = &config.project.name;
 
     // Resolve context upfront (file contents or literal text)
-    let resolved_context = context.map(super::feat_new::resolve_context).transpose()?;
+    let resolved_context = params
+        .context
+        .map(super::feat_new::resolve_context)
+        .transpose()?;
 
     // Resolve base branch (detected from CWD, or "main" fallback). Even though
     // feat_adopt takes an existing branch, recording a base helps feat_sync /
     // feat_merge know what to merge into.
     let cwd = std::env::current_dir()?;
-    let resolved_base = super::feat_new::resolve_base(project_root, None, &cwd)?;
+    let resolved_base = super::feat_new::resolve_base(params.project_root, None, &cwd)?;
 
     // Handle pre-existing worktree for this branch up-front, *before* writing
     // state. With --from: back up the old worktree and prune so add_worktree
@@ -63,7 +68,7 @@ pub fn feat_adopt(
     // stale Initializing entry just because the branch was already checked
     // out elsewhere.
     if let Some(existing_wt) = git::find_worktree_for_branch(&main_worktree, branch)? {
-        if from.is_some() {
+        if params.from.is_some() {
             if existing_wt.exists() {
                 let timestamp = Utc::now().format("%Y%m%d%H%M%S");
                 let backup = existing_wt.with_extension(format!("bak.{timestamp}"));
@@ -100,22 +105,26 @@ pub fn feat_adopt(
     //
     // Invariant: `branch` is user-owned — it existed before feat_adopt ran —
     // so rollback must NOT delete it. We pass `delete_branch: false` below.
-    let worktree_path = project_root.join(&feature_name);
+    let worktree_path = params.project_root.join(&feature_name);
     let session_name = format!("{project_name}/{feature_name}");
-    let hook_path = project_root.join(hooks::POST_CREATE_PATH);
+    let hook_path = params.project_root.join(hooks::POST_CREATE_PATH);
 
     let result: Result<()> = (|| {
         // Step 2: Create git worktree (skip branch creation — branch already exists)
         git::add_worktree(&main_worktree, &worktree_path, branch)?;
 
         // Step 2.5: Seed Claude Code settings and skills from main worktree
-        super::claude_settings::seed_feature_claude(project_root, &worktree_path)?;
+        super::claude_settings::seed_feature_claude(params.project_root, &worktree_path)?;
 
         // Step 2.6: Migrate Claude Code sessions from old path if provided.
         // Always use the original --from path for migration since claude
         // sessions are keyed by the original path, not the backup location.
-        if let Some(old_path) = from {
-            match super::claude_migrate::migrate_sessions(old_path, &worktree_path, claude_base) {
+        if let Some(old_path) = params.from {
+            match super::claude_migrate::migrate_sessions(
+                old_path,
+                &worktree_path,
+                params.claude_base,
+            ) {
                 Ok(msgs) => {
                     for msg in msgs {
                         eprintln!("{msg}");
@@ -130,16 +139,16 @@ pub fn feat_adopt(
         // empty first turn; TASK.md is never written.
         if let Some(ref resolved) = resolved_context {
             feat_common::enqueue_initial_context(
-                project_root,
+                params.project_root,
                 &feature_name,
                 &config,
-                agent_override,
+                params.agent_override,
                 resolved,
             )?;
         }
 
         // Step 3: Create tmux session
-        tmux::create_session(tmux_server, &session_name, &worktree_path)?;
+        tmux::create_session(params.tmux_server, &session_name, &worktree_path)?;
 
         // Step 3.5: Spawn a claude session (if context was provided). The
         // Stop hook blocks until the queued message is available.
@@ -147,18 +156,23 @@ pub fn feat_adopt(
         if resolved_context.is_some() {
             let reuse_target = format!("{session_name}:0");
             feat_common::spawn_default_agent(
-                project_root,
+                params.project_root,
                 &feature_name,
                 &config,
-                agent_override,
-                edit,
+                params.agent_override,
+                params.edit,
                 Some(&reuse_target),
-                tmux_server,
+                params.tmux_server,
             )?;
         }
 
         // Step 3.6: Run post-create hook in a named "hook" window (non-fatal)
-        hooks::run_hook(tmux_server, &session_name, &worktree_path, &hook_path);
+        hooks::run_hook(
+            params.tmux_server,
+            &session_name,
+            &worktree_path,
+            &hook_path,
+        );
 
         // Step 4: Update status to wip
         state.status = FeatureStatus::Wip;
@@ -169,15 +183,15 @@ pub fn feat_adopt(
     })();
 
     if let Err(e) = result {
-        feat_common::rollback_creation(
-            project_root,
-            &feature_name,
+        feat_common::rollback_creation(&feat_common::RollbackParams {
+            project_root: params.project_root,
+            feature_name: &feature_name,
             branch,
             project_name,
-            tmux_server,
-            false, // user-owned branch — never delete it
-            &resolved_base,
-        );
+            tmux_server: params.tmux_server,
+            delete_branch: false, // user-owned branch — never delete it
+            base: &resolved_base,
+        });
         return Err(e);
     }
 
@@ -196,6 +210,25 @@ mod tests {
         git::create_branch(&main_worktree, name).unwrap();
     }
 
+    /// Helper to build FeatAdoptParams with common defaults for tests.
+    fn default_adopt_params<'a>(
+        project_root: &'a Path,
+        name: &'a str,
+        tmux_server: Option<&'a str>,
+    ) -> FeatAdoptParams<'a> {
+        FeatAdoptParams {
+            project_root,
+            name,
+            name_override: None,
+            context: None,
+            from: None,
+            edit: false,
+            agent_override: None,
+            tmux_server,
+            claude_base: None,
+        }
+    }
+
     #[test]
     fn feat_adopt_creates_state_file_with_wip_status() {
         let dir = tempdir().unwrap();
@@ -203,18 +236,7 @@ mod tests {
         let (project_path, _, _) = server.setup_project(dir.path());
         create_branch(&project_path, "login");
 
-        feat_adopt(
-            &project_path,
-            "login",
-            None,
-            None,
-            None,
-            false,
-            None,
-            server.name(),
-            None,
-        )
-        .unwrap();
+        feat_adopt(&default_adopt_params(&project_path, "login", server.name())).unwrap();
 
         let features_dir = paths::features_dir(&project_path);
         let state = FeatureState::load(&features_dir, "login").unwrap();
@@ -228,18 +250,7 @@ mod tests {
         let (project_path, _, _) = server.setup_project(dir.path());
         create_branch(&project_path, "login");
 
-        feat_adopt(
-            &project_path,
-            "login",
-            None,
-            None,
-            None,
-            false,
-            None,
-            server.name(),
-            None,
-        )
-        .unwrap();
+        feat_adopt(&default_adopt_params(&project_path, "login", server.name())).unwrap();
 
         let worktree_path = project_path.join("login");
         assert!(worktree_path.exists());
@@ -253,18 +264,7 @@ mod tests {
         let (project_path, _, project_name) = server.setup_project(dir.path());
         create_branch(&project_path, "login");
 
-        feat_adopt(
-            &project_path,
-            "login",
-            None,
-            None,
-            None,
-            false,
-            None,
-            server.name(),
-            None,
-        )
-        .unwrap();
+        feat_adopt(&default_adopt_params(&project_path, "login", server.name())).unwrap();
 
         assert!(tmux::has_session(server.name(), &format!("{project_name}/login")).unwrap());
     }
@@ -280,18 +280,7 @@ mod tests {
         let main_wt = project_path.join("main");
         assert!(git::branch_exists(&main_wt, "login").unwrap());
 
-        feat_adopt(
-            &project_path,
-            "login",
-            None,
-            None,
-            None,
-            false,
-            None,
-            server.name(),
-            None,
-        )
-        .unwrap();
+        feat_adopt(&default_adopt_params(&project_path, "login", server.name())).unwrap();
 
         // Branch still exists (not a new one, same one)
         assert!(git::branch_exists(&main_wt, "login").unwrap());
@@ -303,17 +292,11 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project(dir.path());
 
-        let result = feat_adopt(
+        let result = feat_adopt(&default_adopt_params(
             &project_path,
             "nonexistent",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-            None,
-        );
+        ));
 
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), PmError::BranchNotFound(_)));
@@ -326,29 +309,8 @@ mod tests {
         let (project_path, _, _) = server.setup_project(dir.path());
         create_branch(&project_path, "login");
 
-        feat_adopt(
-            &project_path,
-            "login",
-            None,
-            None,
-            None,
-            false,
-            None,
-            server.name(),
-            None,
-        )
-        .unwrap();
-        let result = feat_adopt(
-            &project_path,
-            "login",
-            None,
-            None,
-            None,
-            false,
-            None,
-            server.name(),
-            None,
-        );
+        feat_adopt(&default_adopt_params(&project_path, "login", server.name())).unwrap();
+        let result = feat_adopt(&default_adopt_params(&project_path, "login", server.name()));
 
         assert!(result.is_err());
         assert!(matches!(
@@ -364,17 +326,11 @@ mod tests {
         let (project_path, _, _) = server.setup_project(dir.path());
         create_branch(&project_path, "login");
 
-        feat_adopt(
-            &project_path,
-            "login",
-            None,
-            Some("Adopt existing login branch"),
-            None,
-            false,
-            Some("implementer"),
-            server.name(),
-            None,
-        )
+        feat_adopt(&FeatAdoptParams {
+            context: Some("Adopt existing login branch"),
+            agent_override: Some("implementer"),
+            ..default_adopt_params(&project_path, "login", server.name())
+        })
         .unwrap();
 
         // No TASK.md is written any more.
@@ -404,18 +360,7 @@ mod tests {
         create_branch(&project_path, "login");
         let before = Utc::now();
 
-        feat_adopt(
-            &project_path,
-            "login",
-            None,
-            None,
-            None,
-            false,
-            None,
-            server.name(),
-            None,
-        )
-        .unwrap();
+        feat_adopt(&default_adopt_params(&project_path, "login", server.name())).unwrap();
 
         let features_dir = paths::features_dir(&project_path);
         let state = FeatureState::load(&features_dir, "login").unwrap();
@@ -430,17 +375,10 @@ mod tests {
         let (project_path, _, project_name) = server.setup_project(dir.path());
         create_branch(&project_path, "login");
 
-        feat_adopt(
-            &project_path,
-            "login",
-            None,
-            Some("Adopt existing login branch"),
-            None,
-            false,
-            None,
-            server.name(),
-            None,
-        )
+        feat_adopt(&FeatAdoptParams {
+            context: Some("Adopt existing login branch"),
+            ..default_adopt_params(&project_path, "login", server.name())
+        })
         .unwrap();
 
         // Session should have 2 windows: the reused window :0 (now agent) + hook window
@@ -455,18 +393,7 @@ mod tests {
         let (project_path, _, project_name) = server.setup_project(dir.path());
         create_branch(&project_path, "login");
 
-        feat_adopt(
-            &project_path,
-            "login",
-            None,
-            None,
-            None,
-            false,
-            None,
-            server.name(),
-            None,
-        )
-        .unwrap();
+        feat_adopt(&default_adopt_params(&project_path, "login", server.name())).unwrap();
 
         // 2 windows: default shell + hook
         let session = format!("{project_name}/login");
@@ -486,17 +413,7 @@ mod tests {
         // Pre-create a tmux session to cause a conflict
         tmux::create_session(server.name(), &format!("{project_name}/login"), dir.path()).unwrap();
 
-        let result = feat_adopt(
-            &project_path,
-            "login",
-            None,
-            None,
-            None,
-            false,
-            None,
-            server.name(),
-            None,
-        );
+        let result = feat_adopt(&default_adopt_params(&project_path, "login", server.name()));
         assert!(result.is_err());
 
         // State file, worktree and our new tmux session should be rolled back...
@@ -524,17 +441,7 @@ mod tests {
         std::fs::create_dir(project_path.join("login")).unwrap();
         std::fs::write(project_path.join("login").join("blocker.txt"), "").unwrap();
 
-        let result = feat_adopt(
-            &project_path,
-            "login",
-            None,
-            None,
-            None,
-            false,
-            None,
-            server.name(),
-            None,
-        );
+        let result = feat_adopt(&default_adopt_params(&project_path, "login", server.name()));
         assert!(result.is_err());
 
         // State file should be cleaned up
@@ -565,17 +472,11 @@ mod tests {
         )
         .unwrap();
 
-        feat_adopt(
-            &project_path,
-            "login",
-            None,
-            None,
-            Some(old_path),
-            false,
-            None,
-            server.name(),
-            Some(claude_base.as_path()),
-        )
+        feat_adopt(&FeatAdoptParams {
+            from: Some(old_path),
+            claude_base: Some(claude_base.as_path()),
+            ..default_adopt_params(&project_path, "login", server.name())
+        })
         .unwrap();
 
         // New session dir should exist with updated path
@@ -595,17 +496,11 @@ mod tests {
         let (project_path, _, project_name) = server.setup_project(dir.path());
         create_branch(&project_path, "ciaran/login");
 
-        feat_adopt(
+        feat_adopt(&default_adopt_params(
             &project_path,
             "ciaran/login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-            None,
-        )
+        ))
         .unwrap();
 
         // Feature name should be sanitized
@@ -629,17 +524,10 @@ mod tests {
         let (project_path, _, project_name) = server.setup_project(dir.path());
         create_branch(&project_path, "ciaran/eval");
 
-        feat_adopt(
-            &project_path,
-            "ciaran/eval",
-            Some("eval"),
-            None,
-            None,
-            false,
-            None,
-            server.name(),
-            None,
-        )
+        feat_adopt(&FeatAdoptParams {
+            name_override: Some("eval"),
+            ..default_adopt_params(&project_path, "ciaran/eval", server.name())
+        })
         .unwrap();
 
         let features_dir = paths::features_dir(&project_path);
@@ -675,17 +563,11 @@ mod tests {
         .unwrap();
 
         // This should succeed despite the branch already having a worktree
-        feat_adopt(
-            &project_path,
-            "login",
-            None,
-            None,
-            Some(old_worktree.as_path()),
-            false,
-            None,
-            server.name(),
-            Some(claude_base.as_path()),
-        )
+        feat_adopt(&FeatAdoptParams {
+            from: Some(old_worktree.as_path()),
+            claude_base: Some(claude_base.as_path()),
+            ..default_adopt_params(&project_path, "login", server.name())
+        })
         .unwrap();
 
         // New worktree should exist
@@ -731,17 +613,7 @@ mod tests {
         git::add_worktree(&main_wt, &old_worktree, "login").unwrap();
 
         // Without --from, should fail with WorktreeConflict
-        let result = feat_adopt(
-            &project_path,
-            "login",
-            None,
-            None,
-            None,
-            false,
-            None,
-            server.name(),
-            None,
-        );
+        let result = feat_adopt(&default_adopt_params(&project_path, "login", server.name()));
 
         assert!(result.is_err());
         assert!(

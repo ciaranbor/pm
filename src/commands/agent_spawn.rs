@@ -47,67 +47,50 @@ fn build_claude_cmd(
     parts.join(" ")
 }
 
+/// Parameters for spawning a Claude session in a tmux window.
+pub struct SpawnClaudeParams<'a> {
+    pub project_root: &'a Path,
+    pub feature: &'a str,
+    pub agent_name: Option<&'a str>,
+    pub prompt: Option<&'a str>,
+    pub edit: bool,
+    pub resume_session: Option<&'a str>,
+    /// When `Some(target)`, the existing window at that target is renamed and
+    /// reused instead of creating a new one. Used during `feat new --context`
+    /// to reuse the default shell at window :0.
+    pub reuse_window: Option<&'a str>,
+    pub tmux_server: Option<&'a str>,
+}
+
 /// Spawn a claude session in a tmux window. Works for both named agents
 /// and plain claude sessions (when `agent_name` is None).
 /// If `resume_session` is provided, passes `--resume` to claude.
 /// Sets `PM_AGENT_NAME` in the spawned shell so the agent auto-identifies
 /// in `pm msg send/check/read` without `--as-agent`.
 ///
-/// When `reuse_window` is `Some(target)`, the existing window at that target
-/// is renamed and reused instead of creating a new one. This is used during
-/// `feat new --context` to reuse the default shell at window :0.
-///
 /// # Safety
 /// Callers must validate `agent_name` via `validate_name()` before calling —
 /// the name is interpolated into a shell command.
 ///
 /// Returns the tmux window target.
-#[allow(clippy::too_many_arguments)]
-pub fn spawn_claude_session(
-    project_root: &Path,
-    feature: &str,
-    agent_name: Option<&str>,
-    prompt: Option<&str>,
-    edit: bool,
-    resume_session: Option<&str>,
-    reuse_window: Option<&str>,
-    tmux_server: Option<&str>,
-) -> Result<String> {
-    let pm_dir = paths::pm_dir(project_root);
+pub fn spawn_claude_session(params: &SpawnClaudeParams<'_>) -> Result<String> {
+    let pm_dir = paths::pm_dir(params.project_root);
     let config = ProjectConfig::load(&pm_dir)?;
-    spawn_claude_session_with_config(
-        project_root,
-        feature,
-        agent_name,
-        prompt,
-        edit,
-        resume_session,
-        reuse_window,
-        tmux_server,
-        &config,
-    )
+    spawn_claude_session_with_config(params, &config)
 }
 
 /// Inner implementation that accepts a pre-loaded config to avoid redundant loads.
-#[allow(clippy::too_many_arguments)]
 fn spawn_claude_session_with_config(
-    project_root: &Path,
-    feature: &str,
-    agent_name: Option<&str>,
-    prompt: Option<&str>,
-    edit: bool,
-    resume_session: Option<&str>,
-    reuse_window: Option<&str>,
-    tmux_server: Option<&str>,
+    params: &SpawnClaudeParams<'_>,
     config: &ProjectConfig,
 ) -> Result<String> {
-    let session_name = format!("{}/{feature}", config.project.name);
-    let worktree_path = project_root.join(feature);
+    let session_name = format!("{}/{}", config.project.name, params.feature);
+    let worktree_path = params.project_root.join(params.feature);
 
     // Resolve permission mode: --edit flag > project config > none
-    let permission_mode = if edit {
+    let permission_mode = if params.edit {
         Some("acceptEdits".to_string())
-    } else if let Some(name) = agent_name {
+    } else if let Some(name) = params.agent_name {
         config
             .agents
             .permissions
@@ -124,25 +107,25 @@ fn spawn_claude_session_with_config(
     // prompt causes an immediate first turn, letting the blocking Stop hook
     // wait for messages. Plain (unnamed) claude sessions don't need this
     // since they're interactive by design.
-    let effective_prompt = match (prompt, agent_name) {
+    let effective_prompt = match (params.prompt, params.agent_name) {
         (Some(p), _) => Some(p),
         (None, Some(_)) => Some("wait for instructions"),
         (None, None) => None,
     };
 
-    let window_name = agent_name.unwrap_or("claude");
+    let window_name = params.agent_name.unwrap_or("claude");
     let cmd = build_claude_cmd(
-        agent_name,
+        params.agent_name,
         effective_prompt,
-        resume_session,
+        params.resume_session,
         permission_mode.as_deref(),
     );
-    let window_target = if let Some(target) = reuse_window {
-        tmux::rename_window(tmux_server, target, window_name)?;
+    let window_target = if let Some(target) = params.reuse_window {
+        tmux::rename_window(params.tmux_server, target, window_name)?;
         target.to_string()
     } else {
         tmux::new_window(
-            tmux_server,
+            params.tmux_server,
             &session_name,
             &worktree_path,
             Some(window_name),
@@ -152,17 +135,17 @@ fn spawn_claude_session_with_config(
 
     // Set PM_AGENT_NAME so the agent's `pm msg send/check/read` calls
     // automatically identify as this agent without needing --as-agent.
-    if let Some(name) = agent_name {
+    if let Some(name) = params.agent_name {
         let export_and_cmd = format!("export PM_AGENT_NAME={name} && {cmd}");
-        tmux::send_keys(tmux_server, &window_target, &export_and_cmd)?;
+        tmux::send_keys(params.tmux_server, &window_target, &export_and_cmd)?;
     } else {
-        tmux::send_keys(tmux_server, &window_target, &cmd)?;
+        tmux::send_keys(params.tmux_server, &window_target, &cmd)?;
     }
 
     // Register in agent registry if this is a named agent
-    if let Some(name) = agent_name {
-        let agents_dir = paths::agents_dir(project_root);
-        let mut registry = AgentRegistry::load(&agents_dir, feature)?;
+    if let Some(name) = params.agent_name {
+        let agents_dir = paths::agents_dir(params.project_root);
+        let mut registry = AgentRegistry::load(&agents_dir, params.feature)?;
         registry.register(
             name,
             AgentEntry {
@@ -171,7 +154,7 @@ fn spawn_claude_session_with_config(
                 window_name: name.to_string(),
             },
         );
-        registry.save(&agents_dir, feature)?;
+        registry.save(&agents_dir, params.feature)?;
     }
 
     Ok(window_target)
@@ -206,14 +189,16 @@ pub fn agent_spawn(
     // Use _with_config helper to avoid reloading config in spawn_claude_session
     let spawn = |prompt: Option<&str>, resume: Option<&str>| {
         spawn_claude_session_with_config(
-            project_root,
-            feature,
-            Some(agent_name),
-            prompt,
-            edit,
-            resume,
-            None,
-            tmux_server,
+            &SpawnClaudeParams {
+                project_root,
+                feature,
+                agent_name: Some(agent_name),
+                prompt,
+                edit,
+                resume_session: resume,
+                reuse_window: None,
+                tmux_server,
+            },
             &config,
         )
     };

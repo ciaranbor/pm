@@ -260,14 +260,11 @@ impl TestServer {
     ) -> (std::path::PathBuf, String) {
         let (project_path, _, project_name) = self.setup_project(dir);
         crate::commands::feat_new::feat_new(
-            &project_path,
-            feature_name,
-            None,
-            None,
-            None,
-            false,
-            None,
-            self.name(),
+            &crate::commands::feat_new::FeatNewParams::with_defaults(
+                &project_path,
+                feature_name,
+                self.name(),
+            ),
         )
         .unwrap();
         (project_path, project_name)

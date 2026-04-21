@@ -706,14 +706,11 @@ mod tests {
         write_json(&main_claude, "settings.json", r#"{"seeded":true}"#);
 
         crate::commands::feat_new::feat_new(
-            &project,
-            "login",
-            None,
-            None,
-            None,
-            false,
-            None,
-            server.name(),
+            &crate::commands::feat_new::FeatNewParams::with_defaults(
+                &project,
+                "login",
+                server.name(),
+            ),
         )
         .unwrap();
 

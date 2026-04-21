@@ -100,16 +100,16 @@ mod tests {
         let project_path = dir.path().join(server.scope("myapp"));
         let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-        feat_new::feat_new(
-            &project_path,
-            "alpha",
-            None,
-            Some("fix the widget"),
-            None,
-            false,
-            None,
-            server.name(),
-        )
+        feat_new::feat_new(&feat_new::FeatNewParams {
+            project_root: &project_path,
+            name: "alpha",
+            name_override: None,
+            context: Some("fix the widget"),
+            base: None,
+            edit: false,
+            agent_override: None,
+            tmux_server: server.name(),
+        })
         .unwrap();
 
         let lines = feat_info(&project_path, "alpha").unwrap();
@@ -173,16 +173,11 @@ mod tests {
             .unwrap();
 
         // Create a feature (worktree at project_path/tracked)
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "tracked",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         // Push the feature branch to set up tracking
@@ -226,16 +221,11 @@ mod tests {
         let project_path = dir.path().join(server.scope("myapp"));
         let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "beta",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         let lines = feat_info(&project_path, "beta").unwrap();
@@ -252,16 +242,11 @@ mod tests {
         let project_path = dir.path().join(server.scope("myapp"));
         let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "diverge",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         // Add a commit on the feature branch
@@ -285,16 +270,11 @@ mod tests {
         let project_path = dir.path().join(server.scope("myapp"));
         let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "synced",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         let lines = feat_info(&project_path, "synced").unwrap();
@@ -312,16 +292,11 @@ mod tests {
         let project_path = dir.path().join(server.scope("myapp"));
         let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "behind",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         // Add a commit on main (the feature is now behind)
@@ -345,16 +320,11 @@ mod tests {
         let project_path = dir.path().join(server.scope("myapp"));
         let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "both",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         // Add a commit on the feature branch

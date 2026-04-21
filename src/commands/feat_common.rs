@@ -101,53 +101,53 @@ pub fn spawn_default_agent(
     tmux_server: Option<&str>,
 ) -> Result<()> {
     let agent = resolve_default_agent(agent_override, config);
-    agent_spawn::spawn_claude_session(
+    agent_spawn::spawn_claude_session(&agent_spawn::SpawnClaudeParams {
         project_root,
-        feature_name,
-        agent,
-        None,
+        feature: feature_name,
+        agent_name: agent,
+        prompt: None,
         edit,
-        None,
+        resume_session: None,
         reuse_window,
         tmux_server,
-    )?;
+    })?;
     Ok(())
+}
+
+/// Parameters for rolling back a partial feature creation.
+pub struct RollbackParams<'a> {
+    pub project_root: &'a Path,
+    pub feature_name: &'a str,
+    /// The git branch name (may differ from `feature_name` when slashes are sanitized).
+    pub branch: &'a str,
+    pub project_name: &'a str,
+    pub tmux_server: Option<&'a str>,
+    /// Whether to delete the branch. Set to `false` for `feat_adopt` (user-owned branch).
+    pub delete_branch: bool,
+    /// The base worktree name (e.g. "main" or a parent feature name).
+    pub base: &'a str,
 }
 
 /// Best-effort rollback of a partial feature creation. Thin wrapper around
 /// `feat_delete::cleanup_feature` in `best_effort` mode, so every cleanup step
 /// (worktree removal, state file, agent registry, message queue, tmux
-/// session) runs even if an earlier one fails. Use `delete_branch = false`
-/// from `feat_adopt`, which must never destroy a user-owned branch.
-///
-/// `branch` is passed separately from `feature_name` because they can differ:
-/// `feat_new` may receive a slash-containing branch that sanitizes to a
-/// different feature name, while `feat_review` uses the sanitized feature
-/// name as both branch and feature id.
-pub fn rollback_creation(
-    project_root: &Path,
-    feature_name: &str,
-    branch: &str,
-    project_name: &str,
-    tmux_server: Option<&str>,
-    delete_branch: bool,
-    base: &str,
-) {
-    let base_worktree = project_root.join(base);
-    let worktree_path = project_root.join(feature_name);
-    let features_dir = paths::features_dir(project_root);
+/// session) runs even if an earlier one fails.
+pub fn rollback_creation(params: &RollbackParams<'_>) {
+    let base_worktree = params.project_root.join(params.base);
+    let worktree_path = params.project_root.join(params.feature_name);
+    let features_dir = paths::features_dir(params.project_root);
 
     let _ = feat_delete::cleanup_feature(&feat_delete::CleanupParams {
         repo: &base_worktree,
         worktree_path: &worktree_path,
-        branch,
+        branch: params.branch,
         features_dir: &features_dir,
-        name: feature_name,
-        project_name,
+        name: params.feature_name,
+        project_name: params.project_name,
         force_worktree: true,
-        tmux_server,
-        delete_branch,
+        tmux_server: params.tmux_server,
+        delete_branch: params.delete_branch,
         best_effort: true,
-        base,
+        base: params.base,
     });
 }

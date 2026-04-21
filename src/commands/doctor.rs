@@ -613,27 +613,17 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project(dir.path());
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "alpha",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "beta",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         let lines = doctor(&project_path, false, server.name()).unwrap();

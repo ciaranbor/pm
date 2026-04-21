@@ -53,29 +53,48 @@ pub fn resolve_base(project_root: &Path, base: Option<&str>, cwd: &Path) -> Resu
     git::current_branch(detect_from).or_else(|_| Ok("main".to_string()))
 }
 
+/// Parameters for creating a new feature.
+pub struct FeatNewParams<'a> {
+    pub project_root: &'a Path,
+    pub name: &'a str,
+    pub name_override: Option<&'a str>,
+    pub context: Option<&'a str>,
+    /// Which branch to stack on. When `None`, the current branch is detected
+    /// from CWD (enabling natural stacking from within a feature worktree).
+    pub base: Option<&'a str>,
+    pub edit: bool,
+    pub agent_override: Option<&'a str>,
+    /// Allows tests to use an isolated tmux server. Pass `None` in production.
+    pub tmux_server: Option<&'a str>,
+}
+
+#[cfg(test)]
+impl<'a> FeatNewParams<'a> {
+    /// Test helper: build params with all optional fields set to defaults.
+    pub fn with_defaults(
+        project_root: &'a Path,
+        name: &'a str,
+        tmux_server: Option<&'a str>,
+    ) -> Self {
+        Self {
+            project_root,
+            name,
+            name_override: None,
+            context: None,
+            base: None,
+            edit: false,
+            agent_override: None,
+            tmux_server,
+        }
+    }
+}
+
 /// Create a new feature: branch + worktree + tmux session + state file.
-///
-/// The `base` parameter specifies which branch to stack on. When `None`,
-/// the current branch is detected from CWD (enabling natural stacking from
-/// within a feature worktree).
-///
-/// The tmux `server` parameter allows tests to use an isolated tmux server.
-/// In production, pass `None` to use the default server.
-#[allow(clippy::too_many_arguments)]
-pub fn feat_new(
-    project_root: &Path,
-    name: &str,
-    name_override: Option<&str>,
-    context: Option<&str>,
-    base: Option<&str>,
-    edit: bool,
-    agent_override: Option<&str>,
-    tmux_server: Option<&str>,
-) -> Result<String> {
-    let branch = name;
-    let feature_name = sanitize_feature_name(branch, name_override)?;
-    let features_dir = paths::features_dir(project_root);
-    let pm_dir = paths::pm_dir(project_root);
+pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
+    let branch = params.name;
+    let feature_name = sanitize_feature_name(branch, params.name_override)?;
+    let features_dir = paths::features_dir(params.project_root);
+    let pm_dir = paths::pm_dir(params.project_root);
 
     // Check for duplicate
     if FeatureState::exists(&features_dir, &feature_name) {
@@ -87,11 +106,11 @@ pub fn feat_new(
     let project_name = &config.project.name;
 
     // Resolve context upfront (file contents or literal text)
-    let resolved_context = context.map(resolve_context).transpose()?;
+    let resolved_context = params.context.map(resolve_context).transpose()?;
 
     // Resolve base branch (explicit, or detected from CWD)
     let cwd = std::env::current_dir()?;
-    let resolved_base = resolve_base(project_root, base, &cwd)?;
+    let resolved_base = resolve_base(params.project_root, params.base, &cwd)?;
 
     // Step 1: Write state with status = initializing
     let mut state = feat_common::write_initializing_state(
@@ -107,10 +126,10 @@ pub fn feat_new(
     )?;
 
     // Steps 2-5: Create resources, rolling back on failure
-    let main_worktree = project_root.join("main");
-    let worktree_path = project_root.join(&feature_name);
+    let main_worktree = params.project_root.join("main");
+    let worktree_path = params.project_root.join(&feature_name);
     let session_name = format!("{project_name}/{feature_name}");
-    let hook_path = project_root.join(hooks::POST_CREATE_PATH);
+    let hook_path = params.project_root.join(hooks::POST_CREATE_PATH);
 
     let result: Result<()> = (|| {
         // Step 2: Create git branch from the base branch (uses actual branch name, may contain slashes)
@@ -120,23 +139,23 @@ pub fn feat_new(
         git::add_worktree(&main_worktree, &worktree_path, branch)?;
 
         // Step 3.5: Seed Claude Code settings from main worktree
-        claude_settings::seed_feature_claude(project_root, &worktree_path)?;
+        claude_settings::seed_feature_claude(params.project_root, &worktree_path)?;
 
         // Step 3.6: Enqueue initial context as a message to the default agent
         // (if context provided). The Stop hook will deliver it on the empty
         // first turn after spawn. TASK.md is never written.
         if let Some(ref resolved) = resolved_context {
             feat_common::enqueue_initial_context(
-                project_root,
+                params.project_root,
                 &feature_name,
                 &config,
-                agent_override,
+                params.agent_override,
                 resolved,
             )?;
         }
 
         // Step 4: Create tmux session
-        tmux::create_session(tmux_server, &session_name, &worktree_path)?;
+        tmux::create_session(params.tmux_server, &session_name, &worktree_path)?;
 
         // Step 4.5: Spawn the default claude agent (if context was provided).
         // The agent starts with no positional prompt; the Stop hook blocks
@@ -145,18 +164,23 @@ pub fn feat_new(
         if resolved_context.is_some() {
             let reuse_target = format!("{session_name}:0");
             feat_common::spawn_default_agent(
-                project_root,
+                params.project_root,
                 &feature_name,
                 &config,
-                agent_override,
-                edit,
+                params.agent_override,
+                params.edit,
                 Some(&reuse_target),
-                tmux_server,
+                params.tmux_server,
             )?;
         }
 
         // Step 4.6: Run post-create hook in a named "hook" window (non-fatal)
-        hooks::run_hook(tmux_server, &session_name, &worktree_path, &hook_path);
+        hooks::run_hook(
+            params.tmux_server,
+            &session_name,
+            &worktree_path,
+            &hook_path,
+        );
 
         // Step 5: Update status to wip
         state.status = FeatureStatus::Wip;
@@ -167,15 +191,15 @@ pub fn feat_new(
     })();
 
     if let Err(e) = result {
-        feat_common::rollback_creation(
-            project_root,
-            &feature_name,
+        feat_common::rollback_creation(&feat_common::RollbackParams {
+            project_root: params.project_root,
+            feature_name: &feature_name,
             branch,
             project_name,
-            tmux_server,
-            true, // feat_new owns the branch and may destroy it on failure
-            &resolved_base,
-        );
+            tmux_server: params.tmux_server,
+            delete_branch: true, // feat_new owns the branch and may destroy it on failure
+            base: &resolved_base,
+        });
         return Err(e);
     }
 
@@ -196,16 +220,11 @@ mod tests {
         let (project_path, _, project_name) = server.setup_project(dir.path());
         let before = Utc::now();
 
-        feat_new(
+        feat_new(&FeatNewParams::with_defaults(
             &project_path,
             "login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         // State file with correct status and fields
@@ -236,27 +255,17 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project(dir.path());
 
-        feat_new(
+        feat_new(&FeatNewParams::with_defaults(
             &project_path,
             "login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
-        let result = feat_new(
+        let result = feat_new(&FeatNewParams::with_defaults(
             &project_path,
             "login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        );
+        ));
 
         assert!(result.is_err());
         assert!(matches!(
@@ -275,16 +284,11 @@ mod tests {
         // so create_session fails with "duplicate session"
         tmux::create_session(server.name(), &format!("{project_name}/login"), dir.path()).unwrap();
 
-        let result = feat_new(
+        let result = feat_new(&FeatNewParams::with_defaults(
             &project_path,
             "login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        );
+        ));
         assert!(result.is_err());
 
         // State file should be cleaned up
@@ -307,16 +311,11 @@ mod tests {
         std::fs::create_dir(project_path.join("login")).unwrap();
         std::fs::write(project_path.join("login").join("blocker.txt"), "").unwrap();
 
-        let result = feat_new(
+        let result = feat_new(&FeatNewParams::with_defaults(
             &project_path,
             "login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        );
+        ));
         assert!(result.is_err());
 
         // State file should be cleaned up
@@ -334,16 +333,11 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project(dir.path());
 
-        feat_new(
-            &project_path,
-            "login",
-            None,
-            Some("Implement login page per issue #42"),
-            None,
-            false,
-            Some("implementer"),
-            server.name(),
-        )
+        feat_new(&FeatNewParams {
+            context: Some("Implement login page per issue #42"),
+            agent_override: Some("implementer"),
+            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+        })
         .unwrap();
 
         // No TASK.md on disk any more.
@@ -375,16 +369,11 @@ mod tests {
         let brief_path = dir.path().join("brief.md");
         std::fs::write(&brief_path, "# Login Feature\nBuild the login page").unwrap();
 
-        feat_new(
-            &project_path,
-            "login",
-            None,
-            Some(brief_path.to_str().unwrap()),
-            None,
-            false,
-            Some("implementer"),
-            server.name(),
-        )
+        feat_new(&FeatNewParams {
+            context: Some(brief_path.to_str().unwrap()),
+            agent_override: Some("implementer"),
+            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+        })
         .unwrap();
 
         // No TASK.md; content is queued to the resolved agent's inbox.
@@ -414,16 +403,10 @@ mod tests {
         let brief_path = dir.path().join("brief.md");
         std::fs::write(&brief_path, "resolved file content").unwrap();
 
-        feat_new(
-            &project_path,
-            "login",
-            None,
-            Some(brief_path.to_str().unwrap()),
-            None,
-            false,
-            None,
-            server.name(),
-        )
+        feat_new(&FeatNewParams {
+            context: Some(brief_path.to_str().unwrap()),
+            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+        })
         .unwrap();
 
         let features_dir = paths::features_dir(&project_path);
@@ -437,16 +420,10 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _, project_name) = server.setup_project(dir.path());
 
-        feat_new(
-            &project_path,
-            "login",
-            None,
-            Some("Build the login page"),
-            None,
-            false,
-            None,
-            server.name(),
-        )
+        feat_new(&FeatNewParams {
+            context: Some("Build the login page"),
+            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+        })
         .unwrap();
 
         // Session should have 2 windows: the reused window :0 (now agent) + hook window
@@ -460,16 +437,11 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _, project_name) = server.setup_project(dir.path());
 
-        feat_new(
-            &project_path,
-            "login",
-            None,
-            Some("Build the login page"),
-            None,
-            false,
-            Some("researcher"),
-            server.name(),
-        )
+        feat_new(&FeatNewParams {
+            context: Some("Build the login page"),
+            agent_override: Some("researcher"),
+            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+        })
         .unwrap();
 
         // The agent window should be named "researcher" (not "claude")
@@ -490,16 +462,11 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _, project_name) = server.setup_project(dir.path());
 
-        feat_new(
+        feat_new(&FeatNewParams::with_defaults(
             &project_path,
             "login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         // 2 windows: default shell + hook window
@@ -527,16 +494,11 @@ mod tests {
         // Remove the bootstrapped hook script
         std::fs::remove_file(project_path.join(hooks::POST_CREATE_PATH)).unwrap();
 
-        feat_new(
+        feat_new(&FeatNewParams::with_defaults(
             &project_path,
             "login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         // Only 1 window — hook was skipped because file is missing
@@ -550,27 +512,16 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project(dir.path());
 
-        feat_new(
+        feat_new(&FeatNewParams::with_defaults(
             &project_path,
             "login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
-        feat_new(
-            &project_path,
-            "stacked",
-            None,
-            None,
-            Some("login"),
-            false,
-            None,
-            server.name(),
-        )
+        feat_new(&FeatNewParams {
+            base: Some("login"),
+            ..FeatNewParams::with_defaults(&project_path, "stacked", server.name())
+        })
         .unwrap();
 
         let features_dir = paths::features_dir(&project_path);
@@ -585,16 +536,11 @@ mod tests {
         let (project_path, _, _) = server.setup_project(dir.path());
 
         // Create parent feature with a commit
-        feat_new(
+        feat_new(&FeatNewParams::with_defaults(
             &project_path,
             "parent",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
         let parent_wt = project_path.join("parent");
         std::fs::write(parent_wt.join("parent.txt"), "parent work").unwrap();
@@ -602,16 +548,10 @@ mod tests {
         git::commit(&parent_wt, "parent commit").unwrap();
 
         // Create stacked feature based on parent
-        feat_new(
-            &project_path,
-            "child",
-            None,
-            None,
-            Some("parent"),
-            false,
-            None,
-            server.name(),
-        )
+        feat_new(&FeatNewParams {
+            base: Some("parent"),
+            ..FeatNewParams::with_defaults(&project_path, "child", server.name())
+        })
         .unwrap();
 
         // Child worktree should have the parent's file
@@ -625,16 +565,11 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project(dir.path());
 
-        feat_new(
+        feat_new(&FeatNewParams::with_defaults(
             &project_path,
             "login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         let features_dir = paths::features_dir(&project_path);
@@ -719,29 +654,19 @@ mod tests {
         let (project_path, _, _) = server.setup_project(dir.path());
 
         // Create "ciaran-login" first
-        feat_new(
+        feat_new(&FeatNewParams::with_defaults(
             &project_path,
             "ciaran-login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         // "ciaran/login" sanitizes to "ciaran-login" — should conflict
-        let result = feat_new(
+        let result = feat_new(&FeatNewParams::with_defaults(
             &project_path,
             "ciaran/login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        );
+        ));
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -755,16 +680,11 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _, project_name) = server.setup_project(dir.path());
 
-        feat_new(
+        feat_new(&FeatNewParams::with_defaults(
             &project_path,
             "ciaran/login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         // Feature name should be sanitized
@@ -787,16 +707,10 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _, project_name) = server.setup_project(dir.path());
 
-        feat_new(
-            &project_path,
-            "ciaran/eval",
-            Some("eval"),
-            None,
-            None,
-            false,
-            None,
-            server.name(),
-        )
+        feat_new(&FeatNewParams {
+            name_override: Some("eval"),
+            ..FeatNewParams::with_defaults(&project_path, "ciaran/eval", server.name())
+        })
         .unwrap();
 
         let features_dir = paths::features_dir(&project_path);

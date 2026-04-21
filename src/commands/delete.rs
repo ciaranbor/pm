@@ -205,27 +205,17 @@ mod tests {
         let server = TestServer::new();
         let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
 
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "api",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         delete(&project_path, &projects_dir, false, true, server.name()).unwrap();
@@ -244,16 +234,11 @@ mod tests {
         let server = TestServer::new();
         let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
 
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         let worktree = project_path.join("login");
@@ -274,16 +259,11 @@ mod tests {
         let server = TestServer::new();
         let (project_path, projects_dir, _project_name) = server.setup_project(dir.path());
 
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         let worktree = project_path.join("login");
@@ -303,16 +283,11 @@ mod tests {
         let server = TestServer::new();
         let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
 
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         let worktree = project_path.join("login");
@@ -333,16 +308,11 @@ mod tests {
         let server = TestServer::new();
         let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
 
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         // Merge the feature branch into main so safety checks pass
@@ -377,27 +347,17 @@ mod tests {
         let (project_path, projects_dir, _project_name) = server.setup_project(dir.path());
 
         // Create two features — one clean (merged), one dirty
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "clean",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "dirty",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         let main_repo = project_path.join("main");

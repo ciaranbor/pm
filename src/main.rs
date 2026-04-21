@@ -860,13 +860,15 @@ fn run() -> pm::error::Result<()> {
                             pm::state::project::ProjectConfig::load(&pm_dir)?;
                         let sender_project_name = &sender_project_config.project.name;
                         let line = commands::agent_send::agent_send_cross_project(
-                            proj_name,
-                            &feature,
-                            sender_project_name,
-                            target_scope,
-                            &agent,
-                            &sender,
-                            &message,
+                            &commands::agent_send::CrossProjectSendParams {
+                                target_project_name: proj_name,
+                                sender_scope: &feature,
+                                sender_project: sender_project_name,
+                                target_scope,
+                                recipient: &agent,
+                                sender: &sender,
+                                body: &message,
+                            },
                         )?;
                         println!("{line}");
                     } else {
@@ -951,16 +953,17 @@ fn run() -> pm::error::Result<()> {
                     edit,
                     agent,
                 } => {
-                    let feat_name = commands::feat_new::feat_new(
-                        &project_root,
-                        &name,
-                        feature_name.as_deref(),
-                        context.as_deref(),
-                        base.as_deref(),
-                        edit,
-                        agent.as_deref(),
-                        None,
-                    )?;
+                    let feat_name =
+                        commands::feat_new::feat_new(&commands::feat_new::FeatNewParams {
+                            project_root: &project_root,
+                            name: &name,
+                            name_override: feature_name.as_deref(),
+                            context: context.as_deref(),
+                            base: base.as_deref(),
+                            edit,
+                            agent_override: agent.as_deref(),
+                            tmux_server: None,
+                        })?;
                     println!("Created feature '{feat_name}'");
                     Ok(())
                 }
@@ -972,17 +975,18 @@ fn run() -> pm::error::Result<()> {
                     edit,
                     agent,
                 } => {
-                    let feat_name = commands::feat_adopt::feat_adopt(
-                        &project_root,
-                        &name,
-                        feature_name.as_deref(),
-                        context.as_deref(),
-                        from.as_deref(),
-                        edit,
-                        agent.as_deref(),
-                        None,
-                        None,
-                    )?;
+                    let feat_name =
+                        commands::feat_adopt::feat_adopt(&commands::feat_adopt::FeatAdoptParams {
+                            project_root: &project_root,
+                            name: &name,
+                            name_override: feature_name.as_deref(),
+                            context: context.as_deref(),
+                            from: from.as_deref(),
+                            edit,
+                            agent_override: agent.as_deref(),
+                            tmux_server: None,
+                            claude_base: None,
+                        })?;
                     println!("Adopted feature '{feat_name}'");
                     Ok(())
                 }

@@ -429,16 +429,11 @@ mod tests {
         feat_merge(&project_path, "login", true, server.name()).unwrap();
 
         // Create a second feature and merge it too
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "api",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
         let worktree = project_path.join("api");
         std::fs::write(worktree.join("api.txt"), "api work").unwrap();
@@ -505,16 +500,16 @@ mod tests {
         git::commit(&parent_wt, "parent commit").unwrap();
 
         // Create stacked feature based on parent
-        feat_new::feat_new(
-            &project_path,
-            "child",
-            None,
-            None,
-            Some("parent"),
-            false,
-            None,
-            server.name(),
-        )
+        feat_new::feat_new(&feat_new::FeatNewParams {
+            project_root: &project_path,
+            name: "child",
+            name_override: None,
+            context: None,
+            base: Some("parent"),
+            edit: false,
+            agent_override: None,
+            tmux_server: server.name(),
+        })
         .unwrap();
         let child_wt = project_path.join("child");
         std::fs::write(child_wt.join("child.txt"), "child work").unwrap();
@@ -535,16 +530,16 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "parent");
 
-        feat_new::feat_new(
-            &project_path,
-            "child",
-            None,
-            None,
-            Some("parent"),
-            false,
-            None,
-            server.name(),
-        )
+        feat_new::feat_new(&feat_new::FeatNewParams {
+            project_root: &project_path,
+            name: "child",
+            name_override: None,
+            context: None,
+            base: Some("parent"),
+            edit: false,
+            agent_override: None,
+            tmux_server: server.name(),
+        })
         .unwrap();
         let child_wt = project_path.join("child");
         std::fs::write(child_wt.join("child.txt"), "child work").unwrap();

@@ -558,16 +558,16 @@ mod tests {
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "parent");
 
         // Create stacked feature based on parent
-        feat_new::feat_new(
-            &project_path,
-            "child",
-            None,
-            None,
-            Some("parent"),
-            false,
-            None,
-            server.name(),
-        )
+        feat_new::feat_new(&feat_new::FeatNewParams {
+            project_root: &project_path,
+            name: "child",
+            name_override: None,
+            context: None,
+            base: Some("parent"),
+            edit: false,
+            agent_override: None,
+            tmux_server: server.name(),
+        })
         .unwrap();
 
         // Merge child into parent so the safety check passes
@@ -588,16 +588,16 @@ mod tests {
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "parent");
 
         // Create stacked feature based on parent with a commit
-        feat_new::feat_new(
-            &project_path,
-            "child",
-            None,
-            None,
-            Some("parent"),
-            false,
-            None,
-            server.name(),
-        )
+        feat_new::feat_new(&feat_new::FeatNewParams {
+            project_root: &project_path,
+            name: "child",
+            name_override: None,
+            context: None,
+            base: Some("parent"),
+            edit: false,
+            agent_override: None,
+            tmux_server: server.name(),
+        })
         .unwrap();
         let child_wt = project_path.join("child");
         std::fs::write(child_wt.join("child.txt"), "child work").unwrap();
