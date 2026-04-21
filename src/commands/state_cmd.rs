@@ -134,6 +134,126 @@ fn capitalize(s: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Shared init logic
+// ---------------------------------------------------------------------------
+
+/// Closure that runs before the first commit (e.g. to write a .gitignore).
+type PreInitHook<'a> = Box<dyn FnOnce(&Path) -> Result<()> + 'a>;
+/// Closure that runs after a remote URL is successfully configured.
+type PostRemoteHook<'a> = Box<dyn FnOnce() -> Result<()> + 'a>;
+/// Closure that interactively prompts for remote setup.
+type PromptRemoteHook<'a> = Box<dyn FnOnce(&Path) -> Result<Option<String>> + 'a>;
+
+/// Configuration for `init_repo_managed`, capturing the differences between
+/// project-level and global-registry init.
+struct InitConfig<'a> {
+    /// Directory to initialise as a git repo.
+    dir: &'a Path,
+    /// Human-readable label (e.g. "state", "global registry").
+    label: &'a str,
+    /// Error message when the directory does not exist.
+    dir_missing_error: &'a str,
+    /// Commit message for the initial commit.
+    init_commit_msg: &'a str,
+    /// Message returned on successful init (e.g. "Initialised state repo in .pm/").
+    init_success_msg: String,
+    /// Message returned when the repo already exists.
+    already_init_msg: &'a str,
+    /// Error message when the repo already has a remote configured.
+    already_has_remote_error: &'a str,
+    /// Called before the first commit (e.g. to write a .gitignore).
+    pre_init: Option<PreInitHook<'a>>,
+    /// Called after a remote URL is successfully configured.
+    post_remote: Option<PostRemoteHook<'a>>,
+    /// Called to interactively prompt for remote setup.
+    prompt_remote: Option<PromptRemoteHook<'a>>,
+}
+
+/// Unified init logic for both project-level and global-registry state repos.
+fn init_repo_managed(
+    cfg: InitConfig,
+    interactive: bool,
+    remote_url: Option<&str>,
+) -> Result<String> {
+    let dir = cfg.dir;
+    let label = cfg.label;
+
+    if dir.join(".git").exists() {
+        // Already initialised — if --remote given, configure it if possible
+        if let Some(url) = remote_url {
+            if git::has_remote(dir, "origin")? {
+                return Err(PmError::Git(cfg.already_has_remote_error.to_string()));
+            }
+            let mut result = cfg.already_init_msg.to_string();
+            let remote_msg = apply_remote_and_pull(dir, url, label, false)?;
+            result.push('\n');
+            result.push_str(&remote_msg);
+            if let Some(post) = cfg.post_remote
+                && let Err(e) = post()
+            {
+                eprintln!("warning: {label} post-remote hook failed: {e}");
+            }
+            return Ok(result);
+        }
+        // If interactive and no remote, offer remote setup
+        if interactive && !git::has_remote(dir, "origin")? {
+            let mut result = cfg.already_init_msg.to_string();
+            if let Some(prompt_fn) = cfg.prompt_remote
+                && let Some(remote_msg) = prompt_fn(dir)?
+            {
+                result.push('\n');
+                result.push_str(&remote_msg);
+            }
+            return Ok(result);
+        }
+        return Ok(cfg.already_init_msg.to_string());
+    }
+
+    if !dir.exists() {
+        return Err(PmError::Git(cfg.dir_missing_error.to_string()));
+    }
+
+    // Run pre-init hook (e.g. write .gitignore for global registry)
+    if let Some(pre) = cfg.pre_init {
+        pre(dir)?;
+    }
+
+    // Init the repo (creates initial empty commit)
+    git::init_repo(dir)?;
+
+    // When --remote is given, skip committing local state — the remote is
+    // authoritative and apply_remote_and_pull will fetch + reset to it.
+    if remote_url.is_none() {
+        git::add_all(dir)?;
+        if git::has_staged_changes(dir)? {
+            git::commit_with_message(dir, cfg.init_commit_msg)?;
+        }
+    }
+
+    let mut result = cfg.init_success_msg;
+
+    // Explicit remote URL takes precedence over interactive prompt
+    if let Some(url) = remote_url {
+        let remote_msg = apply_remote_and_pull(dir, url, label, true)?;
+        result.push('\n');
+        result.push_str(&remote_msg);
+        if let Some(post) = cfg.post_remote
+            && let Err(e) = post()
+        {
+            eprintln!("warning: {label} post-remote hook failed: {e}");
+        }
+    } else if interactive
+        && let Some(prompt_fn) = cfg.prompt_remote
+        && let Some(remote_msg) = prompt_fn(dir)?
+    {
+        result.push('\n');
+        result.push_str(&remote_msg);
+    }
+
+    Ok(result)
+}
+
+// ---------------------------------------------------------------------------
 // Project-level state repo (.pm/)
 // ---------------------------------------------------------------------------
 
@@ -164,71 +284,21 @@ pub fn init_with_remote(project_root: &Path, remote_url: Option<&str>) -> Result
 
 fn init_inner(project_root: &Path, interactive: bool, remote_url: Option<&str>) -> Result<String> {
     let pm_dir = paths::pm_dir(project_root);
-
-    if pm_dir.join(".git").exists() {
-        // Already initialised — if --remote given, configure it if possible
-        if let Some(url) = remote_url {
-            if git::has_remote(&pm_dir, "origin")? {
-                return Err(PmError::Git(
-                    "state repo already initialised with a remote (remove it first to reset)"
-                        .to_string(),
-                ));
-            }
-            let mut result = "State repo already initialised".to_string();
-            let remote_msg = apply_remote_and_pull(&pm_dir, url, "state", false)?;
-            result.push('\n');
-            result.push_str(&remote_msg);
-            if let Err(e) = persist_state_remote_to_registry(project_root) {
-                eprintln!("warning: failed to persist state_remote to registry: {e}");
-            }
-            return Ok(result);
-        }
-        // If interactive and no remote, offer remote setup
-        if interactive && !git::has_remote(&pm_dir, "origin")? {
-            let mut result = "State repo already initialised".to_string();
-            if let Some(remote_msg) = prompt_remote_setup(project_root, &pm_dir)? {
-                result.push('\n');
-                result.push_str(&remote_msg);
-            }
-            return Ok(result);
-        }
-        return Ok("State repo already initialised".to_string());
-    }
-
-    if !pm_dir.exists() {
-        return Err(PmError::Git(
-            ".pm/ directory does not exist — is this a pm project?".to_string(),
-        ));
-    }
-
-    // Init the repo (creates initial empty commit)
-    git::init_repo(&pm_dir)?;
-
-    // When --remote is given, skip committing local state — the remote is
-    // authoritative and apply_remote_and_pull will fetch + reset to it.
-    if remote_url.is_none() {
-        git::add_all(&pm_dir)?;
-        if git::has_staged_changes(&pm_dir)? {
-            git::commit_with_message(&pm_dir, "init state repo")?;
-        }
-    }
-
-    let mut result = "Initialised state repo in .pm/".to_string();
-
-    // Explicit remote URL takes precedence over interactive prompt
-    if let Some(url) = remote_url {
-        let remote_msg = apply_remote_and_pull(&pm_dir, url, "state", true)?;
-        result.push('\n');
-        result.push_str(&remote_msg);
-        if let Err(e) = persist_state_remote_to_registry(project_root) {
-            eprintln!("warning: failed to persist state_remote to registry: {e}");
-        }
-    } else if interactive && let Some(remote_msg) = prompt_remote_setup(project_root, &pm_dir)? {
-        result.push('\n');
-        result.push_str(&remote_msg);
-    }
-
-    Ok(result)
+    let cfg = InitConfig {
+        dir: &pm_dir,
+        label: "state",
+        dir_missing_error: ".pm/ directory does not exist — is this a pm project?",
+        init_commit_msg: "init state repo",
+        init_success_msg: "Initialised state repo in .pm/".to_string(),
+        already_init_msg: "State repo already initialised",
+        already_has_remote_error: "state repo already initialised with a remote (remove it first to reset)",
+        pre_init: None,
+        post_remote: Some(Box::new(|| persist_state_remote_to_registry(project_root))),
+        prompt_remote: Some(Box::new(|dir: &Path| {
+            prompt_remote_setup(project_root, dir)
+        })),
+    };
+    init_repo_managed(cfg, interactive, remote_url)
 }
 
 /// Set the remote URL for the state repo.
@@ -330,63 +400,27 @@ pub fn global_init_with_remote(remote_url: Option<&str>) -> Result<String> {
 }
 
 fn global_init_at(dir: &Path, interactive: bool, remote_url: Option<&str>) -> Result<String> {
-    if dir.join(".git").exists() {
-        // Already initialised — if --remote given, configure it if possible
-        if let Some(url) = remote_url {
-            if git::has_remote(dir, "origin")? {
-                return Err(PmError::Git(
-                    "global registry repo already initialised with a remote (remove it first to reset)"
-                        .to_string(),
-                ));
+    let cfg = InitConfig {
+        dir,
+        label: "global registry",
+        dir_missing_error: "~/.config/pm/ does not exist — run `pm init` first to create a project",
+        init_commit_msg: "init global registry repo",
+        init_success_msg: format!("Initialised global registry repo in {}", dir.display()),
+        already_init_msg: "Global registry repo already initialised",
+        already_has_remote_error: "global registry repo already initialised with a remote (remove it first to reset)",
+        pre_init: Some(Box::new(|dir: &Path| {
+            let gitignore_path = dir.join(".gitignore");
+            if !gitignore_path.exists() {
+                std::fs::write(&gitignore_path, GLOBAL_GITIGNORE)?;
             }
-            let mut result = "Global registry repo already initialised".to_string();
-            let remote_msg = apply_remote_and_pull(dir, url, "global registry", false)?;
-            result.push('\n');
-            result.push_str(&remote_msg);
-            return Ok(result);
-        }
-        return Ok("Global registry repo already initialised".to_string());
-    }
-
-    if !dir.exists() {
-        return Err(PmError::Git(
-            "~/.config/pm/ does not exist — run `pm init` first to create a project".to_string(),
-        ));
-    }
-
-    // Write .gitignore before first commit
-    let gitignore_path = dir.join(".gitignore");
-    if !gitignore_path.exists() {
-        std::fs::write(&gitignore_path, GLOBAL_GITIGNORE)?;
-    }
-
-    git::init_repo(dir)?;
-
-    // When --remote is given, skip committing local state — the remote is
-    // authoritative and apply_remote_and_pull will fetch + reset to it.
-    if remote_url.is_none() {
-        git::add_all(dir)?;
-        if git::has_staged_changes(dir)? {
-            git::commit_with_message(dir, "init global registry repo")?;
-        }
-    }
-
-    let mut result = format!("Initialised global registry repo in {}", dir.display());
-
-    // Explicit remote URL takes precedence over interactive prompt
-    if let Some(url) = remote_url {
-        let remote_msg = apply_remote_and_pull(dir, url, "global registry", true)?;
-        result.push('\n');
-        result.push_str(&remote_msg);
-    } else if interactive
-        && let Some(remote_msg) =
-            prompt_remote_setup_common(dir, "global registry", "pm-global-registry")?
-    {
-        result.push('\n');
-        result.push_str(&remote_msg);
-    }
-
-    Ok(result)
+            Ok(())
+        })),
+        post_remote: None,
+        prompt_remote: Some(Box::new(|dir: &Path| {
+            prompt_remote_setup_common(dir, "global registry", "pm-global-registry")
+        })),
+    };
+    init_repo_managed(cfg, interactive, remote_url)
 }
 
 /// Set the remote URL for the global registry repo.
