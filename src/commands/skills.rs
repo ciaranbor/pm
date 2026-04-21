@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
 use crate::fs_utils::copy_dir_recursive;
+use crate::state::paths;
 
 // --- Unified bundled item system ---
 
@@ -106,8 +107,7 @@ fn global_dir(kind: BundledKind) -> Result<PathBuf> {
 }
 
 fn project_dir(project_root: &Path, kind: BundledKind) -> PathBuf {
-    project_root
-        .join("main")
+    paths::main_worktree(project_root)
         .join(".claude")
         .join(kind.claude_subdir())
 }
@@ -431,14 +431,13 @@ mod tests {
     fn install_project_writes_to_main_claude_skills() {
         let tmp = tempfile::tempdir().unwrap();
         let project_root = tmp.path();
-        fs::create_dir_all(project_root.join("main")).unwrap();
+        fs::create_dir_all(paths::main_worktree(project_root)).unwrap();
 
         let messages = skills_install_project(project_root, Some("pm")).unwrap();
         assert_eq!(messages.len(), 1);
         assert!(messages[0].contains("Installed"));
 
-        let skill_path = project_root
-            .join("main")
+        let skill_path = paths::main_worktree(project_root)
             .join(".claude")
             .join("skills")
             .join("pm")
@@ -455,7 +454,9 @@ mod tests {
         fs::create_dir_all(&features_dir).unwrap();
         fs::write(features_dir.join("my-feat.toml"), "branch = \"my-feat\"\n").unwrap();
 
-        let main_skills = project_root.join("main").join(".claude").join("skills");
+        let main_skills = paths::main_worktree(project_root)
+            .join(".claude")
+            .join("skills");
         fs::create_dir_all(main_skills.join("foo")).unwrap();
         fs::write(main_skills.join("foo").join("SKILL.md"), "skill content").unwrap();
 
@@ -482,7 +483,9 @@ mod tests {
         fs::create_dir_all(&features_dir).unwrap();
         fs::write(features_dir.join("my-feat.toml"), "branch = \"my-feat\"\n").unwrap();
 
-        let main_skills = project_root.join("main").join(".claude").join("skills");
+        let main_skills = paths::main_worktree(project_root)
+            .join(".claude")
+            .join("skills");
         fs::create_dir_all(main_skills.join("foo")).unwrap();
         fs::write(main_skills.join("foo").join("SKILL.md"), "updated content").unwrap();
 
@@ -509,7 +512,7 @@ mod tests {
         fs::create_dir_all(&features_dir).unwrap();
         fs::write(features_dir.join("my-feat.toml"), "branch = \"my-feat\"\n").unwrap();
 
-        fs::create_dir_all(project_root.join("main")).unwrap();
+        fs::create_dir_all(paths::main_worktree(project_root)).unwrap();
         fs::create_dir_all(project_root.join("my-feat")).unwrap();
 
         let err = skills_pull(project_root, "my-feat").unwrap_err();
@@ -587,14 +590,13 @@ mod tests {
     fn agents_install_project_writes_to_main_claude_agents() {
         let tmp = tempfile::tempdir().unwrap();
         let project_root = tmp.path();
-        fs::create_dir_all(project_root.join("main")).unwrap();
+        fs::create_dir_all(paths::main_worktree(project_root)).unwrap();
 
         let messages = agents_install_project(project_root, Some("reviewer")).unwrap();
         assert_eq!(messages.len(), 1);
         assert!(messages[0].contains("Installed"));
 
-        let agent_path = project_root
-            .join("main")
+        let agent_path = paths::main_worktree(project_root)
             .join(".claude")
             .join("agents")
             .join("reviewer.md");

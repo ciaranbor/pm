@@ -22,6 +22,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use crate::error::{PmError, Result};
+use crate::state::paths;
 
 /// Timeout in seconds for the Stop hook. Claude Code's default is 600s
 /// (10 minutes), which is too short for agents that block waiting for
@@ -54,7 +55,7 @@ pub fn session_start_hook_command() -> String {
 ///
 /// Returns a human-readable status line describing what happened.
 pub fn install(project_root: &Path) -> Result<String> {
-    let main_claude_dir = project_root.join("main").join(".claude");
+    let main_claude_dir = paths::main_worktree(project_root).join(".claude");
     let settings_path = main_claude_dir.join("settings.json");
 
     let mut root = load_or_init_settings(&settings_path)?;
@@ -230,8 +231,7 @@ fn session_start_entry_is_pm_owned(entry: &Value) -> bool {
 /// Used by `pm doctor`. Returns `Ok(true)` when both Stop and SessionStart
 /// pm-owned entries are present, `Ok(false)` otherwise.
 pub fn is_installed(project_root: &Path) -> Result<bool> {
-    let path = project_root
-        .join("main")
+    let path = paths::main_worktree(project_root)
         .join(".claude")
         .join("settings.json");
     if !path.exists() {
@@ -266,7 +266,7 @@ mod tests {
 
     fn setup_project(dir: &Path) -> std::path::PathBuf {
         let root = dir.to_path_buf();
-        std::fs::create_dir_all(root.join("main")).unwrap();
+        std::fs::create_dir_all(paths::main_worktree(&root)).unwrap();
         root
     }
 
@@ -278,7 +278,9 @@ mod tests {
         let msg = install(&root).unwrap();
         assert!(msg.contains("Installed"));
 
-        let path = root.join("main").join(".claude").join("settings.json");
+        let path = paths::main_worktree(&root)
+            .join(".claude")
+            .join("settings.json");
         assert!(path.exists());
         let content = std::fs::read_to_string(&path).unwrap();
         let parsed: Value = serde_json::from_str(&content).unwrap();
@@ -322,7 +324,9 @@ mod tests {
         let root = setup_project(dir.path());
 
         install(&root).unwrap();
-        let path = root.join("main").join(".claude").join("settings.json");
+        let path = paths::main_worktree(&root)
+            .join(".claude")
+            .join("settings.json");
         let first = std::fs::read_to_string(&path).unwrap();
 
         let msg = install(&root).unwrap();
@@ -336,7 +340,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
 
-        let claude_dir = root.join("main").join(".claude");
+        let claude_dir = paths::main_worktree(&root).join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
         let existing = json!({
             "hooks": {
@@ -385,7 +389,7 @@ mod tests {
         install(&root).unwrap();
 
         // Manually modify the SessionStart hook command to simulate an old version
-        let claude_dir = root.join("main").join(".claude");
+        let claude_dir = paths::main_worktree(&root).join(".claude");
         let content = std::fs::read_to_string(claude_dir.join("settings.json")).unwrap();
         let mut parsed: Value = serde_json::from_str(&content).unwrap();
         let ss = parsed
@@ -426,7 +430,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
 
-        let claude_dir = root.join("main").join(".claude");
+        let claude_dir = paths::main_worktree(&root).join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
         std::fs::write(
             claude_dir.join("settings.json"),
@@ -448,7 +452,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
 
-        let claude_dir = root.join("main").join(".claude");
+        let claude_dir = paths::main_worktree(&root).join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
         let existing = json!({
             "hooks": {
@@ -495,7 +499,7 @@ mod tests {
 
         // Seed the old-style printf hook — install should replace it with
         // `pm claude hooks stop`.
-        let claude_dir = root.join("main").join(".claude");
+        let claude_dir = paths::main_worktree(&root).join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
         let old = json!({
             "hooks": {
@@ -556,7 +560,7 @@ mod tests {
     fn is_installed_false_with_foreign_stop_hook_only() {
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
-        let claude_dir = root.join("main").join(".claude");
+        let claude_dir = paths::main_worktree(&root).join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
         std::fs::write(
             claude_dir.join("settings.json"),
@@ -578,7 +582,9 @@ mod tests {
 
         install(&root).unwrap();
 
-        let path = root.join("main").join(".claude").join("settings.json");
+        let path = paths::main_worktree(&root)
+            .join(".claude")
+            .join("settings.json");
         let content = std::fs::read_to_string(&path).unwrap();
         let parsed: Value = serde_json::from_str(&content).unwrap();
 
@@ -595,7 +601,7 @@ mod tests {
         let root = setup_project(dir.path());
 
         // Seed a pm-owned stop hook that lacks the timeout field (old format)
-        let claude_dir = root.join("main").join(".claude");
+        let claude_dir = paths::main_worktree(&root).join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
         let old = json!({
             "hooks": {

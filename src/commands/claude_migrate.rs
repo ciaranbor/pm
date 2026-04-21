@@ -46,10 +46,8 @@ fn update_sessions_index(path: &Path, old_path: &str, new_path: &str) -> Result<
 /// Recursively replace `old` with `new` in all JSON string values.
 fn replace_json_strings(value: &mut serde_json::Value, old: &str, new: &str) {
     match value {
-        serde_json::Value::String(s) => {
-            if s.contains(old) {
-                *s = s.replace(old, new);
-            }
+        serde_json::Value::String(s) if s.contains(old) => {
+            *s = s.replace(old, new);
         }
         serde_json::Value::Array(arr) => {
             for item in arr {

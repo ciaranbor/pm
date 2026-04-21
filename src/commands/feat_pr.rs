@@ -93,7 +93,7 @@ mod tests {
             .unwrap();
 
         // Add remote to the main repo
-        let main_repo = project_path.join("main");
+        let main_repo = paths::main_worktree(&project_path);
         std::process::Command::new("git")
             .args(["-C", &main_repo.to_string_lossy()])
             .args(["remote", "add", "origin", &remote_path.to_string_lossy()])

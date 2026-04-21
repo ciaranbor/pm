@@ -82,13 +82,13 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
         return Ok(vec!["No features to check".to_string()]);
     }
 
-    let main_repo = project_root.join("main");
+    let main_repo = paths::main_worktree(project_root);
     let worktrees = git::list_worktrees(&main_repo)?;
 
     let mut findings: Vec<Finding> = Vec::new();
 
     // Main-scope checks: stop hook installed, main tmux session present.
-    let main_session = format!("{project_name}/main");
+    let main_session = tmux::session_name(project_name, "main");
     let mut main_issues: Vec<Issue> = Vec::new();
     if !hooks_install::is_installed(project_root)? {
         main_issues.push(Issue {
@@ -219,7 +219,7 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
 
         // Check 4: tmux session exists (only for active features)
         if state.status.is_active() {
-            let session_name = format!("{project_name}/{name}");
+            let session_name = tmux::session_name(project_name, name);
             if !tmux::has_session(tmux_server, &session_name)? {
                 let fix_action = if dir_exists {
                     Fix::Auto(FixAction::RecreateTmuxSession {
@@ -527,7 +527,7 @@ mod tests {
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         // Deregister worktree from git but leave directory on disk
-        let main_repo = project_path.join("main");
+        let main_repo = paths::main_worktree(&project_path);
         git::remove_worktree_force(&main_repo, &project_path.join("login")).unwrap();
         std::fs::create_dir_all(project_path.join("login")).unwrap();
 
@@ -547,7 +547,7 @@ mod tests {
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         // Remove worktree first (branch can't be deleted while checked out), then branch
-        let main_repo = project_path.join("main");
+        let main_repo = paths::main_worktree(&project_path);
         git::remove_worktree_force(&main_repo, &project_path.join("login")).unwrap();
         git::delete_branch(&main_repo, "login").unwrap();
         // Re-create the directory so the only issue is the missing branch
@@ -574,7 +574,7 @@ mod tests {
         let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
 
         // Kill the feature's tmux session
-        tmux::kill_session(server.name(), &format!("{project_name}/login")).unwrap();
+        tmux::kill_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
 
         let lines = doctor(&project_path, false, server.name()).unwrap();
         assert!(
@@ -639,10 +639,10 @@ mod tests {
         let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
 
         // Remove worktree + branch + tmux session — fully orphaned
-        let main_repo = project_path.join("main");
+        let main_repo = paths::main_worktree(&project_path);
         git::remove_worktree_force(&main_repo, &project_path.join("login")).unwrap();
         git::delete_branch(&main_repo, "login").unwrap();
-        tmux::kill_session(server.name(), &format!("{project_name}/login")).unwrap();
+        tmux::kill_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
 
         let lines = doctor(&project_path, false, server.name()).unwrap();
         // Orphan is reported as a single consolidated issue
@@ -660,7 +660,7 @@ mod tests {
 
         // Remove only the worktree directory — branch still exists, so not orphaned
         std::fs::remove_dir_all(project_path.join("login")).unwrap();
-        tmux::kill_session(server.name(), &format!("{project_name}/login")).unwrap();
+        tmux::kill_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
 
         let lines = doctor(&project_path, false, server.name()).unwrap();
         let issue_lines: Vec<_> = lines
@@ -680,7 +680,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
-        let session_name = format!("{project_name}/login");
+        let session_name = tmux::session_name(&project_name, "login");
 
         tmux::kill_session(server.name(), &session_name).unwrap();
         assert!(!tmux::has_session(server.name(), &session_name).unwrap());
@@ -718,10 +718,12 @@ mod tests {
         // Worktree directory should be removed
         assert!(!project_path.join("login").exists());
         // Branch should be removed
-        let main_repo = project_path.join("main");
+        let main_repo = paths::main_worktree(&project_path);
         assert!(!git::branch_exists(&main_repo, "login").unwrap());
         // Tmux session should be removed
-        assert!(!tmux::has_session(server.name(), &format!("{project_name}/login")).unwrap());
+        assert!(
+            !tmux::has_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap()
+        );
     }
 
     #[test]
@@ -731,10 +733,10 @@ mod tests {
         let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
 
         // Remove worktree, branch, and tmux session — leaving only the state file
-        let main_repo = project_path.join("main");
+        let main_repo = paths::main_worktree(&project_path);
         git::remove_worktree_force(&main_repo, &project_path.join("login")).unwrap();
         git::delete_branch(&main_repo, "login").unwrap();
-        tmux::kill_session(server.name(), &format!("{project_name}/login")).unwrap();
+        tmux::kill_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
 
         let features_dir = paths::features_dir(&project_path);
         assert!(FeatureState::exists(&features_dir, "login"));
@@ -756,7 +758,7 @@ mod tests {
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         // Remove worktree directory — branch still exists, so doctor can recreate
-        let main_repo = project_path.join("main");
+        let main_repo = paths::main_worktree(&project_path);
         git::remove_worktree_force(&main_repo, &project_path.join("login")).unwrap();
         assert!(!project_path.join("login").exists());
 
@@ -777,7 +779,7 @@ mod tests {
         let server = TestServer::new();
         let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
 
-        tmux::kill_session(server.name(), &format!("{project_name}/login")).unwrap();
+        tmux::kill_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
 
         let lines = doctor(&project_path, true, server.name()).unwrap();
         assert!(
@@ -844,9 +846,13 @@ mod tests {
 
         // Agent window should now exist
         assert!(
-            tmux::find_window(server.name(), &format!("{project_name}/login"), "reviewer")
-                .unwrap()
-                .is_some()
+            tmux::find_window(
+                server.name(),
+                &tmux::session_name(&project_name, "login"),
+                "reviewer"
+            )
+            .unwrap()
+            .is_some()
         );
     }
 
@@ -857,7 +863,7 @@ mod tests {
         let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
 
         // Register an agent AND create its window with a non-shell process
-        let session_name = format!("{project_name}/login");
+        let session_name = tmux::session_name(&project_name, "login");
         server.spawn_fake_agent(&project_path, &session_name, "login", "reviewer");
 
         let lines = doctor(&project_path, false, server.name()).unwrap();

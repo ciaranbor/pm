@@ -7,6 +7,7 @@ use crate::hooks;
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
 use crate::state::project::ProjectConfig;
+use crate::tmux;
 
 /// Merge a feature branch into its base branch from the main worktree.
 /// By default, cleans up the feature afterwards (remove worktree, delete branch, remove state, kill session).
@@ -81,7 +82,7 @@ pub fn feat_merge(
 
     // Run post-merge hook in a named "hook" window within the base session
     let hook_path = project_root.join(hooks::POST_MERGE_PATH);
-    let base_session = format!("{project_name}/{base}");
+    let base_session = tmux::session_name(project_name, base);
     hooks::run_hook(tmux_server, &base_session, &base_repo, &hook_path);
 
     if keep {
@@ -128,7 +129,7 @@ mod tests {
         feat_merge(&project_path, "login", true, server.name()).unwrap();
 
         // Verify the feature file is now in main
-        let main_repo = project_path.join("main");
+        let main_repo = paths::main_worktree(&project_path);
         assert!(main_repo.join("feature.txt").exists());
     }
 
@@ -143,7 +144,7 @@ mod tests {
         feat_merge(&project_path, "login", true, server.name()).unwrap();
 
         // Check that the latest commit in main is a merge commit (has two parents)
-        let main_repo = project_path.join("main");
+        let main_repo = paths::main_worktree(&project_path);
         let stdout = git::cat_file(&main_repo, "HEAD").unwrap();
         let parent_count = stdout.lines().filter(|l| l.starts_with("parent ")).count();
         assert_eq!(parent_count, 2, "merge commit should have two parents");
@@ -177,7 +178,7 @@ mod tests {
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         // Stage a file in the main worktree (uncommitted change)
-        let main_repo = project_path.join("main");
+        let main_repo = paths::main_worktree(&project_path);
         std::fs::write(main_repo.join("dirty.txt"), "uncommitted").unwrap();
         git::stage_file(&main_repo, "dirty.txt").unwrap();
 
@@ -201,16 +202,22 @@ mod tests {
         TestServer::add_feature_commit(&project_path, "login");
 
         // Verify session exists before merge
-        assert!(tmux_mod::has_session(server.name(), &format!("{project_name}/login")).unwrap());
+        assert!(
+            tmux_mod::has_session(server.name(), &tmux::session_name(&project_name, "login"))
+                .unwrap()
+        );
 
         feat_merge(&project_path, "login", false, server.name()).unwrap();
 
         // Session killed
-        assert!(!tmux_mod::has_session(server.name(), &format!("{project_name}/login")).unwrap());
+        assert!(
+            !tmux_mod::has_session(server.name(), &tmux::session_name(&project_name, "login"))
+                .unwrap()
+        );
         // Worktree removed
         assert!(!project_path.join("login").exists());
         // Branch deleted
-        let main_repo = project_path.join("main");
+        let main_repo = paths::main_worktree(&project_path);
         assert!(!git::branch_exists(&main_repo, "login").unwrap());
         // State removed
         let features_dir = paths::features_dir(&project_path);
@@ -229,11 +236,14 @@ mod tests {
         feat_merge(&project_path, "login", true, server.name()).unwrap();
 
         // Session still exists
-        assert!(tmux_mod::has_session(server.name(), &format!("{project_name}/login")).unwrap());
+        assert!(
+            tmux_mod::has_session(server.name(), &tmux::session_name(&project_name, "login"))
+                .unwrap()
+        );
         // Worktree still exists
         assert!(project_path.join("login").exists());
         // Branch still exists
-        let main_repo = project_path.join("main");
+        let main_repo = paths::main_worktree(&project_path);
         assert!(git::branch_exists(&main_repo, "login").unwrap());
         // State still exists, but status is Merged
         let features_dir = paths::features_dir(&project_path);
@@ -264,7 +274,7 @@ mod tests {
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         // Create a conflicting file on both main and feature
-        let main_repo = project_path.join("main");
+        let main_repo = paths::main_worktree(&project_path);
         std::fs::write(main_repo.join("shared.txt"), "main content").unwrap();
         git::stage_file(&main_repo, "shared.txt").unwrap();
         git::commit(&main_repo, "main change").unwrap();
@@ -293,7 +303,7 @@ mod tests {
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         // Simulate the branch being merged upstream by merging it directly in the main worktree via git
-        let main_repo = project_path.join("main");
+        let main_repo = paths::main_worktree(&project_path);
         let worktree = project_path.join("login");
         std::fs::write(worktree.join("feature.txt"), "feature work").unwrap();
         git::stage_file(&worktree, "feature.txt").unwrap();
@@ -316,7 +326,7 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        let main_repo = project_path.join("main");
+        let main_repo = paths::main_worktree(&project_path);
         let worktree = project_path.join("login");
 
         // Set up a bare repo as a fake remote
@@ -368,13 +378,13 @@ mod tests {
         TestServer::add_feature_commit(&project_path, "login");
 
         // Kill the session before merging
-        tmux_mod::kill_session(server.name(), &format!("{project_name}/login")).unwrap();
+        tmux_mod::kill_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
 
         feat_merge(&project_path, "login", false, server.name()).unwrap();
 
         // Everything still cleaned up
         assert!(!project_path.join("login").exists());
-        let main_repo = project_path.join("main");
+        let main_repo = paths::main_worktree(&project_path);
         assert!(!git::branch_exists(&main_repo, "login").unwrap());
         let features_dir = paths::features_dir(&project_path);
         assert!(!FeatureState::exists(&features_dir, "login"));
@@ -404,17 +414,24 @@ mod tests {
 
         // Main session should have 1 window before merge
         let before =
-            tmux_mod::list_windows(server.name(), &format!("{project_name}/main")).unwrap();
+            tmux_mod::list_windows(server.name(), &tmux::session_name(&project_name, "main"))
+                .unwrap();
         assert_eq!(before, 1);
 
         feat_merge(&project_path, "login", true, server.name()).unwrap();
 
         // Main session should now have 2 windows: original + hook window
-        let after = tmux_mod::list_windows(server.name(), &format!("{project_name}/main")).unwrap();
+        let after =
+            tmux_mod::list_windows(server.name(), &tmux::session_name(&project_name, "main"))
+                .unwrap();
         assert_eq!(after, 2);
         // Hook window should be named "hook"
-        let target =
-            tmux_mod::find_window(server.name(), &format!("{project_name}/main"), "hook").unwrap();
+        let target = tmux_mod::find_window(
+            server.name(),
+            &tmux::session_name(&project_name, "main"),
+            "hook",
+        )
+        .unwrap();
         assert!(target.is_some());
     }
 
@@ -443,7 +460,8 @@ mod tests {
 
         // Should still have just 2 windows — the hook window was reused, not duplicated
         let windows =
-            tmux_mod::list_windows(server.name(), &format!("{project_name}/main")).unwrap();
+            tmux_mod::list_windows(server.name(), &tmux::session_name(&project_name, "main"))
+                .unwrap();
         assert_eq!(windows, 2);
     }
 
@@ -462,7 +480,8 @@ mod tests {
 
         // Main session should still have just 1 window
         let windows =
-            tmux_mod::list_windows(server.name(), &format!("{project_name}/main")).unwrap();
+            tmux_mod::list_windows(server.name(), &tmux::session_name(&project_name, "main"))
+                .unwrap();
         assert_eq!(windows, 1);
     }
 
@@ -476,7 +495,7 @@ mod tests {
         TestServer::add_feature_commit(&project_path, "login");
 
         // Kill the main session before merging
-        tmux_mod::kill_session(server.name(), &format!("{project_name}/main")).unwrap();
+        tmux_mod::kill_session(server.name(), &tmux::session_name(&project_name, "main")).unwrap();
 
         // Merge should still succeed — hook skip is non-fatal
         feat_merge(&project_path, "login", true, server.name()).unwrap();
@@ -520,7 +539,7 @@ mod tests {
 
         // Child's changes should appear in parent worktree, not main
         assert!(parent_wt.join("child.txt").exists());
-        let main_repo = project_path.join("main");
+        let main_repo = paths::main_worktree(&project_path);
         assert!(!main_repo.join("child.txt").exists());
     }
 

@@ -18,7 +18,7 @@ fn copy_settings_file(src_dir: &Path, dst_dir: &Path, filename: &str) -> Result<
 }
 
 fn main_claude_dir(project_root: &Path) -> std::path::PathBuf {
-    project_root.join("main").join(".claude")
+    paths::main_worktree(project_root).join(".claude")
 }
 
 /// A pair of optional file contents (main, feature) for a single settings file.
@@ -427,7 +427,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _, _) = server.setup_project(dir.path());
 
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(
             &main_claude,
             "settings.json",
@@ -446,7 +446,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _, _) = server.setup_project(dir.path());
 
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"a":1}"#);
         write_json(&main_claude, "settings.local.json", r#"{"b":2}"#);
 
@@ -463,7 +463,7 @@ mod tests {
         let (project, _, _) = server.setup_project(dir.path());
         // `pm init` now installs the Stop hook into main/.claude/settings.json;
         // strip it to exercise the "no .claude/ dir" branch.
-        let _ = std::fs::remove_dir_all(project.join("main").join(".claude"));
+        let _ = std::fs::remove_dir_all(paths::main_worktree(&project).join(".claude"));
 
         let lines = list_main(&project).unwrap();
         assert!(lines.is_empty());
@@ -558,7 +558,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _, _) = server.setup_project(dir.path());
 
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"permissions":true}"#);
         write_json(&main_claude, "settings.local.json", r#"{"local":true}"#);
 
@@ -584,7 +584,7 @@ mod tests {
         let (project, _, _) = server.setup_project(dir.path());
         // `pm init` now installs the Stop hook into main/.claude/settings.json;
         // strip it to exercise the "no source dir" branch.
-        let _ = std::fs::remove_dir_all(project.join("main").join(".claude"));
+        let _ = std::fs::remove_dir_all(paths::main_worktree(&project).join(".claude"));
 
         let feature_wt = project.join("login");
         std::fs::create_dir_all(&feature_wt).unwrap();
@@ -599,7 +599,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _, _) = server.setup_project(dir.path());
 
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"only":"this"}"#);
 
         let feature_wt = project.join("login");
@@ -617,7 +617,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _, _) = server.setup_project(dir.path());
 
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"a":1}"#);
         let skills_dir = main_claude.join("skills").join("pm");
         std::fs::create_dir_all(&skills_dir).unwrap();
@@ -650,7 +650,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _, _) = server.setup_project(dir.path());
 
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"a":1}"#);
 
         // Remove skills/agents that init installs, so we can test the
@@ -674,7 +674,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _, _) = server.setup_project(dir.path());
 
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"a":1}"#);
         let skills_dir = main_claude.join("skills").join("pm");
         std::fs::create_dir_all(&skills_dir).unwrap();
@@ -702,7 +702,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _, _) = server.setup_project(dir.path());
 
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"seeded":true}"#);
 
         crate::commands::feat_new::feat_new(
@@ -740,7 +740,7 @@ mod tests {
 
         push(&project, "login").unwrap();
 
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         assert_eq!(
             std::fs::read_to_string(main_claude.join("settings.json")).unwrap(),
             r#"{"pushed":true}"#
@@ -785,7 +785,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"pulled":true}"#);
 
         pull(&project, "login").unwrap();
@@ -813,7 +813,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature(dir.path(), "login");
         // Strip the Stop-hook settings.json seeded by `pm init`.
-        let _ = std::fs::remove_dir_all(project.join("main").join(".claude"));
+        let _ = std::fs::remove_dir_all(paths::main_worktree(&project).join(".claude"));
 
         let result = pull(&project, "login");
         assert!(result.is_err());
@@ -836,7 +836,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
         write_json(&main_claude, "settings.json", r#"{"same":true}"#);
         write_json(&feat_claude, "settings.json", r#"{"same":true}"#);
@@ -851,7 +851,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
         write_json(&main_claude, "settings.json", r#"{"key":"a"}"#);
         write_json(&feat_claude, "settings.json", r#"{"key":"b"}"#);
@@ -869,7 +869,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
         write_json(&main_claude, "settings.json", r#"{"extra":"val"}"#);
         write_json(&feat_claude, "settings.json", r#"{}"#);
@@ -884,7 +884,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
         write_json(&main_claude, "settings.json", r#"{}"#);
         write_json(&feat_claude, "settings.json", r#"{"new_perm":true}"#);
@@ -899,7 +899,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"x":1}"#);
 
         let output = diff_output(&project, "login");
@@ -942,7 +942,7 @@ mod tests {
     // --- merge ---
 
     fn read_merged(project: &Path, filename: &str) -> serde_json::Value {
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(project).join(".claude");
         let content = std::fs::read_to_string(main_claude.join(filename)).unwrap();
         serde_json::from_str(&content).unwrap()
     }
@@ -953,7 +953,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
         write_json(&main_claude, "settings.json", r#"{"a":1}"#);
         write_json(&feat_claude, "settings.json", r#"{"b":2}"#);
@@ -971,7 +971,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
         write_json(
             &main_claude,
@@ -1002,7 +1002,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
         write_json(&main_claude, "settings.json", r#"{"mode":"strict"}"#);
         write_json(&feat_claude, "settings.json", r#"{"mode":"relaxed"}"#);
@@ -1020,7 +1020,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
         write_json(&main_claude, "settings.json", r#"{"mode":"strict"}"#);
         write_json(&feat_claude, "settings.json", r#"{"mode":"relaxed"}"#);
@@ -1052,7 +1052,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"existing":true}"#);
 
         merge(&project, "login", false).unwrap();
@@ -1068,12 +1068,12 @@ mod tests {
         let (project, _) = server.setup_project_with_feature(dir.path(), "login");
         // Strip the Stop-hook settings.json seeded by `pm init` (and the
         // feature copy seeded by seed_feature_claude during feat_new).
-        let _ = std::fs::remove_dir_all(project.join("main").join(".claude"));
+        let _ = std::fs::remove_dir_all(paths::main_worktree(&project).join(".claude"));
         let _ = std::fs::remove_dir_all(project.join("login").join(".claude"));
 
         merge(&project, "login", false).unwrap();
 
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         assert!(!main_claude.join("settings.json").exists());
     }
 
@@ -1083,7 +1083,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
         write_json(&main_claude, "settings.json", r#"{"same":true}"#);
         write_json(&feat_claude, "settings.json", r#"{"same":true}"#);
@@ -1108,7 +1108,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
         write_json(
             &main_claude,
@@ -1144,7 +1144,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
         write_json(&main_claude, "settings.json", "not json");
         write_json(&feat_claude, "settings.json", r#"{"valid":true}"#);
@@ -1166,7 +1166,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
         // settings.json identical, settings.local.json differs
         write_json(&main_claude, "settings.json", r#"{"same":true}"#);
@@ -1185,7 +1185,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
         write_json(&main_claude, "settings.local.json", r#"{"a":1}"#);
         write_json(&feat_claude, "settings.local.json", r#"{"b":2}"#);
@@ -1205,7 +1205,7 @@ mod tests {
         let (project, _) = server.setup_project_with_feature(dir.path(), "login");
 
         // Main has old settings
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"old":true}"#);
 
         // Feature has new settings
@@ -1229,7 +1229,7 @@ mod tests {
         write_json(&feat_claude, "settings.json", r#"{"diverged":true}"#);
 
         // Main has canonical settings
-        let main_claude = project.join("main").join(".claude");
+        let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"canonical":true}"#);
 
         pull(&project, "login").unwrap();

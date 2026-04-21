@@ -3,6 +3,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use crate::error::{PmError, Result};
+use crate::state::paths;
 use crate::state::project::ProjectEntry;
 
 use super::claude_migrate::{claude_base_dir, migrate_sessions, path_to_key};
@@ -83,7 +84,7 @@ pub fn import(
         };
 
         let local_root = local_entry.root_path();
-        let local_main = local_root.join("main");
+        let local_main = paths::main_worktree(&local_root);
         let new_key = path_to_key(&local_main);
 
         // Source dir in the extracted tarball
@@ -183,7 +184,7 @@ mod tests {
             agents: Default::default(),
         };
         config.save(&pm_dir).unwrap();
-        let main_path = root.join("main");
+        let main_path = paths::main_worktree(root);
         std::fs::create_dir_all(&main_path).unwrap();
 
         let entry = ProjectEntry {

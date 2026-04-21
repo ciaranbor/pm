@@ -84,7 +84,7 @@ fn spawn_claude_session_with_config(
     params: &SpawnClaudeParams<'_>,
     config: &ProjectConfig,
 ) -> Result<String> {
-    let session_name = format!("{}/{}", config.project.name, params.feature);
+    let session_name = tmux::session_name(&config.project.name, params.feature);
     let worktree_path = params.project_root.join(params.feature);
 
     // Resolve permission mode: --edit flag > project config > none
@@ -185,7 +185,7 @@ pub fn agent_spawn(
     let pm_dir = paths::pm_dir(project_root);
     let agents_dir = paths::agents_dir(project_root);
     let config = ProjectConfig::load(&pm_dir)?;
-    let session_name = format!("{}/{feature}", config.project.name);
+    let session_name = tmux::session_name(&config.project.name, feature);
     // Use _with_config helper to avoid reloading config in spawn_claude_session
     let spawn = |prompt: Option<&str>, resume: Option<&str>| {
         spawn_claude_session_with_config(
@@ -360,7 +360,7 @@ mod tests {
         std::fs::create_dir_all(&worktree).unwrap();
 
         // Create tmux session for the feature
-        let session_name = format!("{project_name}/{feature_name}");
+        let session_name = tmux::session_name(&project_name, feature_name);
         tmux::create_session(server.name(), &session_name, &worktree).unwrap();
 
         (session_name, feature_name.to_string())
@@ -593,7 +593,7 @@ mod tests {
         // there's no tmux session to create windows in.
         let pm_dir = paths::pm_dir(dir.path());
         let config = ProjectConfig::load(&pm_dir).unwrap();
-        let session_name = format!("{}/{feature}", config.project.name);
+        let session_name = tmux::session_name(&config.project.name, &feature);
         tmux::kill_session(server.name(), &session_name).unwrap();
 
         let result = agent_spawn_all(dir.path(), &feature, server.name()).unwrap();

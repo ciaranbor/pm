@@ -555,6 +555,7 @@ pub fn is_git_repo(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::paths;
     use tempfile::tempdir;
 
     #[test]
@@ -658,7 +659,7 @@ mod tests {
     #[test]
     fn add_worktree_creates_directory() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("main");
+        let repo_path = paths::main_worktree(dir.path());
         init_repo(&repo_path).unwrap();
 
         create_branch(&repo_path, "feature-login").unwrap();
@@ -673,7 +674,7 @@ mod tests {
     #[test]
     fn add_worktree_appears_in_list() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("main");
+        let repo_path = paths::main_worktree(dir.path());
         init_repo(&repo_path).unwrap();
 
         create_branch(&repo_path, "feature-login").unwrap();
@@ -694,7 +695,7 @@ mod tests {
     #[test]
     fn remove_worktree_removes_directory() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("main");
+        let repo_path = paths::main_worktree(dir.path());
         init_repo(&repo_path).unwrap();
 
         create_branch(&repo_path, "feature-login").unwrap();
@@ -710,7 +711,7 @@ mod tests {
     #[test]
     fn remove_worktree_removes_from_list() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("main");
+        let repo_path = paths::main_worktree(dir.path());
         init_repo(&repo_path).unwrap();
 
         create_branch(&repo_path, "feature-login").unwrap();
@@ -733,7 +734,7 @@ mod tests {
     #[test]
     fn list_worktrees_includes_main() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("main");
+        let repo_path = paths::main_worktree(dir.path());
         init_repo(&repo_path).unwrap();
 
         let worktrees = list_worktrees(&repo_path).unwrap();
@@ -743,7 +744,7 @@ mod tests {
     #[test]
     fn find_worktree_for_branch_returns_path() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("main");
+        let repo_path = paths::main_worktree(dir.path());
         init_repo(&repo_path).unwrap();
 
         create_branch(&repo_path, "feature").unwrap();
@@ -759,7 +760,7 @@ mod tests {
     #[test]
     fn find_worktree_for_branch_returns_none_for_no_worktree() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("main");
+        let repo_path = paths::main_worktree(dir.path());
         init_repo(&repo_path).unwrap();
 
         create_branch(&repo_path, "feature").unwrap();
@@ -771,7 +772,7 @@ mod tests {
     #[test]
     fn prune_worktrees_cleans_stale_entry() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("main");
+        let repo_path = paths::main_worktree(dir.path());
         init_repo(&repo_path).unwrap();
 
         create_branch(&repo_path, "feature").unwrap();
@@ -943,7 +944,7 @@ mod tests {
     #[test]
     fn branch_merged_into_returns_false_for_unmerged_branch() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("main");
+        let repo_path = paths::main_worktree(dir.path());
         init_repo(&repo_path).unwrap();
 
         create_branch(&repo_path, "feature").unwrap();
@@ -961,7 +962,7 @@ mod tests {
     #[test]
     fn merge_no_ff_merges_branch() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("main");
+        let repo_path = paths::main_worktree(dir.path());
         init_repo(&repo_path).unwrap();
 
         create_branch(&repo_path, "feature").unwrap();
@@ -981,7 +982,7 @@ mod tests {
     #[test]
     fn merge_no_ff_creates_merge_commit() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("main");
+        let repo_path = paths::main_worktree(dir.path());
         init_repo(&repo_path).unwrap();
 
         create_branch(&repo_path, "feature").unwrap();
@@ -1013,7 +1014,7 @@ mod tests {
     #[test]
     fn merge_no_ff_fails_on_conflict() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("main");
+        let repo_path = paths::main_worktree(dir.path());
         init_repo(&repo_path).unwrap();
 
         // Create a file on main and commit
@@ -1063,7 +1064,7 @@ mod tests {
     #[test]
     fn current_branch_returns_checked_out_branch_in_worktree() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("main");
+        let repo_path = paths::main_worktree(dir.path());
         init_repo(&repo_path).unwrap();
 
         create_branch(&repo_path, "feature").unwrap();
@@ -1076,7 +1077,7 @@ mod tests {
     #[test]
     fn create_branch_from_branches_at_specific_commit() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("main");
+        let repo_path = paths::main_worktree(dir.path());
         init_repo(&repo_path).unwrap();
 
         // Make a second commit on main
@@ -1106,7 +1107,7 @@ mod tests {
     #[test]
     fn branch_divergence_up_to_date() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("main");
+        let repo_path = paths::main_worktree(dir.path());
         init_repo(&repo_path).unwrap();
 
         create_branch(&repo_path, "feature").unwrap();
@@ -1125,7 +1126,7 @@ mod tests {
     #[test]
     fn branch_divergence_ahead() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("main");
+        let repo_path = paths::main_worktree(dir.path());
         init_repo(&repo_path).unwrap();
 
         create_branch(&repo_path, "feature").unwrap();
@@ -1150,7 +1151,7 @@ mod tests {
     #[test]
     fn branch_divergence_behind() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("main");
+        let repo_path = paths::main_worktree(dir.path());
         init_repo(&repo_path).unwrap();
 
         create_branch(&repo_path, "feature").unwrap();
@@ -1174,7 +1175,7 @@ mod tests {
     #[test]
     fn branch_divergence_both() {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("main");
+        let repo_path = paths::main_worktree(dir.path());
         init_repo(&repo_path).unwrap();
 
         create_branch(&repo_path, "feature").unwrap();

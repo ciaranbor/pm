@@ -622,7 +622,7 @@ pub fn backfill_with_dir(projects_dir: &Path) -> Result<Vec<String>> {
 
         // Backfill repo_url from main worktree's origin
         if entry.repo_url.is_none() {
-            let main_path = root.join("main");
+            let main_path = paths::main_worktree(&root);
             if git::is_git_repo(&main_path)
                 && let Ok(Some(url)) = git::remote_url(&main_path, "origin")
             {
@@ -666,7 +666,7 @@ mod tests {
     fn setup_project(dir: &std::path::Path) -> std::path::PathBuf {
         let root = dir.to_path_buf();
         std::fs::create_dir_all(root.join(".pm").join("features")).unwrap();
-        std::fs::create_dir_all(root.join("main")).unwrap();
+        std::fs::create_dir_all(paths::main_worktree(&root)).unwrap();
         root
     }
 
@@ -1338,7 +1338,7 @@ mod tests {
 
     /// Create a project dir with a main worktree that has a git origin remote.
     fn setup_project_with_origin(root: &std::path::Path, origin_url: &str) {
-        let main_path = root.join("main");
+        let main_path = paths::main_worktree(root);
         std::fs::create_dir_all(&main_path).unwrap();
         git::init_repo(&main_path).unwrap();
         git::add_remote(&main_path, "origin", origin_url).unwrap();

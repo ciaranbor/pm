@@ -115,7 +115,7 @@ mod tests {
     fn setup_project(dir: &std::path::Path) -> PathBuf {
         let root = dir.to_path_buf();
         fs::create_dir_all(root.join(".pm").join("features")).unwrap();
-        fs::create_dir_all(root.join("main")).unwrap();
+        fs::create_dir_all(paths::main_worktree(&root)).unwrap();
         root
     }
 
@@ -155,8 +155,7 @@ last_active = "2026-01-01T00:00:00Z"
         assert!(hooks_install::is_installed(&root).unwrap());
 
         // Verify skills installed
-        let skill_path = root
-            .join("main")
+        let skill_path = paths::main_worktree(&root)
             .join(".claude")
             .join("skills")
             .join("pm")
@@ -164,8 +163,7 @@ last_active = "2026-01-01T00:00:00Z"
         assert!(skill_path.exists());
 
         // Verify agents installed
-        let agent_path = root
-            .join("main")
+        let agent_path = paths::main_worktree(&root)
             .join(".claude")
             .join("agents")
             .join("reviewer.md");

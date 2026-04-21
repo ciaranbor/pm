@@ -16,7 +16,7 @@ fn check_all_features_safety(
     features: &[(String, FeatureState)],
     main_branch: &str,
 ) -> Result<Vec<String>> {
-    let main_repo = project_root.join("main");
+    let main_repo = paths::main_worktree(project_root);
     let mut blockers = Vec::new();
 
     for (name, state) in features {
@@ -65,7 +65,7 @@ pub fn delete(
     let project_name = config.project.name.clone();
 
     let features = FeatureState::list(&features_dir)?;
-    let main_repo = project_root.join("main");
+    let main_repo = paths::main_worktree(project_root);
 
     // --- Safety checks (skip with --force) ---
     if !force && !features.is_empty() {
@@ -146,9 +146,9 @@ pub fn delete(
             let messages_dir = paths::messages_dir(project_root);
             messages::delete_feature(&messages_dir, name)?;
 
-            let session_name = format!("{project_name}/{name}");
+            let session_name = tmux::session_name(&project_name, name);
             if tmux::has_session(tmux_server, &session_name)? {
-                let main_session = format!("{project_name}/main");
+                let main_session = tmux::session_name(&project_name, "main");
                 let _ = tmux::switch_client(tmux_server, &main_session);
                 tmux::kill_session(tmux_server, &session_name)?;
             }
@@ -168,7 +168,7 @@ pub fn delete(
 
     // --- Kill main tmux session (must be last — if the caller is inside this
     // session, the kill terminates this process) ---
-    let main_session = format!("{project_name}/main");
+    let main_session = tmux::session_name(&project_name, "main");
     if tmux::has_session(tmux_server, &main_session)? {
         tmux::kill_session(tmux_server, &main_session)?;
     }
@@ -188,7 +188,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
-        let main_session = format!("{project_name}/main");
+        let main_session = tmux::session_name(&project_name, "main");
 
         assert!(tmux::has_session(server.name(), &main_session).unwrap());
 
@@ -223,8 +223,12 @@ mod tests {
         let features_dir = paths::features_dir(&project_path);
         assert!(!FeatureState::exists(&features_dir, "login"));
         assert!(!FeatureState::exists(&features_dir, "api"));
-        assert!(!tmux::has_session(server.name(), &format!("{project_name}/login")).unwrap());
-        assert!(!tmux::has_session(server.name(), &format!("{project_name}/api")).unwrap());
+        assert!(
+            !tmux::has_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap()
+        );
+        assert!(
+            !tmux::has_session(server.name(), &tmux::session_name(&project_name, "api")).unwrap()
+        );
         assert!(!paths::pm_dir(&project_path).exists());
     }
 
@@ -316,7 +320,7 @@ mod tests {
         .unwrap();
 
         // Merge the feature branch into main so safety checks pass
-        let main_repo = project_path.join("main");
+        let main_repo = paths::main_worktree(&project_path);
         git::merge_no_ff(&main_repo, "login").unwrap();
 
         delete(&project_path, &projects_dir, false, true, server.name()).unwrap();
@@ -360,7 +364,7 @@ mod tests {
         ))
         .unwrap();
 
-        let main_repo = project_path.join("main");
+        let main_repo = paths::main_worktree(&project_path);
         git::merge_no_ff(&main_repo, "clean").unwrap();
 
         let worktree = project_path.join("dirty");

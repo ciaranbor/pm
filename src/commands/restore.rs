@@ -164,7 +164,7 @@ fn restore_project(
 
     // Step 2.5: Recreate missing feature worktrees
     let features_dir = paths::features_dir(&root);
-    let main_worktree = root.join("main");
+    let main_worktree = paths::main_worktree(&root);
     if main_worktree.exists() {
         match FeatureState::list(&features_dir) {
             Ok(features) => {
@@ -224,6 +224,7 @@ fn restore_project(
 mod tests {
     use super::*;
     use crate::testing::TestServer;
+    use crate::tmux;
     use tempfile::tempdir;
 
     #[test]
@@ -261,7 +262,7 @@ mod tests {
         super::super::init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         // Kill the session so open has something to restore
-        crate::tmux::kill_session(server.name(), &format!("{name}/main")).unwrap();
+        crate::tmux::kill_session(server.name(), &tmux::session_name(&name, "main")).unwrap();
 
         let msgs = restore_with_dir(&projects_dir, server.name()).unwrap();
         assert!(
@@ -269,7 +270,9 @@ mod tests {
             "{msgs:?}"
         );
         // Session should be restored
-        assert!(crate::tmux::has_session(server.name(), &format!("{name}/main")).unwrap());
+        assert!(
+            crate::tmux::has_session(server.name(), &tmux::session_name(&name, "main")).unwrap()
+        );
     }
 
     #[test]
@@ -303,7 +306,7 @@ mod tests {
             msgs.iter().any(|m| m.contains("cloned and initialised")),
             "{msgs:?}"
         );
-        assert!(project_path.join("main").join(".git").exists());
+        assert!(paths::main_worktree(&project_path).join(".git").exists());
 
         // Verify URLs were preserved in the registry after init
         let loaded = ProjectEntry::load(&projects_dir, &name).unwrap();
@@ -479,7 +482,7 @@ mod tests {
         let project_path = dir.path().join(&name);
         super::super::init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
-        let main_worktree = project_path.join("main");
+        let main_worktree = paths::main_worktree(&project_path);
 
         // Create a feature branch and worktree
         git::create_branch(&main_worktree, "feat-login").unwrap();
@@ -507,7 +510,7 @@ mod tests {
         assert!(!wt_path.exists());
 
         // Kill the session so open doesn't complain
-        let _ = crate::tmux::kill_session(server.name(), &format!("{name}/main"));
+        let _ = crate::tmux::kill_session(server.name(), &tmux::session_name(&name, "main"));
 
         let msgs = restore_with_dir(&projects_dir, server.name()).unwrap();
         assert!(
@@ -532,7 +535,7 @@ mod tests {
         let project_path = dir.path().join(&name);
         super::super::init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
-        let main_worktree = project_path.join("main");
+        let main_worktree = paths::main_worktree(&project_path);
         git::create_branch(&main_worktree, "feat-old").unwrap();
 
         // Register a merged feature — its worktree should NOT be recreated
@@ -550,7 +553,7 @@ mod tests {
         };
         feat_state.save(&features_dir, "old-feat").unwrap();
 
-        let _ = crate::tmux::kill_session(server.name(), &format!("{name}/main"));
+        let _ = crate::tmux::kill_session(server.name(), &tmux::session_name(&name, "main"));
 
         let msgs = restore_with_dir(&projects_dir, server.name()).unwrap();
         // Should NOT contain any worktree recreation message
@@ -590,7 +593,7 @@ mod tests {
         };
         feat_state.save(&features_dir, "ghost-feat").unwrap();
 
-        let _ = crate::tmux::kill_session(server.name(), &format!("{name}/main"));
+        let _ = crate::tmux::kill_session(server.name(), &tmux::session_name(&name, "main"));
 
         let msgs = restore_with_dir(&projects_dir, server.name()).unwrap();
         assert!(

@@ -51,7 +51,7 @@ pub fn sync_one(
 /// Returns a list of human-readable status change messages.
 pub fn feat_sync(project_root: &Path, name: Option<&str>) -> Result<Vec<String>> {
     let features_dir = paths::features_dir(project_root);
-    let main_worktree = project_root.join("main");
+    let main_worktree = paths::main_worktree(project_root);
 
     let features: Vec<(String, FeatureState)> = if let Some(name) = name {
         let state = FeatureState::load(&features_dir, name)?;
@@ -220,7 +220,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let project_root = dir.path();
         let features_dir = paths::features_dir(project_root);
-        std::fs::create_dir_all(project_root.join("main")).unwrap();
+        std::fs::create_dir_all(paths::main_worktree(project_root)).unwrap();
 
         let state = make_feature(FeatureStatus::Wip, "");
         state.save(&features_dir, "no-pr").unwrap();
@@ -249,7 +249,7 @@ mod tests {
         let project_root = dir.path();
         let features_dir = paths::features_dir(project_root);
         std::fs::create_dir_all(&features_dir).unwrap();
-        std::fs::create_dir_all(project_root.join("main")).unwrap();
+        std::fs::create_dir_all(paths::main_worktree(project_root)).unwrap();
 
         let messages = feat_sync(project_root, None).unwrap();
         assert_eq!(messages, vec!["All features up to date"]);

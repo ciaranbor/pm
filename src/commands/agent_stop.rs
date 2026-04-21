@@ -19,7 +19,7 @@ pub fn agent_stop(
     let pm_dir = paths::pm_dir(project_root);
     let agents_dir = paths::agents_dir(project_root);
     let config = ProjectConfig::load(&pm_dir)?;
-    let session_name = format!("{}/{feature}", config.project.name);
+    let session_name = tmux::session_name(&config.project.name, feature);
 
     let registry = AgentRegistry::load(&agents_dir, feature)?;
 
@@ -81,7 +81,7 @@ mod tests {
         let worktree = root.join(feature_name);
         std::fs::create_dir_all(&worktree).unwrap();
 
-        let session_name = format!("{project_name}/{feature_name}");
+        let session_name = tmux::session_name(&project_name, feature_name);
         tmux::create_session(server.name(), &session_name, &worktree).unwrap();
 
         (session_name, feature_name.to_string())

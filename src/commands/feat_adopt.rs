@@ -40,7 +40,7 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
     }
 
     // Verify branch exists
-    let main_worktree = params.project_root.join("main");
+    let main_worktree = paths::main_worktree(params.project_root);
     if !git::branch_exists(&main_worktree, branch)? {
         return Err(PmError::BranchNotFound(branch.to_string()));
     }
@@ -106,7 +106,7 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
     // Invariant: `branch` is user-owned — it existed before feat_adopt ran —
     // so rollback must NOT delete it. We pass `delete_branch: false` below.
     let worktree_path = params.project_root.join(&feature_name);
-    let session_name = format!("{project_name}/{feature_name}");
+    let session_name = tmux::session_name(project_name, &feature_name);
     let hook_path = params.project_root.join(hooks::POST_CREATE_PATH);
 
     let result: Result<()> = (|| {
@@ -206,7 +206,7 @@ mod tests {
 
     /// Create a branch on the main worktree so feat_adopt can find it.
     fn create_branch(project_path: &Path, name: &str) {
-        let main_worktree = project_path.join("main");
+        let main_worktree = paths::main_worktree(project_path);
         git::create_branch(&main_worktree, name).unwrap();
     }
 
@@ -266,7 +266,9 @@ mod tests {
 
         feat_adopt(&default_adopt_params(&project_path, "login", server.name())).unwrap();
 
-        assert!(tmux::has_session(server.name(), &format!("{project_name}/login")).unwrap());
+        assert!(
+            tmux::has_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap()
+        );
     }
 
     #[test]
@@ -277,7 +279,7 @@ mod tests {
         create_branch(&project_path, "login");
 
         // Branch exists before adopt
-        let main_wt = project_path.join("main");
+        let main_wt = paths::main_worktree(&project_path);
         assert!(git::branch_exists(&main_wt, "login").unwrap());
 
         feat_adopt(&default_adopt_params(&project_path, "login", server.name())).unwrap();
@@ -382,7 +384,8 @@ mod tests {
         .unwrap();
 
         // Session should have 2 windows: the reused window :0 (now agent) + hook window
-        let output = tmux::list_windows(server.name(), &format!("{project_name}/login")).unwrap();
+        let output =
+            tmux::list_windows(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
         assert_eq!(output, 2);
     }
 
@@ -396,7 +399,7 @@ mod tests {
         feat_adopt(&default_adopt_params(&project_path, "login", server.name())).unwrap();
 
         // 2 windows: default shell + hook
-        let session = format!("{project_name}/login");
+        let session = tmux::session_name(&project_name, "login");
         let output = tmux::list_windows(server.name(), &session).unwrap();
         assert_eq!(output, 2);
         let target = tmux::find_window(server.name(), &session, "hook").unwrap();
@@ -411,7 +414,12 @@ mod tests {
         create_branch(&project_path, "login");
 
         // Pre-create a tmux session to cause a conflict
-        tmux::create_session(server.name(), &format!("{project_name}/login"), dir.path()).unwrap();
+        tmux::create_session(
+            server.name(),
+            &tmux::session_name(&project_name, "login"),
+            dir.path(),
+        )
+        .unwrap();
 
         let result = feat_adopt(&default_adopt_params(&project_path, "login", server.name()));
         assert!(result.is_err());
@@ -422,7 +430,7 @@ mod tests {
         assert!(!project_path.join("login").exists());
 
         // ...but the user-owned branch must NOT be deleted.
-        let main_wt = project_path.join("main");
+        let main_wt = paths::main_worktree(&project_path);
         assert!(
             git::branch_exists(&main_wt, "login").unwrap(),
             "feat_adopt rollback must preserve the user's branch"
@@ -449,7 +457,7 @@ mod tests {
         assert!(!FeatureState::exists(&features_dir, "login"));
 
         // Branch must still exist — it's the user's branch
-        let main_wt = project_path.join("main");
+        let main_wt = paths::main_worktree(&project_path);
         assert!(git::branch_exists(&main_wt, "login").unwrap());
     }
 
@@ -514,7 +522,13 @@ mod tests {
         assert!(project_path.join("ciaran-login").exists());
 
         // Tmux session uses sanitized name
-        assert!(tmux::has_session(server.name(), &format!("{project_name}/ciaran-login")).unwrap());
+        assert!(
+            tmux::has_session(
+                server.name(),
+                &tmux::session_name(&project_name, "ciaran-login")
+            )
+            .unwrap()
+        );
     }
 
     #[test]
@@ -535,7 +549,9 @@ mod tests {
         assert_eq!(state.branch, "ciaran/eval");
         assert_eq!(state.worktree, "eval");
         assert!(project_path.join("eval").exists());
-        assert!(tmux::has_session(server.name(), &format!("{project_name}/eval")).unwrap());
+        assert!(
+            tmux::has_session(server.name(), &tmux::session_name(&project_name, "eval")).unwrap()
+        );
     }
 
     #[test]
@@ -547,7 +563,7 @@ mod tests {
 
         // Create an existing worktree for the branch (simulating a pre-existing checkout)
         let old_worktree = dir.path().join("old-checkout");
-        let main_wt = project_path.join("main");
+        let main_wt = paths::main_worktree(&project_path);
         git::add_worktree(&main_wt, &old_worktree, "login").unwrap();
         assert!(old_worktree.exists());
 
@@ -609,7 +625,7 @@ mod tests {
 
         // Create an existing worktree for the branch
         let old_worktree = dir.path().join("old-checkout");
-        let main_wt = project_path.join("main");
+        let main_wt = paths::main_worktree(&project_path);
         git::add_worktree(&main_wt, &old_worktree, "login").unwrap();
 
         // Without --from, should fail with WorktreeConflict

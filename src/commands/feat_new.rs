@@ -43,7 +43,7 @@ pub fn resolve_base(project_root: &Path, base: Option<&str>, cwd: &Path) -> Resu
         return Ok(b.to_string());
     }
     // Detect from CWD: find which worktree we're in and get its branch
-    let main_worktree = project_root.join("main");
+    let main_worktree = paths::main_worktree(project_root);
     // Try CWD first, fall back to main worktree
     let detect_from = if cwd.starts_with(project_root) {
         cwd
@@ -126,9 +126,9 @@ pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
     )?;
 
     // Steps 2-5: Create resources, rolling back on failure
-    let main_worktree = params.project_root.join("main");
+    let main_worktree = paths::main_worktree(params.project_root);
     let worktree_path = params.project_root.join(&feature_name);
-    let session_name = format!("{project_name}/{feature_name}");
+    let session_name = tmux::session_name(project_name, &feature_name);
     let hook_path = params.project_root.join(hooks::POST_CREATE_PATH);
 
     let result: Result<()> = (|| {
@@ -237,7 +237,7 @@ mod tests {
         assert!(state.last_active >= state.created);
 
         // Git branch exists
-        let main_path = project_path.join("main");
+        let main_path = paths::main_worktree(&project_path);
         assert!(git::branch_exists(&main_path, "login").unwrap());
 
         // Worktree directory exists
@@ -246,7 +246,9 @@ mod tests {
         assert!(worktree_path.is_dir());
 
         // Tmux session exists
-        assert!(tmux::has_session(server.name(), &format!("{project_name}/login")).unwrap());
+        assert!(
+            tmux::has_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap()
+        );
     }
 
     #[test]
@@ -282,7 +284,12 @@ mod tests {
 
         // Pre-create a tmux session with the name feat_new will use,
         // so create_session fails with "duplicate session"
-        tmux::create_session(server.name(), &format!("{project_name}/login"), dir.path()).unwrap();
+        tmux::create_session(
+            server.name(),
+            &tmux::session_name(&project_name, "login"),
+            dir.path(),
+        )
+        .unwrap();
 
         let result = feat_new(&FeatNewParams::with_defaults(
             &project_path,
@@ -296,7 +303,7 @@ mod tests {
         assert!(!FeatureState::exists(&features_dir, "login"));
 
         // Branch and worktree should be cleaned up
-        let main_path = project_path.join("main");
+        let main_path = paths::main_worktree(&project_path);
         assert!(!git::branch_exists(&main_path, "login").unwrap());
         assert!(!project_path.join("login").exists());
     }
@@ -323,7 +330,7 @@ mod tests {
         assert!(!FeatureState::exists(&features_dir, "login"));
 
         // Branch should be cleaned up (worktree was never created by git)
-        let main_path = project_path.join("main");
+        let main_path = paths::main_worktree(&project_path);
         assert!(!git::branch_exists(&main_path, "login").unwrap());
     }
 
@@ -427,7 +434,8 @@ mod tests {
         .unwrap();
 
         // Session should have 2 windows: the reused window :0 (now agent) + hook window
-        let output = tmux::list_windows(server.name(), &format!("{project_name}/login")).unwrap();
+        let output =
+            tmux::list_windows(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
         assert_eq!(output, 2);
     }
 
@@ -445,7 +453,7 @@ mod tests {
         .unwrap();
 
         // The agent window should be named "researcher" (not "claude")
-        let session = format!("{project_name}/login");
+        let session = tmux::session_name(&project_name, "login");
         let target = tmux::find_window(server.name(), &session, "researcher").unwrap();
         assert!(target.is_some(), "expected a 'researcher' tmux window");
 
@@ -470,7 +478,7 @@ mod tests {
         .unwrap();
 
         // 2 windows: default shell + hook window
-        let session = format!("{project_name}/login");
+        let session = tmux::session_name(&project_name, "login");
         let windows = tmux::list_windows(server.name(), &session).unwrap();
         assert_eq!(windows, 2);
         // Hook window should be named "hook"
@@ -502,7 +510,8 @@ mod tests {
         .unwrap();
 
         // Only 1 window — hook was skipped because file is missing
-        let windows = tmux::list_windows(server.name(), &format!("{project_name}/login")).unwrap();
+        let windows =
+            tmux::list_windows(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
         assert_eq!(windows, 1);
     }
 
@@ -589,7 +598,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let project_path = dir.path().join("myproject");
         std::fs::create_dir_all(&project_path).unwrap();
-        let main_path = project_path.join("main");
+        let main_path = paths::main_worktree(&project_path);
         git::init_repo(&main_path).unwrap();
 
         git::create_branch(&main_path, "parent").unwrap();
@@ -606,7 +615,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let project_path = dir.path().join("myproject");
         std::fs::create_dir_all(&project_path).unwrap();
-        let main_path = project_path.join("main");
+        let main_path = paths::main_worktree(&project_path);
         git::init_repo(&main_path).unwrap();
 
         // CWD is outside the project
@@ -698,7 +707,13 @@ mod tests {
         assert!(project_path.join("ciaran-login").exists());
 
         // Tmux session uses sanitized name
-        assert!(tmux::has_session(server.name(), &format!("{project_name}/ciaran-login")).unwrap());
+        assert!(
+            tmux::has_session(
+                server.name(),
+                &tmux::session_name(&project_name, "ciaran-login")
+            )
+            .unwrap()
+        );
     }
 
     #[test]
@@ -718,6 +733,8 @@ mod tests {
         assert_eq!(state.branch, "ciaran/eval");
         assert_eq!(state.worktree, "eval");
         assert!(project_path.join("eval").exists());
-        assert!(tmux::has_session(server.name(), &format!("{project_name}/eval")).unwrap());
+        assert!(
+            tmux::has_session(server.name(), &tmux::session_name(&project_name, "eval")).unwrap()
+        );
     }
 }

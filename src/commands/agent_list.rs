@@ -34,7 +34,7 @@ pub fn agent_list(
     let messages_dir = paths::messages_dir(project_root);
     let pm_dir = paths::pm_dir(project_root);
     let config = ProjectConfig::load(&pm_dir)?;
-    let session_name = format!("{}/{feature}", config.project.name);
+    let session_name = tmux::session_name(&config.project.name, feature);
     let registry = AgentRegistry::load(&agents_dir, feature)?;
 
     if registry.agents.is_empty() {
@@ -103,7 +103,7 @@ mod tests {
         let feature = "login";
         let worktree = root.join(feature);
         std::fs::create_dir_all(&worktree).unwrap();
-        let session_name = format!("{project_name}/{feature}");
+        let session_name = tmux::session_name(&project_name, feature);
         tmux::create_session(server.name(), &session_name, &worktree).unwrap();
 
         project_name
@@ -125,7 +125,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let project_name = setup_project(dir.path(), &server);
 
-        let session_name = format!("{project_name}/login");
+        let session_name = tmux::session_name(&project_name, "login");
 
         // Spawn reviewer as active (non-shell process), tester registered but no window
         server.spawn_fake_agent(dir.path(), &session_name, "login", "reviewer");

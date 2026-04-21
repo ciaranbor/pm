@@ -3,6 +3,12 @@ use std::process::Command;
 
 use crate::error::{PmError, Result};
 
+/// Single source of truth for the tmux session naming convention.
+/// Returns `"{project_name}/{scope}"`.
+pub fn session_name(project_name: &str, scope: &str) -> String {
+    format!("{project_name}/{scope}")
+}
+
 fn run_tmux(server: Option<&str>, args: &[&str]) -> Result<String> {
     let mut cmd = Command::new("tmux");
     if let Some(s) = server {
@@ -463,7 +469,7 @@ mod tests {
     fn display_menu_returns_ok_even_outside_tmux() {
         let server = TestServer::new();
         let name = server.scope("myapp");
-        let items = vec![("login".to_string(), format!("{name}/login"))];
+        let items = vec![("login".to_string(), session_name(&name, "login"))];
 
         // display_menu swallows the tmux error (no client attached)
         let result = display_menu(server.name(), "Test", &items);

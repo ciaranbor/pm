@@ -125,7 +125,7 @@ pub fn cleanup_feature(params: &CleanupParams) -> Result<()> {
 
     // Step 5: Kill tmux session (last — see doc comment above)
     run(&mut || {
-        let session_name = format!("{}/{}", params.project_name, params.name);
+        let session_name = tmux::session_name(params.project_name, params.name);
         if tmux::has_session(params.tmux_server, &session_name)? {
             // Only switch the client away if it's currently attached to the
             // session being deleted. Otherwise we'd disrupt the user's
@@ -133,7 +133,7 @@ pub fn cleanup_feature(params: &CleanupParams) -> Result<()> {
             if let Some(current) = tmux::current_session(params.tmux_server)
                 && current == session_name
             {
-                let base_session = format!("{}/{}", params.project_name, params.base);
+                let base_session = tmux::session_name(params.project_name, params.base);
                 let _ = tmux::switch_client(params.tmux_server, &base_session);
             }
             tmux::kill_session(params.tmux_server, &session_name)?;
@@ -274,7 +274,7 @@ pub fn feat_delete(
     // Trigger post-merge hook when deleting a feature whose PR was merged
     if pr_merged {
         let hook_path = project_root.join(hooks::POST_MERGE_PATH);
-        let base_session = format!("{project_name}/{base}");
+        let base_session = tmux::session_name(project_name, base);
         hooks::run_hook(tmux_server, &base_session, &base_repo, &hook_path);
     }
 
@@ -320,7 +320,7 @@ mod tests {
 
         feat_delete(&project_path, "login", false, server.name()).unwrap();
 
-        let main_repo = project_path.join("main");
+        let main_repo = paths::main_worktree(&project_path);
         assert!(!git::branch_exists(&main_repo, "login").unwrap());
     }
 
@@ -331,11 +331,17 @@ mod tests {
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         let scoped_name = server.scope("myapp");
-        assert!(tmux_mod::has_session(server.name(), &format!("{scoped_name}/login")).unwrap());
+        assert!(
+            tmux_mod::has_session(server.name(), &tmux::session_name(&scoped_name, "login"))
+                .unwrap()
+        );
 
         feat_delete(&project_path, "login", false, server.name()).unwrap();
 
-        assert!(!tmux_mod::has_session(server.name(), &format!("{scoped_name}/login")).unwrap());
+        assert!(
+            !tmux_mod::has_session(server.name(), &tmux::session_name(&scoped_name, "login"))
+                .unwrap()
+        );
     }
 
     #[test]
@@ -444,7 +450,7 @@ mod tests {
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         // Merge the feature branch into main
-        let main_repo = project_path.join("main");
+        let main_repo = paths::main_worktree(&project_path);
         git::merge_no_ff(&main_repo, "login").unwrap();
 
         feat_delete(&project_path, "login", false, server.name()).unwrap();

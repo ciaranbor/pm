@@ -12,7 +12,7 @@ pub fn status(project_root: &Path, tmux_server: Option<&str>) -> Result<Vec<Stri
     let config = ProjectConfig::load(&pm_dir)?;
     let features_dir = paths::features_dir(project_root);
     let features = FeatureState::list(&features_dir)?;
-    let main_repo = project_root.join("main");
+    let main_repo = paths::main_worktree(project_root);
 
     let mut lines = Vec::new();
 
