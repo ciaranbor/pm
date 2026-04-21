@@ -40,26 +40,32 @@ pub fn feat_pr(project_root: &Path, name: &str, ready: bool, body: Option<&str>)
     git::push_branch(&worktree_path, &state.branch)?;
 
     // Check if a PR already exists for this branch
-    let pr_number = if let Some(number) = gh::existing_pr_number(&worktree_path, &state.branch)? {
-        eprintln!("PR #{number} already exists for branch '{}'", state.branch);
+    let pr_number = if let Some(existing) = gh::existing_pr(&worktree_path, &state.branch)? {
+        eprintln!(
+            "PR #{} already exists for branch '{}'",
+            existing.number, state.branch
+        );
         if let Some(b) = body {
-            gh::edit_pr_body(&worktree_path, &number, b)?;
-            eprintln!("Updated PR #{number} body");
+            gh::edit_pr_body(&worktree_path, &existing.number, b)?;
+            eprintln!("Updated PR #{} body", existing.number);
         }
-        number
+        eprintln!("{}", existing.url);
+        existing.number
     } else {
         let pr_body = resolve_pr_body(&worktree_path, body)?;
 
         let draft = !ready;
         let base = state.base_or_default();
         let base_arg = if base == "main" { None } else { Some(base) };
-        gh::create_pr(
+        let result = gh::create_pr(
             &worktree_path,
             &state.branch,
             draft,
             pr_body.as_deref(),
             base_arg,
-        )?
+        )?;
+        eprintln!("{}", result.url);
+        result.number
     };
 
     state.pr = pr_number;
