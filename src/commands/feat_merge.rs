@@ -29,61 +29,67 @@ pub fn feat_merge(
     let base_repo = project_root.join(base);
     let worktree_path = project_root.join(&state.worktree);
 
-    // Block if already merged
-    if state.status == FeatureStatus::Merged {
-        return Err(PmError::SafetyCheck(format!(
-            "feature '{name}' is already merged"
-        )));
-    }
+    let already_status_merged = state.status == FeatureStatus::Merged;
 
-    // Block if the feature worktree has uncommitted changes
-    if git::has_uncommitted_changes(&worktree_path)? {
-        return Err(PmError::SafetyCheck(format!(
-            "feature '{name}' has uncommitted changes — commit or stash before merging"
-        )));
-    }
+    if already_status_merged {
+        eprintln!("Feature '{name}' already merged — cleaning up");
 
-    // Block if the base worktree has uncommitted changes
-    if git::has_uncommitted_changes(&base_repo)? {
-        return Err(PmError::SafetyCheck(format!(
-            "{base} worktree has uncommitted changes — commit or stash before merging"
-        )));
-    }
-
-    // Check if the branch is already merged locally
-    let mut already_merged = git::branch_merged_into(&base_repo, &state.branch, base)?;
-
-    // If not merged locally, check whether the base has an upstream and, if so,
-    // fetch and re-check against it. tracking_branch is a local lookup, so
-    // checking it first lets us skip the network fetch entirely when there is
-    // no upstream. The branch may have been merged upstream (e.g. via GitHub PR).
-    if !already_merged
-        && let Ok(Some(tracking)) = git::tracking_branch(&base_repo, base)
-        && let Ok(()) = git::fetch(&base_repo)
-    {
-        already_merged = git::branch_merged_into(&base_repo, &state.branch, &tracking)?;
-    }
-
-    if already_merged {
-        // Branch was merged (locally or upstream) — pull to update local base
-        if let Err(e) = git::pull(&base_repo) {
-            eprintln!("warning: git pull failed: {e}");
+        // Still guard against data loss if user edited after the first merge
+        if !keep && git::has_uncommitted_changes(&worktree_path)? {
+            return Err(PmError::SafetyCheck(format!(
+                "feature '{name}' has uncommitted changes — commit or stash before cleaning up"
+            )));
         }
     } else {
-        // Perform the merge from the base worktree
-        if let Err(e) = git::merge_no_ff(&base_repo, &state.branch) {
-            // Abort the failed merge to leave base worktree clean
-            if let Err(abort_err) = git::merge_abort(&base_repo) {
-                eprintln!("Warning: merge --abort failed: {abort_err}");
-            }
-            return Err(e);
+        // Block if the feature worktree has uncommitted changes
+        if git::has_uncommitted_changes(&worktree_path)? {
+            return Err(PmError::SafetyCheck(format!(
+                "feature '{name}' has uncommitted changes — commit or stash before merging"
+            )));
         }
-    }
 
-    // Run post-merge hook in a named "hook" window within the base session
-    let hook_path = project_root.join(hooks::POST_MERGE_PATH);
-    let base_session = tmux::session_name(project_name, base);
-    hooks::run_hook(tmux_server, &base_session, &base_repo, &hook_path);
+        // Block if the base worktree has uncommitted changes
+        if git::has_uncommitted_changes(&base_repo)? {
+            return Err(PmError::SafetyCheck(format!(
+                "{base} worktree has uncommitted changes — commit or stash before merging"
+            )));
+        }
+
+        // Check if the branch is already merged locally
+        let mut already_merged = git::branch_merged_into(&base_repo, &state.branch, base)?;
+
+        // If not merged locally, check whether the base has an upstream and, if so,
+        // fetch and re-check against it. tracking_branch is a local lookup, so
+        // checking it first lets us skip the network fetch entirely when there is
+        // no upstream. The branch may have been merged upstream (e.g. via GitHub PR).
+        if !already_merged
+            && let Ok(Some(tracking)) = git::tracking_branch(&base_repo, base)
+            && let Ok(()) = git::fetch(&base_repo)
+        {
+            already_merged = git::branch_merged_into(&base_repo, &state.branch, &tracking)?;
+        }
+
+        if already_merged {
+            // Branch was merged (locally or upstream) — pull to update local base
+            if let Err(e) = git::pull(&base_repo) {
+                eprintln!("warning: git pull failed: {e}");
+            }
+        } else {
+            // Perform the merge from the base worktree
+            if let Err(e) = git::merge_no_ff(&base_repo, &state.branch) {
+                // Abort the failed merge to leave base worktree clean
+                if let Err(abort_err) = git::merge_abort(&base_repo) {
+                    eprintln!("Warning: merge --abort failed: {abort_err}");
+                }
+                return Err(e);
+            }
+        }
+
+        // Run post-merge hook in a named "hook" window within the base session
+        let hook_path = project_root.join(hooks::POST_MERGE_PATH);
+        let base_session = tmux::session_name(project_name, base);
+        hooks::run_hook(tmux_server, &base_session, &base_repo, &hook_path);
+    }
 
     if keep {
         // Update feature state to Merged
@@ -98,7 +104,7 @@ pub fn feat_merge(
             features_dir: &features_dir,
             name,
             project_name,
-            force_worktree: true, // always force — we already checked for uncommitted changes
+            force_worktree: true, // always force — both paths checked for uncommitted changes above
             tmux_server,
             delete_branch: true,
             best_effort: false,
@@ -252,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_already_merged_feature_fails() {
+    fn merge_already_merged_feature_with_keep_is_noop() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
@@ -261,10 +267,70 @@ mod tests {
 
         feat_merge(&project_path, "login", true, server.name()).unwrap();
 
-        // Second merge should fail
-        let result = feat_merge(&project_path, "login", true, server.name());
+        // Second merge with --keep should succeed (no-op)
+        feat_merge(&project_path, "login", true, server.name()).unwrap();
+
+        // State should still be Merged
+        let features_dir = paths::features_dir(&project_path);
+        let state = FeatureState::load(&features_dir, "login").unwrap();
+        assert_eq!(state.status, FeatureStatus::Merged);
+    }
+
+    #[test]
+    fn merge_already_merged_feature_cleans_up() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let project_name = server.scope("myapp");
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+
+        TestServer::add_feature_commit(&project_path, "login");
+
+        // First merge with --keep to set status to Merged
+        feat_merge(&project_path, "login", true, server.name()).unwrap();
+
+        // Second merge without --keep should clean up
+        feat_merge(&project_path, "login", false, server.name()).unwrap();
+
+        // Session killed
+        assert!(
+            !tmux_mod::has_session(server.name(), &tmux::session_name(&project_name, "login"))
+                .unwrap()
+        );
+        // Worktree removed
+        assert!(!project_path.join("login").exists());
+        // Branch deleted
+        let main_repo = paths::main_worktree(&project_path);
+        assert!(!git::branch_exists(&main_repo, "login").unwrap());
+        // State removed
+        let features_dir = paths::features_dir(&project_path);
+        assert!(!FeatureState::exists(&features_dir, "login"));
+    }
+
+    #[test]
+    fn merge_already_merged_blocks_cleanup_on_dirty_worktree() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+
+        TestServer::add_feature_commit(&project_path, "login");
+
+        // First merge with --keep to set status to Merged
+        feat_merge(&project_path, "login", true, server.name()).unwrap();
+
+        // Add uncommitted changes to the feature worktree
+        let worktree = project_path.join("login");
+        std::fs::write(worktree.join("dirty.txt"), "uncommitted").unwrap();
+        git::stage_file(&worktree, "dirty.txt").unwrap();
+
+        // Second merge without --keep should fail due to uncommitted changes
+        let result = feat_merge(&project_path, "login", false, server.name());
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("already merged"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("uncommitted changes")
+        );
     }
 
     #[test]
