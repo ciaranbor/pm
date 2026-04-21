@@ -12,7 +12,7 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 - `src/cli.rs` — clap CLI definition (all derive structs and enums)
 - `src/dispatch.rs` — command dispatch (`run()` function, scope helpers)
 - `src/state/` — TOML state management (project entries, feature state, config). `ProjectEntry` has optional `repo_url` (project git origin) and `state_remote` (.pm/ repo remote) fields for cross-machine restore.
-- `src/git.rs` — git operations (branch, worktree, clone, status checks)
+- `src/git/` — git operations, split into submodules: `init.rs`, `branch.rs`, `worktree.rs`, `remote.rs`, `status.rs`
 - `src/tmux.rs` — tmux operations (session create/kill/switch, display-menu)
 - `src/gh.rs` — GitHub CLI wrapper (PR creation, status queries via `gh`)
 - `src/hooks.rs` — lifecycle hooks (post-create, post-merge, restore)
@@ -119,7 +119,7 @@ TDD. Tests use real git repos and real tmux sessions, not mocks.
 - Use `thiserror` for error types. Propagate errors with `?`, don't panic in library code.
 - Keep modules focused. If a file grows past ~300 lines, split it.
 - No unnecessary abstractions — three similar lines is better than a premature trait.
-- External commands (git, tmux, gh) go through thin wrapper functions in `git.rs` / `tmux.rs` / `gh.rs`, not scattered throughout command handlers.
+- External commands (git, tmux, gh) go through thin wrapper functions in `git/` / `tmux.rs` / `gh.rs`, not scattered throughout command handlers.
 - All CLI commands and subcommands must support `--help` via clap derive.
 
 ## Documentation
