@@ -1,114 +1,25 @@
-use std::collections::BTreeMap;
+mod cursor;
+mod types;
+mod validation;
+
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use chrono::Utc;
 
-use crate::error::{PmError, Result};
+use crate::error::Result;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MessageMeta {
-    pub sender: String,
-    pub timestamp: DateTime<Utc>,
-    /// The scope (feature name or "main") the sender was in when the message
-    /// was sent. `None` for messages sent before cross-scope support.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sender_scope: Option<String>,
-    /// The project the sender was in when the message was sent.
-    /// Only set for cross-project messages.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sender_project: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Message {
-    pub index: u32,
-    pub sender: String,
-    pub body: String,
-    pub meta: MessageMeta,
-}
-
-#[derive(Debug, Clone)]
-pub struct UnreadSummary {
-    pub sender: String,
-    pub count: u32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MessageStatus {
-    /// Already processed (index <= cursor).
-    Read,
-    /// The next message to be read (index == cursor + 1).
-    Next,
-    /// Ahead of the cursor (index > cursor + 1).
-    Queued,
-}
-
-#[derive(Debug, Clone)]
-pub struct MessageSummary {
-    pub sender: String,
-    pub index: u32,
-    pub timestamp: DateTime<Utc>,
-    pub first_line: String,
-    pub status: MessageStatus,
-}
-
-/// Result of resolving which sender a command operates on when `--from`
-/// is not specified.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SenderResolution {
-    /// `--from` was given explicitly.
-    Explicit(String),
-    /// Exactly one sender has unread messages; use it.
-    Implicit(String),
-    /// The inbox has no unread messages at all.
-    NoUnread,
-    /// More than one sender has unread messages; caller must disambiguate.
-    Ambiguous(Vec<String>),
-}
-
-impl SenderResolution {
-    /// Return the resolved sender, or a messaging error describing the
-    /// reason resolution failed.
-    pub fn into_sender(self) -> Result<String> {
-        match self {
-            SenderResolution::Explicit(s) | SenderResolution::Implicit(s) => Ok(s),
-            SenderResolution::NoUnread => Err(PmError::Messaging("No new messages".to_string())),
-            SenderResolution::Ambiguous(senders) => Err(PmError::Messaging(format!(
-                "messages from multiple senders are unread, specify --from {{{}}}",
-                senders.join(",")
-            ))),
-        }
-    }
-}
+// Re-export public API
+pub use cursor::{cursor_for, next};
+pub use types::{
+    Message, MessageMeta, MessageStatus, MessageSummary, SenderResolution, UnreadSummary,
+};
+pub use validation::validate_name;
 
 /// Default identity: PM_AGENT_NAME (set by `pm agent spawn`) > $USER > "user".
 pub fn default_user_name() -> String {
     std::env::var("PM_AGENT_NAME")
         .or_else(|_| std::env::var("USER"))
         .unwrap_or_else(|_| "user".to_string())
-}
-
-/// Cursor tracks the last-read index per sender.
-type Cursor = BTreeMap<String, u32>;
-
-/// Validate that a name (agent, sender, feature) is safe for use as a path component.
-/// Allows alphanumeric, dashes, and underscores only.
-pub fn validate_name(name: &str, kind: &str) -> Result<()> {
-    if name.is_empty() {
-        return Err(PmError::InvalidAgentName(format!(
-            "{kind} name cannot be empty"
-        )));
-    }
-    if !name
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-    {
-        return Err(PmError::InvalidAgentName(format!(
-            "{kind} name '{name}' contains invalid characters (only alphanumeric, dashes, and underscores allowed)"
-        )));
-    }
-    Ok(())
 }
 
 /// Returns the inbox directory for an agent in a feature.
@@ -126,11 +37,6 @@ fn meta_dir(messages_dir: &Path, feature: &str, agent: &str, sender: &str) -> Pa
     inbox_dir(messages_dir, feature, agent)
         .join(".meta")
         .join(format!("from-{sender}"))
-}
-
-/// Returns the cursor file path for an agent's inbox.
-fn cursor_path(messages_dir: &Path, feature: &str, agent: &str) -> PathBuf {
-    inbox_dir(messages_dir, feature, agent).join(".cursor")
 }
 
 /// Find the highest message index in a directory of numbered .md files.
@@ -154,24 +60,24 @@ fn max_index(dir: &Path) -> Result<u32> {
     Ok(max)
 }
 
-fn load_cursor(path: &Path) -> Result<Cursor> {
-    if !path.exists() {
-        return Ok(Cursor::new());
+/// List all senders who have sent messages to an inbox.
+fn list_senders(inbox: &Path) -> Result<Vec<String>> {
+    let mut senders = Vec::new();
+    if !inbox.exists() {
+        return Ok(senders);
     }
-    let content = std::fs::read_to_string(path)?;
-    let cursor: Cursor = serde_json::from_str(&content)?;
-    Ok(cursor)
-}
-
-fn save_cursor(path: &Path, cursor: &Cursor) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+    for entry in std::fs::read_dir(inbox)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if let Some(sender) = name.strip_prefix("from-")
+            && entry.path().is_dir()
+        {
+            senders.push(sender.to_string());
+        }
     }
-    let content = serde_json::to_string_pretty(cursor)?;
-    let tmp = path.with_extension("cursor.tmp");
-    std::fs::write(&tmp, &content)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    senders.sort();
+    Ok(senders)
 }
 
 /// Send a message to an agent's inbox. Returns the message index.
@@ -252,7 +158,7 @@ pub fn check(messages_dir: &Path, feature: &str, agent: &str) -> Result<Vec<Unre
         return Ok(Vec::new());
     }
 
-    let cursor = load_cursor(&cursor_path(messages_dir, feature, agent))?;
+    let csr = cursor::load_cursor(&cursor::cursor_path(messages_dir, feature, agent))?;
     let mut summaries = Vec::new();
 
     for entry in std::fs::read_dir(&inbox)? {
@@ -264,7 +170,7 @@ pub fn check(messages_dir: &Path, feature: &str, agent: &str) -> Result<Vec<Unre
             if !entry.path().is_dir() {
                 continue;
             }
-            let last_read = cursor.get(sender).copied().unwrap_or(0);
+            let last_read = csr.get(sender).copied().unwrap_or(0);
             let latest = max_index(&entry.path())?;
             if latest > last_read {
                 summaries.push(UnreadSummary {
@@ -277,14 +183,6 @@ pub fn check(messages_dir: &Path, feature: &str, agent: &str) -> Result<Vec<Unre
 
     summaries.sort_by(|a, b| a.sender.cmp(&b.sender));
     Ok(summaries)
-}
-
-/// Read the cursor position (last-processed index) for one sender in an
-/// agent's inbox. Returns 0 if the sender has never sent a message or the
-/// cursor has not been advanced.
-pub fn cursor_for(messages_dir: &Path, feature: &str, agent: &str, sender: &str) -> Result<u32> {
-    let cursor = load_cursor(&cursor_path(messages_dir, feature, agent))?;
-    Ok(cursor.get(sender).copied().unwrap_or(0))
 }
 
 /// Load a single message at an absolute index from a specific sender. Pure
@@ -334,33 +232,6 @@ pub fn read_at(
     }))
 }
 
-/// Advance the cursor for one sender by exactly one position. Returns the
-/// new cursor position. Errors if the cursor is already at the latest
-/// index (nothing to advance past).
-pub fn next(messages_dir: &Path, feature: &str, agent: &str, sender: &str) -> Result<u32> {
-    validate_name(feature, "feature")?;
-    validate_name(agent, "agent")?;
-    validate_name(sender, "sender")?;
-
-    let sdir = sender_dir(messages_dir, feature, agent, sender);
-    let latest = max_index(&sdir)?;
-
-    let cpath = cursor_path(messages_dir, feature, agent);
-    let mut cursor = load_cursor(&cpath)?;
-    let current = cursor.get(sender).copied().unwrap_or(0);
-
-    if current >= latest {
-        return Err(PmError::Messaging(format!(
-            "no messages to advance past from {sender} (cursor at {current}, latest is {latest})"
-        )));
-    }
-
-    let new = current + 1;
-    cursor.insert(sender.to_string(), new);
-    save_cursor(&cpath, &cursor)?;
-    Ok(new)
-}
-
 /// Resolve which sender a single-message command operates on. If `from` is
 /// provided, it is returned verbatim as `Explicit`. Otherwise, the senders
 /// with unread messages are examined and the caller gets `Implicit(s)`
@@ -400,7 +271,7 @@ pub fn list(
         return Ok(Vec::new());
     }
 
-    let cursor = load_cursor(&cursor_path(messages_dir, feature, agent))?;
+    let csr = cursor::load_cursor(&cursor::cursor_path(messages_dir, feature, agent))?;
     let senders = match from {
         Some(s) => {
             validate_name(s, "sender")?;
@@ -416,7 +287,7 @@ pub fn list(
             continue;
         }
         let latest = max_index(&sdir)?;
-        let cur = cursor.get(sender.as_str()).copied().unwrap_or(0);
+        let cur = csr.get(sender.as_str()).copied().unwrap_or(0);
 
         for i in 1..=latest {
             let msg_path = sdir.join(format!("{i:03}.md"));
@@ -473,29 +344,10 @@ pub fn delete_feature(messages_dir: &Path, feature: &str) -> Result<()> {
     }
 }
 
-/// List all senders who have sent messages to an inbox.
-fn list_senders(inbox: &Path) -> Result<Vec<String>> {
-    let mut senders = Vec::new();
-    if !inbox.exists() {
-        return Ok(senders);
-    }
-    for entry in std::fs::read_dir(inbox)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if let Some(sender) = name.strip_prefix("from-")
-            && entry.path().is_dir()
-        {
-            senders.push(sender.to_string());
-        }
-    }
-    senders.sort();
-    Ok(senders)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::PmError;
     use tempfile::tempdir;
 
     fn messages_dir(dir: &Path) -> PathBuf {
