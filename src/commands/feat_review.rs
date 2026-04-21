@@ -17,7 +17,7 @@ use crate::{gh, git, tmux};
 /// The tmux `server` parameter allows tests to use an isolated tmux server.
 /// In production, pass `None` to use the default server.
 pub fn feat_review(project_root: &Path, pr_arg: &str, tmux_server: Option<&str>) -> Result<String> {
-    let main_worktree = project_root.join("main");
+    let main_worktree = paths::main_worktree(project_root);
 
     // Fetch PR details from GitHub (gh pr view accepts both numbers and URLs)
     let details = gh::pr_details(&main_worktree, pr_arg)?;
@@ -51,7 +51,7 @@ fn setup_review(
 ) -> Result<String> {
     let features_dir = paths::features_dir(project_root);
     let pm_dir = paths::pm_dir(project_root);
-    let main_worktree = project_root.join("main");
+    let main_worktree = paths::main_worktree(project_root);
 
     // Check for duplicate
     if FeatureState::exists(&features_dir, feature_name) {
@@ -85,7 +85,7 @@ fn setup_review(
     // The local branch was created by `git::fetch_pr` in the caller, so we
     // own it and rollback is free to delete it.
     let worktree_path = project_root.join(feature_name);
-    let session_name = format!("{project_name}/{feature_name}");
+    let session_name = tmux::session_name(project_name, feature_name);
     let hook_path = project_root.join(hooks::POST_CREATE_PATH);
 
     let result: Result<()> = (|| {
@@ -165,7 +165,7 @@ mod tests {
     /// Create the local branch that setup_review expects to exist.
     /// In production, git::fetch_pr creates this; in tests we simulate it.
     fn simulate_fetched_pr(project_path: &Path, branch: &str) {
-        let main_wt = project_path.join("main");
+        let main_wt = paths::main_worktree(project_path);
         git::create_branch(&main_wt, branch).unwrap();
     }
 
@@ -212,7 +212,13 @@ mod tests {
 
         setup_review(&project_path, &details, "review-42", server.name()).unwrap();
 
-        assert!(tmux::has_session(server.name(), &format!("{project_name}/review-42")).unwrap());
+        assert!(
+            tmux::has_session(
+                server.name(),
+                &tmux::session_name(&project_name, "review-42")
+            )
+            .unwrap()
+        );
     }
 
     #[test]
@@ -258,8 +264,11 @@ mod tests {
         setup_review(&project_path, &details, "review-42", server.name()).unwrap();
 
         // 2 windows: reused window :0 (now reviewer) + hook
-        let windows =
-            tmux::list_windows(server.name(), &format!("{project_name}/review-42")).unwrap();
+        let windows = tmux::list_windows(
+            server.name(),
+            &tmux::session_name(&project_name, "review-42"),
+        )
+        .unwrap();
         assert_eq!(windows, 2);
     }
 
@@ -309,7 +318,7 @@ mod tests {
         // Pre-create the tmux session to force a conflict
         tmux::create_session(
             server.name(),
-            &format!("{project_name}/review-42"),
+            &tmux::session_name(&project_name, "review-42"),
             dir.path(),
         )
         .unwrap();
@@ -325,7 +334,7 @@ mod tests {
         assert!(!project_path.join("review-42").exists());
 
         // Branch should be cleaned up
-        let main_wt = project_path.join("main");
+        let main_wt = paths::main_worktree(&project_path);
         assert!(!git::branch_exists(&main_wt, "review-42").unwrap());
     }
 

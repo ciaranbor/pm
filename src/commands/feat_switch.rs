@@ -17,7 +17,7 @@ pub fn feat_switch(project_root: &Path, name: &str, tmux_server: Option<&str>) -
     }
 
     let config = ProjectConfig::load(&pm_dir)?;
-    let session_name = format!("{}/{name}", config.project.name);
+    let session_name = tmux::session_name(&config.project.name, name);
 
     tmux::switch_client(tmux_server, &session_name)?;
     Ok(())
@@ -33,10 +33,10 @@ pub fn feat_switch_menu(project_root: &Path) -> Result<Vec<(String, String)>> {
     let features = FeatureState::list(&features_dir)?;
 
     // Include main session
-    let mut items = vec![("main".to_string(), format!("{project_name}/main"))];
+    let mut items = vec![("main".to_string(), tmux::session_name(project_name, "main"))];
 
     for (name, _state) in &features {
-        items.push((name.clone(), format!("{project_name}/{name}")));
+        items.push((name.clone(), tmux::session_name(project_name, name)));
     }
 
     Ok(items)
@@ -113,10 +113,10 @@ mod tests {
 
         assert_eq!(items.len(), 3); // main + 2 features
         assert_eq!(items[0].0, "main");
-        assert_eq!(items[0].1, format!("{scoped}/main"));
+        assert_eq!(items[0].1, tmux::session_name(&scoped, "main"));
         assert_eq!(items[1].0, "api");
-        assert_eq!(items[1].1, format!("{scoped}/api"));
+        assert_eq!(items[1].1, tmux::session_name(&scoped, "api"));
         assert_eq!(items[2].0, "login");
-        assert_eq!(items[2].1, format!("{scoped}/login"));
+        assert_eq!(items[2].1, tmux::session_name(&scoped, "login"));
     }
 }

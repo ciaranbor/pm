@@ -24,7 +24,7 @@ pub fn feat_info(project_root: &Path, name: &str) -> Result<Vec<String>> {
     let features_dir = paths::features_dir(project_root);
     let mut state = FeatureState::load(&features_dir, name)?;
 
-    let main_repo = project_root.join("main");
+    let main_repo = paths::main_worktree(project_root);
 
     // If PR is linked, query GitHub and sync local status
     let mut pr_status_line = None;
@@ -144,7 +144,7 @@ mod tests {
         let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
-        let main_repo = project_path.join("main");
+        let main_repo = paths::main_worktree(&project_path);
 
         // Add remote to the main git repo
         Command::new("git")
@@ -300,7 +300,7 @@ mod tests {
         .unwrap();
 
         // Add a commit on main (the feature is now behind)
-        let main_repo = project_path.join("main");
+        let main_repo = paths::main_worktree(&project_path);
         std::fs::write(main_repo.join("main.txt"), "content").unwrap();
         git::stage_file(&main_repo, "main.txt").unwrap();
         git::commit(&main_repo, "main commit").unwrap();
@@ -334,7 +334,7 @@ mod tests {
         git::commit(&wt_path, "feature commit").unwrap();
 
         // Add a commit on main
-        let main_repo = project_path.join("main");
+        let main_repo = paths::main_worktree(&project_path);
         std::fs::write(main_repo.join("main.txt"), "content").unwrap();
         git::stage_file(&main_repo, "main.txt").unwrap();
         git::commit(&main_repo, "main commit").unwrap();

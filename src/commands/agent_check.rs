@@ -152,7 +152,7 @@ pub fn agent_check_all(
     let agents_dir = paths::agents_dir(project_root);
     let pm_dir = paths::pm_dir(project_root);
     let config = ProjectConfig::load(&pm_dir)?;
-    let session_name = format!("{}/{feature}", config.project.name);
+    let session_name = tmux::session_name(&config.project.name, feature);
     let registry = AgentRegistry::load(&agents_dir, feature)?;
 
     let active_agents: Vec<&str> = registry
@@ -333,7 +333,7 @@ tools: Read, Write
         let worktree = root.join(feature_name);
         std::fs::create_dir_all(&worktree).unwrap();
 
-        let session_name = format!("{project_name}/{feature_name}");
+        let session_name = tmux::session_name(&project_name, feature_name);
         tmux::create_session(server.name(), &session_name, &worktree).unwrap();
 
         (root, feature_name.to_string())
@@ -344,8 +344,7 @@ tools: Read, Write
         agent_name: &str,
         checklist: &[&str],
     ) {
-        let agent_def = root
-            .join("main")
+        let agent_def = paths::main_worktree(root)
             .join(".claude/agents")
             .join(format!("{agent_name}.md"));
         std::fs::create_dir_all(agent_def.parent().unwrap()).unwrap();
@@ -464,7 +463,7 @@ tools: Read, Write
     ) {
         let pm_dir = paths::pm_dir(root);
         let config = ProjectConfig::load(&pm_dir).unwrap();
-        let session_name = format!("{}/{feature}", config.project.name);
+        let session_name = tmux::session_name(&config.project.name, feature);
         server.spawn_fake_agent(root, &session_name, feature, agent_name);
     }
 

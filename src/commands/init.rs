@@ -48,7 +48,7 @@ pub fn init(
     std::fs::create_dir_all(path)?;
 
     // Init or clone git repo in main/
-    let main_path = path.join("main");
+    let main_path = paths::main_worktree(path);
     let main_branch = if let Some(url) = git_url {
         git::clone_repo(url, &main_path)?;
         // Detect default branch from the cloned remote
@@ -106,7 +106,7 @@ pub fn init(
     entry.save(projects_dir, &name)?;
 
     // Create main tmux session
-    let session_name = format!("{name}/main");
+    let session_name = tmux::session_name(&name, "main");
     tmux::create_session(tmux_server, &session_name, &main_path)?;
 
     Ok(())
@@ -128,8 +128,8 @@ mod tests {
 
         init(&project_path, &projects_dir, None, server.name()).unwrap();
 
-        assert!(project_path.join("main").exists());
-        assert!(project_path.join("main").is_dir());
+        assert!(paths::main_worktree(&project_path).exists());
+        assert!(paths::main_worktree(&project_path).is_dir());
     }
 
     #[test]
@@ -142,7 +142,7 @@ mod tests {
 
         init(&project_path, &projects_dir, None, server.name()).unwrap();
 
-        assert!(project_path.join("main").join(".git").exists());
+        assert!(paths::main_worktree(&project_path).join(".git").exists());
     }
 
     #[test]
@@ -185,8 +185,7 @@ mod tests {
         init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         // Skills should be installed into main/.claude/skills/
-        let skill_path = project_path
-            .join("main")
+        let skill_path = paths::main_worktree(&project_path)
             .join(".claude")
             .join("skills")
             .join("pm")
@@ -194,8 +193,7 @@ mod tests {
         assert!(skill_path.exists(), "pm skill should be installed");
 
         // Agent definitions should be installed into main/.claude/agents/
-        let agent_path = project_path
-            .join("main")
+        let agent_path = paths::main_worktree(&project_path)
             .join(".claude")
             .join("agents")
             .join("reviewer.md");
@@ -276,7 +274,7 @@ mod tests {
         init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         // Should be able to create a branch (requires at least one commit)
-        let main_path = project_path.join("main");
+        let main_path = paths::main_worktree(&project_path);
         git::create_branch(&main_path, "test-branch").unwrap();
         assert!(git::branch_exists(&main_path, "test-branch").unwrap());
     }
@@ -291,7 +289,7 @@ mod tests {
 
         init(&project_path, &projects_dir, None, server.name()).unwrap();
 
-        assert!(tmux::has_session(server.name(), &format!("{name}/main")).unwrap());
+        assert!(tmux::has_session(server.name(), &tmux::session_name(&name, "main")).unwrap());
     }
 
     #[test]
@@ -322,12 +320,12 @@ mod tests {
         .unwrap();
 
         // main/ should exist and be a git repo
-        assert!(project_path.join("main").join(".git").exists());
+        assert!(paths::main_worktree(&project_path).join(".git").exists());
         // .pm/ structure should exist
         assert!(project_path.join(".pm").join("config.toml").exists());
         assert!(project_path.join(".pm").join("features").exists());
         // tmux session should exist
-        assert!(tmux::has_session(server.name(), &format!("{name}/main")).unwrap());
+        assert!(tmux::has_session(server.name(), &tmux::session_name(&name, "main")).unwrap());
     }
 
     #[test]
@@ -356,7 +354,7 @@ mod tests {
         .unwrap();
 
         // The cloned repo should have an origin remote
-        let main_path = project_path.join("main");
+        let main_path = paths::main_worktree(&project_path);
         let remotes = crate::git::list_remotes(&main_path).unwrap();
         assert!(remotes.contains("origin"));
     }
@@ -374,7 +372,7 @@ mod tests {
                 "init",
                 "--bare",
                 "--initial-branch=master",
-                &bare_path.to_string_lossy().to_string(),
+                bare_path.to_string_lossy().as_ref(),
             ])
             .output()
             .unwrap();
@@ -386,7 +384,7 @@ mod tests {
             .args([
                 "init",
                 "--initial-branch=master",
-                &staging.to_string_lossy().to_string(),
+                staging.to_string_lossy().as_ref(),
             ])
             .output()
             .unwrap();

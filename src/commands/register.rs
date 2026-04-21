@@ -51,7 +51,7 @@ pub fn register(
 
     // Check if this repo is already registered under a different name
     for (existing_name, entry) in ProjectEntry::list(projects_dir)? {
-        let existing_main = entry.root_path().join("main");
+        let existing_main = paths::main_worktree(&entry.root_path());
         if let Ok(existing_canonical) = existing_main.canonicalize()
             && existing_canonical == repo_path
         {
@@ -78,7 +78,7 @@ pub fn register(
         }
         std::fs::rename(&repo_path, &tmp_name)?;
         std::fs::create_dir_all(&wrapper)?;
-        std::fs::rename(&tmp_name, wrapper.join("main"))?;
+        std::fs::rename(&tmp_name, paths::main_worktree(&wrapper))?;
         wrapper
     } else {
         // Symlink mode: wrapper gets -pm suffix to avoid collision with the original repo
@@ -88,7 +88,7 @@ pub fn register(
         }
         std::fs::create_dir_all(&wrapper)?;
 
-        let main_path = wrapper.join("main");
+        let main_path = paths::main_worktree(&wrapper);
         #[cfg(unix)]
         std::os::unix::fs::symlink(&repo_path, &main_path)?;
         #[cfg(windows)]
@@ -97,7 +97,7 @@ pub fn register(
     };
 
     // Migrate Claude Code sessions from original repo path to new main path
-    let new_main = wrapper_dir.join("main");
+    let new_main = paths::main_worktree(&wrapper_dir);
     match super::claude_migrate::migrate_sessions(&repo_path, &new_main, claude_base) {
         Ok(msgs) => {
             for msg in msgs {
@@ -128,7 +128,7 @@ pub fn register(
 
     // Register in global registry
     // Try to read the origin URL from the main worktree
-    let main_path_reg = wrapper_dir.join("main");
+    let main_path_reg = paths::main_worktree(&wrapper_dir);
     let repo_url = if crate::git::is_git_repo(&main_path_reg) {
         crate::git::remote_url(&main_path_reg, "origin").unwrap_or(None)
     } else {
@@ -143,8 +143,8 @@ pub fn register(
     entry.save(projects_dir, &project_name)?;
 
     // Create main tmux session
-    let session_name = format!("{project_name}/main");
-    let main_path = wrapper_dir.join("main");
+    let session_name = tmux::session_name(&project_name, "main");
+    let main_path = paths::main_worktree(&wrapper_dir);
     tmux::create_session(tmux_server, &session_name, &main_path)?;
 
     Ok(())
@@ -212,7 +212,7 @@ mod tests {
 
         // With --move, wrapper uses the project name directly (no -pm suffix)
         let wrapper = dir.path().join(&name);
-        let main_path = wrapper.join("main");
+        let main_path = paths::main_worktree(&wrapper);
         assert!(main_path.exists());
         assert!(main_path.join(".git").exists());
         assert!(!main_path.is_symlink());
@@ -392,7 +392,9 @@ mod tests {
         let wrapper = dir.path().join(format!("{wt_proj_name}-pm"));
         assert!(wrapper.exists());
         assert!(wrapper.join(".pm").join("config.toml").exists());
-        assert!(tmux::has_session(server.name(), &format!("{wt_proj_name}/main")).unwrap());
+        assert!(
+            tmux::has_session(server.name(), &tmux::session_name(&wt_proj_name, "main")).unwrap()
+        );
     }
 
     #[test]
@@ -406,7 +408,7 @@ mod tests {
 
         register(&repo_path, None, &projects_dir, false, server.name(), None).unwrap();
 
-        assert!(tmux::has_session(server.name(), &format!("{name}/main")).unwrap());
+        assert!(tmux::has_session(server.name(), &tmux::session_name(&name, "main")).unwrap());
     }
 
     #[test]

@@ -48,6 +48,12 @@ pub fn docs_dir(project_root: &Path) -> PathBuf {
     pm_dir(project_root).join("docs")
 }
 
+/// Single source of truth for the main worktree directory name convention.
+/// Returns `<project_root>/main`.
+pub fn main_worktree(project_root: &Path) -> PathBuf {
+    project_root.join("main")
+}
+
 /// Walk up from `start` to find the project root (directory containing `.pm/`).
 /// Returns `None` if no `.pm/` directory is found.
 pub fn find_project_root(start: &Path) -> Result<PathBuf> {
@@ -139,7 +145,7 @@ mod tests {
         std::fs::create_dir(root.join(".pm")).unwrap();
 
         // Simulate a worktree subdirectory: <root>/main/src/
-        let deep = root.join("main").join("src");
+        let deep = main_worktree(root).join("src");
         std::fs::create_dir_all(&deep).unwrap();
 
         let found = find_project_root(&deep).unwrap();
@@ -205,7 +211,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = dir.path();
         std::fs::create_dir(root.join(".pm")).unwrap();
-        let main_dir = root.join("main").join("src");
+        let main_dir = main_worktree(root).join("src");
         std::fs::create_dir_all(&main_dir).unwrap();
 
         let result = detect_feature_from_cwd(root, &main_dir);
@@ -247,7 +253,7 @@ mod tests {
     fn is_in_main_worktree_true_in_main() {
         let dir = tempdir().unwrap();
         let root = dir.path();
-        let main_dir = root.join("main").join("src");
+        let main_dir = main_worktree(root).join("src");
         std::fs::create_dir_all(&main_dir).unwrap();
 
         assert!(is_in_main_worktree(root, &main_dir));
@@ -257,7 +263,7 @@ mod tests {
     fn is_in_main_worktree_true_at_main_root() {
         let dir = tempdir().unwrap();
         let root = dir.path();
-        let main_dir = root.join("main");
+        let main_dir = main_worktree(root);
         std::fs::create_dir_all(&main_dir).unwrap();
 
         assert!(is_in_main_worktree(root, &main_dir));

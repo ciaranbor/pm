@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
+use crate::state::paths;
 use crate::state::project::{ProjectConfig, ProjectEntry};
 
 use super::claude_migrate::{claude_base_dir, path_to_key};
@@ -37,7 +38,7 @@ fn resolve_projects(
             .into_iter()
             .map(|(name, entry)| {
                 let root = entry.root_path();
-                let main_path = root.join("main");
+                let main_path = paths::main_worktree(&root);
                 (name, main_path)
             })
             .collect())
@@ -45,7 +46,7 @@ fn resolve_projects(
         let root = project_root.ok_or(PmError::NotInProject)?;
         let pm_dir = root.join(".pm");
         let config = ProjectConfig::load(&pm_dir)?;
-        let main_path = root.join("main");
+        let main_path = paths::main_worktree(root);
         Ok(vec![(config.project.name, main_path)])
     }
 }
@@ -178,7 +179,7 @@ mod tests {
             agents: Default::default(),
         };
         config.save(&pm_dir).unwrap();
-        let main_path = root.join("main");
+        let main_path = paths::main_worktree(root);
         std::fs::create_dir_all(&main_path).unwrap();
 
         let entry = ProjectEntry {

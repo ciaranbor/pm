@@ -32,8 +32,7 @@ pub fn find_agent_definition_path(
     }
 
     // Main worktree (project-level install location)
-    let main_def = project_root
-        .join("main")
+    let main_def = paths::main_worktree(project_root)
         .join(".claude/agents")
         .join(&def_filename);
     if main_def.exists() {
@@ -69,7 +68,7 @@ fn is_agent_active(
     if registry.get(agent_name).is_some() {
         let pm_dir = paths::pm_dir(project_root);
         let config = ProjectConfig::load(&pm_dir)?;
-        let session_name = format!("{}/{feature}", config.project.name);
+        let session_name = tmux::session_name(&config.project.name, feature);
         if let Some(target) = tmux::find_window(tmux_server, &session_name, agent_name)? {
             // Verify the pane is running a non-shell process
             if let Ok(cmd) = tmux::pane_command(tmux_server, &target)
@@ -268,7 +267,7 @@ mod tests {
         let worktree = root.join(feature_name);
         std::fs::create_dir_all(&worktree).unwrap();
 
-        let session_name = format!("{project_name}/{feature_name}");
+        let session_name = tmux::session_name(&project_name, feature_name);
         tmux::create_session(server.name(), &session_name, &worktree).unwrap();
 
         (root, session_name, feature_name.to_string())
@@ -276,8 +275,7 @@ mod tests {
 
     /// Create an agent definition in the main worktree (where `pm agents install-project` writes).
     fn create_agent_definition(root: &Path, agent_name: &str) {
-        let agent_def = root
-            .join("main")
+        let agent_def = paths::main_worktree(root)
             .join(".claude/agents")
             .join(format!("{agent_name}.md"));
         std::fs::create_dir_all(agent_def.parent().unwrap()).unwrap();
@@ -525,9 +523,9 @@ mod tests {
         // Create a "main" scope setup with tmux session and agent definition
         let pm_dir = root.join(".pm");
         let config = ProjectConfig::load(&pm_dir).unwrap();
-        let main_worktree = root.join("main");
+        let main_worktree = paths::main_worktree(&root);
         std::fs::create_dir_all(&main_worktree).unwrap();
-        let main_session = format!("{}/main", config.project.name);
+        let main_session = tmux::session_name(&config.project.name, "main");
         tmux::create_session(server.name(), &main_session, &main_worktree).unwrap();
 
         // Need feature state for "main" scope so agent lookup works
@@ -599,9 +597,9 @@ mod tests {
         // Set up "main" scope with tmux session
         let pm_dir = root.join(".pm");
         let config = ProjectConfig::load(&pm_dir).unwrap();
-        let main_worktree = root.join("main");
+        let main_worktree = paths::main_worktree(&root);
         std::fs::create_dir_all(&main_worktree).unwrap();
-        let main_session = format!("{}/main", config.project.name);
+        let main_session = tmux::session_name(&config.project.name, "main");
         tmux::create_session(server.name(), &main_session, &main_worktree).unwrap();
 
         let now = Utc::now();

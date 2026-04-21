@@ -89,10 +89,10 @@ pub fn open(project_root: &Path, tmux_server: Option<&str>) -> Result<OpenResult
     let agents_dir = paths::agents_dir(project_root);
 
     // Ensure <project>/main session exists
-    let main_session = format!("{project_name}/main");
+    let main_session = tmux::session_name(project_name, "main");
     let restore_hook = project_root.join(hooks::RESTORE_PATH);
     if !tmux::has_session(tmux_server, &main_session)? {
-        let main_path = project_root.join("main");
+        let main_path = paths::main_worktree(project_root);
         if !main_path.exists() {
             return Err(PmError::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -128,7 +128,7 @@ pub fn open(project_root: &Path, tmux_server: Option<&str>) -> Result<OpenResult
         if !state.status.is_active() {
             continue;
         }
-        let session_name = format!("{project_name}/{name}");
+        let session_name = tmux::session_name(project_name, name);
         if !tmux::has_session(tmux_server, &session_name)? {
             let worktree_path = project_root.join(&state.worktree);
             if !worktree_path.exists() {
@@ -150,7 +150,7 @@ pub fn open(project_root: &Path, tmux_server: Option<&str>) -> Result<OpenResult
     // need respawning. agent_spawn handles zombie detection (window exists
     // but process is dead) so this is safe for already-running agents too.
     for feature in &active_features {
-        let session_name = format!("{project_name}/{feature}");
+        let session_name = tmux::session_name(project_name, feature);
         agents_respawned += respawn_agents_for_scope(
             project_root,
             feature,
@@ -184,12 +184,12 @@ mod tests {
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         // Kill the main session that init created
-        tmux::kill_session(server.name(), &format!("{name}/main")).unwrap();
-        assert!(!tmux::has_session(server.name(), &format!("{name}/main")).unwrap());
+        tmux::kill_session(server.name(), &tmux::session_name(&name, "main")).unwrap();
+        assert!(!tmux::has_session(server.name(), &tmux::session_name(&name, "main")).unwrap());
 
         open(&project_path, server.name()).unwrap();
 
-        assert!(tmux::has_session(server.name(), &format!("{name}/main")).unwrap());
+        assert!(tmux::has_session(server.name(), &tmux::session_name(&name, "main")).unwrap());
     }
 
     #[test]
@@ -202,11 +202,11 @@ mod tests {
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         // Main session already exists from init — open should not fail
-        assert!(tmux::has_session(server.name(), &format!("{name}/main")).unwrap());
+        assert!(tmux::has_session(server.name(), &tmux::session_name(&name, "main")).unwrap());
 
         open(&project_path, server.name()).unwrap();
 
-        assert!(tmux::has_session(server.name(), &format!("{name}/main")).unwrap());
+        assert!(tmux::has_session(server.name(), &tmux::session_name(&name, "main")).unwrap());
     }
 
     #[test]
@@ -225,12 +225,12 @@ mod tests {
         .unwrap();
 
         // Kill the feature session
-        tmux::kill_session(server.name(), &format!("{name}/login")).unwrap();
-        assert!(!tmux::has_session(server.name(), &format!("{name}/login")).unwrap());
+        tmux::kill_session(server.name(), &tmux::session_name(&name, "login")).unwrap();
+        assert!(!tmux::has_session(server.name(), &tmux::session_name(&name, "login")).unwrap());
 
         open(&project_path, server.name()).unwrap();
 
-        assert!(tmux::has_session(server.name(), &format!("{name}/login")).unwrap());
+        assert!(tmux::has_session(server.name(), &tmux::session_name(&name, "login")).unwrap());
     }
 
     #[test]
@@ -249,11 +249,11 @@ mod tests {
         .unwrap();
 
         // Feature session exists — open should not fail
-        assert!(tmux::has_session(server.name(), &format!("{name}/login")).unwrap());
+        assert!(tmux::has_session(server.name(), &tmux::session_name(&name, "login")).unwrap());
 
         open(&project_path, server.name()).unwrap();
 
-        assert!(tmux::has_session(server.name(), &format!("{name}/login")).unwrap());
+        assert!(tmux::has_session(server.name(), &tmux::session_name(&name, "login")).unwrap());
     }
 
     #[test]
@@ -278,12 +278,12 @@ mod tests {
         state.save(&features_dir, "login").unwrap();
 
         // Kill the feature session
-        tmux::kill_session(server.name(), &format!("{name}/login")).unwrap();
+        tmux::kill_session(server.name(), &tmux::session_name(&name, "login")).unwrap();
 
         open(&project_path, server.name()).unwrap();
 
         // Should NOT recreate session for merged feature
-        assert!(!tmux::has_session(server.name(), &format!("{name}/login")).unwrap());
+        assert!(!tmux::has_session(server.name(), &tmux::session_name(&name, "login")).unwrap());
     }
 
     #[test]
@@ -296,7 +296,7 @@ mod tests {
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         // Kill main
-        tmux::kill_session(server.name(), &format!("{name}/main")).unwrap();
+        tmux::kill_session(server.name(), &tmux::session_name(&name, "main")).unwrap();
 
         open(&project_path, server.name()).unwrap();
 
@@ -306,7 +306,7 @@ mod tests {
             .filter(|s| s.starts_with(&format!("{name}/")))
             .collect();
         assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0], format!("{name}/main"));
+        assert_eq!(sessions[0], tmux::session_name(&name, "main"));
     }
 
     #[test]
@@ -339,8 +339,8 @@ mod tests {
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         // Kill session and delete the main worktree
-        tmux::kill_session(server.name(), &format!("{name}/main")).unwrap();
-        std::fs::remove_dir_all(project_path.join("main")).unwrap();
+        tmux::kill_session(server.name(), &tmux::session_name(&name, "main")).unwrap();
+        std::fs::remove_dir_all(paths::main_worktree(&project_path)).unwrap();
 
         let result = open(&project_path, server.name());
         assert!(result.is_err());
@@ -372,21 +372,21 @@ mod tests {
         }
 
         // Kill all sessions to force recreation
-        tmux::kill_session(server.name(), &format!("{name}/main")).unwrap();
-        tmux::kill_session(server.name(), &format!("{name}/login")).unwrap();
+        tmux::kill_session(server.name(), &tmux::session_name(&name, "main")).unwrap();
+        tmux::kill_session(server.name(), &tmux::session_name(&name, "login")).unwrap();
 
         open(&project_path, server.name()).unwrap();
 
         // Verify sessions were created and hook windows exist (restore hook ran)
-        assert!(tmux::has_session(server.name(), &format!("{name}/main")).unwrap());
-        assert!(tmux::has_session(server.name(), &format!("{name}/login")).unwrap());
+        assert!(tmux::has_session(server.name(), &tmux::session_name(&name, "main")).unwrap());
+        assert!(tmux::has_session(server.name(), &tmux::session_name(&name, "login")).unwrap());
         assert!(
-            tmux::find_window(server.name(), &format!("{name}/main"), "hook")
+            tmux::find_window(server.name(), &tmux::session_name(&name, "main"), "hook")
                 .unwrap()
                 .is_some()
         );
         assert!(
-            tmux::find_window(server.name(), &format!("{name}/login"), "hook")
+            tmux::find_window(server.name(), &tmux::session_name(&name, "login"), "hook")
                 .unwrap()
                 .is_some()
         );
@@ -416,7 +416,7 @@ mod tests {
 
         // No hook window should exist since sessions were not recreated
         assert!(
-            tmux::find_window(server.name(), &format!("{name}/main"), "hook")
+            tmux::find_window(server.name(), &tmux::session_name(&name, "main"), "hook")
                 .unwrap()
                 .is_none()
         );
@@ -444,15 +444,15 @@ mod tests {
         .unwrap();
 
         // Kill sessions and delete only login's worktree
-        tmux::kill_session(server.name(), &format!("{name}/login")).unwrap();
-        tmux::kill_session(server.name(), &format!("{name}/api")).unwrap();
+        tmux::kill_session(server.name(), &tmux::session_name(&name, "login")).unwrap();
+        tmux::kill_session(server.name(), &tmux::session_name(&name, "api")).unwrap();
         std::fs::remove_dir_all(project_path.join("login")).unwrap();
 
         open(&project_path, server.name()).unwrap();
 
         // login skipped (missing worktree), api recreated
-        assert!(!tmux::has_session(server.name(), &format!("{name}/login")).unwrap());
-        assert!(tmux::has_session(server.name(), &format!("{name}/api")).unwrap());
+        assert!(!tmux::has_session(server.name(), &tmux::session_name(&name, "login")).unwrap());
+        assert!(tmux::has_session(server.name(), &tmux::session_name(&name, "api")).unwrap());
     }
 
     #[test]
@@ -486,8 +486,8 @@ mod tests {
         .unwrap();
 
         // Kill both sessions
-        tmux::kill_session(server.name(), &format!("{name}/main")).unwrap();
-        tmux::kill_session(server.name(), &format!("{name}/login")).unwrap();
+        tmux::kill_session(server.name(), &tmux::session_name(&name, "main")).unwrap();
+        tmux::kill_session(server.name(), &tmux::session_name(&name, "login")).unwrap();
 
         let result = open(&project_path, server.name()).unwrap();
         assert_eq!(result.sessions_restored, 2); // main + login
@@ -523,7 +523,7 @@ mod tests {
         registry.save(&agents_dir, "login").unwrap();
 
         // Kill the feature session (simulating reboot)
-        tmux::kill_session(server.name(), &format!("{name}/login")).unwrap();
+        tmux::kill_session(server.name(), &tmux::session_name(&name, "login")).unwrap();
 
         let result = open(&project_path, server.name()).unwrap();
 
@@ -533,9 +533,13 @@ mod tests {
 
         // Agent window should exist in the restored session
         assert!(
-            tmux::find_window(server.name(), &format!("{name}/login"), "reviewer")
-                .unwrap()
-                .is_some()
+            tmux::find_window(
+                server.name(),
+                &tmux::session_name(&name, "login"),
+                "reviewer"
+            )
+            .unwrap()
+            .is_some()
         );
     }
 
@@ -568,12 +572,12 @@ mod tests {
         registry.save(&agents_dir, "login").unwrap();
 
         // Kill the feature session
-        tmux::kill_session(server.name(), &format!("{name}/login")).unwrap();
+        tmux::kill_session(server.name(), &tmux::session_name(&name, "login")).unwrap();
 
         open(&project_path, server.name()).unwrap();
 
         // After open, the agent should be respawned (window exists)
-        let session_name = format!("{name}/login");
+        let session_name = tmux::session_name(&name, "login");
         let window = tmux::find_window(server.name(), &session_name, "reviewer").unwrap();
         assert!(window.is_some(), "reviewer window should be respawned");
     }
@@ -601,7 +605,7 @@ mod tests {
         registry.save(&agents_dir, "main").unwrap();
 
         // Kill the main session (simulating reboot)
-        tmux::kill_session(server.name(), &format!("{name}/main")).unwrap();
+        tmux::kill_session(server.name(), &tmux::session_name(&name, "main")).unwrap();
 
         let result = open(&project_path, server.name()).unwrap();
 
@@ -611,9 +615,13 @@ mod tests {
 
         // Agent window should exist in the restored main session
         assert!(
-            tmux::find_window(server.name(), &format!("{name}/main"), "orchestrator")
-                .unwrap()
-                .is_some()
+            tmux::find_window(
+                server.name(),
+                &tmux::session_name(&name, "main"),
+                "orchestrator"
+            )
+            .unwrap()
+            .is_some()
         );
     }
 
@@ -649,7 +657,7 @@ mod tests {
 
         // Session still exists (NOT killed) — simulates tmux-resurrect preserving it.
         // But the agent window doesn't exist (it was in a different window that wasn't preserved).
-        assert!(tmux::has_session(server.name(), &format!("{name}/login")).unwrap());
+        assert!(tmux::has_session(server.name(), &tmux::session_name(&name, "login")).unwrap());
 
         let result = open(&project_path, server.name()).unwrap();
 
@@ -660,9 +668,13 @@ mod tests {
 
         // Agent window should exist
         assert!(
-            tmux::find_window(server.name(), &format!("{name}/login"), "reviewer")
-                .unwrap()
-                .is_some()
+            tmux::find_window(
+                server.name(),
+                &tmux::session_name(&name, "login"),
+                "reviewer"
+            )
+            .unwrap()
+            .is_some()
         );
     }
 }

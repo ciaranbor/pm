@@ -38,15 +38,15 @@ fn system_pty_count() -> Option<usize> {
 /// Check the system-wide pty count and return an error message if it
 /// exceeds the safety threshold.
 fn enforce_system_pty_cap() -> Result<(), String> {
-    if let Some(count) = system_pty_count() {
-        if count >= MAX_SYSTEM_PTYS {
-            return Err(format!(
-                "system-wide pty count is {count} (threshold: {MAX_SYSTEM_PTYS}, macOS limit: 511). \
+    if let Some(count) = system_pty_count()
+        && count >= MAX_SYSTEM_PTYS
+    {
+        return Err(format!(
+            "system-wide pty count is {count} (threshold: {MAX_SYSTEM_PTYS}, macOS limit: 511). \
                  Aborting test to prevent pty exhaustion. \
                  Check for leaked tmux sessions: tmux list-sessions; \
                  kill test servers: for s in /tmp/tmux-$(id -u)/pm-test-*; do tmux -L $(basename \"$s\") kill-server; done"
-            ));
-        }
+        ));
     }
     Ok(())
 }
@@ -292,10 +292,10 @@ impl TestServer {
 
         // Wait for sleep to take effect
         for _ in 0..100 {
-            if let Ok(cmd) = crate::tmux::pane_command(self.name(), &target) {
-                if cmd == "sleep" {
-                    break;
-                }
+            if let Ok(cmd) = crate::tmux::pane_command(self.name(), &target)
+                && cmd == "sleep"
+            {
+                break;
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }

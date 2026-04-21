@@ -25,7 +25,7 @@ pub fn feat_rename(
     }
 
     // Validate: new name must not already exist as a branch
-    let main_repo = project_root.join("main");
+    let main_repo = paths::main_worktree(project_root);
     if git::branch_exists(&main_repo, new_name)? {
         return Err(PmError::SafetyCheck(format!(
             "branch '{new_name}' already exists"
@@ -51,8 +51,8 @@ pub fn feat_rename(
     }
 
     // Step 3: Rename tmux session
-    let old_session = format!("{project_name}/{old_name}");
-    let new_session = format!("{project_name}/{new_name}");
+    let old_session = tmux::session_name(project_name, old_name);
+    let new_session = tmux::session_name(project_name, new_name);
     if tmux::has_session(tmux_server, &old_session)?
         && let Err(e) = tmux::rename_session(tmux_server, &old_session, &new_session)
     {
@@ -113,7 +113,7 @@ mod tests {
 
         feat_rename(&project_path, "login", "auth", server.name()).unwrap();
 
-        let main_repo = project_path.join("main");
+        let main_repo = paths::main_worktree(&project_path);
         assert!(!git::branch_exists(&main_repo, "login").unwrap());
         assert!(git::branch_exists(&main_repo, "auth").unwrap());
     }
@@ -139,8 +139,12 @@ mod tests {
 
         feat_rename(&project_path, "login", "auth", server.name()).unwrap();
 
-        assert!(!tmux::has_session(server.name(), &format!("{project_name}/login")).unwrap());
-        assert!(tmux::has_session(server.name(), &format!("{project_name}/auth")).unwrap());
+        assert!(
+            !tmux::has_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap()
+        );
+        assert!(
+            tmux::has_session(server.name(), &tmux::session_name(&project_name, "auth")).unwrap()
+        );
     }
 
     #[test]
@@ -204,7 +208,7 @@ mod tests {
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         // Create a branch without a feature
-        let main_repo = project_path.join("main");
+        let main_repo = paths::main_worktree(&project_path);
         git::create_branch(&main_repo, "taken-branch").unwrap();
 
         let result = feat_rename(&project_path, "login", "taken-branch", server.name());

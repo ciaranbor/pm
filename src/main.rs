@@ -1275,7 +1275,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = dir.path();
         std::fs::create_dir(root.join(".pm")).unwrap();
-        let cwd = root.join("main").join("src");
+        let cwd = paths::main_worktree(root).join("src");
         std::fs::create_dir_all(&cwd).unwrap();
 
         let scope = resolve_scope_from(root, &cwd).unwrap();

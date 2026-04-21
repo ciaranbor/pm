@@ -131,7 +131,7 @@ mod tests {
     fn setup_project(dir: &std::path::Path) -> std::path::PathBuf {
         let root = dir.to_path_buf();
         std::fs::create_dir_all(root.join(".pm").join("features")).unwrap();
-        std::fs::create_dir_all(root.join("main")).unwrap();
+        std::fs::create_dir_all(paths::main_worktree(&root)).unwrap();
         root
     }
     #[test]
