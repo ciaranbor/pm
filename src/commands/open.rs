@@ -217,16 +217,11 @@ mod tests {
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         // Kill the feature session
@@ -246,16 +241,11 @@ mod tests {
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         // Feature session exists — open should not fail
@@ -274,16 +264,11 @@ mod tests {
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         // Manually set feature status to merged
@@ -369,16 +354,11 @@ mod tests {
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         // Create a restore hook
@@ -450,27 +430,17 @@ mod tests {
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "api",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         // Kill sessions and delete only login's worktree
@@ -508,16 +478,11 @@ mod tests {
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         // Kill both sessions
@@ -537,16 +502,11 @@ mod tests {
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         // Register an agent for the feature
@@ -587,16 +547,11 @@ mod tests {
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         // Register an agent marked active (but its window won't exist after session kill)
@@ -672,16 +627,11 @@ mod tests {
         let project_path = dir.path().join(&name);
         let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         // Register an agent marked active (simulating a previously running agent)

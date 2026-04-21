@@ -108,16 +108,16 @@ fn setup_review(
         // blocks until the PR-review context queued above is available.
         // Reuse window :0 so the reviewer takes over the default shell.
         let reuse_target = format!("{session_name}:0");
-        agent_spawn::spawn_claude_session(
+        agent_spawn::spawn_claude_session(&agent_spawn::SpawnClaudeParams {
             project_root,
-            feature_name,
-            Some("reviewer"),
-            None,
-            false, // reviews are read-only
-            None,
-            Some(&reuse_target),
+            feature: feature_name,
+            agent_name: Some("reviewer"),
+            prompt: None,
+            edit: false, // reviews are read-only
+            resume_session: None,
+            reuse_window: Some(&reuse_target),
             tmux_server,
-        )?;
+        })?;
 
         // Step 3.6: Run post-create hook
         hooks::run_hook(tmux_server, &session_name, &worktree_path, &hook_path);
@@ -131,15 +131,15 @@ fn setup_review(
     })();
 
     if let Err(e) = result {
-        feat_common::rollback_creation(
+        feat_common::rollback_creation(&feat_common::RollbackParams {
             project_root,
             feature_name,
-            feature_name,
+            branch: feature_name,
             project_name,
             tmux_server,
-            true, // fetch_pr created the local branch, so we own it
-            "main",
-        );
+            delete_branch: true, // fetch_pr created the local branch, so we own it
+            base: "main",
+        });
         return Err(e);
     }
 

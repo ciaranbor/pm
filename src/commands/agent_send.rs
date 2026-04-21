@@ -171,64 +171,54 @@ pub fn agent_send(
     Ok(status)
 }
 
+/// Parameters for sending a message to an agent in a different project.
+pub struct CrossProjectSendParams<'a> {
+    pub target_project_name: &'a str,
+    pub sender_scope: &'a str,
+    pub sender_project: &'a str,
+    pub target_scope: &'a str,
+    pub recipient: &'a str,
+    pub sender: &'a str,
+    pub body: &'a str,
+}
+
 /// Send a message to an agent in a different project. Looks up the target
 /// project from the global registry, delivers the message to its
 /// `.pm/messages/` directory, but does NOT auto-spawn the recipient
 /// (we can't safely spawn agents in a foreign project).
-///
-/// `sender_scope` is the scope the sender is in (used for metadata).
-/// `target_scope` is the scope within the target project to deliver to.
-pub fn agent_send_cross_project(
-    target_project_name: &str,
-    sender_scope: &str,
-    sender_project: &str,
-    target_scope: &str,
-    recipient: &str,
-    sender: &str,
-    body: &str,
-) -> Result<String> {
+pub fn agent_send_cross_project(params: &CrossProjectSendParams<'_>) -> Result<String> {
     let projects_dir = paths::global_projects_dir()?;
-    agent_send_cross_project_with_dir(
-        &projects_dir,
-        target_project_name,
-        sender_scope,
-        sender_project,
-        target_scope,
-        recipient,
-        sender,
-        body,
-    )
+    agent_send_cross_project_with_dir(&projects_dir, params)
 }
 
 /// Inner implementation that accepts an explicit `projects_dir` for testability.
-#[allow(clippy::too_many_arguments)]
 fn agent_send_cross_project_with_dir(
     projects_dir: &Path,
-    target_project_name: &str,
-    sender_scope: &str,
-    sender_project: &str,
-    target_scope: &str,
-    recipient: &str,
-    sender: &str,
-    body: &str,
+    params: &CrossProjectSendParams<'_>,
 ) -> Result<String> {
-    let entry = ProjectEntry::load(projects_dir, target_project_name)?;
+    let entry = ProjectEntry::load(projects_dir, params.target_project_name)?;
     let target_root = entry.root_path();
 
     let messages_dir = paths::messages_dir(&target_root);
     let index = messages::send_full(
         &messages_dir,
-        target_scope,
-        recipient,
-        sender,
-        body,
-        Some(sender_scope),
-        Some(sender_project),
+        params.target_scope,
+        params.recipient,
+        params.sender,
+        params.body,
+        Some(params.sender_scope),
+        Some(params.sender_project),
     )?;
 
     Ok(format!(
         "Message {index:03} sent to '{recipient}@{target_scope}' in project '{target_project_name}' \
-         (from '{sender}@{sender_scope}' in project '{sender_project}')"
+         (from '{sender}@{sender_scope}' in project '{sender_project}')",
+        recipient = params.recipient,
+        target_scope = params.target_scope,
+        target_project_name = params.target_project_name,
+        sender = params.sender,
+        sender_scope = params.sender_scope,
+        sender_project = params.sender_project,
     ))
 }
 
@@ -674,13 +664,15 @@ mod tests {
 
         let result = agent_send_cross_project_with_dir(
             projects_dir.path(),
-            "exo",
-            "login",
-            "myapp",
-            "main",
-            "implementer",
-            "reviewer",
-            "found a bug in the auth module",
+            &CrossProjectSendParams {
+                target_project_name: "exo",
+                sender_scope: "login",
+                sender_project: "myapp",
+                target_scope: "main",
+                recipient: "implementer",
+                sender: "reviewer",
+                body: "found a bug in the auth module",
+            },
         )
         .unwrap();
 
@@ -707,13 +699,15 @@ mod tests {
 
         let result = agent_send_cross_project_with_dir(
             projects_dir.path(),
-            "nonexistent",
-            "login",
-            "myapp",
-            "main",
-            "implementer",
-            "reviewer",
-            "hello",
+            &CrossProjectSendParams {
+                target_project_name: "nonexistent",
+                sender_scope: "login",
+                sender_project: "myapp",
+                target_scope: "main",
+                recipient: "implementer",
+                sender: "reviewer",
+                body: "hello",
+            },
         );
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), PmError::ProjectNotFound(_)));
@@ -736,13 +730,15 @@ mod tests {
 
         agent_send_cross_project_with_dir(
             projects_dir.path(),
-            "exo",
-            "my-feature",
-            "myapp",
-            "main",
-            "bot",
-            "human",
-            "test message",
+            &CrossProjectSendParams {
+                target_project_name: "exo",
+                sender_scope: "my-feature",
+                sender_project: "myapp",
+                target_scope: "main",
+                recipient: "bot",
+                sender: "human",
+                body: "test message",
+            },
         )
         .unwrap();
 
@@ -771,26 +767,30 @@ mod tests {
 
         let r1 = agent_send_cross_project_with_dir(
             projects_dir.path(),
-            "exo",
-            "feat",
-            "myapp",
-            "main",
-            "bot",
-            "human",
-            "first",
+            &CrossProjectSendParams {
+                target_project_name: "exo",
+                sender_scope: "feat",
+                sender_project: "myapp",
+                target_scope: "main",
+                recipient: "bot",
+                sender: "human",
+                body: "first",
+            },
         )
         .unwrap();
         assert!(r1.contains("Message 001"));
 
         let r2 = agent_send_cross_project_with_dir(
             projects_dir.path(),
-            "exo",
-            "feat",
-            "myapp",
-            "main",
-            "bot",
-            "human",
-            "second",
+            &CrossProjectSendParams {
+                target_project_name: "exo",
+                sender_scope: "feat",
+                sender_project: "myapp",
+                target_scope: "main",
+                recipient: "bot",
+                sender: "human",
+                body: "second",
+            },
         )
         .unwrap();
         assert!(r2.contains("Message 002"));

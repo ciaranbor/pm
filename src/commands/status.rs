@@ -106,27 +106,17 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project(dir.path());
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "alpha",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "beta",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         let lines = status(&project_path, server.name()).unwrap();
@@ -148,16 +138,11 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project(dir.path());
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         let lines = status(&project_path, server.name()).unwrap();
@@ -169,16 +154,11 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project(dir.path());
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         // Kill tmux session to create a doctor issue
@@ -207,27 +187,17 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project(dir.path());
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "alpha",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "beta",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         // Break only beta's tmux session
@@ -267,16 +237,11 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project(dir.path());
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "login",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         // Manually set a PR number on the feature

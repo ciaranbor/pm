@@ -179,16 +179,11 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-        feat_new::feat_new(
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             "signup",
-            None,
-            None,
-            None,
-            false,
-            None,
             server.name(),
-        )
+        ))
         .unwrap();
 
         let result = feat_rename(&project_path, "login", "signup", server.name());

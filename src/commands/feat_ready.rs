@@ -63,14 +63,11 @@ mod tests {
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         crate::commands::feat_new::feat_new(
-            &project_path,
-            "login",
-            None,
-            None,
-            None,
-            false,
-            None,
-            server.name(),
+            &crate::commands::feat_new::FeatNewParams::with_defaults(
+                &project_path,
+                "login",
+                server.name(),
+            ),
         )
         .unwrap();
 
