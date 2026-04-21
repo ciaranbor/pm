@@ -18,9 +18,16 @@ fn run_gh(repo_dir: &Path, args: &[&str]) -> Result<String> {
     }
 }
 
+/// Basic PR reference: number and URL.
+#[derive(Debug, Clone)]
+pub struct PrRef {
+    pub number: String,
+    pub url: String,
+}
+
 /// Check if a PR already exists for the given branch head.
-/// Returns the PR number if one exists, None otherwise.
-pub fn existing_pr_number(repo_dir: &Path, branch: &str) -> Result<Option<String>> {
+/// Returns the PR number and URL if one exists, None otherwise.
+pub fn existing_pr(repo_dir: &Path, branch: &str) -> Result<Option<PrRef>> {
     let output = run_gh(
         repo_dir,
         &[
@@ -29,19 +36,37 @@ pub fn existing_pr_number(repo_dir: &Path, branch: &str) -> Result<Option<String
             "--head",
             branch,
             "--json",
-            "number",
-            "--jq",
-            ".[0].number",
+            "number,url",
+            "--limit",
+            "1",
         ],
     )?;
-    if output.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(output))
+    if output.is_empty() || output == "[]" {
+        return Ok(None);
+    }
+    let parsed: Vec<serde_json::Value> =
+        serde_json::from_str(&output).map_err(|e| PmError::Gh(format!("parse PR list: {e}")))?;
+    match parsed.first() {
+        Some(pr) => {
+            let number = pr["number"]
+                .as_u64()
+                .map(|n| n.to_string())
+                .ok_or_else(|| PmError::Gh("PR list missing 'number' field".to_string()))?;
+            let url = pr["url"].as_str().unwrap_or("").to_string();
+            Ok(Some(PrRef { number, url }))
+        }
+        None => Ok(None),
     }
 }
 
-/// Create a PR for the given branch. Returns the PR number.
+/// Result of creating a PR: the full URL and the extracted PR number.
+#[derive(Debug, Clone)]
+pub struct CreatePrResult {
+    pub url: String,
+    pub number: String,
+}
+
+/// Create a PR for the given branch. Returns the PR URL and number.
 /// Uses `--fill-first` to auto-populate the title from the first commit
 /// without dumping all commit messages into the body.
 /// If `draft` is true, creates a draft PR.
@@ -52,7 +77,7 @@ pub fn create_pr(
     draft: bool,
     body: Option<&str>,
     base: Option<&str>,
-) -> Result<String> {
+) -> Result<CreatePrResult> {
     let mut args = vec!["pr", "create", "--fill-first", "--head", branch];
     if let Some(base) = base {
         args.push("--base");
@@ -67,7 +92,8 @@ pub fn create_pr(
     }
     let url = run_gh(repo_dir, &args)?;
     // gh pr create returns the URL; extract the number from the end
-    Ok(pr_number_from_url(&url))
+    let number = pr_number_from_url(&url);
+    Ok(CreatePrResult { url, number })
 }
 
 /// PR status info returned by a single `gh pr view` call.
