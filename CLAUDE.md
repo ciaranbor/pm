@@ -8,7 +8,9 @@
 
 Rust CLI using clap (derive macros). The codebase is organized as:
 
-- `src/main.rs` — entry point, clap CLI definition, command dispatch
+- `src/main.rs` — entry point (parse args, run dispatch, handle errors)
+- `src/cli.rs` — clap CLI definition (all derive structs and enums)
+- `src/dispatch.rs` — command dispatch (`run()` function, scope helpers)
 - `src/state/` — TOML state management (project entries, feature state, config). `ProjectEntry` has optional `repo_url` (project git origin) and `state_remote` (.pm/ repo remote) fields for cross-machine restore.
 - `src/git.rs` — git operations (branch, worktree, clone, status checks)
 - `src/tmux.rs` — tmux operations (session create/kill/switch, display-menu)
