@@ -189,6 +189,14 @@ pm open                          # open/reconstruct sessions for current project
 
 Creates tmux sessions for the main worktree and any active features that are missing sessions. Useful after a reboot or tmux server restart.
 
+### Close a project
+
+```sh
+pm close                         # kill all tmux sessions for the current project
+```
+
+Tears down all tmux sessions (main + features) without deleting any state, files, or worktrees. This is the counterpart to `pm open` — use it when you want to free up tmux sessions without losing any project state. Idempotent; no error if sessions are already gone.
+
 ### Claude Code settings management
 
 Manage Claude Code settings (`settings.json`, `settings.local.json`) across worktrees. The main worktree's `.claude/` directory is the source of truth — new features are seeded from it automatically.

@@ -54,6 +54,8 @@ enum Commands {
     /// Claude Code settings, skills, and session management
     #[command(subcommand)]
     Claude(ClaudeCommands),
+    /// Close all tmux sessions for the current project (counterpart to `pm open`)
+    Close,
     /// Delete a project (teardown features, sessions, state, and registry entry)
     Delete {
         /// Project name (defaults to current project from CWD)
@@ -556,6 +558,15 @@ fn run() -> pm::error::Result<()> {
                     result.sessions_restored, result.agents_respawned
                 );
             }
+            Ok(())
+        }
+        Commands::Close => {
+            let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+            let (project_name, killed) = commands::close::close(&project_root, None)?;
+            println!(
+                "Closed project {project_name} (killed {killed} session{})",
+                if killed == 1 { "" } else { "s" }
+            );
             Ok(())
         }
         Commands::Claude(claude_cmd) => match claude_cmd {
