@@ -1,4 +1,7 @@
-use std::path::Path;
+use std::fmt::Write as _;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use crate::error::{PmError, Result};
 use crate::state::agent::AgentRegistry;
@@ -6,6 +9,58 @@ use crate::state::feature::FeatureState;
 use crate::state::paths;
 use crate::state::project::ProjectConfig;
 use crate::{gh, git, hooks, messages, tmux};
+
+/// Accumulates timing entries and appends them to a log file on flush.
+/// Used to diagnose intermittent merge/cleanup hangs — the log file
+/// survives even when the tmux session that ran the command is killed.
+pub struct TimingLog {
+    path: PathBuf,
+    buf: String,
+}
+
+impl TimingLog {
+    /// Create a new timing log that will write to `<pm_dir>/cleanup.log`.
+    pub fn new(pm_dir: &Path, label: &str, name: &str) -> Self {
+        let path = pm_dir.join("cleanup.log");
+        let mut buf = String::new();
+        let _ = writeln!(
+            buf,
+            "\n--- {label}:{name} {} ---",
+            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+        );
+        Self { path, buf }
+    }
+
+    /// Record a step's duration. Only records if elapsed > 100ms.
+    pub fn record(&mut self, step: &str, elapsed: std::time::Duration) {
+        if elapsed.as_millis() > 100 {
+            let _ = writeln!(self.buf, "  {step}: {:.1}s", elapsed.as_secs_f64());
+        }
+    }
+
+    /// Record the total duration. Only records if elapsed > 500ms.
+    pub fn record_total(&mut self, elapsed: std::time::Duration) {
+        if elapsed.as_millis() > 500 {
+            let _ = writeln!(self.buf, "  TOTAL: {:.1}s", elapsed.as_secs_f64());
+        }
+    }
+
+    /// Flush accumulated entries to the log file. No-op if nothing was recorded
+    /// beyond the header.
+    pub fn flush(&self) {
+        // Header is always 1 line; if buf only has that, nothing interesting happened
+        if self.buf.lines().count() <= 1 {
+            return;
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+        {
+            let _ = f.write_all(self.buf.as_bytes());
+        }
+    }
+}
 
 /// Parameters for feature cleanup.
 pub struct CleanupParams<'a> {
@@ -40,20 +95,49 @@ pub struct CleanupParams<'a> {
 /// from within the feature session (where killing the session would kill
 /// this process).
 pub fn cleanup_feature(params: &CleanupParams) -> Result<()> {
-    // Helper: run `step`, propagating errors only when `best_effort` is false.
-    let run = |step: &mut dyn FnMut() -> Result<()>| -> Result<()> {
-        match step() {
-            Ok(()) => Ok(()),
-            Err(e) if params.best_effort => {
-                eprintln!("warning: cleanup step failed (continuing): {e}");
-                Ok(())
+    let mut tlog = params
+        .features_dir
+        .parent()
+        .map(|pm_dir| TimingLog::new(pm_dir, "cleanup", params.name));
+
+    cleanup_feature_with_timing(params, &mut tlog)
+}
+
+/// Run cleanup with an optional timing log. The log is flushed before
+/// the session-killing step so timings survive even if the process is
+/// terminated. Called directly by `feat_merge` to share a single log.
+pub(crate) fn cleanup_feature_with_timing(
+    params: &CleanupParams,
+    tlog: &mut Option<TimingLog>,
+) -> Result<()> {
+    let cleanup_start = Instant::now();
+
+    /// Run a cleanup step, recording its duration in `$tlog` and handling
+    /// best-effort error swallowing. This is a macro rather than a closure
+    /// so that `$tlog` can be mutably borrowed across multiple invocations
+    /// without conflicting with later borrows (e.g. for recording totals).
+    macro_rules! run {
+        ($tlog:expr, $label:expr, $best_effort:expr, $step:expr) => {{
+            let t = Instant::now();
+            #[allow(clippy::redundant_closure_call)]
+            let result: Result<()> = (|| $step)();
+            let elapsed = t.elapsed();
+            if let Some(tl) = $tlog.as_mut() {
+                tl.record($label, elapsed);
             }
-            Err(e) => Err(e),
-        }
-    };
+            match result {
+                Ok(()) => Ok(()),
+                Err(e) if $best_effort => {
+                    eprintln!("warning: cleanup step failed (continuing): {e}");
+                    Ok(())
+                }
+                Err(e) => Err(e),
+            }
+        }};
+    }
 
     // Step 0: Move summary.md from worktree to .pm/summaries/<feature>.md
-    run(&mut || {
+    run!(tlog, "collect-summary", params.best_effort, {
         let summary_src = params.worktree_path.join("summary.md");
         if summary_src.exists()
             && let Some(pm_dir) = params.features_dir.parent()
@@ -67,7 +151,7 @@ pub fn cleanup_feature(params: &CleanupParams) -> Result<()> {
     })?;
 
     // Step 1: Remove git worktree
-    run(&mut || {
+    run!(tlog, "remove-worktree", params.best_effort, {
         if params.worktree_path.exists() {
             if params.force_worktree {
                 git::remove_worktree_force(params.repo, params.worktree_path)?;
@@ -81,10 +165,15 @@ pub fn cleanup_feature(params: &CleanupParams) -> Result<()> {
     // Step 1b: Prune stale worktree entries so git no longer considers the
     // branch checked-out. Without this, `git branch -D` can race against the
     // worktree bookkeeping update from step 1.
-    run(&mut || git::prune_worktrees(params.repo))?;
+    run!(
+        tlog,
+        "prune-worktrees",
+        params.best_effort,
+        git::prune_worktrees(params.repo)
+    )?;
 
     // Step 2: Delete branch (skipped during feat_adopt rollback)
-    run(&mut || {
+    run!(tlog, "delete-branch", params.best_effort, {
         if params.delete_branch && git::branch_exists(params.repo, params.branch)? {
             git::delete_branch(params.repo, params.branch)?;
         }
@@ -92,11 +181,16 @@ pub fn cleanup_feature(params: &CleanupParams) -> Result<()> {
     })?;
 
     // Step 3: Remove state file
-    run(&mut || FeatureState::delete(params.features_dir, params.name))?;
+    run!(
+        tlog,
+        "delete-state",
+        params.best_effort,
+        FeatureState::delete(params.features_dir, params.name)
+    )?;
 
     // Step 4: Remove agent registry and message queue.
     // Derive .pm/ dir from features_dir (which is <project_root>/.pm/features/).
-    run(&mut || {
+    run!(tlog, "delete-agents-messages", params.best_effort, {
         if let Some(pm_dir) = params.features_dir.parent() {
             let agents_dir = pm_dir.join("agents");
             AgentRegistry::delete(&agents_dir, params.name)?;
@@ -109,7 +203,7 @@ pub fn cleanup_feature(params: &CleanupParams) -> Result<()> {
 
     // Step 4.5: Notify main agent before killing the session (the session
     // kill terminates this process if run from within the feature session)
-    run(&mut || {
+    run!(tlog, "notify-main", params.best_effort, {
         if let Some(pm_dir) = params.features_dir.parent() {
             let messages_dir = pm_dir.join("messages");
             let body = format!(
@@ -128,8 +222,15 @@ pub fn cleanup_feature(params: &CleanupParams) -> Result<()> {
         Ok(())
     })?;
 
+    // Flush timing log before killing the session — the session kill may
+    // terminate this process, so we must persist timings first.
+    if let Some(tl) = tlog.as_mut() {
+        tl.record_total(cleanup_start.elapsed());
+        tl.flush();
+    }
+
     // Step 5: Kill tmux session (last — see doc comment above)
-    run(&mut || {
+    run!(tlog, "kill-session", params.best_effort, {
         let session_name = tmux::session_name(params.project_name, params.name);
         if tmux::has_session(params.tmux_server, &session_name)? {
             // Only switch the client away if it's currently attached to the
