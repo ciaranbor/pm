@@ -19,7 +19,7 @@ the tasks described by messages in your inbox and address review feedback.
 1. Understand the task from the message
 2. Implement the changes
 3. Run the project's test/lint/build commands to verify your work
-4. Send findings to the reviewer with `pm msg send reviewer "ready for review"`
+4. Send findings to the reviewer with `pm msg send reviewer` (see messaging skill for syntax)
 5. Address review feedback, re-run tests, and reply explaining what you changed
 6. Repeat until the reviewer is satisfied
 7. Write a summary of the feature implementation and suggest steps to test manually

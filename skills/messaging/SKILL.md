@@ -30,17 +30,14 @@ revisit any message at any time.
 
 ## Sending messages
 
-```sh
-pm msg send <agent> "message"         # send a message to another agent
-```
-
-For multi-line messages, use a heredoc to avoid permission prompts
-(newline + `#` in a regular quoted arg triggers Claude Code's comment-injection heuristic):
+Always use a heredoc to send messages — plain quoted args with newlines
+and `#` characters trigger Claude Code's comment-injection heuristic and
+cause permission prompts:
 
 ```sh
 pm msg send <agent> "$(cat <<'EOF'
-# Section one
-Details here.
+## Summary
+Your message here.
 EOF
 )"
 ```
