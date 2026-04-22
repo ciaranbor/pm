@@ -270,6 +270,114 @@ impl TestServer {
         (project_path, project_name)
     }
 
+    /// Create a project without tmux sessions.
+    ///
+    /// Replicates the filesystem structure of `pm init` (git repo, `.pm/`
+    /// directory, config, hooks, skills, registry entry) but skips creating
+    /// the tmux session. Use this for tests that only need the project
+    /// directory layout and never interact with tmux.
+    ///
+    /// Keep in sync with `commands::init::init()` — if init gains new
+    /// setup steps, they should be mirrored here.
+    pub fn setup_project_no_tmux(
+        &self,
+        dir: &std::path::Path,
+    ) -> (std::path::PathBuf, std::path::PathBuf, String) {
+        use crate::state::paths;
+        let name = self.scope("myapp");
+        let project_path = dir.join(&name);
+        let projects_dir = dir.join("registry");
+
+        // Replicate init's filesystem work without tmux
+        std::fs::create_dir_all(&project_path).unwrap();
+        let main_path = paths::main_worktree(&project_path);
+        crate::git::init_repo(&main_path).unwrap();
+
+        let pm_dir = paths::pm_dir(&project_path);
+        let features_dir = paths::features_dir(&project_path);
+        std::fs::create_dir_all(&features_dir).unwrap();
+
+        // Write project config
+        use crate::state::project::{
+            AgentsConfig, GithubConfig, ProjectConfig, ProjectInfo, SetupConfig,
+        };
+        let config = ProjectConfig {
+            project: ProjectInfo { name: name.clone() },
+            setup: SetupConfig::default(),
+            github: GithubConfig::default(),
+            agents: {
+                let mut permissions = std::collections::BTreeMap::new();
+                permissions.insert("implementer".to_string(), "acceptEdits".to_string());
+                AgentsConfig {
+                    default: Some("implementer".to_string()),
+                    permissions,
+                }
+            },
+        };
+        config.save(&pm_dir).unwrap();
+
+        crate::hooks::bootstrap(&project_path).unwrap();
+        crate::commands::docs::bootstrap(&project_path).unwrap();
+        crate::commands::state_cmd::init(&project_path).unwrap();
+        crate::commands::hooks_install::install(&project_path).unwrap();
+        crate::commands::skills::skills_install_project(&project_path, None).unwrap();
+        crate::commands::skills::agents_install_project(&project_path, None).unwrap();
+
+        // Register in global registry
+        use crate::state::project::ProjectEntry;
+        let entry = ProjectEntry {
+            root: crate::path_utils::to_portable(&project_path),
+            main_branch: "main".to_string(),
+            repo_url: None,
+            state_remote: None,
+        };
+        entry.save(&projects_dir, &name).unwrap();
+
+        (project_path, projects_dir, name)
+    }
+
+    /// Create a project and a feature without tmux sessions.
+    ///
+    /// Same as `setup_project_with_feature` but skips all tmux interaction.
+    /// The git branch and worktree are created, and feature state is written,
+    /// but no tmux sessions exist for the project or feature.
+    pub fn setup_project_with_feature_no_tmux(
+        &self,
+        dir: &std::path::Path,
+        feature_name: &str,
+    ) -> (std::path::PathBuf, String) {
+        use crate::state::paths;
+        let (project_path, _, project_name) = self.setup_project_no_tmux(dir);
+        let main_worktree = paths::main_worktree(&project_path);
+        let worktree_path = project_path.join(feature_name);
+
+        // Create git branch + worktree
+        crate::git::create_branch_from(&main_worktree, feature_name, "main").unwrap();
+        crate::git::add_worktree(&main_worktree, &worktree_path, feature_name).unwrap();
+
+        // Write feature state
+        let features_dir = paths::features_dir(&project_path);
+        use crate::state::feature::{FeatureState, FeatureStatus};
+        let now = chrono::Utc::now();
+        let state = FeatureState {
+            branch: feature_name.to_string(),
+            worktree: feature_name.to_string(),
+            status: FeatureStatus::Wip,
+            pr: String::new(),
+            base: "main".to_string(),
+            context: String::new(),
+            created: now,
+            last_active: now,
+        };
+        state.save(&features_dir, feature_name).unwrap();
+
+        // Seed Claude settings from main
+        crate::commands::claude_settings::seed_feature_claude(&project_path, &worktree_path)
+            .unwrap();
+
+        (project_path, project_name)
+    }
+
     /// Create a tmux window running `sleep 999` (a non-shell process) to
     /// simulate an active agent. Registers the agent in the registry and waits
     /// until `pane_command` reports "sleep" so callers can immediately query
@@ -293,14 +401,14 @@ impl TestServer {
         // Wait for sleep to take effect. Under heavy load (parallel tests)
         // this can take longer than usual, so we poll generously.
         let mut sleep_detected = false;
-        for _ in 0..200 {
+        for _ in 0..500 {
             if let Ok(cmd) = crate::tmux::pane_command(self.name(), &target)
                 && cmd == "sleep"
             {
                 sleep_detected = true;
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            std::thread::sleep(std::time::Duration::from_millis(20));
         }
         assert!(
             sleep_detected,
