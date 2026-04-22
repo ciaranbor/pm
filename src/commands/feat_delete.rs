@@ -78,6 +78,11 @@ pub fn cleanup_feature(params: &CleanupParams) -> Result<()> {
         Ok(())
     })?;
 
+    // Step 1b: Prune stale worktree entries so git no longer considers the
+    // branch checked-out. Without this, `git branch -D` can race against the
+    // worktree bookkeeping update from step 1.
+    run(&mut || git::prune_worktrees(params.repo))?;
+
     // Step 2: Delete branch (skipped during feat_adopt rollback)
     run(&mut || {
         if params.delete_branch && git::branch_exists(params.repo, params.branch)? {
