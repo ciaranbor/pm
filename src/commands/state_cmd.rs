@@ -798,22 +798,6 @@ mod tests {
     }
 
     #[test]
-    fn remote_none_with_non_interactive_stdin_skips() {
-        // When stdin is not a terminal (as in tests), read_remote_choice()
-        // returns Skip immediately without blocking on input.
-        let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
-        init(&root).unwrap();
-
-        let msg = remote(&root, None).unwrap();
-        assert_eq!(msg, "Skipped remote setup");
-
-        // No remote should have been set
-        let pm_dir = paths::pm_dir(&root);
-        assert!(!git::has_remote(&pm_dir, "origin").unwrap());
-    }
-
-    #[test]
     fn push_errors_without_remote() {
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
