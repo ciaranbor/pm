@@ -356,6 +356,9 @@ pub enum MsgCommands {
         /// Agent name (defaults to $PM_AGENT_NAME or $USER)
         #[arg(long)]
         as_agent: Option<String>,
+        /// Read from a different scope's inbox (feature name or "main")
+        #[arg(long)]
+        scope: Option<String>,
     },
     /// List all messages in your inbox, with cursor position markers
     List {
@@ -365,6 +368,9 @@ pub enum MsgCommands {
         /// Agent name (defaults to $PM_AGENT_NAME or $USER)
         #[arg(long)]
         as_agent: Option<String>,
+        /// List messages from a different scope's inbox (feature name or "main")
+        #[arg(long)]
+        scope: Option<String>,
     },
     /// Block until a message arrives in your inbox
     Wait {
@@ -374,6 +380,9 @@ pub enum MsgCommands {
         /// Agent name (defaults to $PM_AGENT_NAME or $USER)
         #[arg(long)]
         as_agent: Option<String>,
+        /// Wait on a different scope's inbox (feature name or "main")
+        #[arg(long)]
+        scope: Option<String>,
     },
 }
 

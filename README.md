@@ -341,12 +341,16 @@ pm msg send impl "note" --upstream           # send to the parent scope (base br
 
 pm msg wait                                  # block until any new message arrives
 pm msg wait --from reviewer                  # block only on messages from reviewer
+pm msg wait --scope login                    # block on messages in another feature's inbox
 
 pm msg list                                  # enumerate inbox with cursor markers
 pm msg list --from reviewer                  # only show one sender's queue
+pm msg list --scope login                    # list messages in another feature's inbox
+pm msg list --scope main                     # list messages in main's inbox
 
 pm msg read                                  # read next unread message and advance cursor
 pm msg read --from reviewer                  # scope to one sender
+pm msg read --scope login --from reviewer    # read from another feature's inbox
 pm msg read --from reviewer --index 3        # re-read message 3 (does not advance)
 pm msg read --from reviewer --index +2       # peek ahead: cursor + 2 (does not advance)
 pm msg read --from reviewer --index -1       # re-read the last processed message
