@@ -1,4 +1,4 @@
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 
 use crate::error::{PmError, Result};
@@ -522,6 +522,12 @@ enum RemoteChoice {
 
 /// Read the user's remote setup choice from stdin.
 fn read_remote_choice() -> Result<RemoteChoice> {
+    // When stdin is not a terminal (e.g. tests, piped input, closed fd),
+    // skip the interactive prompt entirely to avoid blocking.
+    if !io::stdin().is_terminal() {
+        return Ok(RemoteChoice::Skip);
+    }
+
     let gh_available = crate::gh::is_available();
 
     if gh_available {
@@ -792,14 +798,9 @@ mod tests {
     }
 
     #[test]
-    fn remote_none_with_closed_stdin_skips() {
-        // When stdin is closed (as in tests), read_line returns empty string.
-        // If gh is not available, the default choice is Skip.
-        if crate::gh::is_available() {
-            // Skip: empty stdin + gh available would default to creating a
-            // real GitHub repo, which we don't want in tests.
-            return;
-        }
+    fn remote_none_with_non_interactive_stdin_skips() {
+        // When stdin is not a terminal (as in tests), read_remote_choice()
+        // returns Skip immediately without blocking on input.
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
         init(&root).unwrap();
