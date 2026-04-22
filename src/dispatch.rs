@@ -20,6 +20,35 @@ fn resolve_scope(project_root: &std::path::Path) -> pm::error::Result<String> {
     resolve_scope_from(project_root, &std::env::current_dir()?)
 }
 
+/// Validate that a scope name refers to an existing scope ("main" or a known feature).
+fn validate_scope(project_root: &std::path::Path, scope: &str) -> pm::error::Result<()> {
+    if scope == "main" {
+        return Ok(());
+    }
+    let features_dir = paths::features_dir(project_root);
+    let state_file = features_dir.join(format!("{scope}.toml"));
+    if state_file.exists() {
+        Ok(())
+    } else {
+        Err(PmError::FeatureNotFound(scope.to_string()))
+    }
+}
+
+/// Resolve scope with an optional override flag. If `scope_flag` is Some,
+/// validates it and returns it; otherwise auto-detects from CWD.
+fn resolve_scope_with_flag(
+    project_root: &std::path::Path,
+    scope_flag: Option<String>,
+) -> pm::error::Result<String> {
+    match scope_flag {
+        Some(s) => {
+            validate_scope(project_root, &s)?;
+            Ok(s)
+        }
+        None => resolve_scope(project_root),
+    }
+}
+
 fn resolve_scope_from(
     project_root: &std::path::Path,
     cwd: &std::path::Path,
@@ -416,7 +445,9 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     from,
                     index,
                     as_agent,
+                    scope,
                 } => {
+                    let target_scope = resolve_scope_with_flag(&project_root, scope)?;
                     let agent = as_agent.unwrap_or_else(pm::messages::default_user_name);
                     let spec = index
                         .as_deref()
@@ -424,7 +455,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         .transpose()?;
                     let lines = commands::agent_read::agent_read(
                         &project_root,
-                        &feature,
+                        &target_scope,
                         &agent,
                         from.as_deref(),
                         spec,
@@ -434,11 +465,16 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     }
                     Ok(())
                 }
-                MsgCommands::List { from, as_agent } => {
+                MsgCommands::List {
+                    from,
+                    as_agent,
+                    scope,
+                } => {
+                    let target_scope = resolve_scope_with_flag(&project_root, scope)?;
                     let agent = as_agent.unwrap_or_else(pm::messages::default_user_name);
                     let lines = commands::msg_list::msg_list(
                         &project_root,
-                        &feature,
+                        &target_scope,
                         &agent,
                         from.as_deref(),
                     )?;
@@ -447,11 +483,16 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     }
                     Ok(())
                 }
-                MsgCommands::Wait { from, as_agent } => {
+                MsgCommands::Wait {
+                    from,
+                    as_agent,
+                    scope,
+                } => {
+                    let target_scope = resolve_scope_with_flag(&project_root, scope)?;
                     let agent = as_agent.unwrap_or_else(pm::messages::default_user_name);
                     let count = commands::agent_wait::agent_wait(
                         &project_root,
-                        &feature,
+                        &target_scope,
                         &agent,
                         from.as_deref(),
                         None,
@@ -799,5 +840,54 @@ mod tests {
         let result = resolve_scope_from(root, root);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), PmError::NotInWorktree));
+    }
+
+    #[test]
+    fn validate_scope_accepts_main() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join(".pm")).unwrap();
+
+        assert!(validate_scope(root, "main").is_ok());
+    }
+
+    #[test]
+    fn validate_scope_accepts_existing_feature() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        create_feature_state(root, "login");
+
+        assert!(validate_scope(root, "login").is_ok());
+    }
+
+    #[test]
+    fn validate_scope_rejects_nonexistent_feature() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join(".pm")).unwrap();
+
+        let result = validate_scope(root, "nonexistent");
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), PmError::FeatureNotFound(_)));
+    }
+
+    #[test]
+    fn resolve_scope_with_flag_uses_override() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        create_feature_state(root, "login");
+
+        let scope = resolve_scope_with_flag(root, Some("login".to_string())).unwrap();
+        assert_eq!(scope, "login");
+    }
+
+    #[test]
+    fn resolve_scope_with_flag_rejects_invalid_scope() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join(".pm")).unwrap();
+
+        let result = resolve_scope_with_flag(root, Some("bogus".to_string()));
+        assert!(result.is_err());
     }
 }
