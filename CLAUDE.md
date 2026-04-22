@@ -14,14 +14,14 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 - `src/state/` — TOML state management (project entries, feature state, config). `ProjectEntry` has optional `repo_url` (project git origin) and `state_remote` (.pm/ repo remote) fields for cross-machine restore.
 - `src/git/` — git operations, split into submodules: `init.rs`, `branch.rs`, `worktree.rs`, `remote.rs`, `status.rs`
 - `src/tmux.rs` — tmux operations (session create/kill/switch, display-menu)
-- `src/gh.rs` — GitHub CLI wrapper (PR creation, status queries via `gh`)
+- `src/gh.rs` — GitHub CLI wrapper (PR creation, editing, status queries via `gh`)
 - `src/hooks.rs` — lifecycle hooks (post-create, post-merge, restore)
 - `src/error.rs` — error types (`PmError` enum, `thiserror`)
 - `src/testing.rs` — test utilities (shared tmux test server, RAII cleanup)
 - `src/path_utils.rs` — portable path conversion (`~/` ↔ `$HOME`) for registry entries
 - `src/messages/` — file-based message queue (send, read_at, next, list, wait, name validation). Supports cross-scope messaging: `send_with_scope` records the sender's scope in metadata, and `pm msg send --scope <name>` / `--upstream` deliver to a different feature's inbox. Split into `mod.rs` (core ops, path helpers, tests), `types.rs`, `validation.rs`, and `cursor.rs`.
 - `src/state/agent.rs` — per-feature agent registry (TOML state for spawned agents)
-- `src/commands/` — one module per command group (project, feat, claude, agent, msg, hooks_install, etc.)
+- `src/commands/` — one module per command group (project, feat, claude, agent, msg, hooks_install, etc.). `feat_pr.rs` handles `pm feat pr create`, `feat_pr_edit.rs` handles `pm feat pr edit`.
 - `src/commands/init.rs` — `pm init` with optional `--git <url>` for cloning; auto-detects default branch from remote
 - `src/commands/open.rs` — reopens project sessions; after recreating missing tmux sessions, walks the main scope's and each feature's agent registry to clear stale active flags and respawn agents
 - `src/commands/close.rs` — `pm close` kills all tmux sessions for a project without deleting state (counterpart to `pm open`)

@@ -6,7 +6,7 @@ Terminal-based project manager built around tmux and git worktrees.
 
 - tmux
 - git
-- [gh](https://cli.github.com/) (for `pm feat pr`, `pm feat review`, `pm feat sync`)
+- [gh](https://cli.github.com/) (for `pm feat pr create/edit`, `pm feat review`, `pm feat sync`)
 
 ## Install
 
@@ -120,11 +120,22 @@ Edit the scripts to add your own logic (install deps, run migrations, deploy, et
 ### Create a PR
 
 ```sh
-pm feat pr login                # create a draft PR for the feature
-pm feat pr --ready              # create a non-draft PR (feature detected from CWD)
+pm feat pr create login         # create a draft PR for the feature
+pm feat pr create --ready       # create a non-draft PR (feature detected from CWD)
 ```
 
 Pushes the branch to origin, then creates a GitHub PR via `gh`. Draft by default; use `--ready` for a non-draft PR. If a PR already exists for the branch, links it instead of creating a new one. For stacked features, the PR targets the base branch instead of main. Respects `.github/pull_request_template.md` if present. Stores the PR number in feature state. Draft PRs keep `wip` status; `--ready` sets status to `review`. Feature name is detected from CWD if omitted.
+
+### Edit a PR
+
+```sh
+pm feat pr edit --title "new title"          # update title
+pm feat pr edit --body "new description"     # update body
+pm feat pr edit --title "t" --body "b"       # update both
+pm feat pr edit login --title "new title"    # specify feature name
+```
+
+Updates the title and/or body of the feature's linked PR via `gh pr edit`. At least one of `--title` or `--body` is required. Prints confirmation with the PR URL. Fails if the feature has no linked PR — run `pm feat pr create` first.
 
 ### Mark a PR as ready for review
 
@@ -133,7 +144,7 @@ pm feat ready                   # mark current feature's PR as ready
 pm feat ready login             # mark a specific feature's PR as ready
 ```
 
-Pushes latest commits, then calls `gh pr ready` to remove draft status. Sets feature status to `review`. Fails if the feature has no linked PR — run `pm feat pr` first.
+Pushes latest commits, then calls `gh pr ready` to remove draft status. Sets feature status to `review`. Fails if the feature has no linked PR — run `pm feat pr create` first.
 
 ### Review a PR
 

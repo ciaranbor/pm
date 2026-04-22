@@ -46,7 +46,7 @@ pub fn feat_pr(project_root: &Path, name: &str, ready: bool, body: Option<&str>)
             existing.number, state.branch
         );
         if let Some(b) = body {
-            gh::edit_pr_body(&worktree_path, &existing.number, b)?;
+            gh::edit_pr(&worktree_path, &existing.number, None, Some(b))?;
             eprintln!("Updated PR #{} body", existing.number);
         }
         eprintln!("{}", existing.url);
