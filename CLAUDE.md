@@ -17,7 +17,7 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 - `src/gh.rs` — GitHub CLI wrapper (PR creation, editing, status queries via `gh`)
 - `src/hooks.rs` — lifecycle hooks (post-create, post-merge, restore)
 - `src/error.rs` — error types (`PmError` enum, `thiserror`)
-- `src/testing.rs` — test utilities (shared tmux test server, RAII cleanup)
+- `src/testing.rs` — test utilities (shared tmux test server, RAII cleanup, no-tmux project setup helpers)
 - `src/path_utils.rs` — portable path conversion (`~/` ↔ `$HOME`) for registry entries
 - `src/messages/` — file-based message queue (send, read_at, next, list, wait, name validation). Supports cross-scope messaging: `send_with_scope` records the sender's scope in metadata, and `pm msg send --scope <name>` / `--upstream` deliver to a different feature's inbox. Split into `mod.rs` (core ops, path helpers, tests), `types.rs`, `validation.rs`, and `cursor.rs`.
 - `src/state/agent.rs` — per-feature agent registry (TOML state for spawned agents)
@@ -112,6 +112,7 @@ TDD. Tests use real git repos and real tmux sessions, not mocks.
 - Integration tests go in `tests/`
 - Git tests create real repos in temp directories (`tempfile` crate)
 - tmux tests use a dedicated test server (`tmux -L pm-test`) to avoid interfering with the user's session
+- Tests that don't need tmux use `setup_project_no_tmux` / `setup_project_with_feature_no_tmux` to avoid unnecessary pty allocation
 - Always clean up tmux test sessions and temp dirs, even on test failure
 
 ## Code style

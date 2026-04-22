@@ -425,7 +425,7 @@ mod tests {
     fn list_main_shows_settings() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _, _) = server.setup_project(dir.path());
+        let (project, _, _) = server.setup_project_no_tmux(dir.path());
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(
@@ -444,7 +444,7 @@ mod tests {
     fn list_main_shows_both_files() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _, _) = server.setup_project(dir.path());
+        let (project, _, _) = server.setup_project_no_tmux(dir.path());
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"a":1}"#);
@@ -460,7 +460,7 @@ mod tests {
     fn list_main_returns_empty_when_no_claude_dir() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _, _) = server.setup_project(dir.path());
+        let (project, _, _) = server.setup_project_no_tmux(dir.path());
         // `pm init` now installs the Stop hook into main/.claude/settings.json;
         // strip it to exercise the "no .claude/ dir" branch.
         let _ = std::fs::remove_dir_all(paths::main_worktree(&project).join(".claude"));
@@ -475,7 +475,7 @@ mod tests {
     fn list_shows_feature_settings() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let feat_claude = project.join("login").join(".claude");
         write_json(
@@ -494,7 +494,7 @@ mod tests {
     fn list_shows_both_files() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let feat_claude = project.join("login").join(".claude");
         write_json(&feat_claude, "settings.json", r#"{"a":1}"#);
@@ -510,7 +510,7 @@ mod tests {
     fn list_returns_empty_when_no_claude_dir() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         // Remove .claude/ if seeded
         let feat_claude = project.join("login").join(".claude");
@@ -526,7 +526,7 @@ mod tests {
     fn list_only_local_settings_no_separator() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let feat_claude = project.join("login").join(".claude");
         // Remove settings.json if seeded, keep only settings.local.json
@@ -544,7 +544,7 @@ mod tests {
     fn list_fails_for_nonexistent_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _, _) = server.setup_project(dir.path());
+        let (project, _, _) = server.setup_project_no_tmux(dir.path());
 
         let result = list(&project, "nonexistent");
         assert!(matches!(result.unwrap_err(), PmError::FeatureNotFound(_)));
@@ -556,7 +556,7 @@ mod tests {
     fn seed_copies_settings_from_main_worktree() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _, _) = server.setup_project(dir.path());
+        let (project, _, _) = server.setup_project_no_tmux(dir.path());
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"permissions":true}"#);
@@ -581,7 +581,7 @@ mod tests {
     fn seed_noop_when_no_main_claude_dir() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _, _) = server.setup_project(dir.path());
+        let (project, _, _) = server.setup_project_no_tmux(dir.path());
         // `pm init` now installs the Stop hook into main/.claude/settings.json;
         // strip it to exercise the "no source dir" branch.
         let _ = std::fs::remove_dir_all(paths::main_worktree(&project).join(".claude"));
@@ -597,7 +597,7 @@ mod tests {
     fn seed_copies_only_existing_files() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _, _) = server.setup_project(dir.path());
+        let (project, _, _) = server.setup_project_no_tmux(dir.path());
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"only":"this"}"#);
@@ -615,7 +615,7 @@ mod tests {
     fn seed_copies_skills_and_agents() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _, _) = server.setup_project(dir.path());
+        let (project, _, _) = server.setup_project_no_tmux(dir.path());
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"a":1}"#);
@@ -648,7 +648,7 @@ mod tests {
     fn seed_noop_when_no_skills_or_agents() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _, _) = server.setup_project(dir.path());
+        let (project, _, _) = server.setup_project_no_tmux(dir.path());
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"a":1}"#);
@@ -672,7 +672,7 @@ mod tests {
     fn seed_overwrites_existing_skills() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _, _) = server.setup_project(dir.path());
+        let (project, _, _) = server.setup_project_no_tmux(dir.path());
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"a":1}"#);
@@ -728,7 +728,7 @@ mod tests {
     fn push_copies_feature_to_main() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let feat_claude = project.join("login").join(".claude");
         write_json(&feat_claude, "settings.json", r#"{"pushed":true}"#);
@@ -755,7 +755,7 @@ mod tests {
     fn push_fails_for_nonexistent_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _, _) = server.setup_project(dir.path());
+        let (project, _, _) = server.setup_project_no_tmux(dir.path());
 
         let result = push(&project, "nonexistent");
         assert!(matches!(result.unwrap_err(), PmError::FeatureNotFound(_)));
@@ -765,7 +765,7 @@ mod tests {
     fn push_fails_when_feature_has_no_claude_dir() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         // Ensure no .claude/ dir in feature
         let feat_claude = project.join("login").join(".claude");
@@ -783,7 +783,7 @@ mod tests {
     fn pull_copies_main_to_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"pulled":true}"#);
@@ -801,7 +801,7 @@ mod tests {
     fn pull_fails_for_nonexistent_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _, _) = server.setup_project(dir.path());
+        let (project, _, _) = server.setup_project_no_tmux(dir.path());
 
         let result = pull(&project, "nonexistent");
         assert!(matches!(result.unwrap_err(), PmError::FeatureNotFound(_)));
@@ -811,7 +811,7 @@ mod tests {
     fn pull_fails_when_main_has_no_claude_dir() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
         // Strip the Stop-hook settings.json seeded by `pm init`.
         let _ = std::fs::remove_dir_all(paths::main_worktree(&project).join(".claude"));
 
@@ -834,7 +834,7 @@ mod tests {
     fn diff_no_differences() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -849,7 +849,7 @@ mod tests {
     fn diff_detects_value_difference() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -867,7 +867,7 @@ mod tests {
     fn diff_detects_key_only_in_main() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -882,7 +882,7 @@ mod tests {
     fn diff_detects_key_only_in_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -897,7 +897,7 @@ mod tests {
     fn diff_file_only_in_main() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"x":1}"#);
@@ -910,7 +910,7 @@ mod tests {
     fn diff_file_only_in_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let feat_claude = project.join("login").join(".claude");
         write_json(&feat_claude, "settings.json", r#"{"x":1}"#);
@@ -923,7 +923,7 @@ mod tests {
     fn diff_both_files_missing_no_output() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let result = diff(&project, "login").unwrap();
         assert!(result.is_empty());
@@ -933,7 +933,7 @@ mod tests {
     fn diff_fails_for_nonexistent_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _, _) = server.setup_project(dir.path());
+        let (project, _, _) = server.setup_project_no_tmux(dir.path());
 
         let result = diff(&project, "nonexistent");
         assert!(matches!(result.unwrap_err(), PmError::FeatureNotFound(_)));
@@ -951,7 +951,7 @@ mod tests {
     fn merge_unions_object_keys() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -969,7 +969,7 @@ mod tests {
     fn merge_unions_arrays() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -1000,7 +1000,7 @@ mod tests {
     fn merge_default_theirs_main_wins_on_scalar_conflict() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -1018,7 +1018,7 @@ mod tests {
     fn merge_ours_feature_wins_on_scalar_conflict() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -1035,7 +1035,7 @@ mod tests {
     fn merge_only_feature_exists_copies_to_main() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let feat_claude = project.join("login").join(".claude");
         write_json(&feat_claude, "settings.json", r#"{"new":true}"#);
@@ -1050,7 +1050,7 @@ mod tests {
     fn merge_only_main_exists_keeps_main() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"existing":true}"#);
@@ -1065,7 +1065,7 @@ mod tests {
     fn merge_neither_exists_is_noop() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
         // Strip the Stop-hook settings.json seeded by `pm init` (and the
         // feature copy seeded by seed_feature_claude during feat_new).
         let _ = std::fs::remove_dir_all(paths::main_worktree(&project).join(".claude"));
@@ -1081,7 +1081,7 @@ mod tests {
     fn merge_identical_files_is_noop() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -1106,7 +1106,7 @@ mod tests {
     fn merge_recurses_into_nested_objects() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -1132,7 +1132,7 @@ mod tests {
     fn merge_fails_for_nonexistent_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _, _) = server.setup_project(dir.path());
+        let (project, _, _) = server.setup_project_no_tmux(dir.path());
 
         let result = merge(&project, "nonexistent", false);
         assert!(matches!(result.unwrap_err(), PmError::FeatureNotFound(_)));
@@ -1142,7 +1142,7 @@ mod tests {
     fn merge_malformed_json_winner_takes_all() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -1164,7 +1164,7 @@ mod tests {
     fn diff_reports_settings_local_json_independently() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -1183,7 +1183,7 @@ mod tests {
     fn merge_handles_settings_local_json_independently() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -1202,7 +1202,7 @@ mod tests {
     fn push_overwrites_main_with_feature_settings() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         // Main has old settings
         let main_claude = paths::main_worktree(&project).join(".claude");
@@ -1222,7 +1222,7 @@ mod tests {
     fn pull_overwrites_feature_with_main_settings() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         // Feature has diverged settings
         let feat_claude = project.join("login").join(".claude");

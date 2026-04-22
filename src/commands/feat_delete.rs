@@ -295,67 +295,12 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn delete_removes_state_file() {
+    fn delete_cleans_up_all_artifacts() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        feat_delete(&project_path, "login", false, server.name()).unwrap();
-
-        let features_dir = paths::features_dir(&project_path);
-        assert!(!FeatureState::exists(&features_dir, "login"));
-    }
-
-    #[test]
-    fn delete_removes_worktree() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-
-        feat_delete(&project_path, "login", false, server.name()).unwrap();
-
-        assert!(!project_path.join("login").exists());
-    }
-
-    #[test]
-    fn delete_removes_branch() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-
-        feat_delete(&project_path, "login", false, server.name()).unwrap();
-
-        let main_repo = paths::main_worktree(&project_path);
-        assert!(!git::branch_exists(&main_repo, "login").unwrap());
-    }
-
-    #[test]
-    fn delete_removes_tmux_session() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-
-        let scoped_name = server.scope("myapp");
-        assert!(
-            tmux_mod::has_session(server.name(), &tmux::session_name(&scoped_name, "login"))
-                .unwrap()
-        );
-
-        feat_delete(&project_path, "login", false, server.name()).unwrap();
-
-        assert!(
-            !tmux_mod::has_session(server.name(), &tmux::session_name(&scoped_name, "login"))
-                .unwrap()
-        );
-    }
-
-    #[test]
-    fn delete_removes_agent_registry() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-
-        // Create an agent registry for the feature
+        // Pre-create additional artifacts that delete should clean up
         let agents_dir = paths::agents_dir(&project_path);
         let mut registry = crate::state::agent::AgentRegistry::default();
         registry.register(
@@ -369,24 +314,34 @@ mod tests {
         registry.save(&agents_dir, "login").unwrap();
         assert!(agents_dir.join("login.toml").exists());
 
-        feat_delete(&project_path, "login", false, server.name()).unwrap();
-
-        assert!(!agents_dir.join("login.toml").exists());
-    }
-
-    #[test]
-    fn delete_removes_messages() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-
-        // Create messages for the feature
         let messages_dir = paths::messages_dir(&project_path);
         crate::messages::send(&messages_dir, "login", "reviewer", "implementer", "hello").unwrap();
         assert!(messages_dir.join("login").exists());
 
+        let scoped_name = server.scope("myapp");
+        assert!(
+            tmux_mod::has_session(server.name(), &tmux::session_name(&scoped_name, "login"))
+                .unwrap()
+        );
+
         feat_delete(&project_path, "login", false, server.name()).unwrap();
 
+        // State file removed
+        let features_dir = paths::features_dir(&project_path);
+        assert!(!FeatureState::exists(&features_dir, "login"));
+        // Worktree removed
+        assert!(!project_path.join("login").exists());
+        // Branch removed
+        let main_repo = paths::main_worktree(&project_path);
+        assert!(!git::branch_exists(&main_repo, "login").unwrap());
+        // Tmux session removed
+        assert!(
+            !tmux_mod::has_session(server.name(), &tmux::session_name(&scoped_name, "login"))
+                .unwrap()
+        );
+        // Agent registry removed
+        assert!(!agents_dir.join("login.toml").exists());
+        // Messages removed
         assert!(!messages_dir.join("login").exists());
     }
 
