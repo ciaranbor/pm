@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{ArgGroup, Parser, Subcommand};
 use clap_complete::Shell;
 use std::path::PathBuf;
 
@@ -456,17 +456,9 @@ pub enum FeatCommands {
         #[arg(long)]
         keep: bool,
     },
-    /// Create or link a GitHub PR for a feature
-    Pr {
-        /// Feature name (detected from CWD if omitted)
-        name: Option<String>,
-        /// Create a non-draft (ready) PR instead of draft
-        #[arg(long)]
-        ready: bool,
-        /// PR body (literal text or path to a file; overrides template)
-        #[arg(long)]
-        body: Option<String>,
-    },
+    /// GitHub PR management (create, edit)
+    #[command(subcommand)]
+    Pr(PrCommands),
     /// Mark a feature's PR as ready for review
     Ready {
         /// Feature name (detected from CWD if omitted)
@@ -489,5 +481,32 @@ pub enum FeatCommands {
     Sync {
         /// Feature name (syncs just this feature). Detected from CWD if omitted. If not in a feature worktree, syncs all features.
         name: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum PrCommands {
+    /// Create or link a GitHub PR for a feature
+    Create {
+        /// Feature name (detected from CWD if omitted)
+        name: Option<String>,
+        /// Create a non-draft (ready) PR instead of draft
+        #[arg(long)]
+        ready: bool,
+        /// PR body (literal text or path to a file; overrides template)
+        #[arg(long)]
+        body: Option<String>,
+    },
+    /// Edit an existing PR's title and/or description
+    #[command(group(ArgGroup::new("edit_fields").required(true).multiple(true).args(["title", "body"])))]
+    Edit {
+        /// Feature name (detected from CWD if omitted)
+        name: Option<String>,
+        /// New PR title
+        #[arg(long)]
+        title: Option<String>,
+        /// New PR body (literal text or path to a file)
+        #[arg(long)]
+        body: Option<String>,
     },
 }

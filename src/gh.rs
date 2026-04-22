@@ -149,9 +149,27 @@ pub fn mark_pr_ready(repo_dir: &Path, branch: &str) -> Result<()> {
     Ok(())
 }
 
-/// Edit the body of an existing PR.
-pub fn edit_pr_body(repo_dir: &Path, pr_number: &str, body: &str) -> Result<()> {
-    run_gh(repo_dir, &["pr", "edit", pr_number, "--body", body])?;
+/// Edit a PR's title and/or body. At least one must be Some.
+pub fn edit_pr(
+    repo_dir: &Path,
+    pr_number: &str,
+    title: Option<&str>,
+    body: Option<&str>,
+) -> Result<()> {
+    debug_assert!(
+        title.is_some() || body.is_some(),
+        "edit_pr called with neither title nor body"
+    );
+    let mut args = vec!["pr", "edit", pr_number];
+    if let Some(t) = title {
+        args.push("--title");
+        args.push(t);
+    }
+    if let Some(b) = body {
+        args.push("--body");
+        args.push(b);
+    }
+    run_gh(repo_dir, &args)?;
     Ok(())
 }
 

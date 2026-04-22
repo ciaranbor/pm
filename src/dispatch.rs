@@ -605,21 +605,37 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     }
                     Ok(())
                 }
-                FeatCommands::Pr { name, ready, body } => {
-                    let name = resolve_feature_name(name, &project_root)?;
-                    let resolved_body = body
-                        .as_deref()
-                        .map(commands::feat_new::resolve_context)
-                        .transpose()?;
-                    commands::feat_pr::feat_pr(
-                        &project_root,
-                        &name,
-                        ready,
-                        resolved_body.as_deref(),
-                    )?;
-                    println!("PR linked for feature '{name}'");
-                    Ok(())
-                }
+                FeatCommands::Pr(pr_cmd) => match pr_cmd {
+                    PrCommands::Create { name, ready, body } => {
+                        let name = resolve_feature_name(name, &project_root)?;
+                        let resolved_body = body
+                            .as_deref()
+                            .map(commands::feat_new::resolve_context)
+                            .transpose()?;
+                        commands::feat_pr::feat_pr(
+                            &project_root,
+                            &name,
+                            ready,
+                            resolved_body.as_deref(),
+                        )?;
+                        println!("PR linked for feature '{name}'");
+                        Ok(())
+                    }
+                    PrCommands::Edit { name, title, body } => {
+                        let name = resolve_feature_name(name, &project_root)?;
+                        let resolved_body = body
+                            .as_deref()
+                            .map(commands::feat_new::resolve_context)
+                            .transpose()?;
+                        commands::feat_pr_edit::feat_pr_edit(
+                            &project_root,
+                            &name,
+                            title.as_deref(),
+                            resolved_body.as_deref(),
+                        )?;
+                        Ok(())
+                    }
+                },
                 FeatCommands::Ready { name } => {
                     let name = resolve_feature_name(name, &project_root)?;
                     commands::feat_ready::feat_ready(&project_root, &name)?;
