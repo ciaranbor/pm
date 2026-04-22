@@ -290,15 +290,22 @@ impl TestServer {
                 .unwrap();
         crate::tmux::send_keys(self.name(), &target, "exec sleep 999").unwrap();
 
-        // Wait for sleep to take effect
-        for _ in 0..100 {
+        // Wait for sleep to take effect. Under heavy load (parallel tests)
+        // this can take longer than usual, so we poll generously.
+        let mut sleep_detected = false;
+        for _ in 0..200 {
             if let Ok(cmd) = crate::tmux::pane_command(self.name(), &target)
                 && cmd == "sleep"
             {
+                sleep_detected = true;
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
+        assert!(
+            sleep_detected,
+            "spawn_fake_agent: timed out waiting for 'exec sleep 999' to take effect in window '{agent_name}'"
+        );
 
         // Register in agent registry
         let agents_dir = paths::agents_dir(project_root);
