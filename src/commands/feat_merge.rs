@@ -1,6 +1,7 @@
 use std::path::Path;
+use std::time::Instant;
 
-use crate::commands::feat_delete::{CleanupParams, cleanup_feature};
+use crate::commands::feat_delete::{CleanupParams, TimingLog, cleanup_feature_with_timing};
 use crate::error::{PmError, Result};
 use crate::git;
 use crate::hooks;
@@ -29,6 +30,8 @@ pub fn feat_merge(
     let base_repo = project_root.join(base);
     let worktree_path = project_root.join(&state.worktree);
 
+    let merge_start = Instant::now();
+    let mut tlog: Option<TimingLog> = Some(TimingLog::new(&pm_dir, "merge", name));
     let already_status_merged = state.status == FeatureStatus::Merged;
 
     if already_status_merged {
@@ -56,6 +59,7 @@ pub fn feat_merge(
         }
 
         // Check if the branch is already merged locally
+        let check_start = Instant::now();
         let mut already_merged = git::branch_merged_into(&base_repo, &state.branch, base)?;
 
         // If not merged locally, check whether the base has an upstream and, if so,
@@ -69,13 +73,22 @@ pub fn feat_merge(
             already_merged = git::branch_merged_into(&base_repo, &state.branch, &tracking)?;
         }
 
+        if let Some(tl) = tlog.as_mut() {
+            tl.record("merge-check+fetch", check_start.elapsed());
+        }
+
         if already_merged {
             // Branch was merged (locally or upstream) — pull to update local base
+            let pull_start = Instant::now();
             if let Err(e) = git::pull(&base_repo) {
                 eprintln!("warning: git pull failed: {e}");
             }
+            if let Some(tl) = tlog.as_mut() {
+                tl.record("git-pull", pull_start.elapsed());
+            }
         } else {
             // Perform the merge from the base worktree
+            let merge_ff_start = Instant::now();
             if let Err(e) = git::merge_no_ff(&base_repo, &state.branch) {
                 // Abort the failed merge to leave base worktree clean
                 if let Err(abort_err) = git::merge_abort(&base_repo) {
@@ -83,12 +96,19 @@ pub fn feat_merge(
                 }
                 return Err(e);
             }
+            if let Some(tl) = tlog.as_mut() {
+                tl.record("merge-no-ff", merge_ff_start.elapsed());
+            }
         }
 
         // Run post-merge hook in a named "hook" window within the base session
+        let hook_start = Instant::now();
         let hook_path = project_root.join(hooks::POST_MERGE_PATH);
         let base_session = tmux::session_name(project_name, base);
         hooks::run_hook(tmux_server, &base_session, &base_repo, &hook_path);
+        if let Some(tl) = tlog.as_mut() {
+            tl.record("post-merge-hook", hook_start.elapsed());
+        }
     }
 
     if keep {
@@ -96,20 +116,29 @@ pub fn feat_merge(
         let mut updated = state.clone();
         updated.status = FeatureStatus::Merged;
         updated.save(&features_dir, name)?;
+
+        // Flush timing log for --keep (no cleanup phase follows)
+        if let Some(tl) = tlog.as_mut() {
+            tl.record_total(merge_start.elapsed());
+            tl.flush();
+        }
     } else {
-        cleanup_feature(&CleanupParams {
-            repo: &base_repo,
-            worktree_path: &worktree_path,
-            branch: &state.branch,
-            features_dir: &features_dir,
-            name,
-            project_name,
-            force_worktree: true, // always force — both paths checked for uncommitted changes above
-            tmux_server,
-            delete_branch: true,
-            best_effort: false,
-            base,
-        })?;
+        cleanup_feature_with_timing(
+            &CleanupParams {
+                repo: &base_repo,
+                worktree_path: &worktree_path,
+                branch: &state.branch,
+                features_dir: &features_dir,
+                name,
+                project_name,
+                force_worktree: true, // always force — both paths checked for uncommitted changes above
+                tmux_server,
+                delete_branch: true,
+                best_effort: false,
+                base,
+            },
+            &mut tlog,
+        )?;
     }
 
     Ok(())
