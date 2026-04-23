@@ -310,6 +310,7 @@ tools: Read, Write
         let config = ProjectConfig {
             project: ProjectInfo {
                 name: project_name.clone(),
+                max_features: None,
             },
             setup: Default::default(),
             github: Default::default(),

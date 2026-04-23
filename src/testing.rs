@@ -302,7 +302,10 @@ impl TestServer {
             AgentsConfig, GithubConfig, ProjectConfig, ProjectInfo, SetupConfig,
         };
         let config = ProjectConfig {
-            project: ProjectInfo { name: name.clone() },
+            project: ProjectInfo {
+                name: name.clone(),
+                max_features: None,
+            },
             setup: SetupConfig::default(),
             github: GithubConfig::default(),
             agents: {

@@ -173,6 +173,7 @@ mod tests {
         let config = ProjectConfig {
             project: crate::state::project::ProjectInfo {
                 name: name.to_string(),
+                max_features: None,
             },
             setup: Default::default(),
             github: Default::default(),

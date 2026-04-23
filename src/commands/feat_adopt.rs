@@ -29,6 +29,9 @@ pub struct FeatAdoptParams<'a> {
 /// Adopt an existing branch as a pm feature: worktree + tmux session + state file.
 /// Unlike `feat_new`, this does not create a branch — it must already exist.
 pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
+    // Check feature limit before doing any work
+    crate::state::project::check_feature_limit(params.project_root)?;
+
     let branch = params.name;
     let feature_name = super::feat_new::sanitize_feature_name(branch, params.name_override)?;
     let features_dir = paths::features_dir(params.project_root);
@@ -636,5 +639,34 @@ mod tests {
             matches!(result.unwrap_err(), PmError::WorktreeConflict { .. }),
             "expected WorktreeConflict error"
         );
+    }
+
+    #[test]
+    fn feat_adopt_blocked_by_feature_limit() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, _) = server.setup_project(dir.path());
+
+        // Set max_features = 1
+        let pm_dir = paths::pm_dir(&project_path);
+        let mut config = crate::state::project::ProjectConfig::load(&pm_dir).unwrap();
+        config.project.max_features = Some(1);
+        config.save(&pm_dir).unwrap();
+
+        // Create first feature via feat_new to use up the limit
+        create_branch(&project_path, "first");
+        feat_adopt(&default_adopt_params(&project_path, "first", server.name())).unwrap();
+
+        // Try to adopt a second branch — should be blocked
+        create_branch(&project_path, "second");
+        let result = feat_adopt(&default_adopt_params(
+            &project_path,
+            "second",
+            server.name(),
+        ));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, PmError::SafetyCheck(_)));
+        assert!(err.to_string().contains("Feature limit reached"));
     }
 }

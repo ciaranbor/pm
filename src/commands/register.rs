@@ -116,6 +116,7 @@ pub fn register(
     let config = ProjectConfig {
         project: ProjectInfo {
             name: project_name.clone(),
+            max_features: None,
         },
         setup: SetupConfig::default(),
         github: GithubConfig::default(),
