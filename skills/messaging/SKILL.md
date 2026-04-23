@@ -30,16 +30,23 @@ revisit any message at any time.
 
 ## Sending messages
 
-Always use a heredoc to send messages — plain quoted args with newlines
-and `#` characters trigger Claude Code's comment-injection heuristic and
-cause permission prompts:
+Always use a heredoc redirect to send messages — this avoids Claude
+Code's command-substitution permission prompt:
 
 ```sh
-pm msg send <agent> "$(cat <<'EOF'
+pm msg send <agent> <<'EOF'
 ## Summary
 Your message here.
 EOF
-)"
+```
+
+When the message body is omitted from the command line, `pm msg send`
+reads it from stdin. The single-quoted heredoc delimiter (`'EOF'`)
+prevents variable expansion. For simple one-line messages you can still
+pass them as a positional argument:
+
+```sh
+pm msg send <agent> "short message here"
 ```
 
 ## Listing and waiting

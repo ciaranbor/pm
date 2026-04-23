@@ -325,8 +325,8 @@ pub enum MsgCommands {
     Send {
         /// Recipient agent name
         agent: String,
-        /// Message body
-        message: String,
+        /// Message body (if omitted, reads from stdin)
+        message: Option<String>,
         /// Sender identity (defaults to $PM_AGENT_NAME or $USER)
         #[arg(long)]
         as_agent: Option<String>,
