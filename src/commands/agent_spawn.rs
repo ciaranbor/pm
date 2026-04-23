@@ -109,7 +109,7 @@ fn spawn_claude_session_with_config(
     // since they're interactive by design.
     let effective_prompt = match (params.prompt, params.agent_name) {
         (Some(p), _) => Some(p),
-        (None, Some(_)) => Some("wait for instructions"),
+        (None, Some(_)) => Some("Stand by."),
         (None, None) => None,
     };
 
