@@ -346,6 +346,10 @@ operation. Advancing through the queue is an explicit `next` step.
 
 ```sh
 pm msg send reviewer "ready for review"      # append to reviewer's inbox
+pm msg send reviewer <<'EOF'                 # multi-line body via stdin heredoc
+## Review findings
+Details here.
+EOF
 pm msg send reviewer "msg" --as-agent impl   # send as a specific identity
 pm msg send impl "note" --scope main         # send to an agent in a different scope
 pm msg send impl "note" --upstream           # send to the parent scope (base branch)
