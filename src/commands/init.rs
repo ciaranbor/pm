@@ -65,7 +65,10 @@ pub fn init(
 
     // Write project config
     let config = ProjectConfig {
-        project: ProjectInfo { name: name.clone() },
+        project: ProjectInfo {
+            name: name.clone(),
+            max_features: None,
+        },
         setup: SetupConfig::default(),
         github: GithubConfig::default(),
         agents: {

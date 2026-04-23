@@ -91,6 +91,9 @@ impl<'a> FeatNewParams<'a> {
 
 /// Create a new feature: branch + worktree + tmux session + state file.
 pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
+    // Check feature limit before doing any work
+    crate::state::project::check_feature_limit(params.project_root)?;
+
     let branch = params.name;
     let feature_name = sanitize_feature_name(branch, params.name_override)?;
     let features_dir = paths::features_dir(params.project_root);
@@ -736,5 +739,71 @@ mod tests {
         assert!(
             tmux::has_session(server.name(), &tmux::session_name(&project_name, "eval")).unwrap()
         );
+    }
+
+    #[test]
+    fn feat_new_blocked_by_feature_limit() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, _) = server.setup_project(dir.path());
+
+        // Set max_features = 1
+        let pm_dir = paths::pm_dir(&project_path);
+        let mut config = ProjectConfig::load(&pm_dir).unwrap();
+        config.project.max_features = Some(1);
+        config.save(&pm_dir).unwrap();
+
+        // Create first feature — should succeed
+        feat_new(&FeatNewParams::with_defaults(
+            &project_path,
+            "first",
+            server.name(),
+        ))
+        .unwrap();
+
+        // Second feature should be blocked
+        let result = feat_new(&FeatNewParams::with_defaults(
+            &project_path,
+            "second",
+            server.name(),
+        ));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, PmError::SafetyCheck(_)));
+        assert!(err.to_string().contains("Feature limit reached"));
+    }
+
+    #[test]
+    fn feat_new_allowed_under_feature_limit() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, _) = server.setup_project(dir.path());
+
+        // Set max_features = 2
+        let pm_dir = paths::pm_dir(&project_path);
+        let mut config = ProjectConfig::load(&pm_dir).unwrap();
+        config.project.max_features = Some(2);
+        config.save(&pm_dir).unwrap();
+
+        // First feature
+        feat_new(&FeatNewParams::with_defaults(
+            &project_path,
+            "first",
+            server.name(),
+        ))
+        .unwrap();
+
+        // Second feature should also succeed (2/2 would block, but 1/2 is fine)
+        feat_new(&FeatNewParams::with_defaults(
+            &project_path,
+            "second",
+            server.name(),
+        ))
+        .unwrap();
+
+        // Verify both exist
+        let features_dir = paths::features_dir(&project_path);
+        assert!(FeatureState::exists(&features_dir, "first"));
+        assert!(FeatureState::exists(&features_dir, "second"));
     }
 }

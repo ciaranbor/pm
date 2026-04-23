@@ -419,6 +419,26 @@ pm feat new my-feature --context "task" --agent ""           # skip auto-spawn
 
 The `agents.permissions` table controls the permission mode passed to `claude` for each agent. Set `"acceptEdits"` to auto-accept file edits, or leave empty for default permissions.
 
+#### Limiting active features
+
+Set `max_features` to cap how many active features a project can have at once. Enforced on `pm feat new` and `pm feat adopt`:
+
+```toml
+# Per-project: .pm/config.toml
+[project]
+name = "myapp"
+max_features = 3
+```
+
+Or set a global default in `~/.config/pm/config.toml`:
+
+```toml
+[project]
+max_features = 5
+```
+
+Per-project settings take precedence over the global default. If neither is set, feature count is unlimited. Merged and stale features don't count toward the limit.
+
 ### The pm Stop hook
 
 `pm init` installs a Claude Code **Stop hook** into `main/.claude/settings.json`. Its only job is to stop Claude from going idle between turns: after every turn, the hook blocks until the agent has unread messages (by calling `pm msg wait` internally), then emits
