@@ -304,10 +304,20 @@ pub enum AgentCommands {
         #[arg(long)]
         active: bool,
     },
-    /// Stop a running agent (kill window, mark inactive)
+    /// Stop one or more running agents (kill window, mark inactive)
     Stop {
-        /// Agent name
-        name: String,
+        /// Agent name(s)
+        #[arg(required = true)]
+        names: Vec<String>,
+        /// Target scope (feature name or "main"; defaults to current scope)
+        #[arg(long)]
+        scope: Option<String>,
+    },
+    /// Restart one or more agents (stop then respawn, preserving active flag and session)
+    Restart {
+        /// Agent name(s)
+        #[arg(required = true)]
+        names: Vec<String>,
         /// Target scope (feature name or "main"; defaults to current scope)
         #[arg(long)]
         scope: Option<String>,

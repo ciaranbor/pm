@@ -326,7 +326,11 @@ pm agent list                                # list all agents in the current fe
 pm agent list --active                       # list only active agents
 
 pm agent stop reviewer                       # stop an agent (kill window, mark inactive)
+pm agent stop reviewer tester                # stop multiple agents at once
 pm agent stop reviewer --scope other-feat    # stop an agent in a different scope
+
+pm agent restart reviewer                    # restart an agent (stop then respawn, preserving session)
+pm agent restart reviewer implementer        # restart multiple agents
 
 pm agent check                               # send checklist to all active agents
 pm agent check implementer                   # send checklist to a specific agent

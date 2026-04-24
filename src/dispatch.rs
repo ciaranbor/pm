@@ -362,20 +362,56 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     }
                     Ok(())
                 }
-                AgentCommands::Stop { name, scope } => {
+                AgentCommands::Stop { names, scope } => {
                     let target_scope = scope.unwrap_or(feature);
-                    let msg = commands::agent_stop::agent_stop(
+                    let results = commands::agent_stop::agent_stop_many(
                         &project_root,
                         &target_scope,
-                        &name,
+                        &names,
                         None,
-                    )?;
-                    println!("{msg}");
-                    Ok(())
+                    );
+                    let mut had_error = false;
+                    for result in results {
+                        match result {
+                            Ok(msg) => println!("{msg}"),
+                            Err(e) => {
+                                eprintln!("error: {e}");
+                                had_error = true;
+                            }
+                        }
+                    }
+                    if had_error {
+                        Err(PmError::Agent("some agents failed to stop".to_string()))
+                    } else {
+                        Ok(())
+                    }
+                }
+                AgentCommands::Restart { names, scope } => {
+                    let target_scope = scope.unwrap_or(feature);
+                    let results = commands::agent_restart::agent_restart_many(
+                        &project_root,
+                        &target_scope,
+                        &names,
+                        None,
+                    );
+                    let mut had_error = false;
+                    for result in results {
+                        match result {
+                            Ok(msg) => println!("{msg}"),
+                            Err(e) => {
+                                eprintln!("error: {e}");
+                                had_error = true;
+                            }
+                        }
+                    }
+                    if had_error {
+                        Err(PmError::Agent("some agents failed to restart".to_string()))
+                    } else {
+                        Ok(())
+                    }
                 }
                 AgentCommands::List { active } => {
-                    let lines =
-                        commands::agent_list::agent_list(&project_root, &feature, active, None)?;
+                    let lines = commands::agent_list::agent_list(&project_root, &feature, active)?;
                     for line in lines {
                         println!("{line}");
                     }

@@ -6,15 +6,6 @@ use crate::state::paths;
 use crate::state::project::ProjectConfig;
 use crate::tmux;
 
-/// Returns true if the process name is a common shell, indicating the agent
-/// process has exited and the pane has fallen back to a shell prompt.
-pub fn is_shell_process(cmd: &str) -> bool {
-    matches!(
-        cmd,
-        "bash" | "zsh" | "sh" | "fish" | "dash" | "ksh" | "csh" | "tcsh"
-    )
-}
-
 /// Build a claude command. If `agent_name` is provided, uses `--agent`.
 /// Otherwise launches a plain claude session.
 fn build_claude_cmd(
@@ -152,6 +143,7 @@ fn spawn_claude_session_with_config(
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
                 window_name: name.to_string(),
+                active: true,
             },
         );
         registry.save(&agents_dir, params.feature)?;
@@ -222,19 +214,9 @@ pub fn agent_spawn(
             Some(entry.session_id.clone())
         };
 
-        // Check if the agent's tmux window still exists
+        // If the window still exists, the agent is already running.
         if let Some(target) = tmux::find_window(tmux_server, &session_name, agent_name)? {
-            // Check if a claude process is actually running in the pane.
-            // If the pane's current command is just a shell, the agent process
-            // has exited and this is a zombie window — kill it and respawn.
-            let is_zombie = match tmux::pane_command(tmux_server, &target) {
-                Ok(cmd) => is_shell_process(&cmd),
-                Err(_) => true, // pane query failed, treat as dead
-            };
-
-            if is_zombie {
-                let _ = tmux::kill_window(tmux_server, &target);
-            } else if context.is_some() {
+            if context.is_some() {
                 return Ok(format!(
                     "Agent '{agent_name}' already active in {target} — sent context as message"
                 ));
@@ -243,7 +225,7 @@ pub fn agent_spawn(
             }
         }
 
-        // Agent existed but window is gone — spawn with resume, no prompt.
+        // Agent existed but window is gone — respawn.
         let window_target = spawn(None, resume_id.as_deref())?;
 
         let msg = if resume_id.is_some() {
@@ -285,7 +267,7 @@ pub fn agent_spawn_all(
     let agent_names: Vec<String> = registry
         .agents
         .iter()
-        .filter(|(_, e)| e.agent_type == AgentType::Agent)
+        .filter(|(_, e)| e.agent_type == AgentType::Agent && e.active)
         .map(|(n, _)| n.clone())
         .collect();
 
@@ -413,102 +395,6 @@ mod tests {
     }
 
     #[test]
-    fn spawn_zombie_window_respawns_agent() {
-        let server = TestServer::new();
-        let dir = tempdir().unwrap();
-        let (session_name, feature) = setup_project(dir.path(), &server);
-
-        // Create a window named "reviewer" manually (simulating a zombie — window
-        // exists but no claude process, just a shell).
-        let worktree = dir.path().join("login");
-        tmux::new_window(
-            server.name(),
-            &session_name,
-            &worktree,
-            Some("reviewer"),
-            true,
-        )
-        .unwrap();
-
-        // Register the agent as active in the registry
-        let agents_dir = paths::agents_dir(dir.path());
-        let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
-        registry.register(
-            "reviewer",
-            AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: "reviewer".to_string(),
-            },
-        );
-        registry.save(&agents_dir, &feature).unwrap();
-
-        // The pane is running a shell (not claude), so agent_spawn should
-        // detect the zombie, kill the stale window, and respawn.
-        let msg =
-            agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
-        assert!(
-            msg.contains("Spawned") || msg.contains("Resumed"),
-            "expected respawn message, got: {msg}"
-        );
-
-        // Verify the window still exists (the new one)
-        let window = tmux::find_window(server.name(), &session_name, "reviewer").unwrap();
-        assert!(window.is_some());
-    }
-
-    #[test]
-    fn spawn_zombie_window_with_context_respawns_and_sends_message() {
-        let server = TestServer::new();
-        let dir = tempdir().unwrap();
-        let (session_name, feature) = setup_project(dir.path(), &server);
-
-        // Create a zombie window
-        let worktree = dir.path().join("login");
-        tmux::new_window(
-            server.name(),
-            &session_name,
-            &worktree,
-            Some("reviewer"),
-            true,
-        )
-        .unwrap();
-
-        // Register as active
-        let agents_dir = paths::agents_dir(dir.path());
-        let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
-        registry.register(
-            "reviewer",
-            AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: "reviewer".to_string(),
-            },
-        );
-        registry.save(&agents_dir, &feature).unwrap();
-
-        // Spawn with context — should detect zombie, respawn, and queue message
-        let msg = agent_spawn(
-            dir.path(),
-            &feature,
-            "reviewer",
-            Some("review auth"),
-            false,
-            server.name(),
-        )
-        .unwrap();
-        assert!(
-            msg.contains("Spawned") || msg.contains("Resumed"),
-            "expected respawn message, got: {msg}"
-        );
-
-        // Verify the message was queued
-        let messages_dir = paths::messages_dir(dir.path());
-        let summaries = crate::messages::check(&messages_dir, &feature, "reviewer").unwrap();
-        assert_eq!(summaries.len(), 1);
-    }
-
-    #[test]
     fn spawn_existing_active_with_context_sends_message() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
@@ -556,6 +442,47 @@ mod tests {
     }
 
     #[test]
+    fn spawn_all_skips_inactive_agents() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+
+        // Spawn two agents
+        agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
+        agent_spawn(dir.path(), &feature, "tester", None, false, server.name()).unwrap();
+
+        // Mark tester as inactive (simulating `pm agent stop tester`)
+        let agents_dir = paths::agents_dir(dir.path());
+        let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        registry.get_mut("tester").unwrap().active = false;
+        registry.save(&agents_dir, &feature).unwrap();
+
+        // Kill the session and recreate it (simulating restart — windows gone)
+        tmux::kill_session(server.name(), &session_name).unwrap();
+        let worktree = dir.path().join("login");
+        tmux::create_session(server.name(), &session_name, &worktree).unwrap();
+
+        // Respawn all — should only spawn reviewer
+        let result = agent_spawn_all(dir.path(), &feature, server.name()).unwrap();
+        assert_eq!(result.spawned_count, 1);
+        assert_eq!(result.successes.len(), 1);
+        assert!(result.successes[0].contains("reviewer"));
+        assert!(result.errors.is_empty());
+
+        // reviewer window should exist, tester should not
+        assert!(
+            tmux::find_window(server.name(), &session_name, "reviewer")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            tmux::find_window(server.name(), &session_name, "tester")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
     fn spawn_all_no_agents_returns_message() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
@@ -586,6 +513,7 @@ mod tests {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
                 window_name: "tester".to_string(),
+                active: true,
             },
         );
         registry.save(&agents_dir, &feature).unwrap();
@@ -701,17 +629,5 @@ mod tests {
             cmd,
             "claude --agent implementer --permission-mode acceptEdits"
         );
-    }
-
-    #[test]
-    fn is_shell_process_detects_common_shells() {
-        assert!(is_shell_process("bash"));
-        assert!(is_shell_process("zsh"));
-        assert!(is_shell_process("sh"));
-        assert!(is_shell_process("fish"));
-        assert!(!is_shell_process("claude"));
-        assert!(!is_shell_process("node"));
-        assert!(!is_shell_process("sleep"));
-        assert!(!is_shell_process(""));
     }
 }

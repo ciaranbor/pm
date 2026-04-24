@@ -410,6 +410,7 @@ mod tests {
                 agent_type: crate::state::agent::AgentType::Agent,
                 session_id: "test".to_string(),
                 window_name: "reviewer".to_string(),
+                active: true,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
