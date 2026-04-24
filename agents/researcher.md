@@ -36,6 +36,7 @@ can act on. You do NOT implement the feature itself.
 
 ## Rules
 
+- Use `pm msg reply` to respond to messages from other scopes
 - Do NOT implement the feature — that's the implementer's job
 - Do NOT create commits
 - Use WebSearch and WebFetch for documentation and prior art

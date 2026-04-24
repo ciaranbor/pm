@@ -83,3 +83,13 @@ impl SenderResolution {
 
 /// Cursor tracks the last-read index per sender.
 pub(crate) type Cursor = BTreeMap<String, u32>;
+
+/// Metadata about the most recently read message, used by `pm msg reply`
+/// to auto-route replies back to the sender's scope.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LastRead {
+    pub sender: String,
+    pub sender_scope: Option<String>,
+    pub sender_project: Option<String>,
+    pub index: u32,
+}

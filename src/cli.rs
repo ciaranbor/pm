@@ -372,6 +372,14 @@ pub enum MsgCommands {
         #[arg(long)]
         scope: Option<String>,
     },
+    /// Reply to the last-read message (auto-routes cross-scope)
+    Reply {
+        /// Reply body (if omitted, reads from stdin)
+        message: Option<String>,
+        /// Sender identity (defaults to $PM_AGENT_NAME or $USER)
+        #[arg(long)]
+        as_agent: Option<String>,
+    },
     /// Block until a message arrives in your inbox
     Wait {
         /// Only block on messages from this sender
