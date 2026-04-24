@@ -49,7 +49,7 @@ Use this structure:
 ```
 
 By completion, summary.md should be accurate and up to date.
-Do not try to message "main" or any agent outside this feature.
+Use `pm msg reply` to respond to messages from other scopes.
 
 ## Rules
 

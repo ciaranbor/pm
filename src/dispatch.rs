@@ -62,6 +62,31 @@ fn resolve_scope_from(
     Err(PmError::NotInWorktree)
 }
 
+/// Read a message body from an explicit argument or stdin. Used by both
+/// `pm msg send` and `pm msg reply`.
+fn read_message_body(message: Option<String>) -> pm::error::Result<String> {
+    match message {
+        Some(m) => Ok(m),
+        None => {
+            use std::io::IsTerminal;
+            if std::io::stdin().is_terminal() {
+                return Err(PmError::Messaging(
+                    "no message provided: pass as argument or pipe via stdin".into(),
+                ));
+            }
+            let mut buf = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;
+            let trimmed = buf.trim_end().to_string();
+            if trimmed.is_empty() {
+                return Err(PmError::Messaging(
+                    "stdin was empty — no message to send".into(),
+                ));
+            }
+            Ok(trimmed)
+        }
+    }
+}
+
 pub fn run(cli: Cli) -> pm::error::Result<()> {
     match cli.command {
         Commands::Init { path, git } => {
@@ -397,27 +422,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     upstream,
                     project: target_project,
                 } => {
-                    let message = match message {
-                        Some(m) => m,
-                        None => {
-                            use std::io::IsTerminal;
-                            if std::io::stdin().is_terminal() {
-                                return Err(PmError::Messaging(
-                                    "no message provided: pass as argument or pipe via stdin"
-                                        .into(),
-                                ));
-                            }
-                            let mut buf = String::new();
-                            std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;
-                            let trimmed = buf.trim_end().to_string();
-                            if trimmed.is_empty() {
-                                return Err(PmError::Messaging(
-                                    "stdin was empty — no message to send".into(),
-                                ));
-                            }
-                            trimmed
-                        }
-                    };
+                    let message = read_message_body(message)?;
                     let sender = as_agent.unwrap_or_else(pm::messages::default_user_name);
 
                     if let Some(ref proj_name) = target_project {
@@ -502,6 +507,19 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     for line in lines {
                         println!("{line}");
                     }
+                    Ok(())
+                }
+                MsgCommands::Reply { message, as_agent } => {
+                    let message = read_message_body(message)?;
+                    let sender = as_agent.unwrap_or_else(pm::messages::default_user_name);
+                    let line = commands::msg_reply::msg_reply(
+                        &project_root,
+                        &feature,
+                        &sender,
+                        &message,
+                        None,
+                    )?;
+                    println!("{line}");
                     Ok(())
                 }
                 MsgCommands::Wait {

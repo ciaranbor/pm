@@ -363,6 +363,11 @@ pm msg list --from reviewer                  # only show one sender's queue
 pm msg list --scope login                    # list messages in another feature's inbox
 pm msg list --scope main                     # list messages in main's inbox
 
+pm msg reply "short reply"                   # reply to the last-read cross-scope message
+pm msg reply <<'EOF'                         # multi-line reply via stdin
+Details here.
+EOF
+
 pm msg read                                  # read next unread message and advance cursor
 pm msg read --from reviewer                  # scope to one sender
 pm msg read --scope login --from reviewer    # read from another feature's inbox

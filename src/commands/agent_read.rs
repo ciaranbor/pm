@@ -120,7 +120,19 @@ pub fn agent_read(
                 Some(m) => {
                     // Advance cursor past this message.
                     messages::next(&messages_dir, feature, agent, &sender)?;
-                    Ok(format_message(&m))
+                    // Record last-read metadata for `pm msg reply`.
+                    messages::save_last_read(
+                        &messages_dir,
+                        feature,
+                        agent,
+                        &messages::LastRead {
+                            sender: m.sender.clone(),
+                            sender_scope: m.meta.sender_scope.clone(),
+                            sender_project: m.meta.sender_project.clone(),
+                            index: m.index,
+                        },
+                    )?;
+                    Ok(format_message(&m, Some(feature)))
                 }
                 None => Ok(vec![format!("No new messages from {sender}")]),
             }
@@ -136,14 +148,14 @@ pub fn agent_read(
             let resolved = spec.resolve(cur)?;
             let msg = messages::read_at(&messages_dir, feature, agent, sender, resolved)?;
             match msg {
-                Some(m) => Ok(format_message(&m)),
+                Some(m) => Ok(format_message(&m, Some(feature))),
                 None => Ok(vec![format!("No message [{resolved:03}] from {sender}")]),
             }
         }
     }
 }
 
-fn format_message(m: &Message) -> Vec<String> {
+fn format_message(m: &Message, current_scope: Option<&str>) -> Vec<String> {
     let mut sender_display = match &m.meta.sender_scope {
         Some(scope) => format!("{}@{}", m.sender, scope),
         None => m.sender.clone(),
@@ -151,7 +163,14 @@ fn format_message(m: &Message) -> Vec<String> {
     if let Some(project) = &m.meta.sender_project {
         sender_display = format!("{sender_display} (project: {project})");
     }
-    vec![
+
+    let is_cross_scope = match (&m.meta.sender_scope, current_scope) {
+        (Some(scope), Some(cs)) => scope != cs,
+        _ => false,
+    };
+    let is_cross_project = m.meta.sender_project.is_some();
+
+    let mut lines = vec![
         format!(
             "--- from {} [{:03}] {} ---",
             sender_display,
@@ -159,7 +178,14 @@ fn format_message(m: &Message) -> Vec<String> {
             m.meta.timestamp.format("%Y-%m-%d %H:%M:%S UTC")
         ),
         m.body.clone(),
-    ]
+    ];
+
+    if is_cross_scope || is_cross_project {
+        lines.push(String::new());
+        lines.push("Reply: pm msg reply \"your reply here\"".to_string());
+    }
+
+    lines
 }
 
 #[cfg(test)]
@@ -557,5 +583,88 @@ mod tests {
         // Should be "--- from implementer [001]" without any @scope
         assert!(lines[0].starts_with("--- from implementer [001]"));
         assert!(!lines[0].contains('@'));
+    }
+
+    #[test]
+    fn read_cross_scope_shows_reply_hint() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        let mdir = paths::messages_dir(&root);
+        messages::send_with_scope(
+            &mdir,
+            "login",
+            "implementer",
+            "reviewer",
+            "please do this",
+            Some("main"),
+        )
+        .unwrap();
+
+        let lines = agent_read(&root, "login", "implementer", None, None).unwrap();
+        // Should contain reply hint
+        assert!(lines.iter().any(|l| l.contains("pm msg reply")));
+    }
+
+    #[test]
+    fn read_same_scope_no_reply_hint() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        let mdir = paths::messages_dir(&root);
+        messages::send(&mdir, "login", "implementer", "reviewer", "same scope").unwrap();
+
+        let lines = agent_read(&root, "login", "implementer", None, None).unwrap();
+        // Should NOT contain reply hint for same-scope messages
+        assert!(!lines.iter().any(|l| l.contains("pm msg reply")));
+    }
+
+    #[test]
+    fn read_writes_last_read_on_advance() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        let mdir = paths::messages_dir(&root);
+        messages::send_with_scope(
+            &mdir,
+            "login",
+            "reviewer",
+            "implementer",
+            "msg body",
+            Some("main"),
+        )
+        .unwrap();
+
+        agent_read(&root, "login", "reviewer", None, None).unwrap();
+
+        // .last_read should be written
+        let lr = messages::load_last_read(&mdir, "login", "reviewer")
+            .unwrap()
+            .unwrap();
+        assert_eq!(lr.sender, "implementer");
+        assert_eq!(lr.sender_scope.as_deref(), Some("main"));
+        assert_eq!(lr.index, 1);
+    }
+
+    #[test]
+    fn read_with_index_does_not_write_last_read() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        let mdir = paths::messages_dir(&root);
+        messages::send(&mdir, "login", "reviewer", "implementer", "msg").unwrap();
+
+        // Read with --index — should NOT write .last_read
+        agent_read(
+            &root,
+            "login",
+            "reviewer",
+            Some("implementer"),
+            Some(IndexSpec::Absolute(1)),
+        )
+        .unwrap();
+
+        let lr = messages::load_last_read(&mdir, "login", "reviewer").unwrap();
+        assert!(lr.is_none());
     }
 }

@@ -33,6 +33,7 @@ pub mod hooks_stop;
 pub mod init;
 pub mod list;
 pub mod msg_list;
+pub mod msg_reply;
 pub mod open;
 pub mod register;
 pub mod restore;

@@ -49,6 +49,31 @@ pass them as a positional argument:
 pm msg send <agent> "short message here"
 ```
 
+## Replying to messages
+
+When you receive a cross-scope message (from a different feature or
+project), use `pm msg reply` to auto-route the reply back:
+
+```sh
+pm msg reply <<'EOF'
+Your reply here.
+EOF
+```
+
+`pm msg reply` reads the `.last_read` metadata written by `pm msg read`
+and automatically addresses the reply to the original sender's scope.
+No need to specify `--scope` or `--project` — routing is derived from
+the last-read message.
+
+For simple one-line replies:
+```sh
+pm msg reply "short reply"
+```
+
+**When to use reply vs send:**
+- `pm msg reply` — responding to a message you just read (auto-routes)
+- `pm msg send` — initiating a new conversation or sending to a specific agent
+
 ## Listing and waiting
 
 ```sh
