@@ -4,8 +4,6 @@ use std::path::Path;
 use crate::error::{PmError, Result};
 use crate::state::agent::{AgentRegistry, AgentType};
 use crate::state::paths;
-use crate::state::project::ProjectConfig;
-use crate::tmux;
 
 /// Parse the YAML frontmatter from an agent definition and extract checklist items.
 ///
@@ -150,26 +148,12 @@ pub fn agent_check_all(
     tmux_server: Option<&str>,
 ) -> Result<(Vec<String>, Vec<String>)> {
     let agents_dir = paths::agents_dir(project_root);
-    let pm_dir = paths::pm_dir(project_root);
-    let config = ProjectConfig::load(&pm_dir)?;
-    let session_name = tmux::session_name(&config.project.name, feature);
     let registry = AgentRegistry::load(&agents_dir, feature)?;
 
     let active_agents: Vec<&str> = registry
         .agents
         .iter()
-        .filter(|(_, entry)| entry.agent_type == AgentType::Agent)
-        .filter(|(name, _)| {
-            tmux::find_window(tmux_server, &session_name, name)
-                .ok()
-                .flatten()
-                .and_then(|target| {
-                    tmux::pane_command(tmux_server, &target)
-                        .ok()
-                        .map(|cmd| !super::agent_spawn::is_shell_process(&cmd))
-                })
-                .unwrap_or(false)
-        })
+        .filter(|(_, entry)| entry.agent_type == AgentType::Agent && entry.active)
         .map(|(name, _)| name.as_str())
         .collect();
 

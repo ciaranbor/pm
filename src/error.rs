@@ -64,6 +64,9 @@ pub enum PmError {
     #[error("Skill not found: {0}")]
     SkillNotFound(String),
 
+    #[error("Agent error: {0}")]
+    Agent(String),
+
     #[error("Agent definition not found: {0}")]
     AgentNotFound(String),
 

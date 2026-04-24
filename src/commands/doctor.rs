@@ -109,27 +109,14 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
         let agents_dir = paths::agents_dir(project_root);
         if let Ok(registry) = AgentRegistry::load(&agents_dir, "main") {
             for (agent_name, entry) in &registry.agents {
-                if entry.agent_type != AgentType::Agent {
+                if entry.agent_type != AgentType::Agent || !entry.active {
                     continue;
                 }
-                let issue = if let Some(target) =
-                    tmux::find_window(tmux_server, &main_session, &entry.window_name)?
-                {
-                    // Window exists — check if it's a zombie (shell process)
-                    match tmux::pane_command(tmux_server, &target) {
-                        Ok(cmd) if agent_spawn::is_shell_process(&cmd) => Some(format!(
-                            "agent '{agent_name}' window is a zombie (shell process, not running)"
-                        )),
-                        _ => None,
-                    }
-                } else {
-                    Some(format!(
-                        "agent '{agent_name}' registered but window missing"
-                    ))
-                };
-                if let Some(message) = issue {
+                if tmux::find_window(tmux_server, &main_session, &entry.window_name)?.is_none() {
                     main_issues.push(Issue {
-                        message,
+                        message: format!(
+                            "agent '{agent_name}' registered as active but window missing"
+                        ),
                         fix: Fix::Auto(FixAction::RespawnAgent {
                             agent_name: agent_name.clone(),
                         }),
@@ -238,26 +225,16 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
                 let agents_dir = paths::agents_dir(project_root);
                 if let Ok(registry) = AgentRegistry::load(&agents_dir, name) {
                     for (agent_name, entry) in &registry.agents {
-                        if entry.agent_type != AgentType::Agent {
+                        if entry.agent_type != AgentType::Agent || !entry.active {
                             continue;
                         }
-                        let issue = if let Some(target) =
-                            tmux::find_window(tmux_server, &session_name, &entry.window_name)?
+                        if tmux::find_window(tmux_server, &session_name, &entry.window_name)?
+                            .is_none()
                         {
-                            match tmux::pane_command(tmux_server, &target) {
-                                Ok(cmd) if agent_spawn::is_shell_process(&cmd) => Some(format!(
-                                    "agent '{agent_name}' window is a zombie (shell process, not running)"
-                                )),
-                                _ => None,
-                            }
-                        } else {
-                            Some(format!(
-                                "agent '{agent_name}' registered but window missing"
-                            ))
-                        };
-                        if let Some(message) = issue {
                             issues.push(Issue {
-                                message,
+                                message: format!(
+                                    "agent '{agent_name}' registered as active but window missing"
+                                ),
                                 fix: Fix::Auto(FixAction::RespawnAgent {
                                     agent_name: agent_name.clone(),
                                 }),
@@ -804,6 +781,7 @@ mod tests {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
                 window_name: "reviewer".to_string(),
+                active: true,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -832,6 +810,7 @@ mod tests {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
                 window_name: "reviewer".to_string(),
+                active: true,
             },
         );
         registry.save(&agents_dir, "login").unwrap();

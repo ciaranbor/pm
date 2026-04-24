@@ -5,8 +5,7 @@ use crate::messages;
 use crate::state::agent::AgentRegistry;
 use crate::state::feature::FeatureState;
 use crate::state::paths;
-use crate::state::project::{ProjectConfig, ProjectEntry};
-use crate::tmux;
+use crate::state::project::ProjectEntry;
 
 /// Find the path to an agent definition file, checking locations that
 /// `claude --agent <name>` would resolve when running in a feature worktree:
@@ -55,31 +54,12 @@ fn has_agent_definition(project_root: &Path, feature: &str, agent_name: &str) ->
     find_agent_definition_path(project_root, feature, agent_name).is_some()
 }
 
-/// Check whether the recipient agent is currently active (registered and has a live tmux window).
-fn is_agent_active(
-    project_root: &Path,
-    feature: &str,
-    agent_name: &str,
-    tmux_server: Option<&str>,
-) -> Result<bool> {
+/// Check whether the recipient agent is currently active (registered with `active = true`).
+fn is_agent_active(project_root: &Path, feature: &str, agent_name: &str) -> Result<bool> {
     let agents_dir = paths::agents_dir(project_root);
     let registry = AgentRegistry::load(&agents_dir, feature)?;
 
-    if registry.get(agent_name).is_some() {
-        let pm_dir = paths::pm_dir(project_root);
-        let config = ProjectConfig::load(&pm_dir)?;
-        let session_name = tmux::session_name(&config.project.name, feature);
-        if let Some(target) = tmux::find_window(tmux_server, &session_name, agent_name)? {
-            // Verify the pane is running a non-shell process
-            if let Ok(cmd) = tmux::pane_command(tmux_server, &target)
-                && !super::agent_spawn::is_shell_process(&cmd)
-            {
-                return Ok(true);
-            }
-        }
-    }
-
-    Ok(false)
+    Ok(registry.get(agent_name).map(|e| e.active).unwrap_or(false))
 }
 
 /// Resolve the `--upstream` flag to a concrete scope name by looking up
@@ -117,7 +97,7 @@ pub fn agent_send(
 ) -> Result<String> {
     let feature = target_scope.unwrap_or(sender_scope);
 
-    let is_active = is_agent_active(project_root, feature, recipient, tmux_server)?;
+    let is_active = is_agent_active(project_root, feature, recipient)?;
 
     // If the agent isn't running and no definition exists, fail early —
     // delivering a message that nobody can ever read is a mistake.
@@ -228,6 +208,7 @@ mod tests {
     use crate::state::feature::{FeatureState, FeatureStatus};
     use crate::state::project::{ProjectConfig, ProjectInfo};
     use crate::testing::TestServer;
+    use crate::tmux;
     use chrono::Utc;
     use std::path::PathBuf;
     use tempfile::tempdir;
@@ -423,15 +404,17 @@ mod tests {
     }
 
     #[test]
-    fn send_to_dead_agent_auto_respawns() {
+    fn send_to_active_flagged_agent_queues_without_respawn() {
+        // With the `active` flag design, an agent that was spawned (active = true)
+        // but whose window has gone away is still considered "active". The message
+        // is queued; the agent will be respawned by `pm open` or `agent_spawn_all`.
         let server = TestServer::new();
         let dir = tempdir().unwrap();
         let (root, session_name, feature) = setup_project_with_tmux(dir.path(), &server);
 
-        // Agent definition must exist for auto-spawn
         create_agent_definition(&root, "reviewer");
 
-        // Spawn agent, then kill its window (simulating it died)
+        // Spawn agent, then kill its window (simulating crash/restart)
         super::super::agent_spawn::agent_spawn(
             &root,
             &feature,
@@ -457,8 +440,9 @@ mod tests {
             server.name(),
         )
         .unwrap();
+        // Agent is still active (flag is true), so no auto-spawn — just queued
         assert!(msg.contains("Message 001 sent to 'reviewer'"));
-        assert!(msg.contains("Spawned agent 'reviewer'"));
+        assert!(!msg.contains("Spawned"));
     }
 
     #[test]

@@ -62,9 +62,8 @@ fn respawn_agents_for_scope(
 /// any active features that are missing their sessions. Existing sessions are
 /// left untouched (resurrect-aware).
 ///
-/// After session creation, walks each feature's agent registry: entries whose
-/// tmux window no longer exists have their `active` flag cleared, then all
-/// registered agents are respawned via `agent_spawn_all`.
+/// After session creation, respawns agents marked `active = true` via
+/// `agent_spawn_all`. Agents whose windows already exist are skipped.
 ///
 /// Finally, selects a sensible landing window in each restored session: the
 /// first agent window if any agents were respawned, otherwise window 0.
@@ -104,10 +103,10 @@ pub fn open(project_root: &Path, tmux_server: Option<&str>) -> Result<OpenResult
         sessions_restored += 1;
     }
 
-    // Respawn agents for the main scope.
-    // The main session may have been preserved by tmux-resurrect with dead agent
-    // windows, or it may have just been recreated above — either way, we need to
-    // clear stale active flags and respawn registered agents.
+    // Respawn agents marked active in the main scope. If the session was just
+    // recreated, their windows are gone and agent_spawn will create new ones.
+    // If the session already existed, agent_spawn is idempotent (skips agents
+    // whose windows are still present).
     agents_respawned += respawn_agents_for_scope(
         project_root,
         "main",
@@ -146,9 +145,7 @@ pub fn open(project_root: &Path, tmux_server: Option<&str>) -> Result<OpenResult
     }
 
     // Respawn agents for ALL active features (not just restored sessions).
-    // Sessions preserved by tmux-resurrect may have dead agent windows that
-    // need respawning. agent_spawn handles zombie detection (window exists
-    // but process is dead) so this is safe for already-running agents too.
+    // agent_spawn is idempotent — skips agents whose windows already exist.
     for feature in &active_features {
         let session_name = tmux::session_name(project_name, feature);
         agents_respawned += respawn_agents_for_scope(
@@ -518,6 +515,7 @@ mod tests {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
                 window_name: "reviewer".to_string(),
+                active: true,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -567,6 +565,7 @@ mod tests {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
                 window_name: "reviewer".to_string(),
+                active: true,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -600,6 +599,7 @@ mod tests {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
                 window_name: "orchestrator".to_string(),
+                active: true,
             },
         );
         registry.save(&agents_dir, "main").unwrap();
@@ -651,6 +651,7 @@ mod tests {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
                 window_name: "reviewer".to_string(),
+                active: true,
             },
         );
         registry.save(&agents_dir, "login").unwrap();

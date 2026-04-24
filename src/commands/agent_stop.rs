@@ -6,7 +6,7 @@ use crate::state::paths;
 use crate::state::project::ProjectConfig;
 use crate::tmux;
 
-/// Stop a running agent: kill its tmux window and mark it inactive in the
+/// Stop a running agent: kill its tmux window and set `active = false` in the
 /// registry. Idempotent — succeeds even if the window is already gone.
 pub fn agent_stop(
     project_root: &Path,
@@ -21,14 +21,17 @@ pub fn agent_stop(
     let config = ProjectConfig::load(&pm_dir)?;
     let session_name = tmux::session_name(&config.project.name, feature);
 
-    let registry = AgentRegistry::load(&agents_dir, feature)?;
+    let mut registry = AgentRegistry::load(&agents_dir, feature)?;
 
     // Verify agent exists in the registry
-    if registry.get(agent_name).is_none() {
-        return Err(crate::error::PmError::AgentNotFound(format!(
+    let entry = registry.get_mut(agent_name).ok_or_else(|| {
+        crate::error::PmError::AgentNotFound(format!(
             "'{agent_name}' not found in scope '{feature}'"
-        )));
-    }
+        ))
+    })?;
+
+    entry.active = false;
+    registry.save(&agents_dir, feature)?;
 
     // Kill the tmux window if it exists (idempotent, must be last)
     if let Some(target) = tmux::find_window(tmux_server, &session_name, agent_name)? {
@@ -36,6 +39,19 @@ pub fn agent_stop(
     }
 
     Ok(format!("Stopped agent '{agent_name}' in {feature}"))
+}
+
+/// Stop multiple agents. Continues on error, returns all results.
+pub fn agent_stop_many(
+    project_root: &Path,
+    feature: &str,
+    names: &[String],
+    tmux_server: Option<&str>,
+) -> Vec<Result<String>> {
+    names
+        .iter()
+        .map(|name| agent_stop(project_root, feature, name, tmux_server))
+        .collect()
 }
 
 #[cfg(test)]
@@ -97,6 +113,7 @@ mod tests {
                 agent_type: AgentType::Agent,
                 session_id: String::new(),
                 window_name: name.to_string(),
+                active: true,
             },
         );
         registry.save(&agents_dir, feature).unwrap();
@@ -126,6 +143,11 @@ mod tests {
         // Window should be gone
         let window = tmux::find_window(server.name(), &session_name, "reviewer").unwrap();
         assert!(window.is_none());
+
+        // active flag should be false
+        let agents_dir = paths::agents_dir(dir.path());
+        let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        assert!(!registry.get("reviewer").unwrap().active);
     }
 
     #[test]
@@ -139,6 +161,11 @@ mod tests {
 
         let msg = agent_stop(dir.path(), &feature, "reviewer", server.name()).unwrap();
         assert!(msg.contains("Stopped agent 'reviewer'"));
+
+        // active flag should be false
+        let agents_dir = paths::agents_dir(dir.path());
+        let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        assert!(!registry.get("reviewer").unwrap().active);
     }
 
     #[test]
@@ -159,5 +186,25 @@ mod tests {
 
         let result = agent_stop(dir.path(), &feature, "../evil", server.name());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn stop_many_continues_on_error() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (_session_name, feature) = setup_project(dir.path(), &server);
+
+        register_agent(dir.path(), &feature, "reviewer");
+        // "nonexistent" is not registered
+
+        let results = agent_stop_many(
+            dir.path(),
+            &feature,
+            &["reviewer".to_string(), "nonexistent".to_string()],
+            server.name(),
+        );
+        assert_eq!(results.len(), 2);
+        assert!(results[0].is_ok());
+        assert!(results[1].is_err());
     }
 }

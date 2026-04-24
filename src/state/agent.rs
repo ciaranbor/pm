@@ -24,6 +24,15 @@ pub struct AgentEntry {
     /// lookup contract doesn't silently depend on the map key.
     #[serde(default)]
     pub window_name: String,
+    /// Whether this agent should be running. Set to `true` by `agent spawn`,
+    /// `false` by `agent stop`. Used by `agent_spawn_all` / `pm open` to
+    /// decide which agents to respawn after a restart.
+    #[serde(default = "default_active")]
+    pub active: bool,
+}
+
+fn default_active() -> bool {
+    true
 }
 
 /// Agent registry for a feature. Stored at `.pm/agents/<feature>.toml`.
@@ -98,6 +107,7 @@ mod tests {
             agent_type: AgentType::Agent,
             session_id: session_id.to_string(),
             window_name: "reviewer".to_string(),
+            active: true,
         }
     }
 
@@ -154,6 +164,7 @@ mod tests {
                 agent_type: AgentType::User,
                 session_id: String::new(),
                 window_name: String::new(),
+                active: false,
             },
         );
 
@@ -194,6 +205,7 @@ mod tests {
                 agent_type: AgentType::User,
                 session_id: String::new(),
                 window_name: String::new(),
+                active: false,
             },
         );
 

@@ -20,13 +20,14 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 - `src/testing.rs` — test utilities (shared tmux test server, RAII cleanup, no-tmux project setup helpers)
 - `src/path_utils.rs` — portable path conversion (`~/` ↔ `$HOME`) for registry entries
 - `src/messages/` — file-based message queue (send, read_at, next, list, wait, name validation). Supports cross-scope messaging: `send_with_scope` records the sender's scope in metadata, and `pm msg send --scope <name>` / `--upstream` deliver to a different feature's inbox. `pm msg reply` auto-routes replies using `.last_read` metadata (sender, scope, project) written by `agent_read` on each cursor advance. Split into `mod.rs` (core ops, path helpers, last-read persistence, tests), `types.rs` (`LastRead`, `MessageMeta`, etc.), `validation.rs`, and `cursor.rs`.
-- `src/state/agent.rs` — per-feature agent registry (TOML state for spawned agents)
+- `src/state/agent.rs` — per-feature agent registry (TOML state for spawned agents). `AgentEntry` has an `active: bool` flag that is the single source of truth for agent lifecycle state: set `true` by `agent spawn`, set `false` by `agent stop`, read by `agent_spawn_all`/`list`/`check`/`send` to determine whether an agent should be running.
 - `src/commands/` — one module per command group (project, feat, claude, agent, msg, hooks_install, etc.). `feat_pr.rs` handles `pm feat pr create`, `feat_pr_edit.rs` handles `pm feat pr edit`.
 - `src/commands/init.rs` — `pm init` with optional `--git <url>` for cloning; auto-detects default branch from remote
-- `src/commands/open.rs` — reopens project sessions; after recreating missing tmux sessions, walks the main scope's and each feature's agent registry to clear stale active flags and respawn agents
+- `src/commands/open.rs` — reopens project sessions; after recreating missing tmux sessions, respawns agents with `active = true` via `agent_spawn_all`
 - `src/commands/close.rs` — `pm close` kills all tmux sessions for a project without deleting state (counterpart to `pm open`)
 - `src/commands/hooks_install.rs` — installs the pm Stop hook into `main/.claude/settings.json`; see below
-- `src/commands/agent_stop.rs` — `pm agent stop` (kill window, mark inactive in registry)
+- `src/commands/agent_stop.rs` — `pm agent stop` (kill window, set `active = false`); accepts multiple names
+- `src/commands/agent_restart.rs` — `pm agent restart` (kill window then respawn, preserving `active = true` and session for `--resume`); accepts multiple names
 - `src/commands/agent_check.rs` — assembles checklists from agent definition frontmatter + project-specific files, sends as message
 - `agents/` — bundled agent definitions (reviewer, implementer, researcher), embedded via `include_str!`. Frontmatter supports a `checklist:` field (YAML list of items for `pm agent check`)
 - `src/commands/claude_export.rs` — `pm claude export` tars Claude session data with a manifest for cross-machine transfer
