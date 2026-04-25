@@ -803,6 +803,13 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             }
             Ok(())
         }
+        Commands::SelfUpdate => {
+            let lines = commands::self_update::self_update()?;
+            for line in lines {
+                println!("{line}");
+            }
+            Ok(())
+        }
         Commands::State(state_cmd) => match state_cmd {
             StateCommands::Init { global, remote } => {
                 let msg = if global {

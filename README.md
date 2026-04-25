@@ -470,6 +470,14 @@ pm claude hooks install
 
 The install is idempotent and append-only — any other `Stop` hooks you've added are left alone. `pm doctor` flags a missing pm Stop hook and `pm doctor --fix` reinstalls it.
 
+### Self-update
+
+```sh
+pm self-update
+```
+
+Pulls the latest pm source from its main branch (fast-forward only), rebuilds with `cargo install --path .`, warns about active features across all projects, then runs `pm upgrade --all` to reinstall bundled assets everywhere. The pm project must be registered in the global registry (`pm register <path-to-pm-source>`). Refuses if the main worktree has uncommitted changes. On build failure the old binary remains intact.
+
 ### Upgrade bundled assets
 
 ```sh
