@@ -86,6 +86,8 @@ pub enum Commands {
     },
     /// Restore all projects on a fresh machine from the global registry
     Restore,
+    /// Pull latest pm source, rebuild, and upgrade all projects
+    SelfUpdate,
     /// Git-backed state management (.pm/ backup and sync)
     #[command(subcommand)]
     State(StateCommands),

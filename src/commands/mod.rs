@@ -38,6 +38,7 @@ pub mod msg_reply;
 pub mod open;
 pub mod register;
 pub mod restore;
+pub mod self_update;
 pub mod skills;
 pub mod state_cmd;
 pub mod status;
