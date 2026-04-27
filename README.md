@@ -200,6 +200,8 @@ pm open                          # open/reconstruct sessions for current project
 
 Creates tmux sessions for the main worktree and any active features that are missing sessions. Useful after a reboot or tmux server restart.
 
+Before recreating sessions, `pm open` runs `pm doctor`'s diagnostic checks and prints warnings for any state drift it can't fix on its own (orphaned features, missing branches, PR drift, missing hooks, stuck-initializing features). Issues that open *will* fix automatically (missing tmux sessions, dead agent windows) are filtered out so the warnings stay focused on real problems. Run `pm doctor --fix` to address anything reported.
+
 ### Close a project
 
 ```sh

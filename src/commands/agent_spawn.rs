@@ -152,6 +152,30 @@ fn spawn_claude_session_with_config(
     Ok(window_target)
 }
 
+/// Outcome of an [`agent_spawn`] call. Lets callers tell whether work was
+/// actually done or the call was a no-op against an already-running agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpawnOutcome {
+    /// Agent's window already existed; no spawn was performed.
+    AlreadyActive,
+    /// New tmux window was created (fresh agent or registry entry without
+    /// a Claude session id).
+    Spawned,
+    /// Existing registry entry resumed via `claude --resume <id>`.
+    Resumed,
+}
+
+impl SpawnOutcome {
+    /// Returns true if a new window was created (Spawned or Resumed) rather
+    /// than this being a no-op against an already-running agent.
+    pub fn is_new_window(self) -> bool {
+        match self {
+            SpawnOutcome::Spawned | SpawnOutcome::Resumed => true,
+            SpawnOutcome::AlreadyActive => false,
+        }
+    }
+}
+
 /// Spawn a named agent in a tmux window within the feature session.
 /// Handles three cases: new agent, already-active agent, and dead-but-resumable agent.
 /// If `edit` is true, `--permission-mode acceptEdits` is passed.
@@ -163,7 +187,10 @@ fn spawn_claude_session_with_config(
 /// The same path serves "spawn fresh with a brief", "spawn and nudge a
 /// dead agent", and "send a follow-up to an active agent".
 ///
-/// Returns a status message.
+/// Returns a `(SpawnOutcome, status_message)` pair. The outcome distinguishes
+/// no-op idempotent calls (`AlreadyActive`) from ones that actually created a
+/// new tmux window (`Spawned`/`Resumed`) so callers like `agent_spawn_all`
+/// can report accurate counts.
 pub fn agent_spawn(
     project_root: &Path,
     feature: &str,
@@ -171,7 +198,7 @@ pub fn agent_spawn(
     context: Option<&str>,
     edit: bool,
     tmux_server: Option<&str>,
-) -> Result<String> {
+) -> Result<(SpawnOutcome, String)> {
     crate::messages::validate_name(agent_name, "agent")?;
 
     let pm_dir = paths::pm_dir(project_root);
@@ -216,40 +243,51 @@ pub fn agent_spawn(
 
         // If the window still exists, the agent is already running.
         if let Some(target) = tmux::find_window(tmux_server, &session_name, agent_name)? {
-            if context.is_some() {
-                return Ok(format!(
-                    "Agent '{agent_name}' already active in {target} — sent context as message"
-                ));
+            let msg = if context.is_some() {
+                format!("Agent '{agent_name}' already active in {target} — sent context as message")
             } else {
-                return Ok(format!("Agent '{agent_name}' already active in {target}"));
-            }
+                format!("Agent '{agent_name}' already active in {target}")
+            };
+            return Ok((SpawnOutcome::AlreadyActive, msg));
         }
 
         // Agent existed but window is gone — respawn.
         let window_target = spawn(None, resume_id.as_deref())?;
 
-        let msg = if resume_id.is_some() {
-            format!("Resumed agent '{agent_name}' in {window_target}")
+        let (outcome, msg) = if resume_id.is_some() {
+            (
+                SpawnOutcome::Resumed,
+                format!("Resumed agent '{agent_name}' in {window_target}"),
+            )
         } else {
-            format!("Spawned agent '{agent_name}' in {window_target}")
+            (
+                SpawnOutcome::Spawned,
+                format!("Spawned agent '{agent_name}' in {window_target}"),
+            )
         };
-        return Ok(msg);
+        return Ok((outcome, msg));
     }
 
     // New agent, no positional prompt — the Stop hook blocks until any
     // queued context is available, then tells the agent to read it.
     let window_target = spawn(None, None)?;
 
-    Ok(format!("Spawned agent '{agent_name}' in {window_target}"))
+    Ok((
+        SpawnOutcome::Spawned,
+        format!("Spawned agent '{agent_name}' in {window_target}"),
+    ))
 }
 
 /// Result of `agent_spawn_all`, providing structured counts alongside messages.
 pub struct SpawnAllResult {
-    /// Human-readable success messages (one per spawned agent).
+    /// Human-readable success messages (one per registered agent processed
+    /// without error — includes both newly-spawned and already-active agents).
     pub successes: Vec<String>,
     /// Human-readable error messages (one per failed agent).
     pub errors: Vec<String>,
-    /// Number of agents successfully spawned.
+    /// Number of agents that actually had a new tmux window created
+    /// ([`SpawnOutcome::Spawned`] or [`SpawnOutcome::Resumed`]). Excludes
+    /// already-active no-ops, so idempotent re-runs report `0`.
     pub spawned_count: usize,
 }
 
@@ -281,14 +319,19 @@ pub fn agent_spawn_all(
 
     let mut successes = Vec::new();
     let mut errors = Vec::new();
+    let mut spawned_count = 0;
     for name in &agent_names {
         match agent_spawn(project_root, feature, name, None, false, tmux_server) {
-            Ok(msg) => successes.push(msg),
+            Ok((outcome, msg)) => {
+                if outcome.is_new_window() {
+                    spawned_count += 1;
+                }
+                successes.push(msg);
+            }
             Err(e) => errors.push(format!("Failed to spawn '{name}': {e}")),
         }
     }
 
-    let spawned_count = successes.len();
     Ok(SpawnAllResult {
         successes,
         errors,
@@ -355,8 +398,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let (session_name, feature) = setup_project(dir.path(), &server);
 
-        let msg =
+        let (outcome, msg) =
             agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
+        assert_eq!(outcome, SpawnOutcome::Spawned);
         assert!(msg.contains("Spawned agent 'reviewer'"));
 
         // Verify window was created
@@ -389,8 +433,10 @@ mod tests {
 
         setup_active_agent(&server, dir.path(), &session_name, &feature, "reviewer");
 
-        let msg =
+        let (outcome, msg) =
             agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
+        assert_eq!(outcome, SpawnOutcome::AlreadyActive);
+        assert!(!outcome.is_new_window());
         assert!(msg.contains("already active"));
     }
 
@@ -402,7 +448,7 @@ mod tests {
 
         setup_active_agent(&server, dir.path(), &session_name, &feature, "reviewer");
 
-        let msg = agent_spawn(
+        let (outcome, msg) = agent_spawn(
             dir.path(),
             &feature,
             "reviewer",
@@ -411,6 +457,7 @@ mod tests {
             server.name(),
         )
         .unwrap();
+        assert_eq!(outcome, SpawnOutcome::AlreadyActive);
         assert!(msg.contains("sent context as message"));
 
         // Verify the message was delivered
@@ -480,6 +527,37 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn spawn_all_idempotent_reports_zero_spawned() {
+        // Regression for "pm open says Respawned N agents on every run".
+        // When agents are already active, spawn_all should report
+        // spawned_count == 0 even though every call succeeded.
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (_session_name, feature) = setup_project(dir.path(), &server);
+
+        agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
+        agent_spawn(dir.path(), &feature, "tester", None, false, server.name()).unwrap();
+
+        // Call spawn_all without killing windows: every agent is already active.
+        let result = agent_spawn_all(dir.path(), &feature, server.name()).unwrap();
+
+        assert_eq!(
+            result.spawned_count, 0,
+            "no new windows should have been created; got spawned_count={}",
+            result.spawned_count
+        );
+        // We still get success messages for every agent (they just say "already active").
+        assert_eq!(result.successes.len(), 2);
+        assert!(
+            result
+                .successes
+                .iter()
+                .all(|s| s.contains("already active"))
+        );
+        assert!(result.errors.is_empty());
     }
 
     #[test]
@@ -557,8 +635,10 @@ mod tests {
         tmux::create_session(server.name(), &session_name, &worktree).unwrap();
 
         // Re-spawn should resume
-        let msg =
+        let (outcome, msg) =
             agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
+        assert_eq!(outcome, SpawnOutcome::Resumed);
+        assert!(outcome.is_new_window());
         assert!(msg.contains("Resumed agent 'reviewer'"));
     }
 
