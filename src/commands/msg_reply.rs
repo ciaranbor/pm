@@ -231,4 +231,63 @@ mod tests {
         assert!(result.contains("Message 001 sent to 'reviewer'"));
         assert!(!result.contains("@"));
     }
+
+    #[test]
+    fn reply_cross_project() {
+        let dir = tempdir().unwrap();
+        let root = setup_project_no_tmux(dir.path());
+
+        // Set up project config so we have a project name
+        let pm_dir = root.join(".pm");
+        let config = ProjectConfig {
+            project: ProjectInfo {
+                name: "myapp".to_string(),
+                max_features: None,
+            },
+            setup: Default::default(),
+            github: Default::default(),
+            agents: Default::default(),
+        };
+        config.save(&pm_dir).unwrap();
+
+        // Set up a "source project" in a separate temp dir
+        let source_dir = tempdir().unwrap();
+        let source_root = source_dir.path().to_path_buf();
+        std::fs::create_dir_all(source_root.join(".pm/messages")).unwrap();
+
+        // Register the source project in global projects dir
+        let projects_dir = tempdir().unwrap();
+        let entry = crate::state::project::ProjectEntry {
+            root: source_root.to_str().unwrap().to_string(),
+            main_branch: "main".to_string(),
+            repo_url: None,
+            state_remote: None,
+        };
+        entry.save(projects_dir.path(), "source-proj").unwrap();
+
+        // Simulate receiving a cross-project message
+        let messages_dir = paths::messages_dir(&root);
+        messages::send_full(
+            &messages_dir,
+            "login",
+            "implementer",
+            "reviewer",
+            "cross-project request",
+            Some("main"),
+            Some("source-proj"),
+        )
+        .unwrap();
+
+        // Read it (writes .last_read with sender_project)
+        crate::commands::agent_read::agent_read(&root, "login", "implementer", None, None).unwrap();
+
+        // Verify .last_read has cross-project info
+        let lr = messages::load_last_read(&messages_dir, "login", "implementer")
+            .unwrap()
+            .unwrap();
+        assert_eq!(lr.sender, "reviewer");
+        assert_eq!(lr.sender_scope.as_deref(), Some("main"));
+        assert_eq!(lr.sender_project.as_deref(), Some("source-proj"));
+        assert_eq!(lr.index, 1);
+    }
 }

@@ -355,6 +355,7 @@ pm msg send reviewer <<'EOF'                 # multi-line body via stdin heredoc
 Details here.
 EOF
 pm msg send reviewer "msg" --as-agent impl   # send as a specific identity
+pm msg send impl@main "note"                 # shorthand for --scope main
 pm msg send impl "note" --scope main         # send to an agent in a different scope
 pm msg send impl "note" --upstream           # send to the parent scope (base branch)
 
