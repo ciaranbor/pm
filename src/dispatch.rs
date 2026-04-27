@@ -87,6 +87,19 @@ fn read_message_body(message: Option<String>) -> pm::error::Result<String> {
     }
 }
 
+/// Parse `agent@scope` shorthand. Returns `(agent, Some(scope))` if `@` is
+/// present, otherwise `(original, None)`.
+fn parse_agent_at_scope(input: &str) -> (&str, Option<&str>) {
+    if let Some(pos) = input.find('@') {
+        let agent = &input[..pos];
+        let scope = &input[pos + 1..];
+        if !agent.is_empty() && !scope.is_empty() {
+            return (agent, Some(scope));
+        }
+    }
+    (input, None)
+}
+
 pub fn run(cli: Cli) -> pm::error::Result<()> {
     match cli.command {
         Commands::Init { path, git } => {
@@ -461,10 +474,24 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     let message = read_message_body(message)?;
                     let sender = as_agent.unwrap_or_else(pm::messages::default_user_name);
 
+                    // Parse agent@scope shorthand
+                    let (recipient, shorthand_scope) = parse_agent_at_scope(&agent);
+                    if shorthand_scope.is_some() && scope.is_some() {
+                        return Err(PmError::Messaging(
+                            "Cannot use both agent@scope shorthand and --scope flag".to_string(),
+                        ));
+                    }
+                    if shorthand_scope.is_some() && upstream {
+                        return Err(PmError::Messaging(
+                            "Cannot use both agent@scope shorthand and --upstream flag".to_string(),
+                        ));
+                    }
+                    let effective_scope = shorthand_scope.map(|s| s.to_string()).or(scope);
+
                     if let Some(ref proj_name) = target_project {
                         // Cross-project delivery: resolve target project root,
                         // deliver message, but do NOT auto-spawn.
-                        let target_scope = scope.as_deref().unwrap_or("main");
+                        let target_scope = effective_scope.as_deref().unwrap_or("main");
                         let pm_dir = paths::pm_dir(&project_root);
                         let sender_project_config =
                             pm::state::project::ProjectConfig::load(&pm_dir)?;
@@ -475,7 +502,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                                 sender_scope: &feature,
                                 sender_project: sender_project_name,
                                 target_scope,
-                                recipient: &agent,
+                                recipient,
                                 sender: &sender,
                                 body: &message,
                             },
@@ -488,13 +515,13 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                                 &feature,
                             )?)
                         } else {
-                            scope
+                            effective_scope
                         };
                         let line = commands::agent_send::agent_send(
                             &project_root,
                             &feature,
                             target_scope.as_deref(),
-                            &agent,
+                            recipient,
                             &sender,
                             &message,
                             None,
@@ -987,5 +1014,44 @@ mod tests {
 
         let result = resolve_scope_with_flag(root, Some("bogus".to_string()));
         assert!(result.is_err());
+    }
+
+    // --- parse_agent_at_scope ---
+
+    #[test]
+    fn parse_agent_at_scope_simple() {
+        let (agent, scope) = parse_agent_at_scope("reviewer@main");
+        assert_eq!(agent, "reviewer");
+        assert_eq!(scope, Some("main"));
+    }
+
+    #[test]
+    fn parse_agent_at_scope_no_at() {
+        let (agent, scope) = parse_agent_at_scope("reviewer");
+        assert_eq!(agent, "reviewer");
+        assert_eq!(scope, None);
+    }
+
+    #[test]
+    fn parse_agent_at_scope_empty_scope_ignored() {
+        // "reviewer@" should not parse as shorthand
+        let (agent, scope) = parse_agent_at_scope("reviewer@");
+        assert_eq!(agent, "reviewer@");
+        assert_eq!(scope, None);
+    }
+
+    #[test]
+    fn parse_agent_at_scope_empty_agent_ignored() {
+        // "@main" should not parse as shorthand
+        let (agent, scope) = parse_agent_at_scope("@main");
+        assert_eq!(agent, "@main");
+        assert_eq!(scope, None);
+    }
+
+    #[test]
+    fn parse_agent_at_scope_feature_name() {
+        let (agent, scope) = parse_agent_at_scope("implementer@login-v2");
+        assert_eq!(agent, "implementer");
+        assert_eq!(scope, Some("login-v2"));
     }
 }

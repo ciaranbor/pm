@@ -161,7 +161,7 @@ fn format_message(m: &Message, current_scope: Option<&str>) -> Vec<String> {
         None => m.sender.clone(),
     };
     if let Some(project) = &m.meta.sender_project {
-        sender_display = format!("{sender_display} (project: {project})");
+        sender_display = format!("{sender_display} ({project})");
     }
 
     let is_cross_scope = match (&m.meta.sender_scope, current_scope) {
@@ -566,7 +566,7 @@ mod tests {
         .unwrap();
 
         let lines = agent_read(&root, "main", "reviewer", None, None).unwrap();
-        assert!(lines[0].contains("implementer@login (project: other-app)"));
+        assert!(lines[0].contains("implementer@login (other-app)"));
         assert_eq!(lines[1], "cross-project msg");
     }
 
