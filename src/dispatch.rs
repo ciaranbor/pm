@@ -87,6 +87,31 @@ fn read_message_body(message: Option<String>) -> pm::error::Result<String> {
     }
 }
 
+/// Print the per-agent results of a multi-name agent op (stop, delete,
+/// restart), aggregating errors. Continues on error: each result is
+/// printed individually and a single `PmError::Agent` is returned only
+/// if any failed, so partial successes are still observable on stdout.
+fn report_agent_op_results(
+    results: Vec<pm::error::Result<String>>,
+    op_label: &str,
+) -> pm::error::Result<()> {
+    let mut had_error = false;
+    for result in results {
+        match result {
+            Ok(msg) => println!("{msg}"),
+            Err(e) => {
+                eprintln!("error: {e}");
+                had_error = true;
+            }
+        }
+    }
+    if had_error {
+        Err(PmError::Agent(format!("some agents failed to {op_label}")))
+    } else {
+        Ok(())
+    }
+}
+
 /// Parse `agent@scope` shorthand. Returns `(agent, Some(scope))` if `@` is
 /// present, otherwise `(original, None)`.
 fn parse_agent_at_scope(input: &str) -> (&str, Option<&str>) {
@@ -383,21 +408,17 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         &names,
                         None,
                     );
-                    let mut had_error = false;
-                    for result in results {
-                        match result {
-                            Ok(msg) => println!("{msg}"),
-                            Err(e) => {
-                                eprintln!("error: {e}");
-                                had_error = true;
-                            }
-                        }
-                    }
-                    if had_error {
-                        Err(PmError::Agent("some agents failed to stop".to_string()))
-                    } else {
-                        Ok(())
-                    }
+                    report_agent_op_results(results, "stop")
+                }
+                AgentCommands::Delete { names, scope } => {
+                    let target_scope = scope.unwrap_or(feature);
+                    let results = commands::agent_delete::agent_delete_many(
+                        &project_root,
+                        &target_scope,
+                        &names,
+                        None,
+                    );
+                    report_agent_op_results(results, "delete")
                 }
                 AgentCommands::Restart { names, scope } => {
                     let target_scope = scope.unwrap_or(feature);
@@ -407,21 +428,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         &names,
                         None,
                     );
-                    let mut had_error = false;
-                    for result in results {
-                        match result {
-                            Ok(msg) => println!("{msg}"),
-                            Err(e) => {
-                                eprintln!("error: {e}");
-                                had_error = true;
-                            }
-                        }
-                    }
-                    if had_error {
-                        Err(PmError::Agent("some agents failed to restart".to_string()))
-                    } else {
-                        Ok(())
-                    }
+                    report_agent_op_results(results, "restart")
                 }
                 AgentCommands::List { active } => {
                     let lines = commands::agent_list::agent_list(&project_root, &feature, active)?;

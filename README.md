@@ -331,6 +331,10 @@ pm agent stop reviewer                       # stop an agent (kill window, mark 
 pm agent stop reviewer tester                # stop multiple agents at once
 pm agent stop reviewer --scope other-feat    # stop an agent in a different scope
 
+pm agent delete reviewer-2                   # delete an agent (kill window, remove registry entry)
+pm agent delete reviewer-2 tester            # delete multiple agents at once
+pm agent delete reviewer-2 --scope other     # delete an agent in a different scope
+
 pm agent restart reviewer                    # restart an agent (stop then respawn, preserving session)
 pm agent restart reviewer implementer        # restart multiple agents
 

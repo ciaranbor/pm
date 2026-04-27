@@ -318,6 +318,15 @@ pub enum AgentCommands {
         #[arg(long)]
         scope: Option<String>,
     },
+    /// Delete one or more agents (kill window and remove registry entry entirely; cannot be respawned)
+    Delete {
+        /// Agent name(s)
+        #[arg(required = true)]
+        names: Vec<String>,
+        /// Target scope (feature name or "main"; defaults to current scope)
+        #[arg(long)]
+        scope: Option<String>,
+    },
     /// Restart one or more agents (stop then respawn, preserving active flag and session)
     Restart {
         /// Agent name(s)
