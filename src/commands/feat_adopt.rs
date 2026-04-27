@@ -70,6 +70,11 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
     // before the state write keeps the on-disk state honest: we never leave a
     // stale Initializing entry just because the branch was already checked
     // out elsewhere.
+    //
+    // Note: the .bak.<timestamp> backup is intentionally NOT restored on
+    // rollback (see the rollback block below). Restoring would require
+    // unwinding the rename plus re-registering with `git worktree add`, and
+    // the user can recover the backup manually if needed.
     if let Some(existing_wt) = git::find_worktree_for_branch(&main_worktree, branch)? {
         if params.from.is_some() {
             if existing_wt.exists() {
@@ -106,8 +111,11 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
 
     // Steps 2+: Create resources, rolling back on failure.
     //
-    // Invariant: `branch` is user-owned — it existed before feat_adopt ran —
-    // so rollback must NOT delete it. We pass `delete_branch: false` below.
+    // Differs from `feat_new`'s rollback in exactly one way: the branch is
+    // user-owned (it existed before feat_adopt ran), so rollback must NOT
+    // delete it. We pass `delete_branch: false` below; everything else
+    // (worktree, state, agent registry, message queue, tmux session) is
+    // cleaned up identically to feat_new via `feat_common::rollback_creation`.
     let worktree_path = params.project_root.join(&feature_name);
     let session_name = tmux::session_name(project_name, &feature_name);
     let hook_path = params.project_root.join(hooks::POST_CREATE_PATH);
@@ -638,6 +646,66 @@ mod tests {
         assert!(
             matches!(result.unwrap_err(), PmError::WorktreeConflict { .. }),
             "expected WorktreeConflict error"
+        );
+    }
+
+    #[test]
+    fn feat_adopt_rollback_preserves_backed_up_worktree() {
+        // When --from is supplied and the branch already has a worktree,
+        // feat_adopt renames the old worktree to .bak.<timestamp> *before*
+        // entering the rollback closure. If a later step fails, the rollback
+        // must clean up the new worktree but leave the .bak backup
+        // untouched so the user can recover it manually.
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, project_name) = server.setup_project(dir.path());
+        create_branch(&project_path, "login");
+
+        // Pre-create an existing worktree for the branch (will be backed up).
+        let old_worktree = dir.path().join("old-checkout");
+        let main_wt = paths::main_worktree(&project_path);
+        git::add_worktree(&main_wt, &old_worktree, "login").unwrap();
+        assert!(old_worktree.exists());
+
+        // Force a failure in the rollback closure: pre-create a tmux session
+        // with the name feat_adopt will try to use, so create_session fails.
+        tmux::create_session(
+            server.name(),
+            &tmux::session_name(&project_name, "login"),
+            dir.path(),
+        )
+        .unwrap();
+
+        let result = feat_adopt(&FeatAdoptParams {
+            from: Some(old_worktree.as_path()),
+            ..default_adopt_params(&project_path, "login", server.name())
+        });
+        assert!(result.is_err());
+
+        // State and the new worktree should be cleaned up.
+        let features_dir = paths::features_dir(&project_path);
+        assert!(!FeatureState::exists(&features_dir, "login"));
+        assert!(!project_path.join("login").exists());
+
+        // The user-owned branch must be preserved.
+        assert!(git::branch_exists(&main_wt, "login").unwrap());
+
+        // The .bak backup of the original worktree must NOT have been
+        // restored or deleted — it should still be sitting on disk for the
+        // user to recover.
+        let backups: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("old-checkout.bak.")
+            })
+            .collect();
+        assert_eq!(
+            backups.len(),
+            1,
+            "rollback should preserve the .bak backup for manual recovery"
         );
     }
 
