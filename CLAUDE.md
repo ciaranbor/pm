@@ -27,6 +27,7 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 - `src/commands/close.rs` — `pm close` kills all tmux sessions for a project without deleting state (counterpart to `pm open`)
 - `src/commands/hooks_install.rs` — installs the pm Stop hook into `main/.claude/settings.json`; see below
 - `src/commands/agent_stop.rs` — `pm agent stop` (kill window, set `active = false`); accepts multiple names
+- `src/commands/agent_delete.rs` — `pm agent delete` (kill window, remove registry entry entirely, wipe agent inbox via `messages::delete_inbox`); accepts multiple names. Terminal counterpart to `agent stop`: gone for good, no respawn, no inherited cursors/messages
 - `src/commands/agent_restart.rs` — `pm agent restart` (kill window then respawn, preserving `active = true` and session for `--resume`); accepts multiple names
 - `src/commands/agent_check.rs` — assembles checklists from agent definition frontmatter + project-specific files, sends as message
 - `src/commands/agent_fork.rs` — `pm agent fork <source> <new-name>` spawns a new agent that starts with a copy of the source's conversation history. Implemented via Claude Code's built-in `claude --resume <source.session_id> --fork-session`, which loads the source's transcript but assigns a fresh session id, leaving the source's session file untouched. `SpawnClaudeParams` carries a `fork_session: bool` so other callers default to `false`.

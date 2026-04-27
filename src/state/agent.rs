@@ -86,6 +86,12 @@ impl AgentRegistry {
         self.agents.keys().map(|s| s.as_str()).collect()
     }
 
+    /// Remove an agent entry by name. Returns the removed entry, or `None`
+    /// if no entry existed for that name.
+    pub fn remove(&mut self, name: &str) -> Option<AgentEntry> {
+        self.agents.remove(name)
+    }
+
     /// Delete the agent registry file for a feature. No-op if missing.
     pub fn delete(agents_dir: &Path, feature: &str) -> Result<()> {
         let path = agents_dir.join(format!("{feature}.toml"));
@@ -170,6 +176,40 @@ mod tests {
 
         let entry = registry.get("ciaranorourke").unwrap();
         assert_eq!(entry.agent_type, AgentType::User);
+    }
+
+    #[test]
+    fn registry_remove_returns_entry_and_clears() {
+        let mut registry = AgentRegistry::default();
+        registry.register("reviewer", make_agent("abc"));
+        assert!(registry.get("reviewer").is_some());
+
+        let removed = registry.remove("reviewer");
+        assert!(removed.is_some());
+        assert!(registry.get("reviewer").is_none());
+
+        // Removing again returns None
+        assert!(registry.remove("reviewer").is_none());
+    }
+
+    #[test]
+    fn registry_remove_persists_to_disk() {
+        let dir = tempdir().unwrap();
+        let agents_dir = dir.path().join("agents");
+
+        let mut registry = AgentRegistry::default();
+        registry.register("reviewer", make_agent("abc"));
+        registry.register("implementer", make_agent("def"));
+        registry.save(&agents_dir, "login").unwrap();
+
+        // Round-trip: load → remove → save → load
+        let mut loaded = AgentRegistry::load(&agents_dir, "login").unwrap();
+        assert!(loaded.remove("reviewer").is_some());
+        loaded.save(&agents_dir, "login").unwrap();
+
+        let reloaded = AgentRegistry::load(&agents_dir, "login").unwrap();
+        assert!(reloaded.get("reviewer").is_none());
+        assert!(reloaded.get("implementer").is_some());
     }
 
     #[test]

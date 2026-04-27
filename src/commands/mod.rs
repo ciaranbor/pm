@@ -1,4 +1,5 @@
 pub mod agent_check;
+pub mod agent_delete;
 pub mod agent_fork;
 pub mod agent_list;
 pub mod agent_read;
