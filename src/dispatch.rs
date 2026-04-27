@@ -457,6 +457,17 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     }
                     Ok(())
                 }
+                AgentCommands::Fork { source, name } => {
+                    let msg = commands::agent_fork::agent_fork(
+                        &project_root,
+                        &feature,
+                        &source,
+                        &name,
+                        None,
+                    )?;
+                    println!("{msg}");
+                    Ok(())
+                }
             }
         }
         Commands::Msg(msg_cmd) => {

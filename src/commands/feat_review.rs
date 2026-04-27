@@ -115,6 +115,7 @@ fn setup_review(
             prompt: None,
             edit: false, // reviews are read-only
             resume_session: None,
+            fork_session: false,
             reuse_window: Some(&reuse_target),
             tmux_server,
         })?;
