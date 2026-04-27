@@ -23,7 +23,7 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 - `src/state/agent.rs` — per-feature agent registry (TOML state for spawned agents). `AgentEntry` has an `active: bool` flag that is the single source of truth for agent lifecycle state: set `true` by `agent spawn`, set `false` by `agent stop`, read by `agent_spawn_all`/`list`/`check`/`send` to determine whether an agent should be running.
 - `src/commands/` — one module per command group (project, feat, claude, agent, msg, hooks_install, etc.). `feat_pr.rs` handles `pm feat pr create`, `feat_pr_edit.rs` handles `pm feat pr edit`.
 - `src/commands/init.rs` — `pm init` with optional `--git <url>` for cloning; auto-detects default branch from remote
-- `src/commands/open.rs` — reopens project sessions; after recreating missing tmux sessions, respawns agents with `active = true` via `agent_spawn_all`
+- `src/commands/open.rs` — reopens project sessions; before recreating, runs `doctor::diagnose` (with PR-state checks disabled to avoid network calls) and warns about non-recoverable drift; after recreating missing tmux sessions, respawns agents with `active = true` via `agent_spawn_all`
 - `src/commands/close.rs` — `pm close` kills all tmux sessions for a project without deleting state (counterpart to `pm open`)
 - `src/commands/hooks_install.rs` — installs the pm Stop hook into `main/.claude/settings.json`; see below
 - `src/commands/agent_stop.rs` — `pm agent stop` (kill window, set `active = false`); accepts multiple names

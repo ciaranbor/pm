@@ -173,7 +173,7 @@ pub fn agent_send(
 
     // Auto-spawn the agent if it's not currently active.
     if !is_active {
-        let spawn_msg = super::agent_spawn::agent_spawn(
+        let (_, spawn_msg) = super::agent_spawn::agent_spawn(
             project_root,
             feature,
             recipient,

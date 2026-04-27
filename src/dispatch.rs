@@ -354,7 +354,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     edit,
                 } => {
                     if let Some(agent_name) = name {
-                        let msg = commands::agent_spawn::agent_spawn(
+                        let (_, msg) = commands::agent_spawn::agent_spawn(
                             &project_root,
                             &feature,
                             &agent_name,

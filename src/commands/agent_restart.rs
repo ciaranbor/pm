@@ -43,7 +43,7 @@ pub fn agent_restart(
 
     // Respawn via agent_spawn (which will see the registry entry, find no window, and respawn)
     // agent_spawn sets active = true on register, preserving the flag.
-    let spawn_msg = super::agent_spawn::agent_spawn(
+    let (_outcome, spawn_msg) = super::agent_spawn::agent_spawn(
         project_root,
         feature,
         agent_name,

@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use crate::commands::agent_spawn;
+use crate::commands::doctor::{self, IssueKind};
 use crate::error::{PmError, Result};
 use crate::hooks;
 use crate::state::agent::{AgentRegistry, AgentType};
@@ -15,6 +16,77 @@ pub struct OpenResult {
     pub sessions_restored: usize,
     /// Number of agents that were successfully respawned.
     pub agents_respawned: usize,
+}
+
+/// Returns true for issue kinds that `pm open` is about to fix automatically
+/// (recreating tmux sessions and respawning agent windows). These are filtered
+/// out of the pre-open warnings to avoid noisy output for normal restart flows.
+///
+/// Uses an exhaustive `match` (no `_` wildcard) so adding a new [`IssueKind`]
+/// variant becomes a compile error, forcing the author to classify it as
+/// open-recoverable or not.
+fn is_open_recoverable(kind: IssueKind) -> bool {
+    match kind {
+        IssueKind::TmuxSessionMissing | IssueKind::AgentWindowMissing => true,
+        IssueKind::OrphanedState
+        | IssueKind::WorktreeDirMissing
+        | IssueKind::DirNotGitWorktree
+        | IssueKind::GitWorktreeNoDir
+        | IssueKind::BranchMissing
+        | IssueKind::StuckInitializing
+        | IssueKind::PrMerged
+        | IssueKind::PrClosed
+        | IssueKind::PrCheckFailed
+        | IssueKind::HooksNotInstalled => false,
+    }
+}
+
+/// Collect drift warnings to print before opening: doctor findings minus the
+/// issue kinds that open will auto-restore.
+///
+/// PR drift checks are skipped (`check_pr_state = false`) to avoid making
+/// `gh pr view` network calls on every `pm open` — that's a `pm doctor` job.
+///
+/// Returns lines of the form `"  <scope> — <message>"`.
+fn collect_drift_warnings(project_root: &Path, tmux_server: Option<&str>) -> Result<Vec<String>> {
+    let findings = doctor::diagnose(project_root, tmux_server, false)?;
+    let mut warnings: Vec<String> = Vec::new();
+    for finding in &findings {
+        for issue in finding.issues() {
+            if is_open_recoverable(issue.kind()) {
+                continue;
+            }
+            warnings.push(format!("  {} — {}", finding.feature(), issue.message()));
+        }
+    }
+    Ok(warnings)
+}
+
+/// Run doctor's diagnostic checks and print warnings for any issues that
+/// `pm open` cannot auto-restore. Used to surface state drift (orphaned
+/// features, missing branches, PR drift, missing hooks, etc.) before
+/// recreating tmux sessions.
+///
+/// Failures during diagnosis are themselves printed as warnings rather than
+/// aborting open — diagnostics are best-effort, recovery is the priority.
+fn warn_about_drift(project_root: &Path, tmux_server: Option<&str>) {
+    let warnings = match collect_drift_warnings(project_root, tmux_server) {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("warning: pre-open diagnostics failed: {e}");
+            return;
+        }
+    };
+
+    if warnings.is_empty() {
+        return;
+    }
+
+    eprintln!("warning: pm doctor detected state drift:");
+    for line in &warnings {
+        eprintln!("{line}");
+    }
+    eprintln!("(run `pm doctor --fix` to address)");
 }
 
 /// Respawn agents for a given scope.
@@ -62,6 +134,12 @@ fn respawn_agents_for_scope(
 /// any active features that are missing their sessions. Existing sessions are
 /// left untouched (resurrect-aware).
 ///
+/// Before doing any recreation, runs `pm doctor`'s diagnostic checks (without
+/// fixing) and prints warnings to stderr for any drift that open cannot
+/// auto-restore (orphaned state, missing branches, PR drift, missing hooks,
+/// stuck-initializing features). Issues that open *will* fix automatically
+/// (missing tmux sessions, dead agent windows) are filtered out.
+///
 /// After session creation, respawns agents marked `active = true` via
 /// `agent_spawn_all`. Agents whose windows already exist are skipped.
 ///
@@ -79,6 +157,11 @@ pub fn open(project_root: &Path, tmux_server: Option<&str>) -> Result<OpenResult
     let pm_dir = paths::pm_dir(project_root);
     let config = ProjectConfig::load(&pm_dir)?;
     let project_name = &config.project.name;
+
+    // Run doctor's diagnostic checks and warn about state drift before doing
+    // any restoration. This surfaces issues like orphaned features or missing
+    // branches that `pm open` cannot fix on its own.
+    warn_about_drift(project_root, tmux_server);
 
     // Backfill hook scripts for projects created before lifecycle hooks existed
     hooks::bootstrap(project_root)?;
@@ -168,8 +251,132 @@ pub fn open(project_root: &Path, tmux_server: Option<&str>) -> Result<OpenResult
 mod tests {
     use super::*;
     use crate::commands::{feat_new, init};
+    use crate::git;
+    use crate::state::feature::FeatureStatus;
     use crate::testing::TestServer;
     use tempfile::tempdir;
+
+    #[test]
+    fn is_open_recoverable_filters_tmux_and_agents() {
+        // open() recreates these on its own — they shouldn't appear as warnings
+        assert!(is_open_recoverable(IssueKind::TmuxSessionMissing));
+        assert!(is_open_recoverable(IssueKind::AgentWindowMissing));
+        // Everything else needs human (or `pm doctor --fix`) attention
+        assert!(!is_open_recoverable(IssueKind::OrphanedState));
+        assert!(!is_open_recoverable(IssueKind::WorktreeDirMissing));
+        assert!(!is_open_recoverable(IssueKind::DirNotGitWorktree));
+        assert!(!is_open_recoverable(IssueKind::GitWorktreeNoDir));
+        assert!(!is_open_recoverable(IssueKind::BranchMissing));
+        assert!(!is_open_recoverable(IssueKind::StuckInitializing));
+        assert!(!is_open_recoverable(IssueKind::PrMerged));
+        assert!(!is_open_recoverable(IssueKind::PrClosed));
+        assert!(!is_open_recoverable(IssueKind::PrCheckFailed));
+        assert!(!is_open_recoverable(IssueKind::HooksNotInstalled));
+    }
+
+    #[test]
+    fn drift_warnings_skip_missing_tmux_session() {
+        // A killed tmux session is something open will recreate itself, so it
+        // shouldn't appear as a drift warning.
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+
+        tmux::kill_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
+
+        let warnings = collect_drift_warnings(&project_path, server.name()).unwrap();
+        assert!(
+            !warnings.iter().any(|w| w.contains("tmux session")),
+            "tmux session warning should be filtered out, got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn drift_warnings_report_orphaned_state() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+
+        // Fully orphan the feature: remove worktree, branch, and session.
+        let main_repo = paths::main_worktree(&project_path);
+        git::remove_worktree_force(&main_repo, &project_path.join("login")).unwrap();
+        git::delete_branch(&main_repo, "login").unwrap();
+        tmux::kill_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
+
+        let warnings = collect_drift_warnings(&project_path, server.name()).unwrap();
+        assert!(
+            warnings.iter().any(|w| w.contains("orphaned state file")),
+            "expected orphaned-state warning, got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn drift_warnings_report_stuck_initializing() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+
+        let features_dir = paths::features_dir(&project_path);
+        let mut state = FeatureState::load(&features_dir, "login").unwrap();
+        state.status = FeatureStatus::Initializing;
+        state.save(&features_dir, "login").unwrap();
+
+        let warnings = collect_drift_warnings(&project_path, server.name()).unwrap();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("stuck on 'initializing'")),
+            "expected stuck-initializing warning, got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn drift_warnings_empty_for_healthy_project() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+
+        let warnings = collect_drift_warnings(&project_path, server.name()).unwrap();
+        assert!(
+            warnings.is_empty(),
+            "healthy project should produce no warnings, got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn open_succeeds_with_orphaned_feature_state() {
+        // open should warn about drift but still complete — orphaned features
+        // don't block restoring the rest of the project.
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
+            &project_path,
+            "login",
+            server.name(),
+        ))
+        .unwrap();
+
+        // Orphan the feature, then kill the main session
+        let main_repo = paths::main_worktree(&project_path);
+        git::remove_worktree_force(&main_repo, &project_path.join("login")).unwrap();
+        git::delete_branch(&main_repo, "login").unwrap();
+        tmux::kill_session(server.name(), &tmux::session_name(&name, "login")).unwrap();
+        tmux::kill_session(server.name(), &tmux::session_name(&name, "main")).unwrap();
+
+        // open should still succeed; the orphaned feature is just warned about.
+        let result = open(&project_path, server.name()).unwrap();
+        assert!(
+            tmux::has_session(server.name(), &tmux::session_name(&name, "main")).unwrap(),
+            "main session should be restored despite drift warning"
+        );
+        // login session NOT recreated (no worktree present)
+        assert!(!tmux::has_session(server.name(), &tmux::session_name(&name, "login")).unwrap());
+        assert_eq!(result.sessions_restored, 1);
+    }
 
     #[test]
     fn open_creates_main_session_when_missing() {
@@ -676,6 +883,53 @@ mod tests {
             )
             .unwrap()
             .is_some()
+        );
+    }
+
+    #[test]
+    fn open_idempotent_reports_zero_agents_respawned() {
+        // Regression: a second `pm open` in a row was reporting
+        // "Respawned N agents" even though every agent was already alive.
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
+        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
+            &project_path,
+            "login",
+            server.name(),
+        ))
+        .unwrap();
+
+        // Spawn the agent fresh so its window actually exists.
+        let agents_dir = paths::agents_dir(&project_path);
+        let mut registry = AgentRegistry::default();
+        registry.register(
+            "reviewer",
+            crate::state::agent::AgentEntry {
+                agent_type: AgentType::Agent,
+                session_id: String::new(),
+                window_name: "reviewer".to_string(),
+                active: true,
+            },
+        );
+        registry.save(&agents_dir, "login").unwrap();
+
+        // First open: agent window doesn't exist yet → spawn count = 1
+        let first = open(&project_path, server.name()).unwrap();
+        assert_eq!(first.agents_respawned, 1);
+
+        // Second open: nothing to do, every agent is already running.
+        let second = open(&project_path, server.name()).unwrap();
+        assert_eq!(
+            second.sessions_restored, 0,
+            "no sessions should be created on idempotent re-run"
+        );
+        assert_eq!(
+            second.agents_respawned, 0,
+            "no agents should be respawned on idempotent re-run"
         );
     }
 }

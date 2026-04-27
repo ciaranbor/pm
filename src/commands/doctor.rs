@@ -9,10 +9,52 @@ use crate::state::paths;
 use crate::state::project::ProjectConfig;
 use crate::{gh, git, tmux};
 
+/// Categorisation of an issue for callers that want to filter findings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssueKind {
+    /// State file present but worktree directory and branch are gone.
+    OrphanedState,
+    /// Worktree directory missing on disk.
+    WorktreeDirMissing,
+    /// Directory exists but git doesn't know about it as a worktree.
+    DirNotGitWorktree,
+    /// Git lists the worktree but the directory doesn't exist on disk.
+    GitWorktreeNoDir,
+    /// Feature branch missing from git.
+    BranchMissing,
+    /// Tmux session for an active scope is missing.
+    TmuxSessionMissing,
+    /// Agent registered as active but its tmux window is gone.
+    AgentWindowMissing,
+    /// Feature status stuck on `initializing`.
+    StuckInitializing,
+    /// PR merged upstream but local status hasn't caught up.
+    PrMerged,
+    /// PR closed upstream but local status still active.
+    PrClosed,
+    /// `gh` lookup failed for a linked PR.
+    PrCheckFailed,
+    /// pm Stop hook not installed in main/.claude/settings.json.
+    HooksNotInstalled,
+}
+
 /// A single issue detected for a feature.
-struct Issue {
+pub struct Issue {
+    kind: IssueKind,
     message: String,
     fix: Fix,
+}
+
+impl Issue {
+    /// Category of the issue, for filtering.
+    pub fn kind(&self) -> IssueKind {
+        self.kind
+    }
+
+    /// Human-readable description of the issue.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
 }
 
 /// What --fix should do about this issue.
@@ -52,13 +94,25 @@ enum FixAction {
     RespawnAgent { agent_name: String },
 }
 
-/// Diagnostic finding for a single feature.
-struct Finding {
+/// Diagnostic finding for a single scope (a feature or `main`).
+pub struct Finding {
     feature: String,
     issues: Vec<Issue>,
 }
 
-/// Run a health check on all features in the project.
+impl Finding {
+    /// Name of the scope this finding pertains to (`main` or a feature name).
+    pub fn feature(&self) -> &str {
+        &self.feature
+    }
+
+    /// Issues detected for this scope.
+    pub fn issues(&self) -> &[Issue] {
+        &self.issues
+    }
+}
+
+/// Run all diagnostic checks without applying any fixes.
 ///
 /// For each feature, checks:
 /// 1. Worktree directory exists on disk
@@ -66,12 +120,24 @@ struct Finding {
 /// 3. Branch exists locally
 /// 4. Tmux session exists
 /// 5. Status stuck on "initializing"
-/// 6. If PR linked, check GH status and update state if merged/closed
+/// 6. If PR linked and `check_pr_state` is true, check GH status drift
 ///
-/// With `fix == true`, auto-resolves clear-cut issues and skips ambiguous ones.
+/// Also runs main-scope checks (Stop hook installed, main session present, main
+/// agent windows alive) when there is at least one feature, mirroring the
+/// existing `doctor` behaviour.
 ///
-/// Returns formatted diagnostic lines.
-pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Result<Vec<String>> {
+/// `check_pr_state` controls whether to make `gh pr view` network calls (one
+/// per feature with a linked PR). `pm doctor` passes `true`; latency-sensitive
+/// callers like the pre-open warning hook pass `false` to avoid round-trips
+/// on every session reopen.
+///
+/// Returns one [`Finding`] per scope that has issues (or per scope, including
+/// healthy ones — callers can filter by inspecting [`Finding::issues`]).
+pub fn diagnose(
+    project_root: &Path,
+    tmux_server: Option<&str>,
+    check_pr_state: bool,
+) -> Result<Vec<Finding>> {
     let features_dir = paths::features_dir(project_root);
     let pm_dir = paths::pm_dir(project_root);
     let config = ProjectConfig::load(&pm_dir)?;
@@ -79,7 +145,7 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
 
     let features = FeatureState::list(&features_dir)?;
     if features.is_empty() {
-        return Ok(vec!["No features to check".to_string()]);
+        return Ok(Vec::new());
     }
 
     let main_repo = paths::main_worktree(project_root);
@@ -92,12 +158,14 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
     let mut main_issues: Vec<Issue> = Vec::new();
     if !hooks_install::is_installed(project_root)? {
         main_issues.push(Issue {
+            kind: IssueKind::HooksNotInstalled,
             message: "pm hooks not fully installed (run `pm claude hooks install`)".to_string(),
             fix: Fix::Auto(FixAction::InstallStopHook),
         });
     }
     if !tmux::has_session(tmux_server, &main_session)? {
         main_issues.push(Issue {
+            kind: IssueKind::TmuxSessionMissing,
             message: format!("tmux session '{main_session}' missing (run `pm open` to fix)"),
             fix: Fix::Auto(FixAction::RecreateTmuxSession {
                 session_name: main_session.clone(),
@@ -114,6 +182,7 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
                 }
                 if tmux::find_window(tmux_server, &main_session, &entry.window_name)?.is_none() {
                     main_issues.push(Issue {
+                        kind: IssueKind::AgentWindowMissing,
                         message: format!(
                             "agent '{agent_name}' registered as active but window missing"
                         ),
@@ -157,6 +226,7 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
         // Report as a single issue instead of redundant individual checks.
         if !dir_exists && !branch_exists && state.status != FeatureStatus::Initializing {
             issues.push(Issue {
+                kind: IssueKind::OrphanedState,
                 message: "orphaned state file (no worktree, no branch)".to_string(),
                 fix: Fix::Auto(FixAction::RemoveState),
             });
@@ -181,24 +251,28 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
                 Fix::Skip
             };
             issues.push(Issue {
+                kind: IssueKind::WorktreeDirMissing,
                 message: "worktree directory missing from disk".to_string(),
                 fix,
             });
         }
         if dir_exists && !in_git_worktrees {
             issues.push(Issue {
+                kind: IssueKind::DirNotGitWorktree,
                 message: "directory exists but not registered as git worktree".to_string(),
                 fix: Fix::Skip,
             });
         }
         if !dir_exists && in_git_worktrees {
             issues.push(Issue {
+                kind: IssueKind::GitWorktreeNoDir,
                 message: "registered as git worktree but directory missing".to_string(),
                 fix: Fix::Skip,
             });
         }
         if !branch_exists {
             issues.push(Issue {
+                kind: IssueKind::BranchMissing,
                 message: format!("branch '{}' not found", state.branch),
                 fix: Fix::Skip,
             });
@@ -217,6 +291,7 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
                     Fix::Skip
                 };
                 issues.push(Issue {
+                    kind: IssueKind::TmuxSessionMissing,
                     message: format!("tmux session '{session_name}' missing"),
                     fix: fix_action,
                 });
@@ -232,6 +307,7 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
                             .is_none()
                         {
                             issues.push(Issue {
+                                kind: IssueKind::AgentWindowMissing,
                                 message: format!(
                                     "agent '{agent_name}' registered as active but window missing"
                                 ),
@@ -248,6 +324,7 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
         // Check 5: stuck on initializing
         if state.status == FeatureStatus::Initializing {
             issues.push(Issue {
+                kind: IssueKind::StuckInitializing,
                 message: "status stuck on 'initializing' (incomplete creation)".to_string(),
                 fix: Fix::Auto(FixAction::CleanupInitializing {
                     worktree: state.worktree.clone(),
@@ -257,12 +334,15 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
             });
         }
 
-        // Check 6: PR status drift
-        if !state.pr.is_empty() {
+        // Check 6: PR status drift (skipped when `check_pr_state` is false to
+        // avoid network round-trips on latency-sensitive callers like
+        // `pm open`'s pre-recreate warning hook).
+        if check_pr_state && !state.pr.is_empty() {
             match gh::pr_info(&main_repo, &state.pr).map(|i| i.state) {
                 Ok(gh_state) => match gh_state.as_str() {
                     "MERGED" if state.status != FeatureStatus::Merged => {
                         issues.push(Issue {
+                            kind: IssueKind::PrMerged,
                             message: format!(
                                 "PR #{} is merged but status is '{}'",
                                 state.pr, state.status
@@ -274,6 +354,7 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
                     }
                     "CLOSED" if state.status.is_active() => {
                         issues.push(Issue {
+                            kind: IssueKind::PrClosed,
                             message: format!(
                                 "PR #{} is closed but status is '{}'",
                                 state.pr, state.status
@@ -287,6 +368,7 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
                 },
                 Err(_) => {
                     issues.push(Issue {
+                        kind: IssueKind::PrCheckFailed,
                         message: format!("could not check PR #{} (gh CLI failed)", state.pr),
                         fix: Fix::None,
                     });
@@ -299,6 +381,31 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
             issues,
         });
     }
+
+    Ok(findings)
+}
+
+/// Run a health check on all features in the project.
+///
+/// Wraps [`diagnose`] with formatting and (optionally) auto-fix logic.
+/// Always passes `check_pr_state = true`, so PR drift is reported here.
+///
+/// With `fix == true`, auto-resolves clear-cut issues and skips ambiguous ones.
+///
+/// Returns formatted diagnostic lines.
+pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Result<Vec<String>> {
+    // diagnose() returns an empty Vec when the project has no features —
+    // preserve the historical "No features to check" message.
+    let findings = diagnose(project_root, tmux_server, true)?;
+    if findings.is_empty() {
+        return Ok(vec!["No features to check".to_string()]);
+    }
+
+    let pm_dir = paths::pm_dir(project_root);
+    let config = ProjectConfig::load(&pm_dir)?;
+    let project_name = &config.project.name;
+    let features_dir = paths::features_dir(project_root);
+    let main_repo = paths::main_worktree(project_root);
 
     let mut lines = Vec::new();
     let mut total_issues = 0;
