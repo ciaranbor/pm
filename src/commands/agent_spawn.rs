@@ -13,6 +13,7 @@ fn build_claude_cmd(
     prompt: Option<&str>,
     resume_session: Option<&str>,
     permission_mode: Option<&str>,
+    fork_session: bool,
 ) -> String {
     let mut parts = vec!["claude".to_string()];
 
@@ -29,6 +30,12 @@ fn build_claude_cmd(
     if let Some(session_id) = resume_session {
         parts.push("--resume".to_string());
         parts.push(session_id.to_string());
+        // `--fork-session` only makes sense alongside `--resume`. It tells
+        // Claude to load the source's transcript but assign a fresh
+        // session id, so the fork's appends don't pollute the source.
+        if fork_session {
+            parts.push("--fork-session".to_string());
+        }
     }
 
     if let Some(p) = prompt {
@@ -46,6 +53,10 @@ pub struct SpawnClaudeParams<'a> {
     pub prompt: Option<&'a str>,
     pub edit: bool,
     pub resume_session: Option<&'a str>,
+    /// When `true` and `resume_session` is `Some`, passes `--fork-session`
+    /// to Claude so the resumed conversation gets a fresh session id and
+    /// the original is left untouched. Used by `pm agent fork`.
+    pub fork_session: bool,
     /// When `Some(target)`, the existing window at that target is renamed and
     /// reused instead of creating a new one. Used during `feat new --context`
     /// to reuse the default shell at window :0.
@@ -110,6 +121,7 @@ fn spawn_claude_session_with_config(
         effective_prompt,
         params.resume_session,
         permission_mode.as_deref(),
+        params.fork_session,
     );
     let window_target = if let Some(target) = params.reuse_window {
         tmux::rename_window(params.tmux_server, target, window_name)?;
@@ -215,6 +227,7 @@ pub fn agent_spawn(
                 prompt,
                 edit,
                 resume_session: resume,
+                fork_session: false,
                 reuse_window: None,
                 tmux_server,
             },
@@ -660,31 +673,37 @@ mod tests {
         // Note: spawn_claude_session adds a " " sentinel when no prompt
         // is provided for a named agent. build_claude_cmd itself is
         // prompt-agnostic — the sentinel is injected by the caller.
-        let cmd = build_claude_cmd(Some("reviewer"), None, None, None);
+        let cmd = build_claude_cmd(Some("reviewer"), None, None, None, false);
         assert_eq!(cmd, "claude --agent reviewer");
     }
 
     #[test]
     fn build_cmd_plain_session() {
-        let cmd = build_claude_cmd(None, None, None, None);
+        let cmd = build_claude_cmd(None, None, None, None, false);
         assert_eq!(cmd, "claude");
     }
 
     #[test]
     fn build_cmd_plain_session_with_permission() {
-        let cmd = build_claude_cmd(None, None, None, Some("acceptEdits"));
+        let cmd = build_claude_cmd(None, None, None, Some("acceptEdits"), false);
         assert_eq!(cmd, "claude --permission-mode acceptEdits");
     }
 
     #[test]
     fn build_cmd_with_context() {
-        let cmd = build_claude_cmd(Some("reviewer"), Some("review the auth module"), None, None);
+        let cmd = build_claude_cmd(
+            Some("reviewer"),
+            Some("review the auth module"),
+            None,
+            None,
+            false,
+        );
         assert_eq!(cmd, "claude --agent reviewer 'review the auth module'");
     }
 
     #[test]
     fn build_cmd_with_resume() {
-        let cmd = build_claude_cmd(Some("reviewer"), None, Some("abc123"), None);
+        let cmd = build_claude_cmd(Some("reviewer"), None, Some("abc123"), None, false);
         assert_eq!(cmd, "claude --agent reviewer --resume abc123");
     }
 
@@ -695,6 +714,7 @@ mod tests {
             Some("continue review"),
             Some("abc123"),
             None,
+            false,
         );
         assert_eq!(
             cmd,
@@ -704,10 +724,28 @@ mod tests {
 
     #[test]
     fn build_cmd_with_permission_mode() {
-        let cmd = build_claude_cmd(Some("implementer"), None, None, Some("acceptEdits"));
+        let cmd = build_claude_cmd(Some("implementer"), None, None, Some("acceptEdits"), false);
         assert_eq!(
             cmd,
             "claude --agent implementer --permission-mode acceptEdits"
         );
+    }
+
+    #[test]
+    fn build_cmd_with_fork_session() {
+        // `--fork-session` only emits when paired with `--resume`.
+        let cmd = build_claude_cmd(Some("reviewer"), None, Some("abc123"), None, true);
+        assert_eq!(
+            cmd,
+            "claude --agent reviewer --resume abc123 --fork-session"
+        );
+    }
+
+    #[test]
+    fn build_cmd_fork_session_without_resume_is_noop() {
+        // `--fork-session` requires `--resume` per claude's CLI; we drop it
+        // silently rather than emit a broken command.
+        let cmd = build_claude_cmd(Some("reviewer"), None, None, None, true);
+        assert_eq!(cmd, "claude --agent reviewer");
     }
 }

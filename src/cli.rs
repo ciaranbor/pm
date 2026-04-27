@@ -332,6 +332,13 @@ pub enum AgentCommands {
         /// Agent name (omit to check all active agents)
         name: Option<String>,
     },
+    /// Fork an existing agent: spawn a new agent that starts with a copy of the source's conversation history
+    Fork {
+        /// Source agent name to fork from (can be running or stopped)
+        source: String,
+        /// New agent name
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]

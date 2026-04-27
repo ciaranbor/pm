@@ -29,6 +29,7 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 - `src/commands/agent_stop.rs` — `pm agent stop` (kill window, set `active = false`); accepts multiple names
 - `src/commands/agent_restart.rs` — `pm agent restart` (kill window then respawn, preserving `active = true` and session for `--resume`); accepts multiple names
 - `src/commands/agent_check.rs` — assembles checklists from agent definition frontmatter + project-specific files, sends as message
+- `src/commands/agent_fork.rs` — `pm agent fork <source> <new-name>` spawns a new agent that starts with a copy of the source's conversation history. Implemented via Claude Code's built-in `claude --resume <source.session_id> --fork-session`, which loads the source's transcript but assigns a fresh session id, leaving the source's session file untouched. `SpawnClaudeParams` carries a `fork_session: bool` so other callers default to `false`.
 - `agents/` — bundled agent definitions (reviewer, implementer, researcher), embedded via `include_str!`. Frontmatter supports a `checklist:` field (YAML list of items for `pm agent check`)
 - `src/commands/claude_export.rs` — `pm claude export` tars Claude session data with a manifest for cross-machine transfer
 - `src/commands/claude_import.rs` — `pm claude import` extracts tarball, resolves local paths from registry, rewrites embedded paths

@@ -334,6 +334,9 @@ pm agent stop reviewer --scope other-feat    # stop an agent in a different scop
 pm agent restart reviewer                    # restart an agent (stop then respawn, preserving session)
 pm agent restart reviewer implementer        # restart multiple agents
 
+pm agent fork reviewer reviewer-2            # spawn a new agent that starts with a copy of the source's history
+                                             # (uses claude's --fork-session, so source can keep running)
+
 pm agent check                               # send checklist to all active agents
 pm agent check implementer                   # send checklist to a specific agent
 ```

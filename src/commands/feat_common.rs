@@ -108,6 +108,7 @@ pub fn spawn_default_agent(
         prompt: None,
         edit,
         resume_session: None,
+        fork_session: false,
         reuse_window,
         tmux_server,
     })?;
