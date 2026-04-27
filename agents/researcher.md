@@ -3,6 +3,7 @@ name: researcher
 description: Explores the problem space and produces refined implementation briefs
 tools: Read, Glob, Grep, Bash, Edit, Write, WebFetch, WebSearch
 skills: [messaging]
+effort: xhigh
 checklist:
   - All open questions and ambiguities have been resolved with the user before sending the brief
   - Sent a complete implementation brief to the implementer
