@@ -43,6 +43,14 @@ fn default_categories_toml() -> String {
     out
 }
 
+/// Returns `true` if `.pm/docs/` is currently a nested git repo / submodule
+/// that [`migrate_docs_submodule`] would migrate.
+pub fn would_migrate_docs_submodule(project_root: &Path) -> bool {
+    let docs_dir = paths::docs_dir(project_root);
+    let pm_dir = paths::pm_dir(project_root);
+    docs_dir.join(".git").exists() && pm_dir.join(".git").exists()
+}
+
 /// Migrate `.pm/docs/` from a git submodule (nested repo) to regular files
 /// tracked by the parent `.pm/` state repo.
 ///
@@ -120,6 +128,27 @@ pub fn bootstrap(project_root: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// List paths that [`bootstrap`] would create. Empty vec means nothing to do.
+pub fn bootstrap_dry_run(project_root: &Path) -> Vec<std::path::PathBuf> {
+    let docs_dir = paths::docs_dir(project_root);
+    let mut would_create = Vec::new();
+
+    if !docs_dir.exists() {
+        would_create.push(docs_dir.clone());
+    }
+    let categories_path = docs_dir.join("categories.toml");
+    if !categories_path.exists() {
+        would_create.push(categories_path);
+    }
+    for cat in DEFAULT_CATEGORIES {
+        let cat_path = docs_dir.join(cat.filename);
+        if !cat_path.exists() {
+            would_create.push(cat_path);
+        }
+    }
+    would_create
 }
 
 #[cfg(test)]

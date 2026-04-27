@@ -55,6 +55,21 @@ pub fn session_start_hook_command() -> String {
 ///
 /// Returns a human-readable status line describing what happened.
 pub fn install(project_root: &Path) -> Result<String> {
+    let (msg, _) = install_inner(project_root, false)?;
+    Ok(msg)
+}
+
+/// Dry-run variant of [`install`]. Returns `Some(line)` describing the action
+/// that would be taken when something would change, or `None` when pm hooks
+/// are already installed and up to date.
+pub fn install_dry_run(project_root: &Path) -> Result<Option<String>> {
+    let (msg, would_change) = install_inner(project_root, true)?;
+    Ok(if would_change { Some(msg) } else { None })
+}
+
+/// Returns the status message and whether on-disk state would (in `dry_run`
+/// mode) or did (in apply mode) change.
+fn install_inner(project_root: &Path, dry_run: bool) -> Result<(String, bool)> {
     let main_claude_dir = paths::main_worktree(project_root).join(".claude");
     let settings_path = main_claude_dir.join("settings.json");
 
@@ -64,17 +79,26 @@ pub fn install(project_root: &Path) -> Result<String> {
     let changed = stop_changed || session_start_changed;
 
     if changed {
+        if dry_run {
+            return Ok((
+                format!("Would install pm hooks in {}", settings_path.display()),
+                true,
+            ));
+        }
         if !main_claude_dir.exists() {
             std::fs::create_dir_all(&main_claude_dir)?;
         }
         let serialized = serde_json::to_string_pretty(&root)
             .map_err(|e| PmError::Io(std::io::Error::other(e.to_string())))?;
         std::fs::write(&settings_path, format!("{serialized}\n"))?;
-        Ok(format!("Installed pm hooks in {}", settings_path.display()))
+        Ok((
+            format!("Installed pm hooks in {}", settings_path.display()),
+            true,
+        ))
     } else {
-        Ok(format!(
-            "pm hooks already installed in {}",
-            settings_path.display()
+        Ok((
+            format!("pm hooks already installed in {}", settings_path.display()),
+            false,
         ))
     }
 }

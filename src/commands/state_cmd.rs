@@ -274,6 +274,12 @@ pub fn init(project_root: &Path) -> Result<String> {
     init_inner(project_root, false, None)
 }
 
+/// Returns `true` if [`init`] would create a new `.pm/` state repo.
+pub fn would_init(project_root: &Path) -> bool {
+    let pm_dir = paths::pm_dir(project_root);
+    pm_dir.exists() && !pm_dir.join(".git").exists()
+}
+
 /// Initialise with an explicit remote URL (combines init + remote + pull).
 pub fn init_with_remote(project_root: &Path, remote_url: Option<&str>) -> Result<String> {
     match remote_url {

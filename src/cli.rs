@@ -83,6 +83,9 @@ pub enum Commands {
         /// Upgrade all registered projects instead of just the current one
         #[arg(long)]
         all: bool,
+        /// Preview changes without writing anything
+        #[arg(long, alias = "check")]
+        dry_run: bool,
     },
     /// Restore all projects on a fresh machine from the global registry
     Restore,
