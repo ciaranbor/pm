@@ -144,15 +144,7 @@ fn list_both(kind: BundledKind, project_root: Option<&Path>) -> Result<Vec<Strin
 }
 
 fn install_in(dir: &Path, kind: BundledKind, name: Option<&str>) -> Result<Vec<String>> {
-    let to_install: Vec<&BundledItem> = match name {
-        Some(n) => {
-            let item = items_of_kind(kind)
-                .find(|i| i.name == n)
-                .ok_or_else(|| kind.not_found_error(n))?;
-            vec![item]
-        }
-        None => items_of_kind(kind).collect(),
-    };
+    let to_install = items_to_install(kind, name)?;
 
     let label = kind.label();
     let mut messages = Vec::new();
@@ -169,6 +161,41 @@ fn install_in(dir: &Path, kind: BundledKind, name: Option<&str>) -> Result<Vec<S
         messages.push(format!("Installed {label} '{}'", item.name));
     }
     Ok(messages)
+}
+
+/// Dry-run companion to [`install_in`]: returns one `Would …` line per item
+/// whose on-disk content does not match the bundled content. Items that are
+/// already up to date produce no output, keeping the contract simple — every
+/// returned line corresponds to an action that would be taken.
+fn install_in_dry_run(dir: &Path, kind: BundledKind, name: Option<&str>) -> Result<Vec<String>> {
+    let to_install = items_to_install(kind, name)?;
+
+    let label = kind.label();
+    let mut messages = Vec::new();
+    for item in to_install {
+        if is_up_to_date(dir, item) {
+            continue;
+        }
+        let verb = if is_installed(dir, item) {
+            "update"
+        } else {
+            "install"
+        };
+        messages.push(format!("Would {verb} {label} '{}'", item.name));
+    }
+    Ok(messages)
+}
+
+fn items_to_install(kind: BundledKind, name: Option<&str>) -> Result<Vec<&'static BundledItem>> {
+    Ok(match name {
+        Some(n) => {
+            let item = items_of_kind(kind)
+                .find(|i| i.name == n)
+                .ok_or_else(|| kind.not_found_error(n))?;
+            vec![item]
+        }
+        None => items_of_kind(kind).collect(),
+    })
 }
 
 fn uninstall_in(dir: &Path, kind: BundledKind, name: Option<&str>) -> Result<Vec<String>> {
@@ -215,6 +242,20 @@ pub fn skills_install(name: Option<&str>) -> Result<Vec<String>> {
 
 pub fn skills_install_project(project_root: &Path, name: Option<&str>) -> Result<Vec<String>> {
     install_in(
+        &project_dir(project_root, BundledKind::Skill),
+        BundledKind::Skill,
+        name,
+    )
+}
+
+/// Dry-run variant of [`skills_install_project`]. Returns one `Would …`
+/// line per skill that would be installed or updated; up-to-date skills
+/// produce no output.
+pub fn skills_install_project_dry_run(
+    project_root: &Path,
+    name: Option<&str>,
+) -> Result<Vec<String>> {
+    install_in_dry_run(
         &project_dir(project_root, BundledKind::Skill),
         BundledKind::Skill,
         name,
@@ -275,6 +316,20 @@ pub fn agents_install(name: Option<&str>) -> Result<Vec<String>> {
 
 pub fn agents_install_project(project_root: &Path, name: Option<&str>) -> Result<Vec<String>> {
     install_in(
+        &project_dir(project_root, BundledKind::Agent),
+        BundledKind::Agent,
+        name,
+    )
+}
+
+/// Dry-run variant of [`agents_install_project`]. Returns one `Would …`
+/// line per agent that would be installed or updated; up-to-date agents
+/// produce no output.
+pub fn agents_install_project_dry_run(
+    project_root: &Path,
+    name: Option<&str>,
+) -> Result<Vec<String>> {
+    install_in_dry_run(
         &project_dir(project_root, BundledKind::Agent),
         BundledKind::Agent,
         name,

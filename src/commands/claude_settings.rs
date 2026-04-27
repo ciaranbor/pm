@@ -92,6 +92,79 @@ pub fn seed_feature_claude(project_root: &Path, feature_worktree: &Path) -> Resu
     Ok(())
 }
 
+/// Returns `true` if [`seed_feature_claude`] would change the contents of the
+/// feature's `.claude/` directory. Compares each settings file and recursively
+/// compares the skills/agents subdirectories.
+pub fn seed_feature_claude_would_change(
+    project_root: &Path,
+    feature_worktree: &Path,
+) -> Result<bool> {
+    let src = main_claude_dir(project_root);
+    if !src.exists() {
+        return Ok(false);
+    }
+    let dst = feature_worktree.join(".claude");
+
+    for filename in SETTINGS_FILES {
+        let src_path = src.join(filename);
+        if !src_path.exists() {
+            continue;
+        }
+        let dst_path = dst.join(filename);
+        if !dst_path.exists() {
+            return Ok(true);
+        }
+        let src_bytes = std::fs::read(&src_path)?;
+        let dst_bytes = std::fs::read(&dst_path)?;
+        if src_bytes != dst_bytes {
+            return Ok(true);
+        }
+    }
+
+    for dirname in COPY_DIRS {
+        let src_dir = src.join(dirname);
+        if !src_dir.is_dir() {
+            continue;
+        }
+        let dst_dir = dst.join(dirname);
+        if dir_differs(&src_dir, &dst_dir)? {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+/// Recursively compare two directories. Returns `true` if any file in `src`
+/// is missing from `dst` or has different bytes. Files only in `dst` (not in
+/// `src`) are ignored — `seed_feature_claude` is copy-only and never deletes.
+fn dir_differs(src: &Path, dst: &Path) -> Result<bool> {
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let dst_path = dst.join(&name);
+        if path.is_dir() {
+            if !dst_path.is_dir() {
+                return Ok(true);
+            }
+            if dir_differs(&path, &dst_path)? {
+                return Ok(true);
+            }
+        } else {
+            if !dst_path.exists() {
+                return Ok(true);
+            }
+            let src_bytes = std::fs::read(&path)?;
+            let dst_bytes = std::fs::read(&dst_path)?;
+            if src_bytes != dst_bytes {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
 /// List main worktree's Claude Code settings.
 pub fn list_main(project_root: &Path) -> Result<Vec<String>> {
     let claude_dir = main_claude_dir(project_root);

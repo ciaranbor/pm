@@ -486,9 +486,13 @@ Pulls the latest pm source from its main branch (fast-forward only), rebuilds wi
 ```sh
 pm upgrade                       # reinstall hooks, skills, agents for current project
 pm upgrade --all                 # upgrade all registered projects
+pm upgrade --dry-run             # preview changes without writing (alias: --check)
+pm upgrade --all --dry-run       # preview changes for every registered project
 ```
 
 Reinstalls bundled assets (hooks, skills, agents, information store) to each project's main worktree, then re-seeds `.claude/` settings into every active feature worktree. Always overwrites — useful after updating pm to pick up new agent definitions or skill files.
+
+`--dry-run` (alias `--check`) prints the actions that would be taken (`Would install …`, `Would update …`, `Would re-seed …`) without modifying anything. When the project is fully up to date, it prints `Up to date`.
 
 ### Information store
 

@@ -816,8 +816,8 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             }
             Ok(())
         }
-        Commands::Upgrade { all } => {
-            let lines = commands::upgrade::upgrade(all)?;
+        Commands::Upgrade { all, dry_run } => {
+            let lines = commands::upgrade::upgrade(all, dry_run)?;
             for line in lines {
                 println!("{line}");
             }
