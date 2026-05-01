@@ -55,11 +55,22 @@ pub fn agent_fork(
     }
 
     let source_session_id = source_entry.session_id.clone();
+    // Inherit the source's claude agent definition so the fork is launched
+    // with the same `--agent <def>` flag. When the source has no explicit
+    // definition stored, fall back to the source's display name (the
+    // back-compat behaviour). The forked entry stores its own
+    // `agent_definition` if it differs from `new_name`, so subsequent
+    // restart/resume on the fork uses the correct definition too.
+    let inherited_definition: String = source_entry
+        .agent_definition
+        .clone()
+        .unwrap_or_else(|| source.to_string());
 
     let window_target = spawn_claude_session(&SpawnClaudeParams {
         project_root,
         feature,
         agent_name: Some(new_name),
+        agent_definition: Some(&inherited_definition),
         prompt: None,
         edit: false,
         resume_session: Some(&source_session_id),
@@ -135,7 +146,7 @@ mod tests {
         session_id: &str,
         server: &TestServer,
     ) {
-        agent_spawn::agent_spawn(dir, feature, name, None, false, server.name()).unwrap();
+        agent_spawn::agent_spawn(dir, feature, name, None, None, false, server.name()).unwrap();
         let agents_dir = paths::agents_dir(dir);
         let mut registry = AgentRegistry::load(&agents_dir, feature).unwrap();
         registry.get_mut(name).unwrap().session_id = session_id.to_string();
@@ -223,6 +234,46 @@ mod tests {
     }
 
     #[test]
+    fn fork_inherits_agent_definition_from_source() {
+        // When the source was spawned with an alias (e.g. display name
+        // 'frontend-dev', definition 'implementer'), the fork must inherit
+        // the definition so its `--agent` flag matches the source's.
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (_session_name, feature) = setup_project(dir.path(), &server);
+
+        // Spawn aliased source and stamp a session_id.
+        agent_spawn::agent_spawn(
+            dir.path(),
+            &feature,
+            "frontend-dev",
+            Some("implementer"),
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
+        let agents_dir = paths::agents_dir(dir.path());
+        let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        registry.get_mut("frontend-dev").unwrap().session_id = "src-session-id".to_string();
+        registry.save(&agents_dir, &feature).unwrap();
+
+        agent_fork(
+            dir.path(),
+            &feature,
+            "frontend-dev",
+            "frontend-dev-2",
+            server.name(),
+        )
+        .unwrap();
+
+        let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        let fork_entry = registry.get("frontend-dev-2").unwrap();
+        // Fork inherits the source's stored definition
+        assert_eq!(fork_entry.agent_definition.as_deref(), Some("implementer"));
+    }
+
+    #[test]
     fn fork_errors_if_source_missing() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
@@ -239,8 +290,16 @@ mod tests {
         let dir = tempdir().unwrap();
         let (_session_name, feature) = setup_project(dir.path(), &server);
 
-        agent_spawn::agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name())
-            .unwrap();
+        agent_spawn::agent_spawn(
+            dir.path(),
+            &feature,
+            "reviewer",
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         let result = agent_fork(
             dir.path(),
@@ -271,6 +330,7 @@ mod tests {
                 session_id: String::new(),
                 window_name: "reviewer-2".to_string(),
                 active: true,
+                agent_definition: None,
             },
         );
         registry.save(&agents_dir, &feature).unwrap();

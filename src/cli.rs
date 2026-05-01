@@ -294,8 +294,15 @@ pub enum HooksCommands {
 pub enum AgentCommands {
     /// Spawn an agent in a tmux window
     Spawn {
-        /// Agent name (omit to respawn all previously active agents)
+        /// Agent name (omit to respawn all previously active agents).
+        /// Used as the registry key, tmux window name, and `PM_AGENT_NAME`.
         name: Option<String>,
+        /// Claude agent definition to launch (passed to `claude --agent`).
+        /// Defaults to `name` when omitted. Use this to spawn multiple
+        /// agents from the same definition under different display names,
+        /// e.g. `pm agent spawn frontend-dev --agent implementer`.
+        #[arg(long = "agent", value_name = "DEFINITION")]
+        agent_definition: Option<String>,
         /// Initial context for the agent
         #[arg(long)]
         context: Option<String>,

@@ -541,7 +541,15 @@ fn apply_fix(
             hooks_install::install(project_root)?;
         }
         FixAction::RespawnAgent { agent_name } => {
-            agent_spawn::agent_spawn(project_root, name, agent_name, None, false, tmux_server)?;
+            agent_spawn::agent_spawn(
+                project_root,
+                name,
+                agent_name,
+                None,
+                None,
+                false,
+                tmux_server,
+            )?;
         }
     }
     Ok(())
@@ -889,6 +897,7 @@ mod tests {
                 session_id: String::new(),
                 window_name: "reviewer".to_string(),
                 active: true,
+                agent_definition: None,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -918,6 +927,7 @@ mod tests {
                 session_id: String::new(),
                 window_name: "reviewer".to_string(),
                 active: true,
+                agent_definition: None,
             },
         );
         registry.save(&agents_dir, "login").unwrap();

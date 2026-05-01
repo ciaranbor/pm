@@ -29,6 +29,24 @@ pub struct AgentEntry {
     /// decide which agents to respawn after a restart.
     #[serde(default = "default_active")]
     pub active: bool,
+    /// The claude agent definition this entry was spawned with, i.e. the
+    /// value passed to `claude --agent`. When `None`, the registry key is
+    /// used as the definition (back-compat: `pm agent spawn implementer`
+    /// stores `None` here and uses `implementer` as the definition).
+    /// When `Some(def)`, the entry was spawned via `pm agent spawn <key>
+    /// --agent <def>` and `def` is used for respawn / restart / fork.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_definition: Option<String>,
+}
+
+impl AgentEntry {
+    /// Returns the definition name to pass to `claude --agent`. Falls back
+    /// to `key` (the registry key / display name) when no explicit
+    /// definition was recorded — preserving back-compat for entries that
+    /// were registered before alias support landed.
+    pub fn effective_definition<'a>(&'a self, key: &'a str) -> &'a str {
+        self.agent_definition.as_deref().unwrap_or(key)
+    }
 }
 
 fn default_active() -> bool {
@@ -114,6 +132,7 @@ mod tests {
             session_id: session_id.to_string(),
             window_name: "reviewer".to_string(),
             active: true,
+            agent_definition: None,
         }
     }
 
@@ -171,6 +190,7 @@ mod tests {
                 session_id: String::new(),
                 window_name: String::new(),
                 active: false,
+                agent_definition: None,
             },
         );
 
@@ -236,6 +256,67 @@ mod tests {
     }
 
     #[test]
+    fn registry_agent_definition_roundtrip() {
+        // Aliased entry: registry key 'frontend-dev', definition 'implementer'.
+        let dir = tempdir().unwrap();
+        let agents_dir = dir.path().join("agents");
+
+        let mut registry = AgentRegistry::default();
+        registry.register(
+            "frontend-dev",
+            AgentEntry {
+                agent_type: AgentType::Agent,
+                session_id: String::new(),
+                window_name: "frontend-dev".to_string(),
+                active: true,
+                agent_definition: Some("implementer".to_string()),
+            },
+        );
+        registry.save(&agents_dir, "login").unwrap();
+
+        let loaded = AgentRegistry::load(&agents_dir, "login").unwrap();
+        let entry = loaded.get("frontend-dev").unwrap();
+        assert_eq!(entry.agent_definition.as_deref(), Some("implementer"));
+        assert_eq!(entry.effective_definition("frontend-dev"), "implementer");
+    }
+
+    #[test]
+    fn registry_agent_definition_omitted_when_none() {
+        // Default unaliased entries should not write the field, keeping
+        // existing on-disk TOML clean.
+        let registry_entry = AgentEntry {
+            agent_type: AgentType::Agent,
+            session_id: String::new(),
+            window_name: "implementer".to_string(),
+            active: true,
+            agent_definition: None,
+        };
+        let toml = toml::to_string_pretty(&registry_entry).unwrap();
+        assert!(
+            !toml.contains("agent_definition"),
+            "expected agent_definition to be omitted from TOML, got:\n{toml}"
+        );
+    }
+
+    #[test]
+    fn registry_legacy_toml_without_agent_definition_loads() {
+        // Older state files won't have `agent_definition` — they should
+        // load with the field defaulted to None and `effective_definition`
+        // falling back to the registry key.
+        let toml_str = r#"
+[agents.implementer]
+type = "agent"
+session_id = ""
+window_name = "implementer"
+active = true
+"#;
+        let registry: AgentRegistry = toml::from_str(toml_str).unwrap();
+        let entry = registry.get("implementer").unwrap();
+        assert!(entry.agent_definition.is_none());
+        assert_eq!(entry.effective_definition("implementer"), "implementer");
+    }
+
+    #[test]
     fn registry_toml_roundtrip() {
         let mut registry = AgentRegistry::default();
         registry.register("reviewer", make_agent("abc123"));
@@ -246,6 +327,7 @@ mod tests {
                 session_id: String::new(),
                 window_name: String::new(),
                 active: false,
+                agent_definition: None,
             },
         );
 

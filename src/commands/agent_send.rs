@@ -54,12 +54,32 @@ fn has_agent_definition(project_root: &Path, feature: &str, agent_name: &str) ->
     find_agent_definition_path(project_root, feature, agent_name).is_some()
 }
 
-/// Check whether the recipient agent is currently active (registered with `active = true`).
-fn is_agent_active(project_root: &Path, feature: &str, agent_name: &str) -> Result<bool> {
+/// Per-recipient state needed by `agent_send`: whether the agent is
+/// currently flagged active, whether a registry entry exists at all (so
+/// auto-spawn can resurrect it), and the effective claude agent
+/// definition (used to resolve aliases when looking up the definition
+/// file). Loaded once from disk per call to avoid redundant TOML parses.
+struct RecipientLookup {
+    is_active: bool,
+    is_registered: bool,
+    definition_name: String,
+}
+
+fn lookup_recipient(
+    project_root: &Path,
+    feature: &str,
+    agent_name: &str,
+) -> Result<RecipientLookup> {
     let agents_dir = paths::agents_dir(project_root);
     let registry = AgentRegistry::load(&agents_dir, feature)?;
-
-    Ok(registry.get(agent_name).map(|e| e.active).unwrap_or(false))
+    let entry = registry.get(agent_name);
+    Ok(RecipientLookup {
+        is_active: entry.map(|e| e.active).unwrap_or(false),
+        is_registered: entry.is_some(),
+        definition_name: entry
+            .map(|e| e.effective_definition(agent_name).to_string())
+            .unwrap_or_else(|| agent_name.to_string()),
+    })
 }
 
 /// Generate a helpful hint when a recipient agent is not found.
@@ -134,11 +154,24 @@ pub fn agent_send(
 ) -> Result<String> {
     let feature = target_scope.unwrap_or(sender_scope);
 
-    let is_active = is_agent_active(project_root, feature, recipient)?;
+    let lookup = lookup_recipient(project_root, feature, recipient)?;
 
-    // If the agent isn't running and no definition exists, fail early —
+    // If the agent isn't running and we can't resurrect it, fail early —
     // delivering a message that nobody can ever read is a mistake.
-    if !is_active && !has_agent_definition(project_root, feature, recipient) {
+    //
+    // "Can resurrect" means either:
+    //   1. A registry entry exists (auto-spawn will use the stored
+    //      `agent_definition` to re-launch), OR
+    //   2. The agent's *definition file* exists at one of the lookup
+    //      locations (so a fresh spawn would succeed).
+    //
+    // Aliased-but-stopped agents (e.g. `pm agent spawn frontend-dev
+    // --agent implementer; pm agent stop frontend-dev`) hit case 1 — the
+    // registry has the entry, the alias resolves through it, and
+    // auto-spawn will respawn them with the correct `--agent` flag.
+    let can_resurrect = lookup.is_registered
+        || has_agent_definition(project_root, feature, &lookup.definition_name);
+    if !lookup.is_active && !can_resurrect {
         let hint = agent_not_found_hint(recipient, sender_scope, feature);
         return Err(PmError::AgentNotFound(format!(
             "No agent called '{recipient}' exists in scope '{feature}'.{hint}"
@@ -171,12 +204,15 @@ pub fn agent_send(
         format!("Message {index:03} sent to '{recipient}' (from '{sender}')")
     };
 
-    // Auto-spawn the agent if it's not currently active.
-    if !is_active {
+    // Auto-spawn the agent if it's not currently active. Pass `None` for
+    // `agent_definition` so `agent_spawn` reads the stored definition from
+    // any existing registry entry — preserving aliases across auto-spawn.
+    if !lookup.is_active {
         let (_, spawn_msg) = super::agent_spawn::agent_spawn(
             project_root,
             feature,
             recipient,
+            None,
             None,
             false,
             tmux_server,
@@ -457,6 +493,7 @@ mod tests {
             &feature,
             "reviewer",
             None,
+            None,
             false,
             server.name(),
         )
@@ -480,6 +517,68 @@ mod tests {
         // Agent is still active (flag is true), so no auto-spawn — just queued
         assert!(msg.contains("Message 001 sent to 'reviewer'"));
         assert!(!msg.contains("Spawned"));
+    }
+
+    #[test]
+    fn send_to_aliased_stopped_agent_resurrects_via_registry() {
+        // Regression: `pm agent spawn frontend-dev --agent implementer; pm
+        // agent stop frontend-dev; pm msg send frontend-dev "hi"` used to
+        // error out because `has_agent_definition` looked for
+        // `frontend-dev.md` (which doesn't exist) instead of resolving the
+        // alias to `implementer`. The registry entry should be enough to
+        // prove the agent is resurrectable.
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (root, _session_name, feature) = setup_project_with_tmux(dir.path(), &server);
+
+        // Definition file lives at implementer.md; no frontend-dev.md.
+        create_agent_definition(&root, "implementer");
+
+        // Spawn aliased agent.
+        super::super::agent_spawn::agent_spawn(
+            &root,
+            &feature,
+            "frontend-dev",
+            Some("implementer"),
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
+
+        // Stop it: kills the window and flips active=false (mirrors `pm agent stop`).
+        super::super::agent_stop::agent_stop(&root, &feature, "frontend-dev", server.name())
+            .unwrap();
+        let agents_dir = paths::agents_dir(&root);
+        assert!(
+            !AgentRegistry::load(&agents_dir, &feature)
+                .unwrap()
+                .get("frontend-dev")
+                .unwrap()
+                .active
+        );
+
+        // Send must succeed: registry has the entry, so auto-spawn can
+        // resurrect via the stored definition.
+        let msg = agent_send(
+            &root,
+            &feature,
+            None,
+            "frontend-dev",
+            "implementer",
+            "hi",
+            server.name(),
+        )
+        .unwrap();
+        assert!(msg.contains("Message 001 sent to 'frontend-dev'"));
+        // Auto-spawn fires (was inactive) and uses the alias's stored definition.
+        assert!(msg.contains("Spawned agent 'frontend-dev'"));
+
+        // Registry entry still has the definition — alias preserved across the auto-respawn.
+        let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        let entry = registry.get("frontend-dev").unwrap();
+        assert_eq!(entry.agent_definition.as_deref(), Some("implementer"));
+        assert!(entry.active);
     }
 
     #[test]

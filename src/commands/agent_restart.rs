@@ -8,7 +8,9 @@ use crate::tmux;
 
 /// Restart a single agent: kill its tmux window, then respawn it.
 /// The `active` flag stays `true` throughout. If the agent has a stored
-/// `session_id`, passes `--resume` to claude on respawn.
+/// `session_id`, passes `--resume` to claude on respawn. If the entry
+/// records an explicit `agent_definition`, the definition is preserved
+/// across the restart (relayed via `agent_spawn` reading the registry).
 pub fn agent_restart(
     project_root: &Path,
     feature: &str,
@@ -41,26 +43,28 @@ pub fn agent_restart(
         let _ = tmux::kill_window(tmux_server, &target);
     }
 
-    // Respawn via agent_spawn (which will see the registry entry, find no window, and respawn)
+    // Respawn via agent_spawn (which will see the registry entry, find no
+    // window, and respawn). Passing `None` for `agent_definition` lets
+    // `agent_spawn` re-read the stored definition from the registry, so
+    // aliased agents keep their `--agent <def>` flag across restarts.
     // agent_spawn sets active = true on register, preserving the flag.
-    let (_outcome, spawn_msg) = super::agent_spawn::agent_spawn(
+    // We discard agent_spawn's status message and craft our own, since
+    // "Restarted ..." reads better than "Resumed ...".
+    let (_outcome, _spawn_msg) = super::agent_spawn::agent_spawn(
         project_root,
         feature,
         agent_name,
+        None,
         None,
         false,
         tmux_server,
     )?;
 
-    // Use the resume info to craft the message
     let msg = if resume_id.is_some() {
         format!("Restarted agent '{agent_name}' (resumed session)")
     } else {
         format!("Restarted agent '{agent_name}'")
     };
-
-    // Log the spawn detail for debugging if needed
-    drop(spawn_msg);
 
     Ok(msg)
 }
@@ -136,8 +140,16 @@ mod tests {
         let (session_name, feature) = setup_project(dir.path(), &server);
 
         // Spawn agent first
-        agent_spawn::agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name())
-            .unwrap();
+        agent_spawn::agent_spawn(
+            dir.path(),
+            &feature,
+            "reviewer",
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         // Verify window exists
         assert!(
@@ -170,8 +182,16 @@ mod tests {
         let (session_name, feature) = setup_project(dir.path(), &server);
 
         // Spawn agent and set a session_id
-        agent_spawn::agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name())
-            .unwrap();
+        agent_spawn::agent_spawn(
+            dir.path(),
+            &feature,
+            "reviewer",
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         let agents_dir = paths::agents_dir(dir.path());
         let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
@@ -205,12 +225,50 @@ mod tests {
                 session_id: String::new(),
                 window_name: "reviewer".to_string(),
                 active: true,
+                agent_definition: None,
             },
         );
         registry.save(&agents_dir, &feature).unwrap();
 
         let msg = agent_restart(dir.path(), &feature, "reviewer", server.name()).unwrap();
         assert!(msg.contains("Restarted agent 'reviewer'"));
+    }
+
+    #[test]
+    fn restart_preserves_agent_definition_alias() {
+        // After spawning an aliased agent (display name != definition),
+        // a restart must preserve the stored definition so the new claude
+        // process is launched with the same `--agent <def>` flag.
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+
+        agent_spawn::agent_spawn(
+            dir.path(),
+            &feature,
+            "frontend-dev",
+            Some("implementer"),
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
+
+        let msg = agent_restart(dir.path(), &feature, "frontend-dev", server.name()).unwrap();
+        assert!(msg.contains("Restarted agent 'frontend-dev'"));
+
+        // Window still exists under display name
+        assert!(
+            tmux::find_window(server.name(), &session_name, "frontend-dev")
+                .unwrap()
+                .is_some()
+        );
+
+        // Registry retains the definition
+        let agents_dir = paths::agents_dir(dir.path());
+        let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        let entry = registry.get("frontend-dev").unwrap();
+        assert_eq!(entry.agent_definition.as_deref(), Some("implementer"));
     }
 
     #[test]
@@ -239,6 +297,7 @@ mod tests {
                 session_id: String::new(),
                 window_name: "reviewer".to_string(),
                 active: true,
+                agent_definition: None,
             },
         );
         registry.save(&agents_dir, &feature).unwrap();

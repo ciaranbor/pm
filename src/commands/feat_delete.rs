@@ -411,6 +411,7 @@ mod tests {
                 session_id: "test".to_string(),
                 window_name: "reviewer".to_string(),
                 active: true,
+                agent_definition: None,
             },
         );
         registry.save(&agents_dir, "login").unwrap();

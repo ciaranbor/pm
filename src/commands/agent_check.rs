@@ -61,6 +61,12 @@ pub fn parse_project_checklist(content: &str) -> Vec<String> {
 /// Assemble a checklist from the agent definition frontmatter and a
 /// project-specific checklist file, then send it as a message to the
 /// target agent.
+///
+/// Resolves aliases: when the registry has an entry for `agent_name` with
+/// an `agent_definition` set, the *definition* file is used to source the
+/// frontmatter checklist. The project-specific checklist (`.pm/checklist/
+/// <name>.txt`) is keyed on the display name so two aliases of the same
+/// definition can have distinct project-level extras.
 pub fn agent_check(
     project_root: &Path,
     feature: &str,
@@ -68,14 +74,32 @@ pub fn agent_check(
     sender: &str,
     tmux_server: Option<&str>,
 ) -> Result<String> {
-    // 1. Find and read the agent definition
-    let def_path = super::agent_send::find_agent_definition_path(project_root, feature, agent_name)
-        .ok_or_else(|| {
-            PmError::AgentNotFound(format!(
-                "No agent definition found for '{agent_name}'. \
+    // Resolve the agent definition name: registry's stored definition (if
+    // aliased) > display name (back-compat / unregistered names).
+    let agents_dir = paths::agents_dir(project_root);
+    let registry = AgentRegistry::load(&agents_dir, feature)?;
+    let definition_name = registry
+        .get(agent_name)
+        .map(|entry| entry.effective_definition(agent_name).to_string())
+        .unwrap_or_else(|| agent_name.to_string());
+
+    // 1. Find and read the agent definition (looked up by definition name)
+    let def_path =
+        super::agent_send::find_agent_definition_path(project_root, feature, &definition_name)
+            .ok_or_else(|| {
+                PmError::AgentNotFound(if definition_name == agent_name {
+                    format!(
+                        "No agent definition found for '{agent_name}'. \
                      Cannot assemble a checklist without an agent definition."
-            ))
-        })?;
+                    )
+                } else {
+                    format!(
+                        "No agent definition found for '{definition_name}' \
+                         (alias for '{agent_name}'). \
+                         Cannot assemble a checklist without an agent definition."
+                    )
+                })
+            })?;
 
     let def_content = fs::read_to_string(&def_path).map_err(|e| {
         PmError::Io(std::io::Error::new(
@@ -424,6 +448,78 @@ tools: Read, Write
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("No checklist items found"));
+    }
+
+    #[test]
+    fn agent_check_resolves_aliased_agent_definition() {
+        // Regression: `pm agent spawn frontend-dev --agent implementer` then
+        // `pm agent check frontend-dev` must look up the implementer
+        // definition, not search for a non-existent frontend-dev.md.
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (root, feature) = setup_project(dir.path(), &server);
+
+        // Definition file lives at `.claude/agents/implementer.md`
+        create_agent_definition_with_checklist(
+            &root,
+            "implementer",
+            &["summary.md exists", "All tests pass"],
+        );
+
+        // Register the alias: display name 'frontend-dev', definition 'implementer'.
+        // Use spawn (which writes the registry entry).
+        super::super::agent_spawn::agent_spawn(
+            &root,
+            &feature,
+            "frontend-dev",
+            Some("implementer"),
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
+
+        let msg = agent_check(&root, &feature, "frontend-dev", "user", server.name()).unwrap();
+        assert!(msg.contains("Message 001 sent to 'frontend-dev'"));
+
+        // Body sourced from implementer's frontmatter and delivered to frontend-dev's inbox
+        let messages_dir = paths::messages_dir(&root);
+        let delivered =
+            crate::messages::read_at(&messages_dir, &feature, "frontend-dev", "user", 1)
+                .unwrap()
+                .unwrap();
+        assert!(delivered.body.contains("- [ ] summary.md exists"));
+        assert!(delivered.body.contains("- [ ] All tests pass"));
+    }
+
+    #[test]
+    fn agent_check_alias_with_missing_definition_errors_clearly() {
+        // If the alias points at a definition that's not installed, the
+        // error mentions both the alias and the definition.
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (root, feature) = setup_project(dir.path(), &server);
+
+        // Register an alias whose definition file does not exist
+        let agents_dir = paths::agents_dir(&root);
+        let mut registry = AgentRegistry::default();
+        registry.register(
+            "frontend-dev",
+            crate::state::agent::AgentEntry {
+                agent_type: crate::state::agent::AgentType::Agent,
+                session_id: String::new(),
+                window_name: "frontend-dev".to_string(),
+                active: false,
+                agent_definition: Some("ghost-definition".to_string()),
+            },
+        );
+        registry.save(&agents_dir, &feature).unwrap();
+
+        let result = agent_check(&root, &feature, "frontend-dev", "user", server.name());
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("ghost-definition"), "got: {err}");
+        assert!(err.contains("frontend-dev"), "got: {err}");
     }
 
     #[test]

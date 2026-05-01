@@ -23,6 +23,15 @@ pub fn agent_list(project_root: &Path, feature: &str, active_only: bool) -> Resu
         }
 
         let status_str = if entry.active { "active" } else { "inactive" };
+        // Surface aliases so users can see at a glance which display
+        // names map to which claude agent definitions. Omitted when the
+        // display name doubles as the definition (the common case).
+        let alias_str = entry
+            .agent_definition
+            .as_deref()
+            .filter(|def| *def != name)
+            .map(|def| format!(", --agent {def}"))
+            .unwrap_or_default();
         let summaries = messages::check(&messages_dir, feature, name)?;
         let unread: u32 = summaries.iter().map(|s| s.count).sum();
         let unread_str = if unread > 0 {
@@ -31,7 +40,7 @@ pub fn agent_list(project_root: &Path, feature: &str, active_only: bool) -> Resu
             String::new()
         };
 
-        lines.push(format!("  {name} ({status_str}{unread_str})"));
+        lines.push(format!("  {name} ({status_str}{alias_str}{unread_str})"));
     }
 
     if lines.len() == 1 {
@@ -83,6 +92,7 @@ mod tests {
                 session_id: String::new(),
                 window_name: "reviewer".to_string(),
                 active: true,
+                agent_definition: None,
             },
         );
         // tester: inactive
@@ -93,6 +103,7 @@ mod tests {
                 session_id: String::new(),
                 window_name: "tester".to_string(),
                 active: false,
+                agent_definition: None,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -111,6 +122,57 @@ mod tests {
     }
 
     #[test]
+    fn list_shows_alias_for_aliased_agents() {
+        let dir = tempdir().unwrap();
+        setup_project(dir.path());
+
+        let agents_dir = paths::agents_dir(dir.path());
+        let mut registry = AgentRegistry::default();
+        // Aliased: frontend-dev -> implementer
+        registry.register(
+            "frontend-dev",
+            AgentEntry {
+                agent_type: AgentType::Agent,
+                session_id: String::new(),
+                window_name: "frontend-dev".to_string(),
+                active: true,
+                agent_definition: Some("implementer".to_string()),
+            },
+        );
+        // Non-aliased
+        registry.register(
+            "reviewer",
+            AgentEntry {
+                agent_type: AgentType::Agent,
+                session_id: String::new(),
+                window_name: "reviewer".to_string(),
+                active: true,
+                agent_definition: None,
+            },
+        );
+        registry.save(&agents_dir, "login").unwrap();
+
+        let lines = agent_list(dir.path(), "login", false).unwrap();
+        let frontend_line = lines
+            .iter()
+            .find(|l| l.contains("frontend-dev"))
+            .expect("frontend-dev line missing");
+        assert!(
+            frontend_line.contains("--agent implementer"),
+            "expected '--agent implementer' segment, got: {frontend_line}"
+        );
+
+        let reviewer_line = lines
+            .iter()
+            .find(|l| l.contains("reviewer"))
+            .expect("reviewer line missing");
+        assert!(
+            !reviewer_line.contains("--agent"),
+            "non-aliased entries should not show --agent, got: {reviewer_line}"
+        );
+    }
+
+    #[test]
     fn list_shows_unread_counts() {
         let dir = tempdir().unwrap();
         setup_project(dir.path());
@@ -124,6 +186,7 @@ mod tests {
                 session_id: String::new(),
                 window_name: "reviewer".to_string(),
                 active: true,
+                agent_definition: None,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
