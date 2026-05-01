@@ -375,6 +375,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             match agent_cmd {
                 AgentCommands::Spawn {
                     name,
+                    agent_definition,
                     context,
                     edit,
                 } => {
@@ -383,12 +384,19 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                             &project_root,
                             &feature,
                             &agent_name,
+                            agent_definition.as_deref(),
                             context.as_deref(),
                             edit,
                             None,
                         )?;
                         println!("{msg}");
                     } else {
+                        if agent_definition.is_some() {
+                            return Err(PmError::Agent(
+                                "--agent requires a positional NAME (the display name to register under)"
+                                    .to_string(),
+                            ));
+                        }
                         let result =
                             commands::agent_spawn::agent_spawn_all(&project_root, &feature, None)?;
                         for msg in &result.successes {

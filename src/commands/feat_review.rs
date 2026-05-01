@@ -112,6 +112,9 @@ fn setup_review(
             project_root,
             feature: feature_name,
             agent_name: Some("reviewer"),
+            // The reviewer flow always uses the `reviewer` definition; no
+            // alias support needed here.
+            agent_definition: None,
             prompt: None,
             edit: false, // reviews are read-only
             resume_session: None,

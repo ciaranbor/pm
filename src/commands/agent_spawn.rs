@@ -49,7 +49,18 @@ fn build_claude_cmd(
 pub struct SpawnClaudeParams<'a> {
     pub project_root: &'a Path,
     pub feature: &'a str,
+    /// Display name for the agent. Used as the tmux window name, the
+    /// `PM_AGENT_NAME` env var (so `pm msg` calls auto-identify), and the
+    /// registry key. `None` produces a plain `claude` session with no
+    /// `--agent` flag and no registry entry.
     pub agent_name: Option<&'a str>,
+    /// Claude agent definition name to pass to `claude --agent`. When `None`
+    /// and `agent_name` is `Some(x)`, defaults to `x` (back-compat: display
+    /// name doubles as definition name). When `Some(def)` with `agent_name
+    /// = Some(name)`, you get a "named agent": registry key / window /
+    /// `PM_AGENT_NAME` are all `name`, but Claude is launched with
+    /// `--agent def`. Ignored when `agent_name` is `None`.
+    pub agent_definition: Option<&'a str>,
     pub prompt: Option<&'a str>,
     pub edit: bool,
     pub resume_session: Option<&'a str>,
@@ -89,14 +100,21 @@ fn spawn_claude_session_with_config(
     let session_name = tmux::session_name(&config.project.name, params.feature);
     let worktree_path = params.project_root.join(params.feature);
 
-    // Resolve permission mode: --edit flag > project config > none
+    // Resolve effective definition (the value that goes to `claude --agent`).
+    // When `agent_definition` is None, the display name doubles as the
+    // definition (back-compat).
+    let effective_definition = params.agent_definition.or(params.agent_name);
+
+    // Permission mode lookup uses the *definition* name — permissions are
+    // configured per claude agent definition, not per display name.
+    // Resolve permission mode: --edit flag > project config (by definition) > none
     let permission_mode = if params.edit {
         Some("acceptEdits".to_string())
-    } else if let Some(name) = params.agent_name {
+    } else if let Some(def) = effective_definition {
         config
             .agents
             .permissions
-            .get(name)
+            .get(def)
             .filter(|s| !s.is_empty())
             .cloned()
     } else {
@@ -117,7 +135,7 @@ fn spawn_claude_session_with_config(
 
     let window_name = params.agent_name.unwrap_or("claude");
     let cmd = build_claude_cmd(
-        params.agent_name,
+        effective_definition,
         effective_prompt,
         params.resume_session,
         permission_mode.as_deref(),
@@ -138,6 +156,7 @@ fn spawn_claude_session_with_config(
 
     // Set PM_AGENT_NAME so the agent's `pm msg send/check/read` calls
     // automatically identify as this agent without needing --as-agent.
+    // The display name (agent_name) is the messaging identity.
     if let Some(name) = params.agent_name {
         let export_and_cmd = format!("export PM_AGENT_NAME={name} && {cmd}");
         tmux::send_keys(params.tmux_server, &window_target, &export_and_cmd)?;
@@ -149,6 +168,13 @@ fn spawn_claude_session_with_config(
     if let Some(name) = params.agent_name {
         let agents_dir = paths::agents_dir(params.project_root);
         let mut registry = AgentRegistry::load(&agents_dir, params.feature)?;
+        // Only persist `agent_definition` when it explicitly differs from
+        // the registry key — keeps existing on-disk TOML clean for the
+        // common case where display name == definition.
+        let stored_definition = match params.agent_definition {
+            Some(def) if def != name => Some(def.to_string()),
+            _ => None,
+        };
         registry.register(
             name,
             AgentEntry {
@@ -156,6 +182,7 @@ fn spawn_claude_session_with_config(
                 session_id: String::new(),
                 window_name: name.to_string(),
                 active: true,
+                agent_definition: stored_definition,
             },
         );
         registry.save(&agents_dir, params.feature)?;
@@ -193,6 +220,16 @@ impl SpawnOutcome {
 /// If `edit` is true, `--permission-mode acceptEdits` is passed.
 /// Otherwise, the permission mode is looked up from the project config.
 ///
+/// `agent_name` is the display name (registry key, tmux window, `PM_AGENT_NAME`).
+/// `agent_definition` is the claude agent definition passed to `--agent`. When
+/// `None`:
+///   - If a registry entry exists, its stored `agent_definition` is used (so
+///     respawn / resume preserves the original `--agent` flag).
+///   - Otherwise, the display name doubles as the definition (back-compat).
+///
+/// When `Some(def)`, `def` is passed to `claude --agent` and stored on the
+/// registry entry for future respawns.
+///
 /// When `context` is provided, it is always enqueued as a message in the
 /// agent's inbox rather than passed as a positional prompt. The Stop hook
 /// blocks until the message is available, then tells the agent to read it.
@@ -207,33 +244,20 @@ pub fn agent_spawn(
     project_root: &Path,
     feature: &str,
     agent_name: &str,
+    agent_definition: Option<&str>,
     context: Option<&str>,
     edit: bool,
     tmux_server: Option<&str>,
 ) -> Result<(SpawnOutcome, String)> {
     crate::messages::validate_name(agent_name, "agent")?;
+    if let Some(def) = agent_definition {
+        crate::messages::validate_name(def, "agent")?;
+    }
 
     let pm_dir = paths::pm_dir(project_root);
     let agents_dir = paths::agents_dir(project_root);
     let config = ProjectConfig::load(&pm_dir)?;
     let session_name = tmux::session_name(&config.project.name, feature);
-    // Use _with_config helper to avoid reloading config in spawn_claude_session
-    let spawn = |prompt: Option<&str>, resume: Option<&str>| {
-        spawn_claude_session_with_config(
-            &SpawnClaudeParams {
-                project_root,
-                feature,
-                agent_name: Some(agent_name),
-                prompt,
-                edit,
-                resume_session: resume,
-                fork_session: false,
-                reuse_window: None,
-                tmux_server,
-            },
-            &config,
-        )
-    };
 
     // Always queue context as a message before touching the session. That
     // way it survives a failed spawn as a dead letter and auto-arrives on
@@ -245,6 +269,36 @@ pub fn agent_spawn(
     }
 
     let registry = AgentRegistry::load(&agents_dir, feature)?;
+
+    // Resolve the effective definition. Caller-provided override wins;
+    // otherwise inherit any stored definition from a prior registration so
+    // respawn/resume keeps using the same `--agent` flag the agent was
+    // originally launched with. Falls back to None (which makes
+    // spawn_claude_session_with_config use `agent_name` as definition).
+    let resolved_definition: Option<String> = agent_definition.map(String::from).or_else(|| {
+        registry
+            .get(agent_name)
+            .and_then(|e| e.agent_definition.clone())
+    });
+
+    // Use _with_config helper to avoid reloading config in spawn_claude_session
+    let spawn = |prompt: Option<&str>, resume: Option<&str>| {
+        spawn_claude_session_with_config(
+            &SpawnClaudeParams {
+                project_root,
+                feature,
+                agent_name: Some(agent_name),
+                agent_definition: resolved_definition.as_deref(),
+                prompt,
+                edit,
+                resume_session: resume,
+                fork_session: false,
+                reuse_window: None,
+                tmux_server,
+            },
+            &config,
+        )
+    };
 
     // Check if this agent already exists in the registry
     if let Some(entry) = registry.get(agent_name) {
@@ -333,8 +387,10 @@ pub fn agent_spawn_all(
     let mut successes = Vec::new();
     let mut errors = Vec::new();
     let mut spawned_count = 0;
+    // `agent_spawn` reads the stored `agent_definition` from the registry
+    // when called with `None`, so respawns automatically preserve aliases.
     for name in &agent_names {
-        match agent_spawn(project_root, feature, name, None, false, tmux_server) {
+        match agent_spawn(project_root, feature, name, None, None, false, tmux_server) {
             Ok((outcome, msg)) => {
                 if outcome.is_new_window() {
                     spawned_count += 1;
@@ -411,8 +467,16 @@ mod tests {
         let dir = tempdir().unwrap();
         let (session_name, feature) = setup_project(dir.path(), &server);
 
-        let (outcome, msg) =
-            agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
+        let (outcome, msg) = agent_spawn(
+            dir.path(),
+            &feature,
+            "reviewer",
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
         assert_eq!(outcome, SpawnOutcome::Spawned);
         assert!(msg.contains("Spawned agent 'reviewer'"));
 
@@ -446,8 +510,16 @@ mod tests {
 
         setup_active_agent(&server, dir.path(), &session_name, &feature, "reviewer");
 
-        let (outcome, msg) =
-            agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
+        let (outcome, msg) = agent_spawn(
+            dir.path(),
+            &feature,
+            "reviewer",
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
         assert_eq!(outcome, SpawnOutcome::AlreadyActive);
         assert!(!outcome.is_new_window());
         assert!(msg.contains("already active"));
@@ -465,6 +537,7 @@ mod tests {
             dir.path(),
             &feature,
             "reviewer",
+            None,
             Some("focus on auth"),
             false,
             server.name(),
@@ -486,8 +559,26 @@ mod tests {
         let (session_name, feature) = setup_project(dir.path(), &server);
 
         // Spawn two agents
-        agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
-        agent_spawn(dir.path(), &feature, "tester", None, false, server.name()).unwrap();
+        agent_spawn(
+            dir.path(),
+            &feature,
+            "reviewer",
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
+        agent_spawn(
+            dir.path(),
+            &feature,
+            "tester",
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         // Kill the session and recreate it (simulating restart — windows gone)
         tmux::kill_session(server.name(), &session_name).unwrap();
@@ -508,8 +599,26 @@ mod tests {
         let (session_name, feature) = setup_project(dir.path(), &server);
 
         // Spawn two agents
-        agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
-        agent_spawn(dir.path(), &feature, "tester", None, false, server.name()).unwrap();
+        agent_spawn(
+            dir.path(),
+            &feature,
+            "reviewer",
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
+        agent_spawn(
+            dir.path(),
+            &feature,
+            "tester",
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         // Mark tester as inactive (simulating `pm agent stop tester`)
         let agents_dir = paths::agents_dir(dir.path());
@@ -551,8 +660,26 @@ mod tests {
         let dir = tempdir().unwrap();
         let (_session_name, feature) = setup_project(dir.path(), &server);
 
-        agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
-        agent_spawn(dir.path(), &feature, "tester", None, false, server.name()).unwrap();
+        agent_spawn(
+            dir.path(),
+            &feature,
+            "reviewer",
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
+        agent_spawn(
+            dir.path(),
+            &feature,
+            "tester",
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         // Call spawn_all without killing windows: every agent is already active.
         let result = agent_spawn_all(dir.path(), &feature, server.name()).unwrap();
@@ -592,7 +719,16 @@ mod tests {
         let (_session_name, feature) = setup_project(dir.path(), &server);
 
         // Spawn a good agent first
-        agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
+        agent_spawn(
+            dir.path(),
+            &feature,
+            "reviewer",
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         // Manually register a second agent, then destroy the tmux session
         // so that spawning new windows fails for both.
@@ -605,6 +741,7 @@ mod tests {
                 session_id: String::new(),
                 window_name: "tester".to_string(),
                 active: true,
+                agent_definition: None,
             },
         );
         registry.save(&agents_dir, &feature).unwrap();
@@ -633,7 +770,16 @@ mod tests {
         let (session_name, feature) = setup_project(dir.path(), &server);
 
         // Spawn agent, then manually set a session_id
-        agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
+        agent_spawn(
+            dir.path(),
+            &feature,
+            "reviewer",
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         let agents_dir = paths::agents_dir(dir.path());
         let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
@@ -648,8 +794,16 @@ mod tests {
         tmux::create_session(server.name(), &session_name, &worktree).unwrap();
 
         // Re-spawn should resume
-        let (outcome, msg) =
-            agent_spawn(dir.path(), &feature, "reviewer", None, false, server.name()).unwrap();
+        let (outcome, msg) = agent_spawn(
+            dir.path(),
+            &feature,
+            "reviewer",
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
         assert_eq!(outcome, SpawnOutcome::Resumed);
         assert!(outcome.is_new_window());
         assert!(msg.contains("Resumed agent 'reviewer'"));
@@ -661,10 +815,183 @@ mod tests {
         let dir = tempdir().unwrap();
         let (_session_name, feature) = setup_project(dir.path(), &server);
 
-        let result = agent_spawn(dir.path(), &feature, "foo:bar", None, false, server.name());
+        let result = agent_spawn(
+            dir.path(),
+            &feature,
+            "foo:bar",
+            None,
+            None,
+            false,
+            server.name(),
+        );
         assert!(result.is_err());
 
-        let result = agent_spawn(dir.path(), &feature, "../evil", None, false, server.name());
+        let result = agent_spawn(
+            dir.path(),
+            &feature,
+            "../evil",
+            None,
+            None,
+            false,
+            server.name(),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn spawn_with_alias_registers_under_display_name_with_definition() {
+        // `pm agent spawn frontend-dev --agent implementer` should:
+        //   - Register the entry under `frontend-dev`
+        //   - Store `agent_definition = Some("implementer")` for restart/resume
+        //   - Create a tmux window named `frontend-dev`
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+
+        let (outcome, _msg) = agent_spawn(
+            dir.path(),
+            &feature,
+            "frontend-dev",
+            Some("implementer"),
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
+        assert_eq!(outcome, SpawnOutcome::Spawned);
+
+        // Window registered under display name
+        assert!(
+            tmux::find_window(server.name(), &session_name, "frontend-dev")
+                .unwrap()
+                .is_some()
+        );
+        // No window under definition name
+        assert!(
+            tmux::find_window(server.name(), &session_name, "implementer")
+                .unwrap()
+                .is_none()
+        );
+
+        // Registry entry under display name with stored definition
+        let agents_dir = paths::agents_dir(dir.path());
+        let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        let entry = registry.get("frontend-dev").unwrap();
+        assert_eq!(entry.agent_definition.as_deref(), Some("implementer"));
+        assert_eq!(entry.window_name, "frontend-dev");
+        assert_eq!(entry.effective_definition("frontend-dev"), "implementer");
+        assert!(registry.get("implementer").is_none());
+    }
+
+    #[test]
+    fn spawn_without_alias_stores_no_definition() {
+        // The common case: `pm agent spawn implementer` should leave
+        // `agent_definition` as `None`, so the on-disk TOML stays clean.
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (_session_name, feature) = setup_project(dir.path(), &server);
+
+        agent_spawn(
+            dir.path(),
+            &feature,
+            "implementer",
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
+
+        let agents_dir = paths::agents_dir(dir.path());
+        let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        let entry = registry.get("implementer").unwrap();
+        assert!(entry.agent_definition.is_none());
+        assert_eq!(entry.effective_definition("implementer"), "implementer");
+    }
+
+    #[test]
+    fn spawn_alias_equal_to_name_does_not_persist_definition() {
+        // `pm agent spawn implementer --agent implementer` is silly but
+        // should be a no-op as far as on-disk state goes — keep TOML clean.
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (_session_name, feature) = setup_project(dir.path(), &server);
+
+        agent_spawn(
+            dir.path(),
+            &feature,
+            "implementer",
+            Some("implementer"),
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
+
+        let agents_dir = paths::agents_dir(dir.path());
+        let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        let entry = registry.get("implementer").unwrap();
+        assert!(entry.agent_definition.is_none());
+    }
+
+    #[test]
+    fn spawn_all_preserves_alias_on_respawn() {
+        // After spawning an aliased agent, killing its window, and
+        // calling `agent_spawn_all`, the respawn should still launch
+        // `claude --agent <definition>` (preserved via the registry).
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+
+        agent_spawn(
+            dir.path(),
+            &feature,
+            "frontend-dev",
+            Some("implementer"),
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
+
+        // Kill and recreate the session (simulating restart — windows gone)
+        tmux::kill_session(server.name(), &session_name).unwrap();
+        let worktree = dir.path().join("login");
+        tmux::create_session(server.name(), &session_name, &worktree).unwrap();
+
+        let result = agent_spawn_all(dir.path(), &feature, server.name()).unwrap();
+        assert_eq!(result.spawned_count, 1);
+
+        // Window restored under the display name
+        assert!(
+            tmux::find_window(server.name(), &session_name, "frontend-dev")
+                .unwrap()
+                .is_some()
+        );
+
+        // Registry still records the definition
+        let agents_dir = paths::agents_dir(dir.path());
+        let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        let entry = registry.get("frontend-dev").unwrap();
+        assert_eq!(entry.agent_definition.as_deref(), Some("implementer"));
+    }
+
+    #[test]
+    fn spawn_rejects_invalid_definition_name() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (_session_name, feature) = setup_project(dir.path(), &server);
+
+        // Display name is fine, but the definition is invalid
+        let result = agent_spawn(
+            dir.path(),
+            &feature,
+            "frontend-dev",
+            Some("foo:bar"),
+            None,
+            false,
+            server.name(),
+        );
         assert!(result.is_err());
     }
 

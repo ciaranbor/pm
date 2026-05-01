@@ -129,6 +129,7 @@ mod tests {
                 session_id: String::new(),
                 window_name: agent_name.to_string(),
                 active: true,
+                agent_definition: None,
             },
         );
         registry.save(&agents_dir, feature).unwrap();

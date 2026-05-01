@@ -322,6 +322,7 @@ Bundled agents:
 pm agent spawn reviewer                      # spawn the reviewer agent in a new tmux window
 pm agent spawn implementer --edit            # spawn with acceptEdits permission
 pm agent spawn implementer --context "..."   # spawn with initial context/prompt
+pm agent spawn frontend-dev --agent implementer  # display name 'frontend-dev', launched as `claude --agent implementer`
 pm agent spawn                               # respawn all previously active agents
 
 pm agent list                                # list all agents in the current feature
@@ -344,6 +345,15 @@ pm agent fork reviewer reviewer-2            # spawn a new agent that starts wit
 pm agent check                               # send checklist to all active agents
 pm agent check implementer                   # send checklist to a specific agent
 ```
+
+Use `--agent <definition>` to decouple the agent's display name from the
+underlying claude agent definition. The display name (positional `NAME`)
+is what shows up in the registry, the tmux window, and `PM_AGENT_NAME`
+(your messaging identity); the `--agent` value is what gets passed to
+`claude --agent`. This lets you run multiple agents from the same
+definition with distinct identities — e.g. `pm agent spawn frontend-dev
+--agent implementer` and `pm agent spawn backend-dev --agent
+implementer`. Restart, fork, and `pm open` all preserve the alias.
 
 Checklists are assembled from two sources:
 - **Agent definition frontmatter** — a `checklist:` field in the YAML frontmatter of `agents/<name>.md`

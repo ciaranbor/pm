@@ -723,6 +723,7 @@ mod tests {
                 session_id: String::new(),
                 window_name: "reviewer".to_string(),
                 active: true,
+                agent_definition: None,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -773,6 +774,7 @@ mod tests {
                 session_id: String::new(),
                 window_name: "reviewer".to_string(),
                 active: true,
+                agent_definition: None,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -807,6 +809,7 @@ mod tests {
                 session_id: String::new(),
                 window_name: "orchestrator".to_string(),
                 active: true,
+                agent_definition: None,
             },
         );
         registry.save(&agents_dir, "main").unwrap();
@@ -859,6 +862,7 @@ mod tests {
                 session_id: String::new(),
                 window_name: "reviewer".to_string(),
                 active: true,
+                agent_definition: None,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -913,6 +917,7 @@ mod tests {
                 session_id: String::new(),
                 window_name: "reviewer".to_string(),
                 active: true,
+                agent_definition: None,
             },
         );
         registry.save(&agents_dir, "login").unwrap();

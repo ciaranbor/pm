@@ -105,6 +105,10 @@ pub fn spawn_default_agent(
         project_root,
         feature: feature_name,
         agent_name: agent,
+        // Default-agent flow has no concept of aliasing — the display name
+        // doubles as the definition. Setting this to None makes
+        // spawn_claude_session use `agent_name` for `--agent`.
+        agent_definition: None,
         prompt: None,
         edit,
         resume_session: None,
