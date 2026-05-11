@@ -658,6 +658,19 @@ pub fn backfill_with_dir(projects_dir: &Path) -> Result<Vec<String>> {
     let mut messages = Vec::new();
 
     for (name, mut entry) in projects {
+        // Flag relative roots before trying to use them. A bare path like
+        // `exo-bench` would be resolved against the *caller's* CWD on every
+        // load, silently corrupting cross-project messaging. We can't fix it
+        // automatically (we don't know the original CWD), so we report and
+        // skip — the user must `pm delete` + re-register from the right dir.
+        if !crate::path_utils::is_portable(&entry.root) {
+            messages.push(format!(
+                "{name}: WARNING relative root \"{}\" — delete entry and re-register from the correct directory",
+                entry.root
+            ));
+            continue;
+        }
+
         let root = entry.root_path();
         if !root.exists() {
             messages.push(format!("{name}: skipped (root does not exist)"));
@@ -1481,6 +1494,33 @@ mod tests {
             msgs.iter()
                 .any(|m| m.contains("skipped (root does not exist)")),
             "{msgs:?}"
+        );
+    }
+
+    #[test]
+    fn backfill_warns_on_relative_root() {
+        // The `pm init exo-bench` (relative path) bug saved entries with
+        // non-portable roots. Backfill cannot auto-fix these (we don't know
+        // the original CWD), but it must surface them so the user can
+        // delete + re-register.
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("projects");
+        std::fs::create_dir_all(&projects_dir).unwrap();
+
+        // Bypass ProjectEntry::save validation by writing the toml directly.
+        // This simulates an entry created by the buggy code path.
+        std::fs::write(
+            projects_dir.join("exo-bench.toml"),
+            "root = \"exo-bench\"\nmain_branch = \"main\"\n",
+        )
+        .unwrap();
+
+        let msgs = backfill_with_dir(&projects_dir).unwrap();
+        assert!(
+            msgs.iter().any(|m| m.contains("exo-bench")
+                && m.contains("WARNING")
+                && m.contains("relative")),
+            "expected relative-root warning, got: {msgs:?}"
         );
     }
 

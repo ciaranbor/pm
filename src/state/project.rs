@@ -158,7 +158,15 @@ impl ProjectEntry {
     }
 
     /// Save to the global registry using atomic write.
+    ///
+    /// Errors if `root` is not a portable path (absolute or `~/…`). Relative
+    /// paths in the registry resolve against each caller's CWD on every load,
+    /// silently corrupting cross-project operations like messaging.
     pub fn save(&self, projects_dir: &Path, name: &str) -> Result<()> {
+        if !crate::path_utils::is_portable(&self.root) {
+            return Err(PmError::InvalidProjectRoot(self.root.clone()));
+        }
+
         std::fs::create_dir_all(projects_dir)?;
         let path = projects_dir.join(format!("{name}.toml"));
         let content = toml::to_string_pretty(self)?;
@@ -315,6 +323,56 @@ main_branch = "main"
 
         let loaded = ProjectEntry::load(&projects_dir, "myapp").unwrap();
         assert_eq!(entry, loaded);
+    }
+
+    #[test]
+    fn project_entry_save_rejects_relative_root() {
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("projects");
+
+        let entry = ProjectEntry {
+            root: "exo-bench".to_string(), // relative — would corrupt registry
+            main_branch: "main".to_string(),
+            repo_url: None,
+            state_remote: None,
+        };
+        let err = entry.save(&projects_dir, "exo-bench").unwrap_err();
+        assert!(matches!(err, PmError::InvalidProjectRoot(_)));
+        assert!(err.to_string().contains("absolute"));
+        // No file should have been written
+        assert!(!projects_dir.join("exo-bench.toml").exists());
+    }
+
+    #[test]
+    fn project_entry_save_rejects_relative_with_dot_root() {
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("projects");
+
+        let entry = ProjectEntry {
+            root: "./exo-bench".to_string(),
+            main_branch: "main".to_string(),
+            repo_url: None,
+            state_remote: None,
+        };
+        assert!(matches!(
+            entry.save(&projects_dir, "exo-bench").unwrap_err(),
+            PmError::InvalidProjectRoot(_)
+        ));
+    }
+
+    #[test]
+    fn project_entry_save_accepts_tilde_root() {
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("projects");
+
+        let entry = ProjectEntry {
+            root: "~/Projects/myapp".to_string(),
+            main_branch: "main".to_string(),
+            repo_url: None,
+            state_remote: None,
+        };
+        entry.save(&projects_dir, "myapp").unwrap();
+        assert!(projects_dir.join("myapp.toml").exists());
     }
 
     #[test]
