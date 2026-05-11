@@ -140,7 +140,12 @@ fn display_path(project_root: &Path, path: &Path) -> String {
 /// Returns one summary line per project.
 pub fn upgrade_all() -> Result<Vec<String>> {
     let projects_dir = paths::global_projects_dir()?;
-    let projects = ProjectEntry::list(&projects_dir)?;
+    upgrade_all_with_dir(&projects_dir)
+}
+
+/// Testable inner function that takes an explicit projects directory.
+pub fn upgrade_all_with_dir(projects_dir: &Path) -> Result<Vec<String>> {
+    let projects = ProjectEntry::list(projects_dir)?;
 
     if projects.is_empty() {
         return Ok(vec!["No registered projects".to_string()]);
@@ -148,6 +153,19 @@ pub fn upgrade_all() -> Result<Vec<String>> {
 
     let mut lines = Vec::new();
     for (name, entry) in &projects {
+        // Skip legacy entries with non-portable roots — calling
+        // `to_portable` on a relative `PathBuf` would `debug_assert!` in
+        // debug builds and silently misbehave in release. `pm self-update`
+        // chains through here, so a single bad entry must not break the
+        // command users run to *pick up* the fix.
+        if !crate::path_utils::is_portable(&entry.root) {
+            lines.push(format!(
+                "{name}: skipped (non-portable root \"{}\" — run `pm state backfill` for details)",
+                entry.root
+            ));
+            continue;
+        }
+
         // Migrate absolute paths to portable ~/… format on re-save
         let portable = crate::path_utils::to_portable(&entry.root_path());
         if portable != entry.root {
@@ -155,7 +173,7 @@ pub fn upgrade_all() -> Result<Vec<String>> {
                 root: portable,
                 ..entry.clone()
             };
-            migrated.save(&projects_dir, name)?;
+            migrated.save(projects_dir, name)?;
         }
 
         let root = entry.root_path();
@@ -175,7 +193,12 @@ pub fn upgrade_all() -> Result<Vec<String>> {
 /// registered project without writing anything.
 pub fn upgrade_all_dry_run() -> Result<Vec<String>> {
     let projects_dir = paths::global_projects_dir()?;
-    let projects = ProjectEntry::list(&projects_dir)?;
+    upgrade_all_dry_run_with_dir(&projects_dir)
+}
+
+/// Testable inner function that takes an explicit projects directory.
+pub fn upgrade_all_dry_run_with_dir(projects_dir: &Path) -> Result<Vec<String>> {
+    let projects = ProjectEntry::list(projects_dir)?;
 
     if projects.is_empty() {
         return Ok(vec!["No registered projects".to_string()]);
@@ -183,6 +206,16 @@ pub fn upgrade_all_dry_run() -> Result<Vec<String>> {
 
     let mut lines = Vec::new();
     for (name, entry) in &projects {
+        // Same guard as in upgrade_all: never resolve a non-portable root
+        // against the caller's CWD.
+        if !crate::path_utils::is_portable(&entry.root) {
+            lines.push(format!(
+                "{name}: skipped (non-portable root \"{}\" — run `pm state backfill` for details)",
+                entry.root
+            ));
+            continue;
+        }
+
         let root = entry.root_path();
         if !root.exists() {
             lines.push(format!("{name}: skipped (root does not exist)"));
@@ -509,5 +542,66 @@ last_active = "2026-01-01T00:00:00Z"
             "expected actions, not the up-to-date sentinel: {lines:?}"
         );
         assert!(!lines.is_empty(), "expected at least one action line");
+    }
+
+    // --- upgrade_all_with_dir tests ---
+
+    /// Write a registry entry directly to disk, bypassing the
+    /// ProjectEntry::save validation. Used to simulate legacy bad entries
+    /// from before the relative-root guard existed.
+    fn write_raw_registry_entry(projects_dir: &std::path::Path, name: &str, root: &str) {
+        fs::create_dir_all(projects_dir).unwrap();
+        fs::write(
+            projects_dir.join(format!("{name}.toml")),
+            format!("root = \"{root}\"\nmain_branch = \"main\"\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn upgrade_all_skips_legacy_non_portable_root() {
+        // Regression: a single bad entry must not break `upgrade --all` or
+        // (by extension) `pm self-update`, which is the command users would
+        // run to *pick up* this fix.
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("registry");
+        write_raw_registry_entry(&projects_dir, "exo-bench", "exo-bench");
+
+        // A real adjacent entry to verify we continue past the bad one
+        let good_root = setup_project(&dir.path().join("good"));
+        let good_entry = ProjectEntry {
+            root: good_root.to_string_lossy().to_string(),
+            main_branch: "main".to_string(),
+            repo_url: None,
+            state_remote: None,
+        };
+        good_entry.save(&projects_dir, "good").unwrap();
+
+        let lines = upgrade_all_with_dir(&projects_dir).unwrap();
+        let joined = lines.join("\n");
+        assert!(
+            joined.contains("exo-bench: skipped (non-portable root")
+                && joined.contains("pm state backfill"),
+            "expected non-portable skip line, got: {joined}"
+        );
+        // The good project still gets upgraded
+        assert!(
+            joined.contains("good:") && !joined.contains("good: skipped"),
+            "good project should not be skipped, got: {joined}"
+        );
+    }
+
+    #[test]
+    fn upgrade_all_dry_run_skips_legacy_non_portable_root() {
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("registry");
+        write_raw_registry_entry(&projects_dir, "exo-bench", "exo-bench");
+
+        let lines = upgrade_all_dry_run_with_dir(&projects_dir).unwrap();
+        let joined = lines.join("\n");
+        assert!(
+            joined.contains("exo-bench: skipped (non-portable root"),
+            "expected non-portable skip line in dry-run, got: {joined}"
+        );
     }
 }

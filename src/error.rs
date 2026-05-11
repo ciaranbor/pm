@@ -41,6 +41,13 @@ pub enum PmError {
     #[error("Repo already registered as project \"{0}\"")]
     RepoAlreadyRegistered(String),
 
+    #[error(
+        "Invalid project root \"{0}\": must be an absolute path or start with `~/` \
+         (relative paths in the registry resolve against each caller's CWD, \
+         which silently corrupts cross-project operations like messaging)"
+    )]
+    InvalidProjectRoot(String),
+
     #[error("Invalid feature name \"{0}\": must not contain '/'")]
     InvalidFeatureName(String),
 

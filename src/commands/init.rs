@@ -44,6 +44,18 @@ pub fn init(
         })?
         .to_string();
 
+    // Resolve to an absolute path before touching the filesystem. Without
+    // this a relative argument (`pm init exo-bench`) would be saved verbatim
+    // in the registry, then resolved against each caller's CWD — silently
+    // corrupting cross-project operations like messaging.
+    //
+    // We use `absolutize` (CWD-join) rather than `canonicalize` so the user's
+    // chosen path prefix is preserved (canonicalize would resolve symlinks
+    // like /var → /private/var on macOS, which is more invasive than needed
+    // and breaks path comparisons in tests).
+    let path_buf = crate::path_utils::absolutize(path)?;
+    let path = path_buf.as_path();
+
     // Create project root
     std::fs::create_dir_all(path)?;
 
@@ -360,6 +372,50 @@ mod tests {
         let main_path = paths::main_worktree(&project_path);
         let remotes = crate::git::list_remotes(&main_path).unwrap();
         assert!(remotes.contains("origin"));
+    }
+
+    #[test]
+    fn init_with_relative_path_stores_absolute_root_in_registry() {
+        // Regression test for the bug where `pm init exo-bench` (relative
+        // path) was saved as `root = "exo-bench"` in the registry, breaking
+        // cross-project messaging because the path resolved against the
+        // sender's CWD.
+        //
+        // CWD is process-global. We serialise this test against itself via
+        // a static mutex so a flaky retry doesn't race with the prior run.
+        // **Important:** every other test in this binary today uses absolute
+        // tempdir paths and never mutates CWD. If you add a test that does
+        // `std::env::set_current_dir(...)`, acquire this same mutex (or move
+        // it to a shared location and acquire it from there) — otherwise
+        // tests will race against each other under `cargo test`.
+        use std::sync::Mutex;
+        static CWD_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = CWD_LOCK.lock().unwrap();
+
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let name = server.scope("relapp");
+        let projects_dir = dir.path().join("registry");
+
+        let prev_cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        // Pass just the relative name — this is what reproduced the bug
+        let relative_path = std::path::PathBuf::from(&name);
+        let result = init(&relative_path, &projects_dir, None, server.name());
+
+        // Always restore CWD before asserting so a failure doesn't leak
+        std::env::set_current_dir(&prev_cwd).unwrap();
+        result.unwrap();
+
+        let entry = ProjectEntry::load(&projects_dir, &name).unwrap();
+        // root must be portable: absolute ('/…') or tilde ('~/…'), never bare
+        assert!(
+            crate::path_utils::is_portable(&entry.root),
+            "registry root should be portable, got: {:?}",
+            entry.root
+        );
+        assert_ne!(entry.root, name, "bug: registry stored relative path");
     }
 
     #[test]

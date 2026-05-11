@@ -568,6 +568,8 @@ pm state push --global           # push the enriched registry
 
 URLs are also auto-persisted going forward: `pm init --git <url>` saves `repo_url`, `pm register` reads origin from the worktree, and `pm state remote` saves `state_remote`.
 
+`pm state backfill` also flags non-portable registry roots (bare relative paths like `exo-bench` instead of absolute `~/Projects/exo-bench`). These corrupt cross-project messaging because the path is resolved against each caller's CWD. `pm init` and `pm register` now absolutize the path before saving, so new entries are always portable; pre-existing bad entries are reported with a `WARNING` line and must be fixed manually (`pm delete <name>` and re-register from the right directory).
+
 #### Restore projects on a fresh machine
 
 `pm restore` rebuilds all projects from the global registry. For each entry it clones the repo (if `repo_url` is set and the directory is missing), sets up the `.pm/` state remote and pulls (if `state_remote` is set), recreates missing worktrees for active features from `.pm/features/` state, then runs `pm open` to recreate tmux sessions.
