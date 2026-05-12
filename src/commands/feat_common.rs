@@ -69,13 +69,22 @@ pub fn enqueue_initial_context<'a>(
     config: &'a ProjectConfig,
     agent_override: Option<&'a str>,
     context: &str,
+    base_scope: &str,
 ) -> Result<Option<&'a str>> {
     let Some(agent) = resolve_default_agent(agent_override, config) else {
         return Ok(None);
     };
     let messages_dir = paths::messages_dir(project_root);
-    let sender = messages::default_user_name();
-    messages::send(&messages_dir, feature_name, agent, &sender, context)?;
+    // Record sender_scope so that `pm msg reply` routes the response
+    // back to the correct scope (main, or a parent feature for stacked features).
+    messages::send_with_scope(
+        &messages_dir,
+        feature_name,
+        agent,
+        base_scope,
+        context,
+        Some(base_scope),
+    )?;
     Ok(Some(agent))
 }
 

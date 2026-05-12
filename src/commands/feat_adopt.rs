@@ -155,6 +155,7 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
                 &config,
                 params.agent_override,
                 resolved,
+                &resolved_base,
             )?;
         }
 
