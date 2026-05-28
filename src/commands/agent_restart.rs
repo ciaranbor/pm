@@ -69,6 +69,12 @@ pub fn agent_restart(
         let _ = tmux::kill_window(tmux_server, target);
     }
 
+    // Land the client on the freshly spawned window so the user ends up in
+    // the restarted agent rather than wherever the killed window left them.
+    if let Some(new_target) = tmux::find_window(tmux_server, &session_name, agent_name)? {
+        let _ = tmux::select_window(tmux_server, &new_target);
+    }
+
     let msg = if resume_id.is_some() {
         format!("Restarted agent '{agent_name}' (resumed session)")
     } else {
@@ -182,6 +188,48 @@ mod tests {
         let agents_dir = paths::agents_dir(dir.path());
         let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
         assert!(registry.get("reviewer").unwrap().active);
+    }
+
+    #[test]
+    fn restart_lands_on_new_window() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+
+        // Spawn the agent, then create and select a different window so the
+        // active window is NOT the agent's at restart time.
+        agent_spawn::agent_spawn(
+            dir.path(),
+            &feature,
+            "reviewer",
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
+
+        let other = tmux::new_window(
+            server.name(),
+            &session_name,
+            dir.path(),
+            Some("other"),
+            true,
+        )
+        .unwrap();
+        tmux::select_window(server.name(), &other).unwrap();
+        assert_eq!(
+            tmux::active_window_name(server.name(), &session_name).unwrap(),
+            Some("other".to_string())
+        );
+
+        agent_restart(dir.path(), &feature, "reviewer", server.name()).unwrap();
+
+        // After restart, the client should be focused on the reviewer window.
+        assert_eq!(
+            tmux::active_window_name(server.name(), &session_name).unwrap(),
+            Some("reviewer".to_string())
+        );
     }
 
     #[test]

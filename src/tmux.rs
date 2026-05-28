@@ -254,6 +254,29 @@ pub fn select_window(server: Option<&str>, target: &str) -> Result<()> {
     Ok(())
 }
 
+/// Return the name of the currently active window in a session, or `None`
+/// if the session has no active window / does not exist.
+pub fn active_window_name(server: Option<&str>, session: &str) -> Result<Option<String>> {
+    let output = run_tmux(
+        server,
+        &[
+            "list-windows",
+            "-t",
+            session,
+            "-F",
+            "#{window_active}\t#{window_name}",
+        ],
+    )?;
+    for line in output.lines() {
+        if let Some((active, name)) = line.split_once('\t')
+            && active == "1"
+        {
+            return Ok(Some(name.to_string()));
+        }
+    }
+    Ok(None)
+}
+
 /// Kill the entire tmux server (used in tests for cleanup).
 pub fn kill_server(server: Option<&str>) -> Result<()> {
     let _ = run_tmux(server, &["kill-server"]);
