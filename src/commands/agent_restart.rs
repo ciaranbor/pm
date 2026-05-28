@@ -38,18 +38,20 @@ pub fn agent_restart(
         Some(entry.session_id.clone())
     };
 
-    // Kill the existing tmux window if it exists
-    if let Some(target) = tmux::find_window(tmux_server, &session_name, agent_name)? {
-        let _ = tmux::kill_window(tmux_server, &target);
+    // Rename the old window (if it exists) so agent_spawn sees "no window"
+    // and creates a fresh one. We kill the old window AFTER spawning so that
+    // `pm agent restart` works when called from within the agent's own window
+    // (killing the window would terminate this process before the spawn).
+    let old_window = tmux::find_window(tmux_server, &session_name, agent_name)?;
+    if let Some(ref target) = old_window {
+        let temp_name = format!("{agent_name}-restarting");
+        let _ = tmux::rename_window(tmux_server, target, &temp_name);
     }
 
     // Respawn via agent_spawn (which will see the registry entry, find no
-    // window, and respawn). Passing `None` for `agent_definition` lets
-    // `agent_spawn` re-read the stored definition from the registry, so
-    // aliased agents keep their `--agent <def>` flag across restarts.
-    // agent_spawn sets active = true on register, preserving the flag.
-    // We discard agent_spawn's status message and craft our own, since
-    // "Restarted ..." reads better than "Resumed ...".
+    // window with the agent's name, and respawn). Passing `None` for
+    // `agent_definition` lets `agent_spawn` re-read the stored definition
+    // from the registry, so aliased agents keep their `--agent <def>` flag.
     let (_outcome, _spawn_msg) = super::agent_spawn::agent_spawn(
         project_root,
         feature,
@@ -59,6 +61,13 @@ pub fn agent_restart(
         false,
         tmux_server,
     )?;
+
+    // Now kill the old (renamed) window. This is safe even if called from
+    // within it — all state updates and the new spawn are already done.
+    if let Some(ref target) = old_window {
+        // The target still refers to the same window (by index), just renamed.
+        let _ = tmux::kill_window(tmux_server, target);
+    }
 
     let msg = if resume_id.is_some() {
         format!("Restarted agent '{agent_name}' (resumed session)")
