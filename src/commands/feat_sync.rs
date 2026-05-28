@@ -121,6 +121,7 @@ mod tests {
             base: String::new(),
             pr: pr.to_string(),
             context: String::new(),
+            workflow: None,
             created: Utc::now(),
             last_active: Utc::now(),
         }

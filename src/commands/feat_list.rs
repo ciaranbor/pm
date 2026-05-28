@@ -81,6 +81,7 @@ mod tests {
             base: "develop".to_string(),
             pr: "https://github.com/org/repo/pull/42".to_string(),
             context: String::new(),
+            workflow: None,
             created: Utc::now(),
             last_active: Utc::now(),
         };

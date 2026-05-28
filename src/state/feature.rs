@@ -47,6 +47,11 @@ pub struct FeatureState {
     pub pr: String,
     #[serde(default)]
     pub context: String,
+    /// Active workflow for this feature, referencing a directory under
+    /// `<project>/.pm/workflows/<name>/`. `None` means no workflow is
+    /// active (legacy features or those created without `--workflow`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<String>,
     pub created: DateTime<Utc>,
     pub last_active: DateTime<Utc>,
 }
@@ -147,6 +152,7 @@ mod tests {
             base: String::new(),
             pr: String::new(),
             context: String::new(),
+            workflow: None,
             created: Utc::now(),
             last_active: Utc::now(),
         }

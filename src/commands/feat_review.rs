@@ -68,7 +68,9 @@ fn setup_review(
         details.number, details.title, details.url, details.body
     );
 
-    // Step 1: Write state with status = initializing
+    // Step 1: Write state with status = initializing. Always tag the
+    // feature with the bundled `pr-review` workflow so the reviewer's
+    // `pm workflow show` returns the right routing prose.
     let mut state = feat_common::write_initializing_state(
         &features_dir,
         feature_name,
@@ -78,6 +80,7 @@ fn setup_review(
             base: "",
             pr: &details.number,
             context: &context,
+            workflow: Some("pr-review"),
         },
     )?;
 
@@ -395,5 +398,20 @@ mod tests {
         let agents_dir = paths::agents_dir(&project_path);
         let registry = crate::state::agent::AgentRegistry::load(&agents_dir, "review-42").unwrap();
         assert!(registry.get("reviewer").is_some());
+    }
+
+    #[test]
+    fn review_sets_pr_review_workflow_in_state() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, _) = server.setup_project(dir.path());
+        let details = sample_details();
+        simulate_fetched_pr(&project_path, "review-42");
+
+        setup_review(&project_path, &details, "review-42", server.name()).unwrap();
+
+        let features_dir = paths::features_dir(&project_path);
+        let state = FeatureState::load(&features_dir, "review-42").unwrap();
+        assert_eq!(state.workflow.as_deref(), Some("pr-review"));
     }
 }

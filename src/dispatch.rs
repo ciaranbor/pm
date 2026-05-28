@@ -639,7 +639,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     context,
                     base,
                     edit,
-                    agent,
+                    workflow,
                 } => {
                     let feat_name =
                         commands::feat_new::feat_new(&commands::feat_new::FeatNewParams {
@@ -649,7 +649,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                             context: context.as_deref(),
                             base: base.as_deref(),
                             edit,
-                            agent_override: agent.as_deref(),
+                            workflow: workflow.as_deref(),
                             tmux_server: None,
                         })?;
                     println!("Created feature '{feat_name}'");
@@ -661,7 +661,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     context,
                     from,
                     edit,
-                    agent,
+                    workflow,
                 } => {
                     let feat_name =
                         commands::feat_adopt::feat_adopt(&commands::feat_adopt::FeatAdoptParams {
@@ -671,7 +671,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                             context: context.as_deref(),
                             from: from.as_deref(),
                             edit,
-                            agent_override: agent.as_deref(),
+                            workflow: workflow.as_deref(),
                             tmux_server: None,
                             claude_base: None,
                         })?;
@@ -943,6 +943,72 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                 commands::summary::run(&body)
             }
         },
+        Commands::Workflow(workflow_cmd) => {
+            let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+            match workflow_cmd {
+                WorkflowCommands::Show => {
+                    let scope = resolve_scope(&project_root)?;
+                    match commands::workflow::show(&project_root, &scope)? {
+                        Some(body) => {
+                            // Use print! (not println!) to avoid adding a
+                            // trailing blank line — workflow.md already
+                            // ends in a newline.
+                            print!("{body}");
+                            if !body.ends_with('\n') {
+                                println!();
+                            }
+                        }
+                        None => {
+                            println!("No workflow active for this feature.");
+                        }
+                    }
+                    Ok(())
+                }
+                WorkflowCommands::Install { name } => {
+                    let messages = commands::skills::workflows_install_project_force(
+                        &project_root,
+                        name.as_deref(),
+                    )?;
+                    for m in messages {
+                        println!("{m}");
+                    }
+                    Ok(())
+                }
+                WorkflowCommands::Uninstall { name, all } => {
+                    if name.is_none() && !all {
+                        eprintln!("Provide a workflow name or use --all to uninstall all");
+                        std::process::exit(1);
+                    }
+                    let messages = commands::skills::workflows_uninstall_project(
+                        &project_root,
+                        name.as_deref(),
+                    )?;
+                    for m in messages {
+                        println!("{m}");
+                    }
+                    Ok(())
+                }
+                WorkflowCommands::List => {
+                    let out = commands::workflow::list_rows(&project_root)?;
+                    // Print rows to stdout (the normal listing).
+                    if out.rows.is_empty() {
+                        println!(
+                            "No workflows installed. Run `pm upgrade` to install bundled workflows."
+                        );
+                    } else {
+                        for line in &out.rows {
+                            println!("{line}");
+                        }
+                    }
+                    // Print warnings to stderr so they don't pollute pipe
+                    // consumers but still surface broken workflows.
+                    for w in &out.warnings {
+                        eprintln!("{w}");
+                    }
+                    Ok(())
+                }
+            }
+        }
     }
 }
 

@@ -445,6 +445,7 @@ mod tests {
             base: String::new(),
             pr: String::new(),
             context: String::new(),
+            workflow: None,
             created: now,
             last_active: now,
         };

@@ -19,7 +19,9 @@ pub struct FeatAdoptParams<'a> {
     /// Path to an existing worktree to migrate Claude sessions from.
     pub from: Option<&'a Path>,
     pub edit: bool,
-    pub agent_override: Option<&'a str>,
+    /// Workflow to activate for this feature. Required when `context` is
+    /// provided (a context with no workflow has nobody to deliver it to).
+    pub workflow: Option<&'a str>,
     /// Allows tests to use an isolated tmux server. Pass `None` in production.
     pub tmux_server: Option<&'a str>,
     /// Base path for Claude session data (for migration).
@@ -29,6 +31,16 @@ pub struct FeatAdoptParams<'a> {
 /// Adopt an existing branch as a pm feature: worktree + tmux session + state file.
 /// Unlike `feat_new`, this does not create a branch — it must already exist.
 pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
+    // A context with no workflow has nobody to deliver it to — fail
+    // early before any side effects.
+    if params.context.is_some() && params.workflow.is_none() {
+        return Err(PmError::SafetyCheck(
+            "--context requires --workflow <name>. \
+             Run `pm workflow list` to see installed workflows."
+                .to_string(),
+        ));
+    }
+
     // Check feature limit before doing any work
     crate::state::project::check_feature_limit(params.project_root)?;
 
@@ -51,6 +63,26 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
     // Load project config for name
     let config = ProjectConfig::load(&pm_dir)?;
     let project_name = &config.project.name;
+
+    // Load workflow def and validate up-front (see `feat_new` for rationale).
+    let workflow_def = params
+        .workflow
+        .map(|w| feat_common::load_and_validate_workflow(params.project_root, w))
+        .transpose()?;
+    let auto_spawn: &[String] = workflow_def
+        .as_ref()
+        .map(|d| d.auto_spawn.as_slice())
+        .unwrap_or(&[]);
+
+    // Block context-with-empty-auto-spawn (see `feat_new` for rationale).
+    if params.context.is_some() && auto_spawn.is_empty() {
+        return Err(PmError::SafetyCheck(format!(
+            "workflow '{}' has an empty `auto_spawn` list, so --context has no recipient. \
+             Add at least one agent to `auto_spawn` in the workflow's config.toml, \
+             or drop --context.",
+            params.workflow.unwrap_or("<none>"),
+        )));
+    }
 
     // Resolve context upfront (file contents or literal text)
     let resolved_context = params
@@ -106,6 +138,7 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
             base: &resolved_base,
             pr: "",
             context: resolved_context.as_deref().unwrap_or(""),
+            workflow: params.workflow,
         },
     )?;
 
@@ -145,15 +178,14 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
             }
         }
 
-        // Step 2.7: Enqueue the initial context as a message to the default
-        // agent (if context provided). The Stop hook delivers it on the agent's
-        // empty first turn; TASK.md is never written.
+        // Step 2.7: Enqueue the initial context as a message to each
+        // auto_spawn agent (if context provided). The Stop hook delivers
+        // it on each agent's empty first turn; TASK.md is never written.
         if let Some(ref resolved) = resolved_context {
             feat_common::enqueue_initial_context(
                 params.project_root,
                 &feature_name,
-                &config,
-                params.agent_override,
+                auto_spawn,
                 resolved,
                 &resolved_base,
             )?;
@@ -162,16 +194,14 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
         // Step 3: Create tmux session
         tmux::create_session(params.tmux_server, &session_name, &worktree_path)?;
 
-        // Step 3.5: Spawn a claude session (if context was provided). The
-        // Stop hook blocks until the queued message is available.
-        // Reuse window :0 (the default shell) so we don't leave an empty window.
-        if resolved_context.is_some() {
+        // Step 3.5: Spawn the workflow's auto_spawn agents (if any). The
+        // first agent reuses window :0 to avoid leaving an empty shell.
+        if resolved_context.is_some() && !auto_spawn.is_empty() {
             let reuse_target = format!("{session_name}:0");
-            feat_common::spawn_default_agent(
+            feat_common::spawn_auto_spawn_agents(
                 params.project_root,
                 &feature_name,
-                &config,
-                params.agent_override,
+                auto_spawn,
                 params.edit,
                 Some(&reuse_target),
                 params.tmux_server,
@@ -235,7 +265,7 @@ mod tests {
             context: None,
             from: None,
             edit: false,
-            agent_override: None,
+            workflow: None,
             tmux_server,
             claude_base: None,
         }
@@ -342,7 +372,7 @@ mod tests {
 
         feat_adopt(&FeatAdoptParams {
             context: Some("Adopt existing login branch"),
-            agent_override: Some("implementer"),
+            workflow: Some("implement-and-review"),
             ..default_adopt_params(&project_path, "login", server.name())
         })
         .unwrap();
@@ -391,6 +421,7 @@ mod tests {
 
         feat_adopt(&FeatAdoptParams {
             context: Some("Adopt existing login branch"),
+            workflow: Some("implement-and-review"),
             ..default_adopt_params(&project_path, "login", server.name())
         })
         .unwrap();
@@ -737,5 +768,49 @@ mod tests {
         let err = result.unwrap_err();
         assert!(matches!(err, PmError::SafetyCheck(_)));
         assert!(err.to_string().contains("Feature limit reached"));
+    }
+
+    #[test]
+    fn feat_adopt_context_without_workflow_errors() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, _) = server.setup_project(dir.path());
+        create_branch(&project_path, "login");
+
+        let result = feat_adopt(&FeatAdoptParams {
+            context: Some("do X"),
+            workflow: None,
+            ..default_adopt_params(&project_path, "login", server.name())
+        });
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("--context requires --workflow")
+        );
+
+        // Branch is user-owned and must still exist.
+        let main_wt = paths::main_worktree(&project_path);
+        assert!(git::branch_exists(&main_wt, "login").unwrap());
+    }
+
+    #[test]
+    fn feat_adopt_workflow_recorded_in_state() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, _) = server.setup_project(dir.path());
+        create_branch(&project_path, "login");
+
+        feat_adopt(&FeatAdoptParams {
+            context: Some("Adopt existing login branch"),
+            workflow: Some("implement-and-review"),
+            ..default_adopt_params(&project_path, "login", server.name())
+        })
+        .unwrap();
+
+        let features_dir = paths::features_dir(&project_path);
+        let state = FeatureState::load(&features_dir, "login").unwrap();
+        assert_eq!(state.workflow.as_deref(), Some("implement-and-review"));
     }
 }

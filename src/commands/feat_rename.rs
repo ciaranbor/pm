@@ -384,7 +384,7 @@ mod tests {
             context: None,
             from: None,
             edit: false,
-            agent_override: None,
+            workflow: None,
             tmux_server: server.name(),
             claude_base: None,
         })

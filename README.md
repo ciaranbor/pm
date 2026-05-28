@@ -58,15 +58,19 @@ Restructures the repo in-place: moves it into `main/` within a new wrapper at th
 
 ```sh
 pm feat new login
-pm feat new login --context "Implement login page per issue #42"
-pm feat new login --context path/to/brief.md
+pm feat new login --workflow implement-and-review --context "Implement login page per issue #42"
+pm feat new login --workflow research-implement-review --context path/to/brief.md
 pm feat new child --base parent      # stack on another feature
-pm feat new login --context "task description" --no-edit
+pm feat new login --workflow implement-and-review --context "task description" --no-edit
 pm feat new ciaran/login                        # feature name: ciaran-login
 pm feat new ciaran/login --feature-name eval    # feature name: eval
 ```
 
-Creates a git branch, worktree, and tmux session (`myapp/login`). With `--context`, enqueues the provided text (or file contents) as the first message in the default agent's inbox and spawns a Claude session with auto-accept edits enabled. The Stop hook (installed by `pm init`, see below) blocks until the queued message is available, then tells the agent to read it. Use `--no-edit` to disable auto-accept edits. With `--base`, branches from the specified branch instead of the default. When `--base` is omitted, the current branch is detected from CWD — so running `pm feat new child` from within a feature worktree automatically stacks on that feature.
+Creates a git branch, worktree, and tmux session (`myapp/login`). With `--context`, you must also pass `--workflow <name>` so pm knows which agent(s) to spawn and where to deliver the message. The Stop hook (installed by `pm init`, see below) blocks until the queued message is available, then tells the agent to read it. Auto-accept edits is on by default; use `--no-edit` to disable. With `--base`, branches from the specified branch instead of the default. When `--base` is omitted, the current branch is detected from CWD — so running `pm feat new child` from within a feature worktree automatically stacks on that feature.
+
+`--workflow <name>` is also valid without `--context` — pm records the workflow in feature state but spawns no agent. Useful for setting up a feature you intend to spawn into later.
+
+Run `pm workflow list` to see installed workflows. See [Workflows](#workflows) below.
 
 Branch names with slashes are supported — slashes are automatically replaced with dashes for the feature name (used for the worktree directory, state file, and tmux session). Use `--feature-name` to override the derived name.
 
@@ -153,7 +157,7 @@ pm feat review 42                                    # by PR number
 pm feat review https://github.com/owner/repo/pull/42 # by URL
 ```
 
-Fetches the PR commits, creates a worktree and tmux session (`myapp/review-42`), and enqueues the PR title, URL, and body as the first message in the `reviewer` agent's inbox. Spawns a read-only reviewer Claude session; the Stop hook blocks until the queued context is available, then tells the agent to read it. Feature status is set to `review` and the PR is linked automatically. Works for both same-repo and fork PRs. Use `pm feat delete` to clean up when done.
+Fetches the PR commits, creates a worktree and tmux session (`myapp/review-42`), and enqueues the PR title, URL, and body as the first message in the `reviewer` agent's inbox. The feature is tagged with the `pr-review` workflow so `pm workflow show` returns the right routing prose. Spawns a read-only reviewer Claude session; the Stop hook blocks until the queued context is available, then tells the agent to read it. Feature status is set to `review` and the PR is linked automatically. Works for both same-repo and fork PRs. Use `pm feat delete` to clean up when done.
 
 ### Sync feature statuses with GitHub
 
@@ -316,6 +320,35 @@ Bundled agents:
 | **reviewer** | Code reviewer — diffs the branch against base, evaluates quality/correctness, sends feedback |
 | **researcher** | Read-only explorer — analyses the problem space and sends a refined implementation brief to the implementer |
 
+The bundled agent definitions describe each agent's *job* (run tests, write the brief, etc.) but deliberately leave routing — *who reports to whom* — to the active [workflow](#workflows). Each agent ships with the `pm-workflow` skill, which teaches it to run `pm workflow show` at the start of every task to discover where to send its output.
+
+### Workflows
+
+A **workflow** defines the per-feature routing topology between agents. Workflows live under `<project>/.pm/workflows/<name>/` and are referenced by name in `FeatureState.workflow`. They're a thin layer over the agent definitions: agents stay generic ("implementer implements"); workflows decide where their output goes ("implementer hands off to reviewer", or "implementer reports back to the user").
+
+```sh
+pm workflow list                         # list installed workflows with descriptions
+pm workflow show                         # print the active workflow's routing prose (workflow.md)
+```
+
+Bundled workflows (installed by `pm init` and `pm upgrade` into `<project>/.pm/workflows/`):
+
+| Workflow | Routing |
+|----------|---------|
+| **implement-and-review** | Implementer drains tasks; reviewer ↔ implementer loop |
+| **research-implement-review** | Researcher → implementer → reviewer |
+| **research-only** | Researcher explores and reports findings to the user |
+| **pr-review** | Reviewer reviews a checked-out PR and reports to the user (used internally by `pm feat review`) |
+
+Each workflow directory contains:
+
+- `config.toml` — machine-readable. `description` (one-line), `agents` (documentary list of all participants), `auto_spawn` (the agent(s) pm spawns at `feat new --workflow X` time).
+- `workflow.md` — free-form markdown with an overall preamble and optional `## <agent-name>` sections that describe topology only ("hand off to the reviewer", "report findings to the user"). Surfaced verbatim by `pm workflow show`.
+
+Workflow files use the same "preserve user edits" policy as `.pm/hooks/`: `pm upgrade` installs missing workflows but never overwrites a file you've modified. Delete the directory and re-run `pm upgrade` if you want the bundled copy back.
+
+`pm feat new --context` requires `--workflow <name>` so pm knows where to deliver the context message and which agent(s) to spawn. `pm feat new --workflow X` without `--context` is also valid: it records the workflow in state but spawns nothing. The `--agent` flag and `[agents] default` config field have been removed in favour of workflows.
+
 ### Agent management
 
 ```sh
@@ -423,34 +456,26 @@ Identity is resolved automatically: `PM_AGENT_NAME` (set by `pm agent spawn`) > 
 
 #### Typical agent flow
 
-1. `pm feat new my-feature --context "task description"` — creates the feature, enqueues `task description` as the first message for the default agent (usually `implementer`), and spawns it. The Stop hook blocks until the queued message is available, then tells the agent to read it
+1. `pm feat new my-feature --workflow implement-and-review --context "task description"` — creates the feature, enqueues `task description` as the first message for every `auto_spawn` agent in the chosen workflow (for `implement-and-review`, that's the implementer), and spawns them. The Stop hook blocks until the queued message is available, then tells each agent to read it. `--workflow` is required when `--context` is given — see [Workflows](#workflows) above
 2. The implementer reads the task, implements changes, runs tests
 3. The implementer sends `pm msg send reviewer "ready for review"` to request a review (auto-spawns the reviewer if it isn't already running)
 4. The reviewer diffs the branch and sends feedback back to the implementer
 5. The implementer addresses feedback, sends another "ready for review" message
 6. The reviewer approves — and both agents go back to `pm msg wait`, ready for the next task
 
-#### Configuring the default agent
+#### Configuring agent permissions
 
-Set the default agent in `.pm/config.toml` to auto-spawn it on `pm feat new`:
+Per-agent permission modes live in `.pm/config.toml`:
 
 ```toml
-[agents]
-default = "implementer"
-
 [agents.permissions]
 implementer = "acceptEdits"
 reviewer = ""
 ```
 
-When `agents.default` is set, `pm feat new --context "..."` spawns that agent automatically. Override per-feature with `--agent`:
+`"acceptEdits"` makes Claude auto-accept file edits for that agent; leave empty for default permissions. Permissions apply both to agents spawned by a workflow's `auto_spawn` list and to those launched manually with `pm agent spawn`.
 
-```sh
-pm feat new my-feature --context "task" --agent researcher   # spawn researcher instead of default
-pm feat new my-feature --context "task" --agent ""           # skip auto-spawn
-```
-
-The `agents.permissions` table controls the permission mode passed to `claude` for each agent. Set `"acceptEdits"` to auto-accept file edits, or leave empty for default permissions.
+> **Note**: earlier versions of pm exposed `[agents] default` and a `--agent` flag on `feat new`/`feat adopt` for choosing which agent to spawn. Both were removed in favour of [Workflows](#workflows). The `[agents] default` field is now silently ignored on load (so legacy configs don't break), and `--context` requires `--workflow <name>`.
 
 #### Limiting active features
 

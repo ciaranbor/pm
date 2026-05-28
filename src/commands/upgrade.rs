@@ -36,6 +36,13 @@ pub fn upgrade_project(project_root: &Path) -> Result<String> {
     let _ = skills::agents_install_project(project_root, None)?;
     updated.push("agents");
 
+    // Install bundled workflows to .pm/workflows/. User edits to existing
+    // files are preserved by `install_in`'s "already up to date / outdated"
+    // logic — only bundled files that exactly match a previously installed
+    // version are rewritten on upgrade.
+    let _ = skills::workflows_install_project(project_root, None)?;
+    updated.push("workflows");
+
     // Re-seed each active feature worktree
     let features_dir = paths::features_dir(project_root);
     let features = crate::state::feature::FeatureState::list(&features_dir)?;
@@ -99,6 +106,12 @@ pub fn upgrade_project_dry_run(project_root: &Path) -> Result<Vec<String>> {
 
     // Agents
     actions.extend(skills::agents_install_project_dry_run(project_root, None)?);
+
+    // Workflows
+    actions.extend(skills::workflows_install_project_dry_run(
+        project_root,
+        None,
+    )?);
 
     // Feature worktrees: only report each feature whose `.claude/` differs
     let features_dir = paths::features_dir(project_root);
@@ -301,6 +314,7 @@ last_active = "2026-01-01T00:00:00Z"
         assert!(summary.contains("hooks"));
         assert!(summary.contains("skills"));
         assert!(summary.contains("agents"));
+        assert!(summary.contains("workflows"));
         assert!(summary.contains("for main"));
 
         // Verify hooks installed
@@ -320,6 +334,48 @@ last_active = "2026-01-01T00:00:00Z"
             .join("agents")
             .join("reviewer.md");
         assert!(agent_path.exists());
+
+        // Verify workflows installed
+        let workflow_path = paths::workflows_dir(&root)
+            .join("implement-and-review")
+            .join("workflow.md");
+        assert!(workflow_path.exists());
+    }
+
+    #[test]
+    fn upgrade_preserves_user_edited_workflow() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        // First install
+        upgrade_project(&root).unwrap();
+
+        // User edits a workflow file
+        let wf_md = paths::workflows_dir(&root)
+            .join("implement-and-review")
+            .join("workflow.md");
+        std::fs::write(&wf_md, "user-customised content").unwrap();
+
+        // Second upgrade leaves the user edits in place — workflows use the
+        // `Preserve` install policy (same spirit as `.pm/hooks/`). Users
+        // who want a fresh bundled copy can delete the directory and rerun
+        // `pm upgrade`.
+        upgrade_project(&root).unwrap();
+        let after = std::fs::read_to_string(&wf_md).unwrap();
+        assert_eq!(after, "user-customised content");
+    }
+
+    #[test]
+    fn dry_run_reports_workflow_install_on_fresh_project() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        let actions = upgrade_project_dry_run(&root).unwrap();
+        let joined = actions.join("\n");
+        assert!(
+            joined.contains("Would install Workflow 'implement-and-review'"),
+            "missing workflow install line, got: {joined}"
+        );
     }
 
     #[test]

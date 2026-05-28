@@ -311,10 +311,7 @@ impl TestServer {
             agents: {
                 let mut permissions = std::collections::BTreeMap::new();
                 permissions.insert("implementer".to_string(), "acceptEdits".to_string());
-                AgentsConfig {
-                    default: Some("implementer".to_string()),
-                    permissions,
-                }
+                AgentsConfig { permissions }
             },
         };
         config.save(&pm_dir).unwrap();
@@ -325,6 +322,7 @@ impl TestServer {
         crate::commands::hooks_install::install(&project_path).unwrap();
         crate::commands::skills::skills_install_project(&project_path, None).unwrap();
         crate::commands::skills::agents_install_project(&project_path, None).unwrap();
+        crate::commands::skills::workflows_install_project(&project_path, None).unwrap();
 
         // Register in global registry
         use crate::state::project::ProjectEntry;
@@ -369,6 +367,7 @@ impl TestServer {
             pr: String::new(),
             base: "main".to_string(),
             context: String::new(),
+            workflow: None,
             created: now,
             last_active: now,
         };

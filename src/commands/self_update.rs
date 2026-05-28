@@ -252,6 +252,7 @@ mod tests {
             base: "main".to_string(),
             pr: String::new(),
             context: String::new(),
+            workflow: None,
             created: chrono::Utc::now(),
             last_active: chrono::Utc::now(),
         };
@@ -265,6 +266,7 @@ mod tests {
             base: "main".to_string(),
             pr: String::new(),
             context: String::new(),
+            workflow: None,
             created: chrono::Utc::now(),
             last_active: chrono::Utc::now(),
         };

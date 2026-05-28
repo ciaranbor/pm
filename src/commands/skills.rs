@@ -11,6 +11,19 @@ use crate::state::paths;
 enum BundledKind {
     Skill,
     Agent,
+    Workflow,
+}
+
+/// How `install_in` treats an already-installed item.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InstallPolicy {
+    /// Bundle is authoritative: outdated installs are rewritten on
+    /// upgrade. Used for skills and agents — pm controls their content.
+    Overwrite,
+    /// User edits are preserved: an already-installed item is skipped on
+    /// upgrade, even if its content drifted from the bundled version.
+    /// Used for workflows, where the bundle is just a starter template.
+    Preserve,
 }
 
 impl BundledKind {
@@ -18,13 +31,7 @@ impl BundledKind {
         match self {
             Self::Skill => "Skill",
             Self::Agent => "Agent",
-        }
-    }
-
-    fn claude_subdir(self) -> &'static str {
-        match self {
-            Self::Skill => "skills",
-            Self::Agent => "agents",
+            Self::Workflow => "Workflow",
         }
     }
 
@@ -32,6 +39,14 @@ impl BundledKind {
         match self {
             Self::Skill => PmError::SkillNotFound(name.to_string()),
             Self::Agent => PmError::AgentNotFound(name.to_string()),
+            Self::Workflow => PmError::WorkflowNotFound(name.to_string()),
+        }
+    }
+
+    fn install_policy(self) -> InstallPolicy {
+        match self {
+            Self::Skill | Self::Agent => InstallPolicy::Overwrite,
+            Self::Workflow => InstallPolicy::Preserve,
         }
     }
 }
@@ -39,9 +54,10 @@ impl BundledKind {
 struct BundledItem {
     kind: BundledKind,
     name: &'static str,
-    /// Path relative to the install directory (e.g. "pm/SKILL.md" or "reviewer.md").
-    rel_path: &'static str,
-    content: &'static str,
+    /// One or more files that make up this item, relative to the install
+    /// directory. Skills and agents have exactly one file each; workflows
+    /// have two (`config.toml` + `workflow.md`).
+    files: &'static [(&'static str, &'static str)],
 }
 
 const BUNDLED_ITEMS: &[BundledItem] = &[
@@ -49,39 +65,104 @@ const BUNDLED_ITEMS: &[BundledItem] = &[
     BundledItem {
         kind: BundledKind::Skill,
         name: "pm",
-        rel_path: "pm/SKILL.md",
-        content: include_str!("../../skills/pm/SKILL.md"),
+        files: &[("pm/SKILL.md", include_str!("../../skills/pm/SKILL.md"))],
     },
     BundledItem {
         kind: BundledKind::Skill,
         name: "messaging",
-        rel_path: "messaging/SKILL.md",
-        content: include_str!("../../skills/messaging/SKILL.md"),
+        files: &[(
+            "messaging/SKILL.md",
+            include_str!("../../skills/messaging/SKILL.md"),
+        )],
+    },
+    BundledItem {
+        kind: BundledKind::Skill,
+        name: "pm-workflow",
+        files: &[(
+            "pm-workflow/SKILL.md",
+            include_str!("../../skills/pm-workflow/SKILL.md"),
+        )],
     },
     // Agents
     BundledItem {
         kind: BundledKind::Agent,
         name: "reviewer",
-        rel_path: "reviewer.md",
-        content: include_str!("../../agents/reviewer.md"),
+        files: &[("reviewer.md", include_str!("../../agents/reviewer.md"))],
     },
     BundledItem {
         kind: BundledKind::Agent,
         name: "implementer",
-        rel_path: "implementer.md",
-        content: include_str!("../../agents/implementer.md"),
+        files: &[(
+            "implementer.md",
+            include_str!("../../agents/implementer.md"),
+        )],
     },
     BundledItem {
         kind: BundledKind::Agent,
         name: "researcher",
-        rel_path: "researcher.md",
-        content: include_str!("../../agents/researcher.md"),
+        files: &[("researcher.md", include_str!("../../agents/researcher.md"))],
     },
     BundledItem {
         kind: BundledKind::Agent,
         name: "main",
-        rel_path: "main.md",
-        content: include_str!("../../agents/main.md"),
+        files: &[("main.md", include_str!("../../agents/main.md"))],
+    },
+    // Workflows
+    BundledItem {
+        kind: BundledKind::Workflow,
+        name: "implement-and-review",
+        files: &[
+            (
+                "implement-and-review/config.toml",
+                include_str!("../../workflows/implement-and-review/config.toml"),
+            ),
+            (
+                "implement-and-review/workflow.md",
+                include_str!("../../workflows/implement-and-review/workflow.md"),
+            ),
+        ],
+    },
+    BundledItem {
+        kind: BundledKind::Workflow,
+        name: "research-implement-review",
+        files: &[
+            (
+                "research-implement-review/config.toml",
+                include_str!("../../workflows/research-implement-review/config.toml"),
+            ),
+            (
+                "research-implement-review/workflow.md",
+                include_str!("../../workflows/research-implement-review/workflow.md"),
+            ),
+        ],
+    },
+    BundledItem {
+        kind: BundledKind::Workflow,
+        name: "research-only",
+        files: &[
+            (
+                "research-only/config.toml",
+                include_str!("../../workflows/research-only/config.toml"),
+            ),
+            (
+                "research-only/workflow.md",
+                include_str!("../../workflows/research-only/workflow.md"),
+            ),
+        ],
+    },
+    BundledItem {
+        kind: BundledKind::Workflow,
+        name: "pr-review",
+        files: &[
+            (
+                "pr-review/config.toml",
+                include_str!("../../workflows/pr-review/config.toml"),
+            ),
+            (
+                "pr-review/workflow.md",
+                include_str!("../../workflows/pr-review/workflow.md"),
+            ),
+        ],
     },
 ];
 
@@ -90,26 +171,48 @@ fn items_of_kind(kind: BundledKind) -> impl Iterator<Item = &'static BundledItem
 }
 
 fn is_installed(base_dir: &Path, item: &BundledItem) -> bool {
-    base_dir.join(item.rel_path).exists()
+    item.files
+        .iter()
+        .all(|(rel, _)| base_dir.join(rel).exists())
 }
 
 fn is_up_to_date(base_dir: &Path, item: &BundledItem) -> bool {
-    let path = base_dir.join(item.rel_path);
-    match fs::read_to_string(&path) {
-        Ok(installed) => installed == item.content,
-        Err(_) => false,
+    item.files.iter().all(
+        |(rel, content)| match fs::read_to_string(base_dir.join(rel)) {
+            Ok(installed) => installed == *content,
+            Err(_) => false,
+        },
+    )
+}
+
+/// Return the global install directory for a bundled kind, or `None` if
+/// the kind has no global install location (workflows are project-only).
+fn global_dir(kind: BundledKind) -> Result<Option<PathBuf>> {
+    match kind {
+        BundledKind::Skill | BundledKind::Agent => {
+            let home = dirs::home_dir().ok_or(PmError::NoHomeDir)?;
+            let subdir = if kind == BundledKind::Skill {
+                "skills"
+            } else {
+                "agents"
+            };
+            Ok(Some(home.join(".claude").join(subdir)))
+        }
+        BundledKind::Workflow => Ok(None),
     }
 }
 
-fn global_dir(kind: BundledKind) -> Result<PathBuf> {
-    let home = dirs::home_dir().ok_or(PmError::NoHomeDir)?;
-    Ok(home.join(".claude").join(kind.claude_subdir()))
-}
-
+/// Return the project-level install directory for a bundled kind.
 fn project_dir(project_root: &Path, kind: BundledKind) -> PathBuf {
-    paths::main_worktree(project_root)
-        .join(".claude")
-        .join(kind.claude_subdir())
+    match kind {
+        BundledKind::Skill => paths::main_worktree(project_root)
+            .join(".claude")
+            .join("skills"),
+        BundledKind::Agent => paths::main_worktree(project_root)
+            .join(".claude")
+            .join("agents"),
+        BundledKind::Workflow => paths::workflows_dir(project_root),
+    }
 }
 
 fn status_label(dir: &Path, item: &BundledItem) -> &'static str {
@@ -128,22 +231,42 @@ fn list_both(kind: BundledKind, project_root: Option<&Path>) -> Result<Vec<Strin
 
     let mut lines = Vec::new();
     for item in items_of_kind(kind) {
-        let global_status = status_label(&global, item);
+        let global_status = global.as_deref().map(|g| status_label(g, item));
 
-        if let Some(ref proj) = project {
-            let project_status = status_label(proj, item);
-            lines.push(format!(
-                "  {} — project: {}, global: {}",
-                item.name, project_status, global_status
-            ));
-        } else {
-            lines.push(format!("  {} — {}", item.name, global_status));
+        match (&project, global_status) {
+            (Some(proj), Some(gs)) => {
+                let ps = status_label(proj, item);
+                lines.push(format!("  {} — project: {}, global: {}", item.name, ps, gs));
+            }
+            (Some(proj), None) => {
+                let ps = status_label(proj, item);
+                lines.push(format!("  {} — {}", item.name, ps));
+            }
+            (None, Some(gs)) => {
+                lines.push(format!("  {} — {}", item.name, gs));
+            }
+            (None, None) => {
+                lines.push(format!("  {} — (no install location)", item.name));
+            }
         }
     }
     Ok(lines)
 }
 
 fn install_in(dir: &Path, kind: BundledKind, name: Option<&str>) -> Result<Vec<String>> {
+    install_in_with_policy(dir, kind, name, kind.install_policy())
+}
+
+/// Like [`install_in`] but lets the caller force an `Overwrite` policy
+/// regardless of the kind's default. Used by explicit `pm workflow
+/// install` calls so users can revert a hand-edited workflow back to
+/// the bundled copy without `rm -rf`-ing the directory first.
+fn install_in_with_policy(
+    dir: &Path,
+    kind: BundledKind,
+    name: Option<&str>,
+    policy: InstallPolicy,
+) -> Result<Vec<String>> {
     let to_install = items_to_install(kind, name)?;
 
     let label = kind.label();
@@ -153,12 +276,42 @@ fn install_in(dir: &Path, kind: BundledKind, name: Option<&str>) -> Result<Vec<S
             messages.push(format!("{label} '{}' is already up to date", item.name));
             continue;
         }
-        let path = dir.join(item.rel_path);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+        // Preserve policy is enforced per-file, not per-item: any
+        // already-on-disk file is left alone (it may be user-modified),
+        // but missing sibling files are still written. This guarantees
+        // that editing one file in a multi-file item never causes a
+        // sibling deletion + upgrade to silently restore the bundle.
+        let mut wrote_any = false;
+        let mut preserved_any = false;
+        for (rel, content) in item.files {
+            let path = dir.join(rel);
+            if policy == InstallPolicy::Preserve && path.exists() {
+                preserved_any = true;
+                continue;
+            }
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&path, content)?;
+            wrote_any = true;
         }
-        fs::write(&path, item.content)?;
-        messages.push(format!("Installed {label} '{}'", item.name));
+        let msg = match (wrote_any, preserved_any) {
+            (true, true) => {
+                format!(
+                    "Installed {label} '{}' (partial — preserved user-modified files)",
+                    item.name
+                )
+            }
+            (true, false) => format!("Installed {label} '{}'", item.name),
+            (false, true) => format!(
+                "{label} '{}' is installed (user-modified, preserving)",
+                item.name
+            ),
+            // Item was not up to date but had no files? Shouldn't happen
+            // with the BUNDLED_ITEMS shape — every item has ≥ 1 file.
+            (false, false) => format!("{label} '{}' had no files to install", item.name),
+        };
+        messages.push(msg);
     }
     Ok(messages)
 }
@@ -169,11 +322,28 @@ fn install_in(dir: &Path, kind: BundledKind, name: Option<&str>) -> Result<Vec<S
 /// returned line corresponds to an action that would be taken.
 fn install_in_dry_run(dir: &Path, kind: BundledKind, name: Option<&str>) -> Result<Vec<String>> {
     let to_install = items_to_install(kind, name)?;
+    let policy = kind.install_policy();
 
     let label = kind.label();
     let mut messages = Vec::new();
     for item in to_install {
         if is_up_to_date(dir, item) {
+            continue;
+        }
+        // Match `install_in`'s per-file Preserve semantics: a file is
+        // "to-be-installed" only when missing (for Preserve) or
+        // missing-or-drifted (for Overwrite).
+        let would_write_any = item.files.iter().any(|(rel, content)| {
+            let path = dir.join(rel);
+            match policy {
+                InstallPolicy::Preserve => !path.exists(),
+                InstallPolicy::Overwrite => match fs::read_to_string(&path) {
+                    Ok(installed) => installed != *content,
+                    Err(_) => true,
+                },
+            }
+        });
+        if !would_write_any {
             continue;
         }
         let verb = if is_installed(dir, item) {
@@ -212,18 +382,23 @@ fn uninstall_in(dir: &Path, kind: BundledKind, name: Option<&str>) -> Result<Vec
     let label = kind.label();
     let mut messages = Vec::new();
     for item in to_uninstall {
-        let path = dir.join(item.rel_path);
-        if !path.exists() {
+        if !is_installed(dir, item) {
             messages.push(format!("{label} '{}' is not installed", item.name));
             continue;
         }
-        std::fs::remove_file(&path)?;
-        // Clean up empty parent directory (for skills which use a subdirectory)
-        if let Some(parent) = path.parent()
-            && parent != dir
-            && parent.read_dir().is_ok_and(|mut d| d.next().is_none())
-        {
-            let _ = std::fs::remove_dir(parent);
+        for (rel, _content) in item.files {
+            let path = dir.join(rel);
+            if path.exists() {
+                std::fs::remove_file(&path)?;
+            }
+            // Clean up empty parent directory (for skills/workflows that use a
+            // subdirectory). Stop short of removing `dir` itself.
+            if let Some(parent) = path.parent()
+                && parent != dir
+                && parent.read_dir().is_ok_and(|mut d| d.next().is_none())
+            {
+                let _ = std::fs::remove_dir(parent);
+            }
         }
         messages.push(format!("Uninstalled {label} '{}'", item.name));
     }
@@ -237,7 +412,8 @@ pub fn skills_list(project_root: Option<&Path>) -> Result<Vec<String>> {
 }
 
 pub fn skills_install(name: Option<&str>) -> Result<Vec<String>> {
-    install_in(&global_dir(BundledKind::Skill)?, BundledKind::Skill, name)
+    let dir = global_dir(BundledKind::Skill)?.ok_or(PmError::NoHomeDir)?;
+    install_in(&dir, BundledKind::Skill, name)
 }
 
 pub fn skills_install_project(project_root: &Path, name: Option<&str>) -> Result<Vec<String>> {
@@ -263,7 +439,8 @@ pub fn skills_install_project_dry_run(
 }
 
 pub fn skills_uninstall(name: Option<&str>) -> Result<Vec<String>> {
-    uninstall_in(&global_dir(BundledKind::Skill)?, BundledKind::Skill, name)
+    let dir = global_dir(BundledKind::Skill)?.ok_or(PmError::NoHomeDir)?;
+    uninstall_in(&dir, BundledKind::Skill, name)
 }
 
 pub fn skills_uninstall_project(project_root: &Path, name: Option<&str>) -> Result<Vec<String>> {
@@ -299,7 +476,8 @@ pub fn agents_list(project_root: Option<&Path>) -> Result<Vec<String>> {
 }
 
 pub fn agents_uninstall(name: Option<&str>) -> Result<Vec<String>> {
-    uninstall_in(&global_dir(BundledKind::Agent)?, BundledKind::Agent, name)
+    let dir = global_dir(BundledKind::Agent)?.ok_or(PmError::NoHomeDir)?;
+    uninstall_in(&dir, BundledKind::Agent, name)
 }
 
 pub fn agents_uninstall_project(project_root: &Path, name: Option<&str>) -> Result<Vec<String>> {
@@ -311,7 +489,8 @@ pub fn agents_uninstall_project(project_root: &Path, name: Option<&str>) -> Resu
 }
 
 pub fn agents_install(name: Option<&str>) -> Result<Vec<String>> {
-    install_in(&global_dir(BundledKind::Agent)?, BundledKind::Agent, name)
+    let dir = global_dir(BundledKind::Agent)?.ok_or(PmError::NoHomeDir)?;
+    install_in(&dir, BundledKind::Agent, name)
 }
 
 pub fn agents_install_project(project_root: &Path, name: Option<&str>) -> Result<Vec<String>> {
@@ -332,6 +511,59 @@ pub fn agents_install_project_dry_run(
     install_in_dry_run(
         &project_dir(project_root, BundledKind::Agent),
         BundledKind::Agent,
+        name,
+    )
+}
+
+// --- Public API: Workflows ---
+
+pub fn workflows_list(project_root: Option<&Path>) -> Result<Vec<String>> {
+    list_both(BundledKind::Workflow, project_root)
+}
+
+pub fn workflows_install_project(project_root: &Path, name: Option<&str>) -> Result<Vec<String>> {
+    install_in(
+        &project_dir(project_root, BundledKind::Workflow),
+        BundledKind::Workflow,
+        name,
+    )
+}
+
+/// Force-install bundled workflows, overwriting any on-disk content.
+/// Used by the explicit `pm workflow install` CLI subcommand so users
+/// can revert a hand-edited workflow back to the bundled copy without
+/// deleting the directory first. The default `pm upgrade` install path
+/// continues to preserve user edits.
+pub fn workflows_install_project_force(
+    project_root: &Path,
+    name: Option<&str>,
+) -> Result<Vec<String>> {
+    install_in_with_policy(
+        &project_dir(project_root, BundledKind::Workflow),
+        BundledKind::Workflow,
+        name,
+        InstallPolicy::Overwrite,
+    )
+}
+
+pub fn workflows_uninstall_project(project_root: &Path, name: Option<&str>) -> Result<Vec<String>> {
+    uninstall_in(
+        &project_dir(project_root, BundledKind::Workflow),
+        BundledKind::Workflow,
+        name,
+    )
+}
+
+/// Dry-run variant of [`workflows_install_project`]. Returns one `Would …`
+/// line per workflow that would be installed or updated; up-to-date
+/// workflows produce no output.
+pub fn workflows_install_project_dry_run(
+    project_root: &Path,
+    name: Option<&str>,
+) -> Result<Vec<String>> {
+    install_in_dry_run(
+        &project_dir(project_root, BundledKind::Workflow),
+        BundledKind::Workflow,
         name,
     )
 }
@@ -360,7 +592,9 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert!(messages[0].contains("pm"));
 
-        let item = items_of_kind(BundledKind::Skill).next().unwrap();
+        let item = items_of_kind(BundledKind::Skill)
+            .find(|i| i.name == "pm")
+            .unwrap();
         assert!(is_installed(&dir, item));
         assert!(is_up_to_date(&dir, item));
         assert_eq!(status_label(&dir, item), "installed");
@@ -413,6 +647,14 @@ mod tests {
     }
 
     #[test]
+    fn install_nonexistent_workflow_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("workflows");
+        let err = install_in(&dir, BundledKind::Workflow, Some("nope")).unwrap_err();
+        assert!(matches!(err, PmError::WorkflowNotFound(_)));
+    }
+
+    #[test]
     fn install_is_idempotent() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("claude");
@@ -432,7 +674,9 @@ mod tests {
         install_in(&dir, BundledKind::Skill, Some("pm")).unwrap();
         fs::write(dir.join("pm/SKILL.md"), "old content").unwrap();
 
-        let item = items_of_kind(BundledKind::Skill).next().unwrap();
+        let item = items_of_kind(BundledKind::Skill)
+            .find(|i| i.name == "pm")
+            .unwrap();
         assert!(is_installed(&dir, item));
         assert!(!is_up_to_date(&dir, item));
         assert_eq!(status_label(&dir, item), "outdated");
@@ -584,8 +828,6 @@ mod tests {
         assert!(matches!(err, PmError::FeatureNotFound(_)));
     }
 
-    // --- Agents-specific tests ---
-
     // --- Uninstall tests ---
 
     #[test]
@@ -656,5 +898,121 @@ mod tests {
             .join("agents")
             .join("reviewer.md");
         assert!(agent_path.exists());
+    }
+
+    // --- Workflows-specific tests ---
+
+    #[test]
+    fn workflows_install_writes_both_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project_root = tmp.path();
+
+        let messages =
+            workflows_install_project(project_root, Some("implement-and-review")).unwrap();
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].contains("Installed Workflow 'implement-and-review'"));
+
+        let dir = paths::workflows_dir(project_root).join("implement-and-review");
+        assert!(dir.join("config.toml").exists());
+        assert!(dir.join("workflow.md").exists());
+    }
+
+    #[test]
+    fn workflows_install_all_installs_four() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project_root = tmp.path();
+        let messages = workflows_install_project(project_root, None).unwrap();
+        // Four bundled workflows
+        assert_eq!(messages.len(), 4);
+        for name in &[
+            "implement-and-review",
+            "research-implement-review",
+            "research-only",
+            "pr-review",
+        ] {
+            let dir = paths::workflows_dir(project_root).join(name);
+            assert!(dir.join("config.toml").exists());
+            assert!(dir.join("workflow.md").exists());
+        }
+    }
+
+    #[test]
+    fn workflows_install_preserves_user_edits() {
+        // Workflows use the `Preserve` install policy: once a file is on
+        // disk, `install_in` reports it as user-modified and refuses to
+        // overwrite. This matches the policy the brief asks for and the
+        // user-facing `pm upgrade` workflow test.
+        let tmp = tempfile::tempdir().unwrap();
+        let project_root = tmp.path();
+        workflows_install_project(project_root, Some("pr-review")).unwrap();
+
+        let second = workflows_install_project(project_root, Some("pr-review")).unwrap();
+        assert!(
+            second[0].contains("already up to date"),
+            "expected 'already up to date' on idempotent install, got: {second:?}"
+        );
+
+        // User edits a workflow file
+        let wf_md = paths::workflows_dir(project_root)
+            .join("pr-review")
+            .join("workflow.md");
+        fs::write(&wf_md, "user edits").unwrap();
+
+        let third = workflows_install_project(project_root, Some("pr-review")).unwrap();
+        assert!(
+            third[0].contains("user-modified"),
+            "expected 'user-modified' message, got: {third:?}"
+        );
+        assert_eq!(fs::read_to_string(&wf_md).unwrap(), "user edits");
+
+        // Dry-run also reports nothing — user-modified workflow is skipped.
+        let dry = workflows_install_project_dry_run(project_root, Some("pr-review")).unwrap();
+        assert!(
+            dry.is_empty(),
+            "expected no dry-run actions when user-modified, got: {dry:?}"
+        );
+    }
+
+    #[test]
+    fn workflows_install_preserves_per_file_not_per_item() {
+        // Regression: if a user modifies `config.toml` and deletes
+        // `workflow.md`, `pm upgrade` must NOT overwrite the modified
+        // `config.toml` even though one sibling file is missing. The
+        // missing sibling should still be written.
+        let tmp = tempfile::tempdir().unwrap();
+        let project_root = tmp.path();
+        workflows_install_project(project_root, Some("pr-review")).unwrap();
+
+        let wf_dir = paths::workflows_dir(project_root).join("pr-review");
+        let cfg = wf_dir.join("config.toml");
+        let md = wf_dir.join("workflow.md");
+
+        // User edits config.toml…
+        fs::write(&cfg, "user-edited config\n").unwrap();
+        // …and deletes workflow.md.
+        fs::remove_file(&md).unwrap();
+        assert!(cfg.exists());
+        assert!(!md.exists());
+
+        let messages = workflows_install_project(project_root, Some("pr-review")).unwrap();
+        // The user's config.toml must survive.
+        assert_eq!(fs::read_to_string(&cfg).unwrap(), "user-edited config\n");
+        // The missing workflow.md must be restored to the bundled content.
+        assert!(md.exists());
+        // Message reflects the partial install.
+        assert!(
+            messages[0].contains("partial") || messages[0].contains("Installed"),
+            "expected partial-install message, got: {messages:?}"
+        );
+    }
+
+    #[test]
+    fn workflows_list_no_project_falls_back_to_no_install_location() {
+        // Workflows have no global install location; listing without a
+        // project_root should produce sentinel "(no install location)".
+        let lines = workflows_list(None).unwrap();
+        for line in &lines {
+            assert!(line.contains("(no install location)"), "line: {line}");
+        }
     }
 }

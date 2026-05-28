@@ -35,9 +35,6 @@ pub struct ProjectConfig {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentsConfig {
-    /// Default agent to spawn on `feat new` (None = no auto-spawn)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default: Option<String>,
     /// Per-agent permission modes (e.g. "acceptEdits")
     #[serde(default)]
     pub permissions: std::collections::BTreeMap<String, String>,
@@ -478,7 +475,6 @@ name = "myapp"
         assert_eq!(config.project.name, "myapp");
         assert_eq!(config.setup.script, "");
         assert_eq!(config.github.repo, "");
-        assert_eq!(config.agents.default, None);
         assert!(config.agents.permissions.is_empty());
     }
 
@@ -488,15 +484,11 @@ name = "myapp"
 [project]
 name = "myapp"
 
-[agents]
-default = "implementer"
-
 [agents.permissions]
 implementer = "acceptEdits"
 reviewer = ""
 "#;
         let config: ProjectConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.agents.default, Some("implementer".to_string()));
         assert_eq!(
             config.agents.permissions.get("implementer").unwrap(),
             "acceptEdits"
@@ -507,6 +499,23 @@ reviewer = ""
         let serialized = toml::to_string_pretty(&config).unwrap();
         let deserialized: ProjectConfig = toml::from_str(&serialized).unwrap();
         assert_eq!(config, deserialized);
+    }
+
+    #[test]
+    fn project_config_ignores_unknown_agents_default_field() {
+        // Legacy projects may still carry the now-removed [agents].default
+        // field. Loading them must succeed (silently dropping the field),
+        // so `pm upgrade` can rewrite them without manual intervention.
+        let toml_str = r#"
+[project]
+name = "myapp"
+
+[agents]
+default = "implementer"
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.project.name, "myapp");
+        assert!(config.agents.permissions.is_empty());
     }
 
     #[test]
@@ -606,6 +615,7 @@ reviewer = ""
                 base: String::new(),
                 pr: String::new(),
                 context: String::new(),
+                workflow: None,
                 created: chrono::Utc::now(),
                 last_active: chrono::Utc::now(),
             };
@@ -643,6 +653,7 @@ reviewer = ""
                 base: String::new(),
                 pr: String::new(),
                 context: String::new(),
+                workflow: None,
                 created: chrono::Utc::now(),
                 last_active: chrono::Utc::now(),
             };
@@ -684,6 +695,7 @@ reviewer = ""
                 base: String::new(),
                 pr: String::new(),
                 context: String::new(),
+                workflow: None,
                 created: chrono::Utc::now(),
                 last_active: chrono::Utc::now(),
             };
@@ -720,6 +732,7 @@ reviewer = ""
             base: String::new(),
             pr: String::new(),
             context: String::new(),
+            workflow: None,
             created: chrono::Utc::now(),
             last_active: chrono::Utc::now(),
         };
@@ -755,6 +768,7 @@ reviewer = ""
             base: String::new(),
             pr: String::new(),
             context: String::new(),
+            workflow: None,
             created: chrono::Utc::now(),
             last_active: chrono::Utc::now(),
         };
@@ -792,6 +806,7 @@ reviewer = ""
                 base: String::new(),
                 pr: String::new(),
                 context: String::new(),
+                workflow: None,
                 created: chrono::Utc::now(),
                 last_active: chrono::Utc::now(),
             };

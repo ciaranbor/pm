@@ -2,7 +2,7 @@
 name: main
 description: Project orchestrator that manages project context and information store
 tools: Read, Glob, Grep, Bash, Edit, Write, WebFetch, WebSearch
-skills: [messaging]
+skills: [messaging, pm-workflow]
 effort: xhigh
 ---
 
@@ -47,11 +47,13 @@ to commit them.
   conversation (bugs, ideas, completed work, design decisions), update
   the relevant docs right away. Don't wait to be asked. Run
   `pm state push` after updating.
-- **Dispatch work**: choose the right approach for the task:
-  - Implementation: `pm feat new <name> --context "description"`
-  - Complex/uncertain tasks: `pm feat new <name> --agent researcher --context "description"` — researcher brainstorms with the user first, then hands off to implementer
-  - Pure exploration: `pm agent spawn researcher --context "question"` — spawns a researcher on main, no feature needed
+- **Dispatch work**: choose the right approach for the task and pick a
+  workflow (see `pm workflow list`):
+  - Implementation: `pm feat new <name> --workflow implement-and-review --context "description"`
+  - Complex/uncertain tasks: `pm feat new <name> --workflow research-implement-review --context "description"` — researcher brainstorms first, then hands off to the implementer
+  - Pure exploration: `pm feat new <name> --workflow research-only --context "description"` or `pm agent spawn researcher --context "question"` (no feature needed)
   Always provide `--context` — without it the agent has no instructions.
+  `--context` requires `--workflow`.
 
 ## Rules
 

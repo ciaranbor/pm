@@ -99,6 +99,9 @@ pub enum Commands {
         #[command(subcommand)]
         command: SummaryCommands,
     },
+    /// Per-feature workflow management
+    #[command(subcommand)]
+    Workflow(WorkflowCommands),
     /// Generate shell completion scripts
     #[command(hide = true)]
     Completions {
@@ -154,6 +157,29 @@ pub enum SummaryCommands {
     Write {
         /// Content string or path to a file
         content: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum WorkflowCommands {
+    /// Print the active workflow's routing prose (workflow.md)
+    Show,
+    /// List installed workflows with their descriptions
+    List,
+    /// (Re)install a bundled workflow into <project>/.pm/workflows/
+    /// (overwrites the workflow directory — use to revert a user edit
+    /// back to the bundled copy)
+    Install {
+        /// Workflow name (installs all bundled workflows if omitted)
+        name: Option<String>,
+    },
+    /// Uninstall a bundled workflow from <project>/.pm/workflows/
+    Uninstall {
+        /// Workflow name (required unless --all is passed)
+        name: Option<String>,
+        /// Uninstall all bundled workflows
+        #[arg(long)]
+        all: bool,
     },
 }
 
@@ -450,9 +476,10 @@ pub enum FeatCommands {
         /// Force --permission-mode acceptEdits on the spawned Claude session
         #[arg(long)]
         edit: bool,
-        /// Agent to spawn (overrides project default)
+        /// Workflow name (required with --context). Run `pm workflow list`
+        /// for installed workflows.
         #[arg(long)]
-        agent: Option<String>,
+        workflow: Option<String>,
     },
     /// Adopt an existing branch as a feature (worktree + tmux session)
     Adopt {
@@ -470,9 +497,10 @@ pub enum FeatCommands {
         /// Force --permission-mode acceptEdits on the spawned Claude session
         #[arg(long)]
         edit: bool,
-        /// Agent to spawn (overrides project default)
+        /// Workflow name (required with --context). Run `pm workflow list`
+        /// for installed workflows.
         #[arg(long)]
-        agent: Option<String>,
+        workflow: Option<String>,
     },
     /// List all features with their status
     List,

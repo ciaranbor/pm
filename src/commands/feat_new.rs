@@ -63,7 +63,9 @@ pub struct FeatNewParams<'a> {
     /// from CWD (enabling natural stacking from within a feature worktree).
     pub base: Option<&'a str>,
     pub edit: bool,
-    pub agent_override: Option<&'a str>,
+    /// Workflow to activate for this feature. Required when `context` is
+    /// provided (a context with no workflow has nobody to deliver it to).
+    pub workflow: Option<&'a str>,
     /// Allows tests to use an isolated tmux server. Pass `None` in production.
     pub tmux_server: Option<&'a str>,
 }
@@ -83,7 +85,7 @@ impl<'a> FeatNewParams<'a> {
             context: None,
             base: None,
             edit: false,
-            agent_override: None,
+            workflow: None,
             tmux_server,
         }
     }
@@ -91,6 +93,16 @@ impl<'a> FeatNewParams<'a> {
 
 /// Create a new feature: branch + worktree + tmux session + state file.
 pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
+    // A context with no workflow has nobody to deliver it to — fail
+    // early before any side effects.
+    if params.context.is_some() && params.workflow.is_none() {
+        return Err(PmError::SafetyCheck(
+            "--context requires --workflow <name>. \
+             Run `pm workflow list` to see installed workflows."
+                .to_string(),
+        ));
+    }
+
     // Check feature limit before doing any work
     crate::state::project::check_feature_limit(params.project_root)?;
 
@@ -107,6 +119,31 @@ pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
     // Load project config for name
     let config = ProjectConfig::load(&pm_dir)?;
     let project_name = &config.project.name;
+
+    // Load the workflow definition (if any) and validate its auto-spawn
+    // agents up-front. Fail early — before any tmux/git/state side
+    // effects — so a bad workflow never leaves a half-built feature on
+    // disk.
+    let workflow_def = params
+        .workflow
+        .map(|w| feat_common::load_and_validate_workflow(params.project_root, w))
+        .transpose()?;
+    let auto_spawn: &[String] = workflow_def
+        .as_ref()
+        .map(|d| d.auto_spawn.as_slice())
+        .unwrap_or(&[]);
+
+    // If the user supplied --context, somebody has to receive it.
+    // A workflow with empty `auto_spawn` would silently swallow the
+    // context — block that case so the user gets a clear error.
+    if params.context.is_some() && auto_spawn.is_empty() {
+        return Err(PmError::SafetyCheck(format!(
+            "workflow '{}' has an empty `auto_spawn` list, so --context has no recipient. \
+             Add at least one agent to `auto_spawn` in the workflow's config.toml, \
+             or drop --context.",
+            params.workflow.unwrap_or("<none>"),
+        )));
+    }
 
     // Resolve context upfront (file contents or literal text)
     let resolved_context = params.context.map(resolve_context).transpose()?;
@@ -125,6 +162,7 @@ pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
             base: &resolved_base,
             pr: "",
             context: resolved_context.as_deref().unwrap_or(""),
+            workflow: params.workflow,
         },
     )?;
 
@@ -144,15 +182,15 @@ pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
         // Step 3.5: Seed Claude Code settings from main worktree
         claude_settings::seed_feature_claude(params.project_root, &worktree_path)?;
 
-        // Step 3.6: Enqueue initial context as a message to the default agent
-        // (if context provided). The Stop hook will deliver it on the empty
-        // first turn after spawn. TASK.md is never written.
+        // Step 3.6: Enqueue initial context as a message to every
+        // auto_spawn agent in the workflow (if context provided). The
+        // Stop hook will deliver it on the empty first turn after spawn.
+        // TASK.md is never written.
         if let Some(ref resolved) = resolved_context {
             feat_common::enqueue_initial_context(
                 params.project_root,
                 &feature_name,
-                &config,
-                params.agent_override,
+                auto_spawn,
                 resolved,
                 &resolved_base,
             )?;
@@ -161,17 +199,15 @@ pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
         // Step 4: Create tmux session
         tmux::create_session(params.tmux_server, &session_name, &worktree_path)?;
 
-        // Step 4.5: Spawn the default claude agent (if context was provided).
-        // The agent starts with no positional prompt; the Stop hook blocks
-        // until the queued message is available, then tells it to read.
-        // Reuse window :0 (the default shell) so we don't leave an empty window.
-        if resolved_context.is_some() {
+        // Step 4.5: Spawn the workflow's auto_spawn agents (if any). The
+        // first agent reuses window :0 so we don't leave an empty default
+        // shell behind. Subsequent agents go into fresh windows.
+        if resolved_context.is_some() && !auto_spawn.is_empty() {
             let reuse_target = format!("{session_name}:0");
-            feat_common::spawn_default_agent(
+            feat_common::spawn_auto_spawn_agents(
                 params.project_root,
                 &feature_name,
-                &config,
-                params.agent_override,
+                auto_spawn,
                 params.edit,
                 Some(&reuse_target),
                 params.tmux_server,
@@ -339,14 +375,14 @@ mod tests {
     }
 
     #[test]
-    fn feat_new_with_text_context_enqueues_message() {
+    fn feat_new_with_text_context_enqueues_message_to_auto_spawn_agents() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project(dir.path());
 
         feat_new(&FeatNewParams {
             context: Some("Implement login page per issue #42"),
-            agent_override: Some("implementer"),
+            workflow: Some("implement-and-review"),
             ..FeatNewParams::with_defaults(&project_path, "login", server.name())
         })
         .unwrap();
@@ -354,7 +390,8 @@ mod tests {
         // No TASK.md on disk any more.
         assert!(!project_path.join("login").join("TASK.md").exists());
 
-        // The context is queued as a message in the resolved agent's inbox.
+        // The context is queued as a message in the implementer's inbox
+        // (the sole auto_spawn agent of `implement-and-review`).
         let messages_dir = paths::messages_dir(&project_path);
         let summaries = crate::messages::list(&messages_dir, "login", "implementer", None).unwrap();
         assert_eq!(summaries.len(), 1);
@@ -382,12 +419,12 @@ mod tests {
 
         feat_new(&FeatNewParams {
             context: Some(brief_path.to_str().unwrap()),
-            agent_override: Some("implementer"),
+            workflow: Some("implement-and-review"),
             ..FeatNewParams::with_defaults(&project_path, "login", server.name())
         })
         .unwrap();
 
-        // No TASK.md; content is queued to the resolved agent's inbox.
+        // No TASK.md; content is queued to the auto_spawn agent's inbox.
         assert!(!project_path.join("login").join("TASK.md").exists());
         let messages_dir = paths::messages_dir(&project_path);
         let summaries = crate::messages::list(&messages_dir, "login", "implementer", None).unwrap();
@@ -416,6 +453,7 @@ mod tests {
 
         feat_new(&FeatNewParams {
             context: Some(brief_path.to_str().unwrap()),
+            workflow: Some("implement-and-review"),
             ..FeatNewParams::with_defaults(&project_path, "login", server.name())
         })
         .unwrap();
@@ -433,6 +471,7 @@ mod tests {
 
         feat_new(&FeatNewParams {
             context: Some("Build the login page"),
+            workflow: Some("implement-and-review"),
             ..FeatNewParams::with_defaults(&project_path, "login", server.name())
         })
         .unwrap();
@@ -444,19 +483,19 @@ mod tests {
     }
 
     #[test]
-    fn feat_new_with_agent_override_spawns_named_agent() {
+    fn feat_new_with_workflow_spawns_named_agent() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, project_name) = server.setup_project(dir.path());
 
         feat_new(&FeatNewParams {
             context: Some("Build the login page"),
-            agent_override: Some("researcher"),
+            workflow: Some("research-only"),
             ..FeatNewParams::with_defaults(&project_path, "login", server.name())
         })
         .unwrap();
 
-        // The agent window should be named "researcher" (not "claude")
+        // The researcher window should exist (research-only's sole auto_spawn agent)
         let session = tmux::session_name(&project_name, "login");
         let target = tmux::find_window(server.name(), &session, "researcher").unwrap();
         assert!(target.is_some(), "expected a 'researcher' tmux window");
@@ -495,6 +534,8 @@ mod tests {
         let features_dir = paths::features_dir(&project_path);
         let state = FeatureState::load(&features_dir, "login").unwrap();
         assert_eq!(state.context, "");
+        // No workflow either when --workflow not given.
+        assert!(state.workflow.is_none());
     }
 
     #[test]
@@ -806,5 +847,162 @@ mod tests {
         let features_dir = paths::features_dir(&project_path);
         assert!(FeatureState::exists(&features_dir, "first"));
         assert!(FeatureState::exists(&features_dir, "second"));
+    }
+
+    #[test]
+    fn feat_new_context_without_workflow_errors() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, _) = server.setup_project(dir.path());
+
+        let result = feat_new(&FeatNewParams {
+            context: Some("do X"),
+            workflow: None,
+            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+        });
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("--context requires --workflow"));
+
+        // No partial state should remain on disk.
+        let features_dir = paths::features_dir(&project_path);
+        assert!(!FeatureState::exists(&features_dir, "login"));
+        assert!(!project_path.join("login").exists());
+    }
+
+    #[test]
+    fn feat_new_workflow_without_context_stores_workflow() {
+        // `pm feat new my-feat --workflow X` (no --context) is valid: it
+        // records the workflow in state but spawns nothing. Useful for
+        // when the user wants to spawn the auto-spawn agent later.
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, _) = server.setup_project(dir.path());
+
+        feat_new(&FeatNewParams {
+            workflow: Some("implement-and-review"),
+            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+        })
+        .unwrap();
+
+        let features_dir = paths::features_dir(&project_path);
+        let state = FeatureState::load(&features_dir, "login").unwrap();
+        assert_eq!(state.workflow.as_deref(), Some("implement-and-review"));
+
+        // No agent spawned (no context).
+        let agents_dir = paths::agents_dir(&project_path);
+        let registry = crate::state::agent::AgentRegistry::load(&agents_dir, "login").unwrap();
+        assert!(
+            registry.get("implementer").is_none(),
+            "no auto-spawn without --context"
+        );
+    }
+
+    #[test]
+    fn feat_new_nonexistent_workflow_errors() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, _) = server.setup_project(dir.path());
+
+        let result = feat_new(&FeatNewParams {
+            context: Some("do X"),
+            workflow: Some("does-not-exist"),
+            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+        });
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), PmError::WorkflowNotFound(_)));
+
+        // No partial state should remain on disk.
+        let features_dir = paths::features_dir(&project_path);
+        assert!(!FeatureState::exists(&features_dir, "login"));
+    }
+
+    #[test]
+    fn feat_new_workflow_with_empty_auto_spawn_and_context_errors() {
+        // A workflow with no auto_spawn agents has nobody to deliver
+        // --context to. Treat it the same as `--context` without
+        // `--workflow`: hard error before any side effects.
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, _) = server.setup_project(dir.path());
+
+        let workflows = paths::workflows_dir(&project_path).join("empty");
+        std::fs::create_dir_all(&workflows).unwrap();
+        std::fs::write(workflows.join("config.toml"), "description = \"x\"\n").unwrap();
+        std::fs::write(workflows.join("workflow.md"), "# empty\n").unwrap();
+
+        let result = feat_new(&FeatNewParams {
+            context: Some("do X"),
+            workflow: Some("empty"),
+            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+        });
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, PmError::SafetyCheck(_)));
+        assert!(
+            err.to_string().contains("empty `auto_spawn`"),
+            "expected empty auto_spawn error, got: {err}",
+        );
+
+        // No partial state should remain.
+        let features_dir = paths::features_dir(&project_path);
+        assert!(!FeatureState::exists(&features_dir, "login"));
+    }
+
+    #[test]
+    fn feat_new_workflow_with_empty_auto_spawn_no_context_succeeds() {
+        // Without --context, an empty auto_spawn is fine — pm just
+        // records the workflow and spawns nothing.
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, _) = server.setup_project(dir.path());
+
+        let workflows = paths::workflows_dir(&project_path).join("empty");
+        std::fs::create_dir_all(&workflows).unwrap();
+        std::fs::write(workflows.join("config.toml"), "description = \"x\"\n").unwrap();
+        std::fs::write(workflows.join("workflow.md"), "# empty\n").unwrap();
+
+        feat_new(&FeatNewParams {
+            workflow: Some("empty"),
+            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+        })
+        .unwrap();
+
+        let features_dir = paths::features_dir(&project_path);
+        let state = FeatureState::load(&features_dir, "login").unwrap();
+        assert_eq!(state.workflow.as_deref(), Some("empty"));
+    }
+
+    #[test]
+    fn feat_new_workflow_with_unknown_auto_spawn_agent_errors() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, _) = server.setup_project(dir.path());
+
+        // Inject a workflow whose auto_spawn references a missing agent.
+        let workflows = paths::workflows_dir(&project_path).join("broken");
+        std::fs::create_dir_all(&workflows).unwrap();
+        std::fs::write(
+            workflows.join("config.toml"),
+            "description = \"x\"\nauto_spawn = [\"ghost-impl\"]\n",
+        )
+        .unwrap();
+        std::fs::write(workflows.join("workflow.md"), "# broken\n").unwrap();
+
+        let result = feat_new(&FeatNewParams {
+            context: Some("do X"),
+            workflow: Some("broken"),
+            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+        });
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, PmError::WorkflowAgentMissing { .. }),
+            "expected WorkflowAgentMissing, got: {err}"
+        );
+
+        // No partial state should remain.
+        let features_dir = paths::features_dir(&project_path);
+        assert!(!FeatureState::exists(&features_dir, "login"));
     }
 }
