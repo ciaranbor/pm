@@ -62,17 +62,21 @@ pub fn agent_restart(
         tmux_server,
     )?;
 
-    // Now kill the old (renamed) window. This is safe even if called from
-    // within it — all state updates and the new spawn are already done.
+    // Land the client on the freshly spawned window BEFORE killing the old
+    // one. When `pm agent restart` is invoked from within the agent's own
+    // window, killing that window terminates this very process — so anything
+    // that must happen has to happen first. Selecting now also means the old
+    // window is no longer active, so killing it won't make tmux auto-jump to
+    // an arbitrary neighbour.
+    if let Some(new_target) = tmux::find_window(tmux_server, &session_name, agent_name)? {
+        let _ = tmux::select_window(tmux_server, &new_target);
+    }
+
+    // Now kill the old (renamed) window. If we're running inside it, this
+    // kills our process — but the spawn and window switch are already done.
     if let Some(ref target) = old_window {
         // The target still refers to the same window (by index), just renamed.
         let _ = tmux::kill_window(tmux_server, target);
-    }
-
-    // Land the client on the freshly spawned window so the user ends up in
-    // the restarted agent rather than wherever the killed window left them.
-    if let Some(new_target) = tmux::find_window(tmux_server, &session_name, agent_name)? {
-        let _ = tmux::select_window(tmux_server, &new_target);
     }
 
     let msg = if resume_id.is_some() {
