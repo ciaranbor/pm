@@ -86,10 +86,7 @@ pub fn init(
         agents: {
             let mut permissions = std::collections::BTreeMap::new();
             permissions.insert("implementer".to_string(), "acceptEdits".to_string());
-            AgentsConfig {
-                default: Some("implementer".to_string()),
-                permissions,
-            }
+            AgentsConfig { permissions }
         },
     };
     config.save(&pm_dir)?;
@@ -110,6 +107,11 @@ pub fn init(
     // so the project is immediately ready for agent workflows.
     skills::skills_install_project(path, None)?;
     skills::agents_install_project(path, None)?;
+
+    // Install bundled workflow definitions into .pm/workflows/.
+    // Workflows hold per-feature routing topology and are referenced
+    // by `feature.workflow`. See `pm workflow show`.
+    skills::workflows_install_project(path, None)?;
 
     // Register in global registry
     let entry = ProjectEntry {
@@ -213,6 +215,45 @@ mod tests {
             .join("agents")
             .join("reviewer.md");
         assert!(agent_path.exists(), "reviewer agent should be installed");
+
+        // The pm-workflow skill should also be installed
+        let workflow_skill = paths::main_worktree(&project_path)
+            .join(".claude")
+            .join("skills")
+            .join("pm-workflow")
+            .join("SKILL.md");
+        assert!(
+            workflow_skill.exists(),
+            "pm-workflow skill should be installed"
+        );
+    }
+
+    #[test]
+    fn init_installs_bundled_workflows() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
+
+        init(&project_path, &projects_dir, None, server.name()).unwrap();
+
+        let workflows = paths::workflows_dir(&project_path);
+        for name in &[
+            "implement-and-review",
+            "research-implement-review",
+            "research-only",
+            "pr-review",
+        ] {
+            assert!(
+                workflows.join(name).join("config.toml").is_file(),
+                "expected config.toml for workflow {name}",
+            );
+            assert!(
+                workflows.join(name).join("workflow.md").is_file(),
+                "expected workflow.md for workflow {name}",
+            );
+        }
     }
 
     #[test]

@@ -634,7 +634,7 @@ mod tests {
             context: None,
             base: Some("parent"),
             edit: false,
-            agent_override: None,
+            workflow: None,
             tmux_server: server.name(),
         })
         .unwrap();
@@ -664,7 +664,7 @@ mod tests {
             context: None,
             base: Some("parent"),
             edit: false,
-            agent_override: None,
+            workflow: None,
             tmux_server: server.name(),
         })
         .unwrap();

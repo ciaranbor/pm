@@ -62,6 +62,7 @@ mod tests {
             base: String::new(),
             pr: pr.to_string(),
             context: String::new(),
+            workflow: None,
             created: now,
             last_active: now,
         }

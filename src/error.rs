@@ -71,6 +71,25 @@ pub enum PmError {
     #[error("Skill not found: {0}")]
     SkillNotFound(String),
 
+    #[error(
+        "Workflow not found: {0}\n  Hint: run `pm workflow list` to see installed workflows, \
+         or run `pm upgrade` to install the bundled ones."
+    )]
+    WorkflowNotFound(String),
+
+    #[error(
+        "Workflow '{workflow}' lists '{agent}' in auto_spawn, but no agent definition was found at \
+         {} or {}. Install the definition or fix the workflow.",
+        .main_def.display(),
+        .global_def.display()
+    )]
+    WorkflowAgentMissing {
+        workflow: String,
+        agent: String,
+        main_def: PathBuf,
+        global_def: PathBuf,
+    },
+
     #[error("Agent error: {0}")]
     Agent(String),
 

@@ -1,0 +1,3 @@
+description = "Reviewer reviews a PR and reports findings to the user"
+agents = ["reviewer"]
+auto_spawn = ["reviewer"]

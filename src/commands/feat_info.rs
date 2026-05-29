@@ -71,6 +71,19 @@ pub fn feat_info(project_root: &Path, name: &str) -> Result<Vec<String>> {
         }
     }
 
+    if let Some(workflow_name) = &state.workflow {
+        // Try to load the workflow def so we can show the description
+        // inline. Fall back to just the name when the workflow is
+        // missing or unparseable — `feat info` shouldn't fail on a
+        // workflow-side issue.
+        let line = match crate::commands::workflow::get(project_root, workflow_name) {
+            Ok(Some(def)) => {
+                format!("workflow:    {workflow_name} — {}", def.description)
+            }
+            _ => format!("workflow:    {workflow_name}"),
+        };
+        lines.push(line);
+    }
     if !state.context.is_empty() {
         lines.push(format!("context:     {}", state.context));
     }
@@ -107,7 +120,7 @@ mod tests {
             context: Some("fix the widget"),
             base: None,
             edit: false,
-            agent_override: None,
+            workflow: Some("implement-and-review"),
             tmux_server: server.name(),
         })
         .unwrap();
@@ -119,6 +132,9 @@ mod tests {
         assert!(output.contains("branch:      alpha"));
         assert!(output.contains("worktree:    alpha"));
         assert!(output.contains("remote:      None"));
+        // `feat info` shows the workflow name + its description.
+        assert!(output.contains("workflow:    implement-and-review — "));
+        assert!(output.contains("Implementer drains tasks"));
         assert!(output.contains("context:     fix the widget"));
         assert!(output.contains("created:"));
         assert!(output.contains("last_active:"));

@@ -46,3 +46,4 @@ pub mod state_cmd;
 pub mod status;
 pub mod summary;
 pub mod upgrade;
+pub mod workflow;

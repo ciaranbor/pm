@@ -48,6 +48,11 @@ pub fn docs_dir(project_root: &Path) -> PathBuf {
     pm_dir(project_root).join("docs")
 }
 
+/// Returns the workflows directory for a given project root.
+pub fn workflows_dir(project_root: &Path) -> PathBuf {
+    pm_dir(project_root).join("workflows")
+}
+
 /// Single source of truth for the main worktree directory name convention.
 /// Returns `<project_root>/main`.
 pub fn main_worktree(project_root: &Path) -> PathBuf {

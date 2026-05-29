@@ -97,6 +97,7 @@ mod tests {
             base: "main".to_string(),
             pr: String::new(),
             context: String::new(),
+            workflow: None,
             created: now,
             last_active: now,
         };
@@ -159,6 +160,7 @@ mod tests {
             base: String::new(),
             pr: String::new(),
             context: String::new(),
+            workflow: None,
             created: now,
             last_active: now,
         };

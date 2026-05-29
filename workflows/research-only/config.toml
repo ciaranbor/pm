@@ -1,0 +1,3 @@
+description = "Researcher explores and reports findings to the user"
+agents = ["researcher"]
+auto_spawn = ["researcher"]

@@ -14,7 +14,7 @@ use crate::error::Result;
 use crate::messages;
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
-use crate::state::project::ProjectConfig;
+use crate::state::workflow::WorkflowDef;
 
 /// Fields needed to write an Initializing-status feature state file.
 pub struct InitStateFields<'a> {
@@ -23,6 +23,7 @@ pub struct InitStateFields<'a> {
     pub base: &'a str,
     pub pr: &'a str,
     pub context: &'a str,
+    pub workflow: Option<&'a str>,
 }
 
 /// Write a feature state file with `status = Initializing` and current timestamps.
@@ -41,6 +42,7 @@ pub fn write_initializing_state(
         base: fields.base.to_string(),
         pr: fields.pr.to_string(),
         context: fields.context.to_string(),
+        workflow: fields.workflow.map(|s| s.to_string()),
         created: now,
         last_active: now,
     };
@@ -48,84 +50,84 @@ pub fn write_initializing_state(
     Ok(state)
 }
 
-/// Resolve the agent to spawn for a feature-creation flow: explicit override
-/// first, then project default, then plain claude (None).
-pub fn resolve_default_agent<'a>(
-    agent_override: Option<&'a str>,
-    config: &'a ProjectConfig,
-) -> Option<&'a str> {
-    agent_override.or(config.agents.default.as_deref())
-}
-
-/// Enqueue a feature's initial context as a message in the resolved default
-/// agent's inbox. The pm Stop hook will deliver it on the agent's empty first
-/// turn. Returns the name of the agent the message was queued for (if any).
-///
-/// With no default agent configured and no override, no message is enqueued
-/// — plain claude sessions don't have an inbox keyed by a named agent.
-pub fn enqueue_initial_context<'a>(
+/// Enqueue a feature's initial context as a message in each `auto_spawn`
+/// agent's inbox. The pm Stop hook will deliver it on each agent's empty
+/// first turn. Caller passes the workflow's loaded `auto_spawn` list; the
+/// empty case (no auto-spawn agents) is handled silently.
+pub fn enqueue_initial_context(
     project_root: &Path,
     feature_name: &str,
-    config: &'a ProjectConfig,
-    agent_override: Option<&'a str>,
+    auto_spawn: &[String],
     context: &str,
     base_scope: &str,
-) -> Result<Option<&'a str>> {
-    let Some(agent) = resolve_default_agent(agent_override, config) else {
-        return Ok(None);
-    };
+) -> Result<()> {
+    if auto_spawn.is_empty() {
+        return Ok(());
+    }
     let messages_dir = paths::messages_dir(project_root);
-    // Record sender_scope so that `pm msg reply` routes the response
-    // back to the correct scope (main, or a parent feature for stacked features).
-    messages::send_with_scope(
-        &messages_dir,
-        feature_name,
-        agent,
-        base_scope,
-        context,
-        Some(base_scope),
-    )?;
-    Ok(Some(agent))
+    for agent in auto_spawn {
+        // Record sender_scope so that `pm msg reply` routes the response
+        // back to the correct scope (main, or a parent feature for stacked features).
+        messages::send_with_scope(
+            &messages_dir,
+            feature_name,
+            agent,
+            base_scope,
+            context,
+            Some(base_scope),
+        )?;
+    }
+    Ok(())
 }
 
-/// Spawn the default claude agent for a newly-created feature: resolves
-/// override → config default → plain claude, then calls
-/// `agent_spawn::spawn_claude_session` with no initial prompt. The pm Stop
-/// hook is responsible for delivering any queued message on the empty first
-/// turn.
+/// Spawn each `auto_spawn` agent for a newly-created feature.
 ///
-/// When `reuse_window` is provided, the existing tmux window at that target
-/// is renamed and reused instead of creating a new window. This avoids
-/// leaving an empty default shell at window :0 during `feat new --context`.
+/// The first agent reuses `reuse_window` (typically window :0, the default
+/// shell created by `tmux new-session`) to avoid leaving an empty window.
+/// Subsequent agents are spawned into new windows.
 ///
-/// Only used by feat_new and feat_adopt. feat_review bypasses this because it
-/// always spawns the hardcoded `reviewer` agent in read-only mode.
-pub fn spawn_default_agent(
+/// The pm Stop hook is responsible for delivering any queued messages on
+/// each agent's empty first turn — `spawn_claude_session` itself passes no
+/// initial prompt.
+pub fn spawn_auto_spawn_agents(
     project_root: &Path,
     feature_name: &str,
-    config: &ProjectConfig,
-    agent_override: Option<&str>,
+    auto_spawn: &[String],
     edit: bool,
     reuse_window: Option<&str>,
     tmux_server: Option<&str>,
 ) -> Result<()> {
-    let agent = resolve_default_agent(agent_override, config);
-    agent_spawn::spawn_claude_session(&agent_spawn::SpawnClaudeParams {
-        project_root,
-        feature: feature_name,
-        agent_name: agent,
-        // Default-agent flow has no concept of aliasing — the display name
-        // doubles as the definition. Setting this to None makes
-        // spawn_claude_session use `agent_name` for `--agent`.
-        agent_definition: None,
-        prompt: None,
-        edit,
-        resume_session: None,
-        fork_session: false,
-        reuse_window,
-        tmux_server,
-    })?;
+    for (idx, agent) in auto_spawn.iter().enumerate() {
+        // Only the first agent reuses the default shell window. All
+        // subsequent agents get their own fresh window.
+        let reuse = if idx == 0 { reuse_window } else { None };
+        agent_spawn::spawn_claude_session(&agent_spawn::SpawnClaudeParams {
+            project_root,
+            feature: feature_name,
+            agent_name: Some(agent.as_str()),
+            // Workflow auto-spawn has no concept of aliasing — the
+            // workflow's `auto_spawn` entry doubles as the definition.
+            // `spawn_claude_session` falls back to `agent_name` when this
+            // is `None`.
+            agent_definition: None,
+            prompt: None,
+            edit,
+            resume_session: None,
+            fork_session: false,
+            reuse_window: reuse,
+            tmux_server,
+        })?;
+    }
     Ok(())
+}
+
+/// Convenience: load a workflow def, validate `auto_spawn` agents exist,
+/// and return the loaded def. Errors propagate from both steps so callers
+/// can surface the workflow problem before any filesystem side effects.
+pub fn load_and_validate_workflow(project_root: &Path, name: &str) -> Result<WorkflowDef> {
+    let def = WorkflowDef::load(project_root, name)?;
+    def.validate_auto_spawn(project_root, name)?;
+    Ok(def)
 }
 
 /// Parameters for rolling back a partial feature creation.

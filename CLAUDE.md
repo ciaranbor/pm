@@ -11,7 +11,8 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 - `src/main.rs` — entry point (parse args, run dispatch, handle errors)
 - `src/cli.rs` — clap CLI definition (all derive structs and enums)
 - `src/dispatch.rs` — command dispatch (`run()` function, scope helpers)
-- `src/state/` — TOML state management (project entries, feature state, config). `ProjectEntry` has optional `repo_url` (project git origin) and `state_remote` (.pm/ repo remote) fields for cross-machine restore. `GlobalConfig` (`~/.config/pm/config.toml`) holds global defaults like `max_features`. Precedence: project-level `.pm/config.toml` > global > unlimited.
+- `src/state/` — TOML state management (project entries, feature state, config). `ProjectEntry` has optional `repo_url` (project git origin) and `state_remote` (.pm/ repo remote) fields for cross-machine restore. `GlobalConfig` (`~/.config/pm/config.toml`) holds global defaults like `max_features`. Precedence: project-level `.pm/config.toml` > global > unlimited. `FeatureState` has an optional `workflow: Option<String>` referencing a workflow under `<project>/.pm/workflows/<name>/`. `AgentsConfig` no longer carries a `default` field — agent selection is driven by the workflow's `auto_spawn` list instead.
+- `src/state/workflow.rs` — Workflow definition (`WorkflowDef`) loader and validator. Each workflow lives under `<project>/.pm/workflows/<name>/` as `config.toml` + `workflow.md`. `WorkflowDef::load` parses the TOML; `validate_auto_spawn` checks that every agent listed in `auto_spawn` has a definition file resolvable from `main/.claude/agents/` or `~/.claude/agents/` (feature worktree not consulted — it usually doesn't exist yet at `feat new` time).
 - `src/git/` — git operations, split into submodules: `init.rs`, `branch.rs`, `worktree.rs`, `remote.rs`, `status.rs`
 - `src/tmux.rs` — tmux operations (session create/kill/switch, display-menu)
 - `src/gh.rs` — GitHub CLI wrapper (PR creation, editing, status queries via `gh`)
@@ -31,15 +32,17 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 - `src/commands/agent_restart.rs` — `pm agent restart` (kill window then respawn, preserving `active = true` and session for `--resume`); accepts multiple names
 - `src/commands/agent_check.rs` — assembles checklists from agent definition frontmatter + project-specific files, sends as message
 - `src/commands/agent_fork.rs` — `pm agent fork <source> <new-name>` spawns a new agent that starts with a copy of the source's conversation history. Implemented via Claude Code's built-in `claude --resume <source.session_id> --fork-session`, which loads the source's transcript but assigns a fresh session id, leaving the source's session file untouched. `SpawnClaudeParams` carries a `fork_session: bool` so other callers default to `false`.
-- `agents/` — bundled agent definitions (reviewer, implementer, researcher), embedded via `include_str!`. Frontmatter supports a `checklist:` field (YAML list of items for `pm agent check`)
+- `agents/` — bundled agent definitions (reviewer, implementer, researcher, main), embedded via `include_str!`. Frontmatter supports a `checklist:` field (YAML list of items for `pm agent check`). Job-duty prose only — routing topology is owned by the workflow (see below).
+- `workflows/` — bundled workflow definitions (implement-and-review, research-implement-review, research-only, pr-review), each a `<name>/{config.toml,workflow.md}` pair embedded via `include_str!`. `pm init`/`pm upgrade` install them into `<project>/.pm/workflows/`. Workflows use a "Preserve" install policy: missing workflows are installed but user-modified ones are never overwritten (same spirit as `.pm/hooks/`). Skills and agents continue to use "Overwrite" (the bundle is authoritative). The shared `BundledItem` system in `src/commands/skills.rs` handles all three kinds.
 - `src/commands/claude_export.rs` — `pm claude export` tars Claude session data with a manifest for cross-machine transfer
 - `src/commands/claude_import.rs` — `pm claude import` extracts tarball, resolves local paths from registry, rewrites embedded paths
 - `src/commands/summary.rs` — `pm summary write` writes/overwrites `.pm/summaries/<feature>.md`
+- `src/commands/workflow.rs` — `pm workflow show` (prints active workflow's `workflow.md`) and `pm workflow list` (lists installed workflows with descriptions). Used by the bundled `pm-workflow` skill so agents can discover their per-feature routing at the start of every task.
 - `src/commands/docs.rs` — information store management (`bootstrap`, submodule migration)
 - `src/commands/state_cmd.rs` — git-backed state backup and sync (`init`, `remote`, `push`, `pull`, `status`, `backfill`). Supports both per-project `.pm/` and global registry `~/.config/pm/` via `--global` flag. Shared `RepoContext` eliminates duplication between the two modes. `backfill` reads origin URLs from existing projects and writes `repo_url`/`state_remote` into the global registry.
 - `src/commands/restore.rs` — `pm restore` rebuilds all projects on a fresh machine from the global registry, cloning repos (`repo_url`), pulling `.pm/` state (`state_remote`), recreating missing feature worktrees, and opening tmux sessions.
 - `src/commands/self_update.rs` — `pm self-update` pulls latest pm source (ff-only), rebuilds via `cargo install`, warns about active features, then runs `upgrade --all`. Finds pm's own source via the global registry lookup for project "pm".
-- `skills/` — bundled skill definitions (pm), embedded via `include_str!`
+- `skills/` — bundled skill definitions (pm, messaging, pm-workflow), embedded via `include_str!`. `pm-workflow` is installed on every bundled agent (researcher, implementer, reviewer, main) and teaches them to run `pm workflow show` to discover per-feature routing.
 
 ### Agents as long-running message processors
 
@@ -63,6 +66,27 @@ primitive: **enqueue a message, then spawn (or do nothing if already
 running).** The first turn is empty; the Stop hook blocks until the
 queued message is available, then delivers it. The first-turn flow is
 identical to every subsequent turn.
+
+### Workflows vs agents
+
+Two layers, deliberately decoupled:
+
+- **Agent definitions** (`agents/<name>.md`) describe an agent's *job*:
+  what they do, how they evaluate work, what their checklist is. They
+  ship with the `pm-workflow` skill but contain no routing prose.
+- **Workflows** (`workflows/<name>/workflow.md`) define the per-feature
+  *topology*: who hands off to whom, who reports back to the user. They
+  live next to `config.toml` which declares the `auto_spawn` agent(s)
+  pm should launch at `feat new --workflow X` time.
+
+This split lets the same agent (e.g. `implementer`) play different
+routing roles in different features without forking the agent
+definition. The `pm-workflow` skill is the bridge: every agent runs
+`pm workflow show` at the start of every task to read the active
+workflow's prose.
+
+`pm feat new --context` *requires* `--workflow <name>`. A context with
+no workflow has nobody to deliver it to.
 
 ### Information store vs messaging
 
