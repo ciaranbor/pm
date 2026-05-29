@@ -55,6 +55,19 @@ back to the user).
 - Is it clear, well-structured, and consistent with project conventions?
 - Are there security concerns (injection, path traversal, etc.)?
 
+### Comment quality
+
+Flag "slop" comments for removal or trimming — they're a recurring
+problem and add noise without value:
+
+- Comments that narrate what *this* change does or reference the
+  PR/feature/ticket (e.g. "newly added for X", "this change makes…").
+  Comments should explain the code as it stands, not its history.
+- Comments that merely restate the adjacent code without adding intent
+  or rationale.
+
+Good comments explain *why*, not *what*. Request that the rest be cut.
+
 ## Review stance
 
 If something has a clearly better alternative, request the change — don't
