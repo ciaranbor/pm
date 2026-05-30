@@ -60,6 +60,11 @@ Claude Code delivers this as a continuation prompt. The agent reads the
 message, processes it, the turn ends, and the hook fires again — blocking
 until the next message arrives.
 
+Exception: if the Stop event reports a running background task or active
+cron and no messages are queued, the hook approves instead of blocking so
+the running work isn't stalled. Recurring crons stay active between fires,
+so an agent with one is message-delivered only at fire boundaries.
+
 Initial context (`pm feat new --context <x>`, `pm agent spawn --context
 <x>`, `pm msg send <to> <body>` auto-spawn) all desugar to the same
 primitive: **enqueue a message, then spawn (or do nothing if already

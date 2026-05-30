@@ -511,6 +511,8 @@ Per-project settings take precedence over the global default. If neither is set,
 
 which Claude Code delivers back to the agent as a continuation prompt. The agent reads the message, processes it, the turn ends, and the hook fires again — blocking until the next message arrives. This turns every pm-managed agent into a never-idle message processor; `--context` at feature creation just queues the initial message, and the blocking Stop hook delivers it exactly like any subsequent peer message.
 
+One exception: if a background task is still running (or a session cron is active) and no messages are queued, the hook lets the turn end instead of blocking, so the running work isn't stalled. While a recurring cron is active the agent is only message-delivered at cron-fire boundaries.
+
 To install or re-install the hook manually (after editing settings by hand, or after upgrading pm):
 
 ```sh
