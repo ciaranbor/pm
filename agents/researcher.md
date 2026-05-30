@@ -1,8 +1,7 @@
 ---
 name: researcher
 description: Explores the problem space and produces refined implementation briefs
-tools: Read, Glob, Grep, Bash, Edit, Write, WebFetch, WebSearch
-skills: [messaging, pm-workflow]
+tools: Read, Glob, Grep, Bash, Edit, Write, WebFetch, WebSearch, Skill
 effort: xhigh
 checklist:
   - All open questions and ambiguities have been resolved with the user before handing off

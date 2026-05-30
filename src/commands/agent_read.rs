@@ -182,7 +182,7 @@ fn format_message(m: &Message, current_scope: Option<&str>) -> Vec<String> {
 
     if is_cross_scope || is_cross_project {
         lines.push(String::new());
-        lines.push("Reply: pm msg reply \"your reply here\"".to_string());
+        lines.push("Reply: pm msg reply <<'EOF' ... EOF".to_string());
     }
 
     lines
@@ -602,8 +602,13 @@ mod tests {
         .unwrap();
 
         let lines = agent_read(&root, "login", "implementer", None, None).unwrap();
-        // Should contain reply hint
-        assert!(lines.iter().any(|l| l.contains("pm msg reply")));
+        // Should suggest reply via the heredoc-redirect form (not a
+        // double-quoted arg, which corrupts backticks/$ and trips prompts).
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("pm msg reply") && l.contains("<<'EOF'"))
+        );
     }
 
     #[test]
