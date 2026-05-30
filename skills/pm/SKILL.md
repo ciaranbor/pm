@@ -1,6 +1,6 @@
 ---
 name: pm
-description: Dispatch features, check status, and manage project lifecycle using the pm project manager
+description: Create and dispatch features, check feature or project status, adopt branches, and inspect the pm project lifecycle. Use whenever you need to start, dispatch, or delegate work as a feature, or look up status with pm feat, pm status, or related pm commands.
 ---
 
 # pm — Feature Dispatch & Status

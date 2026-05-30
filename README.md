@@ -437,6 +437,10 @@ pm msg read --from reviewer --index -2       # one further back
 
 Key properties:
 
+- **Send multi-line bodies via a heredoc redirect with a quoted delimiter.**
+  Use `pm msg send <agent> <<'EOF' … EOF` for anything containing markdown,
+  backticks, `$`, or apostrophes — the body is passed through verbatim.
+  Reserve the positional form (`pm msg send x "…"`) for trivial one-liners.
 - **`read` reads and advances.** Each call returns the next unread message
   and moves the cursor forward. No separate `next` call needed.
 - **`--index` is pure.** With `--index`, `read` returns the specified
