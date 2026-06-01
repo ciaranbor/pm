@@ -41,7 +41,7 @@ fn stop_inner() -> crate::error::Result<String> {
 
     let cwd = std::env::current_dir()?;
     let project_root = paths::find_project_root(&cwd)?;
-    let feature = resolve_feature_or_scope(&project_root, &cwd)?;
+    let feature = paths::resolve_scope_from(&project_root, &cwd)?;
 
     wait_and_decide(busy, &project_root, &feature, &agent, None)
 }
@@ -134,20 +134,6 @@ fn is_terminal_status(status: &str) -> bool {
         status,
         "completed" | "failed" | "cancelled" | "canceled" | "expired" | "killed"
     )
-}
-
-/// Resolve the current scope: feature name from CWD, or "main".
-fn resolve_feature_or_scope(
-    project_root: &std::path::Path,
-    cwd: &std::path::Path,
-) -> crate::error::Result<String> {
-    if let Some(feature) = paths::detect_feature_from_cwd(project_root, cwd) {
-        return Ok(feature);
-    }
-    if paths::is_in_main_worktree(project_root, cwd) {
-        return Ok("main".to_string());
-    }
-    Err(crate::error::PmError::NotInWorktree)
 }
 
 #[cfg(test)]
