@@ -1,6 +1,23 @@
 /// Test utilities shared across modules.
 use std::sync::OnceLock;
+use std::sync::RwLock;
 use std::sync::atomic::{AtomicU32, Ordering};
+
+/// Process-wide lock guarding the global current working directory.
+///
+/// CWD is process-global, but `cargo test` runs tests in parallel within a
+/// single process. Tests that mutate CWD via `std::env::set_current_dir`
+/// take the WRITE lock; tests that merely *read* CWD take a READ lock. The
+/// chief reader is `git clone`, which reads CWD at startup and aborts with
+/// "this operation must be run in a work tree" if CWD has been moved into a
+/// directory that isn't a work tree. This serialises the CWD mutator(s)
+/// against the clone readers without flattening parallelism among the
+/// readers themselves.
+///
+/// If you add a test that calls `std::env::set_current_dir`, take the write
+/// lock here. If you add a test that runs `git clone` (or otherwise depends
+/// on CWD), take the read lock.
+pub static CWD_LOCK: RwLock<()> = RwLock::new(());
 
 static TMUX_SERVER_COUNTER: AtomicU32 = AtomicU32::new(0);
 static SHARED_SERVER_NAME: OnceLock<String> = OnceLock::new();

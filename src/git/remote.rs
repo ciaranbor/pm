@@ -121,6 +121,8 @@ mod tests {
 
     #[test]
     fn clone_repo_creates_clone() {
+        // Read side of CWD_LOCK (serialises against the CWD mutator) — see testing.rs.
+        let _cwd = crate::testing::CWD_LOCK.read().unwrap();
         let dir = tempdir().unwrap();
 
         // Create a bare repo as remote
@@ -145,6 +147,8 @@ mod tests {
 
     #[test]
     fn clone_repo_fails_for_invalid_url() {
+        // Read side of CWD_LOCK (serialises against the CWD mutator) — see testing.rs.
+        let _cwd = crate::testing::CWD_LOCK.read().unwrap();
         let dir = tempdir().unwrap();
         let clone_path = dir.path().join("cloned");
 

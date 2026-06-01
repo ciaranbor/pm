@@ -350,6 +350,8 @@ mod tests {
 
     #[test]
     fn init_with_git_url_clones_repo() {
+        // Read side of CWD_LOCK (serialises against the CWD mutator) — see testing.rs.
+        let _cwd = crate::testing::CWD_LOCK.read().unwrap();
         let dir = tempdir().unwrap();
         let server = TestServer::new();
 
@@ -386,6 +388,8 @@ mod tests {
 
     #[test]
     fn init_with_git_url_cloned_repo_has_remote() {
+        // Read side of CWD_LOCK (serialises against the CWD mutator) — see testing.rs.
+        let _cwd = crate::testing::CWD_LOCK.read().unwrap();
         let dir = tempdir().unwrap();
         let server = TestServer::new();
 
@@ -422,16 +426,14 @@ mod tests {
         // cross-project messaging because the path resolved against the
         // sender's CWD.
         //
-        // CWD is process-global. We serialise this test against itself via
-        // a static mutex so a flaky retry doesn't race with the prior run.
-        // **Important:** every other test in this binary today uses absolute
-        // tempdir paths and never mutates CWD. If you add a test that does
-        // `std::env::set_current_dir(...)`, acquire this same mutex (or move
-        // it to a shared location and acquire it from there) — otherwise
-        // tests will race against each other under `cargo test`.
-        use std::sync::Mutex;
-        static CWD_LOCK: Mutex<()> = Mutex::new(());
-        let _guard = CWD_LOCK.lock().unwrap();
+        // CWD is process-global and `cargo test` runs tests in parallel, so
+        // mutating it here can race the `git clone` tests (clone reads CWD at
+        // startup and fails if CWD isn't a work tree). We take the WRITE side
+        // of the shared `CWD_LOCK`; the clone tests take the READ side. This
+        // serialises this mutator against those readers without flattening
+        // parallelism. If you add another CWD-mutating test, take this write
+        // lock too.
+        let _guard = crate::testing::CWD_LOCK.write().unwrap();
 
         let dir = tempdir().unwrap();
         let server = TestServer::new();
@@ -461,6 +463,8 @@ mod tests {
 
     #[test]
     fn init_with_git_url_detects_default_branch() {
+        // Read side of CWD_LOCK (serialises against the CWD mutator) — see testing.rs.
+        let _cwd = crate::testing::CWD_LOCK.read().unwrap();
         let dir = tempdir().unwrap();
         let server = TestServer::new();
 
