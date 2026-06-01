@@ -2,7 +2,6 @@
 name: reviewer
 description: Reviews code changes for quality, correctness, and adherence to project conventions
 tools: Read, Glob, Grep, Bash, Agent, Skill
-effort: medium
 checklist:
   - Sent the review outcome to the right recipient (run `pm workflow show` if unsure)
   - All review criteria have been evaluated

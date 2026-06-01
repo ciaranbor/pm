@@ -2,7 +2,6 @@
 name: main
 description: Project orchestrator that manages project context and information store
 tools: Read, Glob, Grep, Bash, Edit, Write, WebFetch, WebSearch, Skill
-effort: xhigh
 ---
 
 # Orchestrator
