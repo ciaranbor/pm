@@ -27,7 +27,19 @@ const DEFAULT_CATEGORIES: &[DefaultCategory] = &[
         heading: "# Ideas",
         description: "Thoughts and design questions that aren't yet actionable.",
     },
+    DefaultCategory {
+        filename: "findings.md",
+        heading: "# Findings",
+        description: "Durable findings and learnings worth remembering — verified facts, gotchas, and external constraints discovered during work. Not tasks, bugs, or open questions.",
+    },
 ];
+
+/// Append a single `[[category]]` table to `out`.
+fn write_category_entry(out: &mut String, cat: &DefaultCategory) {
+    writeln!(out, "[[category]]").unwrap();
+    writeln!(out, "filename = \"{}\"", cat.filename).unwrap();
+    writeln!(out, "description = \"{}\"", cat.description).unwrap();
+}
 
 /// Generate `categories.toml` content from the default categories.
 fn default_categories_toml() -> String {
@@ -36,11 +48,53 @@ fn default_categories_toml() -> String {
         if i > 0 {
             out.push('\n');
         }
-        writeln!(out, "[[category]]").unwrap();
-        writeln!(out, "filename = \"{}\"", cat.filename).unwrap();
-        writeln!(out, "description = \"{}\"", cat.description).unwrap();
+        write_category_entry(&mut out, cat);
     }
     out
+}
+
+/// Reconcile an existing `categories.toml` against the defaults, appending any
+/// default category whose `filename` isn't already listed.
+///
+/// Returns `Some(updated_content)` if entries were appended, `None` if the file
+/// already lists every default (or can't be parsed — we don't clobber files we
+/// don't understand).
+///
+/// Note: this resurrects a default category a user intentionally deleted from
+/// `categories.toml`. That's deliberate and consistent with `bootstrap`, which
+/// already recreates any missing default category *file*; keeping the toml and
+/// the on-disk files in sync with the defaults is the simpler, predictable rule
+/// this early on.
+fn reconcile_categories_toml(content: &str) -> Option<String> {
+    let parsed: toml::Value = toml::from_str(content).ok()?;
+    let existing: std::collections::HashSet<&str> = parsed
+        .get("category")
+        .and_then(|c| c.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|e| e.get("filename").and_then(|f| f.as_str()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let missing: Vec<&DefaultCategory> = DEFAULT_CATEGORIES
+        .iter()
+        .filter(|cat| !existing.contains(cat.filename))
+        .collect();
+
+    if missing.is_empty() {
+        return None;
+    }
+
+    let mut out = content.to_string();
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    for cat in missing {
+        out.push('\n');
+        write_category_entry(&mut out, cat);
+    }
+    Some(out)
 }
 
 /// Returns `true` if `.pm/docs/` is currently a nested git repo / submodule
@@ -113,10 +167,19 @@ pub fn bootstrap(project_root: &Path) -> Result<()> {
 
     std::fs::create_dir_all(&docs_dir)?;
 
-    // Write categories.toml (only if it doesn't exist, to preserve customisations)
+    // Write categories.toml. If it doesn't exist, seed it with the defaults.
+    // If it does, preserve user customisations but reconcile in any default
+    // categories it's missing (e.g. findings.md added in a later version) so
+    // the orchestrator — which discovers categories by reading this file —
+    // sees every default category file bootstrap creates below.
     let categories_path = docs_dir.join("categories.toml");
     if !categories_path.exists() {
         std::fs::write(&categories_path, default_categories_toml())?;
+    } else {
+        let existing = std::fs::read_to_string(&categories_path)?;
+        if let Some(updated) = reconcile_categories_toml(&existing) {
+            std::fs::write(&categories_path, updated)?;
+        }
     }
 
     // Write default category files
@@ -187,6 +250,64 @@ mod tests {
         assert!(content.contains("todo.md"));
         assert!(content.contains("issues.md"));
         assert!(content.contains("ideas.md"));
+        assert!(content.contains("findings.md"));
+
+        // The orchestrator reads filename + description from this file, so make
+        // sure the findings entry round-trips through a TOML parse intact.
+        let parsed: toml::Value = toml::from_str(&content).unwrap();
+        let findings = parsed
+            .get("category")
+            .and_then(|c| c.as_array())
+            .unwrap()
+            .iter()
+            .find(|e| e.get("filename").and_then(|f| f.as_str()) == Some("findings.md"))
+            .expect("findings category present");
+        let desc = findings
+            .get("description")
+            .and_then(|d| d.as_str())
+            .unwrap();
+        assert!(desc.contains("Durable findings"));
+    }
+
+    #[test]
+    fn bootstrap_reconciles_missing_default_into_existing_categories_toml() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        // Simulate a project created before findings existed: categories.toml
+        // lists only the original three categories.
+        let docs = paths::docs_dir(&root);
+        std::fs::create_dir_all(&docs).unwrap();
+        let legacy = "[[category]]\nfilename = \"todo.md\"\ndescription = \"Ordered task list.\"\n\n\
+[[category]]\nfilename = \"issues.md\"\ndescription = \"Bugs.\"\n\n\
+[[category]]\nfilename = \"ideas.md\"\ndescription = \"Ideas.\"\n";
+        std::fs::write(docs.join("categories.toml"), legacy).unwrap();
+
+        bootstrap(&root).unwrap();
+
+        let content = std::fs::read_to_string(docs.join("categories.toml")).unwrap();
+        // Original entries preserved (custom descriptions untouched).
+        assert!(content.contains("Ordered task list."));
+        assert!(content.contains("\"Bugs.\""));
+        // findings appended both to the toml and on disk.
+        assert!(content.contains("findings.md"));
+        assert!(docs.join("findings.md").exists());
+
+        // Still valid TOML with exactly one findings entry.
+        let parsed: toml::Value = toml::from_str(&content).unwrap();
+        let count = parsed
+            .get("category")
+            .and_then(|c| c.as_array())
+            .unwrap()
+            .iter()
+            .filter(|e| e.get("filename").and_then(|f| f.as_str()) == Some("findings.md"))
+            .count();
+        assert_eq!(count, 1);
+
+        // Idempotent: a second bootstrap doesn't append a duplicate.
+        bootstrap(&root).unwrap();
+        let content2 = std::fs::read_to_string(docs.join("categories.toml")).unwrap();
+        assert_eq!(content, content2);
     }
 
     #[test]
@@ -200,9 +321,13 @@ mod tests {
         assert!(docs.join("todo.md").exists());
         assert!(docs.join("issues.md").exists());
         assert!(docs.join("ideas.md").exists());
+        assert!(docs.join("findings.md").exists());
 
         let todo = std::fs::read_to_string(docs.join("todo.md")).unwrap();
         assert!(todo.starts_with("# Todo"));
+
+        let findings = std::fs::read_to_string(docs.join("findings.md")).unwrap();
+        assert!(findings.starts_with("# Findings"));
     }
 
     #[test]

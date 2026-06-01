@@ -547,7 +547,7 @@ Reinstalls bundled assets (hooks, skills, agents, information store) to each pro
 
 ### Information store
 
-Each project has an information store at `.pm/docs/` for project-level documentation. The store is bootstrapped by `pm init` with default categories (todo, issues, ideas) defined in `categories.toml`.
+Each project has an information store at `.pm/docs/` for project-level documentation. The store is bootstrapped by `pm init` with default categories (todo, issues, ideas, findings) defined in `categories.toml`.
 
 The orchestrator agent manages the store directly — reading `categories.toml` to discover categories and editing the corresponding markdown files. Use `pm state push` to commit and push all changes in the `.pm/` state repo. When a remote is configured (`pm state remote [url]`), it also pushes. The docs are tracked alongside all other project state.
 
@@ -558,8 +558,11 @@ Default categories after bootstrap:
 | `todo.md` | Ordered task list. Actionable items with clear next steps. |
 | `issues.md` | Concrete bugs and unexpected behaviours discovered during usage. |
 | `ideas.md` | Thoughts and design questions that aren't yet actionable. |
+| `findings.md` | Durable findings and learnings worth remembering — verified facts, gotchas, and external constraints discovered during work. Not tasks, bugs, or open questions. |
 
 Add custom categories by editing `categories.toml` and creating the corresponding markdown file.
+
+The orchestrator keeps the working docs lean: completed tasks, issues, and ideas are **deleted** rather than marked done (git history is the record of completed work). Durable findings worth remembering are migrated into `findings.md` before the original item is deleted.
 
 ### State backup and sync
 
