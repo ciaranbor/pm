@@ -25,14 +25,48 @@ pub fn sanitize_feature_name(branch: &str, name_override: Option<&str>) -> Resul
     }
 }
 
-/// Resolve context: if the value is a path to an existing file, read its contents;
-/// otherwise treat it as literal text.
+/// Read all of `reader` to EOF as a UTF-8 string. Used to back the `-`
+/// (stdin) sentinel; factored out so tests can inject a reader.
+fn read_to_string(mut reader: impl std::io::Read) -> Result<String> {
+    let mut buf = String::new();
+    reader.read_to_string(&mut buf)?;
+    Ok(buf)
+}
+
+/// Resolve context: `-` reads the entire body from stdin; otherwise, if the
+/// value is a path to an existing file, read its contents; otherwise treat it
+/// as literal text.
 pub fn resolve_context(context: &str) -> Result<String> {
+    resolve_context_from(context, std::io::stdin())
+}
+
+fn resolve_context_from(context: &str, stdin: impl std::io::Read) -> Result<String> {
+    if context == "-" {
+        return read_to_string(stdin);
+    }
     let path = Path::new(context);
     if path.is_file() {
         Ok(std::fs::read_to_string(path)?)
     } else {
         Ok(context.to_string())
+    }
+}
+
+/// Resolve the `-` stdin sentinel only, leaving any other value untouched as a
+/// literal string. Used by callers (e.g. `pm agent spawn`) that treat context
+/// as a literal and must not perform file-path resolution. Only the `-` case
+/// reads stdin; every other value (including `None`) is returned as-is.
+pub fn resolve_stdin_context(context: Option<&str>) -> Result<Option<String>> {
+    resolve_stdin_context_from(context, std::io::stdin())
+}
+
+fn resolve_stdin_context_from(
+    context: Option<&str>,
+    stdin: impl std::io::Read,
+) -> Result<Option<String>> {
+    match context {
+        Some("-") => Ok(Some(read_to_string(stdin)?)),
+        other => Ok(other.map(str::to_string)),
     }
 }
 
@@ -251,7 +285,56 @@ mod tests {
     use super::*;
     use crate::hooks;
     use crate::testing::TestServer;
+    use std::io::Cursor;
     use tempfile::tempdir;
+
+    #[test]
+    fn resolve_context_dash_reads_stdin() {
+        let body = "line one\nline two\n";
+        let resolved = resolve_context_from("-", Cursor::new(body)).unwrap();
+        assert_eq!(resolved, body);
+    }
+
+    #[test]
+    fn resolve_context_literal_does_not_touch_stdin() {
+        // Passing a non-empty stdin proves the literal path never reads it.
+        let resolved = resolve_context_from("just a string", Cursor::new("STDIN")).unwrap();
+        assert_eq!(resolved, "just a string");
+    }
+
+    #[test]
+    fn resolve_context_file_path_still_reads_file() {
+        let dir = tempdir().unwrap();
+        let brief = dir.path().join("brief.md");
+        std::fs::write(&brief, "file body").unwrap();
+        let resolved = resolve_context_from(brief.to_str().unwrap(), Cursor::new("STDIN")).unwrap();
+        assert_eq!(resolved, "file body");
+    }
+
+    #[test]
+    fn resolve_stdin_context_dash_reads_stdin() {
+        let body = "multi\nline\nbrief\n";
+        let resolved = resolve_stdin_context_from(Some("-"), Cursor::new(body)).unwrap();
+        assert_eq!(resolved.as_deref(), Some(body));
+    }
+
+    #[test]
+    fn resolve_stdin_context_literal_unchanged_and_no_file_resolution() {
+        let dir = tempdir().unwrap();
+        let brief = dir.path().join("brief.md");
+        std::fs::write(&brief, "file body").unwrap();
+        // Unlike resolve_context, a file path is left as the literal string.
+        let resolved =
+            resolve_stdin_context_from(Some(brief.to_str().unwrap()), Cursor::new("STDIN"))
+                .unwrap();
+        assert_eq!(resolved.as_deref(), Some(brief.to_str().unwrap()));
+    }
+
+    #[test]
+    fn resolve_stdin_context_none_is_none() {
+        let resolved = resolve_stdin_context_from(None, Cursor::new("STDIN")).unwrap();
+        assert_eq!(resolved, None);
+    }
 
     #[test]
     fn feat_new_creates_all_resources() {

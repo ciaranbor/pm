@@ -366,6 +366,9 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     context,
                     edit,
                 } => {
+                    // `--context -` reads the brief from stdin; any other
+                    // value is treated as a literal string (no file resolution).
+                    let context = commands::feat_new::resolve_stdin_context(context.as_deref())?;
                     if let Some(agent_name) = name {
                         let (_, msg) = commands::agent_spawn::agent_spawn(
                             &project_root,

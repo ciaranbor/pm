@@ -72,6 +72,12 @@ running).** The first turn is empty; the Stop hook blocks until the
 queued message is available, then delivers it. The first-turn flow is
 identical to every subsequent turn.
 
+`--context` (and `pr create/edit --body`) take a `-` sentinel meaning
+"read the body from stdin", so long briefs can be fed via heredoc without
+an approval prompt. Resolved in `feat_new::resolve_context` (shared, also
+does file/literal) and `feat_new::resolve_stdin_context` (stdin-only, for
+`agent spawn`).
+
 ### Workflows vs agents
 
 Two layers, deliberately decoupled:
