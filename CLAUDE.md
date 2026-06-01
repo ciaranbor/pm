@@ -98,10 +98,14 @@ no workflow has nobody to deliver it to.
 Two different things, don't collapse them:
 
 - **Information store** (`.pm/docs/`) is for **project-level persistent
-  knowledge** — todos, issues, ideas, and any other categories defined in
-  `categories.toml`. Tracked by the `.pm/` state repo, managed by the
-  orchestrator agent. Use `pm state push` to commit and push changes.
-  Bootstrapped by `pm init` and `pm upgrade`.
+  knowledge** — todos, issues, ideas, findings, and any other categories
+  defined in `categories.toml`. The default set bootstrapped by `pm init`
+  and `pm upgrade` is todo/issues/ideas/findings (the hardcoded
+  `DEFAULT_CATEGORIES` in `src/commands/docs.rs`). Tracked by the `.pm/`
+  state repo, managed by the orchestrator agent. Use `pm state push` to
+  commit and push changes. The orchestrator deletes completed
+  tasks/issues/ideas rather than marking them done (git history is the
+  record), migrating any durable finding into `findings.md` first.
 - **Messaging** (`pm msg`) is for **cross-scope or cross-role
   communication** — sending something to a *different* agent or a
   *different* scope. A queue, not a database.

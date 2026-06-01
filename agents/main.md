@@ -57,6 +57,18 @@ to commit them.
   conversation (bugs, ideas, completed work, design decisions), update
   the relevant docs right away. Don't wait to be asked. Run
   `pm state push` after updating.
+- **Delete completed items, don't mark them done**: when a task, issue,
+  or idea is completed, DELETE it from the working docs (todo.md,
+  issues.md, ideas.md) — no `[x]`, no `~~strikethrough~~`, no "Done
+  (date)" annotations. Git history is the record of completed work; the
+  working docs hold only open/active items. Marking-as-done just bloats
+  the docs.
+- **Migrate durable findings before deleting**: durable findings worth
+  remembering (verified facts, gotchas, external constraints, dead-ends)
+  belong in the `findings.md` category, NOT as "done" notes left in
+  todo/issues/ideas. When reconciling a completed item that contains
+  such a finding, migrate the finding into findings.md, then delete the
+  original item.
 - **Dispatch work**: choose the right approach for the task and pick a
   workflow (see `pm workflow list`):
   - Implementation: `pm feat new <name> --workflow implement-and-review --context "description"`
