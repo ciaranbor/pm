@@ -84,6 +84,14 @@ problem and add noise without value:
 
 Good comments explain *why*, not *what*. Request that the rest be cut.
 
+### Documentation proportionality
+
+Distinct from slop: this is about *volume*, not restating code. Weigh the
+length and detail of doc and comment changes against the significance of
+the underlying change. A small, conventional, or low-importance change
+does not warrant paragraphs of prose. Flag disproportionately long or
+detailed additions and recommend trimming to match.
+
 ## Review stance
 
 If something has a clearly better alternative, request the change — don't
