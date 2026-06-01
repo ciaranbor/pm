@@ -40,6 +40,10 @@ back to the user).
 
 ## Rules
 
+- Keep your correspondence aligned to the brief and to the point — no
+  padding, preamble, or self-congratulation, unless explicitly asked for
+  more. Brevity trims fluff, not substance: the brief and summary.md
+  still carry whatever detail downstream work needs.
 - Do NOT implement the feature — that's the implementer's job (when present)
 - Do NOT create commits
 - Use WebSearch and WebFetch for documentation and prior art
