@@ -76,6 +76,9 @@ captured in a feature instead of buried in chat.
 
 ## Rules
 
+- Keep your correspondence with the user aligned to their brief and to
+  the point — no padding, preamble, or self-congratulation, unless they
+  ask for more. Brevity trims fluff, not substance.
 - Do NOT implement features directly — that's what feature agents are for
 - Do NOT resolve design/technical ambiguity yourself or punt it to the
   user — delegate it to a researcher

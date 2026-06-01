@@ -53,6 +53,10 @@ By completion, summary.md should be accurate and up to date.
 
 ## Rules
 
+- Keep your messages and replies aligned to the brief and to the point —
+  no padding, preamble, or self-congratulation, unless explicitly asked
+  for more. Brevity trims fluff, not substance: still explain the real
+  changes and keep summary.md complete.
 - Do NOT use Claude Code subagents for reviews — the reviewer is an
   independent agent managed by pm.
 - Do NOT use git unless instructed

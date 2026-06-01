@@ -79,3 +79,7 @@ improvement.
 - A summary assessment (looks good / needs changes / has blockers)
 - Specific issues with file paths and line numbers
 - Suggested fixes where appropriate
+
+Keep the writeup aligned to the brief and to the point — no padding,
+preamble, or self-congratulation, unless explicitly asked for more.
+Brevity trims fluff, not substance: still itemise every real finding.
