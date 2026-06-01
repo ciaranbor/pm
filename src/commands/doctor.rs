@@ -7,6 +7,7 @@ use crate::state::agent::{AgentRegistry, AgentType};
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
 use crate::state::project::ProjectConfig;
+use crate::state::workflow;
 use crate::{gh, git, tmux};
 
 /// Categorisation of an issue for callers that want to filter findings.
@@ -28,6 +29,8 @@ pub enum IssueKind {
     AgentWindowMissing,
     /// Feature status stuck on `initializing`.
     StuckInitializing,
+    /// Feature references a workflow whose directory is missing.
+    WorkflowDirMissing,
     /// PR merged upstream but local status hasn't caught up.
     PrMerged,
     /// PR closed upstream but local status still active.
@@ -120,7 +123,8 @@ impl Finding {
 /// 3. Branch exists locally
 /// 4. Tmux session exists
 /// 5. Status stuck on "initializing"
-/// 6. If PR linked and `check_pr_state` is true, check GH status drift
+/// 6. Referenced workflow directory exists
+/// 7. If PR linked and `check_pr_state` is true, check GH status drift
 ///
 /// Also runs main-scope checks (Stop hook installed, main session present, main
 /// agent windows alive) when there is at least one feature, mirroring the
@@ -334,7 +338,23 @@ pub fn diagnose(
             });
         }
 
-        // Check 6: PR status drift (skipped when `check_pr_state` is false to
+        // Check 6: referenced workflow directory exists. Non-fatal warning —
+        // the workflow may have been deleted by accident or not installed on
+        // this machine. No auto-fix: a custom workflow can't be regenerated.
+        if let Some(wf) = &state.workflow
+            && !workflow::exists(project_root, wf)
+        {
+            issues.push(Issue {
+                kind: IssueKind::WorkflowDirMissing,
+                message: format!(
+                    "workflow '{wf}' directory missing from .pm/workflows/ \
+                     (deleted or not installed on this machine)"
+                ),
+                fix: Fix::None,
+            });
+        }
+
+        // Check 7: PR status drift (skipped when `check_pr_state` is false to
         // avoid network round-trips on latency-sensitive callers like
         // `pm open`'s pre-recreate warning hook).
         if check_pr_state && !state.pr.is_empty() {
@@ -696,7 +716,50 @@ mod tests {
         );
     }
 
-    // Check 6 (PR state drift) is not unit-tested because it requires `gh` CLI
+    #[test]
+    fn missing_workflow_directory_detected() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+
+        // Point the feature at a workflow whose directory does not exist.
+        let features_dir = paths::features_dir(&project_path);
+        let mut state = FeatureState::load(&features_dir, "login").unwrap();
+        state.workflow = Some("ghost-workflow".to_string());
+        state.save(&features_dir, "login").unwrap();
+
+        let lines = doctor(&project_path, false, server.name()).unwrap();
+        assert!(
+            lines.iter().any(|l| l.contains("login")
+                && l.contains("workflow 'ghost-workflow'")
+                && l.contains("missing")),
+            "got: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn present_workflow_directory_not_flagged() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+
+        // Create a workflow directory and point the feature at it.
+        let wf_dir = paths::workflows_dir(&project_path).join("real-workflow");
+        std::fs::create_dir_all(&wf_dir).unwrap();
+        std::fs::write(wf_dir.join("config.toml"), "description = \"x\"\n").unwrap();
+        let features_dir = paths::features_dir(&project_path);
+        let mut state = FeatureState::load(&features_dir, "login").unwrap();
+        state.workflow = Some("real-workflow".to_string());
+        state.save(&features_dir, "login").unwrap();
+
+        let lines = doctor(&project_path, false, server.name()).unwrap();
+        assert!(
+            !lines.iter().any(|l| l.contains("workflow")),
+            "got: {lines:?}"
+        );
+    }
+
+    // Check 7 (PR state drift) is not unit-tested because it requires `gh` CLI
     // authenticated against a real GitHub remote. The logic is exercised via the
     // gh::pr_info wrapper; integration testing would need a mock or real repo.
 
