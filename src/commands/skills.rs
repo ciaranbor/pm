@@ -643,6 +643,29 @@ mod tests {
         }
     }
 
+    /// Every feature agent def must carry the environment/CWD guidance that
+    /// stops the emergent `cd "$(git rev-parse …)"` habit — both the no-`cd`
+    /// and no-`$(…)` rules. Lock it in so a future edit can't drop it.
+    #[test]
+    fn feature_agents_carry_no_cd_no_subst_guidance() {
+        for item in items_of_kind(BundledKind::Agent) {
+            if !FEATURE_AGENTS.contains(&item.name) {
+                continue;
+            }
+            let body = item.files[0].1;
+            assert!(
+                body.contains("Do NOT `cd`"),
+                "agent '{}' must state the no-cd rule",
+                item.name
+            );
+            assert!(
+                body.contains("$(…)"),
+                "agent '{}' must warn against `$(…)` command substitution",
+                item.name
+            );
+        }
+    }
+
     /// Terminal routing prose must say "report in your own session", not the
     /// bare "respond to the user" that the implementer used to operationalise
     /// as a `pm msg reply` back to `main`. Guard against regressing it.
