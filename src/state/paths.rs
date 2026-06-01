@@ -113,6 +113,19 @@ pub fn detect_feature_from_cwd(project_root: &Path, cwd: &Path) -> Option<String
     Some(name)
 }
 
+/// Resolve the current scope from a working directory: the feature name if
+/// `cwd` is inside a known feature worktree, `"main"` if inside the main
+/// worktree, otherwise [`PmError::NotInWorktree`].
+pub fn resolve_scope_from(project_root: &Path, cwd: &Path) -> Result<String> {
+    if let Some(feature) = detect_feature_from_cwd(project_root, cwd) {
+        return Ok(feature);
+    }
+    if is_in_main_worktree(project_root, cwd) {
+        return Ok("main".to_string());
+    }
+    Err(PmError::NotInWorktree)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,6 +304,42 @@ mod tests {
         std::fs::create_dir(root.join(".pm")).unwrap();
 
         assert!(!is_in_main_worktree(root, root));
+    }
+
+    #[test]
+    fn resolve_scope_from_returns_feature_name_in_feature_worktree() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join(".pm")).unwrap();
+        create_feature_state(root, "login");
+        let cwd = root.join("login").join("src");
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        let scope = resolve_scope_from(root, &cwd).unwrap();
+        assert_eq!(scope, "login");
+    }
+
+    #[test]
+    fn resolve_scope_from_returns_main_in_main_worktree() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join(".pm")).unwrap();
+        let cwd = main_worktree(root).join("src");
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        let scope = resolve_scope_from(root, &cwd).unwrap();
+        assert_eq!(scope, "main");
+    }
+
+    #[test]
+    fn resolve_scope_from_errors_outside_worktree() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join(".pm")).unwrap();
+
+        let result = resolve_scope_from(root, root);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), PmError::NotInWorktree));
     }
 
     #[test]

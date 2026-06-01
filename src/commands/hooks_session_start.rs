@@ -38,7 +38,7 @@ fn session_start_inner() -> crate::error::Result<()> {
 
     let cwd = std::env::current_dir()?;
     let project_root = paths::find_project_root(&cwd)?;
-    let feature = resolve_feature_or_scope(&project_root, &cwd)?;
+    let feature = paths::resolve_scope_from(&project_root, &cwd)?;
 
     update_agent_session_id(&project_root, &feature, &agent_name, &session_id)
 }
@@ -69,20 +69,6 @@ fn parse_session_id(json_str: &str) -> crate::error::Result<String> {
     }
 
     Ok(session_id.to_string())
-}
-
-/// Resolve the current scope: feature name from CWD, or "main".
-fn resolve_feature_or_scope(
-    project_root: &std::path::Path,
-    cwd: &std::path::Path,
-) -> crate::error::Result<String> {
-    if let Some(feature) = paths::detect_feature_from_cwd(project_root, cwd) {
-        return Ok(feature);
-    }
-    if paths::is_in_main_worktree(project_root, cwd) {
-        return Ok("main".to_string());
-    }
-    Err(crate::error::PmError::NotInWorktree)
 }
 
 /// Update the agent's session_id in the registry.

@@ -17,7 +17,7 @@ fn resolve_feature_name(
 /// Resolve the current scope: feature name if in a feature worktree,
 /// "main" if in the main worktree, error otherwise.
 fn resolve_scope(project_root: &std::path::Path) -> pm::error::Result<String> {
-    resolve_scope_from(project_root, &std::env::current_dir()?)
+    paths::resolve_scope_from(project_root, &std::env::current_dir()?)
 }
 
 /// Validate that a scope name refers to an existing scope ("main" or a known feature).
@@ -47,19 +47,6 @@ fn resolve_scope_with_flag(
         }
         None => resolve_scope(project_root),
     }
-}
-
-fn resolve_scope_from(
-    project_root: &std::path::Path,
-    cwd: &std::path::Path,
-) -> pm::error::Result<String> {
-    if let Some(feature) = paths::detect_feature_from_cwd(project_root, cwd) {
-        return Ok(feature);
-    }
-    if paths::is_in_main_worktree(project_root, cwd) {
-        return Ok("main".to_string());
-    }
-    Err(PmError::NotInWorktree)
 }
 
 /// Read a message body from an explicit argument or stdin. Used by both
@@ -1021,42 +1008,6 @@ mod tests {
         let feat_dir = root.join(".pm").join("features");
         std::fs::create_dir_all(&feat_dir).unwrap();
         std::fs::write(feat_dir.join(format!("{name}.toml")), "").unwrap();
-    }
-
-    #[test]
-    fn scope_returns_feature_name_in_feature_worktree() {
-        let dir = tempdir().unwrap();
-        let root = dir.path();
-        std::fs::create_dir(root.join(".pm")).unwrap();
-        create_feature_state(root, "login");
-        let cwd = root.join("login").join("src");
-        std::fs::create_dir_all(&cwd).unwrap();
-
-        let scope = resolve_scope_from(root, &cwd).unwrap();
-        assert_eq!(scope, "login");
-    }
-
-    #[test]
-    fn scope_returns_main_in_main_worktree() {
-        let dir = tempdir().unwrap();
-        let root = dir.path();
-        std::fs::create_dir(root.join(".pm")).unwrap();
-        let cwd = paths::main_worktree(root).join("src");
-        std::fs::create_dir_all(&cwd).unwrap();
-
-        let scope = resolve_scope_from(root, &cwd).unwrap();
-        assert_eq!(scope, "main");
-    }
-
-    #[test]
-    fn scope_errors_outside_worktree() {
-        let dir = tempdir().unwrap();
-        let root = dir.path();
-        std::fs::create_dir(root.join(".pm")).unwrap();
-
-        let result = resolve_scope_from(root, root);
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), PmError::NotInWorktree));
     }
 
     #[test]
