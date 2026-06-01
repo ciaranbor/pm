@@ -64,9 +64,18 @@ pm feat new child --base parent      # stack on another feature
 pm feat new login --workflow implement-and-review --context "task description" --no-edit
 pm feat new ciaran/login                        # feature name: ciaran-login
 pm feat new ciaran/login --feature-name eval    # feature name: eval
+
+# Long multi-line brief via stdin (--context -); no approval prompt
+pm feat new login --workflow implement-and-review --context - <<'EOF'
+Implement the login page.
+- validate the email field
+- add an integration test
+EOF
 ```
 
 Creates a git branch, worktree, and tmux session (`myapp/login`). With `--context`, you must also pass `--workflow <name>` so pm knows which agent(s) to spawn and where to deliver the message. The Stop hook (installed by `pm init`, see below) blocks until the queued message is available, then tells the agent to read it. Auto-accept edits is on by default; use `--no-edit` to disable. With `--base`, branches from the specified branch instead of the default. When `--base` is omitted, the current branch is detected from CWD — so running `pm feat new child` from within a feature worktree automatically stacks on that feature.
+
+`--context` accepts literal text, a path to a file, or `-` to read the body from stdin (handy for long briefs via heredoc, as shown above, with no approval prompt).
 
 `--workflow <name>` is also valid without `--context` — pm records the workflow in feature state but spawns no agent. Useful for setting up a feature you intend to spawn into later.
 
@@ -129,6 +138,8 @@ pm feat pr create --ready       # create a non-draft PR (feature detected from C
 ```
 
 Pushes the branch to origin, then creates a GitHub PR via `gh`. Draft by default; use `--ready` for a non-draft PR. If a PR already exists for the branch, links it instead of creating a new one. For stacked features, the PR targets the base branch instead of main. Respects `.github/pull_request_template.md` if present. Stores the PR number in feature state. Draft PRs keep `wip` status; `--ready` sets status to `review`. Feature name is detected from CWD if omitted.
+
+`--body` (on both `pr create` and `pr edit`) accepts literal text, a path to a file, or `-` to read the body from stdin — e.g. `pm feat pr create --body - <<'EOF' … EOF` for a long multi-line description.
 
 ### Edit a PR
 
@@ -358,6 +369,9 @@ Workflow files use the same "preserve user edits" policy as `.pm/hooks/`: `pm up
 pm agent spawn reviewer                      # spawn the reviewer agent in a new tmux window
 pm agent spawn implementer --edit            # spawn with acceptEdits permission
 pm agent spawn implementer --context "..."   # spawn with initial context/prompt
+pm agent spawn implementer --context - <<'EOF' # long multi-line brief via stdin
+...full brief...
+EOF
 pm agent spawn frontend-dev --agent implementer  # display name 'frontend-dev', launched as `claude --agent implementer`
 pm agent spawn                               # respawn all previously active agents
 
@@ -381,6 +395,8 @@ pm agent fork reviewer reviewer-2            # spawn a new agent that starts wit
 pm agent check                               # send checklist to all active agents
 pm agent check implementer                   # send checklist to a specific agent
 ```
+
+`--context -` reads the brief from stdin (as for `pm feat new`); here a non-`-` value is always a literal string (no file-path resolution).
 
 Use `--agent <definition>` to decouple the agent's display name from the
 underlying claude agent definition. The display name (positional `NAME`)

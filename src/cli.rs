@@ -329,7 +329,8 @@ pub enum AgentCommands {
         /// e.g. `pm agent spawn frontend-dev --agent implementer`.
         #[arg(long = "agent", value_name = "DEFINITION")]
         agent_definition: Option<String>,
-        /// Initial context for the agent
+        /// Initial context for the agent. Use `-` to read the body from stdin
+        /// (e.g. `--context - <<'EOF' … EOF`).
         #[arg(long)]
         context: Option<String>,
         /// Enable acceptEdits permission mode
@@ -467,7 +468,8 @@ pub enum FeatCommands {
         /// Override the derived feature name
         #[arg(long)]
         feature_name: Option<String>,
-        /// Initial context (literal text or path to a file)
+        /// Initial context (literal text, path to a file, or `-` to read the
+        /// body from stdin, e.g. `--context - <<'EOF' … EOF`)
         #[arg(long)]
         context: Option<String>,
         /// Base branch to stack on (defaults to current branch from CWD)
@@ -488,7 +490,8 @@ pub enum FeatCommands {
         /// Override the derived feature name
         #[arg(long)]
         feature_name: Option<String>,
-        /// Initial context (literal text or path to a file)
+        /// Initial context (literal text, path to a file, or `-` to read the
+        /// body from stdin, e.g. `--context - <<'EOF' … EOF`)
         #[arg(long)]
         context: Option<String>,
         /// Migrate Claude Code sessions from this old path
@@ -567,7 +570,8 @@ pub enum PrCommands {
         /// Create a non-draft (ready) PR instead of draft
         #[arg(long)]
         ready: bool,
-        /// PR body (literal text or path to a file; overrides template)
+        /// PR body (literal text, path to a file, or `-` to read from stdin;
+        /// overrides template)
         #[arg(long)]
         body: Option<String>,
     },
@@ -579,7 +583,7 @@ pub enum PrCommands {
         /// New PR title
         #[arg(long)]
         title: Option<String>,
-        /// New PR body (literal text or path to a file)
+        /// New PR body (literal text, path to a file, or `-` to read from stdin)
         #[arg(long)]
         body: Option<String>,
     },
