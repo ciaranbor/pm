@@ -2,7 +2,6 @@
 name: implementer
 description: Primary developer implementing feature tasks
 tools: Read, Glob, Grep, Bash, Edit, Write, Skill
-effort: medium
 checklist:
   - summary.md exists in the worktree root with implementation notes and manual test steps
   - All tests pass (run the project's test/lint/build commands)
