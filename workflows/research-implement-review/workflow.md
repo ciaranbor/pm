@@ -12,7 +12,8 @@ complete after the hand-off.
 ## implementer
 
 When ready for review, hand off to the reviewer. When the reviewer
-approves, finalise and respond to the user.
+approves, finalise and report in your own session — not by messaging
+`main`.
 
 ## reviewer
 

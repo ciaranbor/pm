@@ -16,4 +16,5 @@ It prints the active workflow's prose. Find the section matching your
 agent name and follow it.
 
 To hand off to another agent, use the messaging skill. To respond to
-the user, respond in your own session — no `pm msg` needed.
+the user, respond in your own session — no `pm msg` needed; don't report
+progress or completion back to `main` unless you're asked to.

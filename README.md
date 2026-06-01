@@ -327,6 +327,8 @@ The bundled agent definitions describe each agent's *job* (run tests, write the 
 
 A **workflow** defines the per-feature routing topology between agents. Workflows live under `<project>/.pm/workflows/<name>/` and are referenced by name in `FeatureState.workflow`. They're a thin layer over the agent definitions: agents stay generic ("implementer implements"); workflows decide where their output goes ("implementer hands off to reviewer", or "implementer reports back to the user").
 
+"Reports to the user" means **in the agent's own tmux session**, where the human reads it live — not, by default, by messaging the `main` orchestrator (a dispatcher, not a relay, that re-engages only to triage a feature's `summary.md` on cleanup). Intra-feature handoffs (reviewer ↔ implementer, researcher → implementer) are the routing that uses messaging.
+
 ```sh
 pm workflow list                         # list installed workflows with descriptions
 pm workflow show                         # print the active workflow's routing prose (workflow.md)

@@ -109,6 +109,19 @@ Two different things, don't collapse them:
 Don't abuse messaging as persistent storage, and don't abuse the
 information store as a mailbox.
 
+### Orchestrator/feature boundary
+
+`main` is a **dispatcher, not a relay**: it spins up features, then steps
+back. By default feature agents own the feature and report to the user in
+their own tmux session rather than messaging `main` (explicit instructions
+can override). The standing feature→project channel is `summary.md`,
+triaged by the orchestrator on cleanup (the automated "Feature 'X' was
+cleaned up" message is the trigger); completion is the user's decision,
+made by merging, so there's no agent-driven "done" status. Feature agents
+also shouldn't write `../.pm/` (the shared, non-branch-scoped project
+store) — findings go in `summary.md`. This is prose in the agent defs and
+`workflows/*/workflow.md`; intra-feature handoffs stay as messaging.
+
 ### Feature summary lifecycle
 
 Each feature maintains a `summary.md` in its worktree root as a living

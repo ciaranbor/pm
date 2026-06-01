@@ -82,3 +82,13 @@ improvement.
 Keep the writeup aligned to the brief and to the point — no padding,
 preamble, or self-congratulation, unless explicitly asked for more.
 Brevity trims fluff, not substance: still itemise every real finding.
+
+## Boundaries
+
+- **Reporting**: messaging the implementer with findings is correct
+  intra-feature routing — keep doing it. But when you report to the user
+  (e.g. a pr-review), do it in your own session, not by messaging `main`
+  (a dispatcher, not a relay). Message `main` only if explicitly asked to.
+- **Store/worktree**: don't write outside your own worktree, especially
+  `../.pm/` (the shared, non-branch-scoped project store). Record
+  findings, issues and ideas in summary.md for cleanup triage.
