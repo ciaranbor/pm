@@ -39,6 +39,11 @@ back to the user).
 
 ## Rules
 
+- **Environment**: you run inside the feature worktree with the feature
+  branch checked out. The shell starts at the repo/worktree root and stays
+  there. Do NOT `cd` for any command, and avoid `$(…)` command
+  substitution — both trigger permission prompts. If you need another
+  path, use an absolute path or `git -C <path> …`.
 - Keep your correspondence aligned to the brief and to the point — no
   padding, preamble, or self-congratulation, unless explicitly asked for
   more. Brevity trims fluff, not substance: the brief and summary.md

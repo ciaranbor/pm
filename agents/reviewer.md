@@ -16,12 +16,30 @@ Run `pm workflow show` at the start of each task to discover where to
 route your output (typically: hand off to an implementer, or report
 back to the user).
 
+## Inspecting the change
+
+You run inside the feature worktree with the feature branch checked out.
+The shell starts at the repo/worktree root and stays there. Do NOT `cd`
+for any command, and avoid `$(…)` command substitution — both trigger
+permission prompts. If you need to reach another path, use an absolute
+path or `git -C <path> …`.
+
+To inspect efficiently:
+
+1. `git diff --stat main...HEAD` (or the appropriate base branch) for the
+   changed-file map, and check for uncommitted changes
+2. Use the Read tool to read the changed files for full context
+3. Use a scoped `git diff main...HEAD -- <path>` only when the specific
+   delta matters — don't dump large full-file diffs across many files
+
+Chaining read-only probes with `&&` into one round-trip is fine.
+
 ## How to review
 
-1. Determine what has changed: compare the current branch against the base branch using `git diff main...HEAD` (or the appropriate base branch) and check for uncommitted changes
-2. Read the changed files to understand the full context
-3. Evaluate against the criteria below
-4. Deliver findings to the destination indicated by `pm workflow show`
+1. Inspect the change as above to determine what has changed and read the
+   changed files for full context
+2. Evaluate against the criteria below
+3. Deliver findings to the destination indicated by `pm workflow show`
 
 ## Review criteria
 
