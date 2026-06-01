@@ -204,7 +204,7 @@ pm open                          # open/reconstruct sessions for current project
 
 Creates tmux sessions for the main worktree and any active features that are missing sessions. Useful after a reboot or tmux server restart.
 
-Before recreating sessions, `pm open` runs `pm doctor`'s diagnostic checks and prints warnings for any state drift it can't fix on its own (orphaned features, missing branches, PR drift, missing hooks, stuck-initializing features). Issues that open *will* fix automatically (missing tmux sessions, dead agent windows) are filtered out so the warnings stay focused on real problems. Run `pm doctor --fix` to address anything reported.
+Before recreating sessions, `pm open` runs `pm doctor`'s diagnostic checks and prints warnings for any state drift it can't fix on its own (orphaned features, missing branches, PR drift, missing hooks, stuck-initializing features, missing workflows). Issues that open *will* fix automatically (missing tmux sessions, dead agent windows) are filtered out so the warnings stay focused on real problems. Run `pm doctor --fix` to address anything reported.
 
 ### Close a project
 
@@ -279,6 +279,7 @@ Audits every feature for drift between pm state and external reality:
 - Branch exists locally
 - Tmux session exists (for active features)
 - Status not stuck on "initializing"
+- Referenced workflow directory exists (under `.pm/workflows/`)
 - PR status matches (calls `gh` for features with linked PRs)
 
 With `--fix`, auto-resolves clear-cut issues: removes orphaned state files (no worktree, no branch), recreates missing worktree directories (when the branch exists), cleans up stuck-initializing features, recreates missing tmux sessions, and updates status to match GitHub PR state. Ambiguous issues (e.g. missing directory with stale git worktree registration) are skipped with a message.

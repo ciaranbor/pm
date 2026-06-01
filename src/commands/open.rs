@@ -34,6 +34,7 @@ fn is_open_recoverable(kind: IssueKind) -> bool {
         | IssueKind::GitWorktreeNoDir
         | IssueKind::BranchMissing
         | IssueKind::StuckInitializing
+        | IssueKind::WorkflowDirMissing
         | IssueKind::PrMerged
         | IssueKind::PrClosed
         | IssueKind::PrCheckFailed
