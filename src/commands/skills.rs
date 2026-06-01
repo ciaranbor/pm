@@ -595,6 +595,73 @@ mod tests {
         }
     }
 
+    const FEATURE_AGENTS: [&str; 3] = ["implementer", "researcher", "reviewer"];
+
+    /// Feature agents must never write the shared project store or outside
+    /// their worktree. Assert each feature agent def states the rule so a
+    /// future edit can't silently drop it.
+    #[test]
+    fn feature_agents_carry_store_worktree_boundary() {
+        for item in items_of_kind(BundledKind::Agent) {
+            if !FEATURE_AGENTS.contains(&item.name) {
+                continue;
+            }
+            let body = item.files[0].1;
+            assert!(
+                body.contains("write outside your own worktree"),
+                "agent '{}' must state the store/worktree boundary",
+                item.name
+            );
+            assert!(
+                body.contains("../.pm/"),
+                "agent '{}' must name `../.pm/` as off-limits",
+                item.name
+            );
+        }
+    }
+
+    /// Feature agents report to the user in-session by default, not by
+    /// messaging `main`. Assert each feature agent def states the rule so a
+    /// future edit can't silently drop it.
+    #[test]
+    fn feature_agents_carry_reporting_boundary() {
+        for item in items_of_kind(BundledKind::Agent) {
+            if !FEATURE_AGENTS.contains(&item.name) {
+                continue;
+            }
+            let body = item.files[0].1;
+            assert!(
+                body.contains("not by messaging `main`"),
+                "agent '{}' must state the reporting boundary",
+                item.name
+            );
+            assert!(
+                body.contains("dispatcher, not a relay"),
+                "agent '{}' must name the dispatcher-not-a-relay framing",
+                item.name
+            );
+        }
+    }
+
+    /// Terminal routing prose must say "report in your own session", not the
+    /// bare "respond to the user" that the implementer used to operationalise
+    /// as a `pm msg reply` back to `main`. Guard against regressing it.
+    #[test]
+    fn workflows_avoid_bare_respond_to_user() {
+        for item in items_of_kind(BundledKind::Workflow) {
+            let (_, body) = item
+                .files
+                .iter()
+                .find(|(path, _)| path.ends_with("workflow.md"))
+                .unwrap_or_else(|| panic!("workflow '{}' has no workflow.md", item.name));
+            assert!(
+                !body.contains("respond to the user"),
+                "workflow '{}' still uses the ambiguous \"respond to the user\" phrasing",
+                item.name
+            );
+        }
+    }
+
     // --- Shared install/list tests (exercise the unified logic) ---
 
     #[test]

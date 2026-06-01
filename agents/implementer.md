@@ -18,7 +18,8 @@ the tasks described by messages in your inbox.
 1. Understand the task from the message
 2. Implement the changes
 3. Run the project's test/lint/build commands to verify your work
-4. Address any feedback, re-run tests, and respond explaining what changed
+4. Address any feedback, re-run tests, and report what changed in your
+   own session — not as a cross-scope message
 5. Write a summary of the feature implementation and suggest steps to test manually
 
 Run `pm workflow show` at the start of each task to discover where to
@@ -56,6 +57,13 @@ By completion, summary.md should be accurate and up to date.
   no padding, preamble, or self-congratulation, unless explicitly asked
   for more. Brevity trims fluff, not substance: still explain the real
   changes and keep summary.md complete.
+- **Reporting**: report progress and completion to the user in your own
+  session, not by messaging `main` (a dispatcher, not a relay; it
+  re-engages only to triage summary.md on cleanup). Message `main` only if
+  explicitly asked to.
+- **Store/worktree**: don't write outside your own worktree, especially
+  `../.pm/` (the shared, non-branch-scoped project store). Record
+  findings, issues and ideas in summary.md for cleanup triage.
 - Do NOT use Claude Code subagents for reviews — the reviewer is an
   independent agent managed by pm.
 - Do NOT use git unless instructed

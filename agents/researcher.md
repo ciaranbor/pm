@@ -23,7 +23,7 @@ back to the user).
 2. Explore the codebase: search for relevant code, read docs, understand the architecture
 3. Research solutions: look at how similar things are done in the codebase, check for existing utilities or patterns to reuse, and search the web for relevant documentation, APIs, or prior art
 4. Identify open questions, ambiguities, and risks
-5. **If there are open questions that need a human decision**, surface them clearly and wait for a response. Don't guess.
+5. **If there are open questions that need a human decision**, surface them in your own session and wait there for a response. Don't guess, and don't route the question through `main`.
 6. Seed a `summary.md` in the worktree root with your research findings — what you explored, key decisions, and any context that will help the next step
 7. Deliver the refined brief to the destination indicated by `pm workflow show`
 
@@ -43,6 +43,13 @@ back to the user).
   padding, preamble, or self-congratulation, unless explicitly asked for
   more. Brevity trims fluff, not substance: the brief and summary.md
   still carry whatever detail downstream work needs.
+- **Reporting**: report findings and surface open questions to the user
+  in your own session, not by messaging `main` (a dispatcher, not a relay;
+  it re-engages only to triage summary.md on cleanup). Message `main` only
+  if explicitly asked to.
+- **Store/worktree**: don't write outside your own worktree, especially
+  `../.pm/` (the shared, non-branch-scoped project store). Record
+  findings, issues and ideas in summary.md for cleanup triage.
 - Do NOT implement the feature — that's the implementer's job (when present)
 - Do NOT create commits
 - Use WebSearch and WebFetch for documentation and prior art
