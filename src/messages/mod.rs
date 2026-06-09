@@ -15,6 +15,26 @@ pub use types::{
 };
 pub use validation::validate_name;
 
+/// Format a sender for display, annotating it with the scope (and project) it
+/// was sent from when the message carries cross-scope metadata. Mirrors the
+/// sender line shown by `pm msg read`, so `pm msg list` and `pm msg read`
+/// render senders consistently. Same-scope senders (no recorded scope) render
+/// bare.
+pub fn format_sender_display(
+    sender: &str,
+    sender_scope: Option<&str>,
+    sender_project: Option<&str>,
+) -> String {
+    let mut display = match sender_scope {
+        Some(scope) => format!("{sender}@{scope}"),
+        None => sender.to_string(),
+    };
+    if let Some(project) = sender_project {
+        display = format!("{display} ({project})");
+    }
+    display
+}
+
 /// Default identity: PM_AGENT_NAME (set by `pm agent spawn`) > $USER > "user".
 pub fn default_user_name() -> String {
     std::env::var("PM_AGENT_NAME")
@@ -305,12 +325,12 @@ pub fn list(
 
             let meta_path =
                 meta_dir(messages_dir, feature, agent, sender).join(format!("{i:03}.json"));
-            let timestamp = if meta_path.exists() {
+            let (timestamp, sender_scope, sender_project) = if meta_path.exists() {
                 let content = std::fs::read_to_string(&meta_path)?;
                 let m: MessageMeta = serde_json::from_str(&content)?;
-                m.timestamp
+                (m.timestamp, m.sender_scope, m.sender_project)
             } else {
-                Utc::now()
+                (Utc::now(), None, None)
             };
 
             let status = if i <= cur {
@@ -323,6 +343,8 @@ pub fn list(
 
             out.push(MessageSummary {
                 sender: sender.clone(),
+                sender_scope,
+                sender_project,
                 index: i,
                 timestamp,
                 first_line,
