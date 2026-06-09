@@ -156,13 +156,11 @@ pub fn agent_read(
 }
 
 fn format_message(m: &Message, current_scope: Option<&str>) -> Vec<String> {
-    let mut sender_display = match &m.meta.sender_scope {
-        Some(scope) => format!("{}@{}", m.sender, scope),
-        None => m.sender.clone(),
-    };
-    if let Some(project) = &m.meta.sender_project {
-        sender_display = format!("{sender_display} ({project})");
-    }
+    let sender_display = messages::format_sender_display(
+        &m.sender,
+        m.meta.sender_scope.as_deref(),
+        m.meta.sender_project.as_deref(),
+    );
 
     let is_cross_scope = match (&m.meta.sender_scope, current_scope) {
         (Some(scope), Some(cs)) => scope != cs,

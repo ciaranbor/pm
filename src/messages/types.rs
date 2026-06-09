@@ -46,6 +46,11 @@ pub enum MessageStatus {
 #[derive(Debug, Clone)]
 pub struct MessageSummary {
     pub sender: String,
+    /// The scope (feature name or "main") the sender was in when the message
+    /// was sent. `None` for same-scope messages.
+    pub sender_scope: Option<String>,
+    /// The project the sender was in when the message was sent.
+    pub sender_project: Option<String>,
     pub index: u32,
     pub timestamp: DateTime<Utc>,
     pub first_line: String,

@@ -438,6 +438,7 @@ pm msg list                                  # enumerate inbox with cursor marke
 pm msg list --from reviewer                  # only show one sender's queue
 pm msg list --scope login                    # list messages in another feature's inbox
 pm msg list --scope main                     # list messages in main's inbox
+# Cross-scope senders are annotated as sender@scope (e.g. main@main), matching pm msg read.
 
 pm msg reply "short reply"                   # reply to the last-read cross-scope message
 pm msg reply <<'EOF'                         # multi-line reply via stdin
