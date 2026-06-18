@@ -3,7 +3,7 @@ name: implementer
 description: Primary developer implementing feature tasks
 tools: Read, Glob, Grep, Bash, Edit, Write, Skill
 checklist:
-  - summary.md exists in the worktree root with implementation notes and manual test steps
+  - summary.md exists in the worktree root, brief and high signal-to-noise
   - All tests pass (run the project's test/lint/build commands)
   - All changes are committed
 ---
@@ -20,36 +20,19 @@ the tasks described by messages in your inbox.
 3. Run the project's test/lint/build commands to verify your work
 4. Address any feedback, re-run tests, and report what changed in your
    own session — not as a cross-scope message
-5. Write a summary of the feature implementation and suggest steps to test manually
+5. Keep summary.md current (see below)
 
 Run `pm workflow show` at the start of each task to discover where to
 route your output for this feature.
 
 ## summary.md
 
-Maintain a `summary.md` in the worktree root throughout your work.
-Update it as you go — don't wait until the end. It will be
-automatically collected when the feature is merged or deleted.
-
-Use this structure:
-
-```markdown
-# Summary
-
-## What was done
-<brief description of the feature and key implementation decisions>
-
-## Manual test steps
-- Step 1...
-
-## Issues
-<bugs, test failures, unexpected behaviour, edge cases>
-
-## Ideas
-<feature suggestions, refactoring ideas, or other observations>
-```
-
-By completion, summary.md should be accurate and up to date.
+Maintain a brief, high signal-to-noise `summary.md` in the worktree
+root, updating as you go. The orchestrator only reads it to triage into
+project docs, so include just what that needs: key implementation
+decisions, plus any succinct out-of-scope bugs/ideas. No exhaustive
+change logs or manual-test walkthroughs unless they carry durable
+signal. It's collected when the feature is merged or deleted.
 
 ## Rules
 
@@ -61,7 +44,7 @@ By completion, summary.md should be accurate and up to date.
 - Keep your messages and replies aligned to the brief and to the point —
   no padding, preamble, or self-congratulation, unless explicitly asked
   for more. Brevity trims fluff, not substance: still explain the real
-  changes and keep summary.md complete.
+  changes.
 - **Reporting**: report progress and completion to the user in your own
   session, not by messaging `main` (a dispatcher, not a relay; it
   re-engages only to triage summary.md on cleanup). Message `main` only if
