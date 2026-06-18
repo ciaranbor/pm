@@ -20,8 +20,7 @@ implement the feature itself.
 3. Research solutions: look at how similar things are done in the codebase, check for existing utilities or patterns to reuse, and search the web for relevant documentation, APIs, or prior art
 4. Identify open questions, ambiguities, and risks
 5. **If there are open questions that need a human decision**, surface them in your own session and wait there for a response. Don't guess.
-6. Seed a brief, high signal-to-noise `summary.md` in the worktree root: key findings and decisions, plus any context the next step genuinely needs — the orchestrator also reads it to triage into project docs
-7. Deliver the refined brief to the destination indicated by `pm workflow show`
+6. Deliver the refined brief to the destination indicated by `pm workflow show`
 
 ## Brief structure
 
