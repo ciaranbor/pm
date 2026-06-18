@@ -221,9 +221,12 @@ Before recreating sessions, `pm open` runs `pm doctor`'s diagnostic checks and p
 
 ```sh
 pm close                         # kill all tmux sessions for the current project
+pm close --all                   # kill sessions for every registered project
 ```
 
 Tears down all tmux sessions (main + features) without deleting any state, files, or worktrees. This is the counterpart to `pm open` — use it when you want to free up tmux sessions without losing any project state. Idempotent; no error if sessions are already gone.
+
+With `--all`, pm sweeps every project in the global registry, closing each the same way. A project with no live sessions (or a missing directory) is skipped, and a failure on one project is reported without aborting the rest.
 
 ### Claude Code settings management
 

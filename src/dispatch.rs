@@ -154,13 +154,20 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             }
             Ok(())
         }
-        Commands::Close => {
-            let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-            let (project_name, killed) = commands::close::close(&project_root, None)?;
-            println!(
-                "Closed project {project_name} (killed {killed} session{})",
-                if killed == 1 { "" } else { "s" }
-            );
+        Commands::Close { all } => {
+            if all {
+                let messages = commands::close::close_all(None)?;
+                for m in messages {
+                    println!("{m}");
+                }
+            } else {
+                let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+                let (project_name, killed) = commands::close::close(&project_root, None)?;
+                println!(
+                    "Closed project {project_name} (killed {killed} session{})",
+                    if killed == 1 { "" } else { "s" }
+                );
+            }
             Ok(())
         }
         Commands::Claude(claude_cmd) => match claude_cmd {

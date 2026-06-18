@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::error::Result;
 use crate::state::feature::FeatureState;
 use crate::state::paths;
-use crate::state::project::ProjectConfig;
+use crate::state::project::{ProjectConfig, ProjectEntry};
 use crate::tmux;
 
 /// Close a project by killing all its tmux sessions (main + features).
@@ -44,6 +44,50 @@ pub fn close(project_root: &Path, tmux_server: Option<&str>) -> Result<(String, 
     }
 
     Ok((project_name.clone(), killed))
+}
+
+/// Close every project in the global registry by killing their tmux sessions.
+///
+/// Iterates over all registered projects, running the same non-destructive
+/// close as the single-project path. A project with no live sessions is a
+/// no-op; per-project failures are reported but never abort the sweep. No
+/// state or files are deleted.
+///
+/// Returns one human-readable status line per project.
+pub fn close_all(tmux_server: Option<&str>) -> Result<Vec<String>> {
+    let projects_dir = paths::global_projects_dir()?;
+    close_all_with_dir(&projects_dir, tmux_server)
+}
+
+/// `close_all` with an injectable registry dir (for tests).
+pub fn close_all_with_dir(projects_dir: &Path, tmux_server: Option<&str>) -> Result<Vec<String>> {
+    let projects = ProjectEntry::list(projects_dir)?;
+
+    if projects.is_empty() {
+        return Ok(vec!["No projects in registry".to_string()]);
+    }
+
+    let mut messages = Vec::new();
+    for (name, entry) in &projects {
+        let root = entry.root_path();
+        if !root.exists() {
+            messages.push(format!("{name}: skipped (directory does not exist)"));
+            continue;
+        }
+        match close(&root, tmux_server) {
+            Ok((project_name, killed)) => {
+                messages.push(format!(
+                    "{project_name}: closed (killed {killed} session{})",
+                    if killed == 1 { "" } else { "s" }
+                ));
+            }
+            Err(e) => {
+                messages.push(format!("{name}: error: {e}"));
+            }
+        }
+    }
+
+    Ok(messages)
 }
 
 #[cfg(test)]
@@ -136,6 +180,120 @@ mod tests {
         assert_eq!(name, project_name);
         assert_eq!(killed, 1);
         assert!(!tmux::has_session(server.name(), &format!("{project_name}/main")).unwrap());
+    }
+
+    #[test]
+    fn close_all_closes_every_project() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let projects_dir = dir.path().join("registry");
+
+        // Two distinct projects sharing one registry
+        let name_a = server.scope("alpha");
+        let path_a = dir.path().join(&name_a);
+        crate::commands::init::init(&path_a, &projects_dir, None, server.name()).unwrap();
+
+        let name_b = server.scope("beta");
+        let path_b = dir.path().join(&name_b);
+        crate::commands::init::init(&path_b, &projects_dir, None, server.name()).unwrap();
+
+        assert!(tmux::has_session(server.name(), &format!("{name_a}/main")).unwrap());
+        assert!(tmux::has_session(server.name(), &format!("{name_b}/main")).unwrap());
+
+        let msgs = close_all_with_dir(&projects_dir, server.name()).unwrap();
+
+        assert!(msgs.iter().any(|m| m.contains(&name_a)), "{msgs:?}");
+        assert!(msgs.iter().any(|m| m.contains(&name_b)), "{msgs:?}");
+        assert!(!tmux::has_session(server.name(), &format!("{name_a}/main")).unwrap());
+        assert!(!tmux::has_session(server.name(), &format!("{name_b}/main")).unwrap());
+
+        // State is preserved for both
+        assert!(paths::pm_dir(&path_a).exists());
+        assert!(paths::pm_dir(&path_b).exists());
+    }
+
+    #[test]
+    fn close_all_no_sessions_is_no_op() {
+        // No tmux sessions created — close_all should report killed 0, not error.
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (_project_path, projects_dir, project_name) = server.setup_project_no_tmux(dir.path());
+
+        let msgs = close_all_with_dir(&projects_dir, server.name()).unwrap();
+        assert!(
+            msgs.iter()
+                .any(|m| m.contains(&project_name) && m.contains("killed 0 sessions")),
+            "{msgs:?}"
+        );
+    }
+
+    #[test]
+    fn close_all_empty_registry() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let projects_dir = dir.path().join("registry");
+        std::fs::create_dir_all(&projects_dir).unwrap();
+
+        let msgs = close_all_with_dir(&projects_dir, server.name()).unwrap();
+        assert!(msgs.iter().any(|m| m.contains("No projects")), "{msgs:?}");
+    }
+
+    #[test]
+    fn close_all_skips_missing_directory() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let projects_dir = dir.path().join("registry");
+
+        let entry = ProjectEntry {
+            root: dir.path().join("gone").to_string_lossy().to_string(),
+            main_branch: "main".to_string(),
+            repo_url: None,
+            state_remote: None,
+        };
+        entry.save(&projects_dir, "ghost").unwrap();
+
+        let msgs = close_all_with_dir(&projects_dir, server.name()).unwrap();
+        assert!(
+            msgs.iter()
+                .any(|m| m.contains("ghost") && m.contains("directory does not exist")),
+            "{msgs:?}"
+        );
+    }
+
+    #[test]
+    fn close_all_reports_per_project_error_and_continues() {
+        // A registered dir that exists but has no valid .pm/config.toml makes
+        // close() error; close_all should report it and still sweep the rest.
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let projects_dir = dir.path().join("registry");
+
+        // Broken project: directory exists, no .pm/ config
+        let broken_path = dir.path().join("broken");
+        std::fs::create_dir_all(&broken_path).unwrap();
+        let broken = ProjectEntry {
+            root: broken_path.to_string_lossy().to_string(),
+            main_branch: "main".to_string(),
+            repo_url: None,
+            state_remote: None,
+        };
+        broken.save(&projects_dir, "broken").unwrap();
+
+        // Healthy project alongside it
+        let name_ok = server.scope("healthy");
+        let path_ok = dir.path().join(&name_ok);
+        crate::commands::init::init(&path_ok, &projects_dir, None, server.name()).unwrap();
+
+        let msgs = close_all_with_dir(&projects_dir, server.name()).unwrap();
+
+        assert!(
+            msgs.iter()
+                .any(|m| m.contains("broken") && m.contains("error")),
+            "{msgs:?}"
+        );
+        // Sweep continued: the healthy project was still closed
+        assert!(msgs.iter().any(|m| m.contains(&name_ok)), "{msgs:?}");
+        assert!(!tmux::has_session(server.name(), &format!("{name_ok}/main")).unwrap());
     }
 
     #[test]
