@@ -71,6 +71,9 @@ pub enum PmError {
     #[error("Skill not found: {0}")]
     SkillNotFound(String),
 
+    #[error("Baseline not found: {0}")]
+    BaselineNotFound(String),
+
     #[error(
         "Workflow not found: {0}\n  Hint: run `pm workflow list` to see installed workflows, \
          or run `pm upgrade` to install the bundled ones."

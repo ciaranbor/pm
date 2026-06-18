@@ -25,7 +25,7 @@ pm init ~/projects/myapp
 cd ~/projects/myapp/main
 ```
 
-Creates a project root with a git repo in `main/`, a `.pm/` state directory, and installs bundled hooks, skills, and agent definitions into `main/.claude/`.
+Creates a project root with a git repo in `main/`, a `.pm/` state directory, and installs bundled hooks, skills, agent definitions, and the shared agent baseline into `main/.claude/`.
 
 ### Option B: Clone a remote repo
 
@@ -293,6 +293,8 @@ Audits every feature for drift between pm state and external reality:
 - Referenced workflow directory exists (under `.pm/workflows/`)
 - PR status matches (calls `gh` for features with linked PRs)
 
+It also runs one capability check: if the [shared agent baseline](#shared-agent-baseline) is installed but the local `claude` no longer advertises `--append-system-prompt-file` (the flag pm uses to apply it), `pm doctor` warns that spawned agents won't receive the baseline. Skipped when the baseline isn't installed or `claude` isn't found.
+
 With `--fix`, auto-resolves clear-cut issues: removes orphaned state files (no worktree, no branch), recreates missing worktree directories (when the branch exists), cleans up stuck-initializing features, recreates missing tmux sessions, and updates status to match GitHub PR state. Ambiguous issues (e.g. missing directory with stale git worktree registration) are skipped with a message.
 
 ### Bundled skills
@@ -333,6 +335,10 @@ Bundled agents:
 | **researcher** | Read-only explorer — analyses the problem space and sends a refined implementation brief to the implementer |
 
 The bundled agent definitions describe each agent's *job* (run tests, write the brief, etc.) but deliberately leave routing — *who reports to whom* — to the active [workflow](#workflows). Each agent ships with the `pm-workflow` skill, which teaches it to run `pm workflow show` at the start of every task to discover where to send its output.
+
+### Shared agent baseline
+
+Cross-cutting operating rules common to every agent — brevity, the no-`cd`/no-`$(…)` environment convention, the messaging heredoc form, the `pm workflow show` reminder, and what "the user" means — live in a single bundled `pm-baseline.md` rather than being repeated in each agent definition. `pm init` and `pm upgrade` install it to `main/.claude/pm-baseline.md` (overwritten on upgrade), and every agent pm spawns (including `main`) is launched with `claude --append-system-prompt-file <that path>`, appending it to the system prompt.
 
 ### Workflows
 
@@ -558,7 +564,7 @@ pm upgrade --dry-run             # preview changes without writing (alias: --che
 pm upgrade --all --dry-run       # preview changes for every registered project
 ```
 
-Reinstalls bundled assets (hooks, skills, agents, information store) to each project's main worktree, then re-seeds `.claude/` settings into every active feature worktree. Always overwrites — useful after updating pm to pick up new agent definitions or skill files.
+Reinstalls bundled assets (hooks, skills, agents, the shared agent baseline, information store) to each project's main worktree, then re-seeds `.claude/` settings into every active feature worktree. Always overwrites — useful after updating pm to pick up new agent definitions or skill files.
 
 `--dry-run` (alias `--check`) prints the actions that would be taken (`Would install …`, `Would update …`, `Would re-seed …`) without modifying anything. When the project is fully up to date, it prints `Up to date`.
 

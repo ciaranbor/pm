@@ -21,7 +21,8 @@ reports; you re-engage only to triage a feature's summary.md on cleanup
 
 Your CWD is `<project>/main/` (the main worktree). The pm state
 directory is at `../.pm/` (the project root, one level up). Feature
-worktrees are siblings: `<project>/<feature>/`.
+worktrees are siblings: `<project>/<feature>/`. `../.pm/` is yours to
+own — other agents don't touch it.
 
 ### Information store
 
