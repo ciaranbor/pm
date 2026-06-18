@@ -50,7 +50,11 @@ pub enum Commands {
     #[command(subcommand)]
     Claude(ClaudeCommands),
     /// Close all tmux sessions for the current project (counterpart to `pm open`)
-    Close,
+    Close {
+        /// Close every registered project's sessions, not just the current one
+        #[arg(long)]
+        all: bool,
+    },
     /// Delete a project (teardown features, sessions, state, and registry entry)
     Delete {
         /// Project name (defaults to current project from CWD)
