@@ -1,3 +1,4 @@
 description = "Reviewer reviews a PR and reports findings to the user"
 agents = ["reviewer"]
 auto_spawn = ["reviewer"]
+when_to_use = "Reviewing an existing PR or branch, not producing new feature work."

@@ -1,3 +1,4 @@
 description = "Researcher explores and reports findings to the user"
 agents = ["researcher"]
 auto_spawn = ["researcher"]
+when_to_use = "Broad exploration that could spin out multiple features, or none — pure investigation, no commitment to build."
