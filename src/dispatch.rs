@@ -145,6 +145,13 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     result.sessions_restored, result.agents_respawned
                 );
             }
+            // Attach (or switch, if already inside tmux) to the project's main
+            // session so `pm open` leaves the user in the project rather than
+            // detached.
+            let inside_tmux = std::env::var("TMUX").is_ok();
+            if let Err(e) = tmux::connect_session(None, &result.main_session, inside_tmux) {
+                eprintln!("warning: could not connect to {}: {e}", result.main_session);
+            }
             Ok(())
         }
         Commands::Close => {

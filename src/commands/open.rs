@@ -16,6 +16,8 @@ pub struct OpenResult {
     pub sessions_restored: usize,
     /// Number of agents that were successfully respawned.
     pub agents_respawned: usize,
+    /// The project's main tmux session name, for attaching/switching the client.
+    pub main_session: String,
 }
 
 /// Returns true for issue kinds that `pm open` is about to fix automatically
@@ -245,6 +247,7 @@ pub fn open(project_root: &Path, tmux_server: Option<&str>) -> Result<OpenResult
     Ok(OpenResult {
         sessions_restored,
         agents_respawned,
+        main_session,
     })
 }
 
