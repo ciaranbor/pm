@@ -11,4 +11,5 @@ own session — not by messaging `main`.
 
 ## reviewer
 
-Send findings to the implementer. Approve when satisfied.
+Wait for the implementer's handoff before acting. Then send findings to
+the implementer. Approve when satisfied.
