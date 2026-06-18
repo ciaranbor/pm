@@ -135,10 +135,12 @@ store) — findings go in `summary.md`. This is prose in the agent defs and
 ### Feature summary lifecycle
 
 Each feature maintains a `summary.md` in its worktree root as a living
-document. Agents update it throughout the feature lifecycle (the
-researcher seeds it, the implementer maintains it). On `feat delete`,
-`summary.md` is collected to `.pm/summaries/<feature>.md` so the
-orchestrator can triage its contents into project-level docs.
+document, kept brief and high signal-to-noise — just what the
+orchestrator needs to triage, plus succinct out-of-scope bugs/ideas.
+Feature agents update it throughout the lifecycle (which roles seed vs.
+maintain it is up to the workflow). On `feat delete`, `summary.md` is
+collected to `.pm/summaries/<feature>.md` so the orchestrator can triage
+its contents into project-level docs.
 
 ## Development
 
