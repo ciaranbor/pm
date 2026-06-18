@@ -93,6 +93,33 @@ pub fn switch_client(server: Option<&str>, name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Attach the current terminal to a tmux session. Inherits stdio so tmux takes
+/// over the controlling terminal; returns when the user detaches.
+pub fn attach_session(server: Option<&str>, name: &str) -> Result<()> {
+    let mut cmd = Command::new("tmux");
+    if let Some(s) = server {
+        cmd.args(["-L", s]);
+    }
+    cmd.args(["attach-session", "-t", name]);
+    let status = cmd.status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(PmError::Tmux(format!("attach-session failed for {name}")))
+    }
+}
+
+/// Connect the current terminal to `session`: switch the client when already
+/// inside tmux (`inside_tmux`, normally `std::env::var("TMUX").is_ok()`),
+/// otherwise attach a fresh client.
+pub fn connect_session(server: Option<&str>, session: &str, inside_tmux: bool) -> Result<()> {
+    if inside_tmux {
+        switch_client(server, session)
+    } else {
+        attach_session(server, session)
+    }
+}
+
 /// Create a new window in an existing tmux session. Returns the new window's target
 /// (e.g. "session:1") for use with send_keys.
 /// When `detached` is true, the new window is created without switching to it.
@@ -467,6 +494,20 @@ mod tests {
         create_session(server.name(), &name, dir.path()).unwrap();
 
         let result = switch_client(server.name(), &name);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), PmError::Tmux(_)));
+    }
+
+    #[test]
+    fn connect_session_switch_path_without_client_errors() {
+        // Inside-tmux path uses switch-client, which fails harmlessly when no
+        // client is attached (as in the test harness).
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let name = server.scope("connect-switch");
+        create_session(server.name(), &name, dir.path()).unwrap();
+
+        let result = connect_session(server.name(), &name, true);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), PmError::Tmux(_)));
     }

@@ -213,7 +213,7 @@ Full project teardown: safety-checks all features, kills all tmux sessions, remo
 pm open                          # open/reconstruct sessions for current project
 ```
 
-Creates tmux sessions for the main worktree and any active features that are missing sessions. Useful after a reboot or tmux server restart.
+Creates tmux sessions for the main worktree and any active features that are missing sessions, then connects you to the project's main session. Useful after a reboot or tmux server restart. If you run it from inside an existing tmux client it switches that client to the main session; otherwise it attaches a new client.
 
 Before recreating sessions, `pm open` runs `pm doctor`'s diagnostic checks and prints warnings for any state drift it can't fix on its own (orphaned features, missing branches, PR drift, missing hooks, stuck-initializing features, missing workflows). Issues that open *will* fix automatically (missing tmux sessions, dead agent windows) are filtered out so the warnings stay focused on real problems. Run `pm doctor --fix` to address anything reported.
 
