@@ -69,16 +69,21 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
         .workflow
         .map(|w| feat_common::load_and_validate_workflow(params.project_root, w))
         .transpose()?;
-    let auto_spawn: &[String] = workflow_def
+    // The full team is spawned; the brief subset receives --context.
+    let team: &[String] = workflow_def
         .as_ref()
-        .map(|d| d.auto_spawn.as_slice())
+        .map(|d| d.effective_team())
+        .unwrap_or(&[]);
+    let brief_agents: &[String] = workflow_def
+        .as_ref()
+        .map(|d| d.brief_agents.as_slice())
         .unwrap_or(&[]);
 
-    // Block context-with-empty-auto-spawn (see `feat_new` for rationale).
-    if params.context.is_some() && auto_spawn.is_empty() {
+    // Block context-with-empty-brief-agents (see `feat_new` for rationale).
+    if params.context.is_some() && brief_agents.is_empty() {
         return Err(PmError::SafetyCheck(format!(
-            "workflow '{}' has an empty `auto_spawn` list, so --context has no recipient. \
-             Add at least one agent to `auto_spawn` in the workflow's config.toml, \
+            "workflow '{}' has an empty `brief_agents` list, so --context has no recipient. \
+             Add at least one agent to `brief_agents` in the workflow's config.toml, \
              or drop --context.",
             params.workflow.unwrap_or("<none>"),
         )));
@@ -179,13 +184,13 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
         }
 
         // Step 2.7: Enqueue the initial context as a message to each
-        // auto_spawn agent (if context provided). The Stop hook delivers
+        // brief_agents agent (if context provided). The Stop hook delivers
         // it on each agent's empty first turn; TASK.md is never written.
         if let Some(ref resolved) = resolved_context {
             feat_common::enqueue_initial_context(
                 params.project_root,
                 &feature_name,
-                auto_spawn,
+                brief_agents,
                 resolved,
             )?;
         }
@@ -193,14 +198,15 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
         // Step 3: Create tmux session
         tmux::create_session(params.tmux_server, &session_name, &worktree_path)?;
 
-        // Step 3.5: Spawn the workflow's auto_spawn agents (if any). The
-        // first agent reuses window :0 to avoid leaving an empty shell.
-        if resolved_context.is_some() && !auto_spawn.is_empty() {
+        // Step 3.5: Spawn the workflow's full agent team (if any), with or
+        // without --context. The first agent reuses window :0 to avoid
+        // leaving an empty shell.
+        if !team.is_empty() {
             let reuse_target = format!("{session_name}:0");
-            feat_common::spawn_auto_spawn_agents(
+            feat_common::spawn_team(
                 params.project_root,
                 &feature_name,
-                auto_spawn,
+                team,
                 params.edit,
                 Some(&reuse_target),
                 params.tmux_server,
@@ -425,10 +431,11 @@ mod tests {
         })
         .unwrap();
 
-        // Session should have 2 windows: the reused window :0 (now agent) + hook window
+        // implement-and-review spawns the full team (implementer + reviewer).
+        // 3 windows: reused window :0 (implementer) + reviewer + hook window.
         let output =
             tmux::list_windows(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
-        assert_eq!(output, 2);
+        assert_eq!(output, 3);
     }
 
     #[test]

@@ -166,6 +166,9 @@ mod tests {
         };
         main_state.save(&pm_dir.join("features"), "main").unwrap();
 
+        // The reply target must be an active agent — messaging no longer spawns.
+        server.spawn_fake_agent(&root, &main_session, "main", "reviewer");
+
         // Send a cross-scope message from main→login
         let messages_dir = paths::messages_dir(&root);
         messages::send_with_scope(
@@ -207,9 +210,11 @@ mod tests {
     fn reply_same_scope() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (root, _session, feature) = setup_project_with_tmux(dir.path(), &server);
+        let (root, session, feature) = setup_project_with_tmux(dir.path(), &server);
 
         create_agent_definition(&root, "reviewer");
+        // The reply target must be an active agent — messaging no longer spawns.
+        server.spawn_fake_agent(&root, &session, &feature, "reviewer");
 
         // Send same-scope message (no sender_scope)
         let messages_dir = paths::messages_dir(&root);

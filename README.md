@@ -77,7 +77,7 @@ Creates a git branch, worktree, and tmux session (`myapp/login`). With `--contex
 
 `--context` accepts literal text, a path to a file, or `-` to read the body from stdin (handy for long briefs via heredoc, as shown above, with no approval prompt).
 
-`--workflow <name>` is also valid without `--context` — pm records the workflow in feature state but spawns no agent. Useful for setting up a feature you intend to spawn into later.
+`--workflow <name>` is also valid without `--context` — pm records the workflow in feature state and stands up the workflow's full idle team (no brief is queued). You drive the agents yourself afterwards.
 
 Run `pm workflow list` to see installed workflows. See [Workflows](#workflows) below.
 
@@ -362,12 +362,12 @@ Bundled workflows (installed by `pm init` and `pm upgrade` into `<project>/.pm/w
 
 Each workflow directory contains:
 
-- `config.toml` — machine-readable. `description` (one-line), `when_to_use` (optional hint for the `main` orchestrator describing the situation the workflow fits; shown by `pm workflow list`), `agents` (documentary list of all participants), `auto_spawn` (the agent(s) pm spawns at `feat new --workflow X` time).
+- `config.toml` — machine-readable. `description` (one-line), `when_to_use` (optional hint for the `main` orchestrator describing the situation the workflow fits; shown by `pm workflow list`), `agents` (the full team pm spawns at `feat new --workflow X` time), `brief_agents` (the subset that receives the `--context` brief; accepts the legacy `auto_spawn` key for back-compat).
 - `workflow.md` — free-form markdown with an overall preamble and optional `## <agent-name>` sections that describe topology only ("hand off to the reviewer", "report findings to the user"). The owning role's section also names the agent responsible for `summary.md`. Surfaced verbatim by `pm workflow show`.
 
 Workflow files use the same "preserve user edits" policy as `.pm/hooks/`: `pm upgrade` installs missing workflows but never overwrites a file you've modified. Delete the directory and re-run `pm upgrade` if you want the bundled copy back.
 
-`pm feat new --context` requires `--workflow <name>` so pm knows where to deliver the context message and which agent(s) to spawn. `pm feat new --workflow X` without `--context` is also valid: it records the workflow in state but spawns nothing. The `--agent` flag and `[agents] default` config field have been removed in favour of workflows.
+`pm feat new --context` requires `--workflow <name>` so pm knows which team to spawn and which agents to brief. `pm feat new --workflow X` without `--context` is also valid: it records the workflow in state and stands up the full idle team (you drive them afterwards). The `--agent` flag and `[agents] default` config field have been removed in favour of workflows.
 
 ### Agent management
 
@@ -479,9 +479,9 @@ Identity is resolved automatically: `PM_AGENT_NAME` (set by `pm agent spawn`) > 
 
 #### Typical agent flow
 
-1. `pm feat new my-feature --workflow implement-and-review --context "task description"` — creates the feature, enqueues `task description` as the first message for every `auto_spawn` agent in the chosen workflow (for `implement-and-review`, that's the implementer), and spawns them. The Stop hook blocks until the queued message is available, then tells each agent to read it. `--workflow` is required when `--context` is given — see [Workflows](#workflows) above
+1. `pm feat new my-feature --workflow implement-and-review --context "task description"` — creates the feature, spawns the workflow's full `agents` team (for `implement-and-review`, that's the implementer and reviewer), and enqueues `task description` as the first message for the `brief_agents` subset (for `implement-and-review`, just the implementer). The Stop hook blocks until the queued message is available, then tells each briefed agent to read it. `--workflow` is required when `--context` is given — see [Workflows](#workflows) above
 2. The implementer reads the task, implements changes, runs tests
-3. The implementer sends `pm msg send reviewer "ready for review"` to request a review (auto-spawns the reviewer if it isn't already running)
+3. The implementer sends `pm msg send reviewer "ready for review"` to request a review (the reviewer is already running with the team; the message just delivers, healing its window if it died)
 4. The reviewer diffs the branch and sends feedback back to the implementer
 5. The implementer addresses feedback, sends another "ready for review" message
 6. The reviewer approves — and both agents go back to `pm msg wait`, ready for the next task
@@ -496,7 +496,7 @@ implementer = "acceptEdits"
 reviewer = ""
 ```
 
-`"acceptEdits"` makes Claude auto-accept file edits for that agent; leave empty for default permissions. Permissions apply both to agents spawned by a workflow's `auto_spawn` list and to those launched manually with `pm agent spawn`.
+`"acceptEdits"` makes Claude auto-accept file edits for that agent; leave empty for default permissions. Permissions apply both to agents spawned by a workflow's `agents` team and to those launched manually with `pm agent spawn`.
 
 > **Note**: earlier versions of pm exposed `[agents] default` and a `--agent` flag on `feat new`/`feat adopt` for choosing which agent to spawn. Both were removed in favour of [Workflows](#workflows). The `[agents] default` field is now silently ignored on load (so legacy configs don't break), and `--context` requires `--workflow <name>`.
 

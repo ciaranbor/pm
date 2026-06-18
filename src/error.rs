@@ -81,7 +81,7 @@ pub enum PmError {
     WorkflowNotFound(String),
 
     #[error(
-        "Workflow '{workflow}' lists '{agent}' in auto_spawn, but no agent definition was found at \
+        "Workflow '{workflow}' lists '{agent}' in its agent team, but no agent definition was found at \
          {} or {}. Install the definition or fix the workflow.",
         .main_def.display(),
         .global_def.display()
