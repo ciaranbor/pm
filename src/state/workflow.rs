@@ -1,12 +1,12 @@
 //! Workflow definitions live under `<project>/.pm/workflows/<name>/`.
 //!
 //! Each workflow directory contains:
-//! - `config.toml` — machine-readable: description, agents, auto_spawn list
+//! - `config.toml` — machine-readable: description, agents, brief_agents list
 //! - `workflow.md` — human-readable routing prose, surfaced by
 //!   `pm workflow show`
 //!
 //! The TOML schema is intentionally minimal — v1 only uses `description`,
-//! `agents`, and `auto_spawn`. New fields can be added later without
+//! `agents`, and `brief_agents`. New fields can be added later without
 //! breaking on-disk files.
 
 use std::path::{Path, PathBuf};
@@ -26,21 +26,17 @@ pub struct WorkflowDef {
     /// Advisory metadata — a custom workflow needn't provide one.
     #[serde(default)]
     pub when_to_use: Option<String>,
-    /// All agents involved in the workflow.
-    ///
-    /// TODO: this is documentary-only in v1 — pm does not validate or
-    /// enforce it against `auto_spawn` or installed agent definitions.
-    /// A future pass could cross-check (every name in `auto_spawn`
-    /// must be in `agents`; every name in `agents` should have an
-    /// installed definition) so users get an early signal when the
-    /// workflow drifts from reality.
+    /// The full agent team for the workflow. **All** of these are spawned
+    /// at `pm feat new`/`feat adopt --workflow <name>` time (with or
+    /// without `--context`). Empty falls back to `brief_agents` for
+    /// back-compat with custom workflows that only set the old field.
     #[serde(default)]
     pub agents: Vec<String>,
-    /// Agents to spawn at `pm feat new --workflow <name>` time. Each
-    /// receives a copy of the `--context` message. Empty is valid (the
-    /// workflow stores routing but never auto-spawns).
-    #[serde(default)]
-    pub auto_spawn: Vec<String>,
+    /// Subset of the team that receives a copy of the `--context` brief.
+    /// Spawning is *not* its job — that's `agents`. Accepts the legacy
+    /// `auto_spawn` key so already-installed configs keep parsing.
+    #[serde(default, alias = "auto_spawn")]
+    pub brief_agents: Vec<String>,
 }
 
 impl WorkflowDef {
@@ -55,26 +51,40 @@ impl WorkflowDef {
         Ok(def)
     }
 
-    /// Validate that every agent listed in `auto_spawn` has a definition
-    /// file resolvable from the main worktree or the global agents
-    /// directory. The feature worktree typically doesn't exist yet when
-    /// this runs, so it isn't consulted.
-    pub fn validate_auto_spawn(&self, project_root: &Path, workflow_name: &str) -> Result<()> {
-        self.validate_auto_spawn_with_home(project_root, workflow_name, dirs::home_dir().as_deref())
+    /// The effective spawn set: the full `agents` team, or — when that's
+    /// empty — `brief_agents` (back-compat for custom workflows that only
+    /// set the old field). This is the set pm spawns at feature creation.
+    pub fn effective_team(&self) -> &[String] {
+        if self.agents.is_empty() {
+            &self.brief_agents
+        } else {
+            &self.agents
+        }
     }
 
-    /// Test-friendly variant of [`validate_auto_spawn`] that takes an
-    /// explicit home directory instead of reading `$HOME` from the
-    /// process environment. Production callers should use
-    /// [`validate_auto_spawn`]; tests use this to avoid races on
-    /// process-global `$HOME`.
-    pub fn validate_auto_spawn_with_home(
+    /// Validate the workflow's spawn set:
+    ///   1. every member of the effective team has a definition file
+    ///      resolvable from the main worktree or the global agents dir, and
+    ///   2. every `brief_agents` entry is a member of the effective team.
+    ///
+    /// The feature worktree typically doesn't exist yet when this runs, so
+    /// it isn't consulted.
+    pub fn validate(&self, project_root: &Path, workflow_name: &str) -> Result<()> {
+        self.validate_with_home(project_root, workflow_name, dirs::home_dir().as_deref())
+    }
+
+    /// Test-friendly variant of [`validate`] that takes an explicit home
+    /// directory instead of reading `$HOME` from the process environment.
+    /// Production callers should use [`validate`]; tests use this to avoid
+    /// races on process-global `$HOME`.
+    pub fn validate_with_home(
         &self,
         project_root: &Path,
         workflow_name: &str,
         home: Option<&Path>,
     ) -> Result<()> {
-        for agent in &self.auto_spawn {
+        let team = self.effective_team();
+        for agent in team {
             if !definition_exists(project_root, agent, home) {
                 let main_def = paths::main_worktree(project_root)
                     .join(".claude/agents")
@@ -88,6 +98,16 @@ impl WorkflowDef {
                     main_def,
                     global_def,
                 });
+            }
+        }
+        // Every brief recipient must be part of the spawned team — a brief
+        // sent to an agent that never spawns would be silently swallowed.
+        for agent in &self.brief_agents {
+            if !team.contains(agent) {
+                return Err(PmError::SafetyCheck(format!(
+                    "workflow '{workflow_name}' lists '{agent}' in `brief_agents` but not in \
+                     `agents`. Every brief recipient must be a member of the spawned team."
+                )));
             }
         }
         Ok(())
@@ -200,13 +220,13 @@ mod tests {
             "demo",
             r#"description = "x"
 agents = ["a", "b"]
-auto_spawn = ["a"]
+brief_agents = ["a"]
 "#,
         );
         let def = WorkflowDef::load(dir.path(), "demo").unwrap();
         assert_eq!(def.description, "x");
         assert_eq!(def.agents, vec!["a".to_string(), "b".to_string()]);
-        assert_eq!(def.auto_spawn, vec!["a".to_string()]);
+        assert_eq!(def.brief_agents, vec!["a".to_string()]);
         // `when_to_use` is optional advisory metadata; absent parses as None.
         assert_eq!(def.when_to_use, None);
     }
@@ -223,6 +243,56 @@ when_to_use = "use it here"
         );
         let def = WorkflowDef::load(dir.path(), "demo").unwrap();
         assert_eq!(def.when_to_use.as_deref(), Some("use it here"));
+    }
+
+    #[test]
+    fn parses_legacy_auto_spawn_via_serde_alias() {
+        // Already-installed (Preserve-policy) configs still say `auto_spawn`.
+        // The serde alias keeps them parsing into `brief_agents`.
+        let dir = tempdir().unwrap();
+        write_workflow(
+            dir.path(),
+            "demo",
+            r#"description = "x"
+agents = ["a", "b"]
+auto_spawn = ["a"]
+"#,
+        );
+        let def = WorkflowDef::load(dir.path(), "demo").unwrap();
+        assert_eq!(def.brief_agents, vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn effective_team_falls_back_to_brief_agents_when_agents_empty() {
+        let dir = tempdir().unwrap();
+        write_workflow(
+            dir.path(),
+            "demo",
+            r#"description = "x"
+auto_spawn = ["a", "b"]
+"#,
+        );
+        let def = WorkflowDef::load(dir.path(), "demo").unwrap();
+        assert!(def.agents.is_empty());
+        assert_eq!(def.effective_team(), &["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn effective_team_is_agents_when_present() {
+        let dir = tempdir().unwrap();
+        write_workflow(
+            dir.path(),
+            "demo",
+            r#"description = "x"
+agents = ["a", "b", "c"]
+brief_agents = ["a"]
+"#,
+        );
+        let def = WorkflowDef::load(dir.path(), "demo").unwrap();
+        assert_eq!(
+            def.effective_team(),
+            &["a".to_string(), "b".to_string(), "c".to_string()]
+        );
     }
 
     #[test]
@@ -244,7 +314,7 @@ when_to_use = "use it here"
         );
         let def = WorkflowDef::load(dir.path(), "demo").unwrap();
         assert!(def.agents.is_empty());
-        assert!(def.auto_spawn.is_empty());
+        assert!(def.brief_agents.is_empty());
     }
 
     #[test]
@@ -255,7 +325,89 @@ when_to_use = "use it here"
     }
 
     #[test]
-    fn validate_auto_spawn_ok_when_definition_in_main() {
+    fn validate_ok_when_definition_in_main() {
+        let dir = tempdir().unwrap();
+        write_workflow(
+            dir.path(),
+            "demo",
+            r#"description = "x"
+agents = ["implementer"]
+brief_agents = ["implementer"]
+"#,
+        );
+        let main_agents = paths::main_worktree(dir.path()).join(".claude/agents");
+        std::fs::create_dir_all(&main_agents).unwrap();
+        std::fs::write(main_agents.join("implementer.md"), "stub").unwrap();
+
+        let def = WorkflowDef::load(dir.path(), "demo").unwrap();
+        def.validate(dir.path(), "demo").unwrap();
+    }
+
+    #[test]
+    fn validate_errors_when_team_member_definition_missing() {
+        let dir = tempdir().unwrap();
+        write_workflow(
+            dir.path(),
+            "demo",
+            r#"description = "x"
+agents = ["frontend-impl"]
+"#,
+        );
+        let def = WorkflowDef::load(dir.path(), "demo").unwrap();
+        // Use the explicit-home variant so the test never mutates process
+        // env. Pointing the home at our tempdir guarantees no spurious hit
+        // on a user's real `~/.claude/agents/frontend-impl.md`.
+        let result = def.validate_with_home(dir.path(), "demo", Some(dir.path()));
+        assert!(matches!(
+            result.unwrap_err(),
+            PmError::WorkflowAgentMissing { .. }
+        ));
+    }
+
+    #[test]
+    fn validate_errors_when_home_is_none() {
+        // When `home` is None, `validate` should also fail cleanly if main
+        // has no matching definition.
+        let dir = tempdir().unwrap();
+        write_workflow(
+            dir.path(),
+            "demo",
+            r#"description = "x"
+agents = ["frontend-impl"]
+"#,
+        );
+        let def = WorkflowDef::load(dir.path(), "demo").unwrap();
+        let result = def.validate_with_home(dir.path(), "demo", None);
+        assert!(matches!(
+            result.unwrap_err(),
+            PmError::WorkflowAgentMissing { .. }
+        ));
+    }
+
+    #[test]
+    fn validate_errors_when_brief_agent_not_in_team() {
+        let dir = tempdir().unwrap();
+        write_workflow(
+            dir.path(),
+            "demo",
+            r#"description = "x"
+agents = ["implementer"]
+brief_agents = ["reviewer"]
+"#,
+        );
+        let main_agents = paths::main_worktree(dir.path()).join(".claude/agents");
+        std::fs::create_dir_all(&main_agents).unwrap();
+        std::fs::write(main_agents.join("implementer.md"), "stub").unwrap();
+
+        let def = WorkflowDef::load(dir.path(), "demo").unwrap();
+        let result = def.validate_with_home(dir.path(), "demo", Some(dir.path()));
+        assert!(matches!(result.unwrap_err(), PmError::SafetyCheck(_)));
+    }
+
+    #[test]
+    fn validate_uses_brief_agents_fallback_when_agents_empty() {
+        // Custom workflow with only the legacy field: the effective team is
+        // `brief_agents`, so its members must have definitions.
         let dir = tempdir().unwrap();
         write_workflow(
             dir.path(),
@@ -269,48 +421,8 @@ auto_spawn = ["implementer"]
         std::fs::write(main_agents.join("implementer.md"), "stub").unwrap();
 
         let def = WorkflowDef::load(dir.path(), "demo").unwrap();
-        def.validate_auto_spawn(dir.path(), "demo").unwrap();
-    }
-
-    #[test]
-    fn validate_auto_spawn_errors_when_missing() {
-        let dir = tempdir().unwrap();
-        write_workflow(
-            dir.path(),
-            "demo",
-            r#"description = "x"
-auto_spawn = ["frontend-impl"]
-"#,
-        );
-        let def = WorkflowDef::load(dir.path(), "demo").unwrap();
-        // Use the explicit-home variant so the test never mutates process
-        // env. Pointing the home at our tempdir guarantees no spurious hit
-        // on a user's real `~/.claude/agents/frontend-impl.md`.
-        let result = def.validate_auto_spawn_with_home(dir.path(), "demo", Some(dir.path()));
-        assert!(matches!(
-            result.unwrap_err(),
-            PmError::WorkflowAgentMissing { .. }
-        ));
-    }
-
-    #[test]
-    fn validate_auto_spawn_errors_when_home_is_none() {
-        // When `home` is None, `validate_auto_spawn` should also fail
-        // cleanly if main has no matching definition.
-        let dir = tempdir().unwrap();
-        write_workflow(
-            dir.path(),
-            "demo",
-            r#"description = "x"
-auto_spawn = ["frontend-impl"]
-"#,
-        );
-        let def = WorkflowDef::load(dir.path(), "demo").unwrap();
-        let result = def.validate_auto_spawn_with_home(dir.path(), "demo", None);
-        assert!(matches!(
-            result.unwrap_err(),
-            PmError::WorkflowAgentMissing { .. }
-        ));
+        def.validate_with_home(dir.path(), "demo", Some(dir.path()))
+            .unwrap();
     }
 
     #[test]

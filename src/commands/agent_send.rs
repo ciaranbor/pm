@@ -7,79 +7,18 @@ use crate::state::feature::FeatureState;
 use crate::state::paths;
 use crate::state::project::ProjectEntry;
 
-/// Find the path to an agent definition file, checking locations that
-/// `claude --agent <name>` would resolve when running in a feature worktree:
-///   1. Feature worktree: `<project_root>/<feature>/.claude/agents/<name>.md`
-///   2. Main worktree: `<project_root>/main/.claude/agents/<name>.md`
-///      (where `pm agents install-project` writes; not committed to git but
-///      still resolvable by Claude Code from sibling worktrees)
-///   3. Global: `~/.claude/agents/<name>.md`
-pub fn find_agent_definition_path(
-    project_root: &Path,
-    feature: &str,
-    agent_name: &str,
-) -> Option<std::path::PathBuf> {
-    let def_filename = format!("{agent_name}.md");
-
-    // Feature worktree
-    let feature_def = project_root
-        .join(feature)
-        .join(".claude/agents")
-        .join(&def_filename);
-    if feature_def.exists() {
-        return Some(feature_def);
-    }
-
-    // Main worktree (project-level install location)
-    let main_def = paths::main_worktree(project_root)
-        .join(".claude/agents")
-        .join(&def_filename);
-    if main_def.exists() {
-        return Some(main_def);
-    }
-
-    // Global (~/.claude/agents/)
-    if let Some(home) = dirs::home_dir() {
-        let global_def = home.join(".claude/agents").join(&def_filename);
-        if global_def.exists() {
-            return Some(global_def);
-        }
-    }
-
-    None
-}
-
-/// Check whether an agent definition file exists in any resolved location.
-fn has_agent_definition(project_root: &Path, feature: &str, agent_name: &str) -> bool {
-    find_agent_definition_path(project_root, feature, agent_name).is_some()
-}
-
-/// Per-recipient state needed by `agent_send`: whether the agent is
-/// currently flagged active, whether a registry entry exists at all (so
-/// auto-spawn can resurrect it), and the effective claude agent
-/// definition (used to resolve aliases when looking up the definition
-/// file). Loaded once from disk per call to avoid redundant TOML parses.
-struct RecipientLookup {
-    is_active: bool,
-    is_registered: bool,
-    definition_name: String,
-}
-
-fn lookup_recipient(
-    project_root: &Path,
-    feature: &str,
-    agent_name: &str,
-) -> Result<RecipientLookup> {
+/// Whether the recipient agent is currently flagged active. Loaded once
+/// from disk per call to avoid redundant TOML parses.
+///
+/// `agent_send` no longer spawns *new* agents, so it doesn't need to know
+/// whether a definition file or registry entry exists for resurrection —
+/// only whether the agent is supposed to be running (`active`). A dead
+/// window of an active agent is healed by `agent_spawn` after the message
+/// is queued.
+fn recipient_is_active(project_root: &Path, feature: &str, agent_name: &str) -> Result<bool> {
     let agents_dir = paths::agents_dir(project_root);
     let registry = AgentRegistry::load(&agents_dir, feature)?;
-    let entry = registry.get(agent_name);
-    Ok(RecipientLookup {
-        is_active: entry.map(|e| e.active).unwrap_or(false),
-        is_registered: entry.is_some(),
-        definition_name: entry
-            .map(|e| e.effective_definition(agent_name).to_string())
-            .unwrap_or_else(|| agent_name.to_string()),
-    })
+    Ok(registry.get(agent_name).map(|e| e.active).unwrap_or(false))
 }
 
 /// Generate a helpful hint when a recipient agent is not found.
@@ -133,8 +72,14 @@ pub fn resolve_upstream(project_root: &Path, current_scope: &str) -> Result<Stri
     Ok(state.base_or_default().to_string())
 }
 
-/// Send a message to an agent's inbox. If the recipient agent is not active,
-/// auto-spawns it first (equivalent to `pm agent spawn <name>`).
+/// Send a message to an agent's inbox.
+///
+/// `agent_send` is a near-pure queue: it never spawns a *new* agent. If the
+/// recipient isn't registered or is flagged inactive (`active = false`), it
+/// errors — delivering a message nobody can ever read is a mistake. If the
+/// recipient is active but its tmux window has died, the message is queued
+/// and the window is healed via `agent_spawn` (a no-op if the window is
+/// alive).
 ///
 /// `target_scope` is the scope (feature or "main") the message is delivered
 /// to. When `None`, defaults to `sender_scope` (same-scope message).
@@ -154,34 +99,20 @@ pub fn agent_send(
 ) -> Result<String> {
     let feature = target_scope.unwrap_or(sender_scope);
 
-    let lookup = lookup_recipient(project_root, feature, recipient)?;
-
-    // If the agent isn't running and we can't resurrect it, fail early —
-    // delivering a message that nobody can ever read is a mistake.
-    //
-    // "Can resurrect" means either:
-    //   1. A registry entry exists (auto-spawn will use the stored
-    //      `agent_definition` to re-launch), OR
-    //   2. The agent's *definition file* exists at one of the lookup
-    //      locations (so a fresh spawn would succeed).
-    //
-    // Aliased-but-stopped agents (e.g. `pm agent spawn frontend-dev
-    // --agent implementer; pm agent stop frontend-dev`) hit case 1 — the
-    // registry has the entry, the alias resolves through it, and
-    // auto-spawn will respawn them with the correct `--agent` flag.
-    let can_resurrect = lookup.is_registered
-        || has_agent_definition(project_root, feature, &lookup.definition_name);
-    if !lookup.is_active && !can_resurrect {
+    // The recipient must be an active agent. Messaging never conjures a new
+    // agent — agents are stood up by `pm feat new`/`feat adopt` (the whole
+    // team) or `pm agent spawn`.
+    if !recipient_is_active(project_root, feature, recipient)? {
         let hint = agent_not_found_hint(recipient, sender_scope, feature);
         return Err(PmError::AgentNotFound(format!(
-            "No agent called '{recipient}' exists in scope '{feature}'.{hint}"
+            "No active agent called '{recipient}' exists in scope '{feature}'.{hint}"
         )));
     }
 
-    // Deliver the message first, then spawn. This ensures the message is durably
-    // queued in the inbox before the agent starts, so it will be picked up on first read.
-    // If spawn fails, the message remains as a "dead letter" — acceptable since the user
-    // can retry the spawn separately.
+    // Deliver the message first, then heal a dead window. This ensures the
+    // message is durably queued in the inbox before the agent starts, so it
+    // will be picked up on first read. If the heal spawn fails, the message
+    // remains as a "dead letter" — acceptable since the user can retry.
     let messages_dir = paths::messages_dir(project_root);
     let is_cross_scope = target_scope.is_some() && target_scope != Some(sender_scope);
     let index = messages::send_with_scope(
@@ -204,19 +135,23 @@ pub fn agent_send(
         format!("Message {index:03} sent to '{recipient}' (from '{sender}')")
     };
 
-    // Auto-spawn the agent if it's not currently active. Pass `None` for
-    // `agent_definition` so `agent_spawn` reads the stored definition from
-    // any existing registry entry — preserving aliases across auto-spawn.
-    if !lookup.is_active {
-        let (_, spawn_msg) = super::agent_spawn::agent_spawn(
-            project_root,
-            feature,
-            recipient,
-            None,
-            None,
-            false,
-            tmux_server,
-        )?;
+    // The agent is active, but its tmux window may have died (crash,
+    // accidental kill). Call `agent_spawn` to heal it: a no-op
+    // (`AlreadyActive`) if the window is alive, a respawn/resume if it's
+    // gone. Pass `None` for `agent_definition` so `agent_spawn` reads the
+    // stored definition from the registry entry — preserving aliases. Only
+    // append the spawn line when a heal actually happened, keeping the
+    // common-case output byte-identical.
+    let (outcome, spawn_msg) = super::agent_spawn::agent_spawn(
+        project_root,
+        feature,
+        recipient,
+        None,
+        None,
+        false,
+        tmux_server,
+    )?;
+    if outcome.is_new_window() {
         status = format!("{status}\n{spawn_msg}");
     }
 
@@ -452,16 +387,17 @@ mod tests {
     }
 
     #[test]
-    fn send_to_inactive_agent_auto_spawns() {
+    fn send_to_unregistered_agent_errors_and_queues_nothing() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
         let (root, _session_name, feature) = setup_project_with_tmux(dir.path(), &server);
 
-        // Agent definition must exist for auto-spawn
+        // Even with a definition file present, an unregistered (never
+        // spawned) agent is not a valid recipient — messaging never
+        // conjures a new agent.
         create_agent_definition(&root, "reviewer");
 
-        // Send without spawning first — agent doesn't exist
-        let msg = agent_send(
+        let result = agent_send(
             &root,
             &feature,
             None,
@@ -469,29 +405,40 @@ mod tests {
             "implementer",
             "hello",
             server.name(),
-        )
-        .unwrap();
-        assert!(msg.contains("Message 001 sent to 'reviewer'"));
-        assert!(msg.contains("Spawned agent 'reviewer'"));
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No active agent called 'reviewer'")
+        );
 
-        // Verify the agent is now registered
+        // Nothing was queued.
+        let messages_dir = paths::messages_dir(&root);
+        assert!(
+            messages::list(&messages_dir, &feature, "reviewer", None)
+                .unwrap()
+                .is_empty()
+        );
+
+        // Agent was not registered.
         let agents_dir = paths::agents_dir(&root);
         let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
-        assert!(registry.get("reviewer").is_some());
+        assert!(registry.get("reviewer").is_none());
     }
 
     #[test]
-    fn send_to_active_flagged_agent_queues_without_respawn() {
-        // With the `active` flag design, an agent that was spawned (active = true)
-        // but whose window has gone away is still considered "active". The message
-        // is queued; the agent will be respawned by `pm open` or `agent_spawn_all`.
+    fn send_to_active_dead_window_queues_and_respawns() {
+        // An agent flagged active (active = true) whose tmux window has died
+        // should have its message queued AND its window healed.
         let server = TestServer::new();
         let dir = tempdir().unwrap();
         let (root, session_name, feature) = setup_project_with_tmux(dir.path(), &server);
 
         create_agent_definition(&root, "reviewer");
 
-        // Spawn agent, then kill its window (simulating crash/restart)
+        // Spawn agent (active = true), then kill its window (simulating crash).
         super::super::agent_spawn::agent_spawn(
             &root,
             &feature,
@@ -503,7 +450,7 @@ mod tests {
         )
         .unwrap();
 
-        // Kill and recreate session to remove the window
+        // Kill and recreate session to remove the window.
         tmux::kill_session(server.name(), &session_name).unwrap();
         let worktree = root.join("login");
         tmux::create_session(server.name(), &session_name, &worktree).unwrap();
@@ -518,27 +465,29 @@ mod tests {
             server.name(),
         )
         .unwrap();
-        // Agent is still active (flag is true), so no auto-spawn — just queued
+        // Message queued and the dead window healed.
         assert!(msg.contains("Message 001 sent to 'reviewer'"));
-        assert!(!msg.contains("Spawned"));
+        assert!(msg.contains("Spawned agent 'reviewer'"));
+
+        // The window now exists again.
+        assert!(
+            tmux::find_window(server.name(), &session_name, "reviewer")
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
-    fn send_to_aliased_stopped_agent_resurrects_via_registry() {
-        // Regression: `pm agent spawn frontend-dev --agent implementer; pm
-        // agent stop frontend-dev; pm msg send frontend-dev "hi"` used to
-        // error out because `has_agent_definition` looked for
-        // `frontend-dev.md` (which doesn't exist) instead of resolving the
-        // alias to `implementer`. The registry entry should be enough to
-        // prove the agent is resurrectable.
+    fn send_to_stopped_agent_errors() {
+        // `pm agent stop` flips active = false. A stopped agent is not a
+        // valid recipient — messaging never resurrects a stopped agent.
         let server = TestServer::new();
         let dir = tempdir().unwrap();
         let (root, _session_name, feature) = setup_project_with_tmux(dir.path(), &server);
 
-        // Definition file lives at implementer.md; no frontend-dev.md.
         create_agent_definition(&root, "implementer");
 
-        // Spawn aliased agent.
+        // Spawn aliased agent, then stop it (active = false).
         super::super::agent_spawn::agent_spawn(
             &root,
             &feature,
@@ -549,10 +498,33 @@ mod tests {
             server.name(),
         )
         .unwrap();
-
-        // Stop it: kills the window and flips active=false (mirrors `pm agent stop`).
         super::super::agent_stop::agent_stop(&root, &feature, "frontend-dev", server.name())
             .unwrap();
+
+        let result = agent_send(
+            &root,
+            &feature,
+            None,
+            "frontend-dev",
+            "implementer",
+            "hi",
+            server.name(),
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No active agent called 'frontend-dev'")
+        );
+
+        // Nothing queued; agent stays inactive.
+        let messages_dir = paths::messages_dir(&root);
+        assert!(
+            messages::list(&messages_dir, &feature, "frontend-dev", None)
+                .unwrap()
+                .is_empty()
+        );
         let agents_dir = paths::agents_dir(&root);
         assert!(
             !AgentRegistry::load(&agents_dir, &feature)
@@ -561,37 +533,15 @@ mod tests {
                 .unwrap()
                 .active
         );
-
-        // Send must succeed: registry has the entry, so auto-spawn can
-        // resurrect via the stored definition.
-        let msg = agent_send(
-            &root,
-            &feature,
-            None,
-            "frontend-dev",
-            "implementer",
-            "hi",
-            server.name(),
-        )
-        .unwrap();
-        assert!(msg.contains("Message 001 sent to 'frontend-dev'"));
-        // Auto-spawn fires (was inactive) and uses the alias's stored definition.
-        assert!(msg.contains("Spawned agent 'frontend-dev'"));
-
-        // Registry entry still has the definition — alias preserved across the auto-respawn.
-        let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
-        let entry = registry.get("frontend-dev").unwrap();
-        assert_eq!(entry.agent_definition.as_deref(), Some("implementer"));
-        assert!(entry.active);
     }
 
     #[test]
-    fn send_without_agent_definition_errors() {
+    fn send_to_unspawned_agent_errors() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
         let (root, _session_name, feature) = setup_project_with_tmux(dir.path(), &server);
 
-        // No agent definition — send should fail
+        // No agent registered at all — send should fail.
         let result = agent_send(
             &root,
             &feature,
@@ -603,19 +553,20 @@ mod tests {
         );
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("No agent called 'reviewer' exists in scope"));
+        assert!(err.contains("No active agent called 'reviewer' exists in scope"));
     }
 
     #[test]
     fn send_increments_index_in_output() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (root, _session_name, feature) = setup_project_with_tmux(dir.path(), &server);
+        let (root, session_name, feature) = setup_project_with_tmux(dir.path(), &server);
 
-        // Agent definition must exist for auto-spawn on first send
+        // Pre-spawn the recipient active with a live window — messaging no
+        // longer auto-spawns.
         create_agent_definition(&root, "reviewer");
+        server.spawn_fake_agent(&root, &session_name, &feature, "reviewer");
 
-        // First send will auto-spawn
         agent_send(
             &root,
             &feature,
@@ -668,8 +619,10 @@ mod tests {
         };
         main_state.save(&pm_dir.join("features"), "main").unwrap();
 
-        // Agent definition in main worktree
+        // Agent definition in main worktree, and pre-spawn it active —
+        // cross-scope sends require the target's agent to already be running.
         create_agent_definition(&root, "implementer");
+        server.spawn_fake_agent(&root, &main_session, "main", "implementer");
 
         // Send from "login" scope to "main" scope
         let msg = agent_send(
@@ -692,9 +645,10 @@ mod tests {
     fn send_same_scope_does_not_record_sender_scope() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (root, _session_name, feature) = setup_project_with_tmux(dir.path(), &server);
+        let (root, session_name, feature) = setup_project_with_tmux(dir.path(), &server);
 
         create_agent_definition(&root, "reviewer");
+        server.spawn_fake_agent(&root, &session_name, &feature, "reviewer");
 
         agent_send(
             &root,
@@ -742,6 +696,7 @@ mod tests {
         };
         main_state.save(&pm_dir.join("features"), "main").unwrap();
         create_agent_definition(&root, "implementer");
+        server.spawn_fake_agent(&root, &main_session, "main", "implementer");
 
         // Cross-scope: login → main
         agent_send(
@@ -760,6 +715,75 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(msg.meta.sender_scope.as_deref(), Some("login"));
+    }
+
+    #[test]
+    fn send_cross_scope_dead_window_queues_and_respawns() {
+        // Cross-scope sends go through the same `agent_send` heal path as
+        // same-scope: an active recipient in the target scope whose window
+        // has died gets its message queued AND its window healed.
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (root, _session_name, _feature) = setup_project_with_tmux(dir.path(), &server);
+
+        // Set up "main" scope with tmux session + state.
+        let pm_dir = root.join(".pm");
+        let config = ProjectConfig::load(&pm_dir).unwrap();
+        let main_worktree = paths::main_worktree(&root);
+        std::fs::create_dir_all(&main_worktree).unwrap();
+        let main_session = tmux::session_name(&config.project.name, "main");
+        tmux::create_session(server.name(), &main_session, &main_worktree).unwrap();
+
+        let now = Utc::now();
+        let main_state = FeatureState {
+            status: FeatureStatus::Wip,
+            branch: "main".to_string(),
+            worktree: "main".to_string(),
+            base: String::new(),
+            pr: String::new(),
+            context: String::new(),
+            workflow: None,
+            created: now,
+            last_active: now,
+        };
+        main_state.save(&pm_dir.join("features"), "main").unwrap();
+        create_agent_definition(&root, "implementer");
+
+        // Spawn the recipient active in main scope, then kill its window by
+        // recreating the session (simulating a crash).
+        super::super::agent_spawn::agent_spawn(
+            &root,
+            "main",
+            "implementer",
+            None,
+            None,
+            false,
+            server.name(),
+        )
+        .unwrap();
+        tmux::kill_session(server.name(), &main_session).unwrap();
+        tmux::create_session(server.name(), &main_session, &main_worktree).unwrap();
+
+        // Cross-scope: login → main, recipient active but window dead.
+        let msg = agent_send(
+            &root,
+            "login",
+            Some("main"),
+            "implementer",
+            "reviewer",
+            "cross-scope heal",
+            server.name(),
+        )
+        .unwrap();
+
+        // Queued and healed.
+        assert!(msg.contains("implementer@main"));
+        assert!(msg.contains("Spawned") || msg.contains("Resumed"));
+        assert!(
+            tmux::find_window(server.name(), &main_session, "implementer")
+                .unwrap()
+                .is_some()
+        );
     }
 
     // --- agent_send_cross_project ---

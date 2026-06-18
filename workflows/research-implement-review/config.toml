@@ -1,4 +1,4 @@
 description = "Researcher → implementer → reviewer"
 agents = ["researcher", "implementer", "reviewer"]
-auto_spawn = ["researcher"]
+brief_agents = ["researcher"]
 when_to_use = "A single feature with ambiguous aspects needing exploration or design before building."

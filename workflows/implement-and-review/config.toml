@@ -1,4 +1,4 @@
 description = "Implementer drains tasks; reviewer ↔ implementer loop"
 agents = ["implementer", "reviewer"]
-auto_spawn = ["implementer"]
+brief_agents = ["implementer"]
 when_to_use = "A feature with little ambiguity, ready to build directly."

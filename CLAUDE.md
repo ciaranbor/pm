@@ -11,8 +11,8 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 - `src/main.rs` — entry point (parse args, run dispatch, handle errors)
 - `src/cli.rs` — clap CLI definition (all derive structs and enums)
 - `src/dispatch.rs` — command dispatch (`run()` function, scope helpers)
-- `src/state/` — TOML state management (project entries, feature state, config). `ProjectEntry` has optional `repo_url` (project git origin) and `state_remote` (.pm/ repo remote) fields for cross-machine restore. `GlobalConfig` (`~/.config/pm/config.toml`) holds global defaults like `max_features`. Precedence: project-level `.pm/config.toml` > global > unlimited. `FeatureState` has an optional `workflow: Option<String>` referencing a workflow under `<project>/.pm/workflows/<name>/`. `AgentsConfig` no longer carries a `default` field — agent selection is driven by the workflow's `auto_spawn` list instead.
-- `src/state/workflow.rs` — Workflow definition (`WorkflowDef`) loader and validator. Each workflow lives under `<project>/.pm/workflows/<name>/` as `config.toml` + `workflow.md`. `config.toml` carries `description`, an optional `when_to_use` hint (advisory metadata aimed at `main` for picking a workflow; rendered as a `use when:` line by `pm workflow list`; a custom workflow needn't provide one), `agents`, and `auto_spawn`. `WorkflowDef::load` parses the TOML; `validate_auto_spawn` checks that every agent listed in `auto_spawn` has a definition file resolvable from `main/.claude/agents/` or `~/.claude/agents/` (feature worktree not consulted — it usually doesn't exist yet at `feat new` time).
+- `src/state/` — TOML state management (project entries, feature state, config). `ProjectEntry` has optional `repo_url` (project git origin) and `state_remote` (.pm/ repo remote) fields for cross-machine restore. `GlobalConfig` (`~/.config/pm/config.toml`) holds global defaults like `max_features`. Precedence: project-level `.pm/config.toml` > global > unlimited. `FeatureState` has an optional `workflow: Option<String>` referencing a workflow under `<project>/.pm/workflows/<name>/`. `AgentsConfig` no longer carries a `default` field — the agent team spawned at feature creation is driven by the workflow's `agents` list instead.
+- `src/state/workflow.rs` — Workflow definition (`WorkflowDef`) loader and validator. Each workflow lives under `<project>/.pm/workflows/<name>/` as `config.toml` + `workflow.md`. `config.toml` carries `description`, an optional `when_to_use` hint (advisory metadata aimed at `main` for picking a workflow; rendered as a `use when:` line by `pm workflow list`; a custom workflow needn't provide one), `agents` (the full team, all spawned at feature creation), and `brief_agents` (the subset that receives the `--context` brief; serde-aliased to the legacy `auto_spawn` key for back-compat). `effective_team()` returns `agents`, or `brief_agents` when `agents` is empty (fallback for custom workflows). `WorkflowDef::load` parses the TOML; `validate` checks that every member of the effective team has a definition file resolvable from `main/.claude/agents/` or `~/.claude/agents/` (feature worktree not consulted — it usually doesn't exist yet at `feat new` time) and that `brief_agents ⊆` the team.
 - `src/git/` — git operations, split into submodules: `init.rs`, `branch.rs`, `worktree.rs`, `remote.rs`, `status.rs`
 - `src/tmux.rs` — tmux operations (session create/kill/switch, display-menu)
 - `src/gh.rs` — GitHub CLI wrapper (PR creation, editing, status queries via `gh`)
@@ -21,7 +21,7 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 - `src/testing.rs` — test utilities (shared tmux test server, RAII cleanup, no-tmux project setup helpers)
 - `src/path_utils.rs` — portable path conversion (`~/` ↔ `$HOME`) for registry entries
 - `src/messages/` — file-based message queue (send, read_at, next, list, wait, name validation). Supports cross-scope messaging: `send_with_scope` records the sender's scope in metadata, and `pm msg send --scope <name>` / `--upstream` deliver to a different feature's inbox. `pm msg reply` auto-routes replies using `.last_read` metadata (sender, scope, project) written by `agent_read` on each cursor advance. Split into `mod.rs` (core ops, path helpers, last-read persistence, tests), `types.rs` (`LastRead`, `MessageMeta`, etc.), `validation.rs`, and `cursor.rs`.
-- `src/state/agent.rs` — per-feature agent registry (TOML state for spawned agents). `AgentEntry` has an `active: bool` flag that is the single source of truth for agent lifecycle state: set `true` by `agent spawn`, set `false` by `agent stop`, read by `agent_spawn_all`/`list`/`check`/`send` to determine whether an agent should be running. `AgentEntry` also has an optional `agent_definition: Option<String>` that decouples the registry key (display name / window / `PM_AGENT_NAME`) from the claude agent definition passed to `claude --agent`. `None` means the registry key doubles as the definition (back-compat); `Some(def)` is set when `pm agent spawn <name> --agent <def>` was used. `effective_definition(key)` resolves to `def` or falls back to `key`. Restart, fork, auto-spawn, and `pm open` all preserve the alias by reading from the registry.
+- `src/state/agent.rs` — per-feature agent registry (TOML state for spawned agents). `AgentEntry` has an `active: bool` flag that is the single source of truth for agent lifecycle state: set `true` by `agent spawn`, set `false` by `agent stop`, read by `agent_spawn_all`/`list`/`check`/`send` to determine whether an agent should be running. `AgentEntry` also has an optional `agent_definition: Option<String>` that decouples the registry key (display name / window / `PM_AGENT_NAME`) from the claude agent definition passed to `claude --agent`. `None` means the registry key doubles as the definition (back-compat); `Some(def)` is set when `pm agent spawn <name> --agent <def>` was used. `effective_definition(key)` resolves to `def` or falls back to `key`. Restart, fork, `agent_spawn_all`/`pm open`, and the `agent_send` dead-window heal all preserve the alias by reading from the registry.
 - `src/commands/` — one module per command group (project, feat, claude, agent, msg, hooks_install, etc.). `feat_pr.rs` handles `pm feat pr create`, `feat_pr_edit.rs` handles `pm feat pr edit`.
 - `src/commands/init.rs` — `pm init` with optional `--git <url>` for cloning; auto-detects default branch from remote
 - `src/commands/open.rs` — reopens project sessions; before recreating, runs `doctor::diagnose` (with PR-state checks disabled to avoid network calls) and warns about non-recoverable drift; after recreating missing tmux sessions, respawns agents with `active = true` via `agent_spawn_all`. `OpenResult` carries the `main_session` name; the `pm open` dispatch handler then connects the user to it via `tmux::connect_session` (switch-client when inside tmux per `$TMUX`, attach-session otherwise). The attach step runs only in the real dispatch path (tests call `open()` directly with a test server and never attach).
@@ -65,10 +65,26 @@ cron and no messages are queued, the hook approves instead of blocking so
 the running work isn't stalled. Recurring crons stay active between fires,
 so an agent with one is message-delivered only at fire boundaries.
 
-Initial context (`pm feat new --context <x>`, `pm agent spawn --context
-<x>`, `pm msg send <to> <body>` auto-spawn) all desugar to the same
-primitive: **enqueue a message, then spawn (or do nothing if already
-running).** The first turn is empty; the Stop hook blocks until the
+Initial context delivery differs by path:
+
+- `pm feat new`/`feat adopt --workflow X` spawn the **whole `agents`
+  team** (with or without `--context`); when `--context` is given, the
+  brief is enqueued only to `brief_agents`. A context with an empty
+  `brief_agents` is an error (nobody to brief).
+- `pm agent spawn --context <x>` desugars to the same primitive as
+  before: **enqueue a message, then spawn (or do nothing if already
+  running).**
+- `pm msg send <to> <body>` is a near-pure queue: it **never spawns a new
+  agent**, errors when the recipient isn't a registered active agent, but
+  **heals a dead tmux window of an active agent** (queues, then calls
+  `agent_spawn` which is a no-op if the window is alive). This applies to
+  cross-*scope* sends (`--scope`/`--upstream`, same project) too — they go
+  through the same `agent_send` path and heal a dead window just like
+  same-scope. Only cross-*project* sends (`agent_send_cross_project`, a
+  separate function) truly never spawn — they assume the target agent in
+  the foreign project already exists.
+
+For spawn paths, the first turn is empty; the Stop hook blocks until the
 queued message is available, then delivers it. The first-turn flow is
 identical to every subsequent turn.
 
@@ -87,8 +103,9 @@ Two layers, deliberately decoupled:
   `pm-workflow` skill but contain no routing prose.
 - **Workflows** (`workflows/<name>/workflow.md`) define the per-feature
   *topology*: who hands off to whom, who reports back to the user. They
-  live next to `config.toml` which declares the `auto_spawn` agent(s)
-  pm should launch at `feat new --workflow X` time.
+  live next to `config.toml` which declares `agents` (the full team pm
+  spawns at `feat new --workflow X` time) and `brief_agents` (the subset
+  that receives the `--context` brief).
 
 This split lets the same agent (e.g. `implementer`) play different
 routing roles in different features without forking the agent

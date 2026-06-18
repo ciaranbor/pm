@@ -154,26 +154,31 @@ pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
     let config = ProjectConfig::load(&pm_dir)?;
     let project_name = &config.project.name;
 
-    // Load the workflow definition (if any) and validate its auto-spawn
-    // agents up-front. Fail early — before any tmux/git/state side
+    // Load the workflow definition (if any) and validate its team and
+    // brief agents up-front. Fail early — before any tmux/git/state side
     // effects — so a bad workflow never leaves a half-built feature on
     // disk.
     let workflow_def = params
         .workflow
         .map(|w| feat_common::load_and_validate_workflow(params.project_root, w))
         .transpose()?;
-    let auto_spawn: &[String] = workflow_def
+    // The full team is spawned; the brief subset receives --context.
+    let team: &[String] = workflow_def
         .as_ref()
-        .map(|d| d.auto_spawn.as_slice())
+        .map(|d| d.effective_team())
+        .unwrap_or(&[]);
+    let brief_agents: &[String] = workflow_def
+        .as_ref()
+        .map(|d| d.brief_agents.as_slice())
         .unwrap_or(&[]);
 
     // If the user supplied --context, somebody has to receive it.
-    // A workflow with empty `auto_spawn` would silently swallow the
+    // A workflow with empty `brief_agents` would silently swallow the
     // context — block that case so the user gets a clear error.
-    if params.context.is_some() && auto_spawn.is_empty() {
+    if params.context.is_some() && brief_agents.is_empty() {
         return Err(PmError::SafetyCheck(format!(
-            "workflow '{}' has an empty `auto_spawn` list, so --context has no recipient. \
-             Add at least one agent to `auto_spawn` in the workflow's config.toml, \
+            "workflow '{}' has an empty `brief_agents` list, so --context has no recipient. \
+             Add at least one agent to `brief_agents` in the workflow's config.toml, \
              or drop --context.",
             params.workflow.unwrap_or("<none>"),
         )));
@@ -217,14 +222,14 @@ pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
         claude_settings::seed_feature_claude(params.project_root, &worktree_path)?;
 
         // Step 3.6: Enqueue initial context as a message to every
-        // auto_spawn agent in the workflow (if context provided). The
+        // brief_agents agent in the workflow (if context provided). The
         // Stop hook will deliver it on the empty first turn after spawn.
         // TASK.md is never written.
         if let Some(ref resolved) = resolved_context {
             feat_common::enqueue_initial_context(
                 params.project_root,
                 &feature_name,
-                auto_spawn,
+                brief_agents,
                 resolved,
             )?;
         }
@@ -232,15 +237,16 @@ pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
         // Step 4: Create tmux session
         tmux::create_session(params.tmux_server, &session_name, &worktree_path)?;
 
-        // Step 4.5: Spawn the workflow's auto_spawn agents (if any). The
-        // first agent reuses window :0 so we don't leave an empty default
-        // shell behind. Subsequent agents go into fresh windows.
-        if resolved_context.is_some() && !auto_spawn.is_empty() {
+        // Step 4.5: Spawn the workflow's full agent team (if any), with or
+        // without --context. The first agent reuses window :0 so we don't
+        // leave an empty default shell behind; subsequent agents go into
+        // fresh windows.
+        if !team.is_empty() {
             let reuse_target = format!("{session_name}:0");
-            feat_common::spawn_auto_spawn_agents(
+            feat_common::spawn_team(
                 params.project_root,
                 &feature_name,
-                auto_spawn,
+                team,
                 params.edit,
                 Some(&reuse_target),
                 params.tmux_server,
@@ -457,7 +463,7 @@ mod tests {
     }
 
     #[test]
-    fn feat_new_with_text_context_enqueues_message_to_auto_spawn_agents() {
+    fn feat_new_with_text_context_enqueues_message_to_brief_agents() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project(dir.path());
@@ -473,7 +479,7 @@ mod tests {
         assert!(!project_path.join("login").join("TASK.md").exists());
 
         // The context is queued as a message in the implementer's inbox
-        // (the sole auto_spawn agent of `implement-and-review`).
+        // (the sole brief_agents recipient of `implement-and-review`).
         let messages_dir = paths::messages_dir(&project_path);
         let summaries = crate::messages::list(&messages_dir, "login", "implementer", None).unwrap();
         assert_eq!(summaries.len(), 1);
@@ -506,7 +512,7 @@ mod tests {
         })
         .unwrap();
 
-        // No TASK.md; content is queued to the auto_spawn agent's inbox.
+        // No TASK.md; content is queued to the brief recipient's inbox.
         assert!(!project_path.join("login").join("TASK.md").exists());
         let messages_dir = paths::messages_dir(&project_path);
         let summaries = crate::messages::list(&messages_dir, "login", "implementer", None).unwrap();
@@ -558,10 +564,11 @@ mod tests {
         })
         .unwrap();
 
-        // Session should have 2 windows: the reused window :0 (now agent) + hook window
+        // implement-and-review spawns the full team (implementer + reviewer).
+        // 3 windows: reused window :0 (implementer) + reviewer + hook window.
         let output =
             tmux::list_windows(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
-        assert_eq!(output, 2);
+        assert_eq!(output, 3);
     }
 
     #[test]
@@ -577,7 +584,7 @@ mod tests {
         })
         .unwrap();
 
-        // The researcher window should exist (research-only's sole auto_spawn agent)
+        // The researcher window should exist (research-only's sole team agent)
         let session = tmux::session_name(&project_name, "login");
         let target = tmux::find_window(server.name(), &session, "researcher").unwrap();
         assert!(target.is_some(), "expected a 'researcher' tmux window");
@@ -953,10 +960,10 @@ mod tests {
     }
 
     #[test]
-    fn feat_new_workflow_without_context_stores_workflow() {
-        // `pm feat new my-feat --workflow X` (no --context) is valid: it
-        // records the workflow in state but spawns nothing. Useful for
-        // when the user wants to spawn the auto-spawn agent later.
+    fn feat_new_workflow_without_context_spawns_idle_team() {
+        // `pm feat new my-feat --workflow X` (no --context) now stands up
+        // the full idle team. It records the workflow in state, spawns
+        // every team agent, but queues no messages — the user drives them.
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project(dir.path());
@@ -971,12 +978,29 @@ mod tests {
         let state = FeatureState::load(&features_dir, "login").unwrap();
         assert_eq!(state.workflow.as_deref(), Some("implement-and-review"));
 
-        // No agent spawned (no context).
+        // Whole team spawned even without --context.
         let agents_dir = paths::agents_dir(&project_path);
         let registry = crate::state::agent::AgentRegistry::load(&agents_dir, "login").unwrap();
         assert!(
-            registry.get("implementer").is_none(),
-            "no auto-spawn without --context"
+            registry.get("implementer").is_some(),
+            "team spawned without --context"
+        );
+        assert!(
+            registry.get("reviewer").is_some(),
+            "team spawned without --context"
+        );
+
+        // But no brief queued to anyone.
+        let messages_dir = paths::messages_dir(&project_path);
+        assert!(
+            crate::messages::list(&messages_dir, "login", "implementer", None)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            crate::messages::list(&messages_dir, "login", "reviewer", None)
+                .unwrap()
+                .is_empty()
         );
     }
 
@@ -1000,10 +1024,10 @@ mod tests {
     }
 
     #[test]
-    fn feat_new_workflow_with_empty_auto_spawn_and_context_errors() {
-        // A workflow with no auto_spawn agents has nobody to deliver
-        // --context to. Treat it the same as `--context` without
-        // `--workflow`: hard error before any side effects.
+    fn feat_new_workflow_with_empty_brief_agents_and_context_errors() {
+        // A workflow with no brief_agents has nobody to deliver --context
+        // to. Treat it the same as `--context` without `--workflow`: hard
+        // error before any side effects.
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project(dir.path());
@@ -1022,8 +1046,8 @@ mod tests {
         let err = result.unwrap_err();
         assert!(matches!(err, PmError::SafetyCheck(_)));
         assert!(
-            err.to_string().contains("empty `auto_spawn`"),
-            "expected empty auto_spawn error, got: {err}",
+            err.to_string().contains("empty `brief_agents`"),
+            "expected empty brief_agents error, got: {err}",
         );
 
         // No partial state should remain.
@@ -1032,9 +1056,9 @@ mod tests {
     }
 
     #[test]
-    fn feat_new_workflow_with_empty_auto_spawn_no_context_succeeds() {
-        // Without --context, an empty auto_spawn is fine — pm just
-        // records the workflow and spawns nothing.
+    fn feat_new_workflow_with_empty_brief_agents_no_context_succeeds() {
+        // Without --context, an empty brief_agents is fine — pm just
+        // records the workflow and spawns nothing (empty team).
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project(dir.path());
@@ -1056,17 +1080,17 @@ mod tests {
     }
 
     #[test]
-    fn feat_new_workflow_with_unknown_auto_spawn_agent_errors() {
+    fn feat_new_workflow_with_unknown_team_agent_errors() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project(dir.path());
 
-        // Inject a workflow whose auto_spawn references a missing agent.
+        // Inject a workflow whose team references a missing agent.
         let workflows = paths::workflows_dir(&project_path).join("broken");
         std::fs::create_dir_all(&workflows).unwrap();
         std::fs::write(
             workflows.join("config.toml"),
-            "description = \"x\"\nauto_spawn = [\"ghost-impl\"]\n",
+            "description = \"x\"\nagents = [\"ghost-impl\"]\nbrief_agents = [\"ghost-impl\"]\n",
         )
         .unwrap();
         std::fs::write(workflows.join("workflow.md"), "# broken\n").unwrap();
@@ -1086,5 +1110,52 @@ mod tests {
         // No partial state should remain.
         let features_dir = paths::features_dir(&project_path);
         assert!(!FeatureState::exists(&features_dir, "login"));
+    }
+
+    #[test]
+    fn feat_new_full_team_spawned_brief_only_to_brief_agents() {
+        // research-implement-review: agents = [researcher, implementer,
+        // reviewer], brief_agents = [researcher]. With --context, all three
+        // spawn but only the researcher is briefed.
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, project_name) = server.setup_project(dir.path());
+
+        feat_new(&FeatNewParams {
+            context: Some("Research the auth flow"),
+            workflow: Some("research-implement-review"),
+            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+        })
+        .unwrap();
+
+        // All three team windows exist.
+        let session = tmux::session_name(&project_name, "login");
+        for agent in ["researcher", "implementer", "reviewer"] {
+            assert!(
+                tmux::find_window(server.name(), &session, agent)
+                    .unwrap()
+                    .is_some(),
+                "expected '{agent}' window"
+            );
+        }
+
+        // Brief queued only to the researcher.
+        let messages_dir = paths::messages_dir(&project_path);
+        assert_eq!(
+            crate::messages::list(&messages_dir, "login", "researcher", None)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            crate::messages::list(&messages_dir, "login", "implementer", None)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            crate::messages::list(&messages_dir, "login", "reviewer", None)
+                .unwrap()
+                .is_empty()
+        );
     }
 }

@@ -50,10 +50,10 @@ pub fn write_initializing_state(
     Ok(state)
 }
 
-/// Enqueue a feature's initial context as a message in each `auto_spawn`
+/// Enqueue a feature's initial context as a message in each `brief_agents`
 /// agent's inbox. The pm Stop hook will deliver it on each agent's empty
-/// first turn. Caller passes the workflow's loaded `auto_spawn` list; the
-/// empty case (no auto-spawn agents) is handled silently.
+/// first turn. Caller passes the workflow's loaded `brief_agents` list; the
+/// empty case (no brief recipients) is handled silently.
 ///
 /// The brief is sent with no sender scope and a `no-reply-brief` sender, so
 /// `pm msg read` shows no reply hint and the agent has no `main` reply
@@ -61,14 +61,14 @@ pub fn write_initializing_state(
 pub fn enqueue_initial_context(
     project_root: &Path,
     feature_name: &str,
-    auto_spawn: &[String],
+    brief_agents: &[String],
     context: &str,
 ) -> Result<()> {
-    if auto_spawn.is_empty() {
+    if brief_agents.is_empty() {
         return Ok(());
     }
     let messages_dir = paths::messages_dir(project_root);
-    for agent in auto_spawn {
+    for agent in brief_agents {
         messages::send(
             &messages_dir,
             feature_name,
@@ -80,7 +80,7 @@ pub fn enqueue_initial_context(
     Ok(())
 }
 
-/// Spawn each `auto_spawn` agent for a newly-created feature.
+/// Spawn the workflow's full agent team for a newly-created feature.
 ///
 /// The first agent reuses `reuse_window` (typically window :0, the default
 /// shell created by `tmux new-session`) to avoid leaving an empty window.
@@ -89,15 +89,15 @@ pub fn enqueue_initial_context(
 /// The pm Stop hook is responsible for delivering any queued messages on
 /// each agent's empty first turn — `spawn_claude_session` itself passes no
 /// initial prompt.
-pub fn spawn_auto_spawn_agents(
+pub fn spawn_team(
     project_root: &Path,
     feature_name: &str,
-    auto_spawn: &[String],
+    team: &[String],
     edit: bool,
     reuse_window: Option<&str>,
     tmux_server: Option<&str>,
 ) -> Result<()> {
-    for (idx, agent) in auto_spawn.iter().enumerate() {
+    for (idx, agent) in team.iter().enumerate() {
         // Only the first agent reuses the default shell window. All
         // subsequent agents get their own fresh window.
         let reuse = if idx == 0 { reuse_window } else { None };
@@ -105,8 +105,8 @@ pub fn spawn_auto_spawn_agents(
             project_root,
             feature: feature_name,
             agent_name: Some(agent.as_str()),
-            // Workflow auto-spawn has no concept of aliasing — the
-            // workflow's `auto_spawn` entry doubles as the definition.
+            // Workflow team spawn has no concept of aliasing — the
+            // workflow's `agents` entry doubles as the definition.
             // `spawn_claude_session` falls back to `agent_name` when this
             // is `None`.
             agent_definition: None,
@@ -121,12 +121,13 @@ pub fn spawn_auto_spawn_agents(
     Ok(())
 }
 
-/// Convenience: load a workflow def, validate `auto_spawn` agents exist,
-/// and return the loaded def. Errors propagate from both steps so callers
-/// can surface the workflow problem before any filesystem side effects.
+/// Convenience: load a workflow def, validate its team agents exist and
+/// that `brief_agents` is a subset of the team, and return the loaded def.
+/// Errors propagate from both steps so callers can surface the workflow
+/// problem before any filesystem side effects.
 pub fn load_and_validate_workflow(project_root: &Path, name: &str) -> Result<WorkflowDef> {
     let def = WorkflowDef::load(project_root, name)?;
-    def.validate_auto_spawn(project_root, name)?;
+    def.validate(project_root, name)?;
     Ok(def)
 }
 
@@ -179,9 +180,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let project_root = dir.path();
         let feature = "login";
-        let auto_spawn = vec!["implementer".to_string()];
+        let brief_agents = vec!["implementer".to_string()];
 
-        enqueue_initial_context(project_root, feature, &auto_spawn, "do the thing").unwrap();
+        enqueue_initial_context(project_root, feature, &brief_agents, "do the thing").unwrap();
 
         // Sender is the no-reply sentinel, with no scope recorded.
         let messages_dir = paths::messages_dir(project_root);
