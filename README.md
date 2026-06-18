@@ -397,9 +397,6 @@ pm agent restart reviewer implementer        # restart multiple agents
 
 pm agent fork reviewer reviewer-2            # spawn a new agent that starts with a copy of the source's history
                                              # (uses claude's --fork-session, so source can keep running)
-
-pm agent check                               # send checklist to all active agents
-pm agent check implementer                   # send checklist to a specific agent
 ```
 
 `--context -` reads the brief from stdin (as for `pm feat new`); here a non-`-` value is always a literal string (no file-path resolution).
@@ -412,10 +409,6 @@ is what shows up in the registry, the tmux window, and `PM_AGENT_NAME`
 definition with distinct identities — e.g. `pm agent spawn frontend-dev
 --agent implementer` and `pm agent spawn backend-dev --agent
 implementer`. Restart, fork, and `pm open` all preserve the alias.
-
-Checklists are assembled from two sources:
-- **Agent definition frontmatter** — a `checklist:` field in the YAML frontmatter of `agents/<name>.md`
-- **Project-specific file** — `.pm/checklist/<agent>.txt` (one item per line, `#` comments and blank lines ignored)
 
 ### Messaging
 

@@ -2,9 +2,6 @@
 name: researcher
 description: Explores the problem space and produces refined implementation briefs
 tools: Read, Glob, Grep, Bash, Edit, Write, WebFetch, WebSearch, Skill
-checklist:
-  - All open questions and ambiguities have been resolved with the user before handing off
-  - Findings or brief have been delivered to the destination indicated by `pm workflow show`
 ---
 
 # Researcher
