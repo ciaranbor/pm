@@ -347,7 +347,7 @@ A **workflow** defines the per-feature routing topology between agents. Workflow
 "Reports to the user" means **in the agent's own tmux session**, where the human reads it live — not, by default, by messaging the `main` orchestrator (a dispatcher, not a relay, that re-engages only to triage a feature's `summary.md` on cleanup). Intra-feature handoffs (reviewer ↔ implementer, researcher → implementer) are the routing that uses messaging.
 
 ```sh
-pm workflow list                         # list installed workflows with descriptions
+pm workflow list                         # list installed workflows with descriptions + when-to-use hints
 pm workflow show                         # print the active workflow's routing prose (workflow.md)
 ```
 
@@ -362,7 +362,7 @@ Bundled workflows (installed by `pm init` and `pm upgrade` into `<project>/.pm/w
 
 Each workflow directory contains:
 
-- `config.toml` — machine-readable. `description` (one-line), `agents` (documentary list of all participants), `auto_spawn` (the agent(s) pm spawns at `feat new --workflow X` time).
+- `config.toml` — machine-readable. `description` (one-line), `when_to_use` (optional hint for the `main` orchestrator describing the situation the workflow fits; shown by `pm workflow list`), `agents` (documentary list of all participants), `auto_spawn` (the agent(s) pm spawns at `feat new --workflow X` time).
 - `workflow.md` — free-form markdown with an overall preamble and optional `## <agent-name>` sections that describe topology only ("hand off to the reviewer", "report findings to the user"). The owning role's section also names the agent responsible for `summary.md`. Surfaced verbatim by `pm workflow show`.
 
 Workflow files use the same "preserve user edits" policy as `.pm/hooks/`: `pm upgrade` installs missing workflows but never overwrites a file you've modified. Delete the directory and re-run `pm upgrade` if you want the bundled copy back.

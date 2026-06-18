@@ -58,6 +58,10 @@ pub fn list_rows(project_root: &Path) -> Result<ListOutput> {
         .max()
         .unwrap_or(0);
 
+    // Indent the optional "use when:" line to align under the description
+    // column: 2 leading spaces + name column + 2 spaces + "— " (2 chars).
+    let hint_indent = " ".repeat(max_name + 6);
+
     let mut rows = Vec::new();
     for (name, def) in &installed.workflows {
         rows.push(format!(
@@ -66,6 +70,9 @@ pub fn list_rows(project_root: &Path) -> Result<ListOutput> {
             def.description,
             width = max_name,
         ));
+        if let Some(hint) = &def.when_to_use {
+            rows.push(format!("{hint_indent}use when: {hint}"));
+        }
     }
 
     let warnings = installed
@@ -171,6 +178,32 @@ mod tests {
         assert!(out.rows[1].contains("beta"));
         assert!(out.rows[1].contains("second"));
         assert!(out.warnings.is_empty());
+    }
+
+    #[test]
+    fn list_rows_renders_when_to_use_hint() {
+        let (_dir, root) = setup_project_root();
+        write_workflow(
+            &root,
+            "demo",
+            "description = \"d\"\nwhen_to_use = \"pick me for X\"\n",
+            "# demo",
+        );
+        let out = list_rows(&root).unwrap();
+        // Description row plus the hint row.
+        assert_eq!(out.rows.len(), 2);
+        assert!(out.rows[0].contains("demo"));
+        assert!(out.rows[1].contains("use when: pick me for X"));
+    }
+
+    #[test]
+    fn list_rows_omits_hint_row_when_absent() {
+        let (_dir, root) = setup_project_root();
+        write_workflow(&root, "demo", "description = \"d\"\n", "# demo");
+        let out = list_rows(&root).unwrap();
+        // No hint → single row, no `use when:` line.
+        assert_eq!(out.rows.len(), 1);
+        assert!(!out.rows.iter().any(|r| r.contains("use when:")));
     }
 
     #[test]

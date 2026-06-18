@@ -17,6 +17,13 @@ This creates a git branch, worktree, and tmux session. A Claude Code
 session is automatically started in the feature's tmux session and the
 `--context` text is delivered to the default agent as its first message.
 
+## Choosing a workflow
+
+Before dispatching, run `pm workflow list` to see installed workflows.
+Each row carries a `use when:` hint describing the situation it fits —
+consult these to pick the workflow that matches how the work should be
+sliced, then pass it with `--workflow <name>`.
+
 Options:
 
 - `--context <text-or-file>` — initial message delivered to the default agent's inbox (required for agent-driven features)

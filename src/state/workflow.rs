@@ -21,6 +21,11 @@ use crate::state::paths;
 pub struct WorkflowDef {
     /// One-line description, shown by `pm workflow list`.
     pub description: String,
+    /// Optional hint, aimed at the `main` orchestrator, describing the
+    /// situation this workflow fits. Surfaced by `pm workflow list`.
+    /// Advisory metadata — a custom workflow needn't provide one.
+    #[serde(default)]
+    pub when_to_use: Option<String>,
     /// All agents involved in the workflow.
     ///
     /// TODO: this is documentary-only in v1 — pm does not validate or
@@ -202,6 +207,22 @@ auto_spawn = ["a"]
         assert_eq!(def.description, "x");
         assert_eq!(def.agents, vec!["a".to_string(), "b".to_string()]);
         assert_eq!(def.auto_spawn, vec!["a".to_string()]);
+        // `when_to_use` is optional advisory metadata; absent parses as None.
+        assert_eq!(def.when_to_use, None);
+    }
+
+    #[test]
+    fn parses_when_to_use_when_present() {
+        let dir = tempdir().unwrap();
+        write_workflow(
+            dir.path(),
+            "demo",
+            r#"description = "x"
+when_to_use = "use it here"
+"#,
+        );
+        let def = WorkflowDef::load(dir.path(), "demo").unwrap();
+        assert_eq!(def.when_to_use.as_deref(), Some("use it here"));
     }
 
     #[test]
