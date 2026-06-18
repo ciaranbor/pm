@@ -2,9 +2,6 @@
 name: implementer
 description: Primary developer implementing feature tasks
 tools: Read, Glob, Grep, Bash, Edit, Write, Skill
-checklist:
-  - All tests pass (run the project's test/lint/build commands)
-  - All changes are committed
 ---
 
 # Implementer

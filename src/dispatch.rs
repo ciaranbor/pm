@@ -442,33 +442,6 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     }
                     Ok(())
                 }
-                AgentCommands::Check { name } => {
-                    let sender = pm::messages::default_user_name();
-                    if let Some(agent_name) = name {
-                        let msg = commands::agent_check::agent_check(
-                            &project_root,
-                            &feature,
-                            &agent_name,
-                            &sender,
-                            None,
-                        )?;
-                        println!("{msg}");
-                    } else {
-                        let (successes, errors) = commands::agent_check::agent_check_all(
-                            &project_root,
-                            &feature,
-                            &sender,
-                            None,
-                        )?;
-                        for msg in &successes {
-                            println!("{msg}");
-                        }
-                        for err in &errors {
-                            eprintln!("error: {err}");
-                        }
-                    }
-                    Ok(())
-                }
                 AgentCommands::Fork { source, name } => {
                     let msg = commands::agent_fork::agent_fork(
                         &project_root,
