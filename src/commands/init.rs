@@ -107,6 +107,8 @@ pub fn init(
     // so the project is immediately ready for agent workflows.
     skills::skills_install_project(path, None)?;
     skills::agents_install_project(path, None)?;
+    // The shared operating baseline appended to every spawned agent.
+    skills::baseline_install_project(path, None)?;
 
     // Install bundled workflow definitions into .pm/workflows/.
     // Workflows hold per-feature routing topology and are referenced

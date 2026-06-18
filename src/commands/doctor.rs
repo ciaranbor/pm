@@ -414,11 +414,20 @@ pub fn diagnose(
 ///
 /// Returns formatted diagnostic lines.
 pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Result<Vec<String>> {
+    // Project-independent capability check: warn loudly if the baseline is
+    // installed but the local `claude` no longer supports the flag pm uses
+    // to apply it (otherwise the regression is silent — agents just lose it).
+    let capability_warning = baseline_capability_warning(project_root);
+
     // diagnose() returns an empty Vec when the project has no features —
     // preserve the historical "No features to check" message.
     let findings = diagnose(project_root, tmux_server, true)?;
     if findings.is_empty() {
-        return Ok(vec!["No features to check".to_string()]);
+        // Status line first, capability warning after — matches the ordering
+        // in the normal path below.
+        let mut lines = vec!["No features to check".to_string()];
+        lines.extend(capability_warning);
+        return Ok(lines);
     }
 
     let pm_dir = paths::pm_dir(project_root);
@@ -502,8 +511,30 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
         )
     };
     lines.insert(0, summary);
+    if let Some(w) = capability_warning {
+        lines.push(w);
+    }
 
     Ok(lines)
+}
+
+/// Warn when the shared agent baseline is installed for this project but the
+/// local `claude` does not advertise `--append-system-prompt-file` — the flag
+/// pm uses to apply the baseline at spawn time. Returns `None` when the
+/// baseline isn't installed (nothing to apply) or claude can't be probed.
+fn baseline_capability_warning(project_root: &Path) -> Option<String> {
+    if !crate::commands::skills::baseline_path(project_root).exists() {
+        return None;
+    }
+    match agent_spawn::claude_supports_append_file() {
+        Some(false) => Some(
+            "baseline — `claude` does not advertise `--append-system-prompt-file`; the \
+             shared agent baseline (main/.claude/pm-baseline.md) will NOT be applied to \
+             spawned agents. Check your Claude Code version."
+                .to_string(),
+        ),
+        _ => None,
+    }
 }
 
 /// Apply a single fix action.
@@ -605,6 +636,16 @@ mod tests {
 
         let lines = doctor(&project_path, false, server.name()).unwrap();
         assert_eq!(lines, vec!["No features to check"]);
+    }
+
+    #[test]
+    fn capability_warning_skipped_when_baseline_absent() {
+        // No `pm-baseline.md` installed → the capability probe is never run
+        // and no warning is produced (so `claude` isn't invoked needlessly).
+        let dir = tempdir().unwrap();
+        let project_root = dir.path();
+        std::fs::create_dir_all(paths::main_worktree(project_root).join(".claude")).unwrap();
+        assert!(baseline_capability_warning(project_root).is_none());
     }
 
     #[test]

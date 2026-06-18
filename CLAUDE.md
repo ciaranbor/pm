@@ -32,8 +32,9 @@ Rust CLI using clap (derive macros). The codebase is organized as:
 - `src/commands/agent_restart.rs` — `pm agent restart` (kill window then respawn, preserving `active = true` and session for `--resume`); accepts multiple names
 - `src/commands/agent_check.rs` — assembles checklists from agent definition frontmatter + project-specific files, sends as message
 - `src/commands/agent_fork.rs` — `pm agent fork <source> <new-name>` spawns a new agent that starts with a copy of the source's conversation history. Implemented via Claude Code's built-in `claude --resume <source.session_id> --fork-session`, which loads the source's transcript but assigns a fresh session id, leaving the source's session file untouched. `SpawnClaudeParams` carries a `fork_session: bool` so other callers default to `false`.
-- `agents/` — bundled agent definitions (reviewer, implementer, researcher, main), embedded via `include_str!`. Frontmatter supports a `checklist:` field (YAML list of items for `pm agent check`) and lists `Skill` in `tools:` so agents can invoke the bundled skills. Job-duty prose only — routing topology is owned by the workflow (see below). The defs also carry a cross-cutting **brevity** directive (all four — keep correspondence aligned to the brief and to the point, trimming padding without suppressing necessary detail) and a cross-cutting **environment/CWD** directive (the three feature agents — runs at the worktree root and stays there; no `cd`, avoid `$(…)`, use absolute paths or `git -C`; the reviewer additionally prescribes a scoped diff-inspection convention).
-- `workflows/` — bundled workflow definitions (implement-and-review, research-implement-review, research-only, pr-review), each a `<name>/{config.toml,workflow.md}` pair embedded via `include_str!`. `pm init`/`pm upgrade` install them into `<project>/.pm/workflows/`. Workflows use a "Preserve" install policy: missing workflows are installed but user-modified ones are never overwritten (same spirit as `.pm/hooks/`). Skills and agents continue to use "Overwrite" (the bundle is authoritative). The shared `BundledItem` system in `src/commands/skills.rs` handles all three kinds.
+- `agents/` — bundled agent definitions (reviewer, implementer, researcher, main), embedded via `include_str!`. Frontmatter supports a `checklist:` field (YAML list of items for `pm agent check`) and lists `Skill` in `tools:` so agents can invoke the bundled skills. **Job-duty prose only** — cross-cutting operating rules (brevity, environment/CWD, messaging heredoc, `pm workflow show`, what "the user" means) live in the shared baseline (see `baseline/` below), not repeated per def. The reviewer keeps a role-specific scoped diff-inspection convention; the feature defs keep `summary.md` guidance; `main.md` owns the `../.pm/` store boundary and dispatcher framing. Routing topology is owned by the workflow (see below).
+- `baseline/` — single bundled `pm-baseline.md` (the shared "operating baseline"), embedded via `include_str!`. `pm init`/`pm upgrade` install it to `main/.claude/pm-baseline.md` (**Overwrite** policy). Every agent pm spawns — including `main` — is launched with `claude --append-system-prompt-file <abs path>`, appended at the single `build_claude_cmd` chokepoint in `agent_spawn.rs` and **only when the file exists** (back-compat: older projects without it spawn unchanged). The content is general/valid for all agents and must **not** mention `.pm`. `skills::baseline_path` resolves the install path; `baseline_append_arg` gates the flag on existence. Regression guard: if a future `claude` drops the flag the baseline would silently go dark, so `agent_spawn::claude_supports_append_file` probes `claude --help` (tolerant of the bracket-collapsed `--append-system-prompt[-file]` form it actually prints) and `pm doctor` warns when the baseline is installed but the flag is unsupported.
+- `workflows/` — bundled workflow definitions (implement-and-review, research-implement-review, research-only, pr-review), each a `<name>/{config.toml,workflow.md}` pair embedded via `include_str!`. `pm init`/`pm upgrade` install them into `<project>/.pm/workflows/`. Workflows use a "Preserve" install policy: missing workflows are installed but user-modified ones are never overwritten (same spirit as `.pm/hooks/`). Skills, agents, and the baseline use "Overwrite" (the bundle is authoritative). The shared `BundledItem` system in `src/commands/skills.rs` handles all four kinds (`BundledKind::{Skill,Agent,Baseline,Workflow}`).
 - `src/commands/claude_export.rs` — `pm claude export` tars Claude session data with a manifest for cross-machine transfer
 - `src/commands/claude_import.rs` — `pm claude import` extracts tarball, resolves local paths from registry, rewrites embedded paths
 - `src/commands/summary.rs` — `pm summary write` writes/overwrites `.pm/summaries/<feature>.md`
@@ -127,10 +128,14 @@ their own tmux session rather than messaging `main` (explicit instructions
 can override). The standing feature→project channel is `summary.md`,
 triaged by the orchestrator on cleanup (the automated "Feature 'X' was
 cleaned up" message is the trigger); completion is the user's decision,
-made by merging, so there's no agent-driven "done" status. Feature agents
-also shouldn't write `../.pm/` (the shared, non-branch-scoped project
-store) — findings go in `summary.md`. This is prose in the agent defs and
-`workflows/*/workflow.md`; intra-feature handoffs stay as messaging.
+made by merging, so there's no agent-driven "done" status. The `feat new`
+brief is delivered non-repliably — `enqueue_initial_context`
+(`feat_common.rs`) sends it via `messages::send` with sender
+`no-reply-brief` and no scope, so `pm msg read` shows no `Reply:` hint and
+the agent has no `main` reply target. The boundary itself now lives in the
+baseline (positive "report to the user") and `main.md` (which owns
+`../.pm/`); intra-feature handoffs stay as messaging, with routing prose in
+`workflows/*/workflow.md`.
 
 ### Feature summary lifecycle
 

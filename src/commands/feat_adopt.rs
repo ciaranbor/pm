@@ -187,7 +187,6 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
                 &feature_name,
                 auto_spawn,
                 resolved,
-                &resolved_base,
             )?;
         }
 

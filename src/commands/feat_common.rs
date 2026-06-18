@@ -54,27 +54,27 @@ pub fn write_initializing_state(
 /// agent's inbox. The pm Stop hook will deliver it on each agent's empty
 /// first turn. Caller passes the workflow's loaded `auto_spawn` list; the
 /// empty case (no auto-spawn agents) is handled silently.
+///
+/// The brief is sent with no sender scope and a `no-reply-brief` sender, so
+/// `pm msg read` shows no reply hint and the agent has no `main` reply
+/// target — the feature→project channel is `summary.md`, not a reply.
 pub fn enqueue_initial_context(
     project_root: &Path,
     feature_name: &str,
     auto_spawn: &[String],
     context: &str,
-    base_scope: &str,
 ) -> Result<()> {
     if auto_spawn.is_empty() {
         return Ok(());
     }
     let messages_dir = paths::messages_dir(project_root);
     for agent in auto_spawn {
-        // Record sender_scope so that `pm msg reply` routes the response
-        // back to the correct scope (main, or a parent feature for stacked features).
-        messages::send_with_scope(
+        messages::send(
             &messages_dir,
             feature_name,
             agent,
-            base_scope,
+            "no-reply-brief",
             context,
-            Some(base_scope),
         )?;
     }
     Ok(())
@@ -166,4 +166,36 @@ pub fn rollback_creation(params: &RollbackParams<'_>) {
         best_effort: true,
         base: params.base,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::agent_read;
+    use tempfile::tempdir;
+
+    #[test]
+    fn brief_is_non_repliable() {
+        let dir = tempdir().unwrap();
+        let project_root = dir.path();
+        let feature = "login";
+        let auto_spawn = vec!["implementer".to_string()];
+
+        enqueue_initial_context(project_root, feature, &auto_spawn, "do the thing").unwrap();
+
+        // Sender is the no-reply sentinel, with no scope recorded.
+        let messages_dir = paths::messages_dir(project_root);
+        let summaries = messages::check(&messages_dir, feature, "implementer").unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].sender, "no-reply-brief");
+
+        // Read output carries no `Reply:` hint — nothing to reply to.
+        let out = agent_read::agent_read(project_root, feature, "implementer", None, None).unwrap();
+        let joined = out.join("\n");
+        assert!(joined.contains("do the thing"));
+        assert!(
+            !joined.contains("Reply:"),
+            "feat-new brief must not show a reply hint, got: {joined}"
+        );
+    }
 }

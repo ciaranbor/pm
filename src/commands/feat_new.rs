@@ -226,7 +226,6 @@ pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
                 &feature_name,
                 auto_spawn,
                 resolved,
-                &resolved_base,
             )?;
         }
 

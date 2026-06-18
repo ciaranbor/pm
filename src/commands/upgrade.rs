@@ -36,6 +36,10 @@ pub fn upgrade_project(project_root: &Path) -> Result<String> {
     let _ = skills::agents_install_project(project_root, None)?;
     updated.push("agents");
 
+    // Install the shared operating baseline (appended to every spawned agent)
+    let _ = skills::baseline_install_project(project_root, None)?;
+    updated.push("baseline");
+
     // Install bundled workflows to .pm/workflows/. User edits to existing
     // files are preserved by `install_in`'s "already up to date / outdated"
     // logic — only bundled files that exactly match a previously installed
@@ -106,6 +110,12 @@ pub fn upgrade_project_dry_run(project_root: &Path) -> Result<Vec<String>> {
 
     // Agents
     actions.extend(skills::agents_install_project_dry_run(project_root, None)?);
+
+    // Baseline
+    actions.extend(skills::baseline_install_project_dry_run(
+        project_root,
+        None,
+    )?);
 
     // Workflows
     actions.extend(skills::workflows_install_project_dry_run(

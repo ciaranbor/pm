@@ -10,6 +10,7 @@ use crate::tmux;
 /// Otherwise launches a plain claude session.
 fn build_claude_cmd(
     agent_name: Option<&str>,
+    append_prompt_file: Option<&str>,
     prompt: Option<&str>,
     resume_session: Option<&str>,
     permission_mode: Option<&str>,
@@ -20,6 +21,14 @@ fn build_claude_cmd(
     if let Some(name) = agent_name {
         parts.push("--agent".to_string());
         parts.push(name.to_string());
+    }
+
+    // Append the shared operating baseline onto the system prompt. Reaches
+    // every spawned agent (including `main`) since this is the single
+    // command-building chokepoint.
+    if let Some(file) = append_prompt_file {
+        parts.push("--append-system-prompt-file".to_string());
+        parts.push(tmux::shell_quote(file));
     }
 
     if let Some(mode) = permission_mode {
@@ -43,6 +52,48 @@ fn build_claude_cmd(
     }
 
     parts.join(" ")
+}
+
+/// Resolve the `--append-system-prompt-file` argument for a project: the
+/// absolute baseline path when `main/.claude/pm-baseline.md` is installed,
+/// or `None` so older projects without it spawn unchanged.
+fn baseline_append_arg(project_root: &Path) -> Option<String> {
+    let baseline = super::skills::baseline_path(project_root);
+    baseline
+        .exists()
+        .then(|| baseline.to_string_lossy().into_owned())
+}
+
+/// Whether `claude --help` text advertises `--append-system-prompt-file`,
+/// the flag pm relies on to apply the shared agent baseline. Split out as a
+/// pure function so it can be unit-tested without invoking `claude`.
+///
+/// `claude --help` collapses the pair into `--append-system-prompt[-file]`
+/// rather than spelling out the `-file` variant, so match either that
+/// bracketed form or a fully expanded `--append-system-prompt-file`. Both
+/// disappear if the file variant is ever removed — which is what we want to
+/// catch.
+fn help_lists_append_file(help: &str) -> bool {
+    help.contains("--append-system-prompt-file") || help.contains("--append-system-prompt[-file]")
+}
+
+/// Probe the installed `claude` for `--append-system-prompt-file` support.
+///
+/// - `Some(true)`  — claude ran and advertises the flag (expected).
+/// - `Some(false)` — claude ran but does NOT advertise it. The baseline
+///   mechanism has regressed: spawned agents would silently lose it.
+/// - `None`        — `claude` not found or `--help` failed; nothing to spawn
+///   against anyway, so callers treat this as "can't tell, don't warn".
+pub fn claude_supports_append_file() -> Option<bool> {
+    let out = std::process::Command::new("claude")
+        .arg("--help")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let help = String::from_utf8_lossy(&out.stdout);
+    Some(help_lists_append_file(&help))
 }
 
 /// Parameters for spawning a Claude session in a tmux window.
@@ -133,9 +184,14 @@ fn spawn_claude_session_with_config(
         (None, None) => None,
     };
 
+    // Append the shared operating baseline only when it's installed, so
+    // older projects without `pm-baseline.md` keep working unchanged.
+    let append_file = baseline_append_arg(params.project_root);
+
     let window_name = params.agent_name.unwrap_or("claude");
     let cmd = build_claude_cmd(
         effective_definition,
+        append_file.as_deref(),
         effective_prompt,
         params.resume_session,
         permission_mode.as_deref(),
@@ -1001,19 +1057,19 @@ mod tests {
         // Note: spawn_claude_session adds a " " sentinel when no prompt
         // is provided for a named agent. build_claude_cmd itself is
         // prompt-agnostic — the sentinel is injected by the caller.
-        let cmd = build_claude_cmd(Some("reviewer"), None, None, None, false);
+        let cmd = build_claude_cmd(Some("reviewer"), None, None, None, None, false);
         assert_eq!(cmd, "claude --agent reviewer");
     }
 
     #[test]
     fn build_cmd_plain_session() {
-        let cmd = build_claude_cmd(None, None, None, None, false);
+        let cmd = build_claude_cmd(None, None, None, None, None, false);
         assert_eq!(cmd, "claude");
     }
 
     #[test]
     fn build_cmd_plain_session_with_permission() {
-        let cmd = build_claude_cmd(None, None, None, Some("acceptEdits"), false);
+        let cmd = build_claude_cmd(None, None, None, None, Some("acceptEdits"), false);
         assert_eq!(cmd, "claude --permission-mode acceptEdits");
     }
 
@@ -1021,6 +1077,7 @@ mod tests {
     fn build_cmd_with_context() {
         let cmd = build_claude_cmd(
             Some("reviewer"),
+            None,
             Some("review the auth module"),
             None,
             None,
@@ -1031,7 +1088,7 @@ mod tests {
 
     #[test]
     fn build_cmd_with_resume() {
-        let cmd = build_claude_cmd(Some("reviewer"), None, Some("abc123"), None, false);
+        let cmd = build_claude_cmd(Some("reviewer"), None, None, Some("abc123"), None, false);
         assert_eq!(cmd, "claude --agent reviewer --resume abc123");
     }
 
@@ -1039,6 +1096,7 @@ mod tests {
     fn build_cmd_with_context_and_resume() {
         let cmd = build_claude_cmd(
             Some("reviewer"),
+            None,
             Some("continue review"),
             Some("abc123"),
             None,
@@ -1052,7 +1110,14 @@ mod tests {
 
     #[test]
     fn build_cmd_with_permission_mode() {
-        let cmd = build_claude_cmd(Some("implementer"), None, None, Some("acceptEdits"), false);
+        let cmd = build_claude_cmd(
+            Some("implementer"),
+            None,
+            None,
+            None,
+            Some("acceptEdits"),
+            false,
+        );
         assert_eq!(
             cmd,
             "claude --agent implementer --permission-mode acceptEdits"
@@ -1060,9 +1125,27 @@ mod tests {
     }
 
     #[test]
+    fn build_cmd_with_append_prompt_file() {
+        // The baseline path is appended right after `--agent` and is
+        // shell-quoted so paths with spaces survive.
+        let cmd = build_claude_cmd(
+            Some("reviewer"),
+            Some("/proj/main/.claude/pm-baseline.md"),
+            None,
+            None,
+            None,
+            false,
+        );
+        assert_eq!(
+            cmd,
+            "claude --agent reviewer --append-system-prompt-file '/proj/main/.claude/pm-baseline.md'"
+        );
+    }
+
+    #[test]
     fn build_cmd_with_fork_session() {
         // `--fork-session` only emits when paired with `--resume`.
-        let cmd = build_claude_cmd(Some("reviewer"), None, Some("abc123"), None, true);
+        let cmd = build_claude_cmd(Some("reviewer"), None, None, Some("abc123"), None, true);
         assert_eq!(
             cmd,
             "claude --agent reviewer --resume abc123 --fork-session"
@@ -1073,7 +1156,45 @@ mod tests {
     fn build_cmd_fork_session_without_resume_is_noop() {
         // `--fork-session` requires `--resume` per claude's CLI; we drop it
         // silently rather than emit a broken command.
-        let cmd = build_claude_cmd(Some("reviewer"), None, None, None, true);
+        let cmd = build_claude_cmd(Some("reviewer"), None, None, None, None, true);
         assert_eq!(cmd, "claude --agent reviewer");
+    }
+
+    #[test]
+    fn help_lists_append_file_detects_flag() {
+        // Fully-expanded form.
+        assert!(help_lists_append_file(
+            "  --append-system-prompt-file <file>  Append a system prompt from a file\n"
+        ));
+        // The bracket-collapsed form `claude --help` actually emits today.
+        assert!(help_lists_append_file(
+            "                                        --append-system-prompt[-file], --add-dir\n"
+        ));
+        // Regressed: only the plain prompt variant remains, no `-file` — the
+        // doctor capability check must flag this.
+        assert!(!help_lists_append_file(
+            "  --append-system-prompt <prompt>  Append a system prompt\n"
+        ));
+    }
+
+    #[test]
+    fn baseline_append_arg_present_iff_file_exists() {
+        let dir = tempdir().unwrap();
+        let project_root = dir.path();
+
+        // No baseline installed → no append arg (back-compat).
+        assert!(baseline_append_arg(project_root).is_none());
+
+        // Install the baseline → append arg points at the absolute path.
+        std::fs::create_dir_all(paths::main_worktree(project_root)).unwrap();
+        crate::commands::skills::baseline_install_project(project_root, None).unwrap();
+
+        let arg = baseline_append_arg(project_root).expect("append arg present once installed");
+        assert_eq!(
+            arg,
+            crate::commands::skills::baseline_path(project_root)
+                .to_string_lossy()
+                .into_owned()
+        );
     }
 }

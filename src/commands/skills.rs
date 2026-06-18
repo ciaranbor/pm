@@ -12,6 +12,9 @@ enum BundledKind {
     Skill,
     Agent,
     Workflow,
+    /// Single shared "operating baseline" file appended to every spawned
+    /// agent's system prompt via `claude --append-system-prompt-file`.
+    Baseline,
 }
 
 /// How `install_in` treats an already-installed item.
@@ -32,6 +35,7 @@ impl BundledKind {
             Self::Skill => "Skill",
             Self::Agent => "Agent",
             Self::Workflow => "Workflow",
+            Self::Baseline => "Baseline",
         }
     }
 
@@ -40,12 +44,13 @@ impl BundledKind {
             Self::Skill => PmError::SkillNotFound(name.to_string()),
             Self::Agent => PmError::AgentNotFound(name.to_string()),
             Self::Workflow => PmError::WorkflowNotFound(name.to_string()),
+            Self::Baseline => PmError::BaselineNotFound(name.to_string()),
         }
     }
 
     fn install_policy(self) -> InstallPolicy {
         match self {
-            Self::Skill | Self::Agent => InstallPolicy::Overwrite,
+            Self::Skill | Self::Agent | Self::Baseline => InstallPolicy::Overwrite,
             Self::Workflow => InstallPolicy::Preserve,
         }
     }
@@ -106,6 +111,15 @@ const BUNDLED_ITEMS: &[BundledItem] = &[
         kind: BundledKind::Agent,
         name: "main",
         files: &[("main.md", include_str!("../../agents/main.md"))],
+    },
+    // Baseline (shared operating prompt appended to every spawned agent)
+    BundledItem {
+        kind: BundledKind::Baseline,
+        name: "pm-baseline",
+        files: &[(
+            "pm-baseline.md",
+            include_str!("../../baseline/pm-baseline.md"),
+        )],
     },
     // Workflows
     BundledItem {
@@ -198,7 +212,9 @@ fn global_dir(kind: BundledKind) -> Result<Option<PathBuf>> {
             };
             Ok(Some(home.join(".claude").join(subdir)))
         }
-        BundledKind::Workflow => Ok(None),
+        // The baseline is project-only — it lives next to the project's
+        // installed agents and is referenced by absolute path at spawn time.
+        BundledKind::Workflow | BundledKind::Baseline => Ok(None),
     }
 }
 
@@ -211,6 +227,8 @@ fn project_dir(project_root: &Path, kind: BundledKind) -> PathBuf {
         BundledKind::Agent => paths::main_worktree(project_root)
             .join(".claude")
             .join("agents"),
+        // Installed alongside agents at `main/.claude/pm-baseline.md`.
+        BundledKind::Baseline => paths::main_worktree(project_root).join(".claude"),
         BundledKind::Workflow => paths::workflows_dir(project_root),
     }
 }
@@ -515,6 +533,37 @@ pub fn agents_install_project_dry_run(
     )
 }
 
+// --- Public API: Baseline ---
+
+/// Absolute path to the installed shared baseline file
+/// (`main/.claude/pm-baseline.md`). Used by `agent_spawn` to pass
+/// `--append-system-prompt-file` when the file exists.
+pub fn baseline_path(project_root: &Path) -> PathBuf {
+    project_dir(project_root, BundledKind::Baseline).join("pm-baseline.md")
+}
+
+pub fn baseline_install_project(project_root: &Path, name: Option<&str>) -> Result<Vec<String>> {
+    install_in(
+        &project_dir(project_root, BundledKind::Baseline),
+        BundledKind::Baseline,
+        name,
+    )
+}
+
+/// Dry-run variant of [`baseline_install_project`]. Returns one `Would …`
+/// line if the baseline would be installed or updated; up-to-date produces
+/// no output.
+pub fn baseline_install_project_dry_run(
+    project_root: &Path,
+    name: Option<&str>,
+) -> Result<Vec<String>> {
+    install_in_dry_run(
+        &project_dir(project_root, BundledKind::Baseline),
+        BundledKind::Baseline,
+        name,
+    )
+}
+
 // --- Public API: Workflows ---
 
 pub fn workflows_list(project_root: Option<&Path>) -> Result<Vec<String>> {
@@ -595,75 +644,49 @@ mod tests {
         }
     }
 
-    const FEATURE_AGENTS: [&str; 3] = ["implementer", "researcher", "reviewer"];
-
-    /// Feature agents must never write the shared project store or outside
-    /// their worktree. Assert each feature agent def states the rule so a
-    /// future edit can't silently drop it.
-    #[test]
-    fn feature_agents_carry_store_worktree_boundary() {
-        for item in items_of_kind(BundledKind::Agent) {
-            if !FEATURE_AGENTS.contains(&item.name) {
-                continue;
-            }
-            let body = item.files[0].1;
-            assert!(
-                body.contains("write outside your own worktree"),
-                "agent '{}' must state the store/worktree boundary",
-                item.name
-            );
-            assert!(
-                body.contains("../.pm/"),
-                "agent '{}' must name `../.pm/` as off-limits",
-                item.name
-            );
-        }
+    fn baseline_body() -> &'static str {
+        items_of_kind(BundledKind::Baseline)
+            .next()
+            .expect("baseline item exists")
+            .files[0]
+            .1
     }
 
-    /// Feature agents report to the user in-session by default, not by
-    /// messaging `main`. Assert each feature agent def states the rule so a
-    /// future edit can't silently drop it.
+    /// The shared baseline owns the environment/CWD guidance that stops the
+    /// emergent `cd "$(git rev-parse …)"` habit — both the no-`cd` and
+    /// no-`$(…)` rules. It reaches every agent via
+    /// `--append-system-prompt-file`, so the feature defs no longer repeat it.
     #[test]
-    fn feature_agents_carry_reporting_boundary() {
-        for item in items_of_kind(BundledKind::Agent) {
-            if !FEATURE_AGENTS.contains(&item.name) {
-                continue;
-            }
-            let body = item.files[0].1;
-            assert!(
-                body.contains("not by messaging `main`"),
-                "agent '{}' must state the reporting boundary",
-                item.name
-            );
-            assert!(
-                body.contains("dispatcher, not a relay"),
-                "agent '{}' must name the dispatcher-not-a-relay framing",
-                item.name
-            );
-        }
+    fn baseline_carries_no_cd_no_subst_guidance() {
+        let body = baseline_body();
+        assert!(
+            body.contains("Do NOT `cd`"),
+            "baseline must state no-cd rule"
+        );
+        assert!(
+            body.contains("$(…)"),
+            "baseline must warn against `$(…)` command substitution"
+        );
     }
 
-    /// Every feature agent def must carry the environment/CWD guidance that
-    /// stops the emergent `cd "$(git rev-parse …)"` habit — both the no-`cd`
-    /// and no-`$(…)` rules. Lock it in so a future edit can't drop it.
+    /// The baseline is general (valid for every agent including `main`), so
+    /// it must not name `.pm` — that store belongs solely to `main`, whose
+    /// own def owns the boundary.
     #[test]
-    fn feature_agents_carry_no_cd_no_subst_guidance() {
-        for item in items_of_kind(BundledKind::Agent) {
-            if !FEATURE_AGENTS.contains(&item.name) {
-                continue;
-            }
-            let body = item.files[0].1;
-            assert!(
-                body.contains("Do NOT `cd`"),
-                "agent '{}' must state the no-cd rule",
-                item.name
-            );
-            assert!(
-                body.contains("$(…)"),
-                "agent '{}' must warn against `$(…)` command substitution",
-                item.name
-            );
-        }
+    fn baseline_is_pm_free_and_main_owns_pm() {
+        assert!(
+            !baseline_body().contains(".pm"),
+            "baseline must not mention `.pm` — it's general to all agents"
+        );
+        let main = items_of_kind(BundledKind::Agent)
+            .find(|i| i.name == "main")
+            .expect("main agent exists")
+            .files[0]
+            .1;
+        assert!(
+            main.contains("../.pm/") && main.contains("own"),
+            "main.md must state `../.pm/` is its store to own"
+        );
     }
 
     /// Terminal routing prose must say "report in your own session", not the
@@ -1117,6 +1140,62 @@ mod tests {
             messages[0].contains("partial") || messages[0].contains("Installed"),
             "expected partial-install message, got: {messages:?}"
         );
+    }
+
+    // --- Baseline-specific tests ---
+
+    #[test]
+    fn baseline_install_writes_to_main_claude() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project_root = tmp.path();
+        fs::create_dir_all(paths::main_worktree(project_root)).unwrap();
+
+        let messages = baseline_install_project(project_root, None).unwrap();
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].contains("Installed Baseline 'pm-baseline'"));
+        assert!(baseline_path(project_root).exists());
+    }
+
+    #[test]
+    fn baseline_install_overwrites_user_edits() {
+        // Baseline uses the Overwrite policy: pm controls its content.
+        let tmp = tempfile::tempdir().unwrap();
+        let project_root = tmp.path();
+        fs::create_dir_all(paths::main_worktree(project_root)).unwrap();
+
+        baseline_install_project(project_root, None).unwrap();
+        fs::write(baseline_path(project_root), "stale").unwrap();
+
+        let second = baseline_install_project(project_root, None).unwrap();
+        assert!(second[0].contains("Installed Baseline"));
+        let content = fs::read_to_string(baseline_path(project_root)).unwrap();
+        assert!(content.contains("Operating baseline"));
+    }
+
+    #[test]
+    fn baseline_install_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project_root = tmp.path();
+        fs::create_dir_all(paths::main_worktree(project_root)).unwrap();
+
+        baseline_install_project(project_root, None).unwrap();
+        let second = baseline_install_project(project_root, None).unwrap();
+        assert!(second[0].contains("already up to date"));
+    }
+
+    #[test]
+    fn baseline_dry_run_reports_install_then_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project_root = tmp.path();
+        fs::create_dir_all(paths::main_worktree(project_root)).unwrap();
+
+        let dry = baseline_install_project_dry_run(project_root, None).unwrap();
+        assert_eq!(dry.len(), 1);
+        assert!(dry[0].contains("Would install Baseline 'pm-baseline'"));
+
+        baseline_install_project(project_root, None).unwrap();
+        let after = baseline_install_project_dry_run(project_root, None).unwrap();
+        assert!(after.is_empty());
     }
 
     #[test]
