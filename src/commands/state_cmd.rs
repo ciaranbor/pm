@@ -42,16 +42,13 @@ fn set_remote(ctx: &RepoContext, url: &str) -> Result<String> {
     Ok(format!("Set {} remote to {url}", ctx.label))
 }
 
-/// Auto-commit and push a state repo.
+/// Auto-commit and (if a remote is configured) push a state repo.
+///
+/// A missing remote is not an error: remote sync is opt-in. Without one,
+/// local changes are still committed and the function exits successfully
+/// with an informational note.
 fn push_repo(ctx: &RepoContext) -> Result<String> {
     require_repo(ctx)?;
-
-    if !git::has_remote(ctx.dir, "origin")? {
-        return Err(PmError::Git(format!(
-            "no remote configured (run `{}`)",
-            ctx.remote_hint
-        )));
-    }
 
     git::add_all(ctx.dir)?;
     let committed = if git::has_staged_changes(ctx.dir)? {
@@ -67,6 +64,21 @@ fn push_repo(ctx: &RepoContext) -> Result<String> {
         false
     };
 
+    if !git::has_remote(ctx.dir, "origin")? {
+        return Ok(if committed {
+            format!(
+                "Committed {} locally; no remote configured (set one with `{}`)",
+                ctx.label, ctx.remote_hint
+            )
+        } else {
+            format!(
+                "{} has no new changes; no remote configured (set one with `{}`)",
+                capitalize(ctx.label),
+                ctx.remote_hint
+            )
+        });
+    }
+
     let branch = git::current_branch(ctx.dir)?;
     git::push(ctx.dir, "origin", &branch)?;
 
@@ -78,14 +90,17 @@ fn push_repo(ctx: &RepoContext) -> Result<String> {
 }
 
 /// Pull state from the remote, auto-committing dirty state first.
+///
+/// A missing remote is not an error: with no remote there's nothing to
+/// pull, so this is an informational no-op.
 fn pull_repo(ctx: &RepoContext) -> Result<String> {
     require_repo(ctx)?;
 
     if !git::has_remote(ctx.dir, "origin")? {
-        return Err(PmError::Git(format!(
-            "no remote configured (run `{}`)",
-            ctx.remote_hint
-        )));
+        return Ok(format!(
+            "No remote configured for {}; nothing to pull (set one with `{}`)",
+            ctx.label, ctx.remote_hint
+        ));
     }
 
     commit_if_dirty(ctx)?;
@@ -99,15 +114,23 @@ fn pull_repo(ctx: &RepoContext) -> Result<String> {
     }
 }
 
-/// Show git status of a state repo.
+/// Show git status of a state repo. A missing remote is noted as plain
+/// info, not treated as an error.
 fn status_repo(ctx: &RepoContext) -> Result<String> {
     require_repo(ctx)?;
     let output = git::status_short(ctx.dir)?;
-    if output.is_empty() {
-        Ok(format!("{} repo is clean", capitalize(ctx.label)))
+    let mut result = if output.is_empty() {
+        format!("{} repo is clean", capitalize(ctx.label))
     } else {
-        Ok(output)
+        output
+    };
+    if !git::has_remote(ctx.dir, "origin")? {
+        result.push_str(&format!(
+            "\n(no remote configured — set one with `{}`)",
+            ctx.remote_hint
+        ));
     }
+    Ok(result)
 }
 
 /// Stage all changes and commit if there's anything to commit.
@@ -817,23 +840,69 @@ mod tests {
     }
 
     #[test]
-    fn push_errors_without_remote() {
+    fn push_without_remote_commits_locally() {
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
         init(&root).unwrap();
 
-        let result = push(&root);
-        assert!(result.is_err());
+        // Make a change with no remote configured.
+        std::fs::write(root.join(".pm").join("features").join("test.toml"), "x").unwrap();
+
+        let msg = push(&root).unwrap();
+        assert!(msg.contains("locally"), "unexpected message: {msg}");
+        assert!(msg.contains("no remote configured"), "unexpected: {msg}");
+
+        // The change should have been committed (status clean).
+        let st = status(&root).unwrap();
+        assert!(st.contains("clean"), "change should be committed: {st}");
     }
 
     #[test]
-    fn pull_errors_without_remote() {
+    fn push_without_remote_no_changes_is_noop() {
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
         init(&root).unwrap();
 
-        let result = pull(&root);
-        assert!(result.is_err());
+        let msg = push(&root).unwrap();
+        assert!(msg.contains("no new changes"), "unexpected: {msg}");
+        assert!(msg.contains("no remote configured"), "unexpected: {msg}");
+    }
+
+    #[test]
+    fn pull_without_remote_is_noop() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        init(&root).unwrap();
+
+        let msg = pull(&root).unwrap();
+        assert!(msg.contains("nothing to pull"), "unexpected: {msg}");
+    }
+
+    #[test]
+    fn status_without_remote_notes_it() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        init(&root).unwrap();
+
+        let msg = status(&root).unwrap();
+        assert!(msg.contains("no remote configured"), "unexpected: {msg}");
+    }
+
+    #[test]
+    fn push_with_configured_remote_surfaces_real_errors() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        init(&root).unwrap();
+
+        // Point origin at a remote that doesn't exist — push must fail.
+        let pm_dir = paths::pm_dir(&root);
+        let bogus = dir.path().join("does-not-exist.git");
+        git::add_remote(&pm_dir, "origin", &bogus.to_string_lossy()).unwrap();
+
+        std::fs::write(root.join(".pm").join("features").join("test.toml"), "x").unwrap();
+
+        let result = push(&root);
+        assert!(result.is_err(), "push to a broken remote should error");
     }
 
     #[test]
@@ -1278,25 +1347,28 @@ mod tests {
     }
 
     #[test]
-    fn global_push_errors_without_remote() {
+    fn global_push_without_remote_commits_locally() {
         let dir = tempdir().unwrap();
         let global = setup_global_dir(dir.path());
         global_init_at(&global, false, None).unwrap();
 
+        std::fs::write(global.join("projects").join("new.toml"), "x").unwrap();
+
         let ctx = global_ctx(&global);
-        let result = push_repo(&ctx);
-        assert!(result.is_err());
+        let msg = push_repo(&ctx).unwrap();
+        assert!(msg.contains("locally"), "unexpected: {msg}");
+        assert!(msg.contains("no remote configured"), "unexpected: {msg}");
     }
 
     #[test]
-    fn global_pull_errors_without_remote() {
+    fn global_pull_without_remote_is_noop() {
         let dir = tempdir().unwrap();
         let global = setup_global_dir(dir.path());
         global_init_at(&global, false, None).unwrap();
 
         let ctx = global_ctx(&global);
-        let result = pull_repo(&ctx);
-        assert!(result.is_err());
+        let msg = pull_repo(&ctx).unwrap();
+        assert!(msg.contains("nothing to pull"), "unexpected: {msg}");
     }
 
     #[test]
