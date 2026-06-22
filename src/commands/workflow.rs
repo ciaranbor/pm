@@ -1,8 +1,10 @@
 //! `pm workflow show` and `pm workflow list`.
 //!
-//! - `show` prints the raw `workflow.md` for the feature's active
-//!   workflow. Used by the bundled `pm-workflow` skill so agents can
-//!   discover their per-feature routing at the start of every turn.
+//! - `show` prints the feature's active `workflow.md` plus an appended
+//!   `## summary.md` brevity note (so the summary owner sees it through
+//!   the command they actually run). Used by the bundled `pm-workflow`
+//!   skill so agents can discover their per-feature routing at the start
+//!   of every turn.
 //! - `list` enumerates installed workflows with one-line descriptions.
 
 use std::path::Path;
@@ -11,6 +13,20 @@ use crate::error::{PmError, Result};
 use crate::state::feature::FeatureState;
 use crate::state::paths;
 use crate::state::workflow::{self, WorkflowDef};
+
+/// Appended to every `pm workflow show` so the `summary.md` brevity rule
+/// reaches the summary owner through the channel they actually use. Lives
+/// here (not in each `workflow.md`) to keep a single source of truth
+/// rather than duplicating the rule across every bundled workflow.
+const SUMMARY_GUIDANCE: &str = "\
+## summary.md
+
+If the active workflow names you the summary owner, keep `summary.md` in
+the worktree root brief and high signal-to-noise — just what the
+orchestrator needs to triage, plus any succinct out-of-scope bugs/ideas.
+No exhaustive change logs or manual-test walkthroughs unless they carry
+durable signal. It's collected when the feature is merged or deleted.
+";
 
 /// Resolve the active workflow for the current scope and return its
 /// `workflow.md` content. Returns `Ok(None)` for scopes with no active
@@ -34,7 +50,16 @@ pub fn show(project_root: &Path, scope: &str) -> Result<Option<String>> {
             md_path.display()
         )));
     }
-    Ok(Some(std::fs::read_to_string(&md_path)?))
+    let mut body = std::fs::read_to_string(&md_path)?;
+    // Append the summary.md brevity guidance so it reaches whoever runs
+    // the command. A single blank line separates it from the workflow's
+    // own prose regardless of how `workflow.md` ends.
+    if !body.ends_with('\n') {
+        body.push('\n');
+    }
+    body.push('\n');
+    body.push_str(SUMMARY_GUIDANCE);
+    Ok(Some(body))
 }
 
 /// Output of [`list_rows`]: stdout rows (successfully-parsed workflows)
@@ -138,7 +163,38 @@ mod tests {
         write_feature_state(&paths::features_dir(&root), "feat", Some("demo"));
 
         let body = show(&root, "feat").unwrap().unwrap();
-        assert_eq!(body, "# demo\nbody");
+        // The workflow.md content comes first, with the summary guidance
+        // appended after a blank-line separator.
+        assert!(body.starts_with("# demo\nbody\n\n"));
+        assert!(body.contains("## summary.md"));
+    }
+
+    #[test]
+    fn show_appends_summary_guidance_once() {
+        let (_dir, root) = setup_project_root();
+        // workflow.md with no trailing newline — guidance must still be
+        // separated by exactly one blank line and appended a single time.
+        write_workflow(&root, "demo", "description = \"d\"\n", "# demo");
+        write_feature_state(&paths::features_dir(&root), "feat", Some("demo"));
+
+        let body = show(&root, "feat").unwrap().unwrap();
+        assert!(body.starts_with("# demo\n\n## summary.md\n"));
+        assert_eq!(body.matches("## summary.md").count(), 1);
+        assert!(body.contains("high signal-to-noise"));
+    }
+
+    #[test]
+    fn show_separates_guidance_when_md_ends_in_newline() {
+        let (_dir, root) = setup_project_root();
+        // The realistic production case: bundled workflow.md files end in
+        // a trailing newline, so the separator must be exactly one blank
+        // line (not two).
+        write_workflow(&root, "demo", "description = \"d\"\n", "# demo\n");
+        write_feature_state(&paths::features_dir(&root), "feat", Some("demo"));
+
+        let body = show(&root, "feat").unwrap().unwrap();
+        assert!(body.starts_with("# demo\n\n## summary.md\n"));
+        assert_eq!(body.matches("## summary.md").count(), 1);
     }
 
     #[test]
