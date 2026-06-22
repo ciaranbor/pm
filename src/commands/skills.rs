@@ -621,24 +621,17 @@ pub fn workflows_install_project_dry_run(
 mod tests {
     use super::*;
 
-    /// Every bundled agent must grant the `Skill` tool in its frontmatter
-    /// `tools:` list — without it Claude Code cannot invoke any skill, so
-    /// messaging/pm/pm-workflow go dark. This is the exact root-cause bug
-    /// the messaging-ergonomics feature fixed; lock it in so a future edit
-    /// can't silently regress it.
+    /// Bundled agents must carry no `tools:` frontmatter line. On the
+    /// `claude --agent` path, omitting `tools` inherits the full tool set
+    /// (incl. `Skill`, so the bundled skills load); a restrictive list would
+    /// silently re-introduce the dark-agent regression. Guard the invariant.
     #[test]
-    fn bundled_agents_grant_skill_tool() {
+    fn bundled_agents_have_no_tools_allowlist() {
         for item in items_of_kind(BundledKind::Agent) {
             let body = item.files[0].1;
-            let tools_line = body
-                .lines()
-                .find(|l| l.trim_start().starts_with("tools:"))
-                .unwrap_or_else(|| {
-                    panic!("agent '{}' has no `tools:` frontmatter line", item.name)
-                });
             assert!(
-                tools_line.split([':', ',']).any(|t| t.trim() == "Skill"),
-                "agent '{}' must list `Skill` in tools, got: {tools_line}",
+                !body.lines().any(|l| l.trim_start().starts_with("tools:")),
+                "agent '{}' must not declare a `tools:` allowlist",
                 item.name
             );
         }
