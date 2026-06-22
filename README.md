@@ -368,7 +368,7 @@ Bundled workflows (installed by `pm init` and `pm upgrade` into `<project>/.pm/w
 Each workflow directory contains:
 
 - `config.toml` — machine-readable. `description` (one-line), `when_to_use` (optional hint for the `main` orchestrator describing the situation the workflow fits; shown by `pm workflow list`), `agents` (the full team pm spawns at `feat new --workflow X` time), `brief_agents` (the subset that receives the `--context` brief; accepts the legacy `auto_spawn` key for back-compat).
-- `workflow.md` — free-form markdown with an overall preamble and optional `## <agent-name>` sections that describe topology only ("hand off to the reviewer", "report findings to the user"). The owning role's section also names the agent responsible for `summary.md`. Surfaced verbatim by `pm workflow show`.
+- `workflow.md` — free-form markdown with an overall preamble and optional `## <agent-name>` sections that describe topology only ("hand off to the reviewer", "report findings to the user"). The owning role's section also names the agent responsible for `summary.md`. Surfaced by `pm workflow show`, which appends a `## summary.md` brevity note for the summary owner (kept single-source in code rather than duplicated across every `workflow.md`).
 
 Workflow files use the same "preserve user edits" policy as `.pm/hooks/`: `pm upgrade` installs missing workflows but never overwrites a file you've modified. Delete the directory and re-run `pm upgrade` if you want the bundled copy back.
 

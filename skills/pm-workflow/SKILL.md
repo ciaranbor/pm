@@ -18,11 +18,3 @@ agent name and follow it.
 To hand off to another agent, use the messaging skill. To respond to
 the user, respond in your own session — no `pm msg` needed; don't report
 progress or completion back to `main` unless you're asked to.
-
-## summary.md
-
-If the active workflow names you the summary owner, keep `summary.md` in
-the worktree root brief and high signal-to-noise — just what the
-orchestrator needs to triage, plus any succinct out-of-scope bugs/ideas.
-No exhaustive change logs or manual-test walkthroughs unless they carry
-durable signal. It's collected when the feature is merged or deleted.
