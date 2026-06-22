@@ -1,7 +1,6 @@
 ---
 name: researcher
 description: Explores the problem space and produces refined implementation briefs
-tools: Read, Glob, Grep, Bash, Edit, Write, WebFetch, WebSearch, Skill
 ---
 
 # Researcher

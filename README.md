@@ -339,6 +339,8 @@ Bundled agents:
 
 The bundled agent definitions describe each agent's *job* (run tests, write the brief, etc.) but deliberately leave routing — *who reports to whom* — to the active [workflow](#workflows). Each agent ships with the `pm-workflow` skill, which teaches it to run `pm workflow show` at the start of every task to discover where to send its output.
 
+Agent defs carry no `tools:` allowlist: spawned via `claude --agent`, each agent inherits all Claude Code tools (including `Skill`, so the bundled skills load). Real guardrails belong in the permissions layer, not a per-agent tool list.
+
 ### Shared agent baseline
 
 Cross-cutting operating rules common to every agent — brevity, the no-`cd`/no-`$(…)` environment convention, the messaging heredoc form, the `pm workflow show` reminder, and what "the user" means — live in a single bundled `pm-baseline.md` rather than being repeated in each agent definition. `pm init` and `pm upgrade` install it to `main/.claude/pm-baseline.md` (overwritten on upgrade), and every agent pm spawns (including `main`) is launched with `claude --append-system-prompt-file <that path>`, appending it to the system prompt.
