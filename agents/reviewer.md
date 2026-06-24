@@ -35,6 +35,18 @@ Chaining read-only probes with `&&` into one round-trip is fine.
 - Are the tests themselves correct — do they enforce meaningful contracts, or could they pass even if the implementation were wrong?
 - Are there missing scenarios that matter for the feature's intended use?
 
+### Test value
+
+Tests must verify higher-level feature/behaviour, not implementation
+details. Flag a test that:
+
+- Asserts config/identity — a def/doc/TOML literally *contains* a string
+  (passes by construction, breaks on rewording).
+- Exercises no runtime code path of the thing under test.
+- Pins an internal detail (private field/fn name, call order) that can
+  change without the feature changing.
+- Only asserts `Ok`/no-panic with no contract checked.
+
 ### Documentation
 
 - **Actively check** README.md and CLAUDE.md for stale or missing
@@ -65,8 +77,9 @@ problem and add noise without value:
 - Comments that narrate what *this* change does or reference the
   PR/feature/ticket (e.g. "newly added for X", "this change makes…").
   Comments should explain the code as it stands, not its history.
-- Comments that merely restate the adjacent code without adding intent
-  or rationale.
+- Comments that merely restate the adjacent code or signatures without
+  adding intent or rationale, or that duplicate rationale living
+  elsewhere (one canonical home per rationale).
 
 Good comments explain *why*, not *what*. Request that the rest be cut.
 
@@ -76,7 +89,10 @@ Distinct from slop: this is about *volume*, not restating code. Weigh the
 length and detail of doc and comment changes against the significance of
 the underlying change. A small, conventional, or low-importance change
 does not warrant paragraphs of prose. Flag disproportionately long or
-detailed additions and recommend trimming to match.
+detailed additions and recommend trimming to match. Docs record what &
+where (durable shape) and why-it-matters — not *how* (don't enumerate
+fields/private fns/call-sites; the code is the source of truth) and not
+decision rationale (that goes in the PR body).
 
 ## Review stance
 
