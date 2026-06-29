@@ -31,31 +31,25 @@ Chaining read-only probes with `&&` into one round-trip is fine.
 
 ### Test correctness and coverage
 
-- Do the tests verify the actual behaviour and functionality we want from the feature, not just exercise the code that happens to exist?
-- Are the tests themselves correct — do they enforce meaningful contracts, or could they pass even if the implementation were wrong?
-- Are there missing scenarios that matter for the feature's intended use?
+Tests must verify the feature's intended behaviour through a real
+production code path — not the code that happens to exist. Check that:
 
-### Test value
+- Each test has an obvious justification as a realistic exercise of a true
+  production path, and enforces a contract that would fail if the
+  implementation were wrong.
+- Coverage matches the feature's intended use — flag missing scenarios that
+  matter.
+- Mocks are minimal; tests don't embed assumptions about internal mechanics
+  or dependency behaviour.
 
-Tests must verify higher-level feature/behaviour, not implementation
-details. Flag a test that:
+Flag a test that:
 
 - Asserts config/identity — a def/doc/TOML literally *contains* a string
   (passes by construction, breaks on rewording).
 - Exercises no runtime code path of the thing under test.
-- Pins an internal detail (private field/fn name, call order) that can
-  change without the feature changing.
+- Pins an internal detail (private field/fn name, call order) or churns just
+  because the code churns (change-detector).
 - Only asserts `Ok`/no-panic with no contract checked.
-
-### Documentation
-
-- **Actively check** README.md and CLAUDE.md for stale or missing
-  documentation. Read the relevant sections — don't just check if a
-  file was touched in the diff.
-- New or changed CLI commands, flags, or behaviour must be reflected
-  in README.md.
-- Architecture changes must be reflected in CLAUDE.md.
-- Are new public APIs or commands documented with inline docs?
 
 ### Code reuse and refactoring
 
@@ -69,30 +63,23 @@ details. Flag a test that:
 - Is it clear, well-structured, and consistent with project conventions?
 - Are there security concerns (injection, path traversal, etc.)?
 
-### Comment quality
+### Documentation and comments
 
-Flag "slop" comments for removal or trimming — they're a recurring
-problem and add noise without value:
+Bias toward less prose — the code is the source of truth; docs and comments
+earn their place only by adding what the code can't show.
 
-- Comments that narrate what *this* change does or reference the
-  PR/feature/ticket (e.g. "newly added for X", "this change makes…").
-  Comments should explain the code as it stands, not its history.
-- Comments that merely restate the adjacent code or signatures without
-  adding intent or rationale, or that duplicate rationale living
-  elsewhere (one canonical home per rationale).
-
-Good comments explain *why*, not *what*. Request that the rest be cut.
-
-### Documentation proportionality
-
-Distinct from slop: this is about *volume*, not restating code. Weigh the
-length and detail of doc and comment changes against the significance of
-the underlying change. A small, conventional, or low-importance change
-does not warrant paragraphs of prose. Flag disproportionately long or
-detailed additions and recommend trimming to match. Docs record what &
-where (durable shape) and why-it-matters — not *how* (don't enumerate
-fields/private fns/call-sites; the code is the source of truth) and not
-decision rationale (that goes in the implementer's in-session report).
+- **Staleness is a bug.** Read the README.md / CLAUDE.md sections touching
+  the changed behaviour and flag any the change has made wrong. Stale beats
+  missing — don't demand new docs for their own sake.
+- **Hunt for removal.** Flag docs/comments to cut or trim: change-narration
+  ("newly added for X", "this change…"), comments restating adjacent code or
+  signatures, rationale duplicated from its canonical home. Question whether
+  a section is important enough to exist at all.
+- **Proportionality.** Weigh length against the change's significance — a
+  small or conventional change doesn't warrant paragraphs. Docs record what
+  & where (durable shape) and why-it-matters — not how (don't enumerate
+  fields/private fns/call-sites) nor decision rationale (that → the
+  implementer's in-session report).
 
 ## Review stance
 
