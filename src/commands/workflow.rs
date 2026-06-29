@@ -21,9 +21,10 @@ use crate::state::workflow::{self, WorkflowDef};
 const SUMMARY_GUIDANCE: &str = "\
 ## summary.md
 
-If the active workflow names you the summary owner, keep `summary.md` in
-the worktree root brief and high signal-to-noise — just what the
-orchestrator needs to triage, plus any succinct out-of-scope bugs/ideas.
+If the active workflow names you the summary owner, create `summary.md`
+in the worktree root and keep it updated — brief and high signal-to-noise
+— just what the orchestrator needs to triage, plus any succinct
+out-of-scope bugs/ideas.
 No exhaustive change logs or manual-test walkthroughs unless they carry
 durable signal. It's collected when the feature is merged or deleted.
 ";
@@ -180,6 +181,8 @@ mod tests {
         let body = show(&root, "feat").unwrap().unwrap();
         assert!(body.starts_with("# demo\n\n## summary.md\n"));
         assert_eq!(body.matches("## summary.md").count(), 1);
+        // so an owner with no file yet knows to write one
+        assert!(body.contains("create `summary.md`"));
         assert!(body.contains("high signal-to-noise"));
     }
 
