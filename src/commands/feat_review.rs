@@ -98,7 +98,12 @@ fn setup_review(
         // Step 2.5: Seed Claude Code settings from main worktree
         claude_settings::seed_feature_claude(project_root, &worktree_path)?;
 
-        // Step 2.6: Enqueue PR-review context to the reviewer agent's inbox.
+        // Step 2.6: this path spawns via `spawn_claude_session` directly,
+        // bypassing `agent_spawn`'s validation chokepoint — validate here too,
+        // before queuing context so a failure leaves no dead-letter.
+        agent_spawn::validate_definition_resolves(project_root, "reviewer")?;
+
+        // Step 2.7: Enqueue PR-review context to the reviewer agent's inbox.
         // The pm Stop hook will deliver it on the reviewer's empty first turn.
         let messages_dir = paths::messages_dir(project_root);
         let sender = crate::messages::default_user_name();

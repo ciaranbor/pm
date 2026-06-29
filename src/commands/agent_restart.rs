@@ -147,6 +147,13 @@ mod tests {
         let worktree = root.join(feature_name);
         std::fs::create_dir_all(&worktree).unwrap();
 
+        // Agent definition stubs so pre-spawn validation resolves.
+        let agents = paths::main_worktree(&root).join(".claude/agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        for name in ["reviewer", "implementer"] {
+            std::fs::write(agents.join(format!("{name}.md")), "# stub").unwrap();
+        }
+
         let session_name = tmux::session_name(&project_name, feature_name);
         tmux::create_session(server.name(), &session_name, &worktree).unwrap();
 

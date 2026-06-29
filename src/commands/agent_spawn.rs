@@ -1,10 +1,38 @@
 use std::path::Path;
 
-use crate::error::Result;
+use crate::error::{PmError, Result};
 use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
 use crate::state::paths;
 use crate::state::project::ProjectConfig;
+use crate::state::workflow;
 use crate::tmux;
+
+/// Pre-spawn check that the claude agent definition resolves to a real file,
+/// so a typo'd or nonexistent `--agent <def>` fails loudly instead of printing
+/// "Spawned …" over a tmux window whose `claude --agent` errors out
+/// immediately — the spawn is fire-and-forget, so that failure is invisible.
+///
+/// The `_with_home` split exists so resolution can be unit-tested against an
+/// explicit home rather than the process's `$HOME`.
+pub(crate) fn validate_definition_resolves(project_root: &Path, definition: &str) -> Result<()> {
+    validate_definition_resolves_with_home(project_root, definition, dirs::home_dir().as_deref())
+}
+
+fn validate_definition_resolves_with_home(
+    project_root: &Path,
+    definition: &str,
+    home: Option<&Path>,
+) -> Result<()> {
+    if workflow::definition_exists(project_root, definition, home) {
+        return Ok(());
+    }
+    let (main_def, global_def) = workflow::definition_paths(project_root, definition, home);
+    Err(PmError::AgentDefinitionMissing {
+        agent: definition.to_string(),
+        main_def,
+        global_def,
+    })
+}
 
 /// Build a claude command. If `agent_name` is provided, uses `--agent`.
 /// Otherwise launches a plain claude session.
@@ -315,15 +343,6 @@ pub fn agent_spawn(
     let config = ProjectConfig::load(&pm_dir)?;
     let session_name = tmux::session_name(&config.project.name, feature);
 
-    // Always queue context as a message before touching the session. That
-    // way it survives a failed spawn as a dead letter and auto-arrives on
-    // the empty first turn.
-    if let Some(ctx) = context {
-        let messages_dir = paths::messages_dir(project_root);
-        let sender = crate::messages::default_user_name();
-        crate::messages::send(&messages_dir, feature, agent_name, &sender, ctx)?;
-    }
-
     let registry = AgentRegistry::load(&agents_dir, feature)?;
 
     // Resolve the effective definition. Caller-provided override wins;
@@ -336,6 +355,25 @@ pub fn agent_spawn(
             .get(agent_name)
             .and_then(|e| e.agent_definition.clone())
     });
+
+    // The definition that will actually reach `claude --agent` (the resolved
+    // definition, else the display name). Validation guards the spawn, not
+    // message delivery — so it runs only on the (re)spawn paths below, never on
+    // the already-active no-op.
+    let effective_definition = resolved_definition.as_deref().unwrap_or(agent_name);
+
+    // Queue context as a message. On spawn paths it's queued after validation
+    // (so a bad def leaves no dead letter) but before the tmux spawn (so it
+    // survives a later spawn failure as a dead letter and auto-arrives on the
+    // empty first turn).
+    let queue_context = || -> Result<()> {
+        if let Some(ctx) = context {
+            let messages_dir = paths::messages_dir(project_root);
+            let sender = crate::messages::default_user_name();
+            crate::messages::send(&messages_dir, feature, agent_name, &sender, ctx)?;
+        }
+        Ok(())
+    };
 
     // Use _with_config helper to avoid reloading config in spawn_claude_session
     let spawn = |prompt: Option<&str>, resume: Option<&str>| {
@@ -364,8 +402,11 @@ pub fn agent_spawn(
             Some(entry.session_id.clone())
         };
 
-        // If the window still exists, the agent is already running.
+        // Window still exists → agent is running. No respawn, so skip
+        // validation: a healthy agent shouldn't go unreachable just because its
+        // def file moved since it started. Context is still queued.
         if let Some(target) = tmux::find_window(tmux_server, &session_name, agent_name)? {
+            queue_context()?;
             let msg = if context.is_some() {
                 format!("Agent '{agent_name}' already active in {target} — sent context as message")
             } else {
@@ -375,6 +416,8 @@ pub fn agent_spawn(
         }
 
         // Agent existed but window is gone — respawn.
+        validate_definition_resolves(project_root, effective_definition)?;
+        queue_context()?;
         let window_target = spawn(None, resume_id.as_deref())?;
 
         let (outcome, msg) = if resume_id.is_some() {
@@ -391,8 +434,10 @@ pub fn agent_spawn(
         return Ok((outcome, msg));
     }
 
-    // New agent, no positional prompt — the Stop hook blocks until any
-    // queued context is available, then tells the agent to read it.
+    // New agent, no positional prompt — the Stop hook blocks until any queued
+    // context is available, then tells the agent to read it.
+    validate_definition_resolves(project_root, effective_definition)?;
+    queue_context()?;
     let window_target = spawn(None, None)?;
 
     Ok((
@@ -472,6 +517,17 @@ mod tests {
     use chrono::Utc;
     use tempfile::tempdir;
 
+    /// Write stub `.claude/agents/<name>.md` files in the main worktree so
+    /// `agent_spawn`'s pre-spawn definition check resolves in tests that
+    /// build a project by hand (rather than via `agents_install_project`).
+    fn write_agent_defs(project_root: &Path, names: &[&str]) {
+        let dir = paths::main_worktree(project_root).join(".claude/agents");
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in names {
+            std::fs::write(dir.join(format!("{name}.md")), "# stub").unwrap();
+        }
+    }
+
     fn setup_project(dir: &Path, server: &TestServer) -> (String, String) {
         let root = dir.to_path_buf();
         let pm_dir = root.join(".pm");
@@ -510,6 +566,9 @@ mod tests {
         // Create worktree directory (simulated)
         let worktree = root.join(feature_name);
         std::fs::create_dir_all(&worktree).unwrap();
+
+        // Install agent definition stubs so pre-spawn validation resolves.
+        write_agent_defs(&root, &["reviewer", "tester", "implementer"]);
 
         // Create tmux session for the feature
         let session_name = tmux::session_name(&project_name, feature_name);
@@ -1050,6 +1109,149 @@ mod tests {
             server.name(),
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn spawn_nonexistent_definition_errors_and_leaves_nothing() {
+        // A typo'd agent name must fail loudly — and leave no registry entry
+        // and no tmux window behind (the bug: success was reported over a
+        // window whose `claude --agent` immediately errored).
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+
+        let result = agent_spawn(
+            dir.path(),
+            &feature,
+            "no-such-agent",
+            None,
+            None,
+            false,
+            server.name(),
+        );
+        assert!(matches!(
+            result.unwrap_err(),
+            PmError::AgentDefinitionMissing { .. }
+        ));
+
+        assert!(
+            tmux::find_window(server.name(), &session_name, "no-such-agent")
+                .unwrap()
+                .is_none()
+        );
+        let agents_dir = paths::agents_dir(dir.path());
+        let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        assert!(registry.get("no-such-agent").is_none());
+    }
+
+    #[test]
+    fn spawn_with_context_for_missing_definition_queues_no_message() {
+        // Validation runs before context is enqueued, so a bad spawn leaves
+        // no dead-letter message in the inbox.
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (_session_name, feature) = setup_project(dir.path(), &server);
+
+        let result = agent_spawn(
+            dir.path(),
+            &feature,
+            "no-such-agent",
+            None,
+            Some("do the thing"),
+            false,
+            server.name(),
+        );
+        assert!(result.is_err());
+
+        let messages_dir = paths::messages_dir(dir.path());
+        let summaries = crate::messages::check(&messages_dir, &feature, "no-such-agent").unwrap();
+        assert!(summaries.is_empty(), "no dead-letter should be queued");
+    }
+
+    #[test]
+    fn context_reaches_active_agent_even_if_definition_removed() {
+        // Regression: validation guards the *spawn*, not message delivery. An
+        // already-running agent stays reachable even if its def file was
+        // moved/removed since it started — the no-op path must not validate.
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+
+        setup_active_agent(&server, dir.path(), &session_name, &feature, "reviewer");
+
+        let def = paths::main_worktree(dir.path()).join(".claude/agents/reviewer.md");
+        std::fs::remove_file(&def).unwrap();
+
+        let (outcome, msg) = agent_spawn(
+            dir.path(),
+            &feature,
+            "reviewer",
+            None,
+            Some("keep going"),
+            false,
+            server.name(),
+        )
+        .unwrap();
+        assert_eq!(outcome, SpawnOutcome::AlreadyActive);
+        assert!(msg.contains("sent context as message"));
+
+        let messages_dir = paths::messages_dir(dir.path());
+        let summaries = crate::messages::check(&messages_dir, &feature, "reviewer").unwrap();
+        assert_eq!(summaries.len(), 1);
+    }
+
+    #[test]
+    fn spawn_validates_effective_definition_not_display_name() {
+        // `pm agent spawn frontend-dev --agent ghost-def`: the display name is
+        // arbitrary, but the *definition* passed to `claude --agent` must
+        // resolve. `ghost-def` doesn't, so this fails.
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+
+        let result = agent_spawn(
+            dir.path(),
+            &feature,
+            "frontend-dev",
+            Some("ghost-def"),
+            None,
+            false,
+            server.name(),
+        );
+        assert!(matches!(
+            result.unwrap_err(),
+            PmError::AgentDefinitionMissing { .. }
+        ));
+        assert!(
+            tmux::find_window(server.name(), &session_name, "frontend-dev")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn validate_definition_resolves_with_home_pass_and_fail() {
+        let dir = tempdir().unwrap();
+        let project_root = dir.path();
+        let home = tempdir().unwrap();
+
+        // Missing everywhere; present only in the global agents dir; present
+        // only in the main worktree (home = None) — each must resolve correctly.
+        assert!(matches!(
+            validate_definition_resolves_with_home(project_root, "impl", Some(home.path()))
+                .unwrap_err(),
+            PmError::AgentDefinitionMissing { .. }
+        ));
+
+        let global = home.path().join(".claude/agents");
+        std::fs::create_dir_all(&global).unwrap();
+        std::fs::write(global.join("impl.md"), "# stub").unwrap();
+        validate_definition_resolves_with_home(project_root, "impl", Some(home.path())).unwrap();
+
+        let main = paths::main_worktree(project_root).join(".claude/agents");
+        std::fs::create_dir_all(&main).unwrap();
+        std::fs::write(main.join("other.md"), "# stub").unwrap();
+        validate_definition_resolves_with_home(project_root, "other", None).unwrap();
     }
 
     #[test]

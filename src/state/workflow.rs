@@ -86,12 +86,7 @@ impl WorkflowDef {
         let team = self.effective_team();
         for agent in team {
             if !definition_exists(project_root, agent, home) {
-                let main_def = paths::main_worktree(project_root)
-                    .join(".claude/agents")
-                    .join(format!("{agent}.md"));
-                let global_def = home
-                    .map(|h| h.join(".claude/agents").join(format!("{agent}.md")))
-                    .unwrap_or_else(|| PathBuf::from("~/.claude/agents/<name>.md"));
+                let (main_def, global_def) = definition_paths(project_root, agent, home);
                 return Err(PmError::WorkflowAgentMissing {
                     workflow: workflow_name.to_string(),
                     agent: agent.clone(),
@@ -180,24 +175,32 @@ pub fn list_installed_with_errors(project_root: &Path) -> Result<InstalledWorkfl
     Ok(InstalledWorkflows { workflows, errors })
 }
 
-/// True iff an agent definition file is resolvable from the main worktree
-/// or the supplied home directory. The feature worktree is intentionally
-/// not consulted — at `feat new` time it doesn't exist yet.
-fn definition_exists(project_root: &Path, agent: &str, home: Option<&Path>) -> bool {
+/// The two candidate locations for an agent definition file: the main
+/// worktree's `.claude/agents/<name>.md`, then the global
+/// `<home>/.claude/agents/<name>.md`. When `home` is `None` the global path
+/// is a `~/...` placeholder used only for error messages. Shared so callers
+/// resolving `--agent <def>` report the same paths the validator checks.
+pub fn definition_paths(
+    project_root: &Path,
+    agent: &str,
+    home: Option<&Path>,
+) -> (PathBuf, PathBuf) {
     let filename = format!("{agent}.md");
     let main_def = paths::main_worktree(project_root)
         .join(".claude/agents")
         .join(&filename);
-    if main_def.exists() {
-        return true;
-    }
-    if let Some(home) = home {
-        let global_def = home.join(".claude/agents").join(&filename);
-        if global_def.exists() {
-            return true;
-        }
-    }
-    false
+    let global_def = home
+        .map(|h| h.join(".claude/agents").join(&filename))
+        .unwrap_or_else(|| PathBuf::from("~/.claude/agents/<name>.md"));
+    (main_def, global_def)
+}
+
+/// True iff an agent definition file is resolvable from the main worktree
+/// or the supplied home directory. The feature worktree is intentionally
+/// not consulted — at `feat new` time it doesn't exist yet.
+pub fn definition_exists(project_root: &Path, agent: &str, home: Option<&Path>) -> bool {
+    let (main_def, global_def) = definition_paths(project_root, agent, home);
+    main_def.exists() || (home.is_some() && global_def.exists())
 }
 
 #[cfg(test)]
