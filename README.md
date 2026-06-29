@@ -53,8 +53,8 @@ EOF
 
 `pm feat new` creates the branch, worktree, and tmux session (`myapp/login`).
 `--context` requires `--workflow <name>` so pm knows which agent team to
-spawn and who to brief. See `pm feat new --help` for `--base`, `--no-edit`,
-`--feature-name`, and slash-name handling.
+spawn and who to brief. See `pm feat new --help` for stacking, naming, and
+editor options.
 
 ## Concepts
 
@@ -66,10 +66,9 @@ a feature worktree stacks on it (stacked features merge into their parent, not
 main).
 
 The lifecycle: `pm feat new` → work → optionally `pm feat pr create` /
-`pm feat ready` / `pm feat review` → `pm feat merge` (cleans up by default;
-`--keep` to retain). `pm feat list`, `info`, `switch`, `rename`, `delete`,
-and `sync` (reconcile status with GitHub PR state) round it out — see
-`pm feat --help`.
+`pm feat ready` / `pm feat review` → `pm feat merge` (cleans up by default).
+Inspection and housekeeping subcommands (`list`, `info`, `switch`, `rename`,
+`delete`, `sync`) round out `pm feat` — see `pm feat --help`.
 
 Each project is bootstrapped with **lifecycle hooks** under `.pm/hooks/`:
 `post-create.sh` (after `pm feat new`), `post-merge.sh` (after `pm feat merge`),
@@ -231,22 +230,19 @@ See `pm state --help` and `pm restore --help`.
 
 ## Other commands
 
-All support `--help`:
+These round out the tool; each has its full flag reference under `--help`:
 
-- `pm open` / `pm close [--all]` — recreate or tear down a project's tmux
-  sessions without touching state (e.g. after a reboot). `pm open` also runs
-  `pm doctor`'s checks and warns about unfixable drift.
-- `pm status` / `pm doctor [--fix]` — project dashboard; audit and auto-fix
-  drift between pm state and git/tmux/GitHub reality.
-- `pm claude settings|migrate|export|import` — manage and transfer Claude Code
-  settings and session data across worktrees and machines.
-- `pm claude skills|agents|hooks` and `pm upgrade [--all]` / `pm self-update` —
-  install and upgrade bundled assets.
-- `pm completions <shell>` — generate shell completion scripts (zsh, bash,
-  fish, elvish).
+- `pm open` / `pm close` — recreate or tear down a project's tmux sessions
+  without touching state (e.g. after a reboot). `pm open` also runs `pm
+  doctor`'s checks and warns about unfixable drift.
+- `pm status` / `pm doctor` — project dashboard; audit and auto-fix drift
+  between pm state and git/tmux/GitHub reality.
+- `pm claude` — manage and transfer Claude Code settings, session data, and
+  bundled assets across worktrees and machines.
+- `pm upgrade` / `pm self-update` — update bundled assets and the binary.
+- `pm completions <shell>` — generate shell completion scripts.
 - `pm list` — list registered projects.
-- `pm delete [--force --yes]` — full project teardown: kills sessions, removes
-  `.pm/`, drops the registry entry (`--force` also removes worktrees/branches).
+- `pm delete` — full project teardown (sessions, `.pm/`, registry entry).
   Destructive — distinct from `pm close`, which only tears down sessions.
 
 ## Development

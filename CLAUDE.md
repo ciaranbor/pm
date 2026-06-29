@@ -6,34 +6,25 @@
 
 ## Architecture
 
-Rust CLI using clap (derive macros). It's a thin dispatch over a few
-well-separated layers — the shape matters more than any file list, and the
-module name almost always matches the command (`commands/agent_fork.rs` ↔
-`pm agent fork`), so use the tree to locate code:
+Rust CLI using clap (derive macros) — a thin dispatch over a few
+well-separated layers. The module name almost always matches the command
+(`commands/agent_fork.rs` ↔ `pm agent fork`), so navigate by the tree; what
+follows is only what the tree *doesn't* tell you.
 
-- **CLI surface** — `cli.rs` (clap derive structs/enums), `main.rs` (parse →
-  dispatch → error handling), `dispatch.rs` (`run()` + scope helpers).
-- **Command handlers** — `commands/`, one module per command group (feat,
-  claude, agent, msg, workflow, state, init, open/close, doctor, …). Handlers
-  orchestrate; they don't shell out directly.
-- **External-tool wrappers** — `git/` (submodules init/branch/worktree/
-  remote/status), `tmux.rs`, `gh.rs`. All shelling-out is funnelled here.
-- **State** (`state/`) — TOML for the project registry (`ProjectEntry`, with
-  optional `repo_url`/`state_remote` for cross-machine restore), `FeatureState`
-  (references a workflow by name), config, the per-feature `AgentEntry`
-  registry, and `WorkflowDef`. `~/.config/pm/` is the global registry;
-  `<project>/.pm/` is per-project state. Config precedence: project
-  `.pm/config.toml` > global > unlimited.
-- **Messaging** (`messages/`) — the file-based inbox queue (see below).
-- **Bundled assets** — `agents/`, `baseline/`, `workflows/`, `skills/`,
-  embedded via `include_str!` and installed by `pm init`/`pm upgrade`. The
-  shared `BundledItem` system (`commands/skills.rs`) installs all four kinds
-  under one of two policies: **Overwrite** (skills/agents/baseline — the bundle
-  is authoritative) or **Preserve** (workflows — never clobber user edits, like
-  `.pm/hooks/`).
-- **Support** — `hooks.rs` (lifecycle hooks), `error.rs` (`PmError`,
-  `thiserror`), `path_utils.rs` (`~/` ↔ `$HOME` registry portability),
-  `testing.rs` (shared tmux test server, RAII cleanup).
+- **Layering** — `cli.rs`/`main.rs`/`dispatch.rs` parse and dispatch,
+  `commands/` handlers orchestrate, and all shelling-out is funnelled through
+  the `git/`, `tmux.rs`, `gh.rs` wrappers — never inline in a handler.
+- **State** (`state/`, TOML) — `~/.config/pm/` is the global registry,
+  `<project>/.pm/` is per-project state; config precedence is project >
+  global > unlimited. `ProjectEntry` optionally records `repo_url`/`state_remote`
+  for cross-machine restore.
+- **Bundled assets** — `agents/`, `baseline/`, `workflows/`, `skills/` are
+  embedded via `include_str!` and installed by `pm init`/`pm upgrade` under one
+  of two policies: **Overwrite** (skills/agents/baseline — the bundle is
+  authoritative) or **Preserve** (workflows, like `.pm/hooks/` — never clobber
+  user edits).
+- **Portability** — `path_utils.rs` swaps `~/` ↔ `$HOME` so registry state
+  moves between machines.
 
 The sections below document the design decisions you can't recover by reading
 the tree — these are the invariants to preserve.
