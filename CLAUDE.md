@@ -43,8 +43,7 @@ the tree — these are the invariants to preserve.
 pm agents are never-idle message processors, not one-shot scripts. This
 is implemented with a Claude Code **Stop hook** (`pm claude hooks stop`,
 installed by `pm claude hooks install` into `main/.claude/settings.json`). The
-hook blocks until messages are available by calling `agent_wait`
-directly, then returns:
+hook blocks until the agent's inbox has unread messages, then returns:
 
 ```json
 {"decision": "block", "reason": "You have new messages. Run `pm msg read` …"}
@@ -70,23 +69,24 @@ Initial context delivery differs by path:
   running).**
 - `pm msg send <to> <body>` is a near-pure queue: it **never spawns a new
   agent**, errors when the recipient isn't a registered active agent, but
-  **heals a dead tmux window of an active agent** (queues, then calls
-  `agent_spawn` which is a no-op if the window is alive). This applies to
-  cross-*scope* sends (`--scope`/`--upstream`, same project) too — they go
-  through the same `agent_send` path and heal a dead window just like
-  same-scope. Only cross-*project* sends (`agent_send_cross_project`, a
-  separate function) truly never spawn — they assume the target agent in
-  the foreign project already exists.
+  **heals a dead tmux window of an active agent** (queues, then respawns
+  only if the window is gone). This applies to cross-*scope* sends
+  (`--scope`/`--upstream`, same project) too — they heal a dead window just
+  like same-scope. Only cross-*project* sends truly never spawn — they assume
+  the target agent in the foreign project already exists.
 
 For spawn paths, the first turn is empty; the Stop hook blocks until the
 queued message is available, then delivers it. The first-turn flow is
 identical to every subsequent turn.
 
+`pm msg reply` targets the last-read cross-scope message automatically — the
+sender, scope, and project are recorded each time a message is read — so an
+agent can reply without re-addressing.
+
 `--context` (and `pr create/edit --body`) take a `-` sentinel meaning
 "read the body from stdin", so long briefs can be fed via heredoc without
-an approval prompt. Resolved in `feat_new::resolve_context` (shared, also
-does file/literal) and `feat_new::resolve_stdin_context` (stdin-only, for
-`agent spawn`).
+an approval prompt. (`--context` also accepts a literal string or a file
+path; `agent spawn`'s is stdin-or-literal only.)
 
 ### Workflows vs agents
 
@@ -114,20 +114,19 @@ contract: every team member must have a resolvable definition file (under
 
 ### Agent registry and the shared baseline
 
-`AgentEntry.active: bool` (in `state/agent.rs`) is the single source of truth
-for an agent's lifecycle: `agent spawn` sets it true, `agent stop` false, and
-spawn-all/list/check/send read it. `agent_definition: Option<String>` decouples
-the registry key (display name / tmux window / `PM_AGENT_NAME`) from the
+An agent registry entry's `active` flag is the single source of truth for its
+lifecycle: `agent spawn` sets it true, `agent stop` false, and the
+spawn/list/check/send paths read it. A separate `agent_definition` decouples the
+registry key (display name / tmux window / `PM_AGENT_NAME`) from the
 `claude --agent` definition, so several agents can run off one definition;
 restart, fork, `pm open`, and the dead-window heal all preserve the alias.
 
-The shared baseline (`baseline/pm-baseline.md`) is appended to every spawned
-agent's prompt via `claude --append-system-prompt-file`, gated on the file
-existing at the single `build_claude_cmd` chokepoint (older projects without it
-spawn unchanged). Its content is general to all agents and must **not** mention
-`.pm`. If a future `claude` drops the flag the baseline would silently go dark,
-so `claude_supports_append_file` probes `claude --help` and `pm doctor` warns
-when the baseline is installed but unsupported.
+The shared baseline is appended to every spawned agent's prompt via
+`claude --append-system-prompt-file`, gated on the file existing at a single
+spawn chokepoint (older projects without it spawn unchanged). Its content is
+general to all agents and must **not** mention `.pm`. If a future `claude` drops
+the flag the baseline would silently go dark, so pm probes `claude --help` at
+spawn and `pm doctor` warns when the baseline is installed but unsupported.
 
 ### Information store vs messaging
 
@@ -136,8 +135,7 @@ Two different things, don't collapse them:
 - **Information store** (`.pm/docs/`) is for **project-level persistent
   knowledge** — todos, issues, ideas, findings, and any other categories
   defined in `categories.toml`. The default set bootstrapped by `pm init`
-  and `pm upgrade` is todo/issues/ideas/findings (the hardcoded
-  `DEFAULT_CATEGORIES` in `src/commands/docs.rs`). Tracked by the `.pm/`
+  and `pm upgrade` is todo/issues/ideas/findings. Tracked by the `.pm/`
   state repo, managed by the orchestrator agent. Use `pm state push` to
   commit and push changes. The orchestrator deletes completed
   tasks/issues/ideas rather than marking them done (git history is the
@@ -158,10 +156,9 @@ can override). The standing feature→project channel is `summary.md`,
 triaged by the orchestrator on cleanup (the automated "Feature 'X' was
 cleaned up" message is the trigger); completion is the user's decision,
 made by merging, so there's no agent-driven "done" status. The `feat new`
-brief is delivered non-repliably — `enqueue_initial_context`
-(`feat_common.rs`) sends it via `messages::send` with sender
-`no-reply-brief` and no scope, so `pm msg read` shows no `Reply:` hint and
-the agent has no `main` reply target. The boundary itself now lives in the
+brief is delivered non-repliably — sent with sender `no-reply-brief` and no
+scope, so `pm msg read` shows no `Reply:` hint and the agent has no `main`
+reply target. The boundary itself now lives in the
 baseline (positive "report to the user") and `main.md` (which owns
 `../.pm/`); intra-feature handoffs stay as messaging, with routing prose in
 `workflows/*/workflow.md`.
@@ -172,10 +169,12 @@ Each feature maintains a `summary.md` in its worktree root as a living
 document, kept brief and high signal-to-noise — just what the
 orchestrator needs to triage, plus succinct out-of-scope bugs/ideas.
 Each workflow's `workflow.md` names the single agent who owns
-`summary.md`, stated in that role's section; format/brevity guidance
-lives in the `pm-workflow` skill (not in the agent defs). On `feat
-delete`, `summary.md` is collected to `.pm/summaries/<feature>.md` so the
-orchestrator can triage its contents into project-level docs.
+`summary.md`, stated in that role's section; format/brevity guidance is
+single-sourced in the `pm workflow show` command, which appends it to that
+output (not duplicated in the agent defs, the `workflow.md` files, or the
+`pm-workflow` skill body). On `feat delete`, `summary.md` is collected to
+`.pm/summaries/<feature>.md` so the orchestrator can triage its contents into
+project-level docs.
 
 ## Development
 

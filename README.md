@@ -245,6 +245,9 @@ All support `--help`:
 - `pm completions <shell>` — generate shell completion scripts (zsh, bash,
   fish, elvish).
 - `pm list` — list registered projects.
+- `pm delete [--force --yes]` — full project teardown: kills sessions, removes
+  `.pm/`, drops the registry entry (`--force` also removes worktrees/branches).
+  Destructive — distinct from `pm close`, which only tears down sessions.
 
 ## Development
 

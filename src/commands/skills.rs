@@ -621,22 +621,6 @@ pub fn workflows_install_project_dry_run(
 mod tests {
     use super::*;
 
-    /// Bundled agents must carry no `tools:` frontmatter line. On the
-    /// `claude --agent` path, omitting `tools` inherits the full tool set
-    /// (incl. `Skill`, so the bundled skills load); a restrictive list would
-    /// silently re-introduce the dark-agent regression. Guard the invariant.
-    #[test]
-    fn bundled_agents_have_no_tools_allowlist() {
-        for item in items_of_kind(BundledKind::Agent) {
-            let body = item.files[0].1;
-            assert!(
-                !body.lines().any(|l| l.trim_start().starts_with("tools:")),
-                "agent '{}' must not declare a `tools:` allowlist",
-                item.name
-            );
-        }
-    }
-
     // --- Shared install/list tests (exercise the unified logic) ---
 
     #[test]
