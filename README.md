@@ -2,11 +2,19 @@
 
 Terminal-based project manager built around tmux and git worktrees.
 
+pm gives every feature its own git branch, worktree, and tmux session, and
+optionally a team of Claude Code agents that talk to each other through a
+file-based message queue. You dispatch work; the agents implement, review,
+and report back in their own sessions.
+
+Every command supports `--help` for its full flag reference — this README
+covers the mental model and the parts you can't get from `--help`.
+
 ## Requirements
 
 - tmux
 - git
-- [gh](https://cli.github.com/) (for `pm feat pr create/edit`, `pm feat review`, `pm feat sync`)
+- [gh](https://cli.github.com/) — for the PR/review/sync commands (`pm feat pr`, `pm feat review`, `pm feat sync`)
 
 ## Install
 
@@ -14,58 +22,28 @@ Terminal-based project manager built around tmux and git worktrees.
 cargo install --path .
 ```
 
-Installs the `pm` binary to `~/.cargo/bin/`. Ensure this is in your `PATH`.
+Installs the `pm` binary to `~/.cargo/bin/` (ensure it's on your `PATH`).
 
 ## Quick start
 
-### Option A: New project from scratch
+Create a project — three ways, pick one:
 
 ```sh
-pm init ~/projects/myapp
-cd ~/projects/myapp/main
+pm init ~/projects/myapp                                   # new repo
+pm init ~/projects/myapp --git https://github.com/org/myapp.git  # clone
+pm register ~/code/myapp --name myapp                      # adopt an existing repo (--move to restructure in place)
 ```
 
-Creates a project root with a git repo in `main/`, a `.pm/` state directory, and installs bundled hooks, skills, agent definitions, and the shared agent baseline into `main/.claude/`.
-
-### Option B: Clone a remote repo
-
-```sh
-pm init ~/projects/myapp --git https://github.com/org/myapp.git
-cd ~/projects/myapp/main
-```
-
-Creates a project root with a clone in `main/` and a `.pm/` state directory. The default branch is auto-detected from the remote.
-
-### Option C: Register an existing repo (symlink)
+Each gives you a project root with the repo in `main/`, a `.pm/` state
+directory, and bundled hooks/skills/agents/baseline installed into
+`main/.claude/`. Then `cd <root>/main` and create a feature:
 
 ```sh
-pm register ~/code/myapp --name myapp
-cd ~/code/myapp-pm/main
-```
+pm feat new login                                          # bare feature, no agents
+pm feat new login --workflow implement-and-review --context "Implement login per #42"
+pm feat new child --base parent                            # stack on another feature
 
-Creates a wrapper directory (`myapp-pm/`) with a symlink to the original repo as `main/`. The original repo is untouched.
-
-### Option D: Register an existing repo (move)
-
-```sh
-pm register ~/code/myapp --name myapp --move
-cd ~/code/myapp/main
-```
-
-Restructures the repo in-place: moves it into `main/` within a new wrapper at the same path. No `-pm` suffix needed since the original directory becomes the wrapper.
-
-### Create a feature
-
-```sh
-pm feat new login
-pm feat new login --workflow implement-and-review --context "Implement login page per issue #42"
-pm feat new login --workflow research-implement-review --context path/to/brief.md
-pm feat new child --base parent      # stack on another feature
-pm feat new login --workflow implement-and-review --context "task description" --no-edit
-pm feat new ciaran/login                        # feature name: ciaran-login
-pm feat new ciaran/login --feature-name eval    # feature name: eval
-
-# Long multi-line brief via stdin (--context -); no approval prompt
+# Long brief via stdin (--context -), no approval prompt:
 pm feat new login --workflow implement-and-review --context - <<'EOF'
 Implement the login page.
 - validate the email field
@@ -73,601 +51,203 @@ Implement the login page.
 EOF
 ```
 
-Creates a git branch, worktree, and tmux session (`myapp/login`). With `--context`, you must also pass `--workflow <name>` so pm knows which agent(s) to spawn and where to deliver the message. The Stop hook (installed by `pm init`, see below) blocks until the queued message is available, then tells the agent to read it. Auto-accept edits is on by default; use `--no-edit` to disable. With `--base`, branches from the specified branch instead of the default. When `--base` is omitted, the current branch is detected from CWD — so running `pm feat new child` from within a feature worktree automatically stacks on that feature.
-
-`--context` accepts literal text, a path to a file, or `-` to read the body from stdin (handy for long briefs via heredoc, as shown above, with no approval prompt).
-
-`--workflow <name>` is also valid without `--context` — pm records the workflow in feature state and stands up the workflow's full idle team (no brief is queued). You drive the agents yourself afterwards.
-
-Run `pm workflow list` to see installed workflows. See [Workflows](#workflows) below.
-
-Branch names with slashes are supported — slashes are automatically replaced with dashes for the feature name (used for the worktree directory, state file, and tmux session). Use `--feature-name` to override the derived name.
-
-### List features
-
-```sh
-pm feat list
-```
-
-Shows all features with status, plus branch (if different from name), base, and PR when set.
-
-### Show feature details
-
-```sh
-pm feat info login              # show details for a specific feature
-pm feat info                    # show details for current feature (detected from CWD)
-```
-
-Displays all state fields: name, status, branch, worktree, base, pr, context, created, last_active. Empty optional fields are omitted.
-
-### Switch to a feature
-
-```sh
-pm feat switch login             # direct switch
-pm feat switch                   # interactive picker (tmux display-menu)
-```
-
-### Merge a feature
-
-```sh
-pm feat merge login             # merge and clean up (default)
-pm feat merge --keep            # merge but keep the feature (worktree, session, branch)
-```
-
-Merges the feature into its base branch (defaults to main; stacked features merge into their parent) and cleans up by default (kills session, removes worktree, deletes branch, removes state). Use `--keep` to preserve the feature after merging. Blocks if either the feature or base worktree has uncommitted changes. Always creates a merge commit (`--no-ff`). Feature name is detected from CWD if omitted. If the branch was already merged (e.g. via GitHub PR), the local merge is skipped. If a merge conflict occurs, the merge is aborted and the base worktree is left clean.
-
-### Lifecycle hooks
-
-Every project is bootstrapped with two hook scripts:
-
-- `.pm/hooks/post-create.sh` — runs in the feature's tmux session after `pm feat new`
-- `.pm/hooks/post-merge.sh` — runs in the base branch's tmux session after `pm feat merge`
-- `.pm/hooks/restore.sh` — runs in each session when `pm open` recreates it (e.g. after reboot)
-
-Hooks run asynchronously in a dedicated `hook` window via `tmux send-keys` — pm does not block on their completion. The hook window is reused across invocations.
-
-`post-create.sh` and `post-merge.sh` are created with defaults on `pm init`. `restore.sh` is opt-in — create it yourself for lightweight recovery tasks like reopening an editor.
-
-Edit the scripts to add your own logic (install deps, run migrations, deploy, etc.). Removing a hook script disables it.
-
-### Create a PR
-
-```sh
-pm feat pr create login         # create a draft PR for the feature
-pm feat pr create --ready       # create a non-draft PR (feature detected from CWD)
-```
-
-Pushes the branch to origin, then creates a GitHub PR via `gh`. Draft by default; use `--ready` for a non-draft PR. If a PR already exists for the branch, links it instead of creating a new one. For stacked features, the PR targets the base branch instead of main. Respects `.github/pull_request_template.md` if present. Stores the PR number in feature state. Draft PRs keep `wip` status; `--ready` sets status to `review`. Feature name is detected from CWD if omitted.
-
-`--body` (on both `pr create` and `pr edit`) accepts literal text, a path to a file, or `-` to read the body from stdin — e.g. `pm feat pr create --body - <<'EOF' … EOF` for a long multi-line description.
-
-### Edit a PR
-
-```sh
-pm feat pr edit --title "new title"          # update title
-pm feat pr edit --body "new description"     # update body
-pm feat pr edit --title "t" --body "b"       # update both
-pm feat pr edit login --title "new title"    # specify feature name
-```
-
-Updates the title and/or body of the feature's linked PR via `gh pr edit`. At least one of `--title` or `--body` is required. Prints confirmation with the PR URL. Fails if the feature has no linked PR — run `pm feat pr create` first.
-
-### Mark a PR as ready for review
-
-```sh
-pm feat ready                   # mark current feature's PR as ready
-pm feat ready login             # mark a specific feature's PR as ready
-```
-
-Pushes latest commits, then calls `gh pr ready` to remove draft status. Sets feature status to `review`. Fails if the feature has no linked PR — run `pm feat pr create` first.
-
-### Review a PR
-
-```sh
-pm feat review 42                                    # by PR number
-pm feat review https://github.com/owner/repo/pull/42 # by URL
-```
-
-Fetches the PR commits, creates a worktree and tmux session (`myapp/review-42`), and enqueues the PR title, URL, and body as the first message in the `reviewer` agent's inbox. The feature is tagged with the `pr-review` workflow so `pm workflow show` returns the right routing prose. Spawns a read-only reviewer Claude session; the Stop hook blocks until the queued context is available, then tells the agent to read it. Feature status is set to `review` and the PR is linked automatically. Works for both same-repo and fork PRs. Use `pm feat delete` to clean up when done.
-
-### Sync feature statuses with GitHub
-
-```sh
-pm feat sync                    # sync all features with their linked PRs
-pm feat sync login              # sync a specific feature
-```
-
-Queries GitHub for each feature's PR state and updates the local status: draft PRs set `wip`, ready PRs set `review`, merged PRs set `merged`, closed PRs set `stale`. Reports changes and suggests `pm feat delete` for merged features. Feature name is detected from CWD if omitted; if not in a feature worktree, syncs all features.
-
-### Rename a feature
-
-```sh
-pm feat rename auth --old-name login  # rename feature "login" to "auth"
-pm feat rename new-name              # rename current feature (detected from CWD)
-```
-
-Renames the git branch, moves the worktree directory, renames the tmux session, and updates the state file. Blocks if the new name already exists as a feature or branch. Local only — does not touch remote branches or linked PRs.
-
-### Delete a feature
-
-```sh
-pm feat delete login             # with safety checks
-pm feat delete --force           # delete current feature, skip safety checks
-```
-
-Safety checks block deletion if the feature has uncommitted changes or commits not merged into its base branch (defaults to main; stacked features check against their parent). If the feature has a linked PR that was merged on GitHub, the merge and unpushed checks are skipped (handles squash merges) and the post-merge hook is triggered. Untracked files trigger a warning but don't block. Feature name is detected from CWD if omitted.
-
-### Delete a project
-
-```sh
-pm delete                        # delete current project (with confirmation)
-pm delete --project myapp        # delete a specific project by name
-pm delete --force --yes          # skip safety checks and confirmation
-```
-
-Full project teardown: safety-checks all features, kills all tmux sessions, removes the `.pm/` directory, and removes the global registry entry. Blocks if any feature has uncommitted changes or unmerged commits unless `--force` is passed. Without `--force`, worktree directories and git branches are left on disk so you can continue using them as plain git repos. With `--force`, worktrees and branches are removed.
-
-### Open a project
-
-```sh
-pm open                          # open/reconstruct sessions for current project
-```
-
-Creates tmux sessions for the main worktree and any active features that are missing sessions, then connects you to the project's main session. Useful after a reboot or tmux server restart. If you run it from inside an existing tmux client it switches that client to the main session; otherwise it attaches a new client.
-
-Before recreating sessions, `pm open` runs `pm doctor`'s diagnostic checks and prints warnings for any state drift it can't fix on its own (orphaned features, missing branches, PR drift, missing hooks, stuck-initializing features, missing workflows). Issues that open *will* fix automatically (missing tmux sessions, dead agent windows) are filtered out so the warnings stay focused on real problems. Run `pm doctor --fix` to address anything reported.
-
-### Close a project
-
-```sh
-pm close                         # kill all tmux sessions for the current project
-pm close --all                   # kill sessions for every registered project
-```
-
-Tears down all tmux sessions (main + features) without deleting any state, files, or worktrees. This is the counterpart to `pm open` — use it when you want to free up tmux sessions without losing any project state. Idempotent; no error if sessions are already gone.
-
-With `--all`, pm sweeps every project in the global registry, closing each the same way. A project with no live sessions (or a missing directory) is skipped, and a failure on one project is reported without aborting the rest.
-
-### Claude Code settings management
-
-Manage Claude Code settings (`settings.json`, `settings.local.json`) across worktrees. The main worktree's `.claude/` directory is the source of truth — new features are seeded from it automatically.
-
-```sh
-pm claude settings list              # show .claude/ settings (works from main or feature worktree)
-pm claude settings push              # push current feature's .claude/ settings to main
-pm claude settings pull              # pull main's .claude/ settings into current feature
-pm claude settings diff              # show differences between main and feature
-pm claude settings merge             # union merge feature settings into main (main wins on conflicts)
-pm claude settings merge --ours      # union merge, feature wins on conflicts
-```
-
-Feature name is detected from CWD if omitted.
-
-### Claude Code session migration
-
-When registering or adopting repos, Claude Code sessions are automatically migrated from the old path to the new worktree path. Sessions are copied (not moved) so originals remain accessible.
-
-```sh
-pm claude migrate --from /old/path   # migrate sessions from old path to CWD
-pm feat adopt login --from /old/path          # adopt branch and migrate sessions
-pm feat adopt login --context "..." --no-edit # adopt without auto-accept edits
-pm feat adopt ciaran/eval --feature-name eval # adopt with custom feature name
-```
-
-`pm register` (both symlink and move modes) migrates sessions automatically — no extra flags needed.
-
-### Claude Code session export/import
-
-Transfer Claude Code sessions between machines:
-
-```sh
-pm claude export                     # export sessions for the current project
-pm claude export --all               # export sessions for all registered projects
-pm claude export -o backup.tar.gz    # custom output path
-pm claude import backup.tar.gz      # import sessions from a tarball
-```
-
-Export creates a tarball containing session data and a manifest mapping project names to paths. Import looks up each project by name in the local registry and rewrites embedded paths if the project lives at a different location on the target machine.
-
-### Project status dashboard
-
-```sh
-pm status                        # dashboard for current project
-pm status --project myapp        # dashboard for a specific project by name
-```
-
-Shows a project overview: name, root path, feature count, and a table of all features with their status. For features with linked PRs, displays the PR number and GitHub state (open, merged, closed, draft). Also surfaces any health issues that `pm doctor` would flag.
-
-### Diagnose project health
-
-```sh
-pm doctor                        # check all features in current project
-pm doctor --project myapp        # check a specific project by name
-pm doctor --fix                  # auto-fix clear-cut issues
-```
-
-Audits every feature for drift between pm state and external reality:
-
-- Worktree directory exists on disk
-- Git worktree registration matches
-- Branch exists locally
-- Tmux session exists (for active features)
-- Status not stuck on "initializing"
-- Referenced workflow directory exists (under `.pm/workflows/`)
-- PR status matches (calls `gh` for features with linked PRs)
-
-It also runs one capability check: if the [shared agent baseline](#shared-agent-baseline) is installed but the local `claude` no longer advertises `--append-system-prompt-file` (the flag pm uses to apply it), `pm doctor` warns that spawned agents won't receive the baseline. Skipped when the baseline isn't installed or `claude` isn't found.
-
-With `--fix`, auto-resolves clear-cut issues: removes orphaned state files (no worktree, no branch), recreates missing worktree directories (when the branch exists), cleans up stuck-initializing features, recreates missing tmux sessions, and updates status to match GitHub PR state. Ambiguous issues (e.g. missing directory with stale git worktree registration) are skipped with a message.
-
-### Bundled skills
-
-pm ships with Claude Code skills that can be installed to a project or globally to `~/.claude/skills/`.
-
-```sh
-pm claude skills list                  # show available skills and install status
-pm claude skills install               # install all bundled skills to project (main/.claude/skills/)
-pm claude skills install pm            # install a specific skill to project
-pm claude skills install --global      # install all bundled skills to ~/.claude/skills/
-pm claude skills install pm --global   # install a specific skill globally
-pm claude skills pull                  # pull main's skills into current feature
-pm claude skills pull my-feat          # pull into a specific feature
-```
-
-Project-level skills are seeded to new features automatically. Use `pm claude skills pull` to sync skills added or updated on main after the feature was created. The `pm` skill teaches Claude Code agents how to dispatch features via `pm feat new` and `pm feat adopt`.
-
-### Bundled agents
-
-pm ships with Claude Code agent definitions that can be installed to a project or globally to `~/.claude/agents/`.
-
-```sh
-pm claude agents list                 # show available agents and install status
-pm claude agents install              # install all bundled agents to project (main/.claude/agents/)
-pm claude agents install implementer  # install a specific agent to project
-pm claude agents install --global     # install all bundled agents to ~/.claude/agents/
-pm claude agents uninstall reviewer   # uninstall a specific agent from the project
-pm claude agents uninstall --all      # uninstall all bundled agents from the project
-```
+`pm feat new` creates the branch, worktree, and tmux session (`myapp/login`).
+`--context` requires `--workflow <name>` so pm knows which agent team to
+spawn and who to brief. See `pm feat new --help` for `--base`, `--no-edit`,
+`--feature-name`, and slash-name handling.
+
+## Concepts
+
+### Features and worktrees
+
+A **feature** is a branch + worktree + tmux session, tracked in `.pm/`. Omit
+`--base` and the base is detected from your CWD, so `pm feat new child` inside
+a feature worktree stacks on it (stacked features merge into their parent, not
+main).
+
+The lifecycle: `pm feat new` → work → optionally `pm feat pr create` /
+`pm feat ready` / `pm feat review` → `pm feat merge` (cleans up by default;
+`--keep` to retain). `pm feat list`, `info`, `switch`, `rename`, `delete`,
+and `sync` (reconcile status with GitHub PR state) round it out — see
+`pm feat --help`.
+
+Each project is bootstrapped with **lifecycle hooks** under `.pm/hooks/`:
+`post-create.sh` (after `pm feat new`), `post-merge.sh` (after `pm feat merge`),
+and an opt-in `restore.sh` (when `pm open` recreates a session). They run
+asynchronously in a dedicated `hook` tmux window. Edit them to install deps,
+run migrations, reopen an editor, etc.; remove a script to disable it.
+
+### Workflows and agents
+
+Two decoupled layers:
+
+- **Agent definitions** (`main/.claude/agents/<name>.md`) describe an agent's
+  *job* — what it does, how it evaluates work. They carry no routing.
+- **Workflows** (`<project>/.pm/workflows/<name>/`) define the per-feature
+  *topology* — who hands off to whom, who reports to the user.
+
+This lets the same `implementer` play different routing roles in different
+features without forking its definition. Every agent ships with the
+`pm-workflow` skill and runs `pm workflow show` at the start of each task to
+discover its routing. `pm workflow list` shows installed workflows.
 
 Bundled agents:
 
-| Agent | Description |
-|-------|-------------|
-| **implementer** | Primary developer — drains its inbox, implements each message, runs tests, addresses reviewer feedback |
-| **reviewer** | Code reviewer — diffs the branch against base, evaluates quality/correctness, sends feedback |
-| **researcher** | Read-only explorer — analyses the problem space and sends a refined implementation brief to the implementer |
+| Agent | Job |
+|-------|-----|
+| **implementer** | Drains its inbox, implements each message, runs tests, addresses reviewer feedback |
+| **reviewer** | Diffs the branch against base, evaluates quality/correctness, sends feedback |
+| **researcher** | Read-only; explores the problem space and sends a refined brief to the implementer |
 
-The bundled agent definitions describe each agent's *job* (run tests, write the brief, etc.) but deliberately leave routing — *who reports to whom* — to the active [workflow](#workflows). Each agent ships with the `pm-workflow` skill, which teaches it to run `pm workflow show` at the start of every task to discover where to send its output.
-
-Agent defs carry no `tools:` allowlist: spawned via `claude --agent`, each agent inherits all Claude Code tools (including `Skill`, so the bundled skills load). Real guardrails belong in the permissions layer, not a per-agent tool list.
-
-### Shared agent baseline
-
-Cross-cutting operating rules common to every agent — brevity, the no-`cd`/no-`$(…)` environment convention, the messaging heredoc form, the `pm workflow show` reminder, and what "the user" means — live in a single bundled `pm-baseline.md` rather than being repeated in each agent definition. `pm init` and `pm upgrade` install it to `main/.claude/pm-baseline.md` (overwritten on upgrade), and every agent pm spawns (including `main`) is launched with `claude --append-system-prompt-file <that path>`, appending it to the system prompt.
-
-### Workflows
-
-A **workflow** defines the per-feature routing topology between agents. Workflows live under `<project>/.pm/workflows/<name>/` and are referenced by name in `FeatureState.workflow`. They're a thin layer over the agent definitions: agents stay generic ("implementer implements"); workflows decide where their output goes ("implementer hands off to reviewer", or "implementer reports back to the user").
-
-"Reports to the user" means **in the agent's own tmux session**, where the human reads it live — not, by default, by messaging the `main` orchestrator (a dispatcher, not a relay, that re-engages only to triage a feature's `summary.md` on cleanup). Intra-feature handoffs (reviewer ↔ implementer, researcher → implementer) are the routing that uses messaging.
-
-```sh
-pm workflow list                         # list installed workflows with descriptions + when-to-use hints
-pm workflow show                         # print the active workflow's routing prose (workflow.md)
-```
-
-Bundled workflows (installed by `pm init` and `pm upgrade` into `<project>/.pm/workflows/`):
+Bundled workflows:
 
 | Workflow | Routing |
 |----------|---------|
 | **implement-and-review** | Implementer drains tasks; reviewer ↔ implementer loop |
 | **research-implement-review** | Researcher → implementer → reviewer |
 | **research-only** | Researcher explores and reports findings to the user |
-| **pr-review** | Reviewer reviews a checked-out PR and reports to the user (used internally by `pm feat review`) |
+| **pr-review** | Reviewer reviews a checked-out PR and reports to the user (used by `pm feat review`) |
 
-Each workflow directory contains:
+Each workflow directory holds a `config.toml` (`description`, optional
+`when_to_use` hint, `agents` = the full team spawned at `feat new` time,
+`brief_agents` = the subset that receives the `--context` brief) and a
+`workflow.md` (free-form routing prose, with `## <agent>` sections; names the
+`summary.md` owner). Workflows use a **preserve** install policy — `pm upgrade`
+adds missing ones but never overwrites your edits. Agents, skills, and the
+baseline are **overwritten** (the bundle is authoritative).
 
-- `config.toml` — machine-readable. `description` (one-line), `when_to_use` (optional hint for the `main` orchestrator describing the situation the workflow fits; shown by `pm workflow list`), `agents` (the full team pm spawns at `feat new --workflow X` time), `brief_agents` (the subset that receives the `--context` brief; accepts the legacy `auto_spawn` key for back-compat).
-- `workflow.md` — free-form markdown with an overall preamble and optional `## <agent-name>` sections that describe topology only ("hand off to the reviewer", "report findings to the user"). The owning role's section also names the agent responsible for `summary.md`. Surfaced by `pm workflow show`, which appends a `## summary.md` brevity note for the summary owner (kept single-source in code rather than duplicated across every `workflow.md`).
+"Reports to the user" means **in the agent's own tmux session**, where you read
+it live — not by messaging the `main` orchestrator. `main` is a dispatcher, not
+a relay: it spins up features and steps back, re-engaging only to triage a
+feature's `summary.md` on cleanup. Intra-feature handoffs (reviewer ↔
+implementer, researcher → implementer) are what use messaging.
 
-Workflow files use the same "preserve user edits" policy as `.pm/hooks/`: `pm upgrade` installs missing workflows but never overwrites a file you've modified. Delete the directory and re-run `pm upgrade` if you want the bundled copy back.
+Agent defs carry no `tools:` allowlist — spawned via `claude --agent`, each
+inherits all Claude Code tools (including `Skill`). Real guardrails belong in
+the permissions layer (`[agents.permissions]` in `.pm/config.toml`), not a
+per-agent tool list.
 
-`pm feat new --context` requires `--workflow <name>` so pm knows which team to spawn and which agents to brief. `pm feat new --workflow X` without `--context` is also valid: it records the workflow in state and stands up the full idle team (you drive them afterwards). The `--agent` flag and `[agents] default` config field have been removed in favour of workflows.
+Manage agents with `pm agent spawn|list|stop|restart|delete|fork`. `spawn
+<name> --agent <def>` decouples the display/messaging identity from the claude
+definition, so you can run several agents off one definition (e.g.
+`frontend-dev` and `backend-dev` both `--agent implementer`). `fork` starts a
+new agent from a copy of another's history. See `pm agent --help`.
 
-### Agent management
+### Agents as never-idle message processors
 
-```sh
-pm agent spawn reviewer                      # spawn the reviewer agent in a new tmux window
-pm agent spawn implementer --edit            # spawn with acceptEdits permission
-pm agent spawn implementer --context "..."   # spawn with initial context/prompt
-pm agent spawn implementer --context - <<'EOF' # long multi-line brief via stdin
-...full brief...
-EOF
-pm agent spawn frontend-dev --agent implementer  # display name 'frontend-dev', launched as `claude --agent implementer`
-pm agent spawn                               # respawn all previously active agents
+`pm init` installs a Claude Code **Stop hook** into
+`main/.claude/settings.json`. After every turn it blocks until the agent has
+unread messages (calling `pm msg wait` internally), then returns a `block`
+decision that Claude Code delivers as a continuation prompt. The agent reads
+the message, processes it, the turn ends, and the hook fires again. This turns
+every pm-managed agent into a never-idle processor: `--context` at feature
+creation just queues the first message, delivered exactly like any later peer
+message.
 
-pm agent list                                # list all agents in the current feature
-pm agent list --active                       # list only active agents
+Exception: if a background task or session cron is still running and no
+messages are queued, the hook lets the turn end so the work isn't stalled.
 
-pm agent stop reviewer                       # stop an agent (kill window, mark inactive)
-pm agent stop reviewer tester                # stop multiple agents at once
-pm agent stop reviewer --scope other-feat    # stop an agent in a different scope
-
-pm agent delete reviewer-2                   # delete an agent (kill window, remove registry entry)
-pm agent delete reviewer-2 tester            # delete multiple agents at once
-pm agent delete reviewer-2 --scope other     # delete an agent in a different scope
-
-pm agent restart reviewer                    # restart an agent (stop then respawn, preserving session)
-pm agent restart reviewer implementer        # restart multiple agents
-
-pm agent fork reviewer reviewer-2            # spawn a new agent that starts with a copy of the source's history
-                                             # (uses claude's --fork-session, so source can keep running)
-```
-
-`--context -` reads the brief from stdin (as for `pm feat new`); here a non-`-` value is always a literal string (no file-path resolution).
-
-Use `--agent <definition>` to decouple the agent's display name from the
-underlying claude agent definition. The display name (positional `NAME`)
-is what shows up in the registry, the tmux window, and `PM_AGENT_NAME`
-(your messaging identity); the `--agent` value is what gets passed to
-`claude --agent`. This lets you run multiple agents from the same
-definition with distinct identities — e.g. `pm agent spawn frontend-dev
---agent implementer` and `pm agent spawn backend-dev --agent
-implementer`. Restart, fork, and `pm open` all preserve the alias.
+Reinstall with `pm claude hooks install` (idempotent, append-only); `pm doctor
+--fix` restores a missing one.
 
 ### Messaging
 
-Agents within a feature communicate through a file-based message queue managed by pm. Each agent has an inbox scoped to the current feature.
-
-Each inbox holds an ordered queue per sender, and a per-sender cursor
-tracks "the last message I processed". Reading is a pure, single-message
-operation. Advancing through the queue is an explicit `next` step.
+Agents communicate through a file-based queue, one inbox per agent scoped to
+the feature. Each inbox holds an ordered queue per sender with a cursor
+tracking the last message processed; `pm msg read` returns the next unread and
+advances the cursor.
 
 ```sh
-pm msg send reviewer "ready for review"      # append to reviewer's inbox
-pm msg send reviewer <<'EOF'                 # multi-line body via stdin heredoc
+pm msg send reviewer "ready for review"
+pm msg send reviewer <<'EOF'              # multi-line / markdown body via heredoc
 ## Review findings
 Details here.
 EOF
-pm msg send reviewer "msg" --as-agent impl   # send as a specific identity
-pm msg send impl@main "note"                 # shorthand for --scope main
-pm msg send impl "note" --scope main         # send to an agent in a different scope
-pm msg send impl "note" --upstream           # send to the parent scope (base branch)
-
-pm msg wait                                  # block until any new message arrives
-pm msg wait --from reviewer                  # block only on messages from reviewer
-pm msg wait --scope login                    # block on messages in another feature's inbox
-
-pm msg list                                  # enumerate inbox with cursor markers
-pm msg list --from reviewer                  # only show one sender's queue
-pm msg list --scope login                    # list messages in another feature's inbox
-pm msg list --scope main                     # list messages in main's inbox
-# Cross-scope senders are annotated as sender@scope (e.g. main@main), matching pm msg read.
-
-pm msg reply "short reply"                   # reply to the last-read cross-scope message
-pm msg reply <<'EOF'                         # multi-line reply via stdin
-Details here.
-EOF
-
-pm msg read                                  # read next unread message and advance cursor
-pm msg read --from reviewer                  # scope to one sender
-pm msg read --scope login --from reviewer    # read from another feature's inbox
-pm msg read --from reviewer --index 3        # re-read message 3 (does not advance)
-pm msg read --from reviewer --index +2       # peek ahead: cursor + 2 (does not advance)
-pm msg read --from reviewer --index -1       # re-read the last processed message
-pm msg read --from reviewer --index -2       # one further back
-
+pm msg send impl@main "note"              # cross-scope: agent in another scope
+pm msg read                               # next unread (auto-picks sender if unambiguous)
+pm msg reply "short reply"                # reply to the last-read cross-scope message
+pm msg wait                               # block until a new message arrives
+pm msg list                               # enumerate inbox with cursor markers
 ```
 
-Key properties:
+Conventions worth knowing (the rest is in `pm msg --help`):
 
-- **Send multi-line bodies via a heredoc redirect with a quoted delimiter.**
-  Use `pm msg send <agent> <<'EOF' … EOF` for anything containing markdown,
-  backticks, `$`, or apostrophes — the body is passed through verbatim.
-  Reserve the positional form (`pm msg send x "…"`) for trivial one-liners.
-- **`read` reads and advances.** Each call returns the next unread message
-  and moves the cursor forward. No separate `next` call needed.
-- **`--index` is pure.** With `--index`, `read` returns the specified
-  message without touching the cursor — use this to re-read history.
-- **`--from` is required only when ambiguous.** If your inbox has unread
-  messages from only one sender, `pm msg read` picks it
-  automatically. If multiple senders have unread, you'll get a clear
-  error asking you to disambiguate.
-- **`--index` always requires `--from`.** Absolute and relative indices
-  address a specific historical message — there's no "implicit sender"
-  for that mode.
-- **Re-reading is free.** Past messages stay on disk forever. Use
-  `pm msg list` to find their index and `pm msg read --from <s> --index <n>`
-  to dump them again.
+- **Use a quoted-delimiter heredoc** (`<<'EOF' … EOF`) for any body with
+  markdown, backticks, `$`, or apostrophes — it's passed verbatim. Reserve the
+  positional `"…"` form for trivial one-liners.
+- **`read` reads *and* advances.** `--index <n>` (requires `--from`) re-reads a
+  past message without moving the cursor; history stays on disk forever.
+- **`--from` is needed only when ambiguous** — if only one sender has unread,
+  it's auto-selected.
 
-Identity is resolved automatically: `PM_AGENT_NAME` (set by `pm agent spawn`) > `$USER` > `"user"`. Spawned agents get `PM_AGENT_NAME` set in their environment, so they don't need `--as-agent`.
-
-#### Typical agent flow
-
-1. `pm feat new my-feature --workflow implement-and-review --context "task description"` — creates the feature, spawns the workflow's full `agents` team (for `implement-and-review`, that's the implementer and reviewer), and enqueues `task description` as the first message for the `brief_agents` subset (for `implement-and-review`, just the implementer). The Stop hook blocks until the queued message is available, then tells each briefed agent to read it. `--workflow` is required when `--context` is given — see [Workflows](#workflows) above
-2. The implementer reads the task, implements changes, runs tests
-3. The implementer sends `pm msg send reviewer "ready for review"` to request a review (the reviewer is already running with the team; the message just delivers, healing its window if it died)
-4. The reviewer diffs the branch and sends feedback back to the implementer
-5. The implementer addresses feedback, sends another "ready for review" message
-6. The reviewer approves — and both agents go back to `pm msg wait`, ready for the next task
-
-#### Configuring agent permissions
-
-Per-agent permission modes live in `.pm/config.toml`:
-
-```toml
-[agents.permissions]
-implementer = "acceptEdits"
-reviewer = ""
-```
-
-`"acceptEdits"` makes Claude auto-accept file edits for that agent; leave empty for default permissions. Permissions apply both to agents spawned by a workflow's `agents` team and to those launched manually with `pm agent spawn`.
-
-> **Note**: earlier versions of pm exposed `[agents] default` and a `--agent` flag on `feat new`/`feat adopt` for choosing which agent to spawn. Both were removed in favour of [Workflows](#workflows). The `[agents] default` field is now silently ignored on load (so legacy configs don't break), and `--context` requires `--workflow <name>`.
-
-#### Limiting active features
-
-Set `max_features` to cap how many active features a project can have at once. Enforced on `pm feat new` and `pm feat adopt`:
-
-```toml
-# Per-project: .pm/config.toml
-[project]
-name = "myapp"
-max_features = 3
-```
-
-Or set a global default in `~/.config/pm/config.toml`:
-
-```toml
-[project]
-max_features = 5
-```
-
-Per-project settings take precedence over the global default. If neither is set, feature count is unlimited. Merged and stale features don't count toward the limit.
-
-### The pm Stop hook
-
-`pm init` installs a Claude Code **Stop hook** into `main/.claude/settings.json`. Its only job is to stop Claude from going idle between turns: after every turn, the hook blocks until the agent has unread messages (by calling `pm msg wait` internally), then emits
-
-```json
-{ "decision": "block", "reason": "You have new messages. Run `pm msg read` …" }
-```
-
-which Claude Code delivers back to the agent as a continuation prompt. The agent reads the message, processes it, the turn ends, and the hook fires again — blocking until the next message arrives. This turns every pm-managed agent into a never-idle message processor; `--context` at feature creation just queues the initial message, and the blocking Stop hook delivers it exactly like any subsequent peer message.
-
-One exception: if a background task is still running (or a session cron is active) and no messages are queued, the hook lets the turn end instead of blocking, so the running work isn't stalled. While a recurring cron is active the agent is only message-delivered at cron-fire boundaries.
-
-To install or re-install the hook manually (after editing settings by hand, or after upgrading pm):
-
-```sh
-pm claude hooks install
-```
-
-The install is idempotent and append-only — any other `Stop` hooks you've added are left alone. `pm doctor` flags a missing pm Stop hook and `pm doctor --fix` reinstalls it.
-
-### Self-update
-
-```sh
-pm self-update
-```
-
-Pulls the latest pm source from its main branch (fast-forward only), rebuilds with `cargo install --path .`, warns about active features across all projects, then runs `pm upgrade --all` to reinstall bundled assets everywhere. The pm project must be registered in the global registry (`pm register <path-to-pm-source>`). Refuses if the main worktree has uncommitted changes. On build failure the old binary remains intact.
-
-### Upgrade bundled assets
-
-```sh
-pm upgrade                       # reinstall hooks, skills, agents for current project
-pm upgrade --all                 # upgrade all registered projects
-pm upgrade --dry-run             # preview changes without writing (alias: --check)
-pm upgrade --all --dry-run       # preview changes for every registered project
-```
-
-Reinstalls bundled assets (hooks, skills, agents, the shared agent baseline, information store) to each project's main worktree, then re-seeds `.claude/` settings into every active feature worktree. Always overwrites — useful after updating pm to pick up new agent definitions or skill files.
-
-`--dry-run` (alias `--check`) prints the actions that would be taken (`Would install …`, `Would update …`, `Would re-seed …`) without modifying anything. When the project is fully up to date, it prints `Up to date`.
+Identity resolves as `PM_AGENT_NAME` (set by `pm agent spawn`) > `$USER` >
+`"user"`, so spawned agents need no `--as-agent`.
 
 ### Information store
 
-Each project has an information store at `.pm/docs/` for project-level documentation. The store is bootstrapped by `pm init` with default categories (todo, issues, ideas, findings) defined in `categories.toml`.
+Each project has an information store at `.pm/docs/` for project-level
+persistent knowledge — todos, issues, ideas, findings (the default categories,
+defined in `categories.toml`; add your own). The `main` orchestrator manages it
+directly, keeping it lean: completed items are **deleted** (git history is the
+record), with durable learnings migrated into `findings.md` first.
 
-The orchestrator agent manages the store directly — reading `categories.toml` to discover categories and editing the corresponding markdown files. Use `pm state push` to commit and push all changes in the `.pm/` state repo. When a remote is configured (`pm state remote [url]`), it also pushes. The docs are tracked alongside all other project state.
+This is distinct from messaging: the store is a database for durable knowledge,
+the queue is for cross-agent/cross-scope communication. Don't conflate them.
 
-Default categories after bootstrap:
+On `pm feat delete`/`merge`, a feature's `summary.md` is collected to
+`.pm/summaries/<feature>.md` so the orchestrator can triage it into the store.
 
-| File | Description |
-|------|-------------|
-| `todo.md` | Ordered task list. Actionable items with clear next steps. |
-| `issues.md` | Concrete bugs and unexpected behaviours discovered during usage. |
-| `ideas.md` | Thoughts and design questions that aren't yet actionable. |
-| `findings.md` | Durable findings and learnings worth remembering — verified facts, gotchas, and external constraints discovered during work. Not tasks, bugs, or open questions. |
+### Shared agent baseline
 
-Add custom categories by editing `categories.toml` and creating the corresponding markdown file.
+Cross-cutting operating rules common to every agent — brevity, the
+environment/CWD conventions, the messaging heredoc form, the `pm workflow show`
+reminder, what "the user" means — live in a single bundled `pm-baseline.md`
+rather than being repeated per agent. `pm init`/`pm upgrade` install it to
+`main/.claude/pm-baseline.md`, and every agent pm spawns (including `main`) is
+launched with `claude --append-system-prompt-file <that path>`.
 
-The orchestrator keeps the working docs lean: completed tasks, issues, and ideas are **deleted** rather than marked done (git history is the record of completed work). Durable findings worth remembering are migrated into `findings.md` before the original item is deleted.
+### State backup, sync, and restore
 
-### State backup and sync
-
-The `.pm/` directory holds all project state (features, agents, messages, config, summaries, docs). A single git repo backs everything up:
+`.pm/` holds all project state (features, agents, messages, config, summaries,
+docs) and the global registry at `~/.config/pm/` holds project entries and
+cross-project config. Both can be git-backed:
 
 ```sh
-pm state init                    # initialise git repo in .pm/ (prompts for remote setup)
-pm state init --remote <url>     # initialise, set remote, and pull (combines init + remote + pull)
-pm state remote [url]            # set the git remote (interactive if no URL given)
-pm state push                    # auto-commit and push state to the remote
-pm state pull                    # pull state from the remote
-pm state status                  # show git status of the state repo
+pm state init --remote <url>     # init .pm/ repo, set remote, pull
+pm state push                    # auto-commit and push
+pm state init --global --remote <url>   # same for the global registry
+pm state backfill                # record repo_url / state_remote for existing projects
 ```
 
-`pm state init` creates a git repo inside `.pm/`, commits existing state, and offers to set up a remote — either creating a private GitHub repo via `gh` or using an existing URL. It's also called automatically by `pm init` and `pm upgrade`.
-
-`pm state push` stages all changes, commits with a message listing changed files, and pushes. `pm state pull` commits any local changes first (to avoid conflicts with dirty state), then pulls with fast-forward only.
-
-#### Global registry backup
-
-The global registry at `~/.config/pm/` (project entries, cross-project config) can also be git-backed. Pass `--global` to any state command:
+This enables full machine migration — back both up to git, then on a fresh
+machine:
 
 ```sh
-pm state init --global           # initialise git repo in ~/.config/pm/
-pm state init --global --remote <url>  # initialise, set remote, and pull
-pm state remote --global <url>   # set remote for the global registry repo
-pm state push --global           # auto-commit and push the global registry
-pm state pull --global           # pull global registry from remote
-pm state status --global         # show git status of the global registry
-```
-
-#### Backfill registry URLs
-
-Existing projects may not have `repo_url` or `state_remote` recorded in their registry entries. `pm state backfill` reads origin URLs from each project's main worktree and `.pm/` remote, and writes them into the global registry:
-
-```sh
-pm state backfill                # backfill repo_url and state_remote for all projects
-pm state push --global           # push the enriched registry
-```
-
-URLs are also auto-persisted going forward: `pm init --git <url>` saves `repo_url`, `pm register` reads origin from the worktree, and `pm state remote` saves `state_remote`.
-
-`pm state backfill` also flags non-portable registry roots (bare relative paths like `exo-bench` instead of absolute `~/Projects/exo-bench`). These corrupt cross-project messaging because the path is resolved against each caller's CWD. `pm init` and `pm register` now absolutize the path before saving, so new entries are always portable; pre-existing bad entries are reported with a `WARNING` line and must be fixed manually (`pm delete <name>` and re-register from the right directory).
-
-#### Restore projects on a fresh machine
-
-`pm restore` rebuilds all projects from the global registry. For each entry it clones the repo (if `repo_url` is set and the directory is missing), sets up the `.pm/` state remote and pulls (if `state_remote` is set), recreates missing worktrees for active features from `.pm/features/` state, then runs `pm open` to recreate tmux sessions.
-
-```sh
-# On the new machine:
 pm state init --global --remote <global-registry-url>
-pm restore
+pm restore                       # clone repos, pull state, recreate worktrees + sessions
 ```
 
-This completes the migration story: back up both per-project state (`.pm/`) and the global registry (`~/.config/pm/`) to git remotes, then restore everything on a new machine with two commands.
+See `pm state --help` and `pm restore --help`.
 
-### Other commands
+## Other commands
 
-```sh
-pm list                          # list all registered projects
-pm open                          # open/reconstruct tmux sessions
-pm --help                        # full help
-pm feat --help                   # feature subcommand help
-```
+All support `--help`:
 
-## Shell completions
-
-Generate completion scripts for your shell and place them in the appropriate directory:
-
-```sh
-# Zsh — place in any directory on your fpath (run `echo $fpath` to see options)
-pm completions zsh > /usr/local/share/zsh/site-functions/_pm
-# Then clear the completion cache and reload:
-rm -f ~/.zcompdump* && exec zsh
-
-# Bash
-pm completions bash > "${BASH_COMPLETION_USER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions}/pm"
-
-# Fish
-pm completions fish > ~/.config/fish/completions/pm.fish
-
-# Elvish
-pm completions elvish > ~/.elvish/lib/pm.elv
-```
+- `pm open` / `pm close [--all]` — recreate or tear down a project's tmux
+  sessions without touching state (e.g. after a reboot). `pm open` also runs
+  `pm doctor`'s checks and warns about unfixable drift.
+- `pm status` / `pm doctor [--fix]` — project dashboard; audit and auto-fix
+  drift between pm state and git/tmux/GitHub reality.
+- `pm claude settings|migrate|export|import` — manage and transfer Claude Code
+  settings and session data across worktrees and machines.
+- `pm claude skills|agents|hooks` and `pm upgrade [--all]` / `pm self-update` —
+  install and upgrade bundled assets.
+- `pm completions <shell>` — generate shell completion scripts (zsh, bash,
+  fish, elvish).
+- `pm list` — list registered projects.
+- `pm delete [--force --yes]` — full project teardown: kills sessions, removes
+  `.pm/`, drops the registry entry (`--force` also removes worktrees/branches).
+  Destructive — distinct from `pm close`, which only tears down sessions.
 
 ## Development
 
@@ -678,7 +258,9 @@ cargo clippy
 cargo fmt
 ```
 
-Tests spawn real tmux sessions. `cargo test` runs are capped at 4 threads via `.cargo/config.toml` to keep pty usage well under macOS limits. If you ever need to manually clean up stale test servers: `for s in /tmp/tmux-$(id -u)/pm-test-*; do tmux -L $(basename "$s") kill-server 2>/dev/null; rm -f "$s"; done`.
+Tests spawn real tmux sessions. `cargo test` runs are capped at 4 threads via
+`.cargo/config.toml` to keep pty usage well under macOS limits. To clean up
+stale test servers: `for s in /tmp/tmux-$(id -u)/pm-test-*; do tmux -L
+$(basename "$s") kill-server 2>/dev/null; rm -f "$s"; done`.
 
-See `CLAUDE.md` for development guidelines.
-
+See `CLAUDE.md` for architecture and development guidelines.
