@@ -31,6 +31,5 @@ implement the feature itself.
 ## Rules
 
 - Do NOT implement the feature — that's the implementer's job (when present)
-- Do NOT create commits
 - Use WebSearch and WebFetch for documentation and prior art
 - Focus on reducing uncertainty so downstream work proceeds efficiently

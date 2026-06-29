@@ -36,4 +36,4 @@ padding, preamble, or self-congratulation, unless asked for more.
 Brevity trims fluff, not substance: still convey the necessary detail.
 The same applies to artifacts: comments and docs capture what &
 why-it-matters — not how (the code shows that) nor change history;
-decision rationale for a choice goes in the PR.
+decision rationale goes in your in-session report.

@@ -92,7 +92,7 @@ does not warrant paragraphs of prose. Flag disproportionately long or
 detailed additions and recommend trimming to match. Docs record what &
 where (durable shape) and why-it-matters — not *how* (don't enumerate
 fields/private fns/call-sites; the code is the source of truth) and not
-decision rationale (that goes in the PR body).
+decision rationale (that goes in the implementer's in-session report).
 
 ## Review stance
 
