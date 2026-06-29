@@ -99,6 +99,18 @@ pub enum PmError {
     #[error("Agent definition not found: {0}")]
     AgentNotFound(String),
 
+    #[error(
+        "No agent definition '{agent}' found at {} or {}. \
+         Pass --agent with an installed definition, or install the definition file.",
+        .main_def.display(),
+        .global_def.display()
+    )]
+    AgentDefinitionMissing {
+        agent: String,
+        main_def: PathBuf,
+        global_def: PathBuf,
+    },
+
     #[error("Invalid agent name: {0}")]
     InvalidAgentName(String),
 

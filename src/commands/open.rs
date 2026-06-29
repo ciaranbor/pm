@@ -803,7 +803,11 @@ mod tests {
         let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
-        // Register an agent in the main scope
+        // Install its definition so pre-spawn validation resolves, then
+        // register an agent in the main scope.
+        let orch_def = paths::main_worktree(&project_path).join(".claude/agents/orchestrator.md");
+        std::fs::create_dir_all(orch_def.parent().unwrap()).unwrap();
+        std::fs::write(&orch_def, "# stub").unwrap();
         let agents_dir = paths::agents_dir(&project_path);
         let mut registry = AgentRegistry::default();
         registry.register(
