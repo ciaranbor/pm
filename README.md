@@ -205,6 +205,25 @@ rather than being repeated per agent. `pm init`/`pm upgrade` install it to
 `main/.claude/pm-baseline.md`, and every agent pm spawns (including `main`) is
 launched with `claude --append-system-prompt-file <that path>`.
 
+### Notice board
+
+Standing directives you want every spawned agent to obey, composed onto the
+baseline at spawn time. Two hand-edited markdown files, no command — write or
+remove notices by editing them directly:
+
+- `~/.config/pm/notices.md` — global, applies in every project
+- `.pm/notices.md` — per-project
+
+Keep them terse: every line is seeded into every agent on every spawn. Absent
+or empty files seed nothing. Both live in the git-backed state repos, so they
+sync via `pm state push` (`--global` for the global one). Example global
+notice:
+
+```markdown
+Hit a pm bug or quirk? Message pm's main agent briefly —
+`pm msg send main --project pm '<what broke>'`. Don't try to fix pm from here.
+```
+
 ### State backup, sync, and restore
 
 `.pm/` holds all project state (features, agents, messages, config, summaries,
