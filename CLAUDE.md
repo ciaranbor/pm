@@ -119,6 +119,17 @@ general to all agents and must **not** mention `.pm`. If a future `claude` drops
 the flag the baseline would silently go dark, so pm probes `claude --help` at
 spawn and `pm doctor` warns when the baseline is installed but unsupported.
 
+The **notice board** (`notice.rs`) is a seeded *directive* surface — terse
+standing instructions hand-written into `~/.config/pm/notices.md` (global) and
+`.pm/notices.md` (per-project). At the same spawn chokepoint,
+`compose_spawn_prompt` folds any non-empty board onto the baseline into the
+single `--append-system-prompt-file` (baseline → global → project). No command:
+writing is manual file editing, reading is the seeding. When both boards are
+empty it returns the baseline path unchanged, so the common case is unaffected.
+Distinct from the info store (persistent knowledge, orchestrator-managed) and
+`summary.md` (per-feature upward channel): the board pushes directives *down*
+into agents, and agents reporting things go through `pm msg`, never the board.
+
 ### Information store vs messaging
 
 Two different things, don't collapse them:

@@ -82,16 +82,6 @@ fn build_claude_cmd(
     parts.join(" ")
 }
 
-/// Resolve the `--append-system-prompt-file` argument for a project: the
-/// absolute baseline path when `main/.claude/pm-baseline.md` is installed,
-/// or `None` so older projects without it spawn unchanged.
-fn baseline_append_arg(project_root: &Path) -> Option<String> {
-    let baseline = super::skills::baseline_path(project_root);
-    baseline
-        .exists()
-        .then(|| baseline.to_string_lossy().into_owned())
-}
-
 /// Whether `claude --help` text advertises `--append-system-prompt-file`,
 /// the flag pm relies on to apply the shared agent baseline. Split out as a
 /// pure function so it can be unit-tested without invoking `claude`.
@@ -212,11 +202,13 @@ fn spawn_claude_session_with_config(
         (None, None) => None,
     };
 
-    // Append the shared operating baseline only when it's installed, so
-    // older projects without `pm-baseline.md` keep working unchanged.
-    let append_file = baseline_append_arg(params.project_root);
-
     let window_name = params.agent_name.unwrap_or("claude");
+
+    // Compose the single `--append-system-prompt-file`: shared baseline plus
+    // any non-empty notice boards. When no board has content this returns the
+    // baseline path unchanged (or None when the baseline is also absent), so
+    // older projects keep spawning exactly as before.
+    let append_file = crate::notice::compose_spawn_prompt(params.project_root, window_name)?;
     let cmd = build_claude_cmd(
         effective_definition,
         append_file.as_deref(),
@@ -1377,26 +1369,5 @@ mod tests {
         assert!(!help_lists_append_file(
             "  --append-system-prompt <prompt>  Append a system prompt\n"
         ));
-    }
-
-    #[test]
-    fn baseline_append_arg_present_iff_file_exists() {
-        let dir = tempdir().unwrap();
-        let project_root = dir.path();
-
-        // No baseline installed → no append arg (back-compat).
-        assert!(baseline_append_arg(project_root).is_none());
-
-        // Install the baseline → append arg points at the absolute path.
-        std::fs::create_dir_all(paths::main_worktree(project_root)).unwrap();
-        crate::commands::skills::baseline_install_project(project_root, None).unwrap();
-
-        let arg = baseline_append_arg(project_root).expect("append arg present once installed");
-        assert_eq!(
-            arg,
-            crate::commands::skills::baseline_path(project_root)
-                .to_string_lossy()
-                .into_owned()
-        );
     }
 }
