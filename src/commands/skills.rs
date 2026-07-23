@@ -166,6 +166,20 @@ const BUNDLED_ITEMS: &[BundledItem] = &[
     },
     BundledItem {
         kind: BundledKind::Workflow,
+        name: "solo",
+        files: &[
+            (
+                "solo/config.toml",
+                include_str!("../../workflows/solo/config.toml"),
+            ),
+            (
+                "solo/workflow.md",
+                include_str!("../../workflows/solo/workflow.md"),
+            ),
+        ],
+    },
+    BundledItem {
+        kind: BundledKind::Workflow,
         name: "pr-review",
         files: &[
             (
@@ -967,16 +981,17 @@ mod tests {
     }
 
     #[test]
-    fn workflows_install_all_installs_four() {
+    fn workflows_install_all_installs_five() {
         let tmp = tempfile::tempdir().unwrap();
         let project_root = tmp.path();
         let messages = workflows_install_project(project_root, None).unwrap();
-        // Four bundled workflows
-        assert_eq!(messages.len(), 4);
+        // Five bundled workflows
+        assert_eq!(messages.len(), 5);
         for name in &[
             "implement-and-review",
             "research-implement-review",
             "research-only",
+            "solo",
             "pr-review",
         ] {
             let dir = paths::workflows_dir(project_root).join(name);

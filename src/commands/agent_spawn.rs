@@ -23,6 +23,10 @@ fn validate_definition_resolves_with_home(
     definition: &str,
     home: Option<&Path>,
 ) -> Result<()> {
+    // The reserved vanilla name spawns without `--agent` — no file to check.
+    if definition == workflow::VANILLA_AGENT {
+        return Ok(());
+    }
     if workflow::definition_exists(project_root, definition, home) {
         return Ok(());
     }
@@ -80,6 +84,13 @@ fn build_claude_cmd(
     }
 
     parts.join(" ")
+}
+
+/// The value that reaches `claude --agent`: the effective definition, except
+/// the reserved vanilla name, which launches a definition-less session even
+/// if a `claude.md` definition file happens to exist.
+fn claude_agent_flag(effective_definition: Option<&str>) -> Option<&str> {
+    effective_definition.filter(|d| *d != workflow::VANILLA_AGENT)
 }
 
 /// Whether `claude --help` text advertises `--append-system-prompt-file`,
@@ -210,7 +221,7 @@ fn spawn_claude_session_with_config(
     // older projects keep spawning exactly as before.
     let append_file = crate::notice::compose_spawn_prompt(params.project_root, window_name)?;
     let cmd = build_claude_cmd(
-        effective_definition,
+        claude_agent_flag(effective_definition),
         append_file.as_deref(),
         effective_prompt,
         params.resume_session,
@@ -1259,6 +1270,33 @@ mod tests {
     fn build_cmd_plain_session() {
         let cmd = build_claude_cmd(None, None, None, None, None, false);
         assert_eq!(cmd, "claude");
+    }
+
+    #[test]
+    fn vanilla_agent_name_gets_no_agent_flag() {
+        // The reserved `claude` name is filtered out of the `--agent` flag;
+        // any other definition passes through.
+        assert_eq!(claude_agent_flag(Some("claude")), None);
+        assert_eq!(claude_agent_flag(Some("reviewer")), Some("reviewer"));
+        let cmd = build_claude_cmd(
+            claude_agent_flag(Some("claude")),
+            None,
+            None,
+            None,
+            None,
+            false,
+        );
+        assert!(
+            !cmd.contains("--agent"),
+            "vanilla spawn must not pass --agent, got: {cmd}"
+        );
+    }
+
+    #[test]
+    fn vanilla_agent_name_skips_definition_validation() {
+        // `pm agent spawn claude` must work with no claude.md anywhere.
+        let tmp = tempfile::tempdir().unwrap();
+        validate_definition_resolves_with_home(tmp.path(), "claude", None).unwrap();
     }
 
     #[test]

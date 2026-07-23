@@ -10,11 +10,42 @@ use std::path::Path;
 use chrono::Utc;
 
 use crate::commands::{agent_spawn, feat_delete};
-use crate::error::Result;
+use crate::error::{PmError, Result};
 use crate::messages;
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
 use crate::state::workflow::WorkflowDef;
+
+/// Workflow used when `--context` is given without `--workflow`: a brief
+/// needs a recipient, and `solo` is the single-agent default team.
+pub const DEFAULT_WORKFLOW: &str = "solo";
+
+/// Resolve the effective workflow for a feature-creation command.
+///
+/// Explicit `--workflow` always wins. Otherwise, a `--context` with no
+/// workflow defaults to [`DEFAULT_WORKFLOW`] (checked to be installed so
+/// the failure is actionable, not a generic not-found). No context and no
+/// workflow stays agentless.
+pub fn resolve_workflow<'a>(
+    project_root: &Path,
+    workflow: Option<&'a str>,
+    context: Option<&str>,
+) -> Result<Option<&'a str>> {
+    match (workflow, context) {
+        (Some(w), _) => Ok(Some(w)),
+        (None, Some(_)) => {
+            if !crate::state::workflow::exists(project_root, DEFAULT_WORKFLOW) {
+                return Err(PmError::SafetyCheck(format!(
+                    "default workflow '{DEFAULT_WORKFLOW}' is not installed. \
+                     Run `pm workflow install {DEFAULT_WORKFLOW}` (or `pm upgrade`), \
+                     or pass --workflow <name>."
+                )));
+            }
+            Ok(Some(DEFAULT_WORKFLOW))
+        }
+        (None, None) => Ok(None),
+    }
+}
 
 /// Fields needed to write an Initializing-status feature state file.
 pub struct InitStateFields<'a> {

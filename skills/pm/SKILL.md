@@ -22,7 +22,9 @@ session is automatically started in the feature's tmux session and the
 Before dispatching, run `pm workflow list` to see installed workflows.
 Each row carries a `use when:` hint describing the situation it fits —
 consult these to pick the workflow that matches how the work should be
-sliced, then pass it with `--workflow <name>`.
+sliced, then pass it with `--workflow <name>`. Omit `--workflow` for the
+single-agent case: `--context` alone defaults to the `solo` workflow
+(one developer owning the feature end-to-end).
 
 Options:
 

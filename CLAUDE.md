@@ -98,10 +98,16 @@ definition. The `pm-workflow` skill is the bridge: every agent runs
 `pm workflow show` at the start of every task to read the active
 workflow's prose.
 
-`pm feat new --context` *requires* `--workflow <name>`. A context with
-no workflow has nobody to deliver it to. `WorkflowDef::validate` enforces the
-contract: every team member must have a resolvable definition file (under
-`main/.claude/agents/` or `~/.claude/agents/`), and `brief_agents ⊆` the team.
+`pm feat new --context` without `--workflow` *defaults* to the bundled
+single-agent `solo` workflow (`feat_common::DEFAULT_WORKFLOW`) — a context
+needs a recipient. The default errors if `solo` isn't installed; bare
+`feat new` (no context, no workflow) stays agentless. `WorkflowDef::validate`
+enforces the contract: every team member must have a resolvable definition
+file (under `main/.claude/agents/` or `~/.claude/agents/`), and
+`brief_agents ⊆` the team. Exception: the reserved name `claude`
+(`workflow::VANILLA_AGENT`, solo's whole team) means a definition-less
+vanilla session — validation skips it, and the spawn chokepoint passes no
+`--agent` flag for it, unconditionally (a user `claude.md` is ignored).
 
 ### Agent registry and the shared baseline
 

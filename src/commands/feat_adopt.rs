@@ -19,8 +19,9 @@ pub struct FeatAdoptParams<'a> {
     /// Path to an existing worktree to migrate Claude sessions from.
     pub from: Option<&'a Path>,
     pub edit: bool,
-    /// Workflow to activate for this feature. Required when `context` is
-    /// provided (a context with no workflow has nobody to deliver it to).
+    /// Workflow to activate for this feature. When `None` and `context` is
+    /// provided, defaults to `feat_common::DEFAULT_WORKFLOW` (a context
+    /// needs a recipient).
     pub workflow: Option<&'a str>,
     /// Allows tests to use an isolated tmux server. Pass `None` in production.
     pub tmux_server: Option<&'a str>,
@@ -31,15 +32,10 @@ pub struct FeatAdoptParams<'a> {
 /// Adopt an existing branch as a pm feature: worktree + tmux session + state file.
 /// Unlike `feat_new`, this does not create a branch — it must already exist.
 pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
-    // A context with no workflow has nobody to deliver it to — fail
-    // early before any side effects.
-    if params.context.is_some() && params.workflow.is_none() {
-        return Err(PmError::SafetyCheck(
-            "--context requires --workflow <name>. \
-             Run `pm workflow list` to see installed workflows."
-                .to_string(),
-        ));
-    }
+    // Resolve the effective workflow (explicit wins; a context with no
+    // workflow defaults to `solo`) — fail early before any side effects.
+    let workflow =
+        feat_common::resolve_workflow(params.project_root, params.workflow, params.context)?;
 
     // Check feature limit before doing any work
     crate::state::project::check_feature_limit(params.project_root)?;
@@ -65,8 +61,7 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
     let project_name = &config.project.name;
 
     // Load workflow def and validate up-front (see `feat_new` for rationale).
-    let workflow_def = params
-        .workflow
+    let workflow_def = workflow
         .map(|w| feat_common::load_and_validate_workflow(params.project_root, w))
         .transpose()?;
     // The full team is spawned; the brief subset receives --context.
@@ -85,7 +80,7 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
             "workflow '{}' has an empty `brief_agents` list, so --context has no recipient. \
              Add at least one agent to `brief_agents` in the workflow's config.toml, \
              or drop --context.",
-            params.workflow.unwrap_or("<none>"),
+            workflow.unwrap_or("<none>"),
         )));
     }
 
@@ -143,7 +138,7 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
             base: &resolved_base,
             pr: "",
             context: resolved_context.as_deref().unwrap_or(""),
-            workflow: params.workflow,
+            workflow,
         },
     )?;
 
@@ -777,28 +772,28 @@ mod tests {
     }
 
     #[test]
-    fn feat_adopt_context_without_workflow_errors() {
+    fn feat_adopt_context_without_workflow_defaults_to_solo() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project(dir.path());
         create_branch(&project_path, "login");
 
-        let result = feat_adopt(&FeatAdoptParams {
+        feat_adopt(&FeatAdoptParams {
             context: Some("do X"),
             workflow: None,
             ..default_adopt_params(&project_path, "login", server.name())
-        });
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("--context requires --workflow")
-        );
+        })
+        .unwrap();
 
-        // Branch is user-owned and must still exist.
-        let main_wt = paths::main_worktree(&project_path);
-        assert!(git::branch_exists(&main_wt, "login").unwrap());
+        let features_dir = paths::features_dir(&project_path);
+        let state = FeatureState::load(&features_dir, "login").unwrap();
+        assert_eq!(state.workflow.as_deref(), Some("solo"));
+
+        // The brief is queued to solo's sole brief agent (the reserved
+        // vanilla `claude` name).
+        let messages_dir = paths::messages_dir(&project_path);
+        let summaries = crate::messages::list(&messages_dir, "login", "claude", None).unwrap();
+        assert_eq!(summaries.len(), 1);
     }
 
     #[test]

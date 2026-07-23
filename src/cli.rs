@@ -477,8 +477,8 @@ pub enum FeatCommands {
         /// Force --permission-mode acceptEdits on the spawned Claude session
         #[arg(long)]
         edit: bool,
-        /// Workflow name (required with --context). Run `pm workflow list`
-        /// for installed workflows.
+        /// Workflow name (defaults to 'solo' when --context is given).
+        /// Run `pm workflow list` for installed workflows.
         #[arg(long)]
         workflow: Option<String>,
     },
@@ -499,8 +499,8 @@ pub enum FeatCommands {
         /// Force --permission-mode acceptEdits on the spawned Claude session
         #[arg(long)]
         edit: bool,
-        /// Workflow name (required with --context). Run `pm workflow list`
-        /// for installed workflows.
+        /// Workflow name (defaults to 'solo' when --context is given).
+        /// Run `pm workflow list` for installed workflows.
         #[arg(long)]
         workflow: Option<String>,
     },
