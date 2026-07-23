@@ -29,27 +29,12 @@ Chaining read-only probes with `&&` into one round-trip is fine.
 
 ## Review criteria
 
-### Test correctness and coverage
+### Tests — audit against the doctrine
 
-Tests must verify the feature's intended behaviour through a real
-production code path — not the code that happens to exist. Check that:
-
-- Each test has an obvious justification as a realistic exercise of a true
-  production path, and enforces a contract that would fail if the
-  implementation were wrong.
-- Coverage matches the feature's intended use — flag missing scenarios that
-  matter.
-- Mocks are minimal; tests don't embed assumptions about internal mechanics
-  or dependency behaviour.
-
-Flag a test that:
-
-- Asserts config/identity — a def/doc/TOML literally *contains* a string
-  (passes by construction, breaks on rewording).
-- Exercises no runtime code path of the thing under test.
-- Pins an internal detail (private field/fn name, call order) or churns just
-  because the code churns (change-detector).
-- Only asserts `Ok`/no-panic with no contract checked.
+Check every test the diff adds or changes against the Tests section
+of your operating baseline and flag each violation by name — silence
+is a pass verdict. Then flag missing scenarios the feature's
+intended use demands.
 
 ### Code reuse and refactoring
 
@@ -63,23 +48,19 @@ Flag a test that:
 - Is it clear, well-structured, and consistent with project conventions?
 - Are there security concerns (injection, path traversal, etc.)?
 
-### Documentation and comments
+### Comments and docs — audit against the doctrine
 
-Bias toward less prose — the code is the source of truth; docs and comments
-earn their place only by adding what the code can't show.
+Walk every comment and doc line the diff adds or touches and check it
+against the Comments-and-docs section of your operating baseline; flag each
+violation for deletion or trimming — silence is a pass verdict.
+Additionally:
 
-- **Staleness is a bug.** Read the README.md / CLAUDE.md sections touching
-  the changed behaviour and flag any the change has made wrong. Stale beats
-  missing — don't demand new docs for their own sake.
-- **Hunt for removal.** Flag docs/comments to cut or trim: change-narration
-  ("newly added for X", "this change…"), comments restating adjacent code or
-  signatures, rationale duplicated from its canonical home. Question whether
-  a section is important enough to exist at all.
-- **Proportionality.** Weigh length against the change's significance — a
-  small or conventional change doesn't warrant paragraphs. Docs record what
-  & where (durable shape) and why-it-matters — not how (don't enumerate
-  fields/private fns/call-sites) nor decision rationale (that → the
-  implementer's in-session report).
+- **Staleness is a bug.** Read the README/CLAUDE.md sections
+  touching the changed behaviour and flag any the change has made
+  wrong. Stale beats missing — don't demand new docs for their own
+  sake.
+- **Proportionality.** Weigh doc length against the change's
+  significance; question whether a section should exist at all.
 
 ## Review stance
 
