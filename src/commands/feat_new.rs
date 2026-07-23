@@ -97,8 +97,9 @@ pub struct FeatNewParams<'a> {
     /// from CWD (enabling natural stacking from within a feature worktree).
     pub base: Option<&'a str>,
     pub edit: bool,
-    /// Workflow to activate for this feature. Required when `context` is
-    /// provided (a context with no workflow has nobody to deliver it to).
+    /// Workflow to activate for this feature. When `None` and `context` is
+    /// provided, defaults to `feat_common::DEFAULT_WORKFLOW` (a context
+    /// needs a recipient).
     pub workflow: Option<&'a str>,
     /// Allows tests to use an isolated tmux server. Pass `None` in production.
     pub tmux_server: Option<&'a str>,
@@ -127,15 +128,10 @@ impl<'a> FeatNewParams<'a> {
 
 /// Create a new feature: branch + worktree + tmux session + state file.
 pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
-    // A context with no workflow has nobody to deliver it to — fail
-    // early before any side effects.
-    if params.context.is_some() && params.workflow.is_none() {
-        return Err(PmError::SafetyCheck(
-            "--context requires --workflow <name>. \
-             Run `pm workflow list` to see installed workflows."
-                .to_string(),
-        ));
-    }
+    // Resolve the effective workflow (explicit wins; a context with no
+    // workflow defaults to `solo`) — fail early before any side effects.
+    let workflow =
+        feat_common::resolve_workflow(params.project_root, params.workflow, params.context)?;
 
     // Check feature limit before doing any work
     crate::state::project::check_feature_limit(params.project_root)?;
@@ -158,8 +154,7 @@ pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
     // brief agents up-front. Fail early — before any tmux/git/state side
     // effects — so a bad workflow never leaves a half-built feature on
     // disk.
-    let workflow_def = params
-        .workflow
+    let workflow_def = workflow
         .map(|w| feat_common::load_and_validate_workflow(params.project_root, w))
         .transpose()?;
     // The full team is spawned; the brief subset receives --context.
@@ -180,7 +175,7 @@ pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
             "workflow '{}' has an empty `brief_agents` list, so --context has no recipient. \
              Add at least one agent to `brief_agents` in the workflow's config.toml, \
              or drop --context.",
-            params.workflow.unwrap_or("<none>"),
+            workflow.unwrap_or("<none>"),
         )));
     }
 
@@ -201,7 +196,7 @@ pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
             base: &resolved_base,
             pr: "",
             context: resolved_context.as_deref().unwrap_or(""),
-            workflow: params.workflow,
+            workflow,
         },
     )?;
 
@@ -939,10 +934,51 @@ mod tests {
     }
 
     #[test]
-    fn feat_new_context_without_workflow_errors() {
+    fn feat_new_context_without_workflow_defaults_to_solo() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, project_name) = server.setup_project(dir.path());
+
+        feat_new(&FeatNewParams {
+            context: Some("do X"),
+            workflow: None,
+            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+        })
+        .unwrap();
+
+        // The default workflow is recorded in state so `pm workflow show`
+        // resolves routing for the spawned agent.
+        let features_dir = paths::features_dir(&project_path);
+        let state = FeatureState::load(&features_dir, "login").unwrap();
+        assert_eq!(state.workflow.as_deref(), Some("solo"));
+
+        // solo's sole team member is the reserved vanilla `claude` name —
+        // spawned and registered despite having no definition file.
+        let session = tmux::session_name(&project_name, "login");
+        let target = tmux::find_window(server.name(), &session, "claude").unwrap();
+        assert!(target.is_some(), "expected a 'claude' tmux window");
+        let agents_dir = paths::agents_dir(&project_path);
+        let registry = crate::state::agent::AgentRegistry::load(&agents_dir, "login").unwrap();
+        let entry = registry.get("claude").expect("'claude' in agent registry");
+        assert!(
+            entry.agent_definition.is_none(),
+            "vanilla agent must not store a definition"
+        );
+
+        // Exactly one brief queued, to the vanilla agent.
+        let messages_dir = paths::messages_dir(&project_path);
+        let summaries = crate::messages::list(&messages_dir, "login", "claude", None).unwrap();
+        assert_eq!(summaries.len(), 1);
+    }
+
+    #[test]
+    fn feat_new_context_without_workflow_errors_when_solo_missing() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project(dir.path());
+
+        // Remove the default workflow so defaulting has nothing to target.
+        crate::commands::skills::workflows_uninstall_project(&project_path, Some("solo")).unwrap();
 
         let result = feat_new(&FeatNewParams {
             context: Some("do X"),
@@ -951,7 +987,8 @@ mod tests {
         });
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("--context requires --workflow"));
+        assert!(matches!(err, PmError::SafetyCheck(_)));
+        assert!(err.to_string().contains("'solo'"));
 
         // No partial state should remain on disk.
         let features_dir = paths::features_dir(&project_path);

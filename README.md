@@ -40,6 +40,7 @@ directory, and bundled hooks/skills/agents/baseline installed into
 
 ```sh
 pm feat new login                                          # bare feature, no agents
+pm feat new login --context "Implement login per #42"      # solo developer agent
 pm feat new login --workflow implement-and-review --context "Implement login per #42"
 pm feat new child --base parent                            # stack on another feature
 
@@ -52,9 +53,9 @@ EOF
 ```
 
 `pm feat new` creates the branch, worktree, and tmux session (`myapp/login`).
-`--context` requires `--workflow <name>` so pm knows which agent team to
-spawn and who to brief. See `pm feat new --help` for stacking, naming, and
-editor options.
+`--workflow <name>` picks the agent team to spawn and who to brief; with
+`--context` but no `--workflow`, pm defaults to the single-agent `solo`
+workflow. See `pm feat new --help` for stacking, naming, and editor options.
 
 ## Concepts
 
@@ -98,10 +99,16 @@ Bundled agents:
 | **reviewer** | Diffs the branch against base, evaluates quality/correctness, sends feedback |
 | **researcher** | Read-only; explores the problem space and sends a refined brief to the implementer |
 
+The definition name `claude` is **reserved**: it always means a
+definition-less vanilla Claude session (no `--agent` flag), even if a
+`claude.md` definition file exists. The `solo` workflow's team is exactly
+this name.
+
 Bundled workflows:
 
 | Workflow | Routing |
 |----------|---------|
+| **solo** | Single developer owns the feature end-to-end (default when `--context` is given without `--workflow`) |
 | **implement-and-review** | Implementer drains tasks; reviewer ↔ implementer loop |
 | **research-implement-review** | Researcher → implementer → reviewer |
 | **research-only** | Researcher explores and reports findings to the user |

@@ -16,6 +16,12 @@ use serde::{Deserialize, Serialize};
 use crate::error::{PmError, Result};
 use crate::state::paths;
 
+/// Reserved agent name meaning a definition-less vanilla Claude session.
+/// Unconditional: even if a `claude.md` definition file exists, this name
+/// spawns plain `claude` with no `--agent` flag. Validation skips the
+/// definition-file check for it.
+pub const VANILLA_AGENT: &str = "claude";
+
 /// Parsed `<workflow>/config.toml`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkflowDef {
@@ -85,6 +91,10 @@ impl WorkflowDef {
     ) -> Result<()> {
         let team = self.effective_team();
         for agent in team {
+            // The reserved vanilla name needs no definition file.
+            if agent == VANILLA_AGENT {
+                continue;
+            }
             if !definition_exists(project_root, agent, home) {
                 let (main_def, global_def) = definition_paths(project_root, agent, home);
                 return Err(PmError::WorkflowAgentMissing {
@@ -385,6 +395,25 @@ agents = ["frontend-impl"]
             result.unwrap_err(),
             PmError::WorkflowAgentMissing { .. }
         ));
+    }
+
+    #[test]
+    fn validate_skips_definition_check_for_vanilla_agent() {
+        // The reserved `claude` name means a definition-less vanilla
+        // session — validation must pass with no def file anywhere.
+        let dir = tempdir().unwrap();
+        write_workflow(
+            dir.path(),
+            "demo",
+            r#"description = "x"
+agents = ["claude"]
+brief_agents = ["claude"]
+"#,
+        );
+        let def = WorkflowDef::load(dir.path(), "demo").unwrap();
+        // Home pointed at the empty tempdir: no definition can resolve.
+        def.validate_with_home(dir.path(), "demo", Some(dir.path()))
+            .unwrap();
     }
 
     #[test]

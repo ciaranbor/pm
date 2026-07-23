@@ -328,6 +328,7 @@ impl TestServer {
             agents: {
                 let mut permissions = std::collections::BTreeMap::new();
                 permissions.insert("implementer".to_string(), "acceptEdits".to_string());
+                permissions.insert("claude".to_string(), "acceptEdits".to_string());
                 AgentsConfig { permissions }
             },
         };
