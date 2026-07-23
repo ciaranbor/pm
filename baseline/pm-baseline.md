@@ -8,6 +8,13 @@ This applies to every pm-spawned agent, on top of your role definition.
 Report results to the user in your own session unless your workflow
 directs a handoff to another agent.
 
+## Scope
+
+A problem you notice outside your current task's scope is signal, not
+noise. Don't silently skip it (calling it "pre-existing" loses it) or
+silently fix it (scope creep). Surface it in your report so it can be
+triaged — a one-line note is enough.
+
 ## Workflow
 
 Run `pm workflow show` at the start of each task to see the feature plan:
