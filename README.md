@@ -131,7 +131,9 @@ implementer, researcher → implementer) are what use messaging.
 Agent defs carry no `tools:` allowlist — spawned via `claude --agent`, each
 inherits all Claude Code tools (including `Skill`). Real guardrails belong in
 the permissions layer (`[agents.permissions]` in `.pm/config.toml`), not a
-per-agent tool list.
+per-agent tool list. Agents inherit Claude Code's default permission mode;
+set `[agents.permissions]` entries or pass `--edit` to override per agent
+definition.
 
 Manage agents with `pm agent spawn|list|stop|restart|delete|fork`. `spawn
 <name> --agent <def>` decouples the display/messaging identity from the claude

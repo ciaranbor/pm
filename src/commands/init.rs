@@ -83,12 +83,7 @@ pub fn init(
         },
         setup: SetupConfig::default(),
         github: GithubConfig::default(),
-        agents: {
-            let mut permissions = std::collections::BTreeMap::new();
-            permissions.insert("implementer".to_string(), "acceptEdits".to_string());
-            permissions.insert("claude".to_string(), "acceptEdits".to_string());
-            AgentsConfig { permissions }
-        },
+        agents: AgentsConfig::default(),
     };
     config.save(&pm_dir)?;
 
