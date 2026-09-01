@@ -130,16 +130,30 @@ implementer, researcher → implementer) are what use messaging.
 
 Agent defs carry no `tools:` allowlist — spawned via `claude --agent`, each
 inherits all Claude Code tools (including `Skill`). Real guardrails belong in
-the permissions layer (`[agents.permissions]` in `.pm/config.toml`), not a
-per-agent tool list. Agents inherit Claude Code's default permission mode;
-set `[agents.permissions]` entries or pass `--edit` to override per agent
-definition.
+the permissions layer (see below), not a per-agent tool list.
 
 Manage agents with `pm agent spawn|list|stop|restart|delete|fork`. `spawn
 <name> --agent <def>` decouples the display/messaging identity from the claude
 definition, so you can run several agents off one definition (e.g.
 `frontend-dev` and `backend-dev` both `--agent implementer`). `fork` starts a
 new agent from a copy of another's history. See `pm agent --help`.
+
+### Configuration
+
+Settings live in `<project>/.pm/config.toml`, or `~/.config/pm/config.toml`
+(macOS: `~/Library/Application Support/pm/`) to apply across projects. Project
+beats global per key; `""` masks the tier below, unset means no flag is passed.
+
+```toml
+[agents.permissions]         # claude --permission-mode; --edit beats both tiers
+implementer = "acceptEdits"
+
+[agents.models]              # claude --model; alias or full id, unvalidated
+reviewer = "opus"
+```
+
+Keys are the `--agent` definition, not the display name: an agent spawned as
+`frontend-dev --agent implementer` takes `implementer`'s row.
 
 ### Agents as never-idle message processors
 
