@@ -6,7 +6,7 @@ use crate::error::Result;
 use crate::state::agent::{AgentRegistry, AgentType};
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
-use crate::state::project::ProjectConfig;
+use crate::state::project::{GlobalConfig, ProjectConfig};
 use crate::state::workflow;
 use crate::{gh, git, tmux};
 
@@ -414,19 +414,23 @@ pub fn diagnose(
 ///
 /// Returns formatted diagnostic lines.
 pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Result<Vec<String>> {
-    // Project-independent capability check: warn loudly if the baseline is
-    // installed but the local `claude` no longer supports the flag pm uses
-    // to apply it (otherwise the regression is silent — agents just lose it).
-    let capability_warning = baseline_capability_warning(project_root);
+    // Project-independent warnings, appended after the status lines.
+    let warnings: Vec<String> = [
+        baseline_capability_warning(project_root),
+        global_config_warning(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
 
     // diagnose() returns an empty Vec when the project has no features —
     // preserve the historical "No features to check" message.
     let findings = diagnose(project_root, tmux_server, true)?;
     if findings.is_empty() {
-        // Status line first, capability warning after — matches the ordering
-        // in the normal path below.
+        // Status line first, warnings after — matches the ordering in the
+        // normal path below.
         let mut lines = vec!["No features to check".to_string()];
-        lines.extend(capability_warning);
+        lines.extend(warnings);
         return Ok(lines);
     }
 
@@ -511,11 +515,26 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
         )
     };
     lines.insert(0, summary);
-    if let Some(w) = capability_warning {
-        lines.push(w);
-    }
+    lines.extend(warnings);
 
     Ok(lines)
+}
+
+/// Warn when the global `config.toml` exists but doesn't parse. Every reader
+/// falls back to defaults on a parse error so that a bad file can never block a
+/// spawn, which leaves `pm doctor` as the only place a user hand-editing it can
+/// learn that `max_features` and all their per-agent models and permission
+/// modes are being ignored.
+fn global_config_warning() -> Option<String> {
+    global_config_warning_in(&paths::global_config_dir().ok()?)
+}
+
+fn global_config_warning_in(config_dir: &Path) -> Option<String> {
+    let err = GlobalConfig::load(config_dir).err()?;
+    let path = config_dir.join("config.toml").display().to_string();
+    Some(format!(
+        "global config — {path} could not be read ({err}); max_features, [agents.models] and [agents.permissions] from it are all being ignored"
+    ))
 }
 
 /// Warn when the shared agent baseline is installed for this project but the
@@ -646,6 +665,28 @@ mod tests {
         let project_root = dir.path();
         std::fs::create_dir_all(paths::main_worktree(project_root).join(".claude")).unwrap();
         assert!(baseline_capability_warning(project_root).is_none());
+    }
+
+    #[test]
+    fn global_config_warning_flags_unparseable_file() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "[project\nmax_features =").unwrap();
+        let warning = global_config_warning_in(dir.path()).expect("malformed config must warn");
+        // Names both the file and what the user silently lost.
+        assert!(warning.contains("config.toml"), "got: {warning}");
+        assert!(warning.contains("[agents.models]"), "got: {warning}");
+    }
+
+    #[test]
+    fn global_config_warning_silent_when_valid_or_absent() {
+        let dir = tempdir().unwrap();
+        assert!(global_config_warning_in(dir.path()).is_none());
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[agents.models]\nreviewer = \"opus\"\n",
+        )
+        .unwrap();
+        assert!(global_config_warning_in(dir.path()).is_none());
     }
 
     #[test]

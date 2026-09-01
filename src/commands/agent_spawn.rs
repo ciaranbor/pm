@@ -3,7 +3,9 @@ use std::path::Path;
 use crate::error::{PmError, Result};
 use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
 use crate::state::paths;
-use crate::state::project::ProjectConfig;
+use crate::state::project::{
+    AgentSettings, AgentsConfig, GlobalConfig, ProjectConfig, resolve_agent_settings,
+};
 use crate::state::workflow;
 use crate::tmux;
 
@@ -38,21 +40,44 @@ fn validate_definition_resolves_with_home(
     })
 }
 
-/// Build a claude command. If `agent_name` is provided, uses `--agent`.
-/// Otherwise launches a plain claude session.
-fn build_claude_cmd(
-    agent_name: Option<&str>,
-    append_prompt_file: Option<&str>,
-    prompt: Option<&str>,
-    resume_session: Option<&str>,
-    permission_mode: Option<&str>,
+/// The pieces of a `claude` invocation. Every field left unset omits its flag,
+/// so an agent inherits Claude Code's own default for that setting.
+#[derive(Default)]
+struct ClaudeCmd<'a> {
+    /// Passed to `--agent`; `None` launches a plain claude session.
+    agent_name: Option<&'a str>,
+    append_prompt_file: Option<&'a str>,
+    prompt: Option<&'a str>,
+    resume_session: Option<&'a str>,
+    permission_mode: Option<&'a str>,
+    model: Option<&'a str>,
     fork_session: bool,
-) -> String {
+}
+
+fn build_claude_cmd(cmd: ClaudeCmd<'_>) -> String {
+    let ClaudeCmd {
+        agent_name,
+        append_prompt_file,
+        prompt,
+        resume_session,
+        permission_mode,
+        model,
+        fork_session,
+    } = cmd;
+
     let mut parts = vec!["claude".to_string()];
 
     if let Some(name) = agent_name {
         parts.push("--agent".to_string());
         parts.push(name.to_string());
+    }
+
+    // Config-sourced values are shell-quoted: the command is sent through the
+    // user's interactive shell, and a model id may carry a bracketed context
+    // suffix (e.g. `claude-opus-4-8[1m]`) that zsh would try to glob.
+    if let Some(id) = model {
+        parts.push("--model".to_string());
+        parts.push(tmux::shell_quote(id));
     }
 
     // Append the shared operating baseline onto the system prompt. Reaches
@@ -65,7 +90,7 @@ fn build_claude_cmd(
 
     if let Some(mode) = permission_mode {
         parts.push("--permission-mode".to_string());
-        parts.push(mode.to_string());
+        parts.push(tmux::shell_quote(mode));
     }
 
     if let Some(session_id) = resume_session {
@@ -84,6 +109,34 @@ fn build_claude_cmd(
     }
 
     parts.join(" ")
+}
+
+/// The claude agent definition a spawn keys on — for `--agent` and for the
+/// per-agent settings lookup alike. The explicit override wins; otherwise the
+/// display name doubles as the definition (back-compat).
+fn effective_definition<'a>(
+    agent_definition: Option<&'a str>,
+    agent_name: Option<&'a str>,
+) -> Option<&'a str> {
+    agent_definition.or(agent_name)
+}
+
+/// The settings a spawn actually launches with: config resolved for this
+/// agent's definition, with `--edit` overriding the permission mode. A `None`
+/// definition (a plain, unregistered claude session) takes no config at all.
+fn spawn_settings(
+    edit: bool,
+    definition: Option<&str>,
+    project: &AgentsConfig,
+    global: &AgentsConfig,
+) -> AgentSettings {
+    let mut settings = definition
+        .map(|def| resolve_agent_settings(project, global, def))
+        .unwrap_or_default();
+    if edit {
+        settings.permission_mode = Some("acceptEdits".to_string());
+    }
+    settings
 }
 
 /// The value that reaches `claude --agent`: the effective definition, except
@@ -169,37 +222,30 @@ pub struct SpawnClaudeParams<'a> {
 pub fn spawn_claude_session(params: &SpawnClaudeParams<'_>) -> Result<String> {
     let pm_dir = paths::pm_dir(params.project_root);
     let config = ProjectConfig::load(&pm_dir)?;
-    spawn_claude_session_with_config(params, &config)
+    spawn_claude_session_with_config(params, &config, &GlobalConfig::load_or_default())
 }
 
-/// Inner implementation that accepts a pre-loaded config to avoid redundant loads.
+/// Inner implementation that accepts pre-loaded configs to avoid redundant
+/// loads (`spawn_team` calls this once per agent).
 fn spawn_claude_session_with_config(
     params: &SpawnClaudeParams<'_>,
     config: &ProjectConfig,
+    global: &GlobalConfig,
 ) -> Result<String> {
     let session_name = tmux::session_name(&config.project.name, params.feature);
     let worktree_path = params.project_root.join(params.feature);
 
-    // Resolve effective definition (the value that goes to `claude --agent`).
-    // When `agent_definition` is None, the display name doubles as the
-    // definition (back-compat).
-    let effective_definition = params.agent_definition.or(params.agent_name);
+    let effective_definition = effective_definition(params.agent_definition, params.agent_name);
 
-    // Permission mode lookup uses the *definition* name — permissions are
-    // configured per claude agent definition, not per display name.
-    // Resolve permission mode: --edit flag > project config (by definition) > none
-    let permission_mode = if params.edit {
-        Some("acceptEdits".to_string())
-    } else if let Some(def) = effective_definition {
-        config
-            .agents
-            .permissions
-            .get(def)
-            .filter(|s| !s.is_empty())
-            .cloned()
-    } else {
-        None
-    };
+    // Settings are configured per claude agent definition, not per display
+    // name, and are re-resolved from config on every spawn — never stored on
+    // the registry entry — so restart/fork/heal pick up config edits.
+    let settings = spawn_settings(
+        params.edit,
+        effective_definition,
+        &config.agents,
+        &global.agents,
+    );
 
     // Named agents need a sentinel prompt when none is explicitly provided:
     // Claude with no positional prompt just waits for user input and never
@@ -220,14 +266,15 @@ fn spawn_claude_session_with_config(
     // baseline path unchanged (or None when the baseline is also absent), so
     // older projects keep spawning exactly as before.
     let append_file = crate::notice::compose_spawn_prompt(params.project_root, window_name)?;
-    let cmd = build_claude_cmd(
-        claude_agent_flag(effective_definition),
-        append_file.as_deref(),
-        effective_prompt,
-        params.resume_session,
-        permission_mode.as_deref(),
-        params.fork_session,
-    );
+    let cmd = build_claude_cmd(ClaudeCmd {
+        agent_name: claude_agent_flag(effective_definition),
+        append_prompt_file: append_file.as_deref(),
+        prompt: effective_prompt,
+        resume_session: params.resume_session,
+        permission_mode: settings.permission_mode.as_deref(),
+        model: settings.model.as_deref(),
+        fork_session: params.fork_session,
+    });
     let window_target = if let Some(target) = params.reuse_window {
         tmux::rename_window(params.tmux_server, target, window_name)?;
         target.to_string()
@@ -344,6 +391,7 @@ pub fn agent_spawn(
     let pm_dir = paths::pm_dir(project_root);
     let agents_dir = paths::agents_dir(project_root);
     let config = ProjectConfig::load(&pm_dir)?;
+    let global = GlobalConfig::load_or_default();
     let session_name = tmux::session_name(&config.project.name, feature);
 
     let registry = AgentRegistry::load(&agents_dir, feature)?;
@@ -394,6 +442,7 @@ pub fn agent_spawn(
                 tmux_server,
             },
             &config,
+            &global,
         )
     };
 
@@ -1262,13 +1311,16 @@ mod tests {
         // Note: spawn_claude_session adds a " " sentinel when no prompt
         // is provided for a named agent. build_claude_cmd itself is
         // prompt-agnostic — the sentinel is injected by the caller.
-        let cmd = build_claude_cmd(Some("reviewer"), None, None, None, None, false);
+        let cmd = build_claude_cmd(ClaudeCmd {
+            agent_name: Some("reviewer"),
+            ..Default::default()
+        });
         assert_eq!(cmd, "claude --agent reviewer");
     }
 
     #[test]
     fn build_cmd_plain_session() {
-        let cmd = build_claude_cmd(None, None, None, None, None, false);
+        let cmd = build_claude_cmd(ClaudeCmd::default());
         assert_eq!(cmd, "claude");
     }
 
@@ -1278,14 +1330,10 @@ mod tests {
         // any other definition passes through.
         assert_eq!(claude_agent_flag(Some("claude")), None);
         assert_eq!(claude_agent_flag(Some("reviewer")), Some("reviewer"));
-        let cmd = build_claude_cmd(
-            claude_agent_flag(Some("claude")),
-            None,
-            None,
-            None,
-            None,
-            false,
-        );
+        let cmd = build_claude_cmd(ClaudeCmd {
+            agent_name: claude_agent_flag(Some("claude")),
+            ..Default::default()
+        });
         assert!(
             !cmd.contains("--agent"),
             "vanilla spawn must not pass --agent, got: {cmd}"
@@ -1301,39 +1349,41 @@ mod tests {
 
     #[test]
     fn build_cmd_plain_session_with_permission() {
-        let cmd = build_claude_cmd(None, None, None, None, Some("acceptEdits"), false);
-        assert_eq!(cmd, "claude --permission-mode acceptEdits");
+        let cmd = build_claude_cmd(ClaudeCmd {
+            permission_mode: Some("acceptEdits"),
+            ..Default::default()
+        });
+        assert_eq!(cmd, "claude --permission-mode 'acceptEdits'");
     }
 
     #[test]
     fn build_cmd_with_context() {
-        let cmd = build_claude_cmd(
-            Some("reviewer"),
-            None,
-            Some("review the auth module"),
-            None,
-            None,
-            false,
-        );
+        let cmd = build_claude_cmd(ClaudeCmd {
+            agent_name: Some("reviewer"),
+            prompt: Some("review the auth module"),
+            ..Default::default()
+        });
         assert_eq!(cmd, "claude --agent reviewer 'review the auth module'");
     }
 
     #[test]
     fn build_cmd_with_resume() {
-        let cmd = build_claude_cmd(Some("reviewer"), None, None, Some("abc123"), None, false);
+        let cmd = build_claude_cmd(ClaudeCmd {
+            agent_name: Some("reviewer"),
+            resume_session: Some("abc123"),
+            ..Default::default()
+        });
         assert_eq!(cmd, "claude --agent reviewer --resume abc123");
     }
 
     #[test]
     fn build_cmd_with_context_and_resume() {
-        let cmd = build_claude_cmd(
-            Some("reviewer"),
-            None,
-            Some("continue review"),
-            Some("abc123"),
-            None,
-            false,
-        );
+        let cmd = build_claude_cmd(ClaudeCmd {
+            agent_name: Some("reviewer"),
+            prompt: Some("continue review"),
+            resume_session: Some("abc123"),
+            ..Default::default()
+        });
         assert_eq!(
             cmd,
             "claude --agent reviewer --resume abc123 'continue review'"
@@ -1342,17 +1392,14 @@ mod tests {
 
     #[test]
     fn build_cmd_with_permission_mode() {
-        let cmd = build_claude_cmd(
-            Some("implementer"),
-            None,
-            None,
-            None,
-            Some("acceptEdits"),
-            false,
-        );
+        let cmd = build_claude_cmd(ClaudeCmd {
+            agent_name: Some("implementer"),
+            permission_mode: Some("acceptEdits"),
+            ..Default::default()
+        });
         assert_eq!(
             cmd,
-            "claude --agent implementer --permission-mode acceptEdits"
+            "claude --agent implementer --permission-mode 'acceptEdits'"
         );
     }
 
@@ -1360,14 +1407,11 @@ mod tests {
     fn build_cmd_with_append_prompt_file() {
         // The baseline path is appended right after `--agent` and is
         // shell-quoted so paths with spaces survive.
-        let cmd = build_claude_cmd(
-            Some("reviewer"),
-            Some("/proj/main/.claude/pm-baseline.md"),
-            None,
-            None,
-            None,
-            false,
-        );
+        let cmd = build_claude_cmd(ClaudeCmd {
+            agent_name: Some("reviewer"),
+            append_prompt_file: Some("/proj/main/.claude/pm-baseline.md"),
+            ..Default::default()
+        });
         assert_eq!(
             cmd,
             "claude --agent reviewer --append-system-prompt-file '/proj/main/.claude/pm-baseline.md'"
@@ -1377,7 +1421,12 @@ mod tests {
     #[test]
     fn build_cmd_with_fork_session() {
         // `--fork-session` only emits when paired with `--resume`.
-        let cmd = build_claude_cmd(Some("reviewer"), None, None, Some("abc123"), None, true);
+        let cmd = build_claude_cmd(ClaudeCmd {
+            agent_name: Some("reviewer"),
+            resume_session: Some("abc123"),
+            fork_session: true,
+            ..Default::default()
+        });
         assert_eq!(
             cmd,
             "claude --agent reviewer --resume abc123 --fork-session"
@@ -1388,8 +1437,82 @@ mod tests {
     fn build_cmd_fork_session_without_resume_is_noop() {
         // `--fork-session` requires `--resume` per claude's CLI; we drop it
         // silently rather than emit a broken command.
-        let cmd = build_claude_cmd(Some("reviewer"), None, None, None, None, true);
+        let cmd = build_claude_cmd(ClaudeCmd {
+            agent_name: Some("reviewer"),
+            fork_session: true,
+            ..Default::default()
+        });
         assert_eq!(cmd, "claude --agent reviewer");
+    }
+
+    #[test]
+    fn build_cmd_with_model() {
+        // Quoted, so a bracketed context suffix survives the interactive shell.
+        let cmd = build_claude_cmd(ClaudeCmd {
+            agent_name: Some("reviewer"),
+            model: Some("claude-opus-4-8[1m]"),
+            ..Default::default()
+        });
+        assert_eq!(cmd, "claude --agent reviewer --model 'claude-opus-4-8[1m]'");
+    }
+
+    #[test]
+    fn spawn_settings_edit_beats_configured_permission_mode() {
+        let project = AgentsConfig {
+            permissions: [("implementer".to_string(), "plan".to_string())]
+                .into_iter()
+                .collect(),
+            models: [("implementer".to_string(), "opus".to_string())]
+                .into_iter()
+                .collect(),
+        };
+        let settings = spawn_settings(
+            true,
+            Some("implementer"),
+            &project,
+            &AgentsConfig::default(),
+        );
+        assert_eq!(settings.permission_mode.as_deref(), Some("acceptEdits"));
+        // --edit is about permissions only; the configured model still applies.
+        assert_eq!(settings.model.as_deref(), Some("opus"));
+    }
+
+    #[test]
+    fn spawn_settings_keyed_by_definition_not_display_name() {
+        // A named agent (display `backend-dev`, definition `implementer`)
+        // takes the definition's settings, not the display name's.
+        let project = AgentsConfig {
+            models: [
+                ("implementer".to_string(), "opus".to_string()),
+                ("backend-dev".to_string(), "haiku".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let named = effective_definition(Some("implementer"), Some("backend-dev"));
+        let settings = spawn_settings(false, named, &project, &AgentsConfig::default());
+        assert_eq!(settings.model.as_deref(), Some("opus"));
+
+        // With no override the display name doubles as the definition.
+        let plain = effective_definition(None, Some("backend-dev"));
+        let settings = spawn_settings(false, plain, &project, &AgentsConfig::default());
+        assert_eq!(settings.model.as_deref(), Some("haiku"));
+    }
+
+    #[test]
+    fn spawn_settings_without_definition_takes_no_config() {
+        // A plain claude session has no definition to key on.
+        let project = AgentsConfig {
+            permissions: [("claude".to_string(), "plan".to_string())]
+                .into_iter()
+                .collect(),
+            models: [("claude".to_string(), "opus".to_string())]
+                .into_iter()
+                .collect(),
+        };
+        let settings = spawn_settings(false, None, &project, &AgentsConfig::default());
+        assert_eq!(settings, AgentSettings::default());
     }
 
     #[test]

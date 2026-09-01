@@ -16,8 +16,8 @@ follows is only what the tree *doesn't* tell you.
   the `git/`, `tmux.rs`, `gh.rs` wrappers — never inline in a handler.
 - **State** (`state/`, TOML) — `~/.config/pm/` is the global registry,
   `<project>/.pm/` is per-project state; config precedence is project >
-  global > unlimited. `ProjectEntry` optionally records `repo_url`/`state_remote`
-  for cross-machine restore.
+  global > unset (unlimited features, no spawn flag). `ProjectEntry` optionally
+  records `repo_url`/`state_remote` for cross-machine restore.
 - **Bundled assets** — `agents/`, `baseline/`, `workflows/`, `skills/` are
   embedded via `include_str!` and installed by `pm init`/`pm upgrade` under one
   of two policies: **Overwrite** (skills/agents/baseline — the bundle is
@@ -124,6 +124,10 @@ spawn chokepoint (older projects without it spawn unchanged). Its content is
 general to all agents and must **not** mention `.pm`. If a future `claude` drops
 the flag the baseline would silently go dark, so pm probes `claude --help` at
 spawn and `pm doctor` warns when the baseline is installed but unsupported.
+
+Per-agent `[agents.*]` settings are resolved at spawn time and deliberately not
+stored on `AgentEntry` — re-reading config per spawn is what lets restart and
+fork pick up edits.
 
 The **notice board** (`notice.rs`) is a seeded *directive* surface — terse
 standing instructions hand-written into `~/.config/pm/notices.md` (global) and

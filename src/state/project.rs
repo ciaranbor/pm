@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
+use crate::state::paths;
 
 /// Thin pointer stored in the global registry (~/.config/pm/projects/<name>.toml).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -33,11 +34,17 @@ pub struct ProjectConfig {
     pub agents: AgentsConfig,
 }
 
+/// Per-agent spawn settings. Both maps are keyed by the claude agent
+/// *definition* name (what reaches `claude --agent`), not the display name.
+/// Present in both the project and global config; see `resolve_agent_settings`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentsConfig {
     /// Per-agent permission modes (e.g. "acceptEdits")
     #[serde(default)]
     pub permissions: std::collections::BTreeMap<String, String>,
+    /// Per-agent models — a family alias ("opus") or a full id ("claude-opus-5")
+    #[serde(default)]
+    pub models: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -64,6 +71,8 @@ pub struct GithubConfig {
 pub struct GlobalConfig {
     #[serde(default)]
     pub project: GlobalProjectConfig,
+    #[serde(default)]
+    pub agents: AgentsConfig,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -84,6 +93,16 @@ impl GlobalConfig {
         Ok(config)
     }
 
+    /// Load from the real global config dir, defaulting on any failure.
+    /// Global settings are advisory — a missing or malformed file must never
+    /// block a spawn.
+    pub fn load_or_default() -> Self {
+        paths::global_config_dir()
+            .ok()
+            .and_then(|dir| Self::load(&dir).ok())
+            .unwrap_or_default()
+    }
+
     /// Save to ~/.config/pm/config.toml using atomic write.
     pub fn save(&self, config_dir: &Path) -> Result<()> {
         std::fs::create_dir_all(config_dir)?;
@@ -98,6 +117,40 @@ impl GlobalConfig {
     }
 }
 
+/// Per-agent spawn settings resolved across the two config tiers.
+/// `None` means pm emits no flag — the agent inherits Claude Code's default.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AgentSettings {
+    pub permission_mode: Option<String>,
+    pub model: Option<String>,
+}
+
+/// Resolve one agent definition's settings: the project entry wins over the
+/// global one, per agent and per key. An empty project value masks a set
+/// global value ("inherit the default here").
+pub fn resolve_agent_settings(
+    project: &AgentsConfig,
+    global: &AgentsConfig,
+    definition: &str,
+) -> AgentSettings {
+    AgentSettings {
+        permission_mode: layered(&project.permissions, &global.permissions, definition),
+        model: layered(&project.models, &global.models, definition),
+    }
+}
+
+fn layered(
+    project: &std::collections::BTreeMap<String, String>,
+    global: &std::collections::BTreeMap<String, String>,
+    key: &str,
+) -> Option<String> {
+    project
+        .get(key)
+        .or_else(|| global.get(key))
+        .filter(|v| !v.is_empty())
+        .cloned()
+}
+
 /// Check whether creating a new feature would exceed the configured limit.
 ///
 /// Counts features that are not Merged or Stale (i.e. Initializing, Wip, Review, Approved).
@@ -105,7 +158,6 @@ impl GlobalConfig {
 /// If neither is set, the feature count is unlimited.
 pub fn check_feature_limit(project_root: &Path) -> Result<()> {
     use crate::state::feature::FeatureState;
-    use crate::state::paths;
 
     let pm_dir = paths::pm_dir(project_root);
     let features_dir = paths::features_dir(project_root);
@@ -119,11 +171,7 @@ pub fn check_feature_limit(project_root: &Path) -> Result<()> {
     let limit = if project_limit.is_some() {
         project_limit
     } else {
-        // Load global limit (best-effort — if we can't find the config dir, treat as unlimited)
-        paths::global_config_dir()
-            .ok()
-            .and_then(|dir| GlobalConfig::load(&dir).ok())
-            .and_then(|c| c.project.max_features)
+        GlobalConfig::load_or_default().project.max_features
     };
 
     let Some(max) = limit else {
@@ -478,6 +526,108 @@ name = "myapp"
         assert!(config.agents.permissions.is_empty());
     }
 
+    fn agents_config(permissions: &[(&str, &str)], models: &[(&str, &str)]) -> AgentsConfig {
+        let map = |pairs: &[(&str, &str)]| {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        AgentsConfig {
+            permissions: map(permissions),
+            models: map(models),
+        }
+    }
+
+    #[test]
+    fn agent_settings_project_overrides_global_per_agent() {
+        let project = agents_config(
+            &[("implementer", "acceptEdits")],
+            &[("implementer", "opus")],
+        );
+        let global = agents_config(
+            &[("implementer", "plan"), ("reviewer", "plan")],
+            &[("implementer", "sonnet"), ("reviewer", "fable")],
+        );
+
+        let implementer = resolve_agent_settings(&project, &global, "implementer");
+        assert_eq!(implementer.permission_mode.as_deref(), Some("acceptEdits"));
+        assert_eq!(implementer.model.as_deref(), Some("opus"));
+
+        // Absent from the project map entirely — falls through to global.
+        let reviewer = resolve_agent_settings(&project, &global, "reviewer");
+        assert_eq!(reviewer.permission_mode.as_deref(), Some("plan"));
+        assert_eq!(reviewer.model.as_deref(), Some("fable"));
+    }
+
+    #[test]
+    fn agent_settings_unset_at_both_tiers_is_none() {
+        let settings = resolve_agent_settings(
+            &AgentsConfig::default(),
+            &AgentsConfig::default(),
+            "researcher",
+        );
+        assert_eq!(settings, AgentSettings::default());
+    }
+
+    #[test]
+    fn agent_settings_empty_project_value_masks_global() {
+        // An explicit "" in the project config means "inherit Claude's
+        // default here", not "fall through to the global value".
+        let project = agents_config(&[("reviewer", "")], &[("reviewer", "")]);
+        let global = agents_config(&[("reviewer", "plan")], &[("reviewer", "opus")]);
+        let settings = resolve_agent_settings(&project, &global, "reviewer");
+        assert_eq!(settings, AgentSettings::default());
+    }
+
+    #[test]
+    fn agent_settings_empty_global_value_is_none() {
+        let global = agents_config(&[("reviewer", "")], &[("reviewer", "")]);
+        let settings = resolve_agent_settings(&AgentsConfig::default(), &global, "reviewer");
+        assert_eq!(settings, AgentSettings::default());
+    }
+
+    #[test]
+    fn agent_settings_resolve_for_vanilla_agent() {
+        // `claude` is only filtered out of the `--agent` flag; it is still a
+        // normal lookup key for per-agent settings.
+        let global = agents_config(&[], &[("claude", "opus")]);
+        let settings = resolve_agent_settings(&AgentsConfig::default(), &global, "claude");
+        assert_eq!(settings.model.as_deref(), Some("opus"));
+    }
+
+    #[test]
+    fn global_config_agents_roundtrip() {
+        let toml_str = r#"
+[project]
+max_features = 3
+
+[agents.permissions]
+implementer = "acceptEdits"
+
+[agents.models]
+reviewer = "opus"
+"#;
+        let config: GlobalConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.project.max_features, Some(3));
+        assert_eq!(
+            config.agents.permissions.get("implementer").unwrap(),
+            "acceptEdits"
+        );
+        assert_eq!(config.agents.models.get("reviewer").unwrap(), "opus");
+
+        let dir = tempdir().unwrap();
+        config.save(dir.path()).unwrap();
+        assert_eq!(GlobalConfig::load(dir.path()).unwrap(), config);
+    }
+
+    #[test]
+    fn global_config_without_agents_still_loads() {
+        let config: GlobalConfig = toml::from_str("[project]\nmax_features = 2\n").unwrap();
+        assert_eq!(config.project.max_features, Some(2));
+        assert_eq!(config.agents, AgentsConfig::default());
+    }
+
     #[test]
     fn project_config_agents_roundtrip() {
         let toml_str = r#"
@@ -487,6 +637,9 @@ name = "myapp"
 [agents.permissions]
 implementer = "acceptEdits"
 reviewer = ""
+
+[agents.models]
+implementer = "sonnet"
 "#;
         let config: ProjectConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(
@@ -494,6 +647,7 @@ reviewer = ""
             "acceptEdits"
         );
         assert_eq!(config.agents.permissions.get("reviewer").unwrap(), "");
+        assert_eq!(config.agents.models.get("implementer").unwrap(), "sonnet");
 
         // Roundtrip
         let serialized = toml::to_string_pretty(&config).unwrap();
@@ -563,19 +717,6 @@ default = "implementer"
         let toml_str = r#"name = "myapp""#;
         let info: ProjectInfo = toml::from_str(toml_str).unwrap();
         assert_eq!(info.max_features, None);
-    }
-
-    #[test]
-    fn global_config_roundtrip() {
-        let dir = tempdir().unwrap();
-        let config = GlobalConfig {
-            project: GlobalProjectConfig {
-                max_features: Some(5),
-            },
-        };
-        config.save(dir.path()).unwrap();
-        let loaded = GlobalConfig::load(dir.path()).unwrap();
-        assert_eq!(config, loaded);
     }
 
     #[test]
