@@ -112,6 +112,15 @@ fn parse_agent_at_scope(input: &str) -> (&str, Option<&str>) {
     (input, None)
 }
 
+/// Hook handlers hand back a process exit code; a non-zero one is the
+/// handler's whole answer to the harness and must reach it verbatim.
+fn exit_unless_ok(code: i32) -> pm::error::Result<()> {
+    if code != 0 {
+        std::process::exit(code);
+    }
+    Ok(())
+}
+
 pub fn run(cli: Cli) -> pm::error::Result<()> {
     match cli.command {
         Commands::Init { path, git } => {
@@ -154,6 +163,12 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             }
             Ok(())
         }
+        Commands::Harness(HarnessCommands::Hooks(hooks_cmd)) => match hooks_cmd {
+            HarnessHooksCommands::Stop => exit_unless_ok(commands::hooks_stop::stop()),
+            HarnessHooksCommands::SessionStart => {
+                exit_unless_ok(commands::hooks_session_start::session_start())
+            }
+        },
         Commands::Close { all } => {
             if all {
                 let messages = commands::close::close_all(None)?;
@@ -319,19 +334,9 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     println!("{msg}");
                     Ok(())
                 }
-                HooksCommands::Stop => {
-                    let code = commands::hooks_stop::stop();
-                    if code != 0 {
-                        std::process::exit(code);
-                    }
-                    Ok(())
-                }
+                HooksCommands::Stop => exit_unless_ok(commands::hooks_stop::stop()),
                 HooksCommands::SessionStart => {
-                    let code = commands::hooks_session_start::session_start();
-                    if code != 0 {
-                        std::process::exit(code);
-                    }
-                    Ok(())
+                    exit_unless_ok(commands::hooks_session_start::session_start())
                 }
             },
             ClaudeCommands::Migrate { from } => {

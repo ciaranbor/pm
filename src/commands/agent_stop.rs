@@ -57,6 +57,7 @@ pub fn agent_stop_many(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::harness::Harness;
     use crate::state::agent::{AgentEntry, AgentType};
     use crate::state::feature::{FeatureState, FeatureStatus};
     use crate::testing::TestServer;
@@ -116,6 +117,7 @@ mod tests {
                 window_name: name.to_string(),
                 active: true,
                 agent_definition: None,
+                harness: Harness::ClaudeCode,
             },
         );
         registry.save(&agents_dir, feature).unwrap();

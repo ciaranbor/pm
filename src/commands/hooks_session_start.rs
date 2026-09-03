@@ -94,6 +94,7 @@ fn update_agent_session_id(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::harness::Harness;
     use crate::state::agent::{AgentEntry, AgentType};
     use tempfile::tempdir;
 
@@ -116,6 +117,7 @@ mod tests {
                 window_name: agent_name.to_string(),
                 active: true,
                 agent_definition: None,
+                harness: Harness::ClaudeCode,
             },
         );
         registry.save(&agents_dir, feature).unwrap();

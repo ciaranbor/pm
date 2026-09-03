@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
+use crate::harness::Harness;
 use crate::state::paths;
 
 /// Thin pointer stored in the global registry (~/.config/pm/projects/<name>.toml).
@@ -45,6 +46,9 @@ pub struct AgentsConfig {
     /// Per-agent models — a family alias ("opus") or a full id ("claude-opus-5")
     #[serde(default)]
     pub models: std::collections::BTreeMap<String, String>,
+    /// Per-agent harness (`Harness` string form). Unset means `claude-code`.
+    #[serde(default)]
+    pub harness: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -118,25 +122,32 @@ impl GlobalConfig {
 }
 
 /// Per-agent spawn settings resolved across the two config tiers.
-/// `None` means pm emits no flag — the agent inherits Claude Code's default.
+/// `None` means pm emits no flag — the agent inherits the harness's default.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AgentSettings {
     pub permission_mode: Option<String>,
     pub model: Option<String>,
+    pub harness: Harness,
 }
 
 /// Resolve one agent definition's settings: the project entry wins over the
 /// global one, per agent and per key. An empty project value masks a set
-/// global value ("inherit the default here").
+/// global value ("inherit the default here"). Errors when the effective
+/// harness names one pm can't spawn — never silently falls back.
 pub fn resolve_agent_settings(
     project: &AgentsConfig,
     global: &AgentsConfig,
     definition: &str,
-) -> AgentSettings {
-    AgentSettings {
+) -> Result<AgentSettings> {
+    let harness = layered(&project.harness, &global.harness, definition)
+        .map(|h| h.parse::<Harness>())
+        .transpose()?
+        .unwrap_or_default();
+    Ok(AgentSettings {
         permission_mode: layered(&project.permissions, &global.permissions, definition),
         model: layered(&project.models, &global.models, definition),
-    }
+        harness,
+    })
 }
 
 fn layered(
@@ -536,6 +547,7 @@ name = "myapp"
         AgentsConfig {
             permissions: map(permissions),
             models: map(models),
+            harness: Default::default(),
         }
     }
 
@@ -550,12 +562,12 @@ name = "myapp"
             &[("implementer", "sonnet"), ("reviewer", "fable")],
         );
 
-        let implementer = resolve_agent_settings(&project, &global, "implementer");
+        let implementer = resolve_agent_settings(&project, &global, "implementer").unwrap();
         assert_eq!(implementer.permission_mode.as_deref(), Some("acceptEdits"));
         assert_eq!(implementer.model.as_deref(), Some("opus"));
 
         // Absent from the project map entirely — falls through to global.
-        let reviewer = resolve_agent_settings(&project, &global, "reviewer");
+        let reviewer = resolve_agent_settings(&project, &global, "reviewer").unwrap();
         assert_eq!(reviewer.permission_mode.as_deref(), Some("plan"));
         assert_eq!(reviewer.model.as_deref(), Some("fable"));
     }
@@ -566,7 +578,8 @@ name = "myapp"
             &AgentsConfig::default(),
             &AgentsConfig::default(),
             "researcher",
-        );
+        )
+        .unwrap();
         assert_eq!(settings, AgentSettings::default());
     }
 
@@ -576,14 +589,15 @@ name = "myapp"
         // default here", not "fall through to the global value".
         let project = agents_config(&[("reviewer", "")], &[("reviewer", "")]);
         let global = agents_config(&[("reviewer", "plan")], &[("reviewer", "opus")]);
-        let settings = resolve_agent_settings(&project, &global, "reviewer");
+        let settings = resolve_agent_settings(&project, &global, "reviewer").unwrap();
         assert_eq!(settings, AgentSettings::default());
     }
 
     #[test]
     fn agent_settings_empty_global_value_is_none() {
         let global = agents_config(&[("reviewer", "")], &[("reviewer", "")]);
-        let settings = resolve_agent_settings(&AgentsConfig::default(), &global, "reviewer");
+        let settings =
+            resolve_agent_settings(&AgentsConfig::default(), &global, "reviewer").unwrap();
         assert_eq!(settings, AgentSettings::default());
     }
 
@@ -592,8 +606,72 @@ name = "myapp"
         // `claude` is only filtered out of the `--agent` flag; it is still a
         // normal lookup key for per-agent settings.
         let global = agents_config(&[], &[("claude", "opus")]);
-        let settings = resolve_agent_settings(&AgentsConfig::default(), &global, "claude");
+        let settings = resolve_agent_settings(&AgentsConfig::default(), &global, "claude").unwrap();
         assert_eq!(settings.model.as_deref(), Some("opus"));
+    }
+
+    #[test]
+    fn agent_settings_harness_layers_project_over_global_per_key() {
+        let mut project = AgentsConfig::default();
+        project
+            .harness
+            .insert("implementer".to_string(), "claude-code".to_string());
+        let mut global = AgentsConfig::default();
+        global
+            .harness
+            .insert("implementer".to_string(), "codex".to_string());
+        global
+            .harness
+            .insert("reviewer".to_string(), "claude-code".to_string());
+
+        // Project row masks the (unsupported) global row for the same key.
+        let implementer = resolve_agent_settings(&project, &global, "implementer").unwrap();
+        assert_eq!(implementer.harness, Harness::ClaudeCode);
+        // Absent from the project map — falls through to global.
+        let reviewer = resolve_agent_settings(&project, &global, "reviewer").unwrap();
+        assert_eq!(reviewer.harness, Harness::ClaudeCode);
+        // Unset at both tiers — the default.
+        let researcher = resolve_agent_settings(&project, &global, "researcher").unwrap();
+        assert_eq!(researcher.harness, Harness::ClaudeCode);
+    }
+
+    #[test]
+    fn agent_settings_unsupported_harness_errors() {
+        let mut global = AgentsConfig::default();
+        global
+            .harness
+            .insert("implementer".to_string(), "codex".to_string());
+        let err =
+            resolve_agent_settings(&AgentsConfig::default(), &global, "implementer").unwrap_err();
+        assert!(
+            matches!(err, PmError::HarnessUnsupported { ref value, .. } if value == "codex"),
+            "got: {err}"
+        );
+        assert_eq!(
+            err.to_string(),
+            "harness 'codex' is not supported yet; supported: claude-code"
+        );
+        // Other agents are unaffected by a bad row they don't use.
+        resolve_agent_settings(&AgentsConfig::default(), &global, "reviewer").unwrap();
+    }
+
+    #[test]
+    fn project_config_agents_harness_roundtrip() {
+        let toml_str = r#"
+[project]
+name = "myapp"
+
+[agents.harness]
+implementer = "claude-code"
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.agents.harness.get("implementer").unwrap(),
+            "claude-code"
+        );
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let deserialized: ProjectConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(config, deserialized);
     }
 
     #[test]
