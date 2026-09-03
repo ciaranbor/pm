@@ -86,6 +86,19 @@ fn claude_subcommand_help() {
 }
 
 #[test]
+fn harness_hooks_aliases_resolve() {
+    // Canonical names for the hook handlers; `pm claude hooks …` stays too.
+    for path in [["harness", "hooks"], ["claude", "hooks"]] {
+        pm().args(path)
+            .arg("--help")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("stop"))
+            .stdout(predicate::str::contains("session-start"));
+    }
+}
+
+#[test]
 fn unknown_subcommand_fails() {
     pm().arg("nonexistent")
         .assert()

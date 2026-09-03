@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use crate::error::{PmError, Result};
+use crate::harness::{self, Harness, SpawnSpec};
 use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
 use crate::state::paths;
 use crate::state::project::{
@@ -40,77 +41,6 @@ fn validate_definition_resolves_with_home(
     })
 }
 
-/// The pieces of a `claude` invocation. Every field left unset omits its flag,
-/// so an agent inherits Claude Code's own default for that setting.
-#[derive(Default)]
-struct ClaudeCmd<'a> {
-    /// Passed to `--agent`; `None` launches a plain claude session.
-    agent_name: Option<&'a str>,
-    append_prompt_file: Option<&'a str>,
-    prompt: Option<&'a str>,
-    resume_session: Option<&'a str>,
-    permission_mode: Option<&'a str>,
-    model: Option<&'a str>,
-    fork_session: bool,
-}
-
-fn build_claude_cmd(cmd: ClaudeCmd<'_>) -> String {
-    let ClaudeCmd {
-        agent_name,
-        append_prompt_file,
-        prompt,
-        resume_session,
-        permission_mode,
-        model,
-        fork_session,
-    } = cmd;
-
-    let mut parts = vec!["claude".to_string()];
-
-    if let Some(name) = agent_name {
-        parts.push("--agent".to_string());
-        parts.push(name.to_string());
-    }
-
-    // Config-sourced values are shell-quoted: the command is sent through the
-    // user's interactive shell, and a model id may carry a bracketed context
-    // suffix (e.g. `claude-opus-4-8[1m]`) that zsh would try to glob.
-    if let Some(id) = model {
-        parts.push("--model".to_string());
-        parts.push(tmux::shell_quote(id));
-    }
-
-    // Append the shared operating baseline onto the system prompt. Reaches
-    // every spawned agent (including `main`) since this is the single
-    // command-building chokepoint.
-    if let Some(file) = append_prompt_file {
-        parts.push("--append-system-prompt-file".to_string());
-        parts.push(tmux::shell_quote(file));
-    }
-
-    if let Some(mode) = permission_mode {
-        parts.push("--permission-mode".to_string());
-        parts.push(tmux::shell_quote(mode));
-    }
-
-    if let Some(session_id) = resume_session {
-        parts.push("--resume".to_string());
-        parts.push(session_id.to_string());
-        // `--fork-session` only makes sense alongside `--resume`. It tells
-        // Claude to load the source's transcript but assign a fresh
-        // session id, so the fork's appends don't pollute the source.
-        if fork_session {
-            parts.push("--fork-session".to_string());
-        }
-    }
-
-    if let Some(p) = prompt {
-        parts.push(tmux::shell_quote(p));
-    }
-
-    parts.join(" ")
-}
-
 /// The claude agent definition a spawn keys on — for `--agent` and for the
 /// per-agent settings lookup alike. The explicit override wins; otherwise the
 /// display name doubles as the definition (back-compat).
@@ -139,9 +69,10 @@ fn spawn_settings(
     definition: Option<&str>,
     project: &AgentsConfig,
     global: &AgentsConfig,
-) -> AgentSettings {
+) -> Result<AgentSettings> {
     let mut settings = definition
         .map(|def| resolve_agent_settings(project, global, def))
+        .transpose()?
         .unwrap_or_default();
     if overrides.edit {
         settings.permission_mode = Some("acceptEdits".to_string());
@@ -149,7 +80,26 @@ fn spawn_settings(
     if let Some(id) = overrides.model {
         settings.model = Some(id.to_string());
     }
-    settings
+    Ok(settings)
+}
+
+/// The harness config selects for `definition`, checked before a respawn
+/// or fork so a stored session id from a different harness isn't resumed.
+pub(crate) fn configured_harness(
+    definition: &str,
+    project: &AgentsConfig,
+    global: &AgentsConfig,
+) -> Result<Harness> {
+    Ok(resolve_agent_settings(project, global, definition)?.harness)
+}
+
+/// The shell line sent to the window: pm's own `PM_AGENT_NAME` (so `pm msg`
+/// calls auto-identify) exported ahead of the harness command.
+fn window_command(agent_name: Option<&str>, cmd: &str) -> String {
+    match agent_name {
+        Some(name) => format!("export PM_AGENT_NAME={name} && {cmd}"),
+        None => cmd.to_string(),
+    }
 }
 
 /// The value that reaches `claude --agent`: the effective definition, except
@@ -157,38 +107,6 @@ fn spawn_settings(
 /// if a `claude.md` definition file happens to exist.
 fn claude_agent_flag(effective_definition: Option<&str>) -> Option<&str> {
     effective_definition.filter(|d| *d != workflow::VANILLA_AGENT)
-}
-
-/// Whether `claude --help` text advertises `--append-system-prompt-file`,
-/// the flag pm relies on to apply the shared agent baseline. Split out as a
-/// pure function so it can be unit-tested without invoking `claude`.
-///
-/// `claude --help` collapses the pair into `--append-system-prompt[-file]`
-/// rather than spelling out the `-file` variant, so match either that
-/// bracketed form or a fully expanded `--append-system-prompt-file`. Both
-/// disappear if the file variant is ever removed — which is what we want to
-/// catch.
-fn help_lists_append_file(help: &str) -> bool {
-    help.contains("--append-system-prompt-file") || help.contains("--append-system-prompt[-file]")
-}
-
-/// Probe the installed `claude` for `--append-system-prompt-file` support.
-///
-/// - `Some(true)`  — claude ran and advertises the flag (expected).
-/// - `Some(false)` — claude ran but does NOT advertise it. The baseline
-///   mechanism has regressed: spawned agents would silently lose it.
-/// - `None`        — `claude` not found or `--help` failed; nothing to spawn
-///   against anyway, so callers treat this as "can't tell, don't warn".
-pub fn claude_supports_append_file() -> Option<bool> {
-    let out = std::process::Command::new("claude")
-        .arg("--help")
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let help = String::from_utf8_lossy(&out.stdout);
-    Some(help_lists_append_file(&help))
 }
 
 /// Parameters for spawning a Claude session in a tmux window.
@@ -258,7 +176,7 @@ fn spawn_claude_session_with_config(
         effective_definition,
         &config.agents,
         &global.agents,
-    );
+    )?;
 
     // Named agents need a sentinel prompt when none is explicitly provided:
     // Claude with no positional prompt just waits for user input and never
@@ -279,14 +197,14 @@ fn spawn_claude_session_with_config(
     // baseline path unchanged (or None when the baseline is also absent), so
     // older projects keep spawning exactly as before.
     let append_file = crate::notice::compose_spawn_prompt(params.project_root, window_name)?;
-    let cmd = build_claude_cmd(ClaudeCmd {
-        agent_name: claude_agent_flag(effective_definition),
+    let cmd = settings.harness.build_cmd(&SpawnSpec {
+        definition: claude_agent_flag(effective_definition),
         append_prompt_file: append_file.as_deref(),
         prompt: effective_prompt,
         resume_session: params.resume_session,
+        fork_session: params.fork_session,
         permission_mode: settings.permission_mode.as_deref(),
         model: settings.model.as_deref(),
-        fork_session: params.fork_session,
     });
     let window_target = if let Some(target) = params.reuse_window {
         tmux::rename_window(params.tmux_server, target, window_name)?;
@@ -301,15 +219,11 @@ fn spawn_claude_session_with_config(
         )?
     };
 
-    // Set PM_AGENT_NAME so the agent's `pm msg send/check/read` calls
-    // automatically identify as this agent without needing --as-agent.
-    // The display name (agent_name) is the messaging identity.
-    if let Some(name) = params.agent_name {
-        let export_and_cmd = format!("export PM_AGENT_NAME={name} && {cmd}");
-        tmux::send_keys(params.tmux_server, &window_target, &export_and_cmd)?;
-    } else {
-        tmux::send_keys(params.tmux_server, &window_target, &cmd)?;
-    }
+    tmux::send_keys(
+        params.tmux_server,
+        &window_target,
+        &window_command(params.agent_name, &cmd),
+    )?;
 
     // Register in agent registry if this is a named agent
     if let Some(name) = params.agent_name {
@@ -330,6 +244,7 @@ fn spawn_claude_session_with_config(
                 window_name: name.to_string(),
                 active: true,
                 agent_definition: stored_definition,
+                harness: settings.harness,
             },
         );
         registry.save(&agents_dir, params.feature)?;
@@ -461,12 +376,6 @@ pub fn agent_spawn(
 
     // Check if this agent already exists in the registry
     if let Some(entry) = registry.get(agent_name) {
-        let resume_id = if entry.session_id.is_empty() {
-            None
-        } else {
-            Some(entry.session_id.clone())
-        };
-
         // Window still exists → agent is running. No respawn, so skip
         // validation: a healthy agent shouldn't go unreachable just because its
         // def file moved since it started. Context is still queued.
@@ -482,10 +391,12 @@ pub fn agent_spawn(
 
         // Agent existed but window is gone — respawn.
         validate_definition_resolves(project_root, effective_definition)?;
+        let harness = configured_harness(effective_definition, &config.agents, &global.agents)?;
+        let resume_id = harness::resumable_session(&entry.session_id, entry.harness, harness);
         queue_context()?;
         let window_target = spawn(None, resume_id.as_deref())?;
 
-        let (outcome, msg) = if resume_id.is_some() {
+        let (outcome, mut msg) = if resume_id.is_some() {
             (
                 SpawnOutcome::Resumed,
                 format!("Resumed agent '{agent_name}' in {window_target}"),
@@ -496,6 +407,12 @@ pub fn agent_spawn(
                 format!("Spawned agent '{agent_name}' in {window_target}"),
             )
         };
+        if entry.harness != harness && !entry.session_id.is_empty() {
+            msg.push_str(&format!(
+                " (harness changed {} → {harness}; previous session not resumed)",
+                entry.harness
+            ));
+        }
         return Ok((outcome, msg));
     }
 
@@ -931,6 +848,7 @@ mod tests {
                 window_name: "tester".to_string(),
                 active: true,
                 agent_definition: None,
+                harness: Harness::ClaudeCode,
             },
         );
         registry.save(&agents_dir, &feature).unwrap();
@@ -996,6 +914,41 @@ mod tests {
         assert_eq!(outcome, SpawnOutcome::Resumed);
         assert!(outcome.is_new_window());
         assert!(msg.contains("Resumed agent 'reviewer'"));
+    }
+
+    #[test]
+    fn spawn_errors_on_unsupported_harness_and_leaves_nothing() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+
+        let pm_dir = paths::pm_dir(dir.path());
+        let mut config = ProjectConfig::load(&pm_dir).unwrap();
+        config
+            .agents
+            .harness
+            .insert("reviewer".to_string(), "codex".to_string());
+        config.save(&pm_dir).unwrap();
+
+        let err = agent_spawn(
+            dir.path(),
+            &feature,
+            "reviewer",
+            None,
+            None,
+            SpawnOverrides::default(),
+            server.name(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, PmError::HarnessUnsupported { .. }),
+            "got: {err}"
+        );
+        assert!(
+            tmux::find_window(server.name(), &session_name, "reviewer")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -1328,31 +1281,13 @@ mod tests {
     }
 
     #[test]
-    fn build_cmd_with_agent() {
-        // Note: spawn_claude_session adds a " " sentinel when no prompt
-        // is provided for a named agent. build_claude_cmd itself is
-        // prompt-agnostic — the sentinel is injected by the caller.
-        let cmd = build_claude_cmd(ClaudeCmd {
-            agent_name: Some("reviewer"),
-            ..Default::default()
-        });
-        assert_eq!(cmd, "claude --agent reviewer");
-    }
-
-    #[test]
-    fn build_cmd_plain_session() {
-        let cmd = build_claude_cmd(ClaudeCmd::default());
-        assert_eq!(cmd, "claude");
-    }
-
-    #[test]
     fn vanilla_agent_name_gets_no_agent_flag() {
         // The reserved `claude` name is filtered out of the `--agent` flag;
         // any other definition passes through.
         assert_eq!(claude_agent_flag(Some("claude")), None);
         assert_eq!(claude_agent_flag(Some("reviewer")), Some("reviewer"));
-        let cmd = build_claude_cmd(ClaudeCmd {
-            agent_name: claude_agent_flag(Some("claude")),
+        let cmd = Harness::ClaudeCode.build_cmd(&SpawnSpec {
+            definition: claude_agent_flag(Some("claude")),
             ..Default::default()
         });
         assert!(
@@ -1369,112 +1304,12 @@ mod tests {
     }
 
     #[test]
-    fn build_cmd_plain_session_with_permission() {
-        let cmd = build_claude_cmd(ClaudeCmd {
-            permission_mode: Some("acceptEdits"),
-            ..Default::default()
-        });
-        assert_eq!(cmd, "claude --permission-mode 'acceptEdits'");
-    }
-
-    #[test]
-    fn build_cmd_with_context() {
-        let cmd = build_claude_cmd(ClaudeCmd {
-            agent_name: Some("reviewer"),
-            prompt: Some("review the auth module"),
-            ..Default::default()
-        });
-        assert_eq!(cmd, "claude --agent reviewer 'review the auth module'");
-    }
-
-    #[test]
-    fn build_cmd_with_resume() {
-        let cmd = build_claude_cmd(ClaudeCmd {
-            agent_name: Some("reviewer"),
-            resume_session: Some("abc123"),
-            ..Default::default()
-        });
-        assert_eq!(cmd, "claude --agent reviewer --resume abc123");
-    }
-
-    #[test]
-    fn build_cmd_with_context_and_resume() {
-        let cmd = build_claude_cmd(ClaudeCmd {
-            agent_name: Some("reviewer"),
-            prompt: Some("continue review"),
-            resume_session: Some("abc123"),
-            ..Default::default()
-        });
+    fn window_command_exports_agent_name_for_named_agents_only() {
         assert_eq!(
-            cmd,
-            "claude --agent reviewer --resume abc123 'continue review'"
+            window_command(Some("reviewer"), "claude --agent reviewer"),
+            "export PM_AGENT_NAME=reviewer && claude --agent reviewer"
         );
-    }
-
-    #[test]
-    fn build_cmd_with_permission_mode() {
-        let cmd = build_claude_cmd(ClaudeCmd {
-            agent_name: Some("implementer"),
-            permission_mode: Some("acceptEdits"),
-            ..Default::default()
-        });
-        assert_eq!(
-            cmd,
-            "claude --agent implementer --permission-mode 'acceptEdits'"
-        );
-    }
-
-    #[test]
-    fn build_cmd_with_append_prompt_file() {
-        // The baseline path is appended right after `--agent` and is
-        // shell-quoted so paths with spaces survive.
-        let cmd = build_claude_cmd(ClaudeCmd {
-            agent_name: Some("reviewer"),
-            append_prompt_file: Some("/proj/main/.claude/pm-baseline.md"),
-            ..Default::default()
-        });
-        assert_eq!(
-            cmd,
-            "claude --agent reviewer --append-system-prompt-file '/proj/main/.claude/pm-baseline.md'"
-        );
-    }
-
-    #[test]
-    fn build_cmd_with_fork_session() {
-        // `--fork-session` only emits when paired with `--resume`.
-        let cmd = build_claude_cmd(ClaudeCmd {
-            agent_name: Some("reviewer"),
-            resume_session: Some("abc123"),
-            fork_session: true,
-            ..Default::default()
-        });
-        assert_eq!(
-            cmd,
-            "claude --agent reviewer --resume abc123 --fork-session"
-        );
-    }
-
-    #[test]
-    fn build_cmd_fork_session_without_resume_is_noop() {
-        // `--fork-session` requires `--resume` per claude's CLI; we drop it
-        // silently rather than emit a broken command.
-        let cmd = build_claude_cmd(ClaudeCmd {
-            agent_name: Some("reviewer"),
-            fork_session: true,
-            ..Default::default()
-        });
-        assert_eq!(cmd, "claude --agent reviewer");
-    }
-
-    #[test]
-    fn build_cmd_with_model() {
-        // Quoted, so a bracketed context suffix survives the interactive shell.
-        let cmd = build_claude_cmd(ClaudeCmd {
-            agent_name: Some("reviewer"),
-            model: Some("claude-opus-4-8[1m]"),
-            ..Default::default()
-        });
-        assert_eq!(cmd, "claude --agent reviewer --model 'claude-opus-4-8[1m]'");
+        assert_eq!(window_command(None, "claude"), "claude");
     }
 
     #[test]
@@ -1486,6 +1321,7 @@ mod tests {
             models: [("implementer".to_string(), "opus".to_string())]
                 .into_iter()
                 .collect(),
+            ..Default::default()
         };
         let settings = spawn_settings(
             SpawnOverrides {
@@ -1495,7 +1331,8 @@ mod tests {
             Some("implementer"),
             &project,
             &AgentsConfig::default(),
-        );
+        )
+        .unwrap();
         assert_eq!(settings.permission_mode.as_deref(), Some("acceptEdits"));
         // --edit is about permissions only; the configured model still applies.
         assert_eq!(settings.model.as_deref(), Some("opus"));
@@ -1510,6 +1347,7 @@ mod tests {
             models: [("implementer".to_string(), "opus".to_string())]
                 .into_iter()
                 .collect(),
+            ..Default::default()
         };
         let settings = spawn_settings(
             SpawnOverrides {
@@ -1519,7 +1357,8 @@ mod tests {
             Some("implementer"),
             &project,
             &AgentsConfig::default(),
-        );
+        )
+        .unwrap();
         assert_eq!(settings.model.as_deref(), Some("haiku"));
         // --model is about the model only; the configured permission mode
         // still applies.
@@ -1539,7 +1378,8 @@ mod tests {
             Some("implementer"),
             &AgentsConfig::default(),
             &global,
-        );
+        )
+        .unwrap();
         assert_eq!(settings.model.as_deref(), Some("opus"));
     }
 
@@ -1555,7 +1395,8 @@ mod tests {
             None,
             &AgentsConfig::default(),
             &AgentsConfig::default(),
-        );
+        )
+        .unwrap();
         assert_eq!(settings.model.as_deref(), Some("haiku"));
         assert_eq!(settings.permission_mode, None);
     }
@@ -1579,7 +1420,8 @@ mod tests {
             named,
             &project,
             &AgentsConfig::default(),
-        );
+        )
+        .unwrap();
         assert_eq!(settings.model.as_deref(), Some("opus"));
 
         // With no override the display name doubles as the definition.
@@ -1589,7 +1431,8 @@ mod tests {
             plain,
             &project,
             &AgentsConfig::default(),
-        );
+        )
+        .unwrap();
         assert_eq!(settings.model.as_deref(), Some("haiku"));
     }
 
@@ -1603,30 +1446,15 @@ mod tests {
             models: [("claude".to_string(), "opus".to_string())]
                 .into_iter()
                 .collect(),
+            ..Default::default()
         };
         let settings = spawn_settings(
             SpawnOverrides::default(),
             None,
             &project,
             &AgentsConfig::default(),
-        );
+        )
+        .unwrap();
         assert_eq!(settings, AgentSettings::default());
-    }
-
-    #[test]
-    fn help_lists_append_file_detects_flag() {
-        // Fully-expanded form.
-        assert!(help_lists_append_file(
-            "  --append-system-prompt-file <file>  Append a system prompt from a file\n"
-        ));
-        // The bracket-collapsed form `claude --help` actually emits today.
-        assert!(help_lists_append_file(
-            "                                        --append-system-prompt[-file], --add-dir\n"
-        ));
-        // Regressed: only the plain prompt variant remains, no `-file` — the
-        // doctor capability check must flag this.
-        assert!(!help_lists_append_file(
-            "  --append-system-prompt <prompt>  Append a system prompt\n"
-        ));
     }
 }

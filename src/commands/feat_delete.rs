@@ -412,6 +412,7 @@ mod tests {
                 window_name: "reviewer".to_string(),
                 active: true,
                 agent_definition: None,
+                harness: crate::harness::Harness::ClaudeCode,
             },
         );
         registry.save(&agents_dir, "login").unwrap();

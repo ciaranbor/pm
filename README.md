@@ -150,7 +150,14 @@ implementer = "acceptEdits"
 
 [agents.models]              # claude --model; alias or full id, unvalidated
 reviewer = "opus"
+
+[agents.harness]             # agent CLI; only "claude-code" (the default) today
+implementer = "claude-code"
 ```
+
+Any other `[agents.harness]` value is an error at spawn — pm never falls back
+silently. `pm agent list` shows each agent's harness; a stored session is only
+resumed on the harness that produced it.
 
 `pm agent spawn`, `pm feat new`, and `pm feat adopt` take `--edit` and
 `--model <id>` as spawn-time overrides that beat both tiers; on `feat new`/
@@ -175,7 +182,8 @@ Exception: if a background task or session cron is still running and no
 messages are queued, the hook lets the turn end so the work isn't stalled.
 
 Reinstall with `pm claude hooks install` (idempotent, append-only); `pm doctor
---fix` restores a missing one.
+--fix` restores a missing one. The handlers answer to both `pm harness hooks
+stop|session-start` (canonical) and `pm claude hooks stop|session-start`.
 
 ### Messaging
 

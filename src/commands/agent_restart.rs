@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::commands::agent_spawn::SpawnOverrides;
+use crate::commands::agent_spawn::{SpawnOutcome, SpawnOverrides};
 use crate::error::Result;
 use crate::state::agent::AgentRegistry;
 use crate::state::paths;
@@ -27,17 +27,11 @@ pub fn agent_restart(
 
     let registry = AgentRegistry::load(&agents_dir, feature)?;
 
-    let entry = registry.get(agent_name).ok_or_else(|| {
+    registry.get(agent_name).ok_or_else(|| {
         crate::error::PmError::AgentNotFound(format!(
             "'{agent_name}' not found in scope '{feature}'"
         ))
     })?;
-
-    let resume_id = if entry.session_id.is_empty() {
-        None
-    } else {
-        Some(entry.session_id.clone())
-    };
 
     // Rename the old window (if it exists) so agent_spawn sees "no window"
     // and creates a fresh one. We kill the old window AFTER spawning so that
@@ -53,7 +47,7 @@ pub fn agent_restart(
     // window with the agent's name, and respawn). Passing `None` for
     // `agent_definition` lets `agent_spawn` re-read the stored definition
     // from the registry, so aliased agents keep their `--agent <def>` flag.
-    let (_outcome, _spawn_msg) = super::agent_spawn::agent_spawn(
+    let (outcome, _spawn_msg) = super::agent_spawn::agent_spawn(
         project_root,
         feature,
         agent_name,
@@ -80,7 +74,7 @@ pub fn agent_restart(
         let _ = tmux::kill_window(tmux_server, target);
     }
 
-    let msg = if resume_id.is_some() {
+    let msg = if outcome == SpawnOutcome::Resumed {
         format!("Restarted agent '{agent_name}' (resumed session)")
     } else {
         format!("Restarted agent '{agent_name}'")
@@ -106,6 +100,7 @@ pub fn agent_restart_many(
 mod tests {
     use super::*;
     use crate::commands::agent_spawn;
+    use crate::harness::Harness;
     use crate::state::agent::{AgentEntry, AgentType};
     use crate::state::feature::{FeatureState, FeatureStatus};
     use crate::testing::TestServer;
@@ -296,6 +291,7 @@ mod tests {
                 window_name: "reviewer".to_string(),
                 active: true,
                 agent_definition: None,
+                harness: Harness::ClaudeCode,
             },
         );
         registry.save(&agents_dir, &feature).unwrap();
@@ -368,6 +364,7 @@ mod tests {
                 window_name: "reviewer".to_string(),
                 active: true,
                 agent_definition: None,
+                harness: Harness::ClaudeCode,
             },
         );
         registry.save(&agents_dir, &feature).unwrap();

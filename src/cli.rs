@@ -49,6 +49,9 @@ pub enum Commands {
     /// Claude Code settings, skills, and session management
     #[command(subcommand)]
     Claude(ClaudeCommands),
+    /// Agent harness integration (hook handlers)
+    #[command(subcommand)]
+    Harness(HarnessCommands),
     /// Close all tmux sessions for the current project (counterpart to `pm open`)
     Close {
         /// Close every registered project's sessions, not just the current one
@@ -317,6 +320,21 @@ pub enum HooksCommands {
     /// Stop hook handler — called by Claude Code on every Stop event (not for direct use)
     Stop,
     /// SessionStart hook handler — called by Claude Code on session start (not for direct use)
+    SessionStart,
+}
+
+#[derive(Subcommand)]
+pub enum HarnessCommands {
+    /// Harness lifecycle hook handlers (canonical names for `pm claude hooks stop|session-start`)
+    #[command(subcommand)]
+    Hooks(HarnessHooksCommands),
+}
+
+#[derive(Subcommand)]
+pub enum HarnessHooksCommands {
+    /// Stop hook handler — called by the harness on every Stop event (not for direct use)
+    Stop,
+    /// SessionStart hook handler — called by the harness on session start (not for direct use)
     SessionStart,
 }
 

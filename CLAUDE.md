@@ -25,6 +25,15 @@ follows is only what the tree *doesn't* tell you.
   user edits).
 - **Portability** — `path_utils.rs` swaps `~/` ↔ `$HOME` so registry state
   moves between machines.
+- **Harness** (`harness/`) — the agent CLI pm launches, behind a `Harness`
+  enum (`ClaudeCode` only today; string form `claude-code`). Each seam is a
+  `match` in `harness/mod.rs`, never a trait: `build_cmd(&SpawnSpec)` turns
+  the harness-neutral spawn description (definition, prompt file, prompt,
+  resume/fork, permission mode, model) into the command line, and
+  `supports_prompt_file` is the baseline capability probe. Harness-specific knowledge lives only in
+  `harness/<name>.rs`; `agent_spawn` and the registry stay neutral. Hook
+  handlers are reachable as `pm harness hooks stop|session-start` (canonical)
+  and `pm claude hooks …` (alias); installed settings still write the latter.
 
 The sections below document the design decisions you can't recover by reading
 the tree — these are the invariants to preserve.
@@ -122,8 +131,8 @@ The shared baseline is appended to every spawned agent's prompt via
 `claude --append-system-prompt-file`, gated on the file existing at a single
 spawn chokepoint (older projects without it spawn unchanged). Its content is
 general to all agents and must **not** mention `.pm`. If a future `claude` drops
-the flag the baseline would silently go dark, so pm probes `claude --help` at
-spawn and `pm doctor` warns when the baseline is installed but unsupported.
+the flag the baseline would silently go dark, so `pm doctor` probes
+`claude --help` and warns when the baseline is installed but unsupported.
 
 Per-agent `[agents.*]` settings are resolved at spawn time and deliberately not
 stored on `AgentEntry` — re-reading config per spawn is what lets restart and
@@ -131,6 +140,15 @@ fork pick up edits. Precedence per setting: CLI flag (`--edit`, `--model`) >
 project config > global config > unset (no flag passed). The flags are
 spawn-only (`agent_spawn::SpawnOverrides`): `feat new`/`feat adopt` apply
 them to the whole team, and restart/fork/heal don't carry them forward.
+
+`[agents.harness]` is layered the same way (project > global per key, `""`
+masks) and defaults to `claude-code`; any other value is an error at
+resolution, never a silent fallback. It is the one setting that *is* stored on
+`AgentEntry` (`harness`, serde-defaulted so older registries load unchanged):
+a `session_id` only means something to the harness that produced it, so
+`agent_spawn` resumes via `harness::resumable_session` only when the entry's
+harness still matches config — otherwise it spawns fresh and says so — and
+`agent fork` refuses outright (a fork without the transcript isn't a fork).
 
 The **notice board** (`notice.rs`) is a seeded *directive* surface — terse
 standing instructions hand-written into `~/.config/pm/notices.md` (global) and

@@ -4,6 +4,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
+use crate::harness::Harness;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -37,6 +38,12 @@ pub struct AgentEntry {
     /// --agent <def>` and `def` is used for respawn / restart / fork.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_definition: Option<String>,
+    /// The harness this entry was last spawned on. Stored — unlike the other
+    /// per-agent settings, which are re-resolved from config per spawn —
+    /// because `session_id` only means something to the harness that
+    /// produced it; see `harness::resumable_session`.
+    #[serde(default)]
+    pub harness: Harness,
 }
 
 impl AgentEntry {
@@ -133,6 +140,7 @@ mod tests {
             window_name: "reviewer".to_string(),
             active: true,
             agent_definition: None,
+            harness: Harness::ClaudeCode,
         }
     }
 
@@ -191,6 +199,7 @@ mod tests {
                 window_name: String::new(),
                 active: false,
                 agent_definition: None,
+                harness: Harness::ClaudeCode,
             },
         );
 
@@ -270,6 +279,7 @@ mod tests {
                 window_name: "frontend-dev".to_string(),
                 active: true,
                 agent_definition: Some("implementer".to_string()),
+                harness: Harness::ClaudeCode,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -290,6 +300,7 @@ mod tests {
             window_name: "implementer".to_string(),
             active: true,
             agent_definition: None,
+            harness: Harness::ClaudeCode,
         };
         let toml = toml::to_string_pretty(&registry_entry).unwrap();
         assert!(
@@ -317,6 +328,24 @@ active = true
     }
 
     #[test]
+    fn registry_toml_without_harness_defaults_to_claude_code() {
+        // Entries written before the harness field existed were all
+        // Claude Code sessions, so they load resumable as such.
+        let toml_str = r#"
+[agents.implementer]
+type = "agent"
+session_id = "sess-1"
+window_name = "implementer"
+active = true
+"#;
+        let registry: AgentRegistry = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            registry.get("implementer").unwrap().harness,
+            Harness::ClaudeCode
+        );
+    }
+
+    #[test]
     fn registry_toml_roundtrip() {
         let mut registry = AgentRegistry::default();
         registry.register("reviewer", make_agent("abc123"));
@@ -328,6 +357,7 @@ active = true
                 window_name: String::new(),
                 active: false,
                 agent_definition: None,
+                harness: Harness::ClaudeCode,
             },
         );
 

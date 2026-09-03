@@ -460,6 +460,7 @@ impl TestServer {
                 window_name: agent_name.to_string(),
                 active: true,
                 agent_definition: None,
+                harness: crate::harness::Harness::ClaudeCode,
             },
         );
         registry.save(&agents_dir, feature).unwrap();

@@ -546,7 +546,7 @@ fn baseline_capability_warning(project_root: &Path) -> Option<String> {
     if !crate::commands::skills::baseline_path(project_root).exists() {
         return None;
     }
-    match agent_spawn::claude_supports_append_file() {
+    match crate::harness::Harness::default().supports_prompt_file() {
         Some(false) => Some(
             "baseline — `claude` does not advertise `--append-system-prompt-file`; the \
              shared agent baseline (main/.claude/pm-baseline.md) will NOT be applied to \
@@ -1044,6 +1044,7 @@ mod tests {
                 window_name: "reviewer".to_string(),
                 active: true,
                 agent_definition: None,
+                harness: crate::harness::Harness::ClaudeCode,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -1074,6 +1075,7 @@ mod tests {
                 window_name: "reviewer".to_string(),
                 active: true,
                 agent_definition: None,
+                harness: crate::harness::Harness::ClaudeCode,
             },
         );
         registry.save(&agents_dir, "login").unwrap();

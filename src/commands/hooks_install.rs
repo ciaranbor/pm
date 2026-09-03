@@ -186,6 +186,7 @@ fn entry_is_pm_owned(entry: &Value) -> bool {
             .and_then(|v| v.as_str())
             .is_some_and(|cmd| {
                 cmd.contains(PM_HOOK_MARKER)
+                    || cmd.contains("pm harness hooks stop")
                     || cmd.contains("pm hooks stop")
                     || cmd.contains("pm msg wait")
             })
@@ -247,7 +248,10 @@ fn session_start_entry_is_pm_owned(entry: &Value) -> bool {
     inner.iter().any(|hook| {
         hook.get("command")
             .and_then(|v| v.as_str())
-            .is_some_and(|cmd| cmd.contains(PM_SESSION_START_MARKER))
+            .is_some_and(|cmd| {
+                cmd.contains(PM_SESSION_START_MARKER)
+                    || cmd.contains("pm harness hooks session-start")
+            })
     })
 }
 
@@ -617,6 +621,38 @@ mod tests {
             .and_then(|v| v.as_u64())
             .unwrap();
         assert_eq!(timeout, STOP_HOOK_TIMEOUT_SECS);
+    }
+
+    #[test]
+    fn harness_spelling_counts_as_installed_and_is_not_duplicated() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        let claude_dir = paths::main_worktree(&root).join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        let hand_edited = json!({
+            "hooks": {
+                "Stop": [{ "hooks": [
+                    { "type": "command", "command": "pm harness hooks stop", "timeout": STOP_HOOK_TIMEOUT_SECS }
+                ]}],
+                "SessionStart": [{ "hooks": [
+                    { "type": "command", "command": "pm harness hooks session-start" }
+                ]}]
+            }
+        });
+        std::fs::write(
+            claude_dir.join("settings.json"),
+            serde_json::to_string_pretty(&hand_edited).unwrap(),
+        )
+        .unwrap();
+
+        assert!(is_installed(&root).unwrap());
+
+        install(&root).unwrap();
+        let content = std::fs::read_to_string(claude_dir.join("settings.json")).unwrap();
+        let parsed: Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed["hooks"]["Stop"].as_array().unwrap().len(), 1);
+        assert_eq!(parsed["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
     }
 
     #[test]

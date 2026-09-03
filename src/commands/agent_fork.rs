@@ -3,6 +3,7 @@ use std::path::Path;
 use crate::error::{PmError, Result};
 use crate::state::agent::AgentRegistry;
 use crate::state::paths;
+use crate::state::project::{GlobalConfig, ProjectConfig};
 
 use super::agent_spawn::{SpawnClaudeParams, SpawnOverrides, spawn_claude_session};
 
@@ -70,6 +71,23 @@ pub fn agent_fork(
     // inherited def here (valid at spawn, but may have been removed since).
     super::agent_spawn::validate_definition_resolves(project_root, &inherited_definition)?;
 
+    // The source's transcript only exists on the harness that wrote it; a
+    // fork onto a different harness would be a fresh agent, not a fork.
+    let config = ProjectConfig::load(&paths::pm_dir(project_root))?;
+    let global = GlobalConfig::load_or_default();
+    let harness = super::agent_spawn::configured_harness(
+        &inherited_definition,
+        &config.agents,
+        &global.agents,
+    )?;
+    if harness != source_entry.harness {
+        return Err(PmError::Agent(format!(
+            "agent '{source}' ran on harness {}, but config now selects {harness} for \
+             '{inherited_definition}' — its session cannot be forked across harnesses",
+            source_entry.harness
+        )));
+    }
+
     let window_target = spawn_claude_session(&SpawnClaudeParams {
         project_root,
         feature,
@@ -92,6 +110,7 @@ pub fn agent_fork(
 mod tests {
     use super::*;
     use crate::commands::agent_spawn;
+    use crate::harness::Harness;
     use crate::state::agent::{AgentEntry, AgentType};
     use crate::state::feature::{FeatureState, FeatureStatus};
     use crate::state::project::ProjectConfig;
@@ -352,6 +371,7 @@ mod tests {
                 window_name: "reviewer-2".to_string(),
                 active: true,
                 agent_definition: None,
+                harness: Harness::ClaudeCode,
             },
         );
         registry.save(&agents_dir, &feature).unwrap();

@@ -74,6 +74,9 @@ pub enum PmError {
     #[error("Baseline not found: {0}")]
     BaselineNotFound(String),
 
+    #[error("harness '{value}' is not supported yet; supported: {supported}")]
+    HarnessUnsupported { value: String, supported: String },
+
     #[error(
         "Workflow not found: {0}\n  Hint: run `pm workflow list` to see installed workflows, \
          or run `pm upgrade` to install the bundled ones."
