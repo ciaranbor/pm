@@ -127,7 +127,10 @@ spawn and `pm doctor` warns when the baseline is installed but unsupported.
 
 Per-agent `[agents.*]` settings are resolved at spawn time and deliberately not
 stored on `AgentEntry` — re-reading config per spawn is what lets restart and
-fork pick up edits.
+fork pick up edits. Precedence per setting: CLI flag (`--edit`, `--model`) >
+project config > global config > unset (no flag passed). The flags are
+spawn-only (`agent_spawn::SpawnOverrides`): `feat new`/`feat adopt` apply
+them to the whole team, and restart/fork/heal don't carry them forward.
 
 The **notice board** (`notice.rs`) is a seeded *directive* surface — terse
 standing instructions hand-written into `~/.config/pm/notices.md` (global) and

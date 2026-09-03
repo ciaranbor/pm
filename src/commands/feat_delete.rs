@@ -634,6 +634,7 @@ mod tests {
             context: None,
             base: Some("parent"),
             edit: false,
+            model: None,
             workflow: None,
             tmux_server: server.name(),
         })
@@ -664,6 +665,7 @@ mod tests {
             context: None,
             base: Some("parent"),
             edit: false,
+            model: None,
             workflow: None,
             tmux_server: server.name(),
         })

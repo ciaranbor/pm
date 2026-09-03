@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use crate::commands::agent_spawn::SpawnOverrides;
 use crate::error::{PmError, Result};
 use crate::messages;
 use crate::state::agent::AgentRegistry;
@@ -148,7 +149,7 @@ pub fn agent_send(
         recipient,
         None,
         None,
-        false,
+        SpawnOverrides::default(),
         tmux_server,
     )?;
     if outcome.is_new_window() {
@@ -445,7 +446,7 @@ mod tests {
             "reviewer",
             None,
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -494,7 +495,7 @@ mod tests {
             "frontend-dev",
             Some("implementer"),
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -757,7 +758,7 @@ mod tests {
             "implementer",
             None,
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();

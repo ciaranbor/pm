@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use crate::commands::agent_spawn::SpawnOverrides;
 use crate::commands::feat_delete::{self, CleanupParams};
 use crate::commands::{agent_spawn, hooks_install};
 use crate::error::Result;
@@ -617,7 +618,7 @@ fn apply_fix(
                 agent_name,
                 None,
                 None,
-                false,
+                SpawnOverrides::default(),
                 tmux_server,
             )?;
         }

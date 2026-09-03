@@ -275,6 +275,16 @@ pub fn pane_command(server: Option<&str>, target: &str) -> Result<String> {
     })
 }
 
+/// Full scrollback of a window's first pane as plain text, wrapped lines
+/// joined. Tests use it to see the command a spawn typed into the shell.
+#[cfg(test)]
+pub fn capture_pane(server: Option<&str>, target: &str) -> Result<String> {
+    run_tmux(
+        server,
+        &["capture-pane", "-p", "-J", "-S", "-", "-t", target],
+    )
+}
+
 /// Select (focus) a specific window in a session.
 pub fn select_window(server: Option<&str>, target: &str) -> Result<()> {
     run_tmux(server, &["select-window", "-t", target])?;

@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use crate::commands::agent_spawn::SpawnOverrides;
 use crate::error::Result;
 use crate::state::agent::AgentRegistry;
 use crate::state::paths;
@@ -58,7 +59,7 @@ pub fn agent_restart(
         agent_name,
         None,
         None,
-        false,
+        SpawnOverrides::default(),
         tmux_server,
     )?;
 
@@ -173,7 +174,7 @@ mod tests {
             "reviewer",
             None,
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -216,7 +217,7 @@ mod tests {
             "reviewer",
             None,
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -257,7 +258,7 @@ mod tests {
             "reviewer",
             None,
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -318,7 +319,7 @@ mod tests {
             "frontend-dev",
             Some("implementer"),
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
