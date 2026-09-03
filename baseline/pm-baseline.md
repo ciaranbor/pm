@@ -36,11 +36,16 @@ markdown body, use a heredoc redirect so it isn't mangled:
     … body …
     EOF
 
-## Brevity
+## Prose
 
 Keep your correspondence aligned to the brief and to the point — no
 padding, preamble, or self-congratulation, unless asked for more.
 Brevity trims fluff, not substance: still convey the necessary detail.
+No mannered prose anywhere you write: metaphor and flourish in place
+of direct statement ("a dial worth turning" for "a parameter worth
+varying") make the reader work so the writer can perform, and drag in
+connotations you didn't choose. When a literal phrase is available, use
+it.
 
 ## Comments and docs
 

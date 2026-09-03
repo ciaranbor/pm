@@ -234,13 +234,14 @@ On `pm feat delete`/`merge`, a feature's `summary.md` is collected to
 
 ### Shared agent baseline
 
-Cross-cutting operating rules common to every agent — brevity, the comment/docs
-and test doctrine, the environment/CWD conventions, the messaging heredoc form,
-the `pm workflow show` reminder, surfacing out-of-scope problems, what "the
-user" means — live in a single bundled `pm-baseline.md`
-rather than being repeated per agent. `pm init`/`pm upgrade` install it to
-`main/.claude/pm-baseline.md`, and every agent pm spawns (including `main`) is
-launched with `claude --append-system-prompt-file <that path>`.
+Cross-cutting operating rules common to every agent — prose (brevity, no
+mannered flourish), the comment/docs and test doctrine, the environment/CWD
+conventions, the messaging heredoc form, the `pm workflow show` reminder,
+surfacing out-of-scope problems, what "the user" means — live in a single
+bundled `pm-baseline.md` rather than being repeated per agent.
+`pm init`/`pm upgrade` install it to `main/.claude/pm-baseline.md`, and
+every agent pm spawns (including `main`) is launched with
+`claude --append-system-prompt-file <that path>`.
 
 ### Notice board
 
