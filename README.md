@@ -145,12 +145,17 @@ Settings live in `<project>/.pm/config.toml`, or `~/.config/pm/config.toml`
 beats global per key; `""` masks the tier below, unset means no flag is passed.
 
 ```toml
-[agents.permissions]         # claude --permission-mode; --edit beats both tiers
+[agents.permissions]         # claude --permission-mode
 implementer = "acceptEdits"
 
 [agents.models]              # claude --model; alias or full id, unvalidated
 reviewer = "opus"
 ```
+
+`pm agent spawn`, `pm feat new`, and `pm feat adopt` take `--edit` and
+`--model <id>` as spawn-time overrides that beat both tiers; on `feat new`/
+`feat adopt` they apply to every agent the workflow spawns. Neither is
+remembered — a restart, fork, or heal goes back to config.
 
 Keys are the `--agent` definition, not the display name: an agent spawned as
 `frontend-dev --agent implementer` takes `implementer`'s row.

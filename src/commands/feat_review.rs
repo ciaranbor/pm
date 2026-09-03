@@ -124,7 +124,8 @@ fn setup_review(
             // alias support needed here.
             agent_definition: None,
             prompt: None,
-            edit: false, // reviews are read-only
+            // Reviews are read-only; no --edit, and the model comes from config.
+            overrides: agent_spawn::SpawnOverrides::default(),
             resume_session: None,
             fork_session: false,
             reuse_window: Some(&reuse_target),

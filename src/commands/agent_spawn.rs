@@ -121,11 +121,21 @@ fn effective_definition<'a>(
     agent_definition.or(agent_name)
 }
 
+/// Spawn-time CLI overrides (`--edit`, `--model`). Resolved on top of config
+/// for this spawn only — never stored on the registry entry, so a restart,
+/// fork, or heal goes back to config.
+#[derive(Default, Clone, Copy)]
+pub struct SpawnOverrides<'a> {
+    pub edit: bool,
+    pub model: Option<&'a str>,
+}
+
 /// The settings a spawn actually launches with: config resolved for this
-/// agent's definition, with `--edit` overriding the permission mode. A `None`
-/// definition (a plain, unregistered claude session) takes no config at all.
+/// agent's definition, with the CLI overrides applied on top. A `None`
+/// definition (a plain, unregistered claude session) takes no config at
+/// all, but the overrides still apply.
 fn spawn_settings(
-    edit: bool,
+    overrides: SpawnOverrides<'_>,
     definition: Option<&str>,
     project: &AgentsConfig,
     global: &AgentsConfig,
@@ -133,8 +143,11 @@ fn spawn_settings(
     let mut settings = definition
         .map(|def| resolve_agent_settings(project, global, def))
         .unwrap_or_default();
-    if edit {
+    if overrides.edit {
         settings.permission_mode = Some("acceptEdits".to_string());
+    }
+    if let Some(id) = overrides.model {
+        settings.model = Some(id.to_string());
     }
     settings
 }
@@ -195,7 +208,7 @@ pub struct SpawnClaudeParams<'a> {
     /// `--agent def`. Ignored when `agent_name` is `None`.
     pub agent_definition: Option<&'a str>,
     pub prompt: Option<&'a str>,
-    pub edit: bool,
+    pub overrides: SpawnOverrides<'a>,
     pub resume_session: Option<&'a str>,
     /// When `true` and `resume_session` is `Some`, passes `--fork-session`
     /// to Claude so the resumed conversation gets a fresh session id and
@@ -241,7 +254,7 @@ fn spawn_claude_session_with_config(
     // name, and are re-resolved from config on every spawn — never stored on
     // the registry entry — so restart/fork/heal pick up config edits.
     let settings = spawn_settings(
-        params.edit,
+        params.overrides,
         effective_definition,
         &config.agents,
         &global.agents,
@@ -351,8 +364,8 @@ impl SpawnOutcome {
 
 /// Spawn a named agent in a tmux window within the feature session.
 /// Handles three cases: new agent, already-active agent, and dead-but-resumable agent.
-/// If `edit` is true, `--permission-mode acceptEdits` is passed.
-/// Otherwise, the permission mode is looked up from the project config.
+/// `overrides` carries the spawn-time CLI flags; anything unset there is
+/// looked up from config.
 ///
 /// `agent_name` is the display name (registry key, tmux window, `PM_AGENT_NAME`).
 /// `agent_definition` is the claude agent definition passed to `--agent`. When
@@ -380,7 +393,7 @@ pub fn agent_spawn(
     agent_name: &str,
     agent_definition: Option<&str>,
     context: Option<&str>,
-    edit: bool,
+    overrides: SpawnOverrides<'_>,
     tmux_server: Option<&str>,
 ) -> Result<(SpawnOutcome, String)> {
     crate::messages::validate_name(agent_name, "agent")?;
@@ -435,7 +448,7 @@ pub fn agent_spawn(
                 agent_name: Some(agent_name),
                 agent_definition: resolved_definition.as_deref(),
                 prompt,
-                edit,
+                overrides,
                 resume_session: resume,
                 fork_session: false,
                 reuse_window: None,
@@ -543,7 +556,15 @@ pub fn agent_spawn_all(
     // `agent_spawn` reads the stored `agent_definition` from the registry
     // when called with `None`, so respawns automatically preserve aliases.
     for name in &agent_names {
-        match agent_spawn(project_root, feature, name, None, None, false, tmux_server) {
+        match agent_spawn(
+            project_root,
+            feature,
+            name,
+            None,
+            None,
+            SpawnOverrides::default(),
+            tmux_server,
+        ) {
             Ok((outcome, msg)) => {
                 if outcome.is_new_window() {
                     spawned_count += 1;
@@ -641,7 +662,7 @@ mod tests {
             "reviewer",
             None,
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -684,7 +705,7 @@ mod tests {
             "reviewer",
             None,
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -707,7 +728,7 @@ mod tests {
             "reviewer",
             None,
             Some("focus on auth"),
-            false,
+            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -733,7 +754,7 @@ mod tests {
             "reviewer",
             None,
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -743,7 +764,7 @@ mod tests {
             "tester",
             None,
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -773,7 +794,7 @@ mod tests {
             "reviewer",
             None,
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -783,7 +804,7 @@ mod tests {
             "tester",
             None,
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -834,7 +855,7 @@ mod tests {
             "reviewer",
             None,
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -844,7 +865,7 @@ mod tests {
             "tester",
             None,
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -893,7 +914,7 @@ mod tests {
             "reviewer",
             None,
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -944,7 +965,7 @@ mod tests {
             "reviewer",
             None,
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -968,7 +989,7 @@ mod tests {
             "reviewer",
             None,
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -989,7 +1010,7 @@ mod tests {
             "foo:bar",
             None,
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         );
         assert!(result.is_err());
@@ -1000,7 +1021,7 @@ mod tests {
             "../evil",
             None,
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         );
         assert!(result.is_err());
@@ -1022,7 +1043,7 @@ mod tests {
             "frontend-dev",
             Some("implementer"),
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -1065,7 +1086,7 @@ mod tests {
             "implementer",
             None,
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -1091,7 +1112,7 @@ mod tests {
             "implementer",
             Some("implementer"),
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -1117,7 +1138,7 @@ mod tests {
             "frontend-dev",
             Some("implementer"),
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -1157,7 +1178,7 @@ mod tests {
             "frontend-dev",
             Some("foo:bar"),
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         );
         assert!(result.is_err());
@@ -1178,7 +1199,7 @@ mod tests {
             "no-such-agent",
             None,
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         );
         assert!(matches!(
@@ -1210,7 +1231,7 @@ mod tests {
             "no-such-agent",
             None,
             Some("do the thing"),
-            false,
+            SpawnOverrides::default(),
             server.name(),
         );
         assert!(result.is_err());
@@ -1240,7 +1261,7 @@ mod tests {
             "reviewer",
             None,
             Some("keep going"),
-            false,
+            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -1267,7 +1288,7 @@ mod tests {
             "frontend-dev",
             Some("ghost-def"),
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         );
         assert!(matches!(
@@ -1467,7 +1488,10 @@ mod tests {
                 .collect(),
         };
         let settings = spawn_settings(
-            true,
+            SpawnOverrides {
+                edit: true,
+                model: None,
+            },
             Some("implementer"),
             &project,
             &AgentsConfig::default(),
@@ -1475,6 +1499,65 @@ mod tests {
         assert_eq!(settings.permission_mode.as_deref(), Some("acceptEdits"));
         // --edit is about permissions only; the configured model still applies.
         assert_eq!(settings.model.as_deref(), Some("opus"));
+    }
+
+    #[test]
+    fn spawn_settings_model_flag_beats_configured_model() {
+        let project = AgentsConfig {
+            permissions: [("implementer".to_string(), "plan".to_string())]
+                .into_iter()
+                .collect(),
+            models: [("implementer".to_string(), "opus".to_string())]
+                .into_iter()
+                .collect(),
+        };
+        let settings = spawn_settings(
+            SpawnOverrides {
+                edit: false,
+                model: Some("haiku"),
+            },
+            Some("implementer"),
+            &project,
+            &AgentsConfig::default(),
+        );
+        assert_eq!(settings.model.as_deref(), Some("haiku"));
+        // --model is about the model only; the configured permission mode
+        // still applies.
+        assert_eq!(settings.permission_mode.as_deref(), Some("plan"));
+    }
+
+    #[test]
+    fn spawn_settings_model_absent_falls_through_to_config() {
+        let global = AgentsConfig {
+            models: [("implementer".to_string(), "opus".to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        let settings = spawn_settings(
+            SpawnOverrides::default(),
+            Some("implementer"),
+            &AgentsConfig::default(),
+            &global,
+        );
+        assert_eq!(settings.model.as_deref(), Some("opus"));
+    }
+
+    #[test]
+    fn spawn_settings_model_flag_applies_without_definition() {
+        // A plain claude session takes no config, but an explicit flag
+        // is still honoured.
+        let settings = spawn_settings(
+            SpawnOverrides {
+                edit: false,
+                model: Some("haiku"),
+            },
+            None,
+            &AgentsConfig::default(),
+            &AgentsConfig::default(),
+        );
+        assert_eq!(settings.model.as_deref(), Some("haiku"));
+        assert_eq!(settings.permission_mode, None);
     }
 
     #[test]
@@ -1491,12 +1574,22 @@ mod tests {
             ..Default::default()
         };
         let named = effective_definition(Some("implementer"), Some("backend-dev"));
-        let settings = spawn_settings(false, named, &project, &AgentsConfig::default());
+        let settings = spawn_settings(
+            SpawnOverrides::default(),
+            named,
+            &project,
+            &AgentsConfig::default(),
+        );
         assert_eq!(settings.model.as_deref(), Some("opus"));
 
         // With no override the display name doubles as the definition.
         let plain = effective_definition(None, Some("backend-dev"));
-        let settings = spawn_settings(false, plain, &project, &AgentsConfig::default());
+        let settings = spawn_settings(
+            SpawnOverrides::default(),
+            plain,
+            &project,
+            &AgentsConfig::default(),
+        );
         assert_eq!(settings.model.as_deref(), Some("haiku"));
     }
 
@@ -1511,7 +1604,12 @@ mod tests {
                 .into_iter()
                 .collect(),
         };
-        let settings = spawn_settings(false, None, &project, &AgentsConfig::default());
+        let settings = spawn_settings(
+            SpawnOverrides::default(),
+            None,
+            &project,
+            &AgentsConfig::default(),
+        );
         assert_eq!(settings, AgentSettings::default());
     }
 

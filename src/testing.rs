@@ -393,6 +393,25 @@ impl TestServer {
         (project_path, project_name)
     }
 
+    /// Poll a window's scrollback until `needle` appears (the shell echoes
+    /// typed commands, so this observes what a spawn actually launched).
+    /// Panics with the captured text on timeout.
+    pub fn wait_for_pane_text(&self, target: &str, needle: &str) {
+        let mut last = String::new();
+        for _ in 0..500 {
+            if let Ok(text) = crate::tmux::capture_pane(self.name(), target) {
+                if text.contains(needle) {
+                    return;
+                }
+                last = text;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!(
+            "wait_for_pane_text: '{needle}' never appeared in window '{target}'; last capture:\n{last}"
+        );
+    }
+
     /// Create a tmux window running `sleep 999` (a non-shell process) to
     /// simulate an active agent. Registers the agent in the registry and waits
     /// until `pane_command` reports "sleep" so callers can immediately query

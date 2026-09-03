@@ -4,7 +4,7 @@ use crate::error::{PmError, Result};
 use crate::state::agent::AgentRegistry;
 use crate::state::paths;
 
-use super::agent_spawn::{SpawnClaudeParams, spawn_claude_session};
+use super::agent_spawn::{SpawnClaudeParams, SpawnOverrides, spawn_claude_session};
 
 /// Fork an existing agent: spawn a new agent that starts with a copy of
 /// the source's conversation history.
@@ -76,7 +76,7 @@ pub fn agent_fork(
         agent_name: Some(new_name),
         agent_definition: Some(&inherited_definition),
         prompt: None,
-        edit: false,
+        overrides: SpawnOverrides::default(),
         resume_session: Some(&source_session_id),
         fork_session: true,
         reuse_window: None,
@@ -158,7 +158,16 @@ mod tests {
         session_id: &str,
         server: &TestServer,
     ) {
-        agent_spawn::agent_spawn(dir, feature, name, None, None, false, server.name()).unwrap();
+        agent_spawn::agent_spawn(
+            dir,
+            feature,
+            name,
+            None,
+            None,
+            SpawnOverrides::default(),
+            server.name(),
+        )
+        .unwrap();
         let agents_dir = paths::agents_dir(dir);
         let mut registry = AgentRegistry::load(&agents_dir, feature).unwrap();
         registry.get_mut(name).unwrap().session_id = session_id.to_string();
@@ -261,7 +270,7 @@ mod tests {
             "frontend-dev",
             Some("implementer"),
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -308,7 +317,7 @@ mod tests {
             "reviewer",
             None,
             None,
-            false,
+            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();

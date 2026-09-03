@@ -340,6 +340,10 @@ pub enum AgentCommands {
         /// Enable acceptEdits permission mode
         #[arg(long)]
         edit: bool,
+        /// Model for the spawned Claude session (alias or full id, passed
+        /// unvalidated to `claude --model`); beats `[agents.models]` config
+        #[arg(long, value_name = "ID")]
+        model: Option<String>,
     },
     /// List agents in the current feature
     List {
@@ -477,6 +481,10 @@ pub enum FeatCommands {
         /// Force --permission-mode acceptEdits on the spawned Claude session
         #[arg(long)]
         edit: bool,
+        /// Model for every agent the workflow spawns (alias or full id,
+        /// passed unvalidated to `claude --model`); beats `[agents.models]`
+        #[arg(long, value_name = "ID")]
+        model: Option<String>,
         /// Workflow name (defaults to 'solo' when --context is given).
         /// Run `pm workflow list` for installed workflows.
         #[arg(long)]
@@ -499,6 +507,10 @@ pub enum FeatCommands {
         /// Force --permission-mode acceptEdits on the spawned Claude session
         #[arg(long)]
         edit: bool,
+        /// Model for every agent the workflow spawns (alias or full id,
+        /// passed unvalidated to `claude --model`); beats `[agents.models]`
+        #[arg(long, value_name = "ID")]
+        model: Option<String>,
         /// Workflow name (defaults to 'solo' when --context is given).
         /// Run `pm workflow list` for installed workflows.
         #[arg(long)]

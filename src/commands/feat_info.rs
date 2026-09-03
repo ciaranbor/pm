@@ -120,6 +120,7 @@ mod tests {
             context: Some("fix the widget"),
             base: None,
             edit: false,
+            model: None,
             workflow: Some("implement-and-review"),
             tmux_server: server.name(),
         })

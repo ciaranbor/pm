@@ -2,8 +2,8 @@ use std::path::Path;
 
 use chrono::Utc;
 
-use crate::commands::claude_settings;
 use crate::commands::feat_common::{self, InitStateFields};
+use crate::commands::{agent_spawn, claude_settings};
 use crate::error::{PmError, Result};
 use crate::hooks;
 use crate::state::feature::{FeatureState, FeatureStatus};
@@ -97,6 +97,8 @@ pub struct FeatNewParams<'a> {
     /// from CWD (enabling natural stacking from within a feature worktree).
     pub base: Option<&'a str>,
     pub edit: bool,
+    /// `--model` for every agent the workflow spawns; beats `[agents.models]`.
+    pub model: Option<&'a str>,
     /// Workflow to activate for this feature. When `None` and `context` is
     /// provided, defaults to `feat_common::DEFAULT_WORKFLOW` (a context
     /// needs a recipient).
@@ -120,6 +122,7 @@ impl<'a> FeatNewParams<'a> {
             context: None,
             base: None,
             edit: false,
+            model: None,
             workflow: None,
             tmux_server,
         }
@@ -242,7 +245,10 @@ pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
                 params.project_root,
                 &feature_name,
                 team,
-                params.edit,
+                agent_spawn::SpawnOverrides {
+                    edit: params.edit,
+                    model: params.model,
+                },
                 Some(&reuse_target),
                 params.tmux_server,
             )?;
@@ -1039,6 +1045,29 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn feat_new_model_applies_to_whole_team() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, _) = server.setup_project(dir.path());
+
+        feat_new(&FeatNewParams {
+            workflow: Some("implement-and-review"),
+            model: Some("haiku"),
+            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+        })
+        .unwrap();
+
+        let config = ProjectConfig::load(&paths::pm_dir(&project_path)).unwrap();
+        let session = tmux::session_name(&config.project.name, "login");
+        for agent in ["implementer", "reviewer"] {
+            let target = tmux::find_window(server.name(), &session, agent)
+                .unwrap()
+                .unwrap_or_else(|| panic!("no window for {agent}"));
+            server.wait_for_pane_text(&target, &format!("--model {}", tmux::shell_quote("haiku")));
+        }
     }
 
     #[test]

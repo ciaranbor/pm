@@ -379,6 +379,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     agent_definition,
                     context,
                     edit,
+                    model,
                 } => {
                     // `--context -` reads the brief from stdin; any other
                     // value is treated as a literal string (no file resolution).
@@ -390,7 +391,10 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                             &agent_name,
                             agent_definition.as_deref(),
                             context.as_deref(),
-                            edit,
+                            commands::agent_spawn::SpawnOverrides {
+                                edit,
+                                model: model.as_deref(),
+                            },
                             None,
                         )?;
                         println!("{msg}");
@@ -398,6 +402,12 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         if agent_definition.is_some() {
                             return Err(PmError::Agent(
                                 "--agent requires a positional NAME (the display name to register under)"
+                                    .to_string(),
+                            ));
+                        }
+                        if edit || model.is_some() {
+                            return Err(PmError::Agent(
+                                "--edit/--model require a positional NAME; respawn-all re-resolves settings from config"
                                     .to_string(),
                             ));
                         }
@@ -616,6 +626,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     context,
                     base,
                     edit,
+                    model,
                     workflow,
                 } => {
                     let feat_name =
@@ -626,6 +637,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                             context: context.as_deref(),
                             base: base.as_deref(),
                             edit,
+                            model: model.as_deref(),
                             workflow: workflow.as_deref(),
                             tmux_server: None,
                         })?;
@@ -638,6 +650,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     context,
                     from,
                     edit,
+                    model,
                     workflow,
                 } => {
                     let feat_name =
@@ -648,6 +661,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                             context: context.as_deref(),
                             from: from.as_deref(),
                             edit,
+                            model: model.as_deref(),
                             workflow: workflow.as_deref(),
                             tmux_server: None,
                             claude_base: None,
