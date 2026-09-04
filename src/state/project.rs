@@ -604,10 +604,11 @@ name = "myapp"
 
     #[test]
     fn agent_settings_resolve_for_vanilla_agent() {
-        // `claude` is only filtered out of the `--agent` flag; it is still a
+        // `default` is only filtered out of the `--agent` flag; it is still a
         // normal lookup key for per-agent settings.
-        let global = agents_config(&[], &[("claude", "opus")]);
-        let settings = resolve_agent_settings(&AgentsConfig::default(), &global, "claude").unwrap();
+        let global = agents_config(&[], &[("default", "opus")]);
+        let settings =
+            resolve_agent_settings(&AgentsConfig::default(), &global, "default").unwrap();
         assert_eq!(settings.model.as_deref(), Some("opus"));
     }
 

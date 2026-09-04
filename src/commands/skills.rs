@@ -31,18 +31,6 @@ enum BundledKind {
     Baseline,
 }
 
-/// How `install_in` treats an already-installed item.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum InstallPolicy {
-    /// Bundle is authoritative: outdated installs are rewritten on
-    /// upgrade. Used for skills and agents — pm controls their content.
-    Overwrite,
-    /// User edits are preserved: an already-installed item is skipped on
-    /// upgrade, even if its content drifted from the bundled version.
-    /// Used for workflows, where the bundle is just a starter template.
-    Preserve,
-}
-
 impl BundledKind {
     fn label(self) -> &'static str {
         match self {
@@ -59,13 +47,6 @@ impl BundledKind {
             Self::Agent => PmError::AgentNotFound(name.to_string()),
             Self::Workflow => PmError::WorkflowNotFound(name.to_string()),
             Self::Baseline => PmError::BaselineNotFound(name.to_string()),
-        }
-    }
-
-    fn install_policy(self) -> InstallPolicy {
-        match self {
-            Self::Skill | Self::Agent | Self::Baseline => InstallPolicy::Overwrite,
-            Self::Workflow => InstallPolicy::Preserve,
         }
     }
 
@@ -402,20 +383,11 @@ fn list_both(kind: BundledKind, project_root: Option<&Path>) -> Result<Vec<Strin
     Ok(lines)
 }
 
+/// Install (or rewrite) every bundled item of `kind` under `dir`. The
+/// bundle is authoritative for all kinds: an item whose on-disk content
+/// differs from the bundle is overwritten. Directories under `dir` that
+/// no bundled item names are never touched.
 fn install_in(dir: &Path, kind: BundledKind, name: Option<&str>) -> Result<Vec<String>> {
-    install_in_with_policy(dir, kind, name, kind.install_policy())
-}
-
-/// Like [`install_in`] but lets the caller force an `Overwrite` policy
-/// regardless of the kind's default. Used by explicit `pm workflow
-/// install` calls so users can revert a hand-edited workflow back to
-/// the bundled copy without `rm -rf`-ing the directory first.
-fn install_in_with_policy(
-    dir: &Path,
-    kind: BundledKind,
-    name: Option<&str>,
-    policy: InstallPolicy,
-) -> Result<Vec<String>> {
     let to_install = items_to_install(kind, name)?;
 
     let label = kind.label();
@@ -425,42 +397,14 @@ fn install_in_with_policy(
             messages.push(format!("{label} '{}' is already up to date", item.name));
             continue;
         }
-        // Preserve policy is enforced per-file, not per-item: any
-        // already-on-disk file is left alone (it may be user-modified),
-        // but missing sibling files are still written. This guarantees
-        // that editing one file in a multi-file item never causes a
-        // sibling deletion + upgrade to silently restore the bundle.
-        let mut wrote_any = false;
-        let mut preserved_any = false;
         for (rel, content) in item.files {
             let path = dir.join(rel);
-            if policy == InstallPolicy::Preserve && path.exists() {
-                preserved_any = true;
-                continue;
-            }
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
             }
             fs::write(&path, content)?;
-            wrote_any = true;
         }
-        let msg = match (wrote_any, preserved_any) {
-            (true, true) => {
-                format!(
-                    "Installed {label} '{}' (partial — preserved user-modified files)",
-                    item.name
-                )
-            }
-            (true, false) => format!("Installed {label} '{}'", item.name),
-            (false, true) => format!(
-                "{label} '{}' is installed (user-modified, preserving)",
-                item.name
-            ),
-            // Item was not up to date but had no files? Shouldn't happen
-            // with the BUNDLED_ITEMS shape — every item has ≥ 1 file.
-            (false, false) => format!("{label} '{}' had no files to install", item.name),
-        };
-        messages.push(msg);
+        messages.push(format!("Installed {label} '{}'", item.name));
     }
     Ok(messages)
 }
@@ -471,28 +415,11 @@ fn install_in_with_policy(
 /// returned line corresponds to an action that would be taken.
 fn install_in_dry_run(dir: &Path, kind: BundledKind, name: Option<&str>) -> Result<Vec<String>> {
     let to_install = items_to_install(kind, name)?;
-    let policy = kind.install_policy();
 
     let label = kind.label();
     let mut messages = Vec::new();
     for item in to_install {
         if is_up_to_date(dir, item) {
-            continue;
-        }
-        // Match `install_in`'s per-file Preserve semantics: a file is
-        // "to-be-installed" only when missing (for Preserve) or
-        // missing-or-drifted (for Overwrite).
-        let would_write_any = item.files.iter().any(|(rel, content)| {
-            let path = dir.join(rel);
-            match policy {
-                InstallPolicy::Preserve => !path.exists(),
-                InstallPolicy::Overwrite => match fs::read_to_string(&path) {
-                    Ok(installed) => installed != *content,
-                    Err(_) => true,
-                },
-            }
-        });
-        if !would_write_any {
             continue;
         }
         let verb = if is_installed(dir, item) {
@@ -767,21 +694,21 @@ pub fn workflows_install_project(project_root: &Path, name: Option<&str>) -> Res
     )
 }
 
-/// Force-install bundled workflows, overwriting any on-disk content.
-/// Used by the explicit `pm workflow install` CLI subcommand so users
-/// can revert a hand-edited workflow back to the bundled copy without
-/// deleting the directory first. The default `pm upgrade` install path
-/// continues to preserve user edits.
-pub fn workflows_install_project_force(
-    project_root: &Path,
-    name: Option<&str>,
-) -> Result<Vec<String>> {
-    install_in_with_policy(
-        &project_dir(project_root, BundledKind::Workflow),
-        BundledKind::Workflow,
-        name,
-        InstallPolicy::Overwrite,
-    )
+/// Whether `name` is one of the bundled workflows — the directories under
+/// `.pm/workflows/` that `pm upgrade` rewrites. Any other directory there
+/// is the user's.
+pub fn is_bundled_workflow(name: &str) -> bool {
+    items_of_kind(BundledKind::Workflow).any(|i| i.name == name)
+}
+
+/// Bundled workflows installed in the project whose on-disk content differs
+/// from the bundle — the ones an upgrade rewrites.
+pub fn workflows_outdated(project_root: &Path) -> Vec<String> {
+    let dir = project_dir(project_root, BundledKind::Workflow);
+    items_of_kind(BundledKind::Workflow)
+        .filter(|item| is_installed(&dir, item) && !is_up_to_date(&dir, item))
+        .map(|item| item.name.to_string())
+        .collect()
 }
 
 pub fn workflows_uninstall_project(project_root: &Path, name: Option<&str>) -> Result<Vec<String>> {
@@ -1313,73 +1240,56 @@ mod tests {
     }
 
     #[test]
-    fn workflows_install_preserves_user_edits() {
-        // Workflows use the `Preserve` install policy: once a file is on
-        // disk, `install_in` reports it as user-modified and refuses to
-        // overwrite. This matches the policy the brief asks for and the
-        // user-facing `pm upgrade` workflow test.
+    fn workflows_install_overwrites_bundled_and_leaves_user_dirs_alone() {
         let tmp = tempfile::tempdir().unwrap();
         let project_root = tmp.path();
-        workflows_install_project(project_root, Some("pr-review")).unwrap();
+        workflows_install_project(project_root, None).unwrap();
 
-        let second = workflows_install_project(project_root, Some("pr-review")).unwrap();
+        let wf_dir = paths::workflows_dir(project_root);
+        let bundled_md = wf_dir.join("pr-review").join("workflow.md");
+        fs::write(&bundled_md, "user edits").unwrap();
+        let user_dir = wf_dir.join("my-solo");
+        fs::create_dir_all(&user_dir).unwrap();
+        fs::write(user_dir.join("config.toml"), "description = \"mine\"\n").unwrap();
+        fs::write(user_dir.join("workflow.md"), "# mine\n").unwrap();
+
+        let dry = workflows_install_project_dry_run(project_root, None).unwrap();
+        assert_eq!(dry, vec!["Would update Workflow 'pr-review'".to_string()]);
+        assert_eq!(fs::read_to_string(&bundled_md).unwrap(), "user edits");
+
+        let messages = workflows_install_project(project_root, None).unwrap();
         assert!(
-            second[0].contains("already up to date"),
-            "expected 'already up to date' on idempotent install, got: {second:?}"
+            messages.contains(&"Installed Workflow 'pr-review'".to_string()),
+            "{messages:?}"
         );
-
-        // User edits a workflow file
-        let wf_md = paths::workflows_dir(project_root)
-            .join("pr-review")
-            .join("workflow.md");
-        fs::write(&wf_md, "user edits").unwrap();
-
-        let third = workflows_install_project(project_root, Some("pr-review")).unwrap();
-        assert!(
-            third[0].contains("user-modified"),
-            "expected 'user-modified' message, got: {third:?}"
+        assert_eq!(
+            fs::read_to_string(&bundled_md).unwrap(),
+            include_str!("../../workflows/pr-review/workflow.md")
         );
-        assert_eq!(fs::read_to_string(&wf_md).unwrap(), "user edits");
-
-        // Dry-run also reports nothing — user-modified workflow is skipped.
-        let dry = workflows_install_project_dry_run(project_root, Some("pr-review")).unwrap();
-        assert!(
-            dry.is_empty(),
-            "expected no dry-run actions when user-modified, got: {dry:?}"
+        assert_eq!(
+            fs::read_to_string(user_dir.join("config.toml")).unwrap(),
+            "description = \"mine\"\n"
         );
+        assert_eq!(
+            fs::read_to_string(user_dir.join("workflow.md")).unwrap(),
+            "# mine\n"
+        );
+        assert!(is_bundled_workflow("pr-review"));
+        assert!(!is_bundled_workflow("my-solo"));
     }
 
     #[test]
-    fn workflows_install_preserves_per_file_not_per_item() {
-        // Regression: if a user modifies `config.toml` and deletes
-        // `workflow.md`, `pm upgrade` must NOT overwrite the modified
-        // `config.toml` even though one sibling file is missing. The
-        // missing sibling should still be written.
+    fn workflows_uninstall_leaves_user_dirs_alone() {
         let tmp = tempfile::tempdir().unwrap();
         let project_root = tmp.path();
-        workflows_install_project(project_root, Some("pr-review")).unwrap();
+        workflows_install_project(project_root, None).unwrap();
+        let user_dir = paths::workflows_dir(project_root).join("my-solo");
+        fs::create_dir_all(&user_dir).unwrap();
+        fs::write(user_dir.join("config.toml"), "description = \"mine\"\n").unwrap();
 
-        let wf_dir = paths::workflows_dir(project_root).join("pr-review");
-        let cfg = wf_dir.join("config.toml");
-        let md = wf_dir.join("workflow.md");
-
-        // User edits config.toml…
-        fs::write(&cfg, "user-edited config\n").unwrap();
-        // …and deletes workflow.md.
-        fs::remove_file(&md).unwrap();
-        assert!(cfg.exists());
-        assert!(!md.exists());
-
-        let messages = workflows_install_project(project_root, Some("pr-review")).unwrap();
-        // The user's config.toml must survive.
-        assert_eq!(fs::read_to_string(&cfg).unwrap(), "user-edited config\n");
-        // The missing workflow.md must be restored to the bundled content.
-        assert!(md.exists());
-        // Message reflects the partial install.
-        assert!(
-            messages[0].contains("partial") || messages[0].contains("Installed"),
-            "expected partial-install message, got: {messages:?}"
-        );
+        workflows_uninstall_project(project_root, None).unwrap();
+        assert!(!paths::workflows_dir(project_root).join("solo").exists());
+        assert!(user_dir.join("config.toml").exists());
     }
 
     // --- Baseline-specific tests ---

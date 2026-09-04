@@ -71,8 +71,9 @@ pub struct ListOutput {
 }
 
 /// Build the column-aligned listing used by `pm workflow list`. Returns
-/// one row per installed workflow, sorted by name, plus a warning per
-/// broken `config.toml` so users don't discover the breakage only when
+/// one row per installed workflow, sorted by name and tagged `[bundled]`
+/// (rewritten by `pm upgrade`) or `[user]`, plus a warning per broken
+/// `config.toml` so users don't discover the breakage only when
 /// `pm feat new --workflow <name>` fails.
 pub fn list_rows(project_root: &Path) -> Result<ListOutput> {
     let installed = workflow::list_installed_with_errors(project_root)?;
@@ -90,8 +91,13 @@ pub fn list_rows(project_root: &Path) -> Result<ListOutput> {
 
     let mut rows = Vec::new();
     for (name, def) in &installed.workflows {
+        let origin = if crate::commands::skills::is_bundled_workflow(name) {
+            "bundled"
+        } else {
+            "user"
+        };
         rows.push(format!(
-            "  {:<width$}  — {}",
+            "  {:<width$}  — {} [{origin}]",
             name,
             def.description,
             width = max_name,
@@ -237,6 +243,17 @@ mod tests {
         assert!(out.rows[1].contains("beta"));
         assert!(out.rows[1].contains("second"));
         assert!(out.warnings.is_empty());
+    }
+
+    #[test]
+    fn list_rows_tags_bundled_and_user_workflows() {
+        let (_dir, root) = setup_project_root();
+        write_workflow(&root, "solo", "description = \"bundled solo\"\n", "# solo");
+        write_workflow(&root, "my-solo", "description = \"mine\"\n", "# mine");
+
+        let out = list_rows(&root).unwrap();
+        assert!(out.rows[0].contains("my-solo") && out.rows[0].ends_with("[user]"));
+        assert!(out.rows[1].contains("solo") && out.rows[1].ends_with("[bundled]"));
     }
 
     #[test]

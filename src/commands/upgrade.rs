@@ -13,47 +13,55 @@ use super::skills;
 /// use, then re-seed every active feature worktree. Returns a
 /// human-readable summary line.
 pub fn upgrade_project(project_root: &Path) -> Result<String> {
-    let mut updated = Vec::new();
+    let mut updated: Vec<String> = Vec::new();
 
     // Install hooks
     let _ = hooks_install::install(project_root)?;
-    updated.push("hooks");
+    updated.push("hooks".into());
 
     // Bootstrap information store and state repo (both idempotent)
     super::docs::bootstrap(project_root)?;
     super::state_cmd::init(project_root)?;
     // Migrate docs submodule to regular files if needed
     if super::docs::migrate_docs_submodule(project_root).unwrap_or(false) {
-        updated.push("docs (migrated from submodule)");
+        updated.push("docs (migrated from submodule)".into());
     } else {
-        updated.push("docs");
+        updated.push("docs".into());
     }
 
     // Install skills to main
     let _ = skills::skills_install_project(project_root, None)?;
-    updated.push("skills");
+    updated.push("skills".into());
 
     // Install agents to main
     let _ = skills::agents_install_project(project_root, None)?;
-    updated.push("agents");
+    updated.push("agents".into());
 
     // Install the shared operating baseline (appended to every spawned agent)
     let _ = skills::baseline_install_project(project_root, None)?;
-    updated.push("baseline");
+    updated.push("baseline".into());
     if skills::remove_legacy_baseline(project_root)? {
-        updated.push("legacy baseline removed");
+        updated.push("legacy baseline removed".into());
     }
 
     // Harnesses read from their own dirs, not the canonical store.
     let _ = skills::project_assets(project_root, false)?;
-    updated.push("projections");
+    updated.push("projections".into());
 
-    // Install bundled workflows to .pm/workflows/. User edits to existing
-    // files are preserved by `install_in`'s "already up to date / outdated"
-    // logic — only bundled files that exactly match a previously installed
-    // version are rewritten on upgrade.
+    // Bundled workflows are pm-owned; user workflows under other names are
+    // never touched. Rewriting an edited bundled workflow is the one
+    // destructive step here, so name what was rewritten (pm can't tell a user
+    // edit from a bundle change, so no claim about which).
+    let rewritten = skills::workflows_outdated(project_root);
     let _ = skills::workflows_install_project(project_root, None)?;
-    updated.push("workflows");
+    if rewritten.is_empty() {
+        updated.push("workflows".into());
+    } else {
+        updated.push(format!(
+            "workflows (rewrote: {} — previous content is in .pm/ git history)",
+            rewritten.join(", ")
+        ));
+    }
 
     // Re-seed each active feature worktree
     let features_dir = paths::features_dir(project_root);
@@ -369,9 +377,9 @@ last_active = "2026-01-01T00:00:00Z"
     #[test]
     fn upgrade_migrates_claude_only_layout() {
         // A project last touched by a release before the canonical store:
-        // everything under `.claude/`, old-generation hook commands, a
-        // Preserve-policy solo naming `claude`, live registry/feature/message
-        // state. One upgrade must leave it working with no manual steps.
+        // everything under `.claude/`, old-generation hook commands, an
+        // old solo naming `claude`, live registry/feature/message state.
+        // One upgrade must leave it working with no manual steps.
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
         let main = paths::main_worktree(&root);
@@ -435,10 +443,11 @@ last_active = "2026-01-01T00:00:00Z"
             assert_eq!(entries[0]["hooks"][0]["command"].as_str().unwrap(), cmd);
         }
 
-        assert_eq!(
-            fs::read_to_string(solo.join("config.toml")).unwrap(),
-            solo_cfg
-        );
+        // The bundled solo is rewritten so its team reads `default`; the
+        // registry (which may still name `claude`) is left alone.
+        let solo_def = crate::state::workflow::WorkflowDef::load(&root, "solo").unwrap();
+        assert_eq!(solo_def.agents, vec!["default".to_string()]);
+        assert_eq!(solo_def.brief_agents, vec!["default".to_string()]);
         assert_eq!(fs::read_to_string(&agents_toml).unwrap(), registry);
         assert_eq!(
             fs::read(root.join(".pm/features/login.toml")).unwrap(),
@@ -458,26 +467,49 @@ last_active = "2026-01-01T00:00:00Z"
     }
 
     #[test]
-    fn upgrade_preserves_user_edited_workflow() {
+    fn upgrade_overwrites_bundled_workflows_and_keeps_user_workflows() {
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
-
-        // First install
         upgrade_project(&root).unwrap();
 
-        // User edits a workflow file
-        let wf_md = paths::workflows_dir(&root)
-            .join("implement-and-review")
-            .join("workflow.md");
-        std::fs::write(&wf_md, "user-customised content").unwrap();
+        let wf_dir = paths::workflows_dir(&root);
+        let bundled_md = wf_dir.join("implement-and-review").join("workflow.md");
+        fs::write(&bundled_md, "user-customised content").unwrap();
+        let user_dir = wf_dir.join("my-solo");
+        fs::create_dir_all(&user_dir).unwrap();
+        let user_cfg = "description = \"mine\"\nagents = [\"default\"]\n";
+        fs::write(user_dir.join("config.toml"), user_cfg).unwrap();
+        fs::write(user_dir.join("workflow.md"), "# mine\n").unwrap();
 
-        // Second upgrade leaves the user edits in place — workflows use the
-        // `Preserve` install policy (same spirit as `.pm/hooks/`). Users
-        // who want a fresh bundled copy can delete the directory and rerun
-        // `pm upgrade`.
-        upgrade_project(&root).unwrap();
-        let after = std::fs::read_to_string(&wf_md).unwrap();
-        assert_eq!(after, "user-customised content");
+        let actions = upgrade_project_dry_run(&root).unwrap();
+        let workflow_actions: Vec<&String> =
+            actions.iter().filter(|a| a.contains("Workflow")).collect();
+        assert_eq!(
+            workflow_actions,
+            vec!["Would update Workflow 'implement-and-review'"]
+        );
+        assert_eq!(
+            fs::read_to_string(&bundled_md).unwrap(),
+            "user-customised content"
+        );
+
+        let summary = upgrade_project(&root).unwrap();
+        assert!(
+            summary.contains("rewrote: implement-and-review"),
+            "{summary}"
+        );
+        assert_eq!(
+            fs::read_to_string(&bundled_md).unwrap(),
+            include_str!("../../workflows/implement-and-review/workflow.md")
+        );
+        assert_eq!(
+            fs::read_to_string(user_dir.join("config.toml")).unwrap(),
+            user_cfg
+        );
+        assert_eq!(
+            fs::read_to_string(user_dir.join("workflow.md")).unwrap(),
+            "# mine\n"
+        );
     }
 
     #[test]

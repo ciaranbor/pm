@@ -41,7 +41,8 @@ fn is_open_recoverable(kind: IssueKind) -> bool {
         | IssueKind::PrClosed
         | IssueKind::PrCheckFailed
         | IssueKind::HooksNotInstalled
-        | IssueKind::AssetNotProjected => false,
+        | IssueKind::AssetNotProjected
+        | IssueKind::LegacyVanillaAgentName => false,
     }
 }
 

@@ -767,7 +767,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     Ok(())
                 }
                 WorkflowCommands::Install { name } => {
-                    let messages = commands::skills::workflows_install_project_force(
+                    let messages = commands::skills::workflows_install_project(
                         &project_root,
                         name.as_deref(),
                     )?;
