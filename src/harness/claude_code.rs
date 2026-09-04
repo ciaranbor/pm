@@ -1,7 +1,28 @@
-//! Claude Code: `claude --agent <def> …`.
+//! Claude Code: `claude --agent <def> …`, reading definitions and skills
+//! from `.claude/{agents,skills}` (never from `.agents/`).
 
-use crate::harness::SpawnSpec;
+use std::path::Path;
+
+use crate::error::Result;
+use crate::harness::{Projection, SpawnSpec};
 use crate::tmux;
+
+pub(super) const CONFIG_DIR: &str = ".claude";
+
+/// Claude Code reads settings per worktree, so a feature needs main's copy.
+pub(super) const SEEDED_FILES: &[&str] = &["settings.json", "settings.local.json"];
+
+pub(super) const PROJECTED_DIRS: &[&str] = &["agents", "skills"];
+
+/// Claude Code needs no content transformation: the canonical files are
+/// copied as-is into `.claude/{agents,skills}`.
+pub(super) fn project_assets(
+    canonical_root: &Path,
+    target_root: &Path,
+    dry_run: bool,
+) -> Result<Projection> {
+    super::project_by_copy(canonical_root, target_root, PROJECTED_DIRS, dry_run)
+}
 
 pub(super) fn build_cmd(spec: &SpawnSpec<'_>) -> String {
     let SpawnSpec {
@@ -172,12 +193,12 @@ mod tests {
         // shell-quoted so paths with spaces survive.
         let cmd = build_cmd(&SpawnSpec {
             definition: Some("reviewer"),
-            append_prompt_file: Some("/proj/main/.claude/pm-baseline.md"),
+            append_prompt_file: Some("/proj/main/.agents/pm-baseline.md"),
             ..Default::default()
         });
         assert_eq!(
             cmd,
-            "claude --agent reviewer --append-system-prompt-file '/proj/main/.claude/pm-baseline.md'"
+            "claude --agent reviewer --append-system-prompt-file '/proj/main/.agents/pm-baseline.md'"
         );
     }
 

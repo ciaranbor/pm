@@ -4,6 +4,7 @@ use crate::commands::agent_spawn::SpawnOverrides;
 use crate::commands::feat_delete::{self, CleanupParams};
 use crate::commands::{agent_spawn, hooks_install};
 use crate::error::Result;
+use crate::harness::Harness;
 use crate::state::agent::{AgentRegistry, AgentType};
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
@@ -40,6 +41,9 @@ pub enum IssueKind {
     PrCheckFailed,
     /// pm Stop hook not installed in main/.claude/settings.json.
     HooksNotInstalled,
+    /// A canonical agent definition has no projected copy for a harness in
+    /// use, so validation passes but the harness can't launch it.
+    AssetNotProjected,
 }
 
 /// A single issue detected for a feature.
@@ -164,8 +168,17 @@ pub fn diagnose(
     if !hooks_install::is_installed(project_root)? {
         main_issues.push(Issue {
             kind: IssueKind::HooksNotInstalled,
-            message: "pm hooks not fully installed (run `pm claude hooks install`)".to_string(),
+            message: "pm hooks not fully installed (run `pm harness hooks install`)".to_string(),
             fix: Fix::Auto(FixAction::InstallStopHook),
+        });
+    }
+    for (name, harness) in unprojected_definitions(project_root)? {
+        main_issues.push(Issue {
+            kind: IssueKind::AssetNotProjected,
+            message: format!(
+                "canonical agent '{name}' not projected for {harness} (run `pm upgrade`)"
+            ),
+            fix: Fix::Skip,
         });
     }
     if !tmux::has_session(tmux_server, &main_session)? {
@@ -539,22 +552,73 @@ fn global_config_warning_in(config_dir: &Path) -> Option<String> {
 }
 
 /// Warn when the shared agent baseline is installed for this project but the
-/// local `claude` does not advertise `--append-system-prompt-file` — the flag
-/// pm uses to apply the baseline at spawn time. Returns `None` when the
-/// baseline isn't installed (nothing to apply) or claude can't be probed.
+/// harness binary doesn't support appending a prompt file — how pm applies
+/// the baseline at spawn time. Returns `None` when the baseline isn't
+/// installed (nothing to apply) or the binary can't be probed.
 fn baseline_capability_warning(project_root: &Path) -> Option<String> {
     if !crate::commands::skills::baseline_path(project_root).exists() {
         return None;
     }
-    match crate::harness::Harness::default().supports_prompt_file() {
-        Some(false) => Some(
-            "baseline — `claude` does not advertise `--append-system-prompt-file`; the \
-             shared agent baseline (main/.claude/pm-baseline.md) will NOT be applied to \
-             spawned agents. Check your Claude Code version."
-                .to_string(),
-        ),
+    let harness = Harness::default();
+    match harness.supports_prompt_file() {
+        Some(false) => Some(format!("baseline — {}", prompt_file_unsupported(harness))),
         _ => None,
     }
+}
+
+fn prompt_file_unsupported(harness: Harness) -> String {
+    format!(
+        "{harness} does not support appending a prompt file; the shared agent baseline \
+         (main/.agents/pm-baseline.md) will NOT be applied to spawned agents. Check your \
+         {harness} version."
+    )
+}
+
+/// One line for `pm harness probe`: whether the installed binary supports
+/// the capabilities pm relies on.
+pub fn probe_line(harness: Harness) -> String {
+    match harness.supports_prompt_file() {
+        Some(true) => format!("{harness}: prompt file supported — the shared baseline is applied"),
+        Some(false) => format!(
+            "{harness}: does not support appending a prompt file — the shared agent \
+             baseline will not be applied to spawned agents"
+        ),
+        None => format!("{harness}: binary not found (or its --help failed); nothing to probe"),
+    }
+}
+
+/// Canonical agent definitions (`main/.agents/agents/*.md`) with no
+/// projected copy in a harness's own definition dir. Such a definition
+/// passes `WorkflowDef::validate` but the harness can't find it at launch.
+fn unprojected_definitions(project_root: &Path) -> Result<Vec<(String, Harness)>> {
+    let main = paths::main_worktree(project_root);
+    let canonical = main
+        .join(crate::commands::skills::CANONICAL_DIR)
+        .join("agents");
+    let mut out = Vec::new();
+    if !canonical.is_dir() {
+        return Ok(out);
+    }
+    let harnesses = crate::commands::skills::harnesses_in_use(project_root);
+    let mut names: Vec<String> = std::fs::read_dir(&canonical)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|f| f.ends_with(".md"))
+        .collect();
+    names.sort();
+    for file in names {
+        for harness in &harnesses {
+            if !main
+                .join(harness.config_dir())
+                .join("agents")
+                .join(&file)
+                .exists()
+            {
+                out.push((file.trim_end_matches(".md").to_string(), *harness));
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Apply a single fix action.
@@ -666,6 +730,35 @@ mod tests {
         let project_root = dir.path();
         std::fs::create_dir_all(paths::main_worktree(project_root).join(".claude")).unwrap();
         assert!(baseline_capability_warning(project_root).is_none());
+    }
+
+    #[test]
+    fn unprojected_canonical_definition_is_flagged_until_projected() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let main = paths::main_worktree(&project_path);
+        std::fs::write(main.join(".agents/agents/planner.md"), "# planner").unwrap();
+
+        assert_eq!(
+            unprojected_definitions(&project_path).unwrap(),
+            vec![("planner".to_string(), Harness::ClaudeCode)]
+        );
+        let lines = doctor(&project_path, false, server.name()).unwrap();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("canonical agent 'planner' not projected for claude-code")),
+            "{lines:?}"
+        );
+
+        crate::commands::skills::project_assets(&project_path, false).unwrap();
+        assert!(unprojected_definitions(&project_path).unwrap().is_empty());
+        let lines = doctor(&project_path, false, server.name()).unwrap();
+        assert!(
+            !lines.iter().any(|l| l.contains("not projected")),
+            "{lines:?}"
+        );
     }
 
     #[test]

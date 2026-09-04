@@ -77,25 +77,48 @@ fn feat_subcommand_help() {
 }
 
 #[test]
-fn claude_subcommand_help() {
-    pm().args(["claude", "--help"])
+fn harness_subcommands_have_help() {
+    for sub in [
+        "hooks", "skills", "agents", "settings", "migrate", "export", "import", "list", "probe",
+    ] {
+        pm().args(["harness", sub, "--help"]).assert().success();
+    }
+    pm().args(["harness", "hooks", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("settings"))
-        .stdout(predicate::str::contains("skills"));
+        .stdout(predicate::str::contains("install"))
+        .stdout(predicate::str::contains("stop"))
+        .stdout(predicate::str::contains("session-start"));
 }
 
 #[test]
-fn harness_hooks_aliases_resolve() {
-    // Canonical names for the hook handlers; `pm claude hooks …` stays too.
-    for path in [["harness", "hooks"], ["claude", "hooks"]] {
-        pm().args(path)
-            .arg("--help")
-            .assert()
-            .success()
-            .stdout(predicate::str::contains("stop"))
-            .stdout(predicate::str::contains("session-start"));
+fn claude_is_a_hidden_alias_for_harness() {
+    // The alias is not listed as a subcommand (help text may still mention
+    // claude-code elsewhere).
+    pm().arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\n  harness "))
+        .stdout(predicate::str::is_match(r"(?m)^\s+claude\s").unwrap().not());
+    for path in [["claude", "hooks"], ["claude", "skills"]] {
+        pm().args(path).arg("--help").assert().success();
     }
+}
+
+#[test]
+fn harness_flag_rejects_unsupported_harness() {
+    pm().args(["harness", "settings", "list", "--harness", "codex"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("supported: claude-code"));
+}
+
+#[test]
+fn harness_list_marks_default() {
+    pm().args(["harness", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("claude-code (default)"));
 }
 
 #[test]

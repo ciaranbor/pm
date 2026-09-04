@@ -1,7 +1,6 @@
 use std::path::Path;
 
 use crate::error::{PmError, Result};
-use crate::fs_utils::copy_dir_recursive;
 use crate::state::feature::FeatureState;
 use crate::state::paths;
 
@@ -64,105 +63,6 @@ pub fn require_feature(project_root: &Path, feature_name: &str) -> Result<()> {
         return Err(PmError::FeatureNotFound(feature_name.to_string()));
     }
     Ok(())
-}
-
-/// Subdirectories of `.claude/` that should be copied wholesale to feature worktrees.
-/// Claude Code does NOT resolve skills or agents from parent directories or the main
-/// worktree — they must live in the worktree's own `.claude/` directory.
-const COPY_DIRS: &[&str] = &["skills", "agents"];
-
-/// Called during `feat new` / `feat adopt` to seed the new feature with the project's
-/// settings files, skills, and agents from `main/.claude/`.
-pub fn seed_feature_claude(project_root: &Path, feature_worktree: &Path) -> Result<()> {
-    let src = main_claude_dir(project_root);
-    if !src.exists() {
-        return Ok(());
-    }
-    let dst = feature_worktree.join(".claude");
-    for filename in SETTINGS_FILES {
-        copy_settings_file(&src, &dst, filename)?;
-    }
-    for dirname in COPY_DIRS {
-        let src_dir = src.join(dirname);
-        if src_dir.is_dir() {
-            let dst_dir = dst.join(dirname);
-            copy_dir_recursive(&src_dir, &dst_dir)?;
-        }
-    }
-    Ok(())
-}
-
-/// Returns `true` if [`seed_feature_claude`] would change the contents of the
-/// feature's `.claude/` directory. Compares each settings file and recursively
-/// compares the skills/agents subdirectories.
-pub fn seed_feature_claude_would_change(
-    project_root: &Path,
-    feature_worktree: &Path,
-) -> Result<bool> {
-    let src = main_claude_dir(project_root);
-    if !src.exists() {
-        return Ok(false);
-    }
-    let dst = feature_worktree.join(".claude");
-
-    for filename in SETTINGS_FILES {
-        let src_path = src.join(filename);
-        if !src_path.exists() {
-            continue;
-        }
-        let dst_path = dst.join(filename);
-        if !dst_path.exists() {
-            return Ok(true);
-        }
-        let src_bytes = std::fs::read(&src_path)?;
-        let dst_bytes = std::fs::read(&dst_path)?;
-        if src_bytes != dst_bytes {
-            return Ok(true);
-        }
-    }
-
-    for dirname in COPY_DIRS {
-        let src_dir = src.join(dirname);
-        if !src_dir.is_dir() {
-            continue;
-        }
-        let dst_dir = dst.join(dirname);
-        if dir_differs(&src_dir, &dst_dir)? {
-            return Ok(true);
-        }
-    }
-
-    Ok(false)
-}
-
-/// Recursively compare two directories. Returns `true` if any file in `src`
-/// is missing from `dst` or has different bytes. Files only in `dst` (not in
-/// `src`) are ignored — `seed_feature_claude` is copy-only and never deletes.
-fn dir_differs(src: &Path, dst: &Path) -> Result<bool> {
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let path = entry.path();
-        let name = entry.file_name();
-        let dst_path = dst.join(&name);
-        if path.is_dir() {
-            if !dst_path.is_dir() {
-                return Ok(true);
-            }
-            if dir_differs(&path, &dst_path)? {
-                return Ok(true);
-            }
-        } else {
-            if !dst_path.exists() {
-                return Ok(true);
-            }
-            let src_bytes = std::fs::read(&path)?;
-            let dst_bytes = std::fs::read(&dst_path)?;
-            if src_bytes != dst_bytes {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
 }
 
 /// List main worktree's Claude Code settings.
@@ -623,150 +523,6 @@ mod tests {
         assert!(matches!(result.unwrap_err(), PmError::FeatureNotFound(_)));
     }
 
-    // --- seed_feature_claude ---
-
-    #[test]
-    fn seed_copies_settings_from_main_worktree() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project, _, _) = server.setup_project_no_tmux(dir.path());
-
-        let main_claude = paths::main_worktree(&project).join(".claude");
-        write_json(&main_claude, "settings.json", r#"{"permissions":true}"#);
-        write_json(&main_claude, "settings.local.json", r#"{"local":true}"#);
-
-        let feature_wt = project.join("login");
-        std::fs::create_dir_all(&feature_wt).unwrap();
-        seed_feature_claude(&project, &feature_wt).unwrap();
-
-        let dst = feature_wt.join(".claude");
-        assert_eq!(
-            std::fs::read_to_string(dst.join("settings.json")).unwrap(),
-            r#"{"permissions":true}"#
-        );
-        assert_eq!(
-            std::fs::read_to_string(dst.join("settings.local.json")).unwrap(),
-            r#"{"local":true}"#
-        );
-    }
-
-    #[test]
-    fn seed_noop_when_no_main_claude_dir() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project, _, _) = server.setup_project_no_tmux(dir.path());
-        // `pm init` now installs the Stop hook into main/.claude/settings.json;
-        // strip it to exercise the "no source dir" branch.
-        let _ = std::fs::remove_dir_all(paths::main_worktree(&project).join(".claude"));
-
-        let feature_wt = project.join("login");
-        std::fs::create_dir_all(&feature_wt).unwrap();
-        seed_feature_claude(&project, &feature_wt).unwrap();
-
-        assert!(!feature_wt.join(".claude").exists());
-    }
-
-    #[test]
-    fn seed_copies_only_existing_files() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project, _, _) = server.setup_project_no_tmux(dir.path());
-
-        let main_claude = paths::main_worktree(&project).join(".claude");
-        write_json(&main_claude, "settings.json", r#"{"only":"this"}"#);
-
-        let feature_wt = project.join("login");
-        std::fs::create_dir_all(&feature_wt).unwrap();
-        seed_feature_claude(&project, &feature_wt).unwrap();
-
-        let dst = feature_wt.join(".claude");
-        assert!(dst.join("settings.json").exists());
-        assert!(!dst.join("settings.local.json").exists());
-    }
-
-    #[test]
-    fn seed_copies_skills_and_agents() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project, _, _) = server.setup_project_no_tmux(dir.path());
-
-        let main_claude = paths::main_worktree(&project).join(".claude");
-        write_json(&main_claude, "settings.json", r#"{"a":1}"#);
-        let skills_dir = main_claude.join("skills").join("pm");
-        std::fs::create_dir_all(&skills_dir).unwrap();
-        std::fs::write(skills_dir.join("SKILL.md"), "# pm skill").unwrap();
-        let agents_dir = main_claude.join("agents");
-        std::fs::create_dir_all(&agents_dir).unwrap();
-        std::fs::write(agents_dir.join("reviewer.md"), "# Reviewer").unwrap();
-
-        let feature_wt = project.join("login");
-        std::fs::create_dir_all(&feature_wt).unwrap();
-        seed_feature_claude(&project, &feature_wt).unwrap();
-
-        let dst = feature_wt.join(".claude");
-        assert!(dst.join("settings.json").exists());
-        assert!(dst.join("skills").join("pm").join("SKILL.md").exists());
-        assert_eq!(
-            std::fs::read_to_string(dst.join("skills").join("pm").join("SKILL.md")).unwrap(),
-            "# pm skill"
-        );
-        assert!(dst.join("agents").join("reviewer.md").exists());
-        assert_eq!(
-            std::fs::read_to_string(dst.join("agents").join("reviewer.md")).unwrap(),
-            "# Reviewer"
-        );
-    }
-
-    #[test]
-    fn seed_noop_when_no_skills_or_agents() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project, _, _) = server.setup_project_no_tmux(dir.path());
-
-        let main_claude = paths::main_worktree(&project).join(".claude");
-        write_json(&main_claude, "settings.json", r#"{"a":1}"#);
-
-        // Remove skills/agents that init installs, so we can test the
-        // seed-noop path where main has neither directory.
-        let _ = std::fs::remove_dir_all(main_claude.join("skills"));
-        let _ = std::fs::remove_dir_all(main_claude.join("agents"));
-
-        let feature_wt = project.join("login");
-        std::fs::create_dir_all(&feature_wt).unwrap();
-        seed_feature_claude(&project, &feature_wt).unwrap();
-
-        let dst = feature_wt.join(".claude");
-        assert!(dst.join("settings.json").exists());
-        assert!(!dst.join("skills").exists());
-        assert!(!dst.join("agents").exists());
-    }
-
-    #[test]
-    fn seed_overwrites_existing_skills() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project, _, _) = server.setup_project_no_tmux(dir.path());
-
-        let main_claude = paths::main_worktree(&project).join(".claude");
-        write_json(&main_claude, "settings.json", r#"{"a":1}"#);
-        let skills_dir = main_claude.join("skills").join("pm");
-        std::fs::create_dir_all(&skills_dir).unwrap();
-        std::fs::write(skills_dir.join("SKILL.md"), "updated content").unwrap();
-
-        // Pre-populate feature with stale skill
-        let feature_wt = project.join("login");
-        let feature_skills = feature_wt.join(".claude").join("skills").join("pm");
-        std::fs::create_dir_all(&feature_skills).unwrap();
-        std::fs::write(feature_skills.join("SKILL.md"), "old content").unwrap();
-
-        seed_feature_claude(&project, &feature_wt).unwrap();
-
-        assert_eq!(
-            std::fs::read_to_string(feature_skills.join("SKILL.md")).unwrap(),
-            "updated content"
-        );
-    }
-
     // --- feat_new integration ---
 
     #[test]
@@ -1140,7 +896,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
         // Strip the Stop-hook settings.json seeded by `pm init` (and the
-        // feature copy seeded by seed_feature_claude during feat_new).
+        // feature copy seeded by seed::seed_feature_assets during feat_new).
         let _ = std::fs::remove_dir_all(paths::main_worktree(&project).join(".claude"));
         let _ = std::fs::remove_dir_all(project.join("login").join(".claude"));
 

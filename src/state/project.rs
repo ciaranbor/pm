@@ -35,12 +35,13 @@ pub struct ProjectConfig {
     pub agents: AgentsConfig,
 }
 
-/// Per-agent spawn settings. Both maps are keyed by the claude agent
-/// *definition* name (what reaches `claude --agent`), not the display name.
-/// Present in both the project and global config; see `resolve_agent_settings`.
+/// Per-agent spawn settings. All maps are keyed by the agent *definition*
+/// name (what the harness launches), not the display name. Present in both
+/// the project and global config; see `resolve_agent_settings`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentsConfig {
-    /// Per-agent permission modes (e.g. "acceptEdits")
+    /// Per-agent permission modes, in the agent's harness's own terms
+    /// (e.g. "acceptEdits") and passed through unvalidated — like `models`.
     #[serde(default)]
     pub permissions: std::collections::BTreeMap<String, String>,
     /// Per-agent models — a family alias ("opus") or a full id ("claude-opus-5")

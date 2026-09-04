@@ -8,7 +8,7 @@ use crate::state::project::ProjectEntry;
 
 use super::claude_migrate::{claude_base_dir, migrate_sessions, path_to_key};
 
-/// Import Claude Code sessions from a tarball exported by `pm claude export`.
+/// Import Claude Code sessions from a tarball exported by `pm harness export`.
 ///
 /// For each project in the tarball's manifest, looks up the local registry to
 /// find the local path, then copies session data and rewrites embedded paths.

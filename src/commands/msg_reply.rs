@@ -114,7 +114,7 @@ mod tests {
 
     fn create_agent_definition(root: &Path, agent_name: &str) {
         let agent_def = paths::main_worktree(root)
-            .join(".claude/agents")
+            .join(".agents/agents")
             .join(format!("{agent_name}.md"));
         std::fs::create_dir_all(agent_def.parent().unwrap()).unwrap();
         std::fs::write(&agent_def, "# agent stub").unwrap();

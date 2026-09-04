@@ -1,4 +1,5 @@
 /target
+.agents/
 .claude/agents/
 .claude/skills/
 /.claude/settings.json

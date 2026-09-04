@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::Result;
 
@@ -16,4 +16,56 @@ pub fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Copy every file under `src` over `dst` (recursively), skipping files whose
+/// bytes already match and never removing anything only in `dst`. Returns
+/// `(path relative to src, replaced)` for each file written — `replaced`
+/// meaning a differing file already existed there. With `dry_run` nothing is
+/// written, only reported.
+pub fn sync_tree(src: &Path, dst: &Path, dry_run: bool) -> Result<Vec<(PathBuf, bool)>> {
+    let mut out = Vec::new();
+    sync_tree_into(src, dst, Path::new(""), dry_run, &mut out)?;
+    out.sort();
+    Ok(out)
+}
+
+fn sync_tree_into(
+    src: &Path,
+    dst: &Path,
+    rel: &Path,
+    dry_run: bool,
+    out: &mut Vec<(PathBuf, bool)>,
+) -> Result<()> {
+    for entry in std::fs::read_dir(src.join(rel))? {
+        let entry = entry?;
+        let rel_path = rel.join(entry.file_name());
+        let src_path = src.join(&rel_path);
+        let dst_path = dst.join(&rel_path);
+        if src_path.is_dir() {
+            sync_tree_into(src, dst, &rel_path, dry_run, out)?;
+            continue;
+        }
+        let existed = dst_path.exists();
+        if sync_file(&src_path, &dst_path, dry_run)? {
+            out.push((rel_path, existed));
+        }
+    }
+    Ok(())
+}
+
+/// Copy `src` over `dst` unless the bytes already match. Returns whether
+/// `dst` was (or, with `dry_run`, would be) written.
+pub fn sync_file(src: &Path, dst: &Path, dry_run: bool) -> Result<bool> {
+    let content = std::fs::read(src)?;
+    if dst.exists() && std::fs::read(dst)? == content {
+        return Ok(false);
+    }
+    if !dry_run {
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(dst, &content)?;
+    }
+    Ok(true)
 }

@@ -85,15 +85,13 @@ pub enum PmError {
 
     #[error(
         "Workflow '{workflow}' lists '{agent}' in its agent team, but no agent definition was found at \
-         {} or {}. Install the definition or fix the workflow.",
-        .main_def.display(),
-        .global_def.display()
+         {}. Install the definition or fix the workflow.",
+        display_paths(.searched)
     )]
     WorkflowAgentMissing {
         workflow: String,
         agent: String,
-        main_def: PathBuf,
-        global_def: PathBuf,
+        searched: Vec<PathBuf>,
     },
 
     #[error("Agent error: {0}")]
@@ -103,15 +101,13 @@ pub enum PmError {
     AgentNotFound(String),
 
     #[error(
-        "No agent definition '{agent}' found at {} or {}. \
+        "No agent definition '{agent}' found at {}. \
          Pass --agent with an installed definition, or install the definition file.",
-        .main_def.display(),
-        .global_def.display()
+        display_paths(.searched)
     )]
     AgentDefinitionMissing {
         agent: String,
-        main_def: PathBuf,
-        global_def: PathBuf,
+        searched: Vec<PathBuf>,
     },
 
     #[error("Invalid agent name: {0}")]
@@ -128,6 +124,14 @@ pub enum PmError {
 
     #[error("Could not determine home directory")]
     NoHomeDir,
+}
+
+fn display_paths(paths: &[PathBuf]) -> String {
+    paths
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 pub type Result<T> = std::result::Result<T, PmError>;

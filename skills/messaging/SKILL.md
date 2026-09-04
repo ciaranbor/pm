@@ -75,9 +75,9 @@ EOF
 `read`, `list`, and `wait` also take `--scope`. `pm msg reply` derives
 scope/project automatically from the last-read message — no flags needed.
 
-> A bare `pm msg send <name>` only targets your own scope (and silently
-> spawns a new agent there if none exists). If a recipient lives in
-> another scope, address it with `<name>@<scope>`, `--scope`,
+> A bare `pm msg send <name>` only targets your own scope, and errors if
+> no active agent of that name is registered there. If a recipient lives
+> in another scope, address it with `<name>@<scope>`, `--scope`,
 > `--upstream`, or `--project` — otherwise you'll misroute.
 
 ## Guidelines

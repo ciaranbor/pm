@@ -1,9 +1,23 @@
+//! Bundled assets and the canonical store they install into.
+//!
+//! Skills, agent definitions, and the baseline live canonically under
+//! `<base>/.agents/` (`main/` for a project, `~` for `--global`). No harness
+//! reads pm's `.agents/agents/`, so after every install the store is
+//! *projected* into each harness's own layout (`.claude/{agents,skills}` for
+//! claude-code) via [`Harness::project_assets`]; the canonical copy always
+//! wins over a same-named projected file, and projection never deletes.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
 use crate::fs_utils::copy_dir_recursive;
+use crate::harness::{self, Harness};
 use crate::state::paths;
+use crate::state::project::{GlobalConfig, ProjectConfig};
+
+/// The canonical asset store, relative to the main worktree or home.
+pub const CANONICAL_DIR: &str = ".agents";
 
 // --- Unified bundled item system ---
 
@@ -13,7 +27,7 @@ enum BundledKind {
     Agent,
     Workflow,
     /// Single shared "operating baseline" file appended to every spawned
-    /// agent's system prompt via `claude --append-system-prompt-file`.
+    /// agent's system prompt.
     Baseline,
 }
 
@@ -52,6 +66,16 @@ impl BundledKind {
         match self {
             Self::Skill | Self::Agent | Self::Baseline => InstallPolicy::Overwrite,
             Self::Workflow => InstallPolicy::Preserve,
+        }
+    }
+
+    /// Subdirectory of the canonical store (and of every harness projection)
+    /// this kind lives in; `None` for kinds that aren't projected.
+    fn store_subdir(self) -> Option<&'static str> {
+        match self {
+            Self::Skill => Some("skills"),
+            Self::Agent => Some("agents"),
+            Self::Workflow | Self::Baseline => None,
         }
     }
 }
@@ -216,35 +240,128 @@ fn is_up_to_date(base_dir: &Path, item: &BundledItem) -> bool {
 /// Return the global install directory for a bundled kind, or `None` if
 /// the kind has no global install location (workflows are project-only).
 fn global_dir(kind: BundledKind) -> Result<Option<PathBuf>> {
-    match kind {
-        BundledKind::Skill | BundledKind::Agent => {
+    match kind.store_subdir() {
+        Some(subdir) => {
             let home = dirs::home_dir().ok_or(PmError::NoHomeDir)?;
-            let subdir = if kind == BundledKind::Skill {
-                "skills"
-            } else {
-                "agents"
-            };
-            Ok(Some(home.join(".claude").join(subdir)))
+            Ok(Some(home.join(CANONICAL_DIR).join(subdir)))
         }
         // The baseline is project-only — it lives next to the project's
         // installed agents and is referenced by absolute path at spawn time.
-        BundledKind::Workflow | BundledKind::Baseline => Ok(None),
+        None => Ok(None),
     }
 }
 
 /// Return the project-level install directory for a bundled kind.
 fn project_dir(project_root: &Path, kind: BundledKind) -> PathBuf {
+    let canonical = paths::main_worktree(project_root).join(CANONICAL_DIR);
     match kind {
-        BundledKind::Skill => paths::main_worktree(project_root)
-            .join(".claude")
-            .join("skills"),
-        BundledKind::Agent => paths::main_worktree(project_root)
-            .join(".claude")
-            .join("agents"),
-        // Installed alongside agents at `main/.claude/pm-baseline.md`.
-        BundledKind::Baseline => paths::main_worktree(project_root).join(".claude"),
+        BundledKind::Skill | BundledKind::Agent => canonical.join(kind.store_subdir().unwrap()),
+        BundledKind::Baseline => canonical,
         BundledKind::Workflow => paths::workflows_dir(project_root),
     }
+}
+
+// --- Projection into harness layouts ---
+
+/// The harnesses whose projections this project maintains: the default plus
+/// any named in `[agents.harness]`. A missing or unreadable project config
+/// contributes nothing (the default still applies).
+pub fn harnesses_in_use(project_root: &Path) -> Vec<Harness> {
+    let project = ProjectConfig::load(&paths::pm_dir(project_root))
+        .map(|c| c.agents)
+        .unwrap_or_default();
+    harness::harnesses_in_use(&project, &GlobalConfig::load_or_default().agents)
+}
+
+/// Project the main worktree's canonical store into every harness in use.
+/// Returns one line per harness whose projection changed (`Would project …`
+/// in `dry_run`, which writes nothing); in sync yields no lines.
+pub fn project_assets(project_root: &Path, dry_run: bool) -> Result<Vec<String>> {
+    let harnesses = harnesses_in_use(project_root);
+    project_from(&paths::main_worktree(project_root), &harnesses, dry_run)
+}
+
+/// Project the user's global canonical store (`~/.agents`) into every
+/// supported harness's home layout. Only explicit `--global` installs reach
+/// here — `pm upgrade` never touches the home directory.
+pub fn project_assets_global() -> Result<Vec<String>> {
+    let home = dirs::home_dir().ok_or(PmError::NoHomeDir)?;
+    project_from(&home, Harness::SUPPORTED, false)
+}
+
+fn project_from(base: &Path, harnesses: &[Harness], dry_run: bool) -> Result<Vec<String>> {
+    let canonical = base.join(CANONICAL_DIR);
+    let mut lines = Vec::new();
+    if !canonical.is_dir() {
+        return Ok(lines);
+    }
+    for h in harnesses {
+        let target = base.join(h.config_dir());
+        let projection = h.project_assets(&canonical, &target, dry_run)?;
+        if projection.is_empty() {
+            continue;
+        }
+        let verb = if dry_run {
+            "Would project"
+        } else {
+            "Projected"
+        };
+        let n = projection.written.len();
+        let mut line = format!(
+            "{verb} {n} file{} into {}/ for {h}",
+            if n == 1 { "" } else { "s" },
+            h.config_dir()
+        );
+        // A user-authored file under the harness dir losing to a same-named
+        // canonical one is what the user asked for, but say so once.
+        let collisions: Vec<String> = projection
+            .replaced
+            .iter()
+            .filter(|rel| !is_bundled_asset(rel))
+            .map(|rel| rel.display().to_string())
+            .collect();
+        if !collisions.is_empty() {
+            line.push_str(&format!(
+                " (canonical copy replaced: {})",
+                collisions.join(", ")
+            ));
+        }
+        lines.push(line);
+    }
+    Ok(lines)
+}
+
+/// Whether `rel` (relative to a store root, e.g. `agents/reviewer.md`) is a
+/// file pm bundles.
+fn is_bundled_asset(rel: &Path) -> bool {
+    BUNDLED_ITEMS.iter().any(|item| {
+        item.kind.store_subdir().is_some_and(|sub| {
+            item.files
+                .iter()
+                .any(|(file, _)| Path::new(sub).join(file) == rel)
+        })
+    })
+}
+
+/// Remove the projected copies of `kind`/`name` from every harness dir
+/// under `base`. Only the explicit uninstall commands do this — projection
+/// itself never deletes.
+fn uninstall_projected(
+    base: &Path,
+    harnesses: &[Harness],
+    kind: BundledKind,
+    name: Option<&str>,
+) -> Result<()> {
+    let Some(subdir) = kind.store_subdir() else {
+        return Ok(());
+    };
+    for h in harnesses {
+        let dir = base.join(h.config_dir()).join(subdir);
+        if dir.is_dir() {
+            uninstall_in(&dir, kind, name)?;
+        }
+    }
+    Ok(())
 }
 
 fn status_label(dir: &Path, item: &BundledItem) -> &'static str {
@@ -471,34 +588,61 @@ pub fn skills_install_project_dry_run(
 }
 
 pub fn skills_uninstall(name: Option<&str>) -> Result<Vec<String>> {
-    let dir = global_dir(BundledKind::Skill)?.ok_or(PmError::NoHomeDir)?;
-    uninstall_in(&dir, BundledKind::Skill, name)
+    uninstall_global(BundledKind::Skill, name)
 }
 
 pub fn skills_uninstall_project(project_root: &Path, name: Option<&str>) -> Result<Vec<String>> {
-    uninstall_in(
-        &project_dir(project_root, BundledKind::Skill),
-        BundledKind::Skill,
-        name,
-    )
+    uninstall_project(project_root, BundledKind::Skill, name)
 }
 
+fn uninstall_global(kind: BundledKind, name: Option<&str>) -> Result<Vec<String>> {
+    let dir = global_dir(kind)?.ok_or(PmError::NoHomeDir)?;
+    let messages = uninstall_in(&dir, kind, name)?;
+    let home = dirs::home_dir().ok_or(PmError::NoHomeDir)?;
+    uninstall_projected(&home, Harness::SUPPORTED, kind, name)?;
+    Ok(messages)
+}
+
+fn uninstall_project(
+    project_root: &Path,
+    kind: BundledKind,
+    name: Option<&str>,
+) -> Result<Vec<String>> {
+    let messages = uninstall_in(&project_dir(project_root, kind), kind, name)?;
+    uninstall_projected(
+        &paths::main_worktree(project_root),
+        &harnesses_in_use(project_root),
+        kind,
+        name,
+    )?;
+    Ok(messages)
+}
+
+/// Copy main's skills — the canonical store and each harness's projection —
+/// into the feature worktree's matching directories.
 pub fn skills_pull(project_root: &Path, feature_name: &str) -> Result<()> {
     super::claude_settings::require_feature(project_root, feature_name)?;
 
-    let src = project_dir(project_root, BundledKind::Skill);
-    if !src.is_dir() {
+    let main = paths::main_worktree(project_root);
+    let feature = project_root.join(feature_name);
+    let mut rels = vec![PathBuf::from(CANONICAL_DIR).join("skills")];
+    for h in harnesses_in_use(project_root) {
+        rels.push(PathBuf::from(h.config_dir()).join("skills"));
+    }
+    let present: Vec<&PathBuf> = rels.iter().filter(|r| main.join(r).is_dir()).collect();
+    if present.is_empty() {
         return Err(PmError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
-            format!("no .claude/skills/ directory in main at {}", src.display()),
+            format!(
+                "no skills directory in main at {}",
+                main.join(&rels[0]).display()
+            ),
         )));
     }
-
-    let dst = project_root
-        .join(feature_name)
-        .join(".claude")
-        .join("skills");
-    copy_dir_recursive(&src, &dst)
+    for rel in present {
+        copy_dir_recursive(&main.join(rel), &feature.join(rel))?;
+    }
+    Ok(())
 }
 
 // --- Public API: Agents ---
@@ -508,16 +652,11 @@ pub fn agents_list(project_root: Option<&Path>) -> Result<Vec<String>> {
 }
 
 pub fn agents_uninstall(name: Option<&str>) -> Result<Vec<String>> {
-    let dir = global_dir(BundledKind::Agent)?.ok_or(PmError::NoHomeDir)?;
-    uninstall_in(&dir, BundledKind::Agent, name)
+    uninstall_global(BundledKind::Agent, name)
 }
 
 pub fn agents_uninstall_project(project_root: &Path, name: Option<&str>) -> Result<Vec<String>> {
-    uninstall_in(
-        &project_dir(project_root, BundledKind::Agent),
-        BundledKind::Agent,
-        name,
-    )
+    uninstall_project(project_root, BundledKind::Agent, name)
 }
 
 pub fn agents_install(name: Option<&str>) -> Result<Vec<String>> {
@@ -549,11 +688,47 @@ pub fn agents_install_project_dry_run(
 
 // --- Public API: Baseline ---
 
-/// Absolute path to the installed shared baseline file
-/// (`main/.claude/pm-baseline.md`). Used by `agent_spawn` to pass
-/// `--append-system-prompt-file` when the file exists.
+const BASELINE_FILE: &str = "pm-baseline.md";
+
+/// Absolute path to the installed shared baseline
+/// (`main/.agents/pm-baseline.md`). A project not yet upgraded to the
+/// canonical store still has it at the legacy `main/.claude/` location, so
+/// that is returned when only it exists; the caller checks existence either
+/// way.
 pub fn baseline_path(project_root: &Path) -> PathBuf {
-    project_dir(project_root, BundledKind::Baseline).join("pm-baseline.md")
+    let canonical = project_dir(project_root, BundledKind::Baseline).join(BASELINE_FILE);
+    if canonical.exists() {
+        return canonical;
+    }
+    let legacy = legacy_baseline_path(project_root);
+    if legacy.exists() { legacy } else { canonical }
+}
+
+/// Where releases before the canonical store installed the baseline.
+pub fn legacy_baseline_path(project_root: &Path) -> PathBuf {
+    paths::main_worktree(project_root)
+        .join(Harness::ClaudeCode.config_dir())
+        .join(BASELINE_FILE)
+}
+
+/// Whether the legacy baseline is due for removal: it exists alongside an
+/// installed canonical one.
+pub fn legacy_baseline_superseded(project_root: &Path) -> bool {
+    project_dir(project_root, BundledKind::Baseline)
+        .join(BASELINE_FILE)
+        .exists()
+        && legacy_baseline_path(project_root).exists()
+}
+
+/// Remove the legacy baseline once the canonical one is installed — the
+/// one pm-owned file at a fixed path under `.claude/` that pm deletes.
+/// Returns whether anything was removed.
+pub fn remove_legacy_baseline(project_root: &Path) -> Result<bool> {
+    if !legacy_baseline_superseded(project_root) {
+        return Ok(false);
+    }
+    fs::remove_file(legacy_baseline_path(project_root))?;
+    Ok(true)
 }
 
 pub fn baseline_install_project(project_root: &Path, name: Option<&str>) -> Result<Vec<String>> {
@@ -790,7 +965,7 @@ mod tests {
     }
 
     #[test]
-    fn install_project_writes_to_main_claude_skills() {
+    fn install_project_writes_to_canonical_store() {
         let tmp = tempfile::tempdir().unwrap();
         let project_root = tmp.path();
         fs::create_dir_all(paths::main_worktree(project_root)).unwrap();
@@ -800,11 +975,124 @@ mod tests {
         assert!(messages[0].contains("Installed"));
 
         let skill_path = paths::main_worktree(project_root)
-            .join(".claude")
+            .join(".agents")
             .join("skills")
             .join("pm")
             .join("SKILL.md");
         assert!(skill_path.exists());
+    }
+
+    #[test]
+    fn project_assets_overwrites_bundled_keeps_foreign_and_reports_collisions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project_root = tmp.path();
+        let main = paths::main_worktree(project_root);
+        let claude_agents = main.join(".claude").join("agents");
+        fs::create_dir_all(&claude_agents).unwrap();
+        fs::write(claude_agents.join("reviewer.md"), "stale").unwrap();
+        fs::write(claude_agents.join("mine.md"), "user's own").unwrap();
+        fs::write(claude_agents.join("shared.md"), "harness copy").unwrap();
+
+        // Nothing canonical yet: dry-run and real projection are both no-ops.
+        assert!(project_assets(project_root, true).unwrap().is_empty());
+        assert!(project_assets(project_root, false).unwrap().is_empty());
+
+        agents_install_project(project_root, None).unwrap();
+        // A user-authored canonical def colliding with a harness-dir one.
+        fs::write(main.join(".agents/agents/shared.md"), "canonical").unwrap();
+
+        let dry = project_assets(project_root, true).unwrap();
+        assert_eq!(dry.len(), 1, "{dry:?}");
+        assert!(dry[0].starts_with("Would project"), "{}", dry[0]);
+        assert_eq!(
+            fs::read_to_string(claude_agents.join("reviewer.md")).unwrap(),
+            "stale"
+        );
+
+        let lines = project_assets(project_root, false).unwrap();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("for claude-code"), "{}", lines[0]);
+        assert!(
+            lines[0].contains("replaced: agents/shared.md") && !lines[0].contains("reviewer.md"),
+            "{}",
+            lines[0]
+        );
+        let bundled = items_of_kind(BundledKind::Agent)
+            .find(|i| i.name == "reviewer")
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(claude_agents.join("reviewer.md")).unwrap(),
+            bundled.files[0].1
+        );
+        assert_eq!(
+            fs::read_to_string(claude_agents.join("mine.md")).unwrap(),
+            "user's own"
+        );
+        assert_eq!(
+            fs::read_to_string(claude_agents.join("shared.md")).unwrap(),
+            "canonical"
+        );
+
+        // In sync: the dry-run is empty again.
+        assert!(project_assets(project_root, true).unwrap().is_empty());
+    }
+
+    #[test]
+    fn global_layout_projects_to_every_supported_harness_and_uninstalls_projections() {
+        // `project_assets_global` / `uninstall_global` run over the real
+        // home; exercise the same fan-out over a temp base.
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        install_in(
+            &base.join(".agents/agents"),
+            BundledKind::Agent,
+            Some("reviewer"),
+        )
+        .unwrap();
+
+        let lines = project_from(base, Harness::SUPPORTED, false).unwrap();
+        assert_eq!(lines.len(), Harness::SUPPORTED.len(), "{lines:?}");
+        for h in Harness::SUPPORTED {
+            assert!(
+                base.join(h.config_dir())
+                    .join("agents/reviewer.md")
+                    .exists(),
+                "{h}"
+            );
+        }
+
+        uninstall_projected(
+            base,
+            Harness::SUPPORTED,
+            BundledKind::Agent,
+            Some("reviewer"),
+        )
+        .unwrap();
+        for h in Harness::SUPPORTED {
+            assert!(
+                !base
+                    .join(h.config_dir())
+                    .join("agents/reviewer.md")
+                    .exists()
+            );
+        }
+        // Only the projections go; the canonical file is the caller's job.
+        assert!(base.join(".agents/agents/reviewer.md").exists());
+    }
+
+    #[test]
+    fn uninstall_project_removes_projected_copy_too() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project_root = tmp.path();
+        fs::create_dir_all(paths::main_worktree(project_root)).unwrap();
+        agents_install_project(project_root, Some("reviewer")).unwrap();
+        project_assets(project_root, false).unwrap();
+        let main = paths::main_worktree(project_root);
+        assert!(main.join(".claude/agents/reviewer.md").exists());
+
+        agents_uninstall_project(project_root, Some("reviewer")).unwrap();
+        assert!(!main.join(".agents/agents/reviewer.md").exists());
+        assert!(!main.join(".claude/agents/reviewer.md").exists());
     }
 
     #[test]
@@ -863,6 +1151,30 @@ mod tests {
 
         let dst = feature_skills.join("SKILL.md");
         assert_eq!(fs::read_to_string(&dst).unwrap(), "updated content");
+    }
+
+    #[test]
+    fn pull_copies_canonical_skills_when_main_has_only_that_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project_root = tmp.path();
+
+        let features_dir = project_root.join(".pm").join("features");
+        fs::create_dir_all(&features_dir).unwrap();
+        fs::write(features_dir.join("my-feat.toml"), "branch = \"my-feat\"\n").unwrap();
+
+        let canonical = paths::main_worktree(project_root).join(".agents/skills/foo");
+        fs::create_dir_all(&canonical).unwrap();
+        fs::write(canonical.join("SKILL.md"), "canonical skill").unwrap();
+        fs::create_dir_all(project_root.join("my-feat")).unwrap();
+
+        skills_pull(project_root, "my-feat").unwrap();
+
+        let feature = project_root.join("my-feat");
+        assert_eq!(
+            fs::read_to_string(feature.join(".agents/skills/foo/SKILL.md")).unwrap(),
+            "canonical skill"
+        );
+        assert!(!feature.join(".claude").exists());
     }
 
     #[test]
@@ -947,7 +1259,7 @@ mod tests {
     // --- Agents-specific tests ---
 
     #[test]
-    fn agents_install_project_writes_to_main_claude_agents() {
+    fn agents_install_project_writes_to_canonical_store() {
         let tmp = tempfile::tempdir().unwrap();
         let project_root = tmp.path();
         fs::create_dir_all(paths::main_worktree(project_root)).unwrap();
@@ -957,7 +1269,7 @@ mod tests {
         assert!(messages[0].contains("Installed"));
 
         let agent_path = paths::main_worktree(project_root)
-            .join(".claude")
+            .join(".agents")
             .join("agents")
             .join("reviewer.md");
         assert!(agent_path.exists());
@@ -1073,7 +1385,7 @@ mod tests {
     // --- Baseline-specific tests ---
 
     #[test]
-    fn baseline_install_writes_to_main_claude() {
+    fn baseline_install_writes_to_canonical_store() {
         let tmp = tempfile::tempdir().unwrap();
         let project_root = tmp.path();
         fs::create_dir_all(paths::main_worktree(project_root)).unwrap();
@@ -1081,7 +1393,40 @@ mod tests {
         let messages = baseline_install_project(project_root, None).unwrap();
         assert_eq!(messages.len(), 1);
         assert!(messages[0].contains("Installed Baseline 'pm-baseline'"));
+        assert_eq!(
+            baseline_path(project_root),
+            paths::main_worktree(project_root).join(".agents/pm-baseline.md")
+        );
         assert!(baseline_path(project_root).exists());
+    }
+
+    #[test]
+    fn baseline_path_prefers_canonical_and_falls_back_to_legacy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project_root = tmp.path();
+        let main = paths::main_worktree(project_root);
+        let canonical = main.join(".agents/pm-baseline.md");
+        let legacy = main.join(".claude/pm-baseline.md");
+
+        // Neither installed: the canonical path, for callers to test.
+        assert_eq!(baseline_path(project_root), canonical);
+        assert!(!baseline_path(project_root).exists());
+
+        // Only the legacy file (project not yet upgraded): still applied.
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::write(&legacy, "old").unwrap();
+        assert_eq!(baseline_path(project_root), legacy);
+        assert!(!legacy_baseline_superseded(project_root));
+        assert!(!remove_legacy_baseline(project_root).unwrap());
+        assert!(legacy.exists());
+
+        // Both: canonical wins and the legacy one is due for removal.
+        baseline_install_project(project_root, None).unwrap();
+        assert_eq!(baseline_path(project_root), canonical);
+        assert!(legacy_baseline_superseded(project_root));
+        assert!(remove_legacy_baseline(project_root).unwrap());
+        assert!(!legacy.exists());
+        assert!(!remove_legacy_baseline(project_root).unwrap());
     }
 
     #[test]

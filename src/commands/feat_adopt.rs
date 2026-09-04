@@ -19,7 +19,9 @@ pub struct FeatAdoptParams<'a> {
     pub context: Option<&'a str>,
     /// Path to an existing worktree to migrate Claude sessions from.
     pub from: Option<&'a Path>,
-    pub edit: bool,
+    /// `--permission` for every agent the workflow spawns; beats
+    /// `[agents.permissions]`.
+    pub permission: Option<&'a str>,
     /// `--model` for every agent the workflow spawns; beats `[agents.models]`.
     pub model: Option<&'a str>,
     /// Workflow to activate for this feature. When `None` and `context` is
@@ -28,8 +30,9 @@ pub struct FeatAdoptParams<'a> {
     pub workflow: Option<&'a str>,
     /// Allows tests to use an isolated tmux server. Pass `None` in production.
     pub tmux_server: Option<&'a str>,
-    /// Base path for Claude session data (for migration).
-    pub claude_base: Option<&'a Path>,
+    /// Root of the harness's session store (`~/.claude` for claude-code),
+    /// for migration. `None` uses the real one.
+    pub session_store: Option<&'a Path>,
 }
 
 /// Adopt an existing branch as a pm feature: worktree + tmux session + state file.
@@ -160,8 +163,8 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
         // Step 2: Create git worktree (skip branch creation — branch already exists)
         git::add_worktree(&main_worktree, &worktree_path, branch)?;
 
-        // Step 2.5: Seed Claude Code settings and skills from main worktree
-        super::claude_settings::seed_feature_claude(params.project_root, &worktree_path)?;
+        // Step 2.5: Seed harness assets and settings from main worktree
+        super::seed::seed_feature_assets(params.project_root, &worktree_path)?;
 
         // Step 2.6: Migrate Claude Code sessions from old path if provided.
         // Always use the original --from path for migration since claude
@@ -170,7 +173,7 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
             match super::claude_migrate::migrate_sessions(
                 old_path,
                 &worktree_path,
-                params.claude_base,
+                params.session_store,
             ) {
                 Ok(msgs) => {
                     for msg in msgs {
@@ -206,7 +209,7 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
                 &feature_name,
                 team,
                 agent_spawn::SpawnOverrides {
-                    edit: params.edit,
+                    permission: params.permission,
                     model: params.model,
                 },
                 Some(&reuse_target),
@@ -270,11 +273,11 @@ mod tests {
             name_override: None,
             context: None,
             from: None,
-            edit: false,
+            permission: None,
             model: None,
             workflow: None,
             tmux_server,
-            claude_base: None,
+            session_store: None,
         }
     }
 
@@ -533,7 +536,7 @@ mod tests {
 
         feat_adopt(&FeatAdoptParams {
             from: Some(old_path),
-            claude_base: Some(claude_base.as_path()),
+            session_store: Some(claude_base.as_path()),
             ..default_adopt_params(&project_path, "login", server.name())
         })
         .unwrap();
@@ -632,7 +635,7 @@ mod tests {
         // This should succeed despite the branch already having a worktree
         feat_adopt(&FeatAdoptParams {
             from: Some(old_worktree.as_path()),
-            claude_base: Some(claude_base.as_path()),
+            session_store: Some(claude_base.as_path()),
             ..default_adopt_params(&project_path, "login", server.name())
         })
         .unwrap();
@@ -797,9 +800,9 @@ mod tests {
         assert_eq!(state.workflow.as_deref(), Some("solo"));
 
         // The brief is queued to solo's sole brief agent (the reserved
-        // vanilla `claude` name).
+        // vanilla `default` name).
         let messages_dir = paths::messages_dir(&project_path);
-        let summaries = crate::messages::list(&messages_dir, "login", "claude", None).unwrap();
+        let summaries = crate::messages::list(&messages_dir, "login", "default", None).unwrap();
         assert_eq!(summaries.len(), 1);
     }
 

@@ -3,7 +3,7 @@ use std::path::Path;
 use chrono::Utc;
 
 use crate::commands::feat_common::{self, InitStateFields};
-use crate::commands::{agent_spawn, claude_settings};
+use crate::commands::{agent_spawn, seed};
 use crate::error::{PmError, Result};
 use crate::hooks;
 use crate::state::feature::{FeatureState, FeatureStatus};
@@ -96,7 +96,9 @@ pub struct FeatNewParams<'a> {
     /// Which branch to stack on. When `None`, the current branch is detected
     /// from CWD (enabling natural stacking from within a feature worktree).
     pub base: Option<&'a str>,
-    pub edit: bool,
+    /// `--permission` for every agent the workflow spawns; beats
+    /// `[agents.permissions]`.
+    pub permission: Option<&'a str>,
     /// `--model` for every agent the workflow spawns; beats `[agents.models]`.
     pub model: Option<&'a str>,
     /// Workflow to activate for this feature. When `None` and `context` is
@@ -121,7 +123,7 @@ impl<'a> FeatNewParams<'a> {
             name_override: None,
             context: None,
             base: None,
-            edit: false,
+            permission: None,
             model: None,
             workflow: None,
             tmux_server,
@@ -216,8 +218,8 @@ pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
         // Step 3: Create git worktree
         git::add_worktree(&main_worktree, &worktree_path, branch)?;
 
-        // Step 3.5: Seed Claude Code settings from main worktree
-        claude_settings::seed_feature_claude(params.project_root, &worktree_path)?;
+        // Step 3.5: Seed harness assets and settings from main worktree
+        seed::seed_feature_assets(params.project_root, &worktree_path)?;
 
         // Step 3.6: Enqueue initial context as a message to every
         // brief_agents agent in the workflow (if context provided). The
@@ -246,7 +248,7 @@ pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
                 &feature_name,
                 team,
                 agent_spawn::SpawnOverrides {
-                    edit: params.edit,
+                    permission: params.permission,
                     model: params.model,
                 },
                 Some(&reuse_target),
@@ -958,23 +960,56 @@ mod tests {
         let state = FeatureState::load(&features_dir, "login").unwrap();
         assert_eq!(state.workflow.as_deref(), Some("solo"));
 
-        // solo's sole team member is the reserved vanilla `claude` name —
+        // solo's sole team member is the reserved vanilla `default` name —
         // spawned and registered despite having no definition file.
-        let session = tmux::session_name(&project_name, "login");
-        let target = tmux::find_window(server.name(), &session, "claude").unwrap();
-        assert!(target.is_some(), "expected a 'claude' tmux window");
-        let agents_dir = paths::agents_dir(&project_path);
+        assert_vanilla_spawned(&project_path, &project_name, server.name(), "default");
+    }
+
+    /// The vanilla agent spawned under `name`: a window, a registry entry
+    /// with no definition, and exactly one queued brief.
+    fn assert_vanilla_spawned(
+        project_path: &Path,
+        project_name: &str,
+        server_name: Option<&str>,
+        name: &str,
+    ) {
+        let session = tmux::session_name(project_name, "login");
+        let target = tmux::find_window(server_name, &session, name).unwrap();
+        assert!(target.is_some(), "expected a '{name}' tmux window");
+        let agents_dir = paths::agents_dir(project_path);
         let registry = crate::state::agent::AgentRegistry::load(&agents_dir, "login").unwrap();
-        let entry = registry.get("claude").expect("'claude' in agent registry");
+        let entry = registry.get(name).expect("vanilla agent in registry");
         assert!(
             entry.agent_definition.is_none(),
             "vanilla agent must not store a definition"
         );
-
-        // Exactly one brief queued, to the vanilla agent.
-        let messages_dir = paths::messages_dir(&project_path);
-        let summaries = crate::messages::list(&messages_dir, "login", "claude", None).unwrap();
+        let messages_dir = paths::messages_dir(project_path);
+        let summaries = crate::messages::list(&messages_dir, "login", name, None).unwrap();
         assert_eq!(summaries.len(), 1);
+    }
+
+    #[test]
+    fn feat_new_installed_old_solo_still_spawns_claude() {
+        // A project whose Preserve-policy solo predates the `default` name
+        // keeps spawning its team as `claude` — the alias is permanent.
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, project_name) = server.setup_project(dir.path());
+        let cfg = crate::state::workflow::config_path(&project_path, "solo");
+        std::fs::write(
+            &cfg,
+            "description = \"old solo\"\nagents = [\"claude\"]\nbrief_agents = [\"claude\"]\n",
+        )
+        .unwrap();
+
+        feat_new(&FeatNewParams {
+            context: Some("do X"),
+            workflow: None,
+            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+        })
+        .unwrap();
+
+        assert_vanilla_spawned(&project_path, &project_name, server.name(), "claude");
     }
 
     #[test]

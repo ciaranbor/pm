@@ -99,12 +99,14 @@ pub fn init(
     // processor (see `commands::hooks_install`).
     hooks_install::install(path)?;
 
-    // Install bundled skills and agent definitions into main/.claude/
-    // so the project is immediately ready for agent workflows.
+    // Install bundled skills and agent definitions into main's canonical
+    // store and project them for each harness in use, so the project is
+    // immediately ready for agent workflows.
     skills::skills_install_project(path, None)?;
     skills::agents_install_project(path, None)?;
     // The shared operating baseline appended to every spawned agent.
     skills::baseline_install_project(path, None)?;
+    skills::project_assets(path, false)?;
 
     // Install bundled workflow definitions into .pm/workflows/.
     // Workflows hold per-feature routing topology and are referenced
@@ -199,31 +201,25 @@ mod tests {
 
         init(&project_path, &projects_dir, None, server.name()).unwrap();
 
-        // Skills should be installed into main/.claude/skills/
-        let skill_path = paths::main_worktree(&project_path)
-            .join(".claude")
-            .join("skills")
-            .join("pm")
-            .join("SKILL.md");
-        assert!(skill_path.exists(), "pm skill should be installed");
-
-        // Agent definitions should be installed into main/.claude/agents/
-        let agent_path = paths::main_worktree(&project_path)
-            .join(".claude")
-            .join("agents")
-            .join("reviewer.md");
-        assert!(agent_path.exists(), "reviewer agent should be installed");
-
-        // The pm-workflow skill should also be installed
-        let workflow_skill = paths::main_worktree(&project_path)
-            .join(".claude")
-            .join("skills")
-            .join("pm-workflow")
-            .join("SKILL.md");
-        assert!(
-            workflow_skill.exists(),
-            "pm-workflow skill should be installed"
-        );
+        // Skills and agents land in the canonical store and, projected, in
+        // the claude-code dirs it actually reads.
+        let main = paths::main_worktree(&project_path);
+        for store in [".agents", ".claude"] {
+            let base = main.join(store);
+            assert!(
+                base.join("skills/pm/SKILL.md").exists(),
+                "{store}: pm skill"
+            );
+            assert!(
+                base.join("agents/reviewer.md").exists(),
+                "{store}: reviewer"
+            );
+            assert!(
+                base.join("skills/pm-workflow/SKILL.md").exists(),
+                "{store}: pm-workflow skill"
+            );
+        }
+        assert!(main.join(".agents/pm-baseline.md").exists());
     }
 
     #[test]

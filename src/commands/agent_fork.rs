@@ -5,7 +5,7 @@ use crate::state::agent::AgentRegistry;
 use crate::state::paths;
 use crate::state::project::{GlobalConfig, ProjectConfig};
 
-use super::agent_spawn::{SpawnClaudeParams, SpawnOverrides, spawn_claude_session};
+use super::agent_spawn::{SpawnOverrides, SpawnParams, spawn_session};
 
 /// Fork an existing agent: spawn a new agent that starts with a copy of
 /// the source's conversation history.
@@ -88,7 +88,7 @@ pub fn agent_fork(
         )));
     }
 
-    let window_target = spawn_claude_session(&SpawnClaudeParams {
+    let window_target = spawn_session(&SpawnParams {
         project_root,
         feature,
         agent_name: Some(new_name),
@@ -156,7 +156,7 @@ mod tests {
         std::fs::create_dir_all(&worktree).unwrap();
 
         // Agent definition stubs so pre-spawn validation resolves.
-        let agents = paths::main_worktree(&root).join(".claude/agents");
+        let agents = paths::main_worktree(&root).join(".agents/agents");
         std::fs::create_dir_all(&agents).unwrap();
         for name in ["reviewer", "implementer"] {
             std::fs::write(agents.join(format!("{name}.md")), "# stub").unwrap();

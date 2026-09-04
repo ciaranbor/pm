@@ -1,4 +1,4 @@
-//! `pm claude hooks session-start` — the SessionStart hook handler.
+//! `pm harness hooks session-start` — the SessionStart hook handler.
 //!
 //! Called by Claude Code when a session starts (or on compaction/clear).
 //! Reads JSON from stdin, extracts the `session_id`, and writes it to

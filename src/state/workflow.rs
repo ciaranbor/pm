@@ -16,11 +16,21 @@ use serde::{Deserialize, Serialize};
 use crate::error::{PmError, Result};
 use crate::state::paths;
 
-/// Reserved agent name meaning a definition-less vanilla Claude session.
-/// Unconditional: even if a `claude.md` definition file exists, this name
-/// spawns plain `claude` with no `--agent` flag. Validation skips the
-/// definition-file check for it.
-pub const VANILLA_AGENT: &str = "claude";
+/// Reserved agent name meaning a definition-less vanilla harness session.
+/// Unconditional: even if a `default.md` definition file exists, this name
+/// spawns with no definition flag. Validation skips the definition-file
+/// check for it.
+pub const VANILLA_AGENT: &str = "default";
+
+/// Every spelling of the vanilla name. `claude` was the original and stays
+/// an alias for good: installed (Preserve-policy) `solo` workflows name it
+/// in their `config.toml` and are never rewritten.
+pub const VANILLA_AGENT_ALIASES: &[&str] = &[VANILLA_AGENT, "claude"];
+
+/// Whether `name` is the reserved vanilla agent under any of its spellings.
+pub fn is_vanilla(name: &str) -> bool {
+    VANILLA_AGENT_ALIASES.contains(&name)
+}
 
 /// Parsed `<workflow>/config.toml`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -69,8 +79,8 @@ impl WorkflowDef {
     }
 
     /// Validate the workflow's spawn set:
-    ///   1. every member of the effective team has a definition file
-    ///      resolvable from the main worktree or the global agents dir, and
+    ///   1. every member of the effective team has a definition file in a
+    ///      canonical store (see [`definition_paths`]), and
     ///   2. every `brief_agents` entry is a member of the effective team.
     ///
     /// The feature worktree typically doesn't exist yet when this runs, so
@@ -92,16 +102,14 @@ impl WorkflowDef {
         let team = self.effective_team();
         for agent in team {
             // The reserved vanilla name needs no definition file.
-            if agent == VANILLA_AGENT {
+            if is_vanilla(agent) {
                 continue;
             }
             if !definition_exists(project_root, agent, home) {
-                let (main_def, global_def) = definition_paths(project_root, agent, home);
                 return Err(PmError::WorkflowAgentMissing {
                     workflow: workflow_name.to_string(),
                     agent: agent.clone(),
-                    main_def,
-                    global_def,
+                    searched: definition_paths(project_root, agent, home),
                 });
             }
         }
@@ -185,32 +193,31 @@ pub fn list_installed_with_errors(project_root: &Path) -> Result<InstalledWorkfl
     Ok(InstalledWorkflows { workflows, errors })
 }
 
-/// The two candidate locations for an agent definition file: the main
-/// worktree's `.claude/agents/<name>.md`, then the global
-/// `<home>/.claude/agents/<name>.md`. When `home` is `None` the global path
-/// is a `~/...` placeholder used only for error messages. Shared so callers
-/// resolving `--agent <def>` report the same paths the validator checks.
-pub fn definition_paths(
-    project_root: &Path,
-    agent: &str,
-    home: Option<&Path>,
-) -> (PathBuf, PathBuf) {
+/// Where an agent definition file may live, in lookup order: the main
+/// worktree's canonical `.agents/agents/`, then the global `~/.agents/agents/`.
+/// Only the canonical stores count — a harness's own dir (`.claude/agents/`)
+/// is a projection of them, never a source. When `home` is `None` the global
+/// entry is a `~/…` placeholder used only for error messages. Shared so
+/// callers resolving a definition report the same paths the validator checks.
+pub fn definition_paths(project_root: &Path, agent: &str, home: Option<&Path>) -> Vec<PathBuf> {
     let filename = format!("{agent}.md");
-    let main_def = paths::main_worktree(project_root)
-        .join(".claude/agents")
-        .join(&filename);
-    let global_def = home
-        .map(|h| h.join(".claude/agents").join(&filename))
-        .unwrap_or_else(|| PathBuf::from("~/.claude/agents/<name>.md"));
-    (main_def, global_def)
+    let main = paths::main_worktree(project_root);
+    vec![
+        main.join(".agents/agents").join(&filename),
+        match home {
+            Some(h) => h.join(".agents/agents").join(&filename),
+            None => PathBuf::from("~/.agents/agents").join(&filename),
+        },
+    ]
 }
 
-/// True iff an agent definition file is resolvable from the main worktree
-/// or the supplied home directory. The feature worktree is intentionally
-/// not consulted — at `feat new` time it doesn't exist yet.
+/// True iff an agent definition file exists at any of [`definition_paths`].
+/// The feature worktree is intentionally not consulted — at `feat new` time
+/// it doesn't exist yet. `~/…` placeholders (no home) are never checked.
 pub fn definition_exists(project_root: &Path, agent: &str, home: Option<&Path>) -> bool {
-    let (main_def, global_def) = definition_paths(project_root, agent, home);
-    main_def.exists() || (home.is_some() && global_def.exists())
+    definition_paths(project_root, agent, home)
+        .iter()
+        .any(|p| p.is_absolute() && p.exists())
 }
 
 #[cfg(test)]
@@ -348,7 +355,7 @@ agents = ["implementer"]
 brief_agents = ["implementer"]
 "#,
         );
-        let main_agents = paths::main_worktree(dir.path()).join(".claude/agents");
+        let main_agents = paths::main_worktree(dir.path()).join(".agents/agents");
         std::fs::create_dir_all(&main_agents).unwrap();
         std::fs::write(main_agents.join("implementer.md"), "stub").unwrap();
 
@@ -369,7 +376,7 @@ agents = ["frontend-impl"]
         let def = WorkflowDef::load(dir.path(), "demo").unwrap();
         // Use the explicit-home variant so the test never mutates process
         // env. Pointing the home at our tempdir guarantees no spurious hit
-        // on a user's real `~/.claude/agents/frontend-impl.md`.
+        // on a user's real `~/.agents/agents/frontend-impl.md`.
         let result = def.validate_with_home(dir.path(), "demo", Some(dir.path()));
         assert!(matches!(
             result.unwrap_err(),
@@ -398,22 +405,81 @@ agents = ["frontend-impl"]
     }
 
     #[test]
-    fn validate_skips_definition_check_for_vanilla_agent() {
-        // The reserved `claude` name means a definition-less vanilla
+    fn validate_skips_definition_check_for_vanilla_agent_aliases() {
+        // Both spellings of the reserved vanilla name mean a definition-less
         // session — validation must pass with no def file anywhere.
+        for name in ["default", "claude"] {
+            let dir = tempdir().unwrap();
+            write_workflow(
+                dir.path(),
+                "demo",
+                &format!(
+                    r#"description = "x"
+agents = ["{name}"]
+brief_agents = ["{name}"]
+"#
+                ),
+            );
+            let def = WorkflowDef::load(dir.path(), "demo").unwrap();
+            // Home pointed at the empty tempdir: no definition can resolve.
+            def.validate_with_home(dir.path(), "demo", Some(dir.path()))
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn validate_resolves_definition_from_either_canonical_store() {
+        // The main worktree's `.agents/agents/` and the home one are each
+        // sufficient; a harness's own dir is not a source.
+        for (in_home, rel, ok) in [
+            (false, ".agents/agents", true),
+            (true, ".agents/agents", true),
+            (false, ".claude/agents", false),
+            (true, ".claude/agents", false),
+        ] {
+            let dir = tempdir().unwrap();
+            let home = tempdir().unwrap();
+            write_workflow(
+                dir.path(),
+                "demo",
+                r#"description = "x"
+agents = ["impl"]
+"#,
+            );
+            let base = if in_home {
+                home.path().to_path_buf()
+            } else {
+                paths::main_worktree(dir.path())
+            };
+            std::fs::create_dir_all(base.join(rel)).unwrap();
+            std::fs::write(base.join(rel).join("impl.md"), "stub").unwrap();
+            let def = WorkflowDef::load(dir.path(), "demo").unwrap();
+            let result = def.validate_with_home(dir.path(), "demo", Some(home.path()));
+            assert_eq!(result.is_ok(), ok, "{rel} (home={in_home}): {result:?}");
+        }
+    }
+
+    #[test]
+    fn missing_definition_error_lists_every_searched_path() {
         let dir = tempdir().unwrap();
+        let home = tempdir().unwrap();
         write_workflow(
             dir.path(),
             "demo",
             r#"description = "x"
-agents = ["claude"]
-brief_agents = ["claude"]
+agents = ["ghost"]
 "#,
         );
         let def = WorkflowDef::load(dir.path(), "demo").unwrap();
-        // Home pointed at the empty tempdir: no definition can resolve.
-        def.validate_with_home(dir.path(), "demo", Some(dir.path()))
-            .unwrap();
+        let err = def
+            .validate_with_home(dir.path(), "demo", Some(home.path()))
+            .unwrap_err()
+            .to_string();
+        for p in definition_paths(dir.path(), "ghost", Some(home.path())) {
+            assert!(err.contains(&p.display().to_string()), "{err}");
+        }
+        assert!(err.contains(".agents/agents/ghost.md"));
+        assert!(!err.contains(".claude"));
     }
 
     #[test]
@@ -427,7 +493,7 @@ agents = ["implementer"]
 brief_agents = ["reviewer"]
 "#,
         );
-        let main_agents = paths::main_worktree(dir.path()).join(".claude/agents");
+        let main_agents = paths::main_worktree(dir.path()).join(".agents/agents");
         std::fs::create_dir_all(&main_agents).unwrap();
         std::fs::write(main_agents.join("implementer.md"), "stub").unwrap();
 
@@ -448,7 +514,7 @@ brief_agents = ["reviewer"]
 auto_spawn = ["implementer"]
 "#,
         );
-        let main_agents = paths::main_worktree(dir.path()).join(".claude/agents");
+        let main_agents = paths::main_worktree(dir.path()).join(".agents/agents");
         std::fs::create_dir_all(&main_agents).unwrap();
         std::fs::write(main_agents.join("implementer.md"), "stub").unwrap();
 

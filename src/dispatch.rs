@@ -3,6 +3,7 @@ use clap::CommandFactory;
 use crate::cli::*;
 use pm::commands;
 use pm::error::PmError;
+use pm::harness::Harness;
 use pm::state::paths;
 use pm::tmux;
 
@@ -163,12 +164,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             }
             Ok(())
         }
-        Commands::Harness(HarnessCommands::Hooks(hooks_cmd)) => match hooks_cmd {
-            HarnessHooksCommands::Stop => exit_unless_ok(commands::hooks_stop::stop()),
-            HarnessHooksCommands::SessionStart => {
-                exit_unless_ok(commands::hooks_session_start::session_start())
-            }
-        },
+        Commands::Harness(cmd) | Commands::Claude(cmd) => dispatch_harness(cmd),
         Commands::Close { all } => {
             if all {
                 let messages = commands::close::close_all(None)?;
@@ -185,196 +181,6 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             }
             Ok(())
         }
-        Commands::Claude(claude_cmd) => match claude_cmd {
-            ClaudeCommands::Settings(settings_cmd) => {
-                let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-                match settings_cmd {
-                    ClaudeSettingsCommands::List { name } => {
-                        let scope = match name {
-                            Some(n) => n,
-                            None => resolve_scope(&project_root)?,
-                        };
-                        let (label, lines) = if scope == "main" {
-                            (
-                                "main".to_string(),
-                                commands::claude_settings::list_main(&project_root)?,
-                            )
-                        } else {
-                            let lines = commands::claude_settings::list(&project_root, &scope)?;
-                            (scope, lines)
-                        };
-                        if lines.is_empty() {
-                            println!("No settings files found for '{label}'");
-                        } else {
-                            for line in lines {
-                                println!("{line}");
-                            }
-                        }
-                        Ok(())
-                    }
-                    ClaudeSettingsCommands::Push { name } => {
-                        let name = resolve_feature_name(name, &project_root)?;
-                        commands::claude_settings::push(&project_root, &name)?;
-                        println!("Pushed settings from feature '{name}' to main");
-                        Ok(())
-                    }
-                    ClaudeSettingsCommands::Pull { name } => {
-                        let name = resolve_feature_name(name, &project_root)?;
-                        commands::claude_settings::pull(&project_root, &name)?;
-                        println!("Pulled settings from main into feature '{name}'");
-                        Ok(())
-                    }
-                    ClaudeSettingsCommands::Diff { name } => {
-                        let name = resolve_feature_name(name, &project_root)?;
-                        let lines = commands::claude_settings::diff(&project_root, &name)?;
-                        if lines.is_empty() {
-                            println!("No differences");
-                        } else {
-                            for line in lines {
-                                println!("{line}");
-                            }
-                        }
-                        Ok(())
-                    }
-                    ClaudeSettingsCommands::Merge { name, ours } => {
-                        let name = resolve_feature_name(name, &project_root)?;
-                        commands::claude_settings::merge(&project_root, &name, ours)?;
-                        println!("Merged settings from feature '{name}' into main");
-                        Ok(())
-                    }
-                }
-            }
-            ClaudeCommands::Skills(skills_cmd) => match skills_cmd {
-                ClaudeSkillsCommands::List => {
-                    let project_root = paths::find_project_root(&std::env::current_dir()?).ok();
-                    let lines = commands::skills::skills_list(project_root.as_deref())?;
-                    for line in lines {
-                        println!("{line}");
-                    }
-                    Ok(())
-                }
-                ClaudeSkillsCommands::Install { name, global } => {
-                    let messages = if global {
-                        commands::skills::skills_install(name.as_deref())?
-                    } else {
-                        let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-                        commands::skills::skills_install_project(&project_root, name.as_deref())?
-                    };
-                    for msg in messages {
-                        println!("{msg}");
-                    }
-                    Ok(())
-                }
-                ClaudeSkillsCommands::Uninstall { name, all, global } => {
-                    if name.is_none() && !all {
-                        eprintln!("Provide a skill name or use --all to uninstall all");
-                        std::process::exit(1);
-                    }
-                    let messages = if global {
-                        commands::skills::skills_uninstall(name.as_deref())?
-                    } else {
-                        let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-                        commands::skills::skills_uninstall_project(&project_root, name.as_deref())?
-                    };
-                    for msg in messages {
-                        println!("{msg}");
-                    }
-                    Ok(())
-                }
-                ClaudeSkillsCommands::Pull { name } => {
-                    let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-                    let name = resolve_feature_name(name, &project_root)?;
-                    commands::skills::skills_pull(&project_root, &name)?;
-                    println!("Pulled skills from main into feature '{name}'");
-                    Ok(())
-                }
-            },
-            ClaudeCommands::Agents(agents_cmd) => match agents_cmd {
-                ClaudeAgentsCommands::List => {
-                    let project_root = paths::find_project_root(&std::env::current_dir()?).ok();
-                    let lines = commands::skills::agents_list(project_root.as_deref())?;
-                    for line in lines {
-                        println!("{line}");
-                    }
-                    Ok(())
-                }
-                ClaudeAgentsCommands::Install { name, global } => {
-                    let messages = if global {
-                        commands::skills::agents_install(name.as_deref())?
-                    } else {
-                        let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-                        commands::skills::agents_install_project(&project_root, name.as_deref())?
-                    };
-                    for msg in messages {
-                        println!("{msg}");
-                    }
-                    Ok(())
-                }
-                ClaudeAgentsCommands::Uninstall { name, all, global } => {
-                    if name.is_none() && !all {
-                        eprintln!("Provide an agent name or use --all to uninstall all");
-                        std::process::exit(1);
-                    }
-                    let messages = if global {
-                        commands::skills::agents_uninstall(name.as_deref())?
-                    } else {
-                        let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-                        commands::skills::agents_uninstall_project(&project_root, name.as_deref())?
-                    };
-                    for msg in messages {
-                        println!("{msg}");
-                    }
-                    Ok(())
-                }
-            },
-            ClaudeCommands::Hooks(hooks_cmd) => match hooks_cmd {
-                HooksCommands::Install => {
-                    let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-                    let msg = commands::hooks_install::install(&project_root)?;
-                    println!("{msg}");
-                    Ok(())
-                }
-                HooksCommands::Stop => exit_unless_ok(commands::hooks_stop::stop()),
-                HooksCommands::SessionStart => {
-                    exit_unless_ok(commands::hooks_session_start::session_start())
-                }
-            },
-            ClaudeCommands::Migrate { from } => {
-                let cwd = std::env::current_dir()?;
-                let messages = commands::claude_migrate::migrate_sessions(&from, &cwd, None)?;
-                for msg in messages {
-                    println!("{msg}");
-                }
-                Ok(())
-            }
-            ClaudeCommands::Export { all, output } => {
-                let projects_dir = paths::global_projects_dir()?;
-                let project_root = if all {
-                    None
-                } else {
-                    Some(paths::find_project_root(&std::env::current_dir()?)?)
-                };
-                let (_, messages) = commands::claude_export::export(
-                    project_root.as_deref(),
-                    &projects_dir,
-                    all,
-                    output.as_deref(),
-                    None,
-                )?;
-                for msg in messages {
-                    println!("{msg}");
-                }
-                Ok(())
-            }
-            ClaudeCommands::Import { tarball } => {
-                let projects_dir = paths::global_projects_dir()?;
-                let messages = commands::claude_import::import(&tarball, &projects_dir, None)?;
-                for msg in messages {
-                    println!("{msg}");
-                }
-                Ok(())
-            }
-        },
         Commands::Agent(agent_cmd) => {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
             let feature = resolve_scope(&project_root)?;
@@ -383,7 +189,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     name,
                     agent_definition,
                     context,
-                    edit,
+                    permission,
                     model,
                 } => {
                     // `--context -` reads the brief from stdin; any other
@@ -397,7 +203,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                             agent_definition.as_deref(),
                             context.as_deref(),
                             commands::agent_spawn::SpawnOverrides {
-                                edit,
+                                permission: permission.as_deref(),
                                 model: model.as_deref(),
                             },
                             None,
@@ -410,9 +216,9 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                                     .to_string(),
                             ));
                         }
-                        if edit || model.is_some() {
+                        if permission.is_some() || model.is_some() {
                             return Err(PmError::Agent(
-                                "--edit/--model require a positional NAME; respawn-all re-resolves settings from config"
+                                "--permission/--model require a positional NAME; respawn-all re-resolves settings from config"
                                     .to_string(),
                             ));
                         }
@@ -630,7 +436,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     feature_name,
                     context,
                     base,
-                    edit,
+                    permission,
                     model,
                     workflow,
                 } => {
@@ -641,7 +447,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                             name_override: feature_name.as_deref(),
                             context: context.as_deref(),
                             base: base.as_deref(),
-                            edit,
+                            permission: permission.as_deref(),
                             model: model.as_deref(),
                             workflow: workflow.as_deref(),
                             tmux_server: None,
@@ -654,7 +460,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     feature_name,
                     context,
                     from,
-                    edit,
+                    permission,
                     model,
                     workflow,
                 } => {
@@ -665,11 +471,11 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                             name_override: feature_name.as_deref(),
                             context: context.as_deref(),
                             from: from.as_deref(),
-                            edit,
+                            permission: permission.as_deref(),
                             model: model.as_deref(),
                             workflow: workflow.as_deref(),
                             tmux_server: None,
-                            claude_base: None,
+                            session_store: None,
                         })?;
                     println!("Adopted feature '{feat_name}'");
                     Ok(())
@@ -1004,6 +810,243 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     Ok(())
                 }
             }
+        }
+    }
+}
+
+fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
+    match cmd {
+        HarnessCommands::Settings { harness, command } => {
+            // Settings files are per harness; only claude-code has them
+            // today. A new variant must add its own arm here, not fall
+            // through to the claude-code implementation.
+            match harness {
+                Harness::ClaudeCode => {}
+            }
+            let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+            match command {
+                HarnessSettingsCommands::List { name } => {
+                    let scope = match name {
+                        Some(n) => n,
+                        None => resolve_scope(&project_root)?,
+                    };
+                    let (label, lines) = if scope == "main" {
+                        (
+                            "main".to_string(),
+                            commands::claude_settings::list_main(&project_root)?,
+                        )
+                    } else {
+                        let lines = commands::claude_settings::list(&project_root, &scope)?;
+                        (scope, lines)
+                    };
+                    if lines.is_empty() {
+                        println!("No settings files found for '{label}'");
+                    } else {
+                        for line in lines {
+                            println!("{line}");
+                        }
+                    }
+                    Ok(())
+                }
+                HarnessSettingsCommands::Push { name } => {
+                    let name = resolve_feature_name(name, &project_root)?;
+                    commands::claude_settings::push(&project_root, &name)?;
+                    println!("Pushed settings from feature '{name}' to main");
+                    Ok(())
+                }
+                HarnessSettingsCommands::Pull { name } => {
+                    let name = resolve_feature_name(name, &project_root)?;
+                    commands::claude_settings::pull(&project_root, &name)?;
+                    println!("Pulled settings from main into feature '{name}'");
+                    Ok(())
+                }
+                HarnessSettingsCommands::Diff { name } => {
+                    let name = resolve_feature_name(name, &project_root)?;
+                    let lines = commands::claude_settings::diff(&project_root, &name)?;
+                    if lines.is_empty() {
+                        println!("No differences");
+                    } else {
+                        for line in lines {
+                            println!("{line}");
+                        }
+                    }
+                    Ok(())
+                }
+                HarnessSettingsCommands::Merge { name, ours } => {
+                    let name = resolve_feature_name(name, &project_root)?;
+                    commands::claude_settings::merge(&project_root, &name, ours)?;
+                    println!("Merged settings from feature '{name}' into main");
+                    Ok(())
+                }
+            }
+        }
+        HarnessCommands::Skills(skills_cmd) => match skills_cmd {
+            HarnessSkillsCommands::List => {
+                let project_root = paths::find_project_root(&std::env::current_dir()?).ok();
+                let lines = commands::skills::skills_list(project_root.as_deref())?;
+                for line in lines {
+                    println!("{line}");
+                }
+                Ok(())
+            }
+            HarnessSkillsCommands::Install { name, global } => {
+                let messages = if global {
+                    let mut m = commands::skills::skills_install(name.as_deref())?;
+                    m.extend(commands::skills::project_assets_global()?);
+                    m
+                } else {
+                    let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+                    let mut m =
+                        commands::skills::skills_install_project(&project_root, name.as_deref())?;
+                    m.extend(commands::skills::project_assets(&project_root, false)?);
+                    m
+                };
+                for msg in messages {
+                    println!("{msg}");
+                }
+                Ok(())
+            }
+            HarnessSkillsCommands::Uninstall { name, all, global } => {
+                if name.is_none() && !all {
+                    eprintln!("Provide a skill name or use --all to uninstall all");
+                    std::process::exit(1);
+                }
+                let messages = if global {
+                    commands::skills::skills_uninstall(name.as_deref())?
+                } else {
+                    let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+                    commands::skills::skills_uninstall_project(&project_root, name.as_deref())?
+                };
+                for msg in messages {
+                    println!("{msg}");
+                }
+                Ok(())
+            }
+            HarnessSkillsCommands::Pull { name } => {
+                let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+                let name = resolve_feature_name(name, &project_root)?;
+                commands::skills::skills_pull(&project_root, &name)?;
+                println!("Pulled skills from main into feature '{name}'");
+                Ok(())
+            }
+        },
+        HarnessCommands::Agents(agents_cmd) => match agents_cmd {
+            HarnessAgentsCommands::List => {
+                let project_root = paths::find_project_root(&std::env::current_dir()?).ok();
+                let lines = commands::skills::agents_list(project_root.as_deref())?;
+                for line in lines {
+                    println!("{line}");
+                }
+                Ok(())
+            }
+            HarnessAgentsCommands::Install { name, global } => {
+                let messages = if global {
+                    let mut m = commands::skills::agents_install(name.as_deref())?;
+                    m.extend(commands::skills::project_assets_global()?);
+                    m
+                } else {
+                    let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+                    let mut m =
+                        commands::skills::agents_install_project(&project_root, name.as_deref())?;
+                    m.extend(commands::skills::project_assets(&project_root, false)?);
+                    m
+                };
+                for msg in messages {
+                    println!("{msg}");
+                }
+                Ok(())
+            }
+            HarnessAgentsCommands::Uninstall { name, all, global } => {
+                if name.is_none() && !all {
+                    eprintln!("Provide an agent name or use --all to uninstall all");
+                    std::process::exit(1);
+                }
+                let messages = if global {
+                    commands::skills::agents_uninstall(name.as_deref())?
+                } else {
+                    let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+                    commands::skills::agents_uninstall_project(&project_root, name.as_deref())?
+                };
+                for msg in messages {
+                    println!("{msg}");
+                }
+                Ok(())
+            }
+        },
+        HarnessCommands::Hooks(hooks_cmd) => match hooks_cmd {
+            HarnessHooksCommands::Install => {
+                let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+                let msg = commands::hooks_install::install(&project_root)?;
+                println!("{msg}");
+                Ok(())
+            }
+            HarnessHooksCommands::Stop => exit_unless_ok(commands::hooks_stop::stop()),
+            HarnessHooksCommands::SessionStart => {
+                exit_unless_ok(commands::hooks_session_start::session_start())
+            }
+        },
+        HarnessCommands::Migrate { from, harness } => {
+            let cwd = std::env::current_dir()?;
+            let messages = match harness {
+                Harness::ClaudeCode => {
+                    commands::claude_migrate::migrate_sessions(&from, &cwd, None)?
+                }
+            };
+            for msg in messages {
+                println!("{msg}");
+            }
+            Ok(())
+        }
+        HarnessCommands::Export {
+            all,
+            output,
+            harness,
+        } => {
+            let projects_dir = paths::global_projects_dir()?;
+            let project_root = if all {
+                None
+            } else {
+                Some(paths::find_project_root(&std::env::current_dir()?)?)
+            };
+            let (_, messages) = match harness {
+                Harness::ClaudeCode => commands::claude_export::export(
+                    project_root.as_deref(),
+                    &projects_dir,
+                    all,
+                    output.as_deref(),
+                    None,
+                )?,
+            };
+            for msg in messages {
+                println!("{msg}");
+            }
+            Ok(())
+        }
+        HarnessCommands::Import { tarball, harness } => {
+            let projects_dir = paths::global_projects_dir()?;
+            let messages = match harness {
+                Harness::ClaudeCode => {
+                    commands::claude_import::import(&tarball, &projects_dir, None)?
+                }
+            };
+            for msg in messages {
+                println!("{msg}");
+            }
+            Ok(())
+        }
+        HarnessCommands::List => {
+            for h in Harness::SUPPORTED {
+                if *h == Harness::default() {
+                    println!("{h} (default)");
+                } else {
+                    println!("{h}");
+                }
+            }
+            Ok(())
+        }
+        HarnessCommands::Probe { harness } => {
+            println!("{}", commands::doctor::probe_line(harness));
+            Ok(())
         }
     }
 }
