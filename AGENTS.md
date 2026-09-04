@@ -28,7 +28,10 @@ follows is only what the tree *doesn't* tell you.
   (the git-backed global analogue of `.pm/workflows/`). The **project tier**
   — `main/.agents/{skills,agents}`, `.pm/workflows/` — holds only the user's
   customs and shadows the global tier **by name**; there is no third
-  "bundled" rank. Agent defs resolve through `workflow::definition_paths`,
+  "bundled" rank. (`.pm/hooks/` is the one seeded surface that is
+  **preserved** — `hooks::bootstrap` only writes missing scripts, since those
+  are user scripts, not a bundled item.) Agent defs resolve through
+  `workflow::definition_paths`,
   workflows through `workflow::resolve_dir` (which also reports the `Tier`);
   the baseline is global-only (`skills::baseline_path`, with a read-only
   fallback to the project/legacy copies for a project spawning before its
@@ -159,11 +162,13 @@ can't launch it, which `pm doctor` reports as a main-scope finding.
 Exception: the reserved name `default` (`workflow::VANILLA_AGENT`, solo's
 whole team) means a definition-less vanilla session — validation skips it,
 and the spawn chokepoint passes no definition for it, unconditionally (a user
-`default.md` is ignored). `claude` is a **permanent** alias
-(`VANILLA_AGENT_ALIASES`, `is_vanilla`): a user's own `solo` copied from an
-earlier release names `claude` in `config.toml`, so it must keep spawning a
-vanilla agent under that name. Config keys are literal — such a solo's agent
-is configured as `[agents.*] claude = …`, not `default`.
+`default.md` is ignored). Earlier releases spelled the name `claude`; that
+alias is removed. `pm upgrade` rewrites the bundled global `solo` to name
+`default` and the migration deletes a stale project `.pm/workflows/solo`
+naming `claude`, so an un-upgraded project repairs itself; `pm doctor` flags
+an active registry entry still named `claude`
+(`IssueKind::LegacyVanillaAgentName`) — it runs until its window dies but
+restart/heal can't resolve it.
 
 ### Agent registry and the shared baseline
 

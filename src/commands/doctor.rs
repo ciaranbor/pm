@@ -50,6 +50,9 @@ pub enum IssueKind {
     StaleBundledCopies,
     /// A project custom skill the harness resolves its global namesake over.
     SkillShadowedByGlobal,
+    /// An active agent is named `claude`, the removed vanilla alias: it runs
+    /// until its window dies, then restart/heal fail to resolve a definition.
+    LegacyVanillaAgentName,
 }
 
 /// A single issue detected for a feature.
@@ -181,6 +184,7 @@ pub fn diagnose(
         });
     }
     main_issues.extend(asset_issues(project_root)?);
+    main_issues.extend(legacy_vanilla_agent_issues(project_root, "main"));
     if !tmux::has_session(tmux_server, &main_session)? {
         main_issues.push(Issue {
             kind: IssueKind::TmuxSessionMissing,
@@ -367,6 +371,8 @@ pub fn diagnose(
                 fix: Fix::None,
             });
         }
+
+        issues.extend(legacy_vanilla_agent_issues(project_root, name));
 
         // Check 7: PR status drift (skipped when `check_pr_state` is false to
         // avoid network round-trips on latency-sensitive callers like
@@ -678,6 +684,31 @@ fn unprojected_definitions(project_root: &Path) -> Result<Vec<(String, Harness)>
     Ok(out)
 }
 
+/// One warning per active agent in `scope` whose effective definition is
+/// `claude`, the removed vanilla alias (spawned by a pre-`default` solo).
+fn legacy_vanilla_agent_issues(project_root: &Path, scope: &str) -> Vec<Issue> {
+    let Ok(registry) = AgentRegistry::load(&paths::agents_dir(project_root), scope) else {
+        return Vec::new();
+    };
+    registry
+        .agents
+        .iter()
+        .filter(|(name, entry)| {
+            entry.agent_type == AgentType::Agent
+                && entry.active
+                && entry.effective_definition(name) == "claude"
+        })
+        .map(|(name, _)| Issue {
+            kind: IssueKind::LegacyVanillaAgentName,
+            message: format!(
+                "agent '{name}' uses removed vanilla agent name 'claude' and cannot be \
+                 restarted (stop it and respawn as 'default')"
+            ),
+            fix: Fix::None,
+        })
+        .collect()
+}
+
 /// Apply a single fix action.
 fn apply_fix(
     action: &FixAction,
@@ -869,6 +900,57 @@ mod tests {
         let lines = doctor(&project_path, false, server.name()).unwrap();
         assert!(
             !lines.iter().any(|l| l.contains("identical to the bundled")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn legacy_claude_agent_name_is_flagged() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let agents_dir = paths::agents_dir(&project_path);
+        let mut registry = AgentRegistry::load(&agents_dir, "login").unwrap();
+        registry.register(
+            "claude",
+            crate::state::agent::AgentEntry {
+                agent_type: AgentType::Agent,
+                session_id: String::new(),
+                window_name: "claude".to_string(),
+                active: true,
+                agent_definition: None,
+                harness: Harness::ClaudeCode,
+            },
+        );
+        registry.register(
+            "dev",
+            crate::state::agent::AgentEntry {
+                agent_type: AgentType::Agent,
+                session_id: String::new(),
+                window_name: "dev".to_string(),
+                active: true,
+                agent_definition: Some("default".to_string()),
+                harness: Harness::ClaudeCode,
+            },
+        );
+        registry.save(&agents_dir, "login").unwrap();
+
+        let lines = doctor(&project_path, false, server.name()).unwrap();
+        assert!(
+            lines.iter().any(|l| l.contains("login")
+                && l.contains("agent 'claude' uses removed vanilla agent name")),
+            "{lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("agent 'dev' uses removed")),
+            "{lines:?}"
+        );
+
+        registry.get_mut("claude").unwrap().active = false;
+        registry.save(&agents_dir, "login").unwrap();
+        let lines = doctor(&project_path, false, server.name()).unwrap();
+        assert!(
+            !lines.iter().any(|l| l.contains("uses removed")),
             "{lines:?}"
         );
     }

@@ -44,7 +44,8 @@ fn is_open_recoverable(kind: IssueKind) -> bool {
         | IssueKind::AssetNotProjected
         | IssueKind::GlobalStoreMissing
         | IssueKind::StaleBundledCopies
-        | IssueKind::SkillShadowedByGlobal => false,
+        | IssueKind::SkillShadowedByGlobal
+        | IssueKind::LegacyVanillaAgentName => false,
     }
 }
 

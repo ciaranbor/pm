@@ -442,8 +442,9 @@ fn list_kind(kind: BundledKind, project_root: Option<&Path>) -> Result<Vec<Strin
 }
 
 /// Install (or rewrite) bundled items of `kind` under `dir`. The bundle is
-/// authoritative: an item whose on-disk content differs is overwritten.
-/// Paths under `dir` that no bundled item names are never touched.
+/// authoritative for every kind: an item whose on-disk content differs is
+/// overwritten, and the message says which were rewritten. Paths under
+/// `dir` that no bundled item names are never touched.
 fn install_in(dir: &Path, kind: BundledKind, name: Option<&str>) -> Result<Vec<String>> {
     let label = kind.label();
     let mut messages = Vec::new();
@@ -452,10 +453,18 @@ fn install_in(dir: &Path, kind: BundledKind, name: Option<&str>) -> Result<Vec<S
             messages.push(format!("{label} '{}' is already up to date", item.name));
             continue;
         }
+        // Rewriting drifted content is the one destructive step here, and pm
+        // can't tell a user edit from a bundle change — so say which items
+        // were rewritten rather than claiming why.
+        let verb = if is_installed(dir, item) {
+            "Rewrote"
+        } else {
+            "Installed"
+        };
         for (rel, content) in item.files {
             write_atomic(&dir.join(rel), content.as_bytes())?;
         }
-        messages.push(format!("Installed {label} '{}'", item.name));
+        messages.push(format!("{verb} {label} '{}'", item.name));
     }
     Ok(messages)
 }
@@ -889,9 +898,9 @@ fn legacy_baseline_path(project_root: &Path) -> PathBuf {
 
 // --- Public API: Workflows ---
 
-/// Whether `name` is one of the bundled workflows — reserved in the global
+/// Whether `name` is one of the bundled workflows — pm-owned in the global
 /// tier, where `pm upgrade` rewrites them. A same-named project workflow is
-/// a custom override.
+/// a user override.
 pub fn is_bundled_workflow(name: &str) -> bool {
     items_of_kind(BundledKind::Workflow).any(|i| i.name == name)
 }
@@ -956,7 +965,7 @@ mod tests {
             vec!["Would update Skill 'pm'".to_string()]
         );
         let third = install_in(&dir, BundledKind::Skill, Some("pm")).unwrap();
-        assert_eq!(third, vec!["Installed Skill 'pm'".to_string()]);
+        assert_eq!(third, vec!["Rewrote Skill 'pm'".to_string()]);
         assert!(is_up_to_date(&dir, item(BundledKind::Skill, "pm")));
     }
 

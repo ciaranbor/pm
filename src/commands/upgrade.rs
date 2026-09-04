@@ -13,8 +13,8 @@ use super::skills;
 /// for each harness in use, then re-seed every active feature worktree.
 /// The global asset tier is installed separately (see [`upgrade_all`] and
 /// [`upgrade`]) since it is shared by every project.
-pub fn upgrade_project(project_root: &Path) -> Result<String> {
-    let mut updated = Vec::new();
+pub fn upgrade_project(project_root: &Path) -> Result<Vec<String>> {
+    let mut updated: Vec<String> = Vec::new();
 
     // Install hooks
     let _ = hooks_install::install(project_root)?;
@@ -41,8 +41,10 @@ pub fn upgrade_project(project_root: &Path) -> Result<String> {
         ));
     }
 
-    // Harnesses read from their own dirs, not the canonical store.
-    let _ = skills::project_assets(project_root, false)?;
+    // Harnesses read from their own dirs, not the canonical store. The
+    // projection's own lines (which name any hand-written harness file a
+    // canonical one replaced) follow the summary.
+    let notes = skills::project_assets(project_root, false)?;
     updated.push("projections".to_string());
 
     // Re-seed each active feature worktree
@@ -58,14 +60,17 @@ pub fn upgrade_project(project_root: &Path) -> Result<String> {
     }
 
     let parts = updated.join(", ");
-    if feature_count > 0 {
-        Ok(format!(
+    let summary = if feature_count > 0 {
+        format!(
             "Upgraded {parts} for main + {feature_count} feature{}",
             if feature_count == 1 { "" } else { "s" }
-        ))
+        )
     } else {
-        Ok(format!("Upgraded {parts} for main"))
-    }
+        format!("Upgraded {parts} for main")
+    };
+    let mut lines = vec![summary];
+    lines.extend(notes);
+    Ok(lines)
 }
 
 /// Dry-run variant of [`upgrade_project`]: report what would change without
@@ -185,7 +190,13 @@ pub fn upgrade_all_with_dir(projects_dir: &Path) -> Result<Vec<String>> {
             continue;
         }
         match upgrade_project(&root) {
-            Ok(summary) => lines.push(format!("{name}: {summary}")),
+            Ok(project_lines) => {
+                let mut project_lines = project_lines.into_iter();
+                if let Some(summary) = project_lines.next() {
+                    lines.push(format!("{name}: {summary}"));
+                }
+                lines.extend(project_lines.map(|l| format!("  {l}")));
+            }
             Err(e) => lines.push(format!("{name}: error: {e}")),
         }
     }
@@ -275,7 +286,7 @@ pub fn upgrade(all: bool, dry_run: bool) -> Result<Vec<String>> {
                 lines.push("Up to date".to_string());
             }
         } else {
-            lines.push(upgrade_project(&project_root)?);
+            lines.extend(upgrade_project(&project_root)?);
         }
         Ok(lines)
     }
@@ -321,7 +332,7 @@ last_active = "2026-01-01T00:00:00Z"
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
 
-        let summary = upgrade_project(&root).unwrap();
+        let summary = upgrade_project(&root).unwrap().join("\n");
         assert!(summary.contains("hooks"), "{summary}");
         assert!(summary.contains("docs"), "{summary}");
         assert!(summary.contains("for main"), "{summary}");
@@ -406,7 +417,7 @@ last_active = "2026-01-01T00:00:00Z"
         );
         assert!(claude.join("agents/reviewer.md").exists(), "dry-run wrote");
 
-        let summary = upgrade_project(&root).unwrap();
+        let summary = upgrade_project(&root).unwrap().join("\n");
         assert!(summary.contains("bundled copies removed"), "{summary}");
 
         // Every bundled copy is gone from main and the feature …
@@ -487,7 +498,7 @@ last_active = "2026-01-01T00:00:00Z"
         fs::create_dir_all(custom.parent().unwrap()).unwrap();
         fs::write(&custom, "custom def").unwrap();
 
-        let summary = upgrade_project(&root).unwrap();
+        let summary = upgrade_project(&root).unwrap().join("\n");
         assert!(summary.contains("1 feature"), "{summary}");
 
         let feat = root.join("my-feat");
@@ -514,7 +525,7 @@ last_active = "2026-01-01T00:00:00Z"
         }
         write_feature_toml(&root, "orphan");
 
-        let summary = upgrade_project(&root).unwrap();
+        let summary = upgrade_project(&root).unwrap().join("\n");
         assert!(summary.contains("3 features"), "{summary}");
     }
 

@@ -110,10 +110,11 @@ Bundled agents:
 
 The definition name `default` is **reserved**: it always means a
 definition-less vanilla agent session (no definition passed to the
-harness), even if a `default.md` definition file exists. `claude` is a
-permanent alias for it — `solo` workflows installed by earlier releases name
-`claude` and keep working unchanged. The bundled `solo` workflow's team is
-exactly this name.
+harness), even if a `default.md` definition file exists. The bundled `solo`
+workflow's team is exactly this name. Earlier releases spelled it `claude`;
+that alias is gone — `pm upgrade` rewrites `solo` to name `default`, and
+`pm doctor` flags any still-running agent named `claude` (it cannot be
+restarted; stop it and respawn).
 
 Bundled workflows:
 
@@ -129,9 +130,10 @@ Each workflow directory holds a `config.toml` (`description`, optional
 `when_to_use` hint, `agents` = the full team spawned at `feat new` time,
 `brief_agents` = the subset that receives the `--context` brief) and a
 `workflow.md` (free-form routing prose, with `## <agent>` sections; names the
-`summary.md` owner). Workflows use a **preserve** install policy — `pm upgrade`
-adds missing ones but never overwrites your edits. Agents, skills, and the
-baseline are **overwritten** (the bundle is authoritative).
+`summary.md` owner). The bundled workflow names are pm-owned: like agents,
+skills, and the baseline they are **overwritten** by `pm upgrade`. Directories
+under `.pm/workflows/` with other names are yours and are never touched;
+`pm workflow list` tags each entry `[bundled]` or `[user]`.
 
 "Reports to the user" means **in the agent's own tmux session**, where you read
 it live — not by messaging the `main` orchestrator. `main` is a dispatcher, not

@@ -989,13 +989,13 @@ mod tests {
     }
 
     #[test]
-    fn feat_new_installed_old_solo_still_spawns_claude() {
-        // A project whose Preserve-policy solo predates the `default` name
-        // keeps spawning its team as `claude` — the alias is permanent.
+    fn feat_new_old_solo_naming_claude_fails_until_upgrade_removes_it() {
+        // `claude` is no longer a vanilla alias: an un-upgraded project's
+        // `.pm/workflows/solo` still names it and shadows the global bundled
+        // one, so validation fails until the migration deletes it.
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, project_name) = server.setup_project(dir.path());
-        // A project-tier override shadows the bundled global `solo`.
         let cfg = paths::workflows_dir(&project_path).join("solo");
         std::fs::create_dir_all(&cfg).unwrap();
         std::fs::write(
@@ -1003,15 +1003,32 @@ mod tests {
             "description = \"old solo\"\nagents = [\"claude\"]\nbrief_agents = [\"claude\"]\n",
         )
         .unwrap();
+        // Pre-migration: the stale copy is pm's, not a user override.
+        std::fs::remove_file(paths::migrations_dir(&project_path).join("global-assets")).unwrap();
 
+        let err = feat_new(&FeatNewParams {
+            context: Some("do X"),
+            workflow: None,
+            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+        })
+        .unwrap_err();
+        assert!(
+            matches!(err, PmError::WorkflowAgentMissing { .. }),
+            "{err:?}"
+        );
+
+        crate::commands::upgrade::upgrade_project(&project_path).unwrap();
+        assert!(
+            !cfg.exists(),
+            "migration must remove the stale bundled solo"
+        );
         feat_new(&FeatNewParams {
             context: Some("do X"),
             workflow: None,
             ..FeatNewParams::with_defaults(&project_path, "login", server.name())
         })
         .unwrap();
-
-        assert_vanilla_spawned(&project_path, &project_name, server.name(), "claude");
+        assert_vanilla_spawned(&project_path, &project_name, server.name(), "default");
     }
 
     #[test]

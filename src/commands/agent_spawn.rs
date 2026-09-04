@@ -512,7 +512,7 @@ mod tests {
 
     /// Write stub `.agents/agents/<name>.md` files in the main worktree so
     /// `agent_spawn`'s pre-spawn definition check resolves in tests that
-    /// build a project by hand (rather than via `agents_install_project`).
+    /// build a project by hand (rather than through the global store).
     fn write_agent_defs(project_root: &Path, names: &[&str]) {
         let dir = paths::main_worktree(project_root).join(".agents/agents");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1288,57 +1288,53 @@ mod tests {
     }
 
     #[test]
-    fn vanilla_agent_aliases_get_no_definition_flag() {
-        // Both spellings of the reserved name are filtered out of the
-        // definition flag; any other definition passes through.
-        for alias in ["default", "claude"] {
-            assert_eq!(definition_flag(Some(alias)), None, "{alias}");
-            let cmd = Harness::ClaudeCode.build_cmd(&SpawnSpec {
-                definition: definition_flag(Some(alias)),
-                ..Default::default()
-            });
-            assert!(
-                !cmd.contains("--agent"),
-                "vanilla spawn must not pass --agent, got: {cmd}"
-            );
-        }
+    fn vanilla_agent_gets_no_definition_flag() {
+        // The reserved name is filtered out of the definition flag; any
+        // other definition passes through.
+        let alias = "default";
+        assert_eq!(definition_flag(Some(alias)), None, "{alias}");
+        let cmd = Harness::ClaudeCode.build_cmd(&SpawnSpec {
+            definition: definition_flag(Some(alias)),
+            ..Default::default()
+        });
+        assert!(
+            !cmd.contains("--agent"),
+            "vanilla spawn must not pass --agent, got: {cmd}"
+        );
         assert_eq!(definition_flag(Some("reviewer")), Some("reviewer"));
     }
 
     #[test]
-    fn vanilla_agent_aliases_skip_definition_validation() {
-        // `pm agent spawn default` / `… claude` must work with no def anywhere.
+    fn vanilla_agent_skips_definition_validation() {
+        // `pm agent spawn default` must work with no def anywhere.
         let tmp = tempfile::tempdir().unwrap();
-        for alias in ["default", "claude"] {
-            validate_definition_resolves_with_home(tmp.path(), alias, None).unwrap();
-        }
+        validate_definition_resolves_with_home(tmp.path(), "default", None).unwrap();
     }
 
     #[test]
-    fn spawning_either_vanilla_alias_launches_a_plain_session() {
+    fn spawning_vanilla_agent_launches_a_plain_session() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
         let (session_name, feature) = setup_project(dir.path(), &server);
 
-        for alias in ["default", "claude"] {
-            let (outcome, _) = agent_spawn(
-                dir.path(),
-                &feature,
-                alias,
-                None,
-                None,
-                SpawnOverrides::default(),
-                server.name(),
-            )
-            .unwrap();
-            assert_eq!(outcome, SpawnOutcome::Spawned);
-            let target = tmux::find_window(server.name(), &session_name, alias)
-                .unwrap()
-                .expect("window");
-            server.wait_for_pane_text(&target, &format!("PM_AGENT_NAME={alias} && claude"));
-            let text = tmux::capture_pane(server.name(), &target).unwrap();
-            assert!(!text.contains("--agent"), "{alias}: {text}");
-        }
+        let alias = "default";
+        let (outcome, _) = agent_spawn(
+            dir.path(),
+            &feature,
+            alias,
+            None,
+            None,
+            SpawnOverrides::default(),
+            server.name(),
+        )
+        .unwrap();
+        assert_eq!(outcome, SpawnOutcome::Spawned);
+        let target = tmux::find_window(server.name(), &session_name, alias)
+            .unwrap()
+            .expect("window");
+        server.wait_for_pane_text(&target, &format!("PM_AGENT_NAME={alias} && claude"));
+        let text = tmux::capture_pane(server.name(), &target).unwrap();
+        assert!(!text.contains("--agent"), "{alias}: {text}");
     }
 
     #[test]

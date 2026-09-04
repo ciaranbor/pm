@@ -25,14 +25,9 @@ use crate::state::paths;
 /// check for it.
 pub const VANILLA_AGENT: &str = "default";
 
-/// Every spelling of the vanilla name. `claude` was the original and stays
-/// an alias for good: installed (Preserve-policy) `solo` workflows name it
-/// in their `config.toml` and are never rewritten.
-pub const VANILLA_AGENT_ALIASES: &[&str] = &[VANILLA_AGENT, "claude"];
-
-/// Whether `name` is the reserved vanilla agent under any of its spellings.
+/// Whether `name` is the reserved vanilla agent.
 pub fn is_vanilla(name: &str) -> bool {
-    VANILLA_AGENT_ALIASES.contains(&name)
+    name == VANILLA_AGENT
 }
 
 /// Parsed `<workflow>/config.toml`.
@@ -343,8 +338,8 @@ when_to_use = "use it here"
 
     #[test]
     fn parses_legacy_auto_spawn_via_serde_alias() {
-        // Already-installed (Preserve-policy) configs still say `auto_spawn`.
-        // The serde alias keeps them parsing into `brief_agents`.
+        // User-created workflows copied from an old bundle may still say
+        // `auto_spawn`. The serde alias keeps them parsing into `brief_agents`.
         let dir = tempdir().unwrap();
         write_workflow(
             dir.path(),
@@ -481,26 +476,25 @@ agents = ["frontend-impl"]
     }
 
     #[test]
-    fn validate_skips_definition_check_for_vanilla_agent_aliases() {
-        // Both spellings of the reserved vanilla name mean a definition-less
-        // session — validation must pass with no def file anywhere.
-        for name in ["default", "claude"] {
-            let dir = tempdir().unwrap();
-            write_workflow(
-                dir.path(),
-                "demo",
-                &format!(
-                    r#"description = "x"
+    fn validate_skips_definition_check_for_vanilla_agent() {
+        // The reserved vanilla name means a definition-less session —
+        // validation must pass with no def file anywhere.
+        let name = VANILLA_AGENT;
+        let dir = tempdir().unwrap();
+        write_workflow(
+            dir.path(),
+            "demo",
+            &format!(
+                r#"description = "x"
 agents = ["{name}"]
 brief_agents = ["{name}"]
 "#
-                ),
-            );
-            let def = WorkflowDef::load(dir.path(), "demo").unwrap();
-            // Home pointed at the empty tempdir: no definition can resolve.
-            def.validate_with_home(dir.path(), "demo", Some(dir.path()))
-                .unwrap();
-        }
+            ),
+        );
+        let def = WorkflowDef::load(dir.path(), "demo").unwrap();
+        // Home pointed at the empty tempdir: no definition can resolve.
+        def.validate_with_home(dir.path(), "demo", Some(dir.path()))
+            .unwrap();
     }
 
     #[test]

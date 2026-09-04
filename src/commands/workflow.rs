@@ -76,9 +76,10 @@ pub struct ListOutput {
 
 /// Build the column-aligned listing used by `pm workflow list`. Returns
 /// one row per installed workflow, sorted by name and tagged
-/// `[<tier>, bundled|custom]` (a project entry shadows a same-named global
-/// one), plus a warning per broken `config.toml` so users don't discover
-/// the breakage only when `pm feat new --workflow <name>` fails. Outside a
+/// `[<tier>, bundled|user]` — `bundled` meaning pm-owned and rewritten by
+/// `pm upgrade`, and a project entry shadowing a same-named global one —
+/// plus a warning per broken `config.toml` so users don't discover the
+/// breakage only when `pm feat new --workflow <name>` fails. Outside a
 /// project (`None`) only the global tier is listed.
 pub fn list_rows(project_root: Option<&Path>) -> Result<ListOutput> {
     list_rows_in(project_root, &workflow::global_dir()?)
@@ -103,7 +104,7 @@ pub fn list_rows_in(project_root: Option<&Path>, global_dir: &Path) -> Result<Li
             {
                 "bundled"
             } else {
-                "custom"
+                "user"
             };
             format!("[{}, {origin}]", w.tier)
         })
@@ -316,8 +317,8 @@ mod tests {
                 .unwrap_or_else(|| panic!("no row for {name}: {:?}", out.rows))
                 .clone()
         };
-        assert!(find("solo").contains("[project, custom]") && find("solo").contains("my solo"));
-        assert!(find("extra").contains("[project, custom]"));
+        assert!(find("solo").contains("[project, user]") && find("solo").contains("my solo"));
+        assert!(find("extra").contains("[project, user]"));
         assert!(find("pr-review").contains("[global, bundled]"));
         assert_eq!(out.rows.iter().filter(|r| r.contains("solo ")).count(), 1);
 
