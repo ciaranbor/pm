@@ -748,7 +748,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
         Commands::Workflow(workflow_cmd) => {
             // `install`/`uninstall`/`list` act on the global tier, so they
             // work outside a project too; `show` needs the feature's scope.
-            let project_root = paths::find_project_root(&std::env::current_dir()?).ok();
+            let project_root = optional_project_root()?;
             match workflow_cmd {
                 WorkflowCommands::Show => {
                     let project_root = project_root.ok_or(pm::error::PmError::NotInProject)?;
@@ -808,6 +808,17 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                 }
             }
         }
+    }
+}
+
+/// The current project root, or `None` when the caller isn't inside a
+/// project — used by commands that also work outside one. Only that case is
+/// swallowed; a genuine I/O failure still propagates.
+fn optional_project_root() -> pm::error::Result<Option<std::path::PathBuf>> {
+    match paths::find_project_root(&std::env::current_dir()?) {
+        Ok(root) => Ok(Some(root)),
+        Err(pm::error::PmError::NotInProject) => Ok(None),
+        Err(e) => Err(e),
     }
 }
 
@@ -879,7 +890,7 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
         }
         HarnessCommands::Skills(skills_cmd) => match skills_cmd {
             HarnessSkillsCommands::List => {
-                let project_root = paths::find_project_root(&std::env::current_dir()?).ok();
+                let project_root = optional_project_root()?;
                 let lines = commands::skills::skills_list(project_root.as_deref())?;
                 for line in lines {
                     println!("{line}");
@@ -916,7 +927,7 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
         },
         HarnessCommands::Agents(agents_cmd) => match agents_cmd {
             HarnessAgentsCommands::List => {
-                let project_root = paths::find_project_root(&std::env::current_dir()?).ok();
+                let project_root = optional_project_root()?;
                 let lines = commands::skills::agents_list(project_root.as_deref())?;
                 for line in lines {
                     println!("{line}");

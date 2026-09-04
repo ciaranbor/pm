@@ -275,18 +275,23 @@ cp ~/.agents/agents/reviewer.md <project>/main/.agents/agents/reviewer.md
 pm upgrade                                     # projects it for the harness
 ```
 
-Same for skills, and for workflows copy `<pm config dir>/workflows/<name>/`
-into `<project>/.pm/workflows/<name>/`. The pm config dir is
-`~/.config/pm/` on Linux and `~/Library/Application Support/pm/` on macOS.
+For workflows, copy `<pm config dir>/workflows/<name>/` into
+`<project>/.pm/workflows/<name>/`. The pm config dir is `~/.config/pm/` on
+Linux and `~/Library/Application Support/pm/` on macOS.
+
+**Skills are the exception.** Claude Code ranks *personal* skills above
+project ones, the inverse of its agent-definition precedence, and pm
+projects every bundled skill into `~/.claude/skills/` — so a project copy
+under a bundled skill's name never applies. Customise a bundled skill
+globally (edit `~/.agents/skills/<name>/`, accepting that `pm upgrade`
+rewrites it) or copy it to a name of your own. `pm doctor` flags a project
+skill shadowed this way.
 
 Upgrading an existing project removes the per-project copies of bundled
-assets that earlier releases installed (they're in `.pm/` git history; commit
-the change with `pm state push`) — your own files are never touched.
-
-One caveat: Claude Code ranks *personal* skills above project ones, the
-inverse of its agent-definition precedence. A project skill whose name also
-exists in `~/.claude/skills/` therefore never applies — `pm doctor` flags it;
-rename the custom to fix it.
+assets that earlier releases installed — your own files are never touched.
+The copies under `.pm/workflows/` are recoverable from `.pm/` git history
+(commit the deletion with `pm state push`); the rest lived in generated,
+gitignored directories.
 
 ### Shared agent baseline
 

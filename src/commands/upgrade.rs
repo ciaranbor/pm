@@ -34,11 +34,15 @@ pub fn upgrade_project(project_root: &Path) -> Result<Vec<String>> {
     // project, so they can't shadow the global tier.
     if !skills::is_migrated(project_root) {
         let removed = skills::migrate_project_to_global(project_root, false)?;
-        updated.push(format!(
-            "{} bundled copies removed (previous content is in .pm/ git history; \
-             commit with `pm state push`)",
-            removed.len()
-        ));
+        if !removed.is_empty() {
+            // Only the `.pm/workflows/` ones are recoverable: the rest sit in
+            // generated, gitignored dirs of the project repo.
+            updated.push(format!(
+                "{} bundled copies removed (any under .pm/workflows/ are in .pm/ git \
+                 history; commit the deletion with `pm state push`)",
+                removed.len()
+            ));
+        }
     }
 
     // Harnesses read from their own dirs, not the canonical store. The
@@ -279,17 +283,26 @@ pub fn upgrade(all: bool, dry_run: bool) -> Result<Vec<String>> {
         }
     } else {
         let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-        let mut lines = install_global_lines(dry_run);
         if dry_run {
-            lines.extend(upgrade_project_dry_run(&project_root)?);
-            if lines.is_empty() {
-                lines.push("Up to date".to_string());
-            }
+            upgrade_dry_run_at(&project_root)
         } else {
+            let mut lines = install_global_lines(false);
             lines.extend(upgrade_project(&project_root)?);
+            Ok(lines)
         }
-        Ok(lines)
     }
+}
+
+/// The global tier's pending actions plus the project's, with the
+/// `Up to date` fallback the dispatcher prints. Lifted out of [`upgrade`]
+/// so it can be tested without mutating the process-wide cwd.
+fn upgrade_dry_run_at(project_root: &Path) -> Result<Vec<String>> {
+    let mut lines = install_global_lines(true);
+    lines.extend(upgrade_project_dry_run(project_root)?);
+    if lines.is_empty() {
+        lines.push("Up to date".to_string());
+    }
+    Ok(lines)
 }
 
 #[cfg(test)]
@@ -331,6 +344,9 @@ last_active = "2026-01-01T00:00:00Z"
     fn upgrade_installs_hooks_and_state_but_no_bundled_copies() {
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
+        // The tier `pm upgrade` installs before touching any project — the
+        // per-project pass deliberately doesn't.
+        skills::install_global().unwrap();
 
         let summary = upgrade_project(&root).unwrap().join("\n");
         assert!(summary.contains("hooks"), "{summary}");
@@ -613,6 +629,19 @@ last_active = "2026-01-01T00:00:00Z"
                 .any(|a| a == "Would re-seed harness assets in feature 'stale-feat'"),
             "expected feature line, got: {actions:?}"
         );
+    }
+
+    #[test]
+    fn dry_run_at_reports_up_to_date_only_when_nothing_is_pending() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        let lines = upgrade_dry_run_at(&root).unwrap();
+        assert!(!lines.is_empty() && lines.iter().all(|l| l != "Up to date"));
+
+        skills::install_global().unwrap();
+        upgrade_project(&root).unwrap();
+        assert_eq!(upgrade_dry_run_at(&root).unwrap(), vec!["Up to date"]);
     }
 
     // --- upgrade_all_with_dir tests ---

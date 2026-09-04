@@ -441,32 +441,57 @@ fn list_kind(kind: BundledKind, project_root: Option<&Path>) -> Result<Vec<Strin
     Ok(lines)
 }
 
-/// Install (or rewrite) bundled items of `kind` under `dir`. The bundle is
-/// authoritative for every kind: an item whose on-disk content differs is
-/// overwritten, and the message says which were rewritten. Paths under
-/// `dir` that no bundled item names are never touched.
-fn install_in(dir: &Path, kind: BundledKind, name: Option<&str>) -> Result<Vec<String>> {
-    let label = kind.label();
-    let mut messages = Vec::new();
+/// What installing one bundled item did (or, in a dry run, would do).
+/// Rewriting drifted content is the one destructive step here, and pm can't
+/// tell a user edit from a bundle change — so callers report *which* items
+/// were rewritten without claiming why.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Applied {
+    Installed,
+    Rewrote,
+    UpToDate,
+}
+
+/// Install (or rewrite) bundled items of `kind` under `dir`, reporting what
+/// each one did. The bundle is authoritative for every kind: an item whose
+/// on-disk content differs is overwritten. Paths under `dir` that no bundled
+/// item names are never touched.
+fn install_in(
+    dir: &Path,
+    kind: BundledKind,
+    name: Option<&str>,
+) -> Result<Vec<(&'static BundledItem, Applied)>> {
+    let mut applied = Vec::new();
     for item in items_to_install(kind, name)? {
         if is_up_to_date(dir, item) {
-            messages.push(format!("{label} '{}' is already up to date", item.name));
+            applied.push((item, Applied::UpToDate));
             continue;
         }
-        // Rewriting drifted content is the one destructive step here, and pm
-        // can't tell a user edit from a bundle change — so say which items
-        // were rewritten rather than claiming why.
-        let verb = if is_installed(dir, item) {
-            "Rewrote"
+        let outcome = if is_installed(dir, item) {
+            Applied::Rewrote
         } else {
-            "Installed"
+            Applied::Installed
         };
         for (rel, content) in item.files {
             write_atomic(&dir.join(rel), content.as_bytes())?;
         }
-        messages.push(format!("{verb} {label} '{}'", item.name));
+        applied.push((item, outcome));
     }
-    Ok(messages)
+    Ok(applied)
+}
+
+/// One user-facing line per item, including the no-ops — what the explicit
+/// install commands print.
+fn install_messages(dir: &Path, kind: BundledKind, name: Option<&str>) -> Result<Vec<String>> {
+    let label = kind.label();
+    Ok(install_in(dir, kind, name)?
+        .into_iter()
+        .map(|(item, applied)| match applied {
+            Applied::Installed => format!("Installed {label} '{}'", item.name),
+            Applied::Rewrote => format!("Rewrote {label} '{}'", item.name),
+            Applied::UpToDate => format!("{label} '{}' is already up to date", item.name),
+        })
+        .collect())
 }
 
 /// Dry-run companion to [`install_in`]: one `Would …` line per item whose
@@ -542,10 +567,15 @@ pub fn install_global() -> Result<Vec<String>> {
 pub fn install_global_in(store: &GlobalStore) -> Result<Vec<String>> {
     let mut lines = Vec::new();
     for kind in BundledKind::ALL {
-        for line in install_in(&store.dir(kind), kind, None)? {
-            if !line.contains("already up to date") {
-                lines.push(format!("{line} (global)"));
-            }
+        let label = kind.label();
+        for (item, applied) in install_in(&store.dir(kind), kind, None)? {
+            let verb = match applied {
+                Applied::Installed => "Installed",
+                Applied::Rewrote => "Rewrote",
+                // An upgrade reports only what it changed.
+                Applied::UpToDate => continue,
+            };
+            lines.push(format!("{verb} {label} '{}' (global)", item.name));
         }
     }
     lines.extend(project_global(store, false)?);
@@ -587,16 +617,21 @@ pub fn global_store_missing_in(store: &GlobalStore) -> Vec<String> {
 }
 
 /// Global agent definitions (`~/.agents/agents/*.md`) with no projected copy
-/// in a supported harness's global definition dir.
-pub fn unprojected_global_definitions() -> Result<Vec<(String, Harness)>> {
-    unprojected_global_definitions_in(&GlobalStore::resolve()?)
+/// in `harnesses`' global definition dirs. Callers pass the harnesses whose
+/// projections matter to them — a project passes the ones it uses, so an
+/// unused harness never raises a finding.
+pub fn unprojected_global_definitions(harnesses: &[Harness]) -> Result<Vec<(String, Harness)>> {
+    unprojected_global_definitions_in(&GlobalStore::resolve()?, harnesses)
 }
 
-pub fn unprojected_global_definitions_in(store: &GlobalStore) -> Result<Vec<(String, Harness)>> {
+pub fn unprojected_global_definitions_in(
+    store: &GlobalStore,
+    harnesses: &[Harness],
+) -> Result<Vec<(String, Harness)>> {
     let canonical = store.dir(BundledKind::Agent);
     let mut out = Vec::new();
     for file in definition_files(&canonical)? {
-        for h in Harness::SUPPORTED {
+        for h in harnesses {
             let projected = h
                 .global_config_dir(&store.home)
                 .map(|d| d.join("agents").join(&file));
@@ -667,7 +702,7 @@ pub fn redundant_overrides(project_root: &Path) -> Vec<String> {
     ] {
         let dir = project_dir(project_root, kind);
         for item in items_of_kind(kind) {
-            if is_installed(&dir, item) && is_up_to_date(&dir, item) {
+            if is_up_to_date(&dir, item) {
                 out.push(format!("{} '{}'", kind.label(), item.name));
             }
         }
@@ -697,17 +732,17 @@ pub fn write_migration_marker(project_root: &Path) -> Result<()> {
 /// projections, the baseline (canonical and legacy), and the bundled
 /// workflow directories. Only what exists on disk.
 pub fn stale_bundled_copies(project_root: &Path) -> Result<Vec<PathBuf>> {
+    let mut stores = vec![PathBuf::from(CANONICAL_DIR)];
+    stores.extend(
+        harnesses_in_use(project_root)
+            .into_iter()
+            .map(|h| PathBuf::from(h.config_dir())),
+    );
     let mut out = Vec::new();
     for base in worktrees_on_disk(project_root)? {
-        let mut stores = vec![PathBuf::from(CANONICAL_DIR)];
-        stores.extend(
-            harnesses_in_use(project_root)
-                .into_iter()
-                .map(|h| PathBuf::from(h.config_dir())),
-        );
-        for store in stores {
+        for store in &stores {
             for kind in [BundledKind::Skill, BundledKind::Agent] {
-                let dir = base.join(&store).join(kind.store_subdir().unwrap());
+                let dir = base.join(store).join(kind.store_subdir().unwrap());
                 for item in items_of_kind(kind) {
                     for (rel, _) in item.files {
                         let path = dir.join(rel);
@@ -815,7 +850,7 @@ pub fn skills_uninstall(name: Option<&str>) -> Result<Vec<String>> {
 
 fn install_kind_global(kind: BundledKind, name: Option<&str>) -> Result<Vec<String>> {
     let store = GlobalStore::resolve()?;
-    let mut messages = install_in(&store.dir(kind), kind, name)?;
+    let mut messages = install_messages(&store.dir(kind), kind, name)?;
     messages.extend(project_global(&store, false)?);
     Ok(messages)
 }
@@ -909,7 +944,7 @@ pub fn is_bundled_workflow(name: &str) -> bool {
 /// on-disk content — the way to revert a hand-edited global copy.
 pub fn workflows_install(name: Option<&str>) -> Result<Vec<String>> {
     let store = GlobalStore::resolve()?;
-    install_in(&store.workflows_dir(), BundledKind::Workflow, name)
+    install_messages(&store.workflows_dir(), BundledKind::Workflow, name)
 }
 
 pub fn workflows_uninstall(name: Option<&str>) -> Result<Vec<String>> {
@@ -936,7 +971,7 @@ mod tests {
             "not installed"
         );
 
-        let messages = install_in(&dir, BundledKind::Skill, Some("pm")).unwrap();
+        let messages = install_messages(&dir, BundledKind::Skill, Some("pm")).unwrap();
         assert_eq!(messages, vec!["Installed Skill 'pm'".to_string()]);
         assert_eq!(
             status_label(&dir, item(BundledKind::Skill, "pm")),
@@ -947,7 +982,7 @@ mod tests {
             "not installed"
         );
 
-        let second = install_in(&dir, BundledKind::Skill, Some("pm")).unwrap();
+        let second = install_messages(&dir, BundledKind::Skill, Some("pm")).unwrap();
         assert!(second[0].contains("already up to date"));
         assert!(
             install_in_dry_run(&dir, BundledKind::Skill, Some("pm"))
@@ -964,7 +999,7 @@ mod tests {
             install_in_dry_run(&dir, BundledKind::Skill, Some("pm")).unwrap(),
             vec!["Would update Skill 'pm'".to_string()]
         );
-        let third = install_in(&dir, BundledKind::Skill, Some("pm")).unwrap();
+        let third = install_messages(&dir, BundledKind::Skill, Some("pm")).unwrap();
         assert_eq!(third, vec!["Rewrote Skill 'pm'".to_string()]);
         assert!(is_up_to_date(&dir, item(BundledKind::Skill, "pm")));
     }
@@ -975,8 +1010,9 @@ mod tests {
         let dir = tmp.path().join("store");
         for kind in BundledKind::ALL {
             let count = items_of_kind(kind).count();
-            let messages = install_in(&dir, kind, None).unwrap();
-            assert_eq!(messages.len(), count);
+            let applied = install_in(&dir, kind, None).unwrap();
+            assert_eq!(applied.len(), count);
+            assert!(applied.iter().all(|(_, a)| *a == Applied::Installed));
             for item in items_of_kind(kind) {
                 assert!(is_installed(&dir, item), "{}", item.name);
             }
@@ -1002,7 +1038,7 @@ mod tests {
                 matches!(e, PmError::WorkflowNotFound(_))
             }),
         ] {
-            let err = install_in(&dir, kind, Some("nonexistent")).unwrap_err();
+            let err = install_messages(&dir, kind, Some("nonexistent")).unwrap_err();
             assert!(check(&err), "{err}");
         }
     }
@@ -1073,7 +1109,7 @@ mod tests {
         }
         assert!(global_store_missing_in(&store).is_empty());
         assert!(
-            unprojected_global_definitions_in(&store)
+            unprojected_global_definitions_in(&store, Harness::SUPPORTED)
                 .unwrap()
                 .is_empty()
         );
@@ -1127,12 +1163,18 @@ mod tests {
         // A user's global custom def is flagged until projected.
         fs::write(home.path().join(".agents/agents/planner.md"), "# planner").unwrap();
         assert_eq!(
-            unprojected_global_definitions_in(&store).unwrap(),
+            unprojected_global_definitions_in(&store, Harness::SUPPORTED).unwrap(),
             vec![("planner".to_string(), Harness::ClaudeCode)]
+        );
+        assert!(
+            unprojected_global_definitions_in(&store, &[])
+                .unwrap()
+                .is_empty(),
+            "a harness the project doesn't use raises no finding"
         );
         install_global_in(&store).unwrap();
         assert!(
-            unprojected_global_definitions_in(&store)
+            unprojected_global_definitions_in(&store, Harness::SUPPORTED)
                 .unwrap()
                 .is_empty()
         );

@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use crate::error::{PmError, Result};
+use crate::error::Result;
+use crate::state::paths;
 
 /// Convert an absolute path to a Claude Code path key.
 /// `/Users/foo/bar` becomes `-Users-foo-bar`.
@@ -15,7 +16,7 @@ pub fn path_to_key(path: &Path) -> String {
 
 /// Return the default Claude base directory (`~/.claude/`).
 pub fn claude_base_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().ok_or(PmError::NoHomeDir)?;
+    let home = paths::home_dir()?;
     Ok(home.join(".claude"))
 }
 

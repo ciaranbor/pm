@@ -48,6 +48,8 @@ pub enum IssueKind {
     GlobalStoreMissing,
     /// Pre-migration bundled copies in the project shadow the global tier.
     StaleBundledCopies,
+    /// A project override whose content equals the bundled asset it shadows.
+    RedundantOverride,
     /// A project custom skill the harness resolves its global namesake over.
     SkillShadowedByGlobal,
     /// An active agent is named `claude`, the removed vanilla alias: it runs
@@ -620,14 +622,14 @@ fn asset_issues(project_root: &Path) -> Result<Vec<Issue>> {
                     "{} pre-migration bundled copies shadow the global store (run `pm upgrade`)",
                     stale.len()
                 ),
-                fix: Fix::Skip,
+                fix: Fix::None,
             });
         }
     } else {
         let redundant = skills::redundant_overrides(project_root);
         if !redundant.is_empty() {
             issues.push(Issue {
-                kind: IssueKind::StaleBundledCopies,
+                kind: IssueKind::RedundantOverride,
                 message: format!(
                     "project overrides identical to the bundled asset (delete to follow the \
                      global store): {}",
@@ -668,16 +670,17 @@ fn asset_issues(project_root: &Path) -> Result<Vec<Issue>> {
 fn unprojected_definitions(project_root: &Path) -> Result<Vec<(String, Harness)>> {
     let main = paths::main_worktree(project_root);
     let canonical = main.join(skills::CANONICAL_DIR).join("agents");
-    let mut out = skills::unprojected_global_definitions()?;
+    let harnesses = skills::harnesses_in_use(project_root);
+    let mut out = skills::unprojected_global_definitions(&harnesses)?;
     for file in skills::definition_files(&canonical)? {
-        for harness in skills::harnesses_in_use(project_root) {
+        for harness in &harnesses {
             if !main
                 .join(harness.config_dir())
                 .join("agents")
                 .join(&file)
                 .exists()
             {
-                out.push((file.trim_end_matches(".md").to_string(), harness));
+                out.push((file.trim_end_matches(".md").to_string(), *harness));
             }
         }
     }
