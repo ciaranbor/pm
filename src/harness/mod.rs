@@ -62,6 +62,26 @@ impl Harness {
         }
     }
 
+    /// The harness's global config dir under `home` (`~/.claude` for
+    /// claude-code), where the global canonical store is projected. `None`
+    /// for a harness with no global dir — such a harness would need the
+    /// global assets projected into each project's own dir instead, which
+    /// no current harness requires.
+    pub fn global_config_dir(self, home: &Path) -> Option<PathBuf> {
+        match self {
+            Harness::ClaudeCode => Some(home.join(claude_code::CONFIG_DIR)),
+        }
+    }
+
+    /// Whether this harness would resolve its *global* copy of skill `name`
+    /// over a project one, so a project custom of that name never applies.
+    /// Claude Code ranks personal skills above project skills.
+    pub fn project_skill_shadowed_by_global(self, home: &Path, name: &str) -> bool {
+        match self {
+            Harness::ClaudeCode => claude_code::personal_skill_exists(home, name),
+        }
+    }
+
     /// Per-worktree files under [`config_dir`](Self::config_dir) that a
     /// feature worktree needs a copy of from main.
     pub fn seeded_files(self) -> &'static [&'static str] {

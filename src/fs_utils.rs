@@ -62,10 +62,29 @@ pub fn sync_file(src: &Path, dst: &Path, dry_run: bool) -> Result<bool> {
         return Ok(false);
     }
     if !dry_run {
-        if let Some(parent) = dst.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(dst, &content)?;
+        write_atomic(dst, &content)?;
     }
     Ok(true)
+}
+
+static TMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Write `content` to `path` via a uniquely-named sibling temp file and a
+/// rename, creating parent directories as needed. A concurrent reader sees
+/// either the old file or the complete new one, never a partial write.
+pub fn write_atomic(path: &Path, content: &[u8]) -> Result<()> {
+    let parent = path.parent().unwrap_or(Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let n = TMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let name = path
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let tmp = parent.join(format!(".{name}.{}.{n}.tmp", std::process::id()));
+    std::fs::write(&tmp, content)?;
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.into());
+    }
+    Ok(())
 }

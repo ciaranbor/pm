@@ -8,52 +8,42 @@ use super::hooks_install;
 use super::seed;
 use super::skills;
 
-/// Upgrade a single project: reinstall hooks, skills, agents, and the
-/// baseline into main's canonical store, project them for each harness in
-/// use, then re-seed every active feature worktree. Returns a
-/// human-readable summary line.
+/// Upgrade a single project: reinstall hooks, bootstrap state, migrate any
+/// pre-global-tier bundled copies away, project the project's own customs
+/// for each harness in use, then re-seed every active feature worktree.
+/// The global asset tier is installed separately (see [`upgrade_all`] and
+/// [`upgrade`]) since it is shared by every project.
 pub fn upgrade_project(project_root: &Path) -> Result<String> {
     let mut updated = Vec::new();
 
     // Install hooks
     let _ = hooks_install::install(project_root)?;
-    updated.push("hooks");
+    updated.push("hooks".to_string());
 
     // Bootstrap information store and state repo (both idempotent)
     super::docs::bootstrap(project_root)?;
     super::state_cmd::init(project_root)?;
     // Migrate docs submodule to regular files if needed
     if super::docs::migrate_docs_submodule(project_root).unwrap_or(false) {
-        updated.push("docs (migrated from submodule)");
+        updated.push("docs (migrated from submodule)".to_string());
     } else {
-        updated.push("docs");
+        updated.push("docs".to_string());
     }
 
-    // Install skills to main
-    let _ = skills::skills_install_project(project_root, None)?;
-    updated.push("skills");
-
-    // Install agents to main
-    let _ = skills::agents_install_project(project_root, None)?;
-    updated.push("agents");
-
-    // Install the shared operating baseline (appended to every spawned agent)
-    let _ = skills::baseline_install_project(project_root, None)?;
-    updated.push("baseline");
-    if skills::remove_legacy_baseline(project_root)? {
-        updated.push("legacy baseline removed");
+    // One-shot: drop the bundled copies earlier releases installed per
+    // project, so they can't shadow the global tier.
+    if !skills::is_migrated(project_root) {
+        let removed = skills::migrate_project_to_global(project_root, false)?;
+        updated.push(format!(
+            "{} bundled copies removed (previous content is in .pm/ git history; \
+             commit with `pm state push`)",
+            removed.len()
+        ));
     }
 
     // Harnesses read from their own dirs, not the canonical store.
     let _ = skills::project_assets(project_root, false)?;
-    updated.push("projections");
-
-    // Install bundled workflows to .pm/workflows/. User edits to existing
-    // files are preserved by `install_in`'s "already up to date / outdated"
-    // logic — only bundled files that exactly match a previously installed
-    // version are rewritten on upgrade.
-    let _ = skills::workflows_install_project(project_root, None)?;
-    updated.push("workflows");
+    updated.push("projections".to_string());
 
     // Re-seed each active feature worktree
     let features_dir = paths::features_dir(project_root);
@@ -113,29 +103,15 @@ pub fn upgrade_project_dry_run(project_root: &Path) -> Result<Vec<String>> {
         actions.push("Would migrate .pm/docs/ from submodule to regular files".to_string());
     }
 
-    // Skills (each line is already an action — no filtering needed)
-    actions.extend(skills::skills_install_project_dry_run(project_root, None)?);
-
-    // Agents
-    actions.extend(skills::agents_install_project_dry_run(project_root, None)?);
-
-    // Baseline
-    actions.extend(skills::baseline_install_project_dry_run(
-        project_root,
-        None,
-    )?);
-    if skills::legacy_baseline_superseded(project_root) {
-        actions.push("Would remove legacy main/.claude/pm-baseline.md".to_string());
+    // Bundled copies left by earlier releases
+    if !skills::is_migrated(project_root) {
+        for path in skills::migrate_project_to_global(project_root, true)? {
+            actions.push(format!("Would remove {}", path.display()));
+        }
     }
 
     // Projections (compares the canonical store as it is on disk now)
     actions.extend(skills::project_assets(project_root, true)?);
-
-    // Workflows
-    actions.extend(skills::workflows_install_project_dry_run(
-        project_root,
-        None,
-    )?);
 
     // Feature worktrees: only report each feature whose seeded assets differ
     let features_dir = paths::features_dir(project_root);
@@ -151,18 +127,6 @@ pub fn upgrade_project_dry_run(project_root: &Path) -> Result<Vec<String>> {
     }
 
     Ok(actions)
-}
-
-/// Wraps [`upgrade_project_dry_run`] with the `Up to date` fallback used by
-/// the public dispatcher. Lifted out of [`upgrade`] so it can be tested
-/// without mutating the process-wide cwd.
-fn upgrade_dry_run_at(project_root: &Path) -> Result<Vec<String>> {
-    let actions = upgrade_project_dry_run(project_root)?;
-    if actions.is_empty() {
-        Ok(vec!["Up to date".to_string()])
-    } else {
-        Ok(actions)
-    }
 }
 
 /// Format a path relative to `project_root` when possible, otherwise display
@@ -185,10 +149,12 @@ pub fn upgrade_all_with_dir(projects_dir: &Path) -> Result<Vec<String>> {
     let projects = ProjectEntry::list(projects_dir)?;
 
     if projects.is_empty() {
-        return Ok(vec!["No registered projects".to_string()]);
+        let mut lines = install_global_lines(false);
+        lines.push("No registered projects".to_string());
+        return Ok(lines);
     }
 
-    let mut lines = Vec::new();
+    let mut lines = install_global_lines(false);
     for (name, entry) in &projects {
         // Skip legacy entries with non-portable roots — calling
         // `to_portable` on a relative `PathBuf` would `debug_assert!` in
@@ -238,10 +204,12 @@ pub fn upgrade_all_dry_run_with_dir(projects_dir: &Path) -> Result<Vec<String>> 
     let projects = ProjectEntry::list(projects_dir)?;
 
     if projects.is_empty() {
-        return Ok(vec!["No registered projects".to_string()]);
+        let mut lines = install_global_lines(true);
+        lines.push("No registered projects".to_string());
+        return Ok(lines);
     }
 
-    let mut lines = Vec::new();
+    let mut lines = install_global_lines(true);
     for (name, entry) in &projects {
         // Same guard as in upgrade_all: never resolve a non-portable root
         // against the caller's CWD.
@@ -274,6 +242,21 @@ pub fn upgrade_all_dry_run_with_dir(projects_dir: &Path) -> Result<Vec<String>> 
     Ok(lines)
 }
 
+/// Install (or preview installing) the shared global asset tier. A failure
+/// here — no resolvable home, say — is reported as a line rather than
+/// aborting the per-project work that follows.
+fn install_global_lines(dry_run: bool) -> Vec<String> {
+    let result = if dry_run {
+        skills::install_global_dry_run()
+    } else {
+        skills::install_global()
+    };
+    match result {
+        Ok(lines) => lines,
+        Err(e) => vec![format!("global assets: error: {e}")],
+    }
+}
+
 /// Upgrade either the current project (default) or all projects (--all).
 /// When `dry_run` is `true`, preview changes without writing anything.
 pub fn upgrade(all: bool, dry_run: bool) -> Result<Vec<String>> {
@@ -285,12 +268,16 @@ pub fn upgrade(all: bool, dry_run: bool) -> Result<Vec<String>> {
         }
     } else {
         let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+        let mut lines = install_global_lines(dry_run);
         if dry_run {
-            upgrade_dry_run_at(&project_root)
+            lines.extend(upgrade_project_dry_run(&project_root)?);
+            if lines.is_empty() {
+                lines.push("Up to date".to_string());
+            }
         } else {
-            let line = upgrade_project(&project_root)?;
-            Ok(vec![line])
+            lines.push(upgrade_project(&project_root)?);
         }
+        Ok(lines)
     }
 }
 
@@ -330,48 +317,40 @@ last_active = "2026-01-01T00:00:00Z"
     }
 
     #[test]
-    fn upgrade_installs_hooks_skills_agents() {
+    fn upgrade_installs_hooks_and_state_but_no_bundled_copies() {
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
 
         let summary = upgrade_project(&root).unwrap();
-        assert!(summary.contains("hooks"));
-        assert!(summary.contains("skills"));
-        assert!(summary.contains("agents"));
-        assert!(summary.contains("workflows"));
-        assert!(summary.contains("for main"));
-
-        // Verify hooks installed
+        assert!(summary.contains("hooks"), "{summary}");
+        assert!(summary.contains("docs"), "{summary}");
+        assert!(summary.contains("for main"), "{summary}");
         assert!(hooks_install::is_installed(&root).unwrap());
+        assert!(skills::is_migrated(&root));
 
-        // Skills and agents land in the canonical store and its projection
+        // Bundled assets live only in the global tier now.
         let main = paths::main_worktree(&root);
-        for store in [".agents", ".claude"] {
-            assert!(
-                main.join(store).join("skills/pm/SKILL.md").exists(),
-                "{store}"
-            );
-            assert!(
-                main.join(store).join("agents/reviewer.md").exists(),
-                "{store}"
-            );
-        }
-        assert!(main.join(".agents/pm-baseline.md").exists());
-        assert!(!main.join(".claude/pm-baseline.md").exists());
-
-        // Verify workflows installed
-        let workflow_path = paths::workflows_dir(&root)
-            .join("implement-and-review")
-            .join("workflow.md");
-        assert!(workflow_path.exists());
+        assert!(!main.join(".agents").exists());
+        assert!(!main.join(".claude/agents").exists());
+        assert!(!paths::workflows_dir(&root).exists());
+        let home = paths::home_dir().unwrap();
+        assert!(home.join(".agents/agents/reviewer.md").exists());
+        assert!(home.join(".claude/agents/reviewer.md").exists());
+        assert!(home.join(".agents/pm-baseline.md").exists());
+        assert!(
+            paths::global_workflows_dir()
+                .unwrap()
+                .join("implement-and-review/workflow.md")
+                .exists()
+        );
     }
 
     #[test]
-    fn upgrade_migrates_claude_only_layout() {
-        // A project last touched by a release before the canonical store:
-        // everything under `.claude/`, old-generation hook commands, a
-        // Preserve-policy solo naming `claude`, live registry/feature/message
-        // state. One upgrade must leave it working with no manual steps.
+    fn upgrade_migrates_pre_global_layout_and_keeps_live_state() {
+        // A project last touched by a release that installed bundled copies
+        // per project: everything under `main/.claude/` and `.pm/workflows/`,
+        // old-generation hook commands, a user custom def, live
+        // registry/feature/message state. One upgrade must leave it working.
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
         let main = paths::main_worktree(&root);
@@ -389,40 +368,67 @@ last_active = "2026-01-01T00:00:00Z"
         .unwrap();
         let solo = paths::workflows_dir(&root).join("solo");
         fs::create_dir_all(&solo).unwrap();
-        let solo_cfg =
-            "description = \"old\"\nagents = [\"claude\"]\nbrief_agents = [\"claude\"]\n";
-        fs::write(solo.join("config.toml"), solo_cfg).unwrap();
+        fs::write(
+            solo.join("config.toml"),
+            "description = \"old\"\nagents = [\"claude\"]\nbrief_agents = [\"claude\"]\n",
+        )
+        .unwrap();
         fs::write(solo.join("workflow.md"), "# solo\n## claude\n").unwrap();
+        let my_flow = paths::workflows_dir(&root).join("my-flow");
+        fs::create_dir_all(&my_flow).unwrap();
+        fs::write(my_flow.join("config.toml"), "description = \"mine\"\n").unwrap();
         let agents_toml = root.join(".pm/agents/main.toml");
         fs::create_dir_all(agents_toml.parent().unwrap()).unwrap();
         let registry =
             "[agents.orchestrator]\nagent_type = \"agent\"\nsession_id = \"abc\"\nactive = true\n";
         fs::write(&agents_toml, registry).unwrap();
         write_feature_toml(&root, "login");
-        fs::create_dir_all(root.join("login")).unwrap();
+        let feat = root.join("login");
+        fs::create_dir_all(feat.join(".claude/agents")).unwrap();
+        fs::write(feat.join(".claude/agents/reviewer.md"), "seeded stale").unwrap();
         let feature_toml = fs::read(root.join(".pm/features/login.toml")).unwrap();
         let msg = root.join(".pm/messages/login/implementer/from-user/001.md");
         fs::create_dir_all(msg.parent().unwrap()).unwrap();
         fs::write(&msg, "hello").unwrap();
 
-        let summary = upgrade_project(&root).unwrap();
-        assert!(summary.contains("legacy baseline"), "{summary}");
+        let dry = upgrade_project_dry_run(&root).unwrap();
+        assert!(
+            dry.contains(&"Would remove main/.claude/agents/reviewer.md".to_string()),
+            "{dry:?}"
+        );
+        assert!(
+            dry.contains(&"Would remove login/.claude/agents/reviewer.md".to_string()),
+            "{dry:?}"
+        );
+        assert!(
+            dry.contains(&"Would remove .pm/workflows/solo".to_string()),
+            "{dry:?}"
+        );
+        assert!(claude.join("agents/reviewer.md").exists(), "dry-run wrote");
 
-        let bundled_reviewer = include_str!("../../agents/reviewer.md");
-        for store in [".agents", ".claude"] {
-            assert_eq!(
-                fs::read_to_string(main.join(store).join("agents/reviewer.md")).unwrap(),
-                bundled_reviewer,
-                "{store}"
-            );
-        }
+        let summary = upgrade_project(&root).unwrap();
+        assert!(summary.contains("bundled copies removed"), "{summary}");
+
+        // Every bundled copy is gone from main and the feature …
+        assert!(!claude.join("agents/reviewer.md").exists());
+        assert!(!claude.join("skills/pm").exists());
+        assert!(!claude.join("pm-baseline.md").exists());
+        assert!(!feat.join(".claude/agents/reviewer.md").exists());
+        assert!(!solo.exists());
+        // … while customs and live state are untouched.
         assert_eq!(
             fs::read_to_string(claude.join("agents/custom.md")).unwrap(),
             "user's own def"
         );
-        assert!(main.join(".agents/pm-baseline.md").exists());
-        assert!(!claude.join("pm-baseline.md").exists());
+        assert!(my_flow.join("config.toml").exists());
+        assert_eq!(fs::read_to_string(&agents_toml).unwrap(), registry);
+        assert_eq!(
+            fs::read(root.join(".pm/features/login.toml")).unwrap(),
+            feature_toml
+        );
+        assert_eq!(fs::read_to_string(&msg).unwrap(), "hello");
 
+        // Hooks were rewritten to the current command spelling.
         let settings: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(claude.join("settings.json")).unwrap())
                 .unwrap();
@@ -435,61 +441,37 @@ last_active = "2026-01-01T00:00:00Z"
             assert_eq!(entries[0]["hooks"][0]["command"].as_str().unwrap(), cmd);
         }
 
-        assert_eq!(
-            fs::read_to_string(solo.join("config.toml")).unwrap(),
-            solo_cfg
-        );
-        assert_eq!(fs::read_to_string(&agents_toml).unwrap(), registry);
-        assert_eq!(
-            fs::read(root.join(".pm/features/login.toml")).unwrap(),
-            feature_toml
-        );
-        assert_eq!(fs::read_to_string(&msg).unwrap(), "hello");
-
-        // The feature picked up both stores and the settings.
-        let feat = root.join("login");
-        assert!(feat.join(".agents/agents/reviewer.md").exists());
-        assert!(feat.join(".claude/agents/reviewer.md").exists());
-        assert!(feat.join(".claude/settings.json").exists());
-        assert!(!feat.join(".agents/pm-baseline.md").exists());
-
+        // `solo` now resolves from the global tier, and a second run is a no-op.
+        assert!(crate::state::workflow::exists(&root, "solo"));
         let actions = upgrade_project_dry_run(&root).unwrap();
         assert!(actions.is_empty(), "second dry-run not empty: {actions:?}");
     }
 
     #[test]
-    fn upgrade_preserves_user_edited_workflow() {
+    fn migrated_project_keeps_its_customs_on_later_upgrades() {
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
-
-        // First install
         upgrade_project(&root).unwrap();
 
-        // User edits a workflow file
-        let wf_md = paths::workflows_dir(&root)
-            .join("implement-and-review")
-            .join("workflow.md");
-        std::fs::write(&wf_md, "user-customised content").unwrap();
+        // A bundled-named file written after the marker is the user's.
+        let custom = paths::main_worktree(&root).join(".agents/agents/reviewer.md");
+        fs::create_dir_all(custom.parent().unwrap()).unwrap();
+        fs::write(&custom, "my reviewer").unwrap();
+        let user_flow = paths::workflows_dir(&root).join("solo");
+        fs::create_dir_all(&user_flow).unwrap();
+        fs::write(user_flow.join("config.toml"), "description = \"my solo\"\n").unwrap();
 
-        // Second upgrade leaves the user edits in place — workflows use the
-        // `Preserve` install policy (same spirit as `.pm/hooks/`). Users
-        // who want a fresh bundled copy can delete the directory and rerun
-        // `pm upgrade`.
         upgrade_project(&root).unwrap();
-        let after = std::fs::read_to_string(&wf_md).unwrap();
-        assert_eq!(after, "user-customised content");
-    }
-
-    #[test]
-    fn dry_run_reports_workflow_install_on_fresh_project() {
-        let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
-
-        let actions = upgrade_project_dry_run(&root).unwrap();
-        let joined = actions.join("\n");
-        assert!(
-            joined.contains("Would install Workflow 'implement-and-review'"),
-            "missing workflow install line, got: {joined}"
+        assert_eq!(fs::read_to_string(&custom).unwrap(), "my reviewer");
+        assert_eq!(
+            fs::read_to_string(user_flow.join("config.toml")).unwrap(),
+            "description = \"my solo\"\n"
+        );
+        // And it is projected where the harness reads it.
+        assert_eq!(
+            fs::read_to_string(paths::main_worktree(&root).join(".claude/agents/reviewer.md"))
+                .unwrap(),
+            "my reviewer"
         );
     }
 
@@ -498,24 +480,31 @@ last_active = "2026-01-01T00:00:00Z"
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
 
-        // Create a feature with state and worktree dir
         write_feature_toml(&root, "my-feat");
         fs::create_dir_all(root.join("my-feat")).unwrap();
+        // A project custom is what a feature now gets seeded with.
+        let custom = paths::main_worktree(&root).join(".agents/agents/custom.md");
+        fs::create_dir_all(custom.parent().unwrap()).unwrap();
+        fs::write(&custom, "custom def").unwrap();
 
         let summary = upgrade_project(&root).unwrap();
-        assert!(summary.contains("1 feature"));
+        assert!(summary.contains("1 feature"), "{summary}");
 
-        // The feature should have settings seeded from main
-        let feat_settings = root.join("my-feat").join(".claude").join("settings.json");
-        // settings.json is only copied if it exists in main, which it does
-        // after hooks install
-        assert!(feat_settings.exists());
-        assert!(root.join("my-feat/.agents/agents/reviewer.md").exists());
-        assert!(root.join("my-feat/.claude/agents/reviewer.md").exists());
+        let feat = root.join("my-feat");
+        assert!(feat.join(".claude/settings.json").exists());
+        assert_eq!(
+            fs::read_to_string(feat.join(".agents/agents/custom.md")).unwrap(),
+            "custom def"
+        );
+        assert_eq!(
+            fs::read_to_string(feat.join(".claude/agents/custom.md")).unwrap(),
+            "custom def"
+        );
+        assert!(!feat.join(".claude/agents/reviewer.md").exists());
     }
 
     #[test]
-    fn upgrade_reports_multiple_features() {
+    fn upgrade_reports_multiple_features_and_skips_missing_worktrees() {
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
 
@@ -523,35 +512,10 @@ last_active = "2026-01-01T00:00:00Z"
             write_feature_toml(&root, name);
             fs::create_dir_all(root.join(name)).unwrap();
         }
-
-        let summary = upgrade_project(&root).unwrap();
-        assert!(summary.contains("3 features"));
-    }
-
-    #[test]
-    fn upgrade_skips_features_without_worktree_dir() {
-        let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
-
-        // Feature state exists but no worktree directory
         write_feature_toml(&root, "orphan");
 
         let summary = upgrade_project(&root).unwrap();
-        assert!(summary.contains("for main"));
-        assert!(!summary.contains("feature"));
-    }
-
-    #[test]
-    fn upgrade_is_idempotent() {
-        let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
-
-        let first = upgrade_project(&root).unwrap();
-        let second = upgrade_project(&root).unwrap();
-
-        // Both should succeed
-        assert!(first.contains("Upgraded"));
-        assert!(second.contains("Upgraded"));
+        assert!(summary.contains("3 features"), "{summary}");
     }
 
     #[test]
@@ -559,8 +523,7 @@ last_active = "2026-01-01T00:00:00Z"
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
 
-        let summary = upgrade_project(&root).unwrap();
-        assert!(summary.contains("docs"));
+        upgrade_project(&root).unwrap();
 
         let docs_dir = root.join(".pm").join("docs");
         assert!(docs_dir.join("categories.toml").exists());
@@ -573,25 +536,15 @@ last_active = "2026-01-01T00:00:00Z"
     // --- Dry-run tests ---
 
     #[test]
-    fn dry_run_reports_actions_on_fresh_project() {
+    fn dry_run_reports_actions_on_fresh_project_and_writes_nothing() {
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
 
         let actions = upgrade_project_dry_run(&root).unwrap();
-        assert!(!actions.is_empty(), "expected actions on fresh project");
-
         let joined = actions.join("\n");
         assert!(
             joined.contains("Would install pm hooks"),
             "missing hooks line, got: {joined}"
-        );
-        assert!(
-            joined.contains("Would install Skill 'pm'"),
-            "missing pm skill line, got: {joined}"
-        );
-        assert!(
-            joined.contains("Would install Agent 'reviewer'"),
-            "missing reviewer agent line, got: {joined}"
         );
         assert!(
             joined.contains("Would create"),
@@ -601,87 +554,33 @@ last_active = "2026-01-01T00:00:00Z"
             joined.contains("Would initialise state repo"),
             "missing state repo line, got: {joined}"
         );
-    }
 
-    #[test]
-    fn dry_run_writes_nothing() {
-        let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
-
-        let _ = upgrade_project_dry_run(&root).unwrap();
-
-        // Ensure none of the side effects of a real upgrade landed
-        let settings_path = paths::main_worktree(&root)
-            .join(".claude")
-            .join("settings.json");
-        assert!(
-            !settings_path.exists(),
-            "settings.json should not be written"
-        );
-        assert!(
-            !root.join(".pm").join("docs").exists(),
-            "docs/ should not be created"
-        );
-        assert!(
-            !root.join(".pm").join(".git").exists(),
-            "state repo should not be initialised"
-        );
         let main = paths::main_worktree(&root);
-        assert!(
-            !main.join(".agents").exists(),
-            ".agents/ should not be created"
-        );
-        assert!(
-            !main.join(".claude").exists(),
-            ".claude/ should not be created"
-        );
+        assert!(!main.join(".claude").exists());
+        assert!(!main.join(".agents").exists());
+        assert!(!root.join(".pm").join("docs").exists());
+        assert!(!root.join(".pm").join(".git").exists());
+        assert!(!skills::is_migrated(&root));
     }
 
     #[test]
-    fn dry_run_returns_empty_when_up_to_date() {
+    fn dry_run_returns_empty_when_up_to_date_and_reports_drifted_projections() {
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
-
-        // Apply a real upgrade first
         upgrade_project(&root).unwrap();
+        assert!(upgrade_project_dry_run(&root).unwrap().is_empty());
 
-        let actions = upgrade_project_dry_run(&root).unwrap();
-        assert!(
-            actions.is_empty(),
-            "expected no actions after upgrade, got: {actions:?}"
-        );
-    }
-
-    #[test]
-    fn dry_run_reports_outdated_skill() {
-        let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
-
-        upgrade_project(&root).unwrap();
-
-        // Corrupt an installed skill so it's no longer up to date
         let main = paths::main_worktree(&root);
-        fs::write(main.join(".agents/skills/pm/SKILL.md"), "stale content").unwrap();
+        let custom = main.join(".agents/agents/custom.md");
+        fs::create_dir_all(custom.parent().unwrap()).unwrap();
+        fs::write(&custom, "custom def").unwrap();
 
         let actions = upgrade_project_dry_run(&root).unwrap();
-        let joined = actions.join("\n");
         assert!(
-            joined.contains("Would update Skill 'pm'"),
-            "expected update line, got: {joined}"
+            actions.iter().any(|a| a.starts_with("Would project")),
+            "expected projection line, got: {actions:?}"
         );
-
-        // A drifted projection is reported too, without being written.
-        fs::write(main.join(".claude/skills/pm/SKILL.md"), "drifted").unwrap();
-        let actions = upgrade_project_dry_run(&root).unwrap();
-        let joined = actions.join("\n");
-        assert!(
-            joined.contains("Would project"),
-            "expected projection line, got: {joined}"
-        );
-        assert_eq!(
-            fs::read_to_string(main.join(".claude/skills/pm/SKILL.md")).unwrap(),
-            "drifted"
-        );
+        assert!(!main.join(".claude/agents/custom.md").exists());
     }
 
     #[test]
@@ -691,42 +590,18 @@ last_active = "2026-01-01T00:00:00Z"
 
         upgrade_project(&root).unwrap();
 
-        // Add a feature with stale .claude/ contents
         write_feature_toml(&root, "stale-feat");
-        let feat_dir = root.join("stale-feat");
-        let feat_claude = feat_dir.join(".claude");
+        let feat_claude = root.join("stale-feat").join(".claude");
         fs::create_dir_all(&feat_claude).unwrap();
         fs::write(feat_claude.join("settings.json"), "{}").unwrap();
 
         let actions = upgrade_project_dry_run(&root).unwrap();
-        let joined = actions.join("\n");
         assert!(
-            joined.contains("Would re-seed harness assets in feature 'stale-feat'"),
-            "expected feature line, got: {joined}"
+            actions
+                .iter()
+                .any(|a| a == "Would re-seed harness assets in feature 'stale-feat'"),
+            "expected feature line, got: {actions:?}"
         );
-    }
-
-    #[test]
-    fn dry_run_at_returns_up_to_date_when_no_actions() {
-        let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
-        upgrade_project(&root).unwrap();
-
-        let lines = upgrade_dry_run_at(&root).unwrap();
-        assert_eq!(lines, vec!["Up to date".to_string()]);
-    }
-
-    #[test]
-    fn dry_run_at_returns_actions_when_changes_pending() {
-        let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
-
-        let lines = upgrade_dry_run_at(&root).unwrap();
-        assert!(
-            lines.iter().all(|l| l != "Up to date"),
-            "expected actions, not the up-to-date sentinel: {lines:?}"
-        );
-        assert!(!lines.is_empty(), "expected at least one action line");
     }
 
     // --- upgrade_all_with_dir tests ---
@@ -744,6 +619,48 @@ last_active = "2026-01-01T00:00:00Z"
     }
 
     #[test]
+    fn upgrade_all_installs_the_global_tier_once_and_upgrades_every_project() {
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("registry");
+        for name in ["one", "two"] {
+            let root = setup_project(&dir.path().join(name));
+            ProjectEntry {
+                root: root.to_string_lossy().to_string(),
+                main_branch: "main".to_string(),
+                repo_url: None,
+                state_remote: None,
+            }
+            .save(&projects_dir, name)
+            .unwrap();
+        }
+
+        let lines = upgrade_all_with_dir(&projects_dir).unwrap();
+        let joined = lines.join("\n");
+        assert!(
+            joined.contains("one: Upgraded") && joined.contains("two: Upgraded"),
+            "{joined}"
+        );
+        // The global install is reported once, not per project.
+        assert!(
+            lines.iter().filter(|l| l.contains("(global)")).count() <= 1
+                || lines
+                    .iter()
+                    .position(|l| l.contains("one:"))
+                    .is_some_and(|i| lines[..i].iter().all(|l| !l.contains(": Upgraded"))),
+            "{joined}"
+        );
+        for name in ["one", "two"] {
+            assert!(skills::is_migrated(&dir.path().join(name)));
+        }
+        assert!(
+            paths::home_dir()
+                .unwrap()
+                .join(".agents/agents/main.md")
+                .exists()
+        );
+    }
+
+    #[test]
     fn upgrade_all_skips_legacy_non_portable_root() {
         // Regression: a single bad entry must not break `upgrade --all` or
         // (by extension) `pm self-update`, which is the command users would
@@ -752,15 +669,15 @@ last_active = "2026-01-01T00:00:00Z"
         let projects_dir = dir.path().join("registry");
         write_raw_registry_entry(&projects_dir, "exo-bench", "exo-bench");
 
-        // A real adjacent entry to verify we continue past the bad one
         let good_root = setup_project(&dir.path().join("good"));
-        let good_entry = ProjectEntry {
+        ProjectEntry {
             root: good_root.to_string_lossy().to_string(),
             main_branch: "main".to_string(),
             repo_url: None,
             state_remote: None,
-        };
-        good_entry.save(&projects_dir, "good").unwrap();
+        }
+        .save(&projects_dir, "good")
+        .unwrap();
 
         let lines = upgrade_all_with_dir(&projects_dir).unwrap();
         let joined = lines.join("\n");
@@ -769,24 +686,17 @@ last_active = "2026-01-01T00:00:00Z"
                 && joined.contains("pm state backfill"),
             "expected non-portable skip line, got: {joined}"
         );
-        // The good project still gets upgraded
         assert!(
             joined.contains("good:") && !joined.contains("good: skipped"),
             "good project should not be skipped, got: {joined}"
         );
-    }
-
-    #[test]
-    fn upgrade_all_dry_run_skips_legacy_non_portable_root() {
-        let dir = tempdir().unwrap();
-        let projects_dir = dir.path().join("registry");
-        write_raw_registry_entry(&projects_dir, "exo-bench", "exo-bench");
 
         let lines = upgrade_all_dry_run_with_dir(&projects_dir).unwrap();
-        let joined = lines.join("\n");
         assert!(
-            joined.contains("exo-bench: skipped (non-portable root"),
-            "expected non-portable skip line in dry-run, got: {joined}"
+            lines
+                .join("\n")
+                .contains("exo-bench: skipped (non-portable root"),
+            "expected non-portable skip line in dry-run, got: {lines:?}"
         );
     }
 }

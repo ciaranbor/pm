@@ -19,7 +19,7 @@ use crate::tmux;
 /// - `<path>/.pm/` — project state directory
 /// - `<path>/.pm/config.toml` — project config
 /// - `<path>/.pm/features/` — empty features directory
-/// - `~/.config/pm/projects/<name>.toml` — global registry entry
+/// - `<pm config dir>/projects/<name>.toml` — global registry entry
 /// - `<name>/main` tmux session pointing at the main worktree
 ///
 /// The `tmux_server` parameter allows tests to use an isolated tmux server.
@@ -99,19 +99,11 @@ pub fn init(
     // processor (see `commands::hooks_install`).
     hooks_install::install(path)?;
 
-    // Install bundled skills and agent definitions into main's canonical
-    // store and project them for each harness in use, so the project is
-    // immediately ready for agent workflows.
-    skills::skills_install_project(path, None)?;
-    skills::agents_install_project(path, None)?;
-    // The shared operating baseline appended to every spawned agent.
-    skills::baseline_install_project(path, None)?;
-    skills::project_assets(path, false)?;
-
-    // Install bundled workflow definitions into .pm/workflows/.
-    // Workflows hold per-feature routing topology and are referenced
-    // by `feature.workflow`. See `pm workflow show`.
-    skills::workflows_install_project(path, None)?;
+    // Bundled skills, agent definitions, workflows, and the baseline live in
+    // the global tier (see `commands::skills`); a fresh project holds no
+    // bundled copies and is born migrated.
+    skills::install_global()?;
+    skills::write_migration_marker(path)?;
 
     // Register in global registry
     let entry = ProjectEntry {
@@ -192,7 +184,7 @@ mod tests {
     }
 
     #[test]
-    fn init_installs_skills_and_agents() {
+    fn init_installs_bundled_assets_globally_and_none_in_the_project() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let name = server.scope("myapp");
@@ -201,11 +193,9 @@ mod tests {
 
         init(&project_path, &projects_dir, None, server.name()).unwrap();
 
-        // Skills and agents land in the canonical store and, projected, in
-        // the claude-code dirs it actually reads.
-        let main = paths::main_worktree(&project_path);
+        let home = paths::home_dir().unwrap();
         for store in [".agents", ".claude"] {
-            let base = main.join(store);
+            let base = home.join(store);
             assert!(
                 base.join("skills/pm/SKILL.md").exists(),
                 "{store}: pm skill"
@@ -214,40 +204,21 @@ mod tests {
                 base.join("agents/reviewer.md").exists(),
                 "{store}: reviewer"
             );
-            assert!(
-                base.join("skills/pm-workflow/SKILL.md").exists(),
-                "{store}: pm-workflow skill"
-            );
         }
-        assert!(main.join(".agents/pm-baseline.md").exists());
-    }
-
-    #[test]
-    fn init_installs_bundled_workflows() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let name = server.scope("myapp");
-        let project_path = dir.path().join(&name);
-        let projects_dir = dir.path().join("registry");
-
-        init(&project_path, &projects_dir, None, server.name()).unwrap();
-
-        let workflows = paths::workflows_dir(&project_path);
-        for name in &[
-            "implement-and-review",
-            "research-implement-review",
-            "research-only",
-            "pr-review",
-        ] {
-            assert!(
-                workflows.join(name).join("config.toml").is_file(),
-                "expected config.toml for workflow {name}",
-            );
-            assert!(
-                workflows.join(name).join("workflow.md").is_file(),
-                "expected workflow.md for workflow {name}",
-            );
+        assert!(home.join(".agents/pm-baseline.md").exists());
+        let workflows = paths::global_workflows_dir().unwrap();
+        for wf in ["implement-and-review", "solo", "pr-review"] {
+            assert!(workflows.join(wf).join("config.toml").is_file(), "{wf}");
+            assert!(workflows.join(wf).join("workflow.md").is_file(), "{wf}");
         }
+
+        let main = paths::main_worktree(&project_path);
+        assert!(!main.join(".agents").exists());
+        assert!(!main.join(".claude/agents").exists());
+        assert!(!main.join(".claude/skills").exists());
+        assert!(main.join(".claude/settings.json").exists());
+        assert!(!paths::workflows_dir(&project_path).exists());
+        assert!(skills::is_migrated(&project_path));
     }
 
     #[test]

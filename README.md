@@ -35,11 +35,11 @@ pm register ~/code/myapp --name myapp                      # adopt an existing r
 ```
 
 Each gives you a project root with the repo in `main/`, a `.pm/` state
-directory, and bundled skills/agents/baseline installed into the canonical
-`main/.agents/` store and projected into each harness's own layout
-(`main/.claude/` for Claude Code, plus its hooks). Both `.agents/` and the
-projected `.claude/{agents,skills}` are generated — gitignore them in your
-repo. Then `cd <root>/main` and create a feature:
+directory, and the harness's hooks in `main/.claude/`. Bundled skills, agent
+definitions, workflows, and the baseline install once per machine into the
+global tier (see [Asset tiers](#asset-tiers)), not per project. Anything you
+add per project under `main/.agents/` is projected into `main/.claude/`,
+which is generated — gitignore it. Then `cd <root>/main` and create a feature:
 
 ```sh
 pm feat new login                                          # bare feature, no agents
@@ -84,18 +84,21 @@ run migrations, reopen an editor, etc.; remove a script to disable it.
 
 Two decoupled layers:
 
-- **Agent definitions** (`main/.agents/agents/<name>.md`, or
-  `~/.agents/agents/` for all projects) describe an agent's *job* — what it
+- **Agent definitions** (`~/.agents/agents/<name>.md`, or
+  `main/.agents/agents/` for one project) describe an agent's *job* — what it
   does, how it evaluates work. They carry no routing. pm projects them into
-  each harness's own dir (`main/.claude/agents/` for Claude Code) on
-  `init`/`upgrade`; only the `.agents/` copy counts as a definition.
-- **Workflows** (`<project>/.pm/workflows/<name>/`) define the per-feature
+  each harness's own dir (`~/.claude/agents/`, `main/.claude/agents/` for
+  Claude Code) on `init`/`upgrade`; only the `.agents/` copy counts as a
+  definition.
+- **Workflows** (`<pm config dir>/workflows/<name>/`, or
+  `<project>/.pm/workflows/` for one project) define the per-feature
   *topology* — who hands off to whom, who reports to the user.
 
 This lets the same `implementer` play different routing roles in different
 features without forking its definition. Every agent ships with the
 `pm-workflow` skill and runs `pm workflow show` at the start of each task to
-discover its routing. `pm workflow list` shows installed workflows.
+discover its routing. `pm workflow list` shows installed workflows and the
+tier each came from.
 
 Bundled agents:
 
@@ -148,8 +151,9 @@ new agent from a copy of another's history. See `pm agent --help`.
 
 ### Configuration
 
-Settings live in `<project>/.pm/config.toml`, or `~/.config/pm/config.toml`
-(macOS: `~/Library/Application Support/pm/`) to apply across projects. Project
+Settings live in `<project>/.pm/config.toml`, or `config.toml` in the pm
+config dir (`~/.config/pm/` on Linux, `~/Library/Application Support/pm/` on
+macOS) to apply across projects. Project
 beats global per key; `""` masks the tier below, unset means no flag is passed.
 
 ```toml
@@ -247,6 +251,41 @@ the queue is for cross-agent/cross-scope communication. Don't conflate them.
 On `pm feat delete`/`merge`, a feature's `summary.md` is collected to
 `.pm/summaries/<feature>.md` so the orchestrator can triage it into the store.
 
+### Asset tiers
+
+Bundled assets — skills, agent definitions, workflows, and the shared
+baseline — install **once per machine** and are refreshed by `pm upgrade` /
+`pm self-update`:
+
+| Tier | Skills / agents / baseline | Workflows |
+|------|----------------------------|-----------|
+| Global (pm's, plus your machine-wide customs) | `~/.agents/{skills,agents}`, `~/.agents/pm-baseline.md` | `<pm config dir>/workflows/` |
+| Project (your customs only) | `main/.agents/{skills,agents}` | `<project>/.pm/workflows/` |
+
+Everything resolves **project tier first, then global**, by name: a project
+file with a bundled name overrides it for that project. Bundled names are
+pm's in the global tier — `pm upgrade` rewrites them there — so keep global
+customs under names of your own. To customise, copy the bundled file and
+edit:
+
+```sh
+cp ~/.agents/agents/reviewer.md <project>/main/.agents/agents/reviewer.md
+pm upgrade                                     # projects it for the harness
+```
+
+Same for skills, and for workflows copy `<pm config dir>/workflows/<name>/`
+into `<project>/.pm/workflows/<name>/`. The pm config dir is
+`~/.config/pm/` on Linux and `~/Library/Application Support/pm/` on macOS.
+
+Upgrading an existing project removes the per-project copies of bundled
+assets that earlier releases installed (they're in `.pm/` git history; commit
+the change with `pm state push`) — your own files are never touched.
+
+One caveat: Claude Code ranks *personal* skills above project ones, the
+inverse of its agent-definition precedence. A project skill whose name also
+exists in `~/.claude/skills/` therefore never applies — `pm doctor` flags it;
+rename the custom to fix it.
+
 ### Shared agent baseline
 
 Cross-cutting operating rules common to every agent — prose (brevity, no
@@ -254,8 +293,8 @@ mannered flourish), the comment/docs and test doctrine, the environment/CWD
 conventions, the messaging heredoc form, the `pm workflow show` reminder,
 surfacing out-of-scope problems, what "the user" means — live in a single
 bundled `pm-baseline.md` rather than being repeated per agent.
-`pm init`/`pm upgrade` install it to `main/.agents/pm-baseline.md` (removing
-the pre-canonical copy under `main/.claude/`), and every agent pm spawns
+`pm init`/`pm upgrade` install it to `~/.agents/pm-baseline.md`, and every
+agent pm spawns
 (including `main`) has it appended to its system prompt
 (`--append-system-prompt-file` on Claude Code).
 
@@ -265,7 +304,7 @@ Standing directives you want every spawned agent to obey, composed onto the
 baseline at spawn time. Two hand-edited markdown files, no command — write or
 remove notices by editing them directly:
 
-- `~/.config/pm/notices.md` — global, applies in every project
+- `notices.md` in the pm config dir — global, applies in every project
 - `.pm/notices.md` — per-project
 
 Keep them terse: every line is seeded into every agent on every spawn. Absent
@@ -281,8 +320,8 @@ Hit a pm bug or quirk? Message pm's main agent briefly —
 ### State backup, sync, and restore
 
 `.pm/` holds all project state (features, agents, messages, config, summaries,
-docs) and the global registry at `~/.config/pm/` holds project entries and
-cross-project config. Both can be git-backed:
+docs) and the pm config dir holds project entries, cross-project config, and
+the global workflow tier. Both can be git-backed:
 
 ```sh
 pm state init --remote <url>     # init .pm/ repo, set remote, pull
@@ -311,7 +350,7 @@ These round out the tool; each has its full flag reference under `--help`:
 - `pm status` / `pm doctor` — project dashboard; audit and auto-fix drift
   between pm state and git/tmux/GitHub reality.
 - `pm harness` — the agent harness: `hooks`, bundled `skills`/`agents`
-  (installed to `.agents/`, projected per harness), per-feature `settings`,
+  (installed to `~/.agents/`, projected per harness), per-feature `settings`,
   and `migrate|export|import` of session data across worktrees and machines
   (`--harness`, default `claude-code`); `list` the supported harnesses and
   `probe` the installed binary. `pm claude …` remains as a hidden alias for

@@ -1,7 +1,7 @@
 //! Notice board — a seeded directive surface.
 //!
-//! Two hand-edited markdown files (global `~/.config/pm/notices.md`,
-//! per-project `.pm/notices.md`) hold terse standing instructions. They are
+//! Two hand-edited markdown files (`notices.md` in the pm config dir and in
+//! the project's `.pm/`) hold terse standing instructions. They are
 //! composed onto the shared baseline at the single spawn chokepoint so every
 //! spawned agent reads them as operating constraints. No commands: writing is
 //! manual file editing; reading is via this seeding. Only non-empty boards are
@@ -169,6 +169,21 @@ mod tests {
         let p = dir.path().join("b.md");
         std::fs::write(&p, "\n  hello directive\n\n").unwrap();
         assert_eq!(read_board(&p).as_deref(), Some("hello directive"));
+    }
+
+    #[test]
+    fn spawn_prompt_is_the_global_baseline_when_no_boards() {
+        // The baseline lives in the global tier, so a project with no
+        // bundled copies of its own still gets it applied.
+        crate::commands::skills::install_global().unwrap();
+        let dir = tempdir().unwrap();
+        let path = compose_spawn_prompt(dir.path(), "implementer")
+            .unwrap()
+            .expect("baseline installed");
+        assert_eq!(
+            PathBuf::from(path),
+            paths::home_dir().unwrap().join(".agents/pm-baseline.md")
+        );
     }
 
     #[test]

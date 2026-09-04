@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::commands::agent_spawn::SpawnOverrides;
 use crate::commands::feat_delete::{self, CleanupParams};
-use crate::commands::{agent_spawn, hooks_install};
+use crate::commands::{agent_spawn, hooks_install, skills};
 use crate::error::Result;
 use crate::harness::Harness;
 use crate::state::agent::{AgentRegistry, AgentType};
@@ -44,6 +44,12 @@ pub enum IssueKind {
     /// A canonical agent definition has no projected copy for a harness in
     /// use, so validation passes but the harness can't launch it.
     AssetNotProjected,
+    /// A bundled asset is missing from the global tier.
+    GlobalStoreMissing,
+    /// Pre-migration bundled copies in the project shadow the global tier.
+    StaleBundledCopies,
+    /// A project custom skill the harness resolves its global namesake over.
+    SkillShadowedByGlobal,
 }
 
 /// A single issue detected for a feature.
@@ -93,6 +99,8 @@ enum FixAction {
     UpdateStatus { new_status: FeatureStatus },
     /// Install the pm Stop hook into main/.claude/settings.json.
     InstallStopHook,
+    /// (Re)install the bundled assets into the global tier.
+    InstallGlobalAssets,
     /// Recreate a missing worktree from its branch.
     RecreateWorktree {
         worktree_path: PathBuf,
@@ -172,15 +180,7 @@ pub fn diagnose(
             fix: Fix::Auto(FixAction::InstallStopHook),
         });
     }
-    for (name, harness) in unprojected_definitions(project_root)? {
-        main_issues.push(Issue {
-            kind: IssueKind::AssetNotProjected,
-            message: format!(
-                "canonical agent '{name}' not projected for {harness} (run `pm upgrade`)"
-            ),
-            fix: Fix::Skip,
-        });
-    }
+    main_issues.extend(asset_issues(project_root)?);
     if !tmux::has_session(tmux_server, &main_session)? {
         main_issues.push(Issue {
             kind: IssueKind::TmuxSessionMissing,
@@ -569,7 +569,7 @@ fn baseline_capability_warning(project_root: &Path) -> Option<String> {
 fn prompt_file_unsupported(harness: Harness) -> String {
     format!(
         "{harness} does not support appending a prompt file; the shared agent baseline \
-         (main/.agents/pm-baseline.md) will NOT be applied to spawned agents. Check your \
+         (~/.agents/pm-baseline.md) will NOT be applied to spawned agents. Check your \
          {harness} version."
     )
 }
@@ -587,34 +587,91 @@ pub fn probe_line(harness: Harness) -> String {
     }
 }
 
-/// Canonical agent definitions (`main/.agents/agents/*.md`) with no
-/// projected copy in a harness's own definition dir. Such a definition
-/// passes `WorkflowDef::validate` but the harness can't find it at launch.
+/// Main-scope findings about the two asset tiers: what the global tier is
+/// missing, pre-migration copies still shadowing it, definitions a harness
+/// can't see, and project skills its global namesake shadows.
+fn asset_issues(project_root: &Path) -> Result<Vec<Issue>> {
+    let mut issues = Vec::new();
+
+    let missing = skills::global_store_missing()?;
+    if !missing.is_empty() {
+        issues.push(Issue {
+            kind: IssueKind::GlobalStoreMissing,
+            message: format!(
+                "not installed in the global asset store: {} (run `pm upgrade`)",
+                missing.join(", ")
+            ),
+            fix: Fix::Auto(FixAction::InstallGlobalAssets),
+        });
+    }
+
+    if !skills::is_migrated(project_root) {
+        let stale = skills::stale_bundled_copies(project_root)?;
+        if !stale.is_empty() {
+            issues.push(Issue {
+                kind: IssueKind::StaleBundledCopies,
+                message: format!(
+                    "{} pre-migration bundled copies shadow the global store (run `pm upgrade`)",
+                    stale.len()
+                ),
+                fix: Fix::Skip,
+            });
+        }
+    } else {
+        let redundant = skills::redundant_overrides(project_root);
+        if !redundant.is_empty() {
+            issues.push(Issue {
+                kind: IssueKind::StaleBundledCopies,
+                message: format!(
+                    "project overrides identical to the bundled asset (delete to follow the \
+                     global store): {}",
+                    redundant.join(", ")
+                ),
+                fix: Fix::None,
+            });
+        }
+    }
+
+    for (name, harness) in unprojected_definitions(project_root)? {
+        issues.push(Issue {
+            kind: IssueKind::AssetNotProjected,
+            message: format!(
+                "canonical agent '{name}' not projected for {harness} (run `pm upgrade`)"
+            ),
+            fix: Fix::Skip,
+        });
+    }
+
+    for (name, harness) in skills::shadowed_project_skills(project_root)? {
+        issues.push(Issue {
+            kind: IssueKind::SkillShadowedByGlobal,
+            message: format!(
+                "project skill '{name}' never applies: {harness} resolves the personal skill of \
+                 that name over it — rename the custom"
+            ),
+            fix: Fix::None,
+        });
+    }
+
+    Ok(issues)
+}
+
+/// Agent definitions with no projected copy in a harness's own definition
+/// dir, in either tier. Such a definition passes `WorkflowDef::validate`
+/// but the harness can't find it at launch.
 fn unprojected_definitions(project_root: &Path) -> Result<Vec<(String, Harness)>> {
     let main = paths::main_worktree(project_root);
-    let canonical = main
-        .join(crate::commands::skills::CANONICAL_DIR)
-        .join("agents");
-    let mut out = Vec::new();
-    if !canonical.is_dir() {
-        return Ok(out);
-    }
-    let harnesses = crate::commands::skills::harnesses_in_use(project_root);
-    let mut names: Vec<String> = std::fs::read_dir(&canonical)?
-        .filter_map(|e| e.ok())
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|f| f.ends_with(".md"))
-        .collect();
-    names.sort();
-    for file in names {
-        for harness in &harnesses {
+    let canonical = main.join(skills::CANONICAL_DIR).join("agents");
+    let mut out = skills::unprojected_global_definitions()?;
+    for file in skills::definition_files(&canonical)? {
+        for harness in skills::harnesses_in_use(project_root) {
             if !main
                 .join(harness.config_dir())
                 .join("agents")
                 .join(&file)
                 .exists()
             {
-                out.push((file.trim_end_matches(".md").to_string(), *harness));
+                out.push((file.trim_end_matches(".md").to_string(), harness));
             }
         }
     }
@@ -675,6 +732,9 @@ fn apply_fix(
         FixAction::InstallStopHook => {
             hooks_install::install(project_root)?;
         }
+        FixAction::InstallGlobalAssets => {
+            crate::commands::skills::install_global()?;
+        }
         FixAction::RespawnAgent { agent_name } => {
             agent_spawn::agent_spawn(
                 project_root,
@@ -733,12 +793,13 @@ mod tests {
     }
 
     #[test]
-    fn unprojected_canonical_definition_is_flagged_until_projected() {
+    fn unprojected_project_definition_is_flagged_until_projected() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-        let main = paths::main_worktree(&project_path);
-        std::fs::write(main.join(".agents/agents/planner.md"), "# planner").unwrap();
+        let planner = paths::main_worktree(&project_path).join(".agents/agents/planner.md");
+        std::fs::create_dir_all(planner.parent().unwrap()).unwrap();
+        std::fs::write(&planner, "# planner").unwrap();
 
         assert_eq!(
             unprojected_definitions(&project_path).unwrap(),
@@ -757,6 +818,57 @@ mod tests {
         let lines = doctor(&project_path, false, server.name()).unwrap();
         assert!(
             !lines.iter().any(|l| l.contains("not projected")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn stale_bundled_copies_flagged_until_migrated_then_redundant_overrides() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let bundled_reviewer = include_str!("../../agents/reviewer.md");
+
+        // A pre-migration project: bundled copies present, no marker.
+        let claude_agents = paths::main_worktree(&project_path).join(".claude/agents");
+        std::fs::create_dir_all(&claude_agents).unwrap();
+        std::fs::write(claude_agents.join("reviewer.md"), bundled_reviewer).unwrap();
+        std::fs::remove_file(paths::migrations_dir(&project_path).join("global-assets")).unwrap();
+
+        let lines = doctor(&project_path, false, server.name()).unwrap();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("pre-migration bundled copies shadow")),
+            "{lines:?}"
+        );
+
+        crate::commands::skills::migrate_project_to_global(&project_path, false).unwrap();
+        let lines = doctor(&project_path, false, server.name()).unwrap();
+        assert!(
+            !lines.iter().any(|l| l.contains("pre-migration")),
+            "{lines:?}"
+        );
+
+        // After the marker, a bundled-named copy is an override — flagged
+        // only as redundant when its bytes match the bundle.
+        let canonical = paths::main_worktree(&project_path).join(".agents/agents");
+        std::fs::create_dir_all(&canonical).unwrap();
+        std::fs::write(canonical.join("reviewer.md"), bundled_reviewer).unwrap();
+        crate::commands::skills::project_assets(&project_path, false).unwrap();
+        let lines = doctor(&project_path, false, server.name()).unwrap();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("identical to the bundled asset")),
+            "{lines:?}"
+        );
+
+        std::fs::write(canonical.join("reviewer.md"), "my reviewer").unwrap();
+        crate::commands::skills::project_assets(&project_path, false).unwrap();
+        let lines = doctor(&project_path, false, server.name()).unwrap();
+        assert!(
+            !lines.iter().any(|l| l.contains("identical to the bundled")),
             "{lines:?}"
         );
     }

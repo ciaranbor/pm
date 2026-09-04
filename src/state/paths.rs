@@ -7,20 +7,57 @@ const FEATURES_DIR_NAME: &str = "features";
 const CONFIG_DIR_NAME: &str = "pm";
 const PROJECTS_DIR_NAME: &str = "projects";
 
-/// Returns the global config directory: ~/.config/pm/
-pub fn global_config_dir() -> Result<PathBuf> {
-    let config_dir = dirs::config_dir().ok_or_else(|| {
-        PmError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "could not determine config directory",
-        ))
-    })?;
-    Ok(config_dir.join(CONFIG_DIR_NAME))
+const WORKFLOWS_DIR_NAME: &str = "workflows";
+
+/// The user's home directory. Every global-tier path (the `~/.agents` store,
+/// the pm config dir) derives from it. Under `cfg(test)` this is a per-binary
+/// temp dir (see `testing::test_home`) so tests never read or write the
+/// developer's real home.
+pub fn home_dir() -> Result<PathBuf> {
+    #[cfg(test)]
+    {
+        Ok(crate::testing::test_home().to_path_buf())
+    }
+    #[cfg(not(test))]
+    {
+        dirs::home_dir().ok_or(PmError::NoHomeDir)
+    }
 }
 
-/// Returns the global projects registry directory: ~/.config/pm/projects/
+/// The pm config dir: `dirs::config_dir()/pm` — `~/.config/pm` on Linux,
+/// `~/Library/Application Support/pm` on macOS. Holds the project registry,
+/// global `config.toml`, `notices.md`, and the global `workflows/` tier.
+pub fn global_config_dir() -> Result<PathBuf> {
+    #[cfg(test)]
+    {
+        Ok(home_dir()?.join(".config").join(CONFIG_DIR_NAME))
+    }
+    #[cfg(not(test))]
+    {
+        let config_dir = dirs::config_dir().ok_or_else(|| {
+            PmError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "could not determine config directory",
+            ))
+        })?;
+        Ok(config_dir.join(CONFIG_DIR_NAME))
+    }
+}
+
+/// The project registry: `<config dir>/projects/`.
 pub fn global_projects_dir() -> Result<PathBuf> {
     Ok(global_config_dir()?.join(PROJECTS_DIR_NAME))
+}
+
+/// The global workflow tier: `<config dir>/workflows/`.
+pub fn global_workflows_dir() -> Result<PathBuf> {
+    Ok(global_config_dir()?.join(WORKFLOWS_DIR_NAME))
+}
+
+/// The global workflow tier under an explicit config dir; see
+/// [`global_workflows_dir`].
+pub fn global_workflows_dir_in(config_dir: &Path) -> PathBuf {
+    config_dir.join(WORKFLOWS_DIR_NAME)
 }
 
 /// Returns the .pm/ directory for a given project root.
@@ -48,9 +85,15 @@ pub fn docs_dir(project_root: &Path) -> PathBuf {
     pm_dir(project_root).join("docs")
 }
 
-/// Returns the workflows directory for a given project root.
+/// The project workflow tier: `<project>/.pm/workflows/`.
 pub fn workflows_dir(project_root: &Path) -> PathBuf {
-    pm_dir(project_root).join("workflows")
+    pm_dir(project_root).join(WORKFLOWS_DIR_NAME)
+}
+
+/// One-shot migration markers, in the git-backed state dir so they travel
+/// with the state they describe.
+pub fn migrations_dir(project_root: &Path) -> PathBuf {
+    pm_dir(project_root).join("migrations")
 }
 
 /// Single source of truth for the main worktree directory name convention.
@@ -343,14 +386,11 @@ mod tests {
     }
 
     #[test]
-    fn global_config_dir_returns_path_under_config() {
-        let config = global_config_dir().unwrap();
-        assert!(config.ends_with("pm"));
-    }
-
-    #[test]
-    fn global_projects_dir_returns_path_under_config() {
-        let projects = global_projects_dir().unwrap();
-        assert!(projects.ends_with("pm/projects"));
+    fn global_dirs_hang_off_the_test_home_under_test() {
+        let home = home_dir().unwrap();
+        assert!(home.starts_with(std::env::temp_dir()));
+        assert!(global_config_dir().unwrap().starts_with(&home));
+        assert!(global_projects_dir().unwrap().ends_with("pm/projects"));
+        assert!(global_workflows_dir().unwrap().ends_with("pm/workflows"));
     }
 }

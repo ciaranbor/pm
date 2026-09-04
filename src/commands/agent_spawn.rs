@@ -18,7 +18,11 @@ use crate::tmux;
 /// The `_with_home` split exists so resolution can be unit-tested against an
 /// explicit home rather than the process's `$HOME`.
 pub(crate) fn validate_definition_resolves(project_root: &Path, definition: &str) -> Result<()> {
-    validate_definition_resolves_with_home(project_root, definition, dirs::home_dir().as_deref())
+    validate_definition_resolves_with_home(
+        project_root,
+        definition,
+        paths::home_dir().ok().as_deref(),
+    )
 }
 
 fn validate_definition_resolves_with_home(
@@ -1202,15 +1206,19 @@ mod tests {
         let dir = tempdir().unwrap();
         let (session_name, feature) = setup_project(dir.path(), &server);
 
-        setup_active_agent(&server, dir.path(), &session_name, &feature, "reviewer");
+        // A name no bundled definition claims, so removing the project's copy
+        // leaves it unresolvable in either tier.
+        write_agent_defs(dir.path(), &["sidekick"]);
+        setup_active_agent(&server, dir.path(), &session_name, &feature, "sidekick");
 
-        let def = paths::main_worktree(dir.path()).join(".agents/agents/reviewer.md");
+        let def = paths::main_worktree(dir.path()).join(".agents/agents/sidekick.md");
         std::fs::remove_file(&def).unwrap();
+        assert!(validate_definition_resolves(dir.path(), "sidekick").is_err());
 
         let (outcome, msg) = agent_spawn(
             dir.path(),
             &feature,
-            "reviewer",
+            "sidekick",
             None,
             Some("keep going"),
             SpawnOverrides::default(),
@@ -1221,7 +1229,7 @@ mod tests {
         assert!(msg.contains("sent context as message"));
 
         let messages_dir = paths::messages_dir(dir.path());
-        let summaries = crate::messages::check(&messages_dir, &feature, "reviewer").unwrap();
+        let summaries = crate::messages::check(&messages_dir, &feature, "sidekick").unwrap();
         assert_eq!(summaries.len(), 1);
     }
 

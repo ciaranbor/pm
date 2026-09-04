@@ -69,6 +69,51 @@ fn list_with_no_projects() {
 }
 
 #[test]
+fn asset_commands_install_into_the_global_tier() {
+    // Every bundled asset installs under $HOME: the canonical store, the
+    // harness projection, and the global workflow tier.
+    let dir = tempdir().unwrap();
+    let home = dir.path();
+    // Run outside any pm project so only the global tier is in play.
+    let pm_home = || {
+        let mut c = pm();
+        c.env("HOME", home.to_string_lossy().as_ref())
+            .current_dir(home);
+        c
+    };
+
+    pm_home()
+        .args(["harness", "agents", "install"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Installed Agent 'reviewer'"));
+    assert!(home.join(".agents/agents/reviewer.md").is_file());
+    assert!(home.join(".claude/agents/reviewer.md").is_file());
+
+    // The old project/global split is gone: `--global` is now an error.
+    pm_home()
+        .args(["harness", "skills", "install", "--global"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unexpected argument"));
+    pm_home()
+        .args(["harness", "skills", "install"])
+        .assert()
+        .success();
+    assert!(home.join(".agents/skills/pm/SKILL.md").is_file());
+    assert!(home.join(".claude/skills/pm/SKILL.md").is_file());
+
+    // Workflow commands work outside a project, listing the global tier.
+    pm_home().args(["workflow", "install"]).assert().success();
+    pm_home()
+        .args(["workflow", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("solo"))
+        .stdout(predicate::str::contains("[global, bundled]"));
+}
+
+#[test]
 fn feat_subcommand_help() {
     pm().args(["feat", "--help"])
         .assert()
