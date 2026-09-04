@@ -1,4 +1,7 @@
-//! Workflow definitions live under `<project>/.pm/workflows/<name>/`.
+//! Workflow definitions live in two tiers, resolved project-first by name:
+//! `<project>/.pm/workflows/<name>/` (the project's customs) and the global
+//! `<pm config dir>/workflows/<name>/` (where the bundled ones install, plus
+//! any global customs under non-bundled names).
 //!
 //! Each workflow directory contains:
 //! - `config.toml` — machine-readable: description, agents, brief_agents list
@@ -51,13 +54,26 @@ pub struct WorkflowDef {
 }
 
 impl WorkflowDef {
-    /// Load a workflow's `config.toml`. Errors if the file is missing or malformed.
+    /// Load a workflow's `config.toml` from whichever tier resolves it.
+    /// Errors if neither has it or the file is malformed.
     pub fn load(project_root: &Path, name: &str) -> Result<Self> {
-        let path = config_path(project_root, name);
-        if !path.exists() {
-            return Err(PmError::WorkflowNotFound(name.to_string()));
-        }
-        let content = std::fs::read_to_string(&path)?;
+        Self::load_with_global(Some(project_root), name, &global_dir()?)
+    }
+
+    /// [`load`](Self::load) against an explicit global tier; `project_root`
+    /// `None` consults the global tier only.
+    pub fn load_with_global(
+        project_root: Option<&Path>,
+        name: &str,
+        global_dir: &Path,
+    ) -> Result<Self> {
+        let (dir, _) = resolve_dir(project_root, name, global_dir)
+            .ok_or_else(|| PmError::WorkflowNotFound(name.to_string()))?;
+        Self::load_from_dir(&dir)
+    }
+
+    fn load_from_dir(dir: &Path) -> Result<Self> {
+        let content = std::fs::read_to_string(dir.join("config.toml"))?;
         let def: Self = toml::from_str(&content)?;
         Ok(def)
     }
@@ -81,7 +97,11 @@ impl WorkflowDef {
     /// The feature worktree typically doesn't exist yet when this runs, so
     /// it isn't consulted.
     pub fn validate(&self, project_root: &Path, workflow_name: &str) -> Result<()> {
-        self.validate_with_home(project_root, workflow_name, dirs::home_dir().as_deref())
+        self.validate_with_home(
+            project_root,
+            workflow_name,
+            paths::home_dir().ok().as_deref(),
+        )
     }
 
     /// Test-friendly variant of [`validate`] that takes an explicit home
@@ -122,23 +142,67 @@ impl WorkflowDef {
     }
 }
 
-/// Path to a workflow's `config.toml`.
-pub fn config_path(project_root: &Path, name: &str) -> PathBuf {
-    paths::workflows_dir(project_root)
-        .join(name)
-        .join("config.toml")
+/// Which tier a workflow resolved from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tier {
+    Project,
+    Global,
 }
 
-/// Path to a workflow's `workflow.md` (the prose dumped by `pm workflow show`).
-pub fn workflow_md_path(project_root: &Path, name: &str) -> PathBuf {
-    paths::workflows_dir(project_root)
-        .join(name)
-        .join("workflow.md")
+impl std::fmt::Display for Tier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Tier::Project => "project",
+            Tier::Global => "global",
+        })
+    }
 }
 
-/// Check whether a workflow's directory exists (contains `config.toml`).
+/// The global workflow tier for this process.
+pub fn global_dir() -> Result<PathBuf> {
+    paths::global_workflows_dir()
+}
+
+/// The directory holding workflow `name` and the tier it came from: the
+/// project's `.pm/workflows/<name>/` when that has a `config.toml`, else
+/// `<global_dir>/<name>/`. `None` when neither does.
+pub fn resolve_dir(
+    project_root: Option<&Path>,
+    name: &str,
+    global_dir: &Path,
+) -> Option<(PathBuf, Tier)> {
+    if let Some(root) = project_root {
+        let dir = paths::workflows_dir(root).join(name);
+        if dir.join("config.toml").is_file() {
+            return Some((dir, Tier::Project));
+        }
+    }
+    let dir = global_dir.join(name);
+    dir.join("config.toml")
+        .is_file()
+        .then_some((dir, Tier::Global))
+}
+
+/// Path to a workflow's `workflow.md` (the prose dumped by `pm workflow
+/// show`) in whichever tier resolves it; `None` if the workflow isn't
+/// installed. The file itself may still be missing.
+pub fn workflow_md_path(project_root: &Path, name: &str) -> Option<PathBuf> {
+    let global = global_dir().ok()?;
+    resolve_dir(Some(project_root), name, &global).map(|(dir, _)| dir.join("workflow.md"))
+}
+
+/// Whether a workflow is installed in either tier.
 pub fn exists(project_root: &Path, name: &str) -> bool {
-    config_path(project_root, name).is_file()
+    global_dir()
+        .ok()
+        .is_some_and(|g| resolve_dir(Some(project_root), name, &g).is_some())
+}
+
+/// A parsed workflow and where it resolved from.
+pub struct InstalledWorkflow {
+    pub name: String,
+    pub def: WorkflowDef,
+    pub tier: Tier,
 }
 
 /// Outcome of [`list_installed_with_errors`]: the successfully-parsed
@@ -146,45 +210,57 @@ pub fn exists(project_root: &Path, name: &str) -> bool {
 /// Callers (e.g. `pm workflow list`) typically print the successes to
 /// stdout and the errors to stderr so neither hides the other.
 pub struct InstalledWorkflows {
-    pub workflows: Vec<(String, WorkflowDef)>,
+    pub workflows: Vec<InstalledWorkflow>,
     pub errors: Vec<(String, String)>,
 }
 
-/// List installed workflows (those with a parseable `config.toml`).
-/// Returns sorted `(name, def)` pairs. Skips entries that fail to parse.
-/// Use [`list_installed_with_errors`] if you also want to surface parse
-/// failures to the caller.
-pub fn list_installed(project_root: &Path) -> Result<Vec<(String, WorkflowDef)>> {
-    Ok(list_installed_with_errors(project_root)?.workflows)
+/// Every installed workflow across both tiers, sorted by name; a project
+/// entry shadows a same-named global one. `project_root` `None` lists the
+/// global tier only. Parse failures are returned alongside so the caller
+/// can warn about broken `config.toml` files.
+pub fn list_installed_with_errors(project_root: Option<&Path>) -> Result<InstalledWorkflows> {
+    list_installed_in(project_root, &global_dir()?)
 }
 
-/// Same as [`list_installed`] but also returns parse errors so the
-/// caller can warn the user about broken `config.toml` files.
-pub fn list_installed_with_errors(project_root: &Path) -> Result<InstalledWorkflows> {
-    let dir = paths::workflows_dir(project_root);
-    if !dir.exists() {
-        return Ok(InstalledWorkflows {
-            workflows: Vec::new(),
-            errors: Vec::new(),
-        });
+pub fn list_installed_in(
+    project_root: Option<&Path>,
+    global_dir: &Path,
+) -> Result<InstalledWorkflows> {
+    let mut names: Vec<String> = Vec::new();
+    let mut dirs = vec![global_dir.to_path_buf()];
+    if let Some(root) = project_root {
+        dirs.push(paths::workflows_dir(root));
     }
-    let mut workflows = Vec::new();
-    let mut errors = Vec::new();
-    for entry in std::fs::read_dir(&dir)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
+    for dir in dirs {
+        if !dir.exists() {
             continue;
         }
-        let Some(name) = entry.file_name().to_str().map(|s| s.to_string()) else {
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            if let Some(name) = entry.file_name().to_str()
+                && !names.iter().any(|n| n == name)
+            {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names.sort();
+    let mut workflows = Vec::new();
+    let mut errors = Vec::new();
+    for name in names {
+        let Some((dir, tier)) = resolve_dir(project_root, &name, global_dir) else {
+            // A directory with no `config.toml` in the tier that would win.
+            errors.push((name, "config.toml missing".to_string()));
             continue;
         };
-        match WorkflowDef::load(project_root, &name) {
-            Ok(def) => workflows.push((name, def)),
+        match WorkflowDef::load_from_dir(&dir) {
+            Ok(def) => workflows.push(InstalledWorkflow { name, def, tier }),
             Err(e) => errors.push((name, e.to_string())),
         }
     }
-    workflows.sort_by(|a, b| a.0.cmp(&b.0));
-    errors.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(InstalledWorkflows { workflows, errors })
 }
 
@@ -517,47 +593,82 @@ auto_spawn = ["implementer"]
             .unwrap();
     }
 
-    #[test]
-    fn list_installed_returns_sorted() {
-        let dir = tempdir().unwrap();
-        write_workflow(
-            dir.path(),
-            "beta",
-            r#"description = "b"
-"#,
-        );
-        write_workflow(
-            dir.path(),
-            "alpha",
-            r#"description = "a"
-"#,
-        );
-        let list = list_installed(dir.path()).unwrap();
-        let names: Vec<_> = list.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(names, vec!["alpha", "beta"]);
+    fn write_global_workflow(global_dir: &Path, name: &str, body: &str) {
+        let dir = global_dir.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.toml"), body).unwrap();
+        std::fs::write(dir.join("workflow.md"), "# global md").unwrap();
     }
 
     #[test]
-    fn list_installed_empty_when_no_workflows_dir() {
-        let dir = tempdir().unwrap();
-        let list = list_installed(dir.path()).unwrap();
-        assert!(list.is_empty());
+    fn resolve_prefers_project_tier_and_falls_back_to_global() {
+        let project = tempdir().unwrap();
+        let global = tempdir().unwrap();
+        write_global_workflow(global.path(), "solo", "description = \"bundled\"\n");
+        write_global_workflow(global.path(), "shared", "description = \"global custom\"\n");
+        write_workflow(
+            project.path(),
+            "solo",
+            "description = \"project override\"\n",
+        );
+
+        let (dir, tier) = resolve_dir(Some(project.path()), "solo", global.path()).unwrap();
+        assert_eq!(tier, Tier::Project);
+        assert_eq!(dir, paths::workflows_dir(project.path()).join("solo"));
+        let (dir, tier) = resolve_dir(Some(project.path()), "shared", global.path()).unwrap();
+        assert_eq!(tier, Tier::Global);
+        assert_eq!(dir, global.path().join("shared"));
+        assert!(resolve_dir(Some(project.path()), "ghost", global.path()).is_none());
+        // No project: the global tier alone.
+        assert_eq!(
+            resolve_dir(None, "solo", global.path()).unwrap().1,
+            Tier::Global
+        );
+
+        let def =
+            WorkflowDef::load_with_global(Some(project.path()), "solo", global.path()).unwrap();
+        assert_eq!(def.description, "project override");
+        let def = WorkflowDef::load_with_global(None, "solo", global.path()).unwrap();
+        assert_eq!(def.description, "bundled");
+        let err = WorkflowDef::load_with_global(Some(project.path()), "ghost", global.path())
+            .unwrap_err();
+        assert!(matches!(err, PmError::WorkflowNotFound(_)));
+
+        let list = list_installed_in(Some(project.path()), global.path()).unwrap();
+        let rows: Vec<(&str, Tier)> = list
+            .workflows
+            .iter()
+            .map(|w| (w.name.as_str(), w.tier))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![("shared", Tier::Global), ("solo", Tier::Project)]
+        );
+        assert!(list.errors.is_empty());
+        let global_only = list_installed_in(None, global.path()).unwrap();
+        assert!(global_only.workflows.iter().all(|w| w.tier == Tier::Global));
     }
 
     #[test]
-    fn list_installed_skips_unparseable_workflows() {
+    fn list_installed_empty_when_neither_tier_exists() {
         let dir = tempdir().unwrap();
+        let global = tempdir().unwrap();
+        let list = list_installed_in(Some(dir.path()), &global.path().join("none")).unwrap();
+        assert!(list.workflows.is_empty() && list.errors.is_empty());
+    }
+
+    #[test]
+    fn list_installed_reports_unparseable_workflows_as_errors() {
+        let dir = tempdir().unwrap();
+        let global = tempdir().unwrap();
         let workflows_dir = paths::workflows_dir(dir.path());
         std::fs::create_dir_all(workflows_dir.join("bad")).unwrap();
         std::fs::write(workflows_dir.join("bad").join("config.toml"), "not toml{{{").unwrap();
-        write_workflow(
-            dir.path(),
-            "good",
-            r#"description = "ok"
-"#,
-        );
-        let list = list_installed(dir.path()).unwrap();
-        let names: Vec<_> = list.iter().map(|(n, _)| n.as_str()).collect();
+        write_workflow(dir.path(), "good", "description = \"ok\"\n");
+        let list = list_installed_in(Some(dir.path()), global.path()).unwrap();
+        let names: Vec<_> = list.workflows.iter().map(|w| w.name.as_str()).collect();
         assert_eq!(names, vec!["good"]);
+        assert_eq!(list.errors.len(), 1);
+        assert_eq!(list.errors[0].0, "bad");
     }
 }

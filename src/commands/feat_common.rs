@@ -31,13 +31,30 @@ pub fn resolve_workflow<'a>(
     workflow: Option<&'a str>,
     context: Option<&str>,
 ) -> Result<Option<&'a str>> {
+    resolve_workflow_in(
+        project_root,
+        workflow,
+        context,
+        &crate::state::workflow::global_dir()?,
+    )
+}
+
+/// [`resolve_workflow`] against an explicit global workflow tier.
+pub fn resolve_workflow_in<'a>(
+    project_root: &Path,
+    workflow: Option<&'a str>,
+    context: Option<&str>,
+    global_dir: &Path,
+) -> Result<Option<&'a str>> {
     match (workflow, context) {
         (Some(w), _) => Ok(Some(w)),
         (None, Some(_)) => {
-            if !crate::state::workflow::exists(project_root, DEFAULT_WORKFLOW) {
+            if crate::state::workflow::resolve_dir(Some(project_root), DEFAULT_WORKFLOW, global_dir)
+                .is_none()
+            {
                 return Err(PmError::SafetyCheck(format!(
                     "default workflow '{DEFAULT_WORKFLOW}' is not installed. \
-                     Run `pm workflow install {DEFAULT_WORKFLOW}` (or `pm upgrade`), \
+                     Run `pm upgrade` (or `pm workflow install {DEFAULT_WORKFLOW}`), \
                      or pass --workflow <name>."
                 )));
             }
@@ -228,6 +245,41 @@ mod tests {
         assert!(
             !joined.contains("Reply:"),
             "feat-new brief must not show a reply hint, got: {joined}"
+        );
+    }
+
+    #[test]
+    fn context_without_workflow_defaults_to_solo_from_either_tier() {
+        let dir = tempdir().unwrap();
+        let project_root = dir.path();
+        let global = tempdir().unwrap();
+
+        // Nothing installed: the default is actionable rather than a
+        // generic not-found.
+        let err = resolve_workflow_in(project_root, None, Some("brief"), global.path())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("'solo'") && err.contains("pm upgrade"),
+            "{err}"
+        );
+
+        // Global tier alone is enough …
+        let solo = global.path().join(DEFAULT_WORKFLOW);
+        std::fs::create_dir_all(&solo).unwrap();
+        std::fs::write(solo.join("config.toml"), "description = \"solo\"\n").unwrap();
+        assert_eq!(
+            resolve_workflow_in(project_root, None, Some("brief"), global.path()).unwrap(),
+            Some(DEFAULT_WORKFLOW)
+        );
+        // … an explicit --workflow always wins, and no context stays agentless.
+        assert_eq!(
+            resolve_workflow_in(project_root, Some("other"), None, global.path()).unwrap(),
+            Some("other")
+        );
+        assert_eq!(
+            resolve_workflow_in(project_root, None, None, global.path()).unwrap(),
+            None
         );
     }
 }

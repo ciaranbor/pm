@@ -5,7 +5,8 @@
 //!   the command they actually run). Used by the bundled `pm-workflow`
 //!   skill so agents can discover their per-feature routing at the start
 //!   of every turn.
-//! - `list` enumerates installed workflows with one-line descriptions.
+//! - `list` enumerates installed workflows across both tiers with one-line
+//!   descriptions, tagged by tier and origin.
 
 use std::path::Path;
 
@@ -44,13 +45,16 @@ pub fn show(project_root: &Path, scope: &str) -> Result<Option<String>> {
         return Ok(None);
     };
 
-    let md_path = workflow::workflow_md_path(project_root, workflow_name);
-    if !md_path.is_file() {
-        return Err(PmError::WorkflowNotFound(format!(
-            "{workflow_name} (workflow.md missing at {})",
-            md_path.display()
-        )));
-    }
+    let md_path = match workflow::workflow_md_path(project_root, workflow_name) {
+        Some(p) if p.is_file() => p,
+        Some(p) => {
+            return Err(PmError::WorkflowNotFound(format!(
+                "{workflow_name} (workflow.md missing at {})",
+                p.display()
+            )));
+        }
+        None => return Err(PmError::WorkflowNotFound(workflow_name.to_string())),
+    };
     let mut body = std::fs::read_to_string(&md_path)?;
     // Append the summary.md brevity guidance so it reaches whoever runs
     // the command. A single blank line separates it from the workflow's
@@ -71,38 +75,58 @@ pub struct ListOutput {
 }
 
 /// Build the column-aligned listing used by `pm workflow list`. Returns
-/// one row per installed workflow, sorted by name and tagged `[bundled]`
-/// (rewritten by `pm upgrade`) or `[user]`, plus a warning per broken
-/// `config.toml` so users don't discover the breakage only when
-/// `pm feat new --workflow <name>` fails.
-pub fn list_rows(project_root: &Path) -> Result<ListOutput> {
-    let installed = workflow::list_installed_with_errors(project_root)?;
+/// one row per installed workflow, sorted by name and tagged
+/// `[<tier>, bundled|user]` — `bundled` meaning pm-owned and rewritten by
+/// `pm upgrade`, and a project entry shadowing a same-named global one —
+/// plus a warning per broken `config.toml` so users don't discover the
+/// breakage only when `pm feat new --workflow <name>` fails. Outside a
+/// project (`None`) only the global tier is listed.
+pub fn list_rows(project_root: Option<&Path>) -> Result<ListOutput> {
+    list_rows_in(project_root, &workflow::global_dir()?)
+}
+
+/// [`list_rows`] against an explicit global workflow tier.
+pub fn list_rows_in(project_root: Option<&Path>, global_dir: &Path) -> Result<ListOutput> {
+    let installed = workflow::list_installed_in(project_root, global_dir)?;
 
     let max_name = installed
         .workflows
         .iter()
-        .map(|(n, _)| n.len())
+        .map(|w| w.name.len())
         .max()
         .unwrap_or(0);
+    let tags: Vec<String> = installed
+        .workflows
+        .iter()
+        .map(|w| {
+            let origin = if w.tier == workflow::Tier::Global
+                && crate::commands::skills::is_bundled_workflow(&w.name)
+            {
+                "bundled"
+            } else {
+                "user"
+            };
+            format!("[{}, {origin}]", w.tier)
+        })
+        .collect();
+    let max_tag = tags.iter().map(|t| t.len()).max().unwrap_or(0);
 
     // Indent the optional "use when:" line to align under the description
-    // column: 2 leading spaces + name column + 2 spaces + "— " (2 chars).
-    let hint_indent = " ".repeat(max_name + 6);
+    // column: 2 leading spaces + name column + 2 spaces + tag column + 2
+    // spaces + "— " (2 chars).
+    let hint_indent = " ".repeat(max_name + max_tag + 8);
 
     let mut rows = Vec::new();
-    for (name, def) in &installed.workflows {
-        let origin = if crate::commands::skills::is_bundled_workflow(name) {
-            "bundled"
-        } else {
-            "user"
-        };
+    for (w, tag) in installed.workflows.iter().zip(&tags) {
         rows.push(format!(
-            "  {:<width$}  — {} [{origin}]",
-            name,
-            def.description,
-            width = max_name,
+            "  {:<name_w$}  {:<tag_w$}  — {}",
+            w.name,
+            tag,
+            w.def.description,
+            name_w = max_name,
+            tag_w = max_tag,
         ));
-        if let Some(hint) = &def.when_to_use {
+        if let Some(hint) = &w.def.when_to_use {
             rows.push(format!("{hint_indent}use when: {hint}"));
         }
     }
@@ -118,13 +142,14 @@ pub fn list_rows(project_root: &Path) -> Result<ListOutput> {
 
 /// Look up a single workflow's definition for display (used by
 /// `pm feat info` to show the workflow row alongside its description).
-/// Returns `None` if the workflow isn't installed; an `Err` only on a
-/// genuine I/O or parse failure for an installed workflow.
+/// Returns `None` if the workflow isn't installed in either tier; an `Err`
+/// only on a genuine I/O or parse failure for an installed workflow.
 pub fn get(project_root: &Path, name: &str) -> Result<Option<WorkflowDef>> {
-    if !workflow::exists(project_root, name) {
-        return Ok(None);
+    match WorkflowDef::load(project_root, name) {
+        Ok(def) => Ok(Some(def)),
+        Err(PmError::WorkflowNotFound(_)) => Ok(None),
+        Err(e) => Err(e),
     }
-    Ok(Some(WorkflowDef::load(project_root, name)?))
 }
 
 #[cfg(test)]
@@ -138,6 +163,12 @@ mod tests {
         let root = dir.path().to_path_buf();
         std::fs::create_dir_all(paths::features_dir(&root)).unwrap();
         (dir, root)
+    }
+
+    /// Rows for the project tier alone, against an empty global tier.
+    fn project_rows(root: &Path) -> ListOutput {
+        let empty = tempdir().unwrap();
+        list_rows_in(Some(root), empty.path()).unwrap()
     }
 
     fn write_workflow(project_root: &Path, name: &str, body: &str, md: &str) {
@@ -236,24 +267,13 @@ mod tests {
         write_workflow(&root, "beta", "description = \"second\"\n", "# beta");
         write_workflow(&root, "alpha", "description = \"first\"\n", "# alpha");
 
-        let out = list_rows(&root).unwrap();
+        let out = project_rows(&root);
         assert_eq!(out.rows.len(), 2);
         assert!(out.rows[0].contains("alpha"));
         assert!(out.rows[0].contains("first"));
         assert!(out.rows[1].contains("beta"));
         assert!(out.rows[1].contains("second"));
         assert!(out.warnings.is_empty());
-    }
-
-    #[test]
-    fn list_rows_tags_bundled_and_user_workflows() {
-        let (_dir, root) = setup_project_root();
-        write_workflow(&root, "solo", "description = \"bundled solo\"\n", "# solo");
-        write_workflow(&root, "my-solo", "description = \"mine\"\n", "# mine");
-
-        let out = list_rows(&root).unwrap();
-        assert!(out.rows[0].contains("my-solo") && out.rows[0].ends_with("[user]"));
-        assert!(out.rows[1].contains("solo") && out.rows[1].ends_with("[bundled]"));
     }
 
     #[test]
@@ -265,7 +285,7 @@ mod tests {
             "description = \"d\"\nwhen_to_use = \"pick me for X\"\n",
             "# demo",
         );
-        let out = list_rows(&root).unwrap();
+        let out = project_rows(&root);
         // Description row plus the hint row.
         assert_eq!(out.rows.len(), 2);
         assert!(out.rows[0].contains("demo"));
@@ -276,18 +296,41 @@ mod tests {
     fn list_rows_omits_hint_row_when_absent() {
         let (_dir, root) = setup_project_root();
         write_workflow(&root, "demo", "description = \"d\"\n", "# demo");
-        let out = list_rows(&root).unwrap();
+        let out = project_rows(&root);
         // No hint → single row, no `use when:` line.
         assert_eq!(out.rows.len(), 1);
         assert!(!out.rows.iter().any(|r| r.contains("use when:")));
     }
 
     #[test]
-    fn list_rows_empty_when_no_workflows_installed() {
+    fn list_rows_tags_tier_and_origin_with_project_shadowing_global() {
         let (_dir, root) = setup_project_root();
-        let out = list_rows(&root).unwrap();
-        assert!(out.rows.is_empty());
-        assert!(out.warnings.is_empty());
+        crate::commands::skills::install_global().unwrap();
+        write_workflow(&root, "solo", "description = \"my solo\"\n", "# mine");
+        write_workflow(&root, "extra", "description = \"extra\"\n", "# extra");
+
+        let out = list_rows(Some(&root)).unwrap();
+        let find = |name: &str| {
+            out.rows
+                .iter()
+                .find(|r| r.trim_start().starts_with(&format!("{name} ")))
+                .unwrap_or_else(|| panic!("no row for {name}: {:?}", out.rows))
+                .clone()
+        };
+        assert!(find("solo").contains("[project, user]") && find("solo").contains("my solo"));
+        assert!(find("extra").contains("[project, user]"));
+        assert!(find("pr-review").contains("[global, bundled]"));
+        assert_eq!(out.rows.iter().filter(|r| r.contains("solo ")).count(), 1);
+
+        // Outside a project only the global tier shows.
+        let global = list_rows(None).unwrap();
+        assert!(global.rows.iter().all(|r| !r.contains("[project")));
+        assert!(
+            global
+                .rows
+                .iter()
+                .any(|r| r.contains("solo") && r.contains("[global, bundled]"))
+        );
     }
 
     #[test]
@@ -300,7 +343,7 @@ mod tests {
         std::fs::create_dir_all(&bad_dir).unwrap();
         std::fs::write(bad_dir.join("config.toml"), "not = valid {{{").unwrap();
 
-        let out = list_rows(&root).unwrap();
+        let out = project_rows(&root);
         assert_eq!(out.rows.len(), 1);
         assert!(out.rows[0].contains("ok"));
         assert_eq!(out.warnings.len(), 1);

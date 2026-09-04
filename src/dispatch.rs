@@ -746,9 +746,12 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             }
         },
         Commands::Workflow(workflow_cmd) => {
-            let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+            // `install`/`uninstall`/`list` act on the global tier, so they
+            // work outside a project too; `show` needs the feature's scope.
+            let project_root = optional_project_root()?;
             match workflow_cmd {
                 WorkflowCommands::Show => {
+                    let project_root = project_root.ok_or(pm::error::PmError::NotInProject)?;
                     let scope = resolve_scope(&project_root)?;
                     match commands::workflow::show(&project_root, &scope)? {
                         Some(body) => {
@@ -767,10 +770,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     Ok(())
                 }
                 WorkflowCommands::Install { name } => {
-                    let messages = commands::skills::workflows_install_project(
-                        &project_root,
-                        name.as_deref(),
-                    )?;
+                    let messages = commands::skills::workflows_install(name.as_deref())?;
                     for m in messages {
                         println!("{m}");
                     }
@@ -781,17 +781,14 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         eprintln!("Provide a workflow name or use --all to uninstall all");
                         std::process::exit(1);
                     }
-                    let messages = commands::skills::workflows_uninstall_project(
-                        &project_root,
-                        name.as_deref(),
-                    )?;
+                    let messages = commands::skills::workflows_uninstall(name.as_deref())?;
                     for m in messages {
                         println!("{m}");
                     }
                     Ok(())
                 }
                 WorkflowCommands::List => {
-                    let out = commands::workflow::list_rows(&project_root)?;
+                    let out = commands::workflow::list_rows(project_root.as_deref())?;
                     // Print rows to stdout (the normal listing).
                     if out.rows.is_empty() {
                         println!(
@@ -811,6 +808,17 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                 }
             }
         }
+    }
+}
+
+/// The current project root, or `None` when the caller isn't inside a
+/// project — used by commands that also work outside one. Only that case is
+/// swallowed; a genuine I/O failure still propagates.
+fn optional_project_root() -> pm::error::Result<Option<std::path::PathBuf>> {
+    match paths::find_project_root(&std::env::current_dir()?) {
+        Ok(root) => Ok(Some(root)),
+        Err(pm::error::PmError::NotInProject) => Ok(None),
+        Err(e) => Err(e),
     }
 }
 
@@ -882,42 +890,25 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
         }
         HarnessCommands::Skills(skills_cmd) => match skills_cmd {
             HarnessSkillsCommands::List => {
-                let project_root = paths::find_project_root(&std::env::current_dir()?).ok();
+                let project_root = optional_project_root()?;
                 let lines = commands::skills::skills_list(project_root.as_deref())?;
                 for line in lines {
                     println!("{line}");
                 }
                 Ok(())
             }
-            HarnessSkillsCommands::Install { name, global } => {
-                let messages = if global {
-                    let mut m = commands::skills::skills_install(name.as_deref())?;
-                    m.extend(commands::skills::project_assets_global()?);
-                    m
-                } else {
-                    let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-                    let mut m =
-                        commands::skills::skills_install_project(&project_root, name.as_deref())?;
-                    m.extend(commands::skills::project_assets(&project_root, false)?);
-                    m
-                };
-                for msg in messages {
+            HarnessSkillsCommands::Install { name } => {
+                for msg in commands::skills::skills_install(name.as_deref())? {
                     println!("{msg}");
                 }
                 Ok(())
             }
-            HarnessSkillsCommands::Uninstall { name, all, global } => {
+            HarnessSkillsCommands::Uninstall { name, all } => {
                 if name.is_none() && !all {
                     eprintln!("Provide a skill name or use --all to uninstall all");
                     std::process::exit(1);
                 }
-                let messages = if global {
-                    commands::skills::skills_uninstall(name.as_deref())?
-                } else {
-                    let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-                    commands::skills::skills_uninstall_project(&project_root, name.as_deref())?
-                };
-                for msg in messages {
+                for msg in commands::skills::skills_uninstall(name.as_deref())? {
                     println!("{msg}");
                 }
                 Ok(())
@@ -925,49 +916,36 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
             HarnessSkillsCommands::Pull { name } => {
                 let project_root = paths::find_project_root(&std::env::current_dir()?)?;
                 let name = resolve_feature_name(name, &project_root)?;
-                commands::skills::skills_pull(&project_root, &name)?;
-                println!("Pulled skills from main into feature '{name}'");
+                let copied = commands::skills::skills_pull(&project_root, &name)?;
+                if copied.is_empty() {
+                    println!("No custom skills in main to pull into feature '{name}'");
+                } else {
+                    println!("Pulled skills from main into feature '{name}'");
+                }
                 Ok(())
             }
         },
         HarnessCommands::Agents(agents_cmd) => match agents_cmd {
             HarnessAgentsCommands::List => {
-                let project_root = paths::find_project_root(&std::env::current_dir()?).ok();
+                let project_root = optional_project_root()?;
                 let lines = commands::skills::agents_list(project_root.as_deref())?;
                 for line in lines {
                     println!("{line}");
                 }
                 Ok(())
             }
-            HarnessAgentsCommands::Install { name, global } => {
-                let messages = if global {
-                    let mut m = commands::skills::agents_install(name.as_deref())?;
-                    m.extend(commands::skills::project_assets_global()?);
-                    m
-                } else {
-                    let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-                    let mut m =
-                        commands::skills::agents_install_project(&project_root, name.as_deref())?;
-                    m.extend(commands::skills::project_assets(&project_root, false)?);
-                    m
-                };
-                for msg in messages {
+            HarnessAgentsCommands::Install { name } => {
+                for msg in commands::skills::agents_install(name.as_deref())? {
                     println!("{msg}");
                 }
                 Ok(())
             }
-            HarnessAgentsCommands::Uninstall { name, all, global } => {
+            HarnessAgentsCommands::Uninstall { name, all } => {
                 if name.is_none() && !all {
                     eprintln!("Provide an agent name or use --all to uninstall all");
                     std::process::exit(1);
                 }
-                let messages = if global {
-                    commands::skills::agents_uninstall(name.as_deref())?
-                } else {
-                    let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-                    commands::skills::agents_uninstall_project(&project_root, name.as_deref())?
-                };
-                for msg in messages {
+                for msg in commands::skills::agents_uninstall(name.as_deref())? {
                     println!("{msg}");
                 }
                 Ok(())

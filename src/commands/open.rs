@@ -42,6 +42,10 @@ fn is_open_recoverable(kind: IssueKind) -> bool {
         | IssueKind::PrCheckFailed
         | IssueKind::HooksNotInstalled
         | IssueKind::AssetNotProjected
+        | IssueKind::GlobalStoreMissing
+        | IssueKind::StaleBundledCopies
+        | IssueKind::RedundantOverride
+        | IssueKind::SkillShadowedByGlobal
         | IssueKind::LegacyVanillaAgentName => false,
     }
 }

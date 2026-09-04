@@ -989,19 +989,22 @@ mod tests {
     }
 
     #[test]
-    fn feat_new_old_solo_naming_claude_fails_validation() {
-        // `claude` is no longer a vanilla alias: a solo whose config still
-        // names it (an un-upgraded project) fails validation until
-        // `pm upgrade` rewrites the bundled workflow.
+    fn feat_new_old_solo_naming_claude_fails_until_upgrade_removes_it() {
+        // `claude` is no longer a vanilla alias: an un-upgraded project's
+        // `.pm/workflows/solo` still names it and shadows the global bundled
+        // one, so validation fails until the migration deletes it.
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, project_name) = server.setup_project(dir.path());
-        let cfg = crate::state::workflow::config_path(&project_path, "solo");
+        let cfg = paths::workflows_dir(&project_path).join("solo");
+        std::fs::create_dir_all(&cfg).unwrap();
         std::fs::write(
-            &cfg,
+            cfg.join("config.toml"),
             "description = \"old solo\"\nagents = [\"claude\"]\nbrief_agents = [\"claude\"]\n",
         )
         .unwrap();
+        // Pre-migration: the stale copy is pm's, not a user override.
+        std::fs::remove_file(paths::migrations_dir(&project_path).join("global-assets")).unwrap();
 
         let err = feat_new(&FeatNewParams {
             context: Some("do X"),
@@ -1015,6 +1018,10 @@ mod tests {
         );
 
         crate::commands::upgrade::upgrade_project(&project_path).unwrap();
+        assert!(
+            !cfg.exists(),
+            "migration must remove the stale bundled solo"
+        );
         feat_new(&FeatNewParams {
             context: Some("do X"),
             workflow: None,
@@ -1025,28 +1032,41 @@ mod tests {
     }
 
     #[test]
-    fn feat_new_context_without_workflow_errors_when_solo_missing() {
+    fn feat_new_resolves_a_global_custom_workflow() {
+        // A workflow installed only in the global tier, naming a team whose
+        // definitions live only in the global store, spawns like any other.
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
+        let (project_path, _, project_name) = server.setup_project(dir.path());
+        let wf = paths::global_workflows_dir()
+            .unwrap()
+            .join("global-custom-flow");
+        std::fs::create_dir_all(&wf).unwrap();
+        std::fs::write(
+            wf.join("config.toml"),
+            "description = \"global custom\"\nagents = [\"implementer\"]\n\
+             brief_agents = [\"implementer\"]\n",
+        )
+        .unwrap();
+        std::fs::write(wf.join("workflow.md"), "# global custom\nrouting prose\n").unwrap();
 
-        // Remove the default workflow so defaulting has nothing to target.
-        crate::commands::skills::workflows_uninstall_project(&project_path, Some("solo")).unwrap();
-
-        let result = feat_new(&FeatNewParams {
+        feat_new(&FeatNewParams {
+            workflow: Some("global-custom-flow"),
             context: Some("do X"),
-            workflow: None,
             ..FeatNewParams::with_defaults(&project_path, "login", server.name())
-        });
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(matches!(err, PmError::SafetyCheck(_)));
-        assert!(err.to_string().contains("'solo'"));
+        })
+        .unwrap();
 
-        // No partial state should remain on disk.
-        let features_dir = paths::features_dir(&project_path);
-        assert!(!FeatureState::exists(&features_dir, "login"));
-        assert!(!project_path.join("login").exists());
+        let session = tmux::session_name(&project_name, "login");
+        assert!(
+            tmux::find_window(server.name(), &session, "implementer")
+                .unwrap()
+                .is_some()
+        );
+        let body = crate::commands::workflow::show(&project_path, "login")
+            .unwrap()
+            .unwrap();
+        assert!(body.contains("routing prose"), "{body}");
     }
 
     #[test]

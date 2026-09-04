@@ -173,16 +173,17 @@ pub enum SummaryCommands {
 pub enum WorkflowCommands {
     /// Print the active workflow's routing prose (workflow.md)
     Show,
-    /// List installed workflows with their descriptions
+    /// List installed workflows (project tier first, then global) with
+    /// their descriptions
     List,
-    /// (Re)install a bundled workflow into <project>/.pm/workflows/
-    /// (bundled workflows are pm-owned and rewritten on upgrade; to
-    /// customise one, copy it to a new name)
+    /// (Re)install a bundled workflow into the global tier (bundled
+    /// workflows are pm-owned and rewritten on upgrade; to customise one,
+    /// copy it into <project>/.pm/workflows/ or to a new name)
     Install {
         /// Workflow name (installs all bundled workflows if omitted)
         name: Option<String>,
     },
-    /// Uninstall a bundled workflow from <project>/.pm/workflows/
+    /// Uninstall a bundled workflow from the global tier
     Uninstall {
         /// Workflow name (required unless --all is passed)
         name: Option<String>,
@@ -197,10 +198,10 @@ pub enum HarnessCommands {
     /// Lifecycle hooks managed by pm (install, plus the handlers the harness calls)
     #[command(subcommand)]
     Hooks(HarnessHooksCommands),
-    /// Manage bundled skills (canonical `.agents/skills/`, projected per harness)
+    /// Manage bundled skills (global `~/.agents/skills/`, projected per harness)
     #[command(subcommand)]
     Skills(HarnessSkillsCommands),
-    /// Manage bundled agent definitions (canonical `.agents/agents/`, projected per harness)
+    /// Manage bundled agent definitions (global `~/.agents/agents/`, projected per harness)
     #[command(subcommand)]
     Agents(HarnessAgentsCommands),
     /// Per-feature harness settings files
@@ -252,26 +253,20 @@ pub enum HarnessCommands {
 
 #[derive(Subcommand)]
 pub enum HarnessAgentsCommands {
-    /// List available bundled agent definitions and their install status
+    /// List bundled agent definitions, their global install status, and any project override
     List,
-    /// Uninstall bundled agent definitions (project-level by default, or --global)
+    /// Uninstall bundled agent definitions from ~/.agents/agents/ (and its projections)
     Uninstall {
         /// Agent name (required unless --all is passed)
         name: Option<String>,
         /// Uninstall all bundled agent definitions
         #[arg(long)]
         all: bool,
-        /// Uninstall from ~/.agents/agents/ (and its projections) instead of the project
-        #[arg(long)]
-        global: bool,
     },
-    /// Install bundled agent definitions (project-level by default, or --global for ~/.agents/agents/)
+    /// Install bundled agent definitions into ~/.agents/agents/ (projected into ~/.claude/agents/)
     Install {
         /// Agent name (installs all if omitted)
         name: Option<String>,
-        /// Install to ~/.agents/agents/ (projected into ~/.claude/agents/) instead of the project
-        #[arg(long)]
-        global: bool,
     },
 }
 
@@ -309,26 +304,20 @@ pub enum HarnessSettingsCommands {
 
 #[derive(Subcommand)]
 pub enum HarnessSkillsCommands {
-    /// List available bundled skills and their install status
+    /// List bundled skills, their global install status, and any project override
     List,
-    /// Install bundled skills (project-level by default, or --global for ~/.agents/skills/)
+    /// Install bundled skills into ~/.agents/skills/ (projected into ~/.claude/skills/)
     Install {
         /// Skill name (installs all if omitted)
         name: Option<String>,
-        /// Install to ~/.agents/skills/ (projected into ~/.claude/skills/) instead of the project
-        #[arg(long)]
-        global: bool,
     },
-    /// Uninstall bundled skills (project-level by default, or --global)
+    /// Uninstall bundled skills from ~/.agents/skills/ (and its projections)
     Uninstall {
         /// Skill name (required unless --all is passed)
         name: Option<String>,
         /// Uninstall all bundled skills
         #[arg(long)]
         all: bool,
-        /// Uninstall from ~/.agents/skills/ (and its projections) instead of the project
-        #[arg(long)]
-        global: bool,
     },
     /// Pull skills from main into a feature (canonical store and harness projections)
     Pull {

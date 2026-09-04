@@ -14,6 +14,13 @@ pub(super) const SEEDED_FILES: &[&str] = &["settings.json", "settings.local.json
 
 pub(super) const PROJECTED_DIRS: &[&str] = &["agents", "skills"];
 
+/// Claude Code resolves `~/.claude/skills/<name>` over a project's
+/// `.claude/skills/<name>` (personal beats project), the inverse of its
+/// agent-definition precedence.
+pub(super) fn personal_skill_exists(home: &Path, name: &str) -> bool {
+    home.join(CONFIG_DIR).join("skills").join(name).is_dir()
+}
+
 /// Claude Code needs no content transformation: the canonical files are
 /// copied as-is into `.claude/{agents,skills}`.
 pub(super) fn project_assets(

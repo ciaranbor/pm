@@ -21,6 +21,7 @@ pub static CWD_LOCK: RwLock<()> = RwLock::new(());
 
 static TMUX_SERVER_COUNTER: AtomicU32 = AtomicU32::new(0);
 static SHARED_SERVER_NAME: OnceLock<String> = OnceLock::new();
+static TEST_HOME: OnceLock<std::path::PathBuf> = OnceLock::new();
 
 /// PID whose `pm-test-<pid>` server should be killed by the atexit handler.
 /// Stored separately because `extern "C" fn` cannot capture state.
@@ -169,6 +170,59 @@ extern "C" fn atexit_kill_shared_server() {
     let _ = crate::tmux::kill_server(Some(&name));
 }
 
+const TEST_HOME_PREFIX: &str = "pm-test-home-";
+
+/// Remove `pm-test-home-<pid>` dirs left by test binaries that died without
+/// running their atexit handler.
+fn reap_dead_test_homes() {
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    let self_pid = std::process::id();
+    for entry in entries.flatten() {
+        let Ok(fname) = entry.file_name().into_string() else {
+            continue;
+        };
+        let Some(pid) = fname
+            .strip_prefix(TEST_HOME_PREFIX)
+            .and_then(|p| p.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if pid == self_pid || pid_is_alive(pid) {
+            continue;
+        }
+        let _ = std::fs::remove_dir_all(entry.path());
+    }
+}
+
+extern "C" fn atexit_remove_test_home() {
+    if let Some(home) = TEST_HOME.get() {
+        let _ = std::fs::remove_dir_all(home);
+    }
+}
+
+/// The `$HOME` stand-in every global-tier path uses under `cfg(test)`: one
+/// `pm-test-home-<pid>` temp dir per test binary, shared by all its tests.
+/// `pm init` populates the global asset tier in it idempotently, so tests
+/// may read it freely; a test that needs to *mutate* the global tier must
+/// use the explicit-dir variants against its own tempdir instead.
+pub fn test_home() -> &'static std::path::Path {
+    TEST_HOME.get_or_init(|| {
+        reap_dead_test_homes();
+        let dir = std::env::temp_dir().join(format!("{TEST_HOME_PREFIX}{}", std::process::id()));
+        // Pid reuse: a stale dir under our own pid holds another run's state.
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create test home");
+        // Safety: `libc::atexit` is always safe to call; the handler only
+        // removes a directory.
+        unsafe {
+            libc::atexit(atexit_remove_test_home);
+        }
+        dir
+    })
+}
+
 fn shared_server_name() -> &'static str {
     SHARED_SERVER_NAME.get_or_init(|| {
         // Reap any `pm-test-<pid>` servers left behind by dead test binaries
@@ -290,8 +344,8 @@ impl TestServer {
     /// Create a project without tmux sessions.
     ///
     /// Replicates the filesystem structure of `pm init` (git repo, `.pm/`
-    /// directory, config, hooks, skills, registry entry) but skips creating
-    /// the tmux session. Use this for tests that only need the project
+    /// directory, config, hooks, global asset tier, registry entry) but skips
+    /// creating the tmux session. Use this for tests that only need the project
     /// directory layout and never interact with tmux.
     ///
     /// Keep in sync with `commands::init::init()` — if init gains new
@@ -333,9 +387,8 @@ impl TestServer {
         crate::commands::docs::bootstrap(&project_path).unwrap();
         crate::commands::state_cmd::init(&project_path).unwrap();
         crate::commands::hooks_install::install(&project_path).unwrap();
-        crate::commands::skills::skills_install_project(&project_path, None).unwrap();
-        crate::commands::skills::agents_install_project(&project_path, None).unwrap();
-        crate::commands::skills::workflows_install_project(&project_path, None).unwrap();
+        crate::commands::skills::install_global().unwrap();
+        crate::commands::skills::write_migration_marker(&project_path).unwrap();
 
         // Register in global registry
         use crate::state::project::ProjectEntry;

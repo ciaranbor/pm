@@ -14,31 +14,46 @@ follows is only what the tree *doesn't* tell you.
 - **Layering** — `cli.rs`/`main.rs`/`dispatch.rs` parse and dispatch,
   `commands/` handlers orchestrate, and all shelling-out is funnelled through
   the `git/`, `tmux.rs`, `gh.rs` wrappers — never inline in a handler.
-- **State** (`state/`, TOML) — `~/.config/pm/` is the global registry,
-  `<project>/.pm/` is per-project state; config precedence is project >
+- **State** (`state/`, TOML) — the pm config dir (`dirs::config_dir()/pm`:
+  `~/.config/pm` on Linux, `~/Library/Application Support/pm` on macOS) holds
+  the global registry, `<project>/.pm/` is per-project state; config precedence is project >
   global > unset (unlimited features, no spawn flag). `ProjectEntry` optionally
   records `repo_url`/`state_remote` for cross-machine restore.
 - **Bundled assets** — `agents/`, `baseline/`, `workflows/`, `skills/` are
-  embedded via `include_str!` and installed by `pm init`/`pm upgrade` with the
-  bundle authoritative: every bundled item is **overwritten** on upgrade. This
-  includes the five bundled workflow names under `.pm/workflows/`; any other
-  directory there is the user's and is never touched. `.pm/hooks/` is the one
-  seeded surface that is **preserved** (`hooks::bootstrap` only writes missing
-  scripts) — they are user scripts, not a bundled item. Skills, agents, and
-  the baseline install into the **canonical store**
-  `main/.agents/{skills,agents}` + `main/.agents/pm-baseline.md`
-  (`~/.agents/` for `--global`); `.agents/skills` is the cross-harness
-  convention, `.agents/agents` is pm's own. No harness reads pm's agents
-  dir, so after every install the store is **projected** into each harness in
-  use (`skills::project_assets` → `Harness::project_assets`, a copy into
-  `main/.claude/{agents,skills}` for claude-code). Projection overwrites
-  same-named files (canonical wins, a note is printed when a non-bundled file
-  is replaced) and never deletes; `.claude/` itself is never removed — users
-  hand-write defs there. The one exception is the legacy
-  `main/.claude/pm-baseline.md`, deleted on upgrade once the canonical one is
-  written; `skills::baseline_path` falls back to it until then so an
-  un-upgraded project still gets the baseline. Feature worktrees are seeded
-  (`commands/seed.rs`) with both the canonical store and each harness's dir.
+  embedded via `include_str!` and installed by `pm init`/`pm upgrade` into the
+  **global tier**, where the bundle is authoritative (bundled names are
+  reserved and rewritten on upgrade): `~/.agents/{skills,agents}` +
+  `~/.agents/pm-baseline.md` (`.agents/skills` is the cross-harness
+  convention, `.agents/agents` is pm's own) and `<config dir>/workflows/`
+  (the git-backed global analogue of `.pm/workflows/`). The **project tier**
+  — `main/.agents/{skills,agents}`, `.pm/workflows/` — holds only the user's
+  customs and shadows the global tier **by name**; there is no third
+  "bundled" rank. (`.pm/hooks/` is the one seeded surface that is
+  **preserved** — `hooks::bootstrap` only writes missing scripts, since those
+  are user scripts, not a bundled item.) Agent defs resolve through
+  `workflow::definition_paths`,
+  workflows through `workflow::resolve_dir` (which also reports the `Tier`);
+  the baseline is global-only (`skills::baseline_path`, with a read-only
+  fallback to the project/legacy copies for a project spawning before its
+  first `pm upgrade`), and skills pm doesn't resolve at all — the harness
+  does. No harness reads pm's agents dir, so after every install each tier's
+  store is **projected** into the harness's own layout
+  (`skills::install_global`/`project_assets` → `Harness::project_assets`, a
+  copy into `~/.claude/{agents,skills}` and `main/.claude/{agents,skills}` for
+  claude-code, `Harness::global_config_dir` naming the global one).
+  Projection overwrites same-named files (canonical wins, a note is printed
+  when a non-bundled file is replaced) and never deletes; `.claude/` itself is
+  never removed — users hand-write defs there. Feature worktrees are seeded
+  (`commands/seed.rs`) with the project tier only; global assets are read from
+  home. A one-shot migration (`skills::migrate_project_to_global`, marker
+  `.pm/migrations/global-assets`, run by `upgrade_project`) deletes the
+  bundled copies earlier releases wrote into main, every feature worktree, and
+  `.pm/workflows/`, since those would shadow the global tier; after the marker
+  a bundled-named project file is a custom and is never touched again.
+  Claude Code's skill precedence is personal > project — the one place
+  project-shadows-global can't be delivered by placement — so
+  `Harness::project_skill_shadowed_by_global` feeds a `pm doctor` finding
+  instead.
 - **Portability** — `path_utils.rs` swaps `~/` ↔ `$HOME` so registry state
   moves between machines.
 - **Harness** (`harness/`) — the agent CLI pm launches, behind a `Harness`
@@ -135,22 +150,23 @@ workflow's prose.
 
 `pm feat new --context` without `--workflow` *defaults* to the bundled
 single-agent `solo` workflow (`feat_common::DEFAULT_WORKFLOW`) — a context
-needs a recipient. The default errors if `solo` isn't installed; bare
-`feat new` (no context, no workflow) stays agentless. `WorkflowDef::validate`
-enforces the contract: every team member must have a definition file in a
-canonical store — `workflow::definition_paths` is `main/.agents/agents/` then
-`~/.agents/agents/`; a harness's own dir is a projection, never a source, so
-a def hand-written only in `.claude/agents/` does not resolve — and
-`brief_agents ⊆` the team. A def present in the canonical store but not yet
-projected passes validation while the harness can't launch it, which
-`pm doctor` reports as a main-scope finding. Exception: the reserved name
-`default` (`workflow::VANILLA_AGENT`, solo's whole team) means a
-definition-less vanilla session — validation skips it, and the spawn
-chokepoint passes no definition for it, unconditionally (a user `default.md`
-is ignored). Earlier releases spelled the name `claude`; that alias is
-removed. `pm upgrade` rewrites the bundled `solo` to name `default`, an
-un-upgraded `solo` naming `claude` fails validation like any missing
-definition, and `pm doctor` flags an active registry entry named `claude`
+needs a recipient. The default errors if `solo` isn't installed in either
+tier; bare `feat new` (no context, no workflow) stays agentless.
+`WorkflowDef::validate` enforces the contract: every team member must have a
+definition file in a canonical store — `workflow::definition_paths` is
+`main/.agents/agents/` then `~/.agents/agents/`; a harness's own dir is a
+projection, never a source, so a def hand-written only in `.claude/agents/`
+does not resolve — and `brief_agents ⊆` the team. A def present in a
+canonical store but not yet projected passes validation while the harness
+can't launch it, which `pm doctor` reports as a main-scope finding.
+Exception: the reserved name `default` (`workflow::VANILLA_AGENT`, solo's
+whole team) means a definition-less vanilla session — validation skips it,
+and the spawn chokepoint passes no definition for it, unconditionally (a user
+`default.md` is ignored). Earlier releases spelled the name `claude`; that
+alias is removed. `pm upgrade` rewrites the bundled global `solo` to name
+`default` and the migration deletes a stale project `.pm/workflows/solo`
+naming `claude`, so an un-upgraded project repairs itself; `pm doctor` flags
+an active registry entry still named `claude`
 (`IssueKind::LegacyVanillaAgentName`) — it runs until its window dies but
 restart/heal can't resolve it.
 
@@ -190,7 +206,7 @@ harness still matches config — otherwise it spawns fresh and says so — and
 `agent fork` refuses outright (a fork without the transcript isn't a fork).
 
 The **notice board** (`notice.rs`) is a seeded *directive* surface — terse
-standing instructions hand-written into `~/.config/pm/notices.md` (global) and
+standing instructions hand-written into `notices.md` in the pm config dir and
 `.pm/notices.md` (per-project). At the same spawn chokepoint,
 `compose_spawn_prompt` folds any non-empty board onto the baseline into the
 single `--append-system-prompt-file` (baseline → global → project). No command:
