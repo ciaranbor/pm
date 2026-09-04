@@ -176,8 +176,8 @@ pub enum WorkflowCommands {
     /// List installed workflows with their descriptions
     List,
     /// (Re)install a bundled workflow into <project>/.pm/workflows/
-    /// (overwrites the workflow directory — use to revert a user edit
-    /// back to the bundled copy)
+    /// (bundled workflows are pm-owned and rewritten on upgrade; to
+    /// customise one, copy it to a new name)
     Install {
         /// Workflow name (installs all bundled workflows if omitted)
         name: Option<String>,

@@ -19,11 +19,14 @@ follows is only what the tree *doesn't* tell you.
   global > unset (unlimited features, no spawn flag). `ProjectEntry` optionally
   records `repo_url`/`state_remote` for cross-machine restore.
 - **Bundled assets** — `agents/`, `baseline/`, `workflows/`, `skills/` are
-  embedded via `include_str!` and installed by `pm init`/`pm upgrade` under one
-  of two policies: **Overwrite** (skills/agents/baseline — the bundle is
-  authoritative) or **Preserve** (workflows, like `.pm/hooks/` — never clobber
-  user edits). Skills, agents, and the baseline install into the **canonical
-  store** `main/.agents/{skills,agents}` + `main/.agents/pm-baseline.md`
+  embedded via `include_str!` and installed by `pm init`/`pm upgrade` with the
+  bundle authoritative: every bundled item is **overwritten** on upgrade. This
+  includes the five bundled workflow names under `.pm/workflows/`; any other
+  directory there is the user's and is never touched. `.pm/hooks/` is the one
+  seeded surface that is **preserved** (`hooks::bootstrap` only writes missing
+  scripts) — they are user scripts, not a bundled item. Skills, agents, and
+  the baseline install into the **canonical store**
+  `main/.agents/{skills,agents}` + `main/.agents/pm-baseline.md`
   (`~/.agents/` for `--global`); `.agents/skills` is the cross-harness
   convention, `.agents/agents` is pm's own. No harness reads pm's agents
   dir, so after every install the store is **projected** into each harness in
@@ -144,11 +147,12 @@ projected passes validation while the harness can't launch it, which
 `default` (`workflow::VANILLA_AGENT`, solo's whole team) means a
 definition-less vanilla session — validation skips it, and the spawn
 chokepoint passes no definition for it, unconditionally (a user `default.md`
-is ignored). `claude` is a **permanent** alias (`VANILLA_AGENT_ALIASES`,
-`is_vanilla`): Preserve-policy `solo` configs installed by earlier releases
-name `claude` in `config.toml` and are never rewritten, so they must keep
-spawning a vanilla agent under that name. Config keys are literal — an old
-solo's agent is configured as `[agents.*] claude = …`, not `default`.
+is ignored). Earlier releases spelled the name `claude`; that alias is
+removed. `pm upgrade` rewrites the bundled `solo` to name `default`, an
+un-upgraded `solo` naming `claude` fails validation like any missing
+definition, and `pm doctor` flags an active registry entry named `claude`
+(`IssueKind::LegacyVanillaAgentName`) — it runs until its window dies but
+restart/heal can't resolve it.
 
 ### Agent registry and the shared baseline
 

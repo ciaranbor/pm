@@ -989,9 +989,10 @@ mod tests {
     }
 
     #[test]
-    fn feat_new_installed_old_solo_still_spawns_claude() {
-        // A project whose Preserve-policy solo predates the `default` name
-        // keeps spawning its team as `claude` — the alias is permanent.
+    fn feat_new_old_solo_naming_claude_fails_validation() {
+        // `claude` is no longer a vanilla alias: a solo whose config still
+        // names it (an un-upgraded project) fails validation until
+        // `pm upgrade` rewrites the bundled workflow.
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, project_name) = server.setup_project(dir.path());
@@ -1002,14 +1003,25 @@ mod tests {
         )
         .unwrap();
 
+        let err = feat_new(&FeatNewParams {
+            context: Some("do X"),
+            workflow: None,
+            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+        })
+        .unwrap_err();
+        assert!(
+            matches!(err, PmError::WorkflowAgentMissing { .. }),
+            "{err:?}"
+        );
+
+        crate::commands::upgrade::upgrade_project(&project_path).unwrap();
         feat_new(&FeatNewParams {
             context: Some("do X"),
             workflow: None,
             ..FeatNewParams::with_defaults(&project_path, "login", server.name())
         })
         .unwrap();
-
-        assert_vanilla_spawned(&project_path, &project_name, server.name(), "claude");
+        assert_vanilla_spawned(&project_path, &project_name, server.name(), "default");
     }
 
     #[test]
