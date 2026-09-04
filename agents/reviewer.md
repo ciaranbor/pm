@@ -55,7 +55,7 @@ against the Comments-and-docs section of your operating baseline; flag each
 violation for deletion or trimming — silence is a pass verdict.
 Additionally:
 
-- **Staleness is a bug.** Read the README/CLAUDE.md sections
+- **Staleness is a bug.** Read the README/AGENTS.md sections
   touching the changed behaviour and flag any the change has made
   wrong. Stale beats missing — don't demand new docs for their own
   sake.

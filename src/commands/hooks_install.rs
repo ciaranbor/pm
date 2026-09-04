@@ -1,14 +1,17 @@
 //! Install pm hooks (Stop + SessionStart) into `main/.claude/settings.json`.
 //!
-//! The Stop hook is `pm claude hooks stop`, a Rust command that blocks until
+//! The Stop hook is `pm harness hooks stop`, a Rust command that blocks until
 //! the agent has unread messages (by calling `agent_wait` internally),
 //! then returns `{"decision":"block","reason":"You have new messages…"}`.
 //! Claude Code delivers the reason as a continuation prompt, the agent
 //! reads its messages, the turn ends, and the hook fires again.
 //!
-//! The SessionStart hook is `pm claude hooks session-start`, which captures
+//! The SessionStart hook is `pm harness hooks session-start`, which captures
 //! the session ID from Claude Code's JSON input and writes it to the agent
 //! registry so dead agents can be resumed with `--resume <session_id>`.
+//!
+//! Entries written by older releases as `pm claude hooks …` are recognised
+//! as pm-owned and rewritten in place on the next install.
 //!
 //! # Stop-hook prototype
 //!
@@ -30,23 +33,26 @@ use crate::state::paths;
 pub const STOP_HOOK_TIMEOUT_SECS: u64 = 86400;
 
 /// Marker string used to identify pm-owned Stop hook entries in
-/// settings.json. Present in both the old `printf` command and the new
-/// `pm claude hooks stop` command so upgrades detect and replace either.
-pub const PM_HOOK_MARKER: &str = "pm claude hooks stop";
+/// settings.json.
+pub const PM_HOOK_MARKER: &str = "pm harness hooks stop";
 
 /// Marker string for pm-owned SessionStart hook entries.
-pub const PM_SESSION_START_MARKER: &str = "pm claude hooks session-start";
+pub const PM_SESSION_START_MARKER: &str = "pm harness hooks session-start";
 
-/// The shell command registered as the Stop hook. Invokes `pm claude hooks stop`
-/// which blocks until unread messages are available, printing the JSON
-/// decision to stdout.
+/// The previous generation's markers, still treated as pm-owned so an
+/// upgrade rewrites them in place rather than adding a second entry.
+const LEGACY_HOOK_MARKER: &str = "pm claude hooks stop";
+const LEGACY_SESSION_START_MARKER: &str = "pm claude hooks session-start";
+
+/// The shell command registered as the Stop hook. It blocks until unread
+/// messages are available, printing the JSON decision to stdout.
 pub fn stop_hook_command() -> String {
-    "pm claude hooks stop".to_string()
+    PM_HOOK_MARKER.to_string()
 }
 
 /// The shell command registered as the SessionStart hook.
 pub fn session_start_hook_command() -> String {
-    "pm claude hooks session-start".to_string()
+    PM_SESSION_START_MARKER.to_string()
 }
 
 /// Install pm hooks (Stop + SessionStart) into `main/.claude/settings.json`.
@@ -157,9 +163,6 @@ fn upsert_stop_hook(root: &mut Value) -> Result<bool> {
     }
     let stop_array = stop_entry.as_array_mut().unwrap();
 
-    // Find an existing pm-owned entry: one whose inner hooks contain a command
-    // that invokes printf with our canned reason text. We match on the reason
-    // text so updates to the exact shell quoting still overwrite in place.
     let existing_idx = stop_array.iter().position(entry_is_pm_owned);
 
     if let Some(idx) = existing_idx {
@@ -174,22 +177,20 @@ fn upsert_stop_hook(root: &mut Value) -> Result<bool> {
     Ok(true)
 }
 
-/// Heuristic: is this Stop entry one we own? Matches both the current
-/// `pm claude hooks stop` command and the old `printf` approach (which contained
-/// our marker text in the reason string). Foreign entries are left alone.
+/// Is this Stop entry one we own (either generation of the command)?
+/// Foreign entries are left alone.
 fn entry_is_pm_owned(entry: &Value) -> bool {
+    entry_command_matches(entry, &[PM_HOOK_MARKER, LEGACY_HOOK_MARKER])
+}
+
+fn entry_command_matches(entry: &Value, markers: &[&str]) -> bool {
     let Some(inner) = entry.get("hooks").and_then(|v| v.as_array()) else {
         return false;
     };
     inner.iter().any(|hook| {
         hook.get("command")
             .and_then(|v| v.as_str())
-            .is_some_and(|cmd| {
-                cmd.contains(PM_HOOK_MARKER)
-                    || cmd.contains("pm harness hooks stop")
-                    || cmd.contains("pm hooks stop")
-                    || cmd.contains("pm msg wait")
-            })
+            .is_some_and(|cmd| markers.iter().any(|m| cmd.contains(m)))
     })
 }
 
@@ -240,19 +241,12 @@ fn upsert_session_start_hook(root: &mut Value) -> Result<bool> {
     Ok(true)
 }
 
-/// Heuristic: is this SessionStart entry one we own?
+/// Is this SessionStart entry one we own (either generation of the command)?
 fn session_start_entry_is_pm_owned(entry: &Value) -> bool {
-    let Some(inner) = entry.get("hooks").and_then(|v| v.as_array()) else {
-        return false;
-    };
-    inner.iter().any(|hook| {
-        hook.get("command")
-            .and_then(|v| v.as_str())
-            .is_some_and(|cmd| {
-                cmd.contains(PM_SESSION_START_MARKER)
-                    || cmd.contains("pm harness hooks session-start")
-            })
-    })
+    entry_command_matches(
+        entry,
+        &[PM_SESSION_START_MARKER, LEGACY_SESSION_START_MARKER],
+    )
 }
 
 /// Check whether pm hooks are installed in `main/.claude/settings.json`.
@@ -327,7 +321,7 @@ mod tests {
             .and_then(|h| h.get("command"))
             .and_then(|c| c.as_str())
             .unwrap();
-        assert_eq!(cmd, "pm claude hooks stop");
+        assert_eq!(cmd, "pm harness hooks stop");
 
         // SessionStart hook
         let ss = parsed
@@ -343,7 +337,7 @@ mod tests {
             .and_then(|h| h.get("command"))
             .and_then(|c| c.as_str())
             .unwrap();
-        assert_eq!(ss_cmd, "pm claude hooks session-start");
+        assert_eq!(ss_cmd, "pm harness hooks session-start");
     }
 
     #[test]
@@ -450,7 +444,7 @@ mod tests {
             .and_then(|h| h.get("command"))
             .and_then(|c| c.as_str())
             .unwrap();
-        assert_eq!(cmd, "pm claude hooks session-start");
+        assert_eq!(cmd, "pm harness hooks session-start");
     }
 
     #[test]
@@ -521,26 +515,23 @@ mod tests {
     }
 
     #[test]
-    fn install_replaces_old_printf_hook() {
+    fn install_rewrites_previous_generation_in_place() {
+        // A project last upgraded by a release that wrote `pm claude hooks …`
+        // counts as installed, and a fresh install swaps each entry for the
+        // canonical command without duplicating it.
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
 
-        // Seed the old-style printf hook — install should replace it with
-        // `pm claude hooks stop`.
         let claude_dir = paths::main_worktree(&root).join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
         let old = json!({
             "hooks": {
-                "Stop": [
-                    {
-                        "hooks": [
-                            {
-                                "type": "command",
-                                "command": "printf '{\"decision\":\"block\",\"reason\":\"... pm msg wait ...\"}'",
-                            }
-                        ]
-                    }
-                ]
+                "Stop": [{ "hooks": [
+                    { "type": "command", "command": "pm claude hooks stop", "timeout": STOP_HOOK_TIMEOUT_SECS }
+                ]}],
+                "SessionStart": [{ "hooks": [
+                    { "type": "command", "command": "pm claude hooks session-start" }
+                ]}]
             }
         });
         std::fs::write(
@@ -548,25 +539,60 @@ mod tests {
             serde_json::to_string_pretty(&old).unwrap(),
         )
         .unwrap();
+        assert!(is_installed(&root).unwrap());
 
-        install(&root).unwrap();
+        let msg = install(&root).unwrap();
+        assert!(msg.contains("Installed"), "{msg}");
 
         let content = std::fs::read_to_string(claude_dir.join("settings.json")).unwrap();
         let parsed: Value = serde_json::from_str(&content).unwrap();
-        let stop = parsed
-            .get("hooks")
-            .and_then(|v| v.get("Stop"))
-            .and_then(|v| v.as_array())
-            .unwrap();
+        let stop = parsed["hooks"]["Stop"].as_array().unwrap();
         assert_eq!(stop.len(), 1);
-        let cmd = stop[0]
-            .get("hooks")
-            .and_then(|v| v.as_array())
-            .and_then(|a| a.first())
-            .and_then(|h| h.get("command"))
-            .and_then(|c| c.as_str())
-            .unwrap();
-        assert_eq!(cmd, "pm claude hooks stop");
+        assert_eq!(
+            stop[0]["hooks"][0]["command"].as_str().unwrap(),
+            "pm harness hooks stop"
+        );
+        let ss = parsed["hooks"]["SessionStart"].as_array().unwrap();
+        assert_eq!(ss.len(), 1);
+        assert_eq!(
+            ss[0]["hooks"][0]["command"].as_str().unwrap(),
+            "pm harness hooks session-start"
+        );
+        assert!(is_installed(&root).unwrap());
+    }
+
+    #[test]
+    fn foreign_msg_wait_hook_is_not_pm_owned() {
+        // The two-generations-old `pm msg wait` shape is no longer claimed:
+        // a user's own hook wrapping it is left alone and not counted.
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        let claude_dir = paths::main_worktree(&root).join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        let existing = json!({
+            "hooks": {
+                "Stop": [{ "hooks": [
+                    { "type": "command", "command": "pm msg wait && notify" }
+                ]}]
+            }
+        });
+        std::fs::write(
+            claude_dir.join("settings.json"),
+            serde_json::to_string_pretty(&existing).unwrap(),
+        )
+        .unwrap();
+        assert!(!is_installed(&root).unwrap());
+
+        install(&root).unwrap();
+        let content = std::fs::read_to_string(claude_dir.join("settings.json")).unwrap();
+        let parsed: Value = serde_json::from_str(&content).unwrap();
+        let stop = parsed["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 2);
+        assert_eq!(
+            stop[0]["hooks"][0]["command"].as_str().unwrap(),
+            "pm msg wait && notify"
+        );
     }
 
     #[test]
@@ -599,8 +625,8 @@ mod tests {
     }
 
     #[test]
-    fn stop_hook_command_is_pm_hooks_stop() {
-        assert_eq!(stop_hook_command(), "pm claude hooks stop");
+    fn stop_hook_command_is_pm_harness_hooks_stop() {
+        assert_eq!(stop_hook_command(), "pm harness hooks stop");
     }
 
     #[test]

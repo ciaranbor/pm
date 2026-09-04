@@ -35,8 +35,11 @@ pm register ~/code/myapp --name myapp                      # adopt an existing r
 ```
 
 Each gives you a project root with the repo in `main/`, a `.pm/` state
-directory, and bundled hooks/skills/agents/baseline installed into
-`main/.claude/`. Then `cd <root>/main` and create a feature:
+directory, and bundled skills/agents/baseline installed into the canonical
+`main/.agents/` store and projected into each harness's own layout
+(`main/.claude/` for Claude Code, plus its hooks). Both `.agents/` and the
+projected `.claude/{agents,skills}` are generated — gitignore them in your
+repo. Then `cd <root>/main` and create a feature:
 
 ```sh
 pm feat new login                                          # bare feature, no agents
@@ -81,8 +84,11 @@ run migrations, reopen an editor, etc.; remove a script to disable it.
 
 Two decoupled layers:
 
-- **Agent definitions** (`main/.claude/agents/<name>.md`) describe an agent's
-  *job* — what it does, how it evaluates work. They carry no routing.
+- **Agent definitions** (`main/.agents/agents/<name>.md`, or
+  `~/.agents/agents/` for all projects) describe an agent's *job* — what it
+  does, how it evaluates work. They carry no routing. pm projects them into
+  each harness's own dir (`main/.claude/agents/` for Claude Code) on
+  `init`/`upgrade`; only the `.agents/` copy counts as a definition.
 - **Workflows** (`<project>/.pm/workflows/<name>/`) define the per-feature
   *topology* — who hands off to whom, who reports to the user.
 
@@ -99,10 +105,12 @@ Bundled agents:
 | **reviewer** | Diffs the branch against base, evaluates quality/correctness, sends feedback |
 | **researcher** | Read-only; explores the problem space and sends a refined brief to the implementer |
 
-The definition name `claude` is **reserved**: it always means a
-definition-less vanilla Claude session (no `--agent` flag), even if a
-`claude.md` definition file exists. The `solo` workflow's team is exactly
-this name.
+The definition name `default` is **reserved**: it always means a
+definition-less vanilla agent session (no definition passed to the
+harness), even if a `default.md` definition file exists. `claude` is a
+permanent alias for it — `solo` workflows installed by earlier releases name
+`claude` and keep working unchanged. The bundled `solo` workflow's team is
+exactly this name.
 
 Bundled workflows:
 
@@ -128,12 +136,12 @@ a relay: it spins up features and steps back, re-engaging only to triage a
 feature's `summary.md` on cleanup. Intra-feature handoffs (reviewer ↔
 implementer, researcher → implementer) are what use messaging.
 
-Agent defs carry no `tools:` allowlist — spawned via `claude --agent`, each
-inherits all Claude Code tools (including `Skill`). Real guardrails belong in
-the permissions layer (see below), not a per-agent tool list.
+Agent defs carry no `tools:` allowlist — each inherits the harness's full
+tool set (including skills). Real guardrails belong in the permissions layer
+(see below), not a per-agent tool list.
 
 Manage agents with `pm agent spawn|list|stop|restart|delete|fork`. `spawn
-<name> --agent <def>` decouples the display/messaging identity from the claude
+<name> --agent <def>` decouples the display/messaging identity from the agent
 definition, so you can run several agents off one definition (e.g.
 `frontend-dev` and `backend-dev` both `--agent implementer`). `fork` starts a
 new agent from a copy of another's history. See `pm agent --help`.
@@ -145,23 +153,29 @@ Settings live in `<project>/.pm/config.toml`, or `~/.config/pm/config.toml`
 beats global per key; `""` masks the tier below, unset means no flag is passed.
 
 ```toml
-[agents.permissions]         # claude --permission-mode
+[agents.permissions]         # harness's own mode string, passed through unvalidated
 implementer = "acceptEdits"
 
-[agents.models]              # claude --model; alias or full id, unvalidated
+[agents.models]              # alias or full id, passed to the harness unvalidated
 reviewer = "opus"
 
 [agents.harness]             # agent CLI; only "claude-code" (the default) today
 implementer = "claude-code"
 ```
 
-Any other `[agents.harness]` value is an error at spawn — pm never falls back
-silently. `pm agent list` shows each agent's harness; a stored session is only
-resumed on the harness that produced it.
+Permission modes and model ids are in the terms of the agent's harness
+(`--permission-mode` / `--model` values for Claude Code) and reach it
+unvalidated, so a typo surfaces in the agent's tmux window rather than at
+spawn.
 
-`pm agent spawn`, `pm feat new`, and `pm feat adopt` take `--edit` and
-`--model <id>` as spawn-time overrides that beat both tiers; on `feat new`/
-`feat adopt` they apply to every agent the workflow spawns. Neither is
+Any other `[agents.harness]` value is an error at spawn — pm never falls back
+silently. `pm harness list` shows what pm can spawn and `pm agent list` each
+agent's harness; a stored session is only resumed on the harness that
+produced it.
+
+`pm agent spawn`, `pm feat new`, and `pm feat adopt` take `--permission <mode>`
+and `--model <id>` as spawn-time overrides that beat both tiers; on `feat
+new`/`feat adopt` they apply to every agent the workflow spawns. Neither is
 remembered — a restart, fork, or heal goes back to config.
 
 Keys are the `--agent` definition, not the display name: an agent spawned as
@@ -181,9 +195,10 @@ message.
 Exception: if a background task or session cron is still running and no
 messages are queued, the hook lets the turn end so the work isn't stalled.
 
-Reinstall with `pm claude hooks install` (idempotent, append-only); `pm doctor
---fix` restores a missing one. The handlers answer to both `pm harness hooks
-stop|session-start` (canonical) and `pm claude hooks stop|session-start`.
+Reinstall with `pm harness hooks install` (idempotent, append-only); `pm
+doctor --fix` restores a missing one. The installed commands are `pm harness
+hooks stop|session-start`; entries written by earlier releases as `pm claude
+hooks …` are still recognised and rewritten in place on upgrade.
 
 ### Messaging
 
@@ -239,9 +254,10 @@ mannered flourish), the comment/docs and test doctrine, the environment/CWD
 conventions, the messaging heredoc form, the `pm workflow show` reminder,
 surfacing out-of-scope problems, what "the user" means — live in a single
 bundled `pm-baseline.md` rather than being repeated per agent.
-`pm init`/`pm upgrade` install it to `main/.claude/pm-baseline.md`, and
-every agent pm spawns (including `main`) is launched with
-`claude --append-system-prompt-file <that path>`.
+`pm init`/`pm upgrade` install it to `main/.agents/pm-baseline.md` (removing
+the pre-canonical copy under `main/.claude/`), and every agent pm spawns
+(including `main`) has it appended to its system prompt
+(`--append-system-prompt-file` on Claude Code).
 
 ### Notice board
 
@@ -294,8 +310,12 @@ These round out the tool; each has its full flag reference under `--help`:
   doctor`'s checks and warns about unfixable drift.
 - `pm status` / `pm doctor` — project dashboard; audit and auto-fix drift
   between pm state and git/tmux/GitHub reality.
-- `pm claude` — manage and transfer Claude Code settings, session data, and
-  bundled assets across worktrees and machines.
+- `pm harness` — the agent harness: `hooks`, bundled `skills`/`agents`
+  (installed to `.agents/`, projected per harness), per-feature `settings`,
+  and `migrate|export|import` of session data across worktrees and machines
+  (`--harness`, default `claude-code`); `list` the supported harnesses and
+  `probe` the installed binary. `pm claude …` remains as a hidden alias for
+  one release.
 - `pm upgrade` / `pm self-update` — update bundled assets and the binary.
 - `pm completions <shell>` — generate shell completion scripts.
 - `pm list` — list registered projects.
@@ -316,4 +336,4 @@ Tests spawn real tmux sessions. `cargo test` runs are capped at 4 threads via
 stale test servers: `for s in /tmp/tmux-$(id -u)/pm-test-*; do tmux -L
 $(basename "$s") kill-server 2>/dev/null; rm -f "$s"; done`.
 
-See `CLAUDE.md` for architecture and development guidelines.
+See `AGENTS.md` for architecture and development guidelines.

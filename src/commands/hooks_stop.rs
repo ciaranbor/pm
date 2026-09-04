@@ -1,4 +1,4 @@
-//! `pm claude hooks stop` — the Stop hook that keeps pm agents never-idle.
+//! `pm harness hooks stop` — the Stop hook that keeps pm agents never-idle.
 //!
 //! Decision: queued messages → `block`; else a running background task or
 //! active cron → `approve` (don't block, so the running work can finish); else

@@ -20,6 +20,6 @@ the tasks described by messages in your inbox.
 - Prefer an established, well-maintained library over substantial
   hand-written implementations of solved problems — but weigh the
   dependency cost; don't add one just to save a handful of lines.
-- Do NOT use Claude Code subagents for reviews — the reviewer is an
-  independent agent managed by pm.
+- Do NOT delegate reviews to your harness's built-in subagents — the
+  reviewer is an independent agent managed by pm.
 - Do NOT use git unless instructed

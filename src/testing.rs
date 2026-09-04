@@ -386,9 +386,7 @@ impl TestServer {
         };
         state.save(&features_dir, feature_name).unwrap();
 
-        // Seed Claude settings from main
-        crate::commands::claude_settings::seed_feature_claude(&project_path, &worktree_path)
-            .unwrap();
+        crate::commands::seed::seed_feature_assets(&project_path, &worktree_path).unwrap();
 
         (project_path, project_name)
     }

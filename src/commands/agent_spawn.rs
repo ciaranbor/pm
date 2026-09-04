@@ -10,10 +10,10 @@ use crate::state::project::{
 use crate::state::workflow;
 use crate::tmux;
 
-/// Pre-spawn check that the claude agent definition resolves to a real file,
-/// so a typo'd or nonexistent `--agent <def>` fails loudly instead of printing
-/// "Spawned …" over a tmux window whose `claude --agent` errors out
-/// immediately — the spawn is fire-and-forget, so that failure is invisible.
+/// Pre-spawn check that the agent definition resolves to a real file, so a
+/// typo'd or nonexistent `--agent <def>` fails loudly instead of printing
+/// "Spawned …" over a tmux window whose harness errors out immediately — the
+/// spawn is fire-and-forget, so that failure is invisible.
 ///
 /// The `_with_home` split exists so resolution can be unit-tested against an
 /// explicit home rather than the process's `$HOME`.
@@ -26,24 +26,22 @@ fn validate_definition_resolves_with_home(
     definition: &str,
     home: Option<&Path>,
 ) -> Result<()> {
-    // The reserved vanilla name spawns without `--agent` — no file to check.
-    if definition == workflow::VANILLA_AGENT {
+    // The reserved vanilla name spawns with no definition — no file to check.
+    if workflow::is_vanilla(definition) {
         return Ok(());
     }
     if workflow::definition_exists(project_root, definition, home) {
         return Ok(());
     }
-    let (main_def, global_def) = workflow::definition_paths(project_root, definition, home);
     Err(PmError::AgentDefinitionMissing {
         agent: definition.to_string(),
-        main_def,
-        global_def,
+        searched: workflow::definition_paths(project_root, definition, home),
     })
 }
 
-/// The claude agent definition a spawn keys on — for `--agent` and for the
-/// per-agent settings lookup alike. The explicit override wins; otherwise the
-/// display name doubles as the definition (back-compat).
+/// The agent definition a spawn keys on — for the harness's definition flag
+/// and for the per-agent settings lookup alike. The explicit override wins;
+/// otherwise the display name doubles as the definition (back-compat).
 fn effective_definition<'a>(
     agent_definition: Option<&'a str>,
     agent_name: Option<&'a str>,
@@ -51,19 +49,20 @@ fn effective_definition<'a>(
     agent_definition.or(agent_name)
 }
 
-/// Spawn-time CLI overrides (`--edit`, `--model`). Resolved on top of config
-/// for this spawn only — never stored on the registry entry, so a restart,
-/// fork, or heal goes back to config.
+/// Spawn-time CLI overrides (`--permission`, `--model`), both in the
+/// harness's own terms. Resolved on top of config for this spawn only —
+/// never stored on the registry entry, so a restart, fork, or heal goes
+/// back to config.
 #[derive(Default, Clone, Copy)]
 pub struct SpawnOverrides<'a> {
-    pub edit: bool,
+    pub permission: Option<&'a str>,
     pub model: Option<&'a str>,
 }
 
 /// The settings a spawn actually launches with: config resolved for this
 /// agent's definition, with the CLI overrides applied on top. A `None`
-/// definition (a plain, unregistered claude session) takes no config at
-/// all, but the overrides still apply.
+/// definition (a plain, unregistered session) takes no config at all, but
+/// the overrides still apply.
 fn spawn_settings(
     overrides: SpawnOverrides<'_>,
     definition: Option<&str>,
@@ -74,8 +73,8 @@ fn spawn_settings(
         .map(|def| resolve_agent_settings(project, global, def))
         .transpose()?
         .unwrap_or_default();
-    if overrides.edit {
-        settings.permission_mode = Some("acceptEdits".to_string());
+    if let Some(mode) = overrides.permission {
+        settings.permission_mode = Some(mode.to_string());
     }
     if let Some(id) = overrides.model {
         settings.model = Some(id.to_string());
@@ -102,35 +101,35 @@ fn window_command(agent_name: Option<&str>, cmd: &str) -> String {
     }
 }
 
-/// The value that reaches `claude --agent`: the effective definition, except
-/// the reserved vanilla name, which launches a definition-less session even
-/// if a `claude.md` definition file happens to exist.
-fn claude_agent_flag(effective_definition: Option<&str>) -> Option<&str> {
-    effective_definition.filter(|d| *d != workflow::VANILLA_AGENT)
+/// The definition that reaches the harness: the effective definition, except
+/// the reserved vanilla name (any alias), which launches a definition-less
+/// session even if a matching definition file happens to exist.
+fn definition_flag(effective_definition: Option<&str>) -> Option<&str> {
+    effective_definition.filter(|d| !workflow::is_vanilla(d))
 }
 
-/// Parameters for spawning a Claude session in a tmux window.
-pub struct SpawnClaudeParams<'a> {
+/// Parameters for spawning an agent session in a tmux window.
+pub struct SpawnParams<'a> {
     pub project_root: &'a Path,
     pub feature: &'a str,
     /// Display name for the agent. Used as the tmux window name, the
     /// `PM_AGENT_NAME` env var (so `pm msg` calls auto-identify), and the
-    /// registry key. `None` produces a plain `claude` session with no
-    /// `--agent` flag and no registry entry.
+    /// registry key. `None` produces a plain session with no definition
+    /// and no registry entry.
     pub agent_name: Option<&'a str>,
-    /// Claude agent definition name to pass to `claude --agent`. When `None`
-    /// and `agent_name` is `Some(x)`, defaults to `x` (back-compat: display
-    /// name doubles as definition name). When `Some(def)` with `agent_name
-    /// = Some(name)`, you get a "named agent": registry key / window /
-    /// `PM_AGENT_NAME` are all `name`, but Claude is launched with
-    /// `--agent def`. Ignored when `agent_name` is `None`.
+    /// Agent definition to launch. When `None` and `agent_name` is
+    /// `Some(x)`, defaults to `x` (back-compat: display name doubles as
+    /// definition name). When `Some(def)` with `agent_name = Some(name)`,
+    /// you get a "named agent": registry key / window / `PM_AGENT_NAME` are
+    /// all `name`, but the harness launches definition `def`. Ignored when
+    /// `agent_name` is `None`.
     pub agent_definition: Option<&'a str>,
     pub prompt: Option<&'a str>,
     pub overrides: SpawnOverrides<'a>,
     pub resume_session: Option<&'a str>,
-    /// When `true` and `resume_session` is `Some`, passes `--fork-session`
-    /// to Claude so the resumed conversation gets a fresh session id and
-    /// the original is left untouched. Used by `pm agent fork`.
+    /// When `true` and `resume_session` is `Some`, the resumed conversation
+    /// gets a fresh session id and the original is left untouched. Used by
+    /// `pm agent fork`.
     pub fork_session: bool,
     /// When `Some(target)`, the existing window at that target is renamed and
     /// reused instead of creating a new one. Used during `feat new --context`
@@ -139,27 +138,27 @@ pub struct SpawnClaudeParams<'a> {
     pub tmux_server: Option<&'a str>,
 }
 
-/// Spawn a claude session in a tmux window. Works for both named agents
-/// and plain claude sessions (when `agent_name` is None).
-/// If `resume_session` is provided, passes `--resume` to claude.
-/// Sets `PM_AGENT_NAME` in the spawned shell so the agent auto-identifies
-/// in `pm msg send/check/read` without `--as-agent`.
+/// Spawn an agent session in a tmux window. Works for both named agents
+/// and plain sessions (when `agent_name` is None). If `resume_session` is
+/// provided, the harness resumes it. Sets `PM_AGENT_NAME` in the spawned
+/// shell so the agent auto-identifies in `pm msg send/check/read` without
+/// `--as-agent`.
 ///
 /// # Safety
 /// Callers must validate `agent_name` via `validate_name()` before calling —
 /// the name is interpolated into a shell command.
 ///
 /// Returns the tmux window target.
-pub fn spawn_claude_session(params: &SpawnClaudeParams<'_>) -> Result<String> {
+pub fn spawn_session(params: &SpawnParams<'_>) -> Result<String> {
     let pm_dir = paths::pm_dir(params.project_root);
     let config = ProjectConfig::load(&pm_dir)?;
-    spawn_claude_session_with_config(params, &config, &GlobalConfig::load_or_default())
+    spawn_session_with_config(params, &config, &GlobalConfig::load_or_default())
 }
 
 /// Inner implementation that accepts pre-loaded configs to avoid redundant
 /// loads (`spawn_team` calls this once per agent).
-fn spawn_claude_session_with_config(
-    params: &SpawnClaudeParams<'_>,
+fn spawn_session_with_config(
+    params: &SpawnParams<'_>,
     config: &ProjectConfig,
     global: &GlobalConfig,
 ) -> Result<String> {
@@ -168,9 +167,9 @@ fn spawn_claude_session_with_config(
 
     let effective_definition = effective_definition(params.agent_definition, params.agent_name);
 
-    // Settings are configured per claude agent definition, not per display
-    // name, and are re-resolved from config on every spawn — never stored on
-    // the registry entry — so restart/fork/heal pick up config edits.
+    // Settings are configured per agent definition, not per display name,
+    // and are re-resolved from config on every spawn — never stored on the
+    // registry entry — so restart/fork/heal pick up config edits.
     let settings = spawn_settings(
         params.overrides,
         effective_definition,
@@ -179,18 +178,18 @@ fn spawn_claude_session_with_config(
     )?;
 
     // Named agents need a sentinel prompt when none is explicitly provided:
-    // Claude with no positional prompt just waits for user input and never
+    // a harness with no positional prompt just waits for user input and never
     // completes a turn, so the Stop hook never fires. A trivial "continue"
     // prompt causes an immediate first turn, letting the blocking Stop hook
-    // wait for messages. Plain (unnamed) claude sessions don't need this
-    // since they're interactive by design.
+    // wait for messages. Plain (unnamed) sessions don't need this since
+    // they're interactive by design.
     let effective_prompt = match (params.prompt, params.agent_name) {
         (Some(p), _) => Some(p),
         (None, Some(_)) => Some("Stand by."),
         (None, None) => None,
     };
 
-    let window_name = params.agent_name.unwrap_or("claude");
+    let window_name = params.agent_name.unwrap_or(workflow::VANILLA_AGENT);
 
     // Compose the single `--append-system-prompt-file`: shared baseline plus
     // any non-empty notice boards. When no board has content this returns the
@@ -198,7 +197,7 @@ fn spawn_claude_session_with_config(
     // older projects keep spawning exactly as before.
     let append_file = crate::notice::compose_spawn_prompt(params.project_root, window_name)?;
     let cmd = settings.harness.build_cmd(&SpawnSpec {
-        definition: claude_agent_flag(effective_definition),
+        definition: definition_flag(effective_definition),
         append_prompt_file: append_file.as_deref(),
         prompt: effective_prompt,
         resume_session: params.resume_session,
@@ -260,9 +259,9 @@ pub enum SpawnOutcome {
     /// Agent's window already existed; no spawn was performed.
     AlreadyActive,
     /// New tmux window was created (fresh agent or registry entry without
-    /// a Claude session id).
+    /// a session id).
     Spawned,
-    /// Existing registry entry resumed via `claude --resume <id>`.
+    /// Existing registry entry's session resumed.
     Resumed,
 }
 
@@ -283,14 +282,14 @@ impl SpawnOutcome {
 /// looked up from config.
 ///
 /// `agent_name` is the display name (registry key, tmux window, `PM_AGENT_NAME`).
-/// `agent_definition` is the claude agent definition passed to `--agent`. When
+/// `agent_definition` is the agent definition the harness launches. When
 /// `None`:
 ///   - If a registry entry exists, its stored `agent_definition` is used (so
-///     respawn / resume preserves the original `--agent` flag).
+///     respawn / resume preserves the original definition).
 ///   - Otherwise, the display name doubles as the definition (back-compat).
 ///
-/// When `Some(def)`, `def` is passed to `claude --agent` and stored on the
-/// registry entry for future respawns.
+/// When `Some(def)`, `def` is launched and stored on the registry entry for
+/// future respawns.
 ///
 /// When `context` is provided, it is always enqueued as a message in the
 /// agent's inbox rather than passed as a positional prompt. The Stop hook
@@ -326,16 +325,16 @@ pub fn agent_spawn(
 
     // Resolve the effective definition. Caller-provided override wins;
     // otherwise inherit any stored definition from a prior registration so
-    // respawn/resume keeps using the same `--agent` flag the agent was
-    // originally launched with. Falls back to None (which makes
-    // spawn_claude_session_with_config use `agent_name` as definition).
+    // respawn/resume keeps using the definition the agent was originally
+    // launched with. Falls back to None (which makes
+    // spawn_session_with_config use `agent_name` as definition).
     let resolved_definition: Option<String> = agent_definition.map(String::from).or_else(|| {
         registry
             .get(agent_name)
             .and_then(|e| e.agent_definition.clone())
     });
 
-    // The definition that will actually reach `claude --agent` (the resolved
+    // The definition that will actually be launched (the resolved
     // definition, else the display name). Validation guards the spawn, not
     // message delivery — so it runs only on the (re)spawn paths below, never on
     // the already-active no-op.
@@ -354,10 +353,10 @@ pub fn agent_spawn(
         Ok(())
     };
 
-    // Use _with_config helper to avoid reloading config in spawn_claude_session
+    // Use _with_config helper to avoid reloading config in spawn_session
     let spawn = |prompt: Option<&str>, resume: Option<&str>| {
-        spawn_claude_session_with_config(
-            &SpawnClaudeParams {
+        spawn_session_with_config(
+            &SpawnParams {
                 project_root,
                 feature,
                 agent_name: Some(agent_name),
@@ -507,11 +506,11 @@ mod tests {
     use chrono::Utc;
     use tempfile::tempdir;
 
-    /// Write stub `.claude/agents/<name>.md` files in the main worktree so
+    /// Write stub `.agents/agents/<name>.md` files in the main worktree so
     /// `agent_spawn`'s pre-spawn definition check resolves in tests that
     /// build a project by hand (rather than via `agents_install_project`).
     fn write_agent_defs(project_root: &Path, names: &[&str]) {
-        let dir = paths::main_worktree(project_root).join(".claude/agents");
+        let dir = paths::main_worktree(project_root).join(".agents/agents");
         std::fs::create_dir_all(&dir).unwrap();
         for name in names {
             std::fs::write(dir.join(format!("{name}.md")), "# stub").unwrap();
@@ -1205,7 +1204,7 @@ mod tests {
 
         setup_active_agent(&server, dir.path(), &session_name, &feature, "reviewer");
 
-        let def = paths::main_worktree(dir.path()).join(".claude/agents/reviewer.md");
+        let def = paths::main_worktree(dir.path()).join(".agents/agents/reviewer.md");
         std::fs::remove_file(&def).unwrap();
 
         let (outcome, msg) = agent_spawn(
@@ -1269,38 +1268,69 @@ mod tests {
             PmError::AgentDefinitionMissing { .. }
         ));
 
-        let global = home.path().join(".claude/agents");
+        let global = home.path().join(".agents/agents");
         std::fs::create_dir_all(&global).unwrap();
         std::fs::write(global.join("impl.md"), "# stub").unwrap();
         validate_definition_resolves_with_home(project_root, "impl", Some(home.path())).unwrap();
 
-        let main = paths::main_worktree(project_root).join(".claude/agents");
+        let main = paths::main_worktree(project_root).join(".agents/agents");
         std::fs::create_dir_all(&main).unwrap();
         std::fs::write(main.join("other.md"), "# stub").unwrap();
         validate_definition_resolves_with_home(project_root, "other", None).unwrap();
     }
 
     #[test]
-    fn vanilla_agent_name_gets_no_agent_flag() {
-        // The reserved `claude` name is filtered out of the `--agent` flag;
-        // any other definition passes through.
-        assert_eq!(claude_agent_flag(Some("claude")), None);
-        assert_eq!(claude_agent_flag(Some("reviewer")), Some("reviewer"));
-        let cmd = Harness::ClaudeCode.build_cmd(&SpawnSpec {
-            definition: claude_agent_flag(Some("claude")),
-            ..Default::default()
-        });
-        assert!(
-            !cmd.contains("--agent"),
-            "vanilla spawn must not pass --agent, got: {cmd}"
-        );
+    fn vanilla_agent_aliases_get_no_definition_flag() {
+        // Both spellings of the reserved name are filtered out of the
+        // definition flag; any other definition passes through.
+        for alias in ["default", "claude"] {
+            assert_eq!(definition_flag(Some(alias)), None, "{alias}");
+            let cmd = Harness::ClaudeCode.build_cmd(&SpawnSpec {
+                definition: definition_flag(Some(alias)),
+                ..Default::default()
+            });
+            assert!(
+                !cmd.contains("--agent"),
+                "vanilla spawn must not pass --agent, got: {cmd}"
+            );
+        }
+        assert_eq!(definition_flag(Some("reviewer")), Some("reviewer"));
     }
 
     #[test]
-    fn vanilla_agent_name_skips_definition_validation() {
-        // `pm agent spawn claude` must work with no claude.md anywhere.
+    fn vanilla_agent_aliases_skip_definition_validation() {
+        // `pm agent spawn default` / `… claude` must work with no def anywhere.
         let tmp = tempfile::tempdir().unwrap();
-        validate_definition_resolves_with_home(tmp.path(), "claude", None).unwrap();
+        for alias in ["default", "claude"] {
+            validate_definition_resolves_with_home(tmp.path(), alias, None).unwrap();
+        }
+    }
+
+    #[test]
+    fn spawning_either_vanilla_alias_launches_a_plain_session() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+
+        for alias in ["default", "claude"] {
+            let (outcome, _) = agent_spawn(
+                dir.path(),
+                &feature,
+                alias,
+                None,
+                None,
+                SpawnOverrides::default(),
+                server.name(),
+            )
+            .unwrap();
+            assert_eq!(outcome, SpawnOutcome::Spawned);
+            let target = tmux::find_window(server.name(), &session_name, alias)
+                .unwrap()
+                .expect("window");
+            server.wait_for_pane_text(&target, &format!("PM_AGENT_NAME={alias} && claude"));
+            let text = tmux::capture_pane(server.name(), &target).unwrap();
+            assert!(!text.contains("--agent"), "{alias}: {text}");
+        }
     }
 
     #[test]
@@ -1313,7 +1343,7 @@ mod tests {
     }
 
     #[test]
-    fn spawn_settings_edit_beats_configured_permission_mode() {
+    fn spawn_settings_permission_flag_beats_configured_permission_mode() {
         let project = AgentsConfig {
             permissions: [("implementer".to_string(), "plan".to_string())]
                 .into_iter()
@@ -1325,7 +1355,7 @@ mod tests {
         };
         let settings = spawn_settings(
             SpawnOverrides {
-                edit: true,
+                permission: Some("acceptEdits"),
                 model: None,
             },
             Some("implementer"),
@@ -1334,7 +1364,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(settings.permission_mode.as_deref(), Some("acceptEdits"));
-        // --edit is about permissions only; the configured model still applies.
+        // --permission is about permissions only; the configured model still applies.
         assert_eq!(settings.model.as_deref(), Some("opus"));
     }
 
@@ -1351,7 +1381,7 @@ mod tests {
         };
         let settings = spawn_settings(
             SpawnOverrides {
-                edit: false,
+                permission: None,
                 model: Some("haiku"),
             },
             Some("implementer"),
@@ -1389,7 +1419,7 @@ mod tests {
         // is still honoured.
         let settings = spawn_settings(
             SpawnOverrides {
-                edit: false,
+                permission: None,
                 model: Some("haiku"),
             },
             None,

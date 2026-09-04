@@ -383,11 +383,11 @@ mod tests {
             name_override: Some("eval"),
             context: None,
             from: None,
-            edit: false,
+            permission: None,
             model: None,
             workflow: None,
             tmux_server: server.name(),
-            claude_base: None,
+            session_store: None,
         })
         .unwrap();
 

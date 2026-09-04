@@ -4,13 +4,14 @@ use crate::error::Result;
 use crate::state::paths;
 use crate::state::project::ProjectEntry;
 
-use super::claude_settings;
 use super::hooks_install;
+use super::seed;
 use super::skills;
 
-/// Upgrade a single project: reinstall hooks, skills, and agents to main,
-/// then re-seed `.claude/` settings into each active feature worktree.
-/// Returns a human-readable summary line.
+/// Upgrade a single project: reinstall hooks, skills, agents, and the
+/// baseline into main's canonical store, project them for each harness in
+/// use, then re-seed every active feature worktree. Returns a
+/// human-readable summary line.
 pub fn upgrade_project(project_root: &Path) -> Result<String> {
     let mut updated = Vec::new();
 
@@ -39,6 +40,13 @@ pub fn upgrade_project(project_root: &Path) -> Result<String> {
     // Install the shared operating baseline (appended to every spawned agent)
     let _ = skills::baseline_install_project(project_root, None)?;
     updated.push("baseline");
+    if skills::remove_legacy_baseline(project_root)? {
+        updated.push("legacy baseline removed");
+    }
+
+    // Harnesses read from their own dirs, not the canonical store.
+    let _ = skills::project_assets(project_root, false)?;
+    updated.push("projections");
 
     // Install bundled workflows to .pm/workflows/. User edits to existing
     // files are preserved by `install_in`'s "already up to date / outdated"
@@ -54,7 +62,7 @@ pub fn upgrade_project(project_root: &Path) -> Result<String> {
     for (name, _state) in &features {
         let feature_worktree = project_root.join(name);
         if feature_worktree.is_dir() {
-            claude_settings::seed_feature_claude(project_root, &feature_worktree)?;
+            seed::seed_feature_assets(project_root, &feature_worktree)?;
             feature_count += 1;
         }
     }
@@ -116,6 +124,12 @@ pub fn upgrade_project_dry_run(project_root: &Path) -> Result<Vec<String>> {
         project_root,
         None,
     )?);
+    if skills::legacy_baseline_superseded(project_root) {
+        actions.push("Would remove legacy main/.claude/pm-baseline.md".to_string());
+    }
+
+    // Projections (compares the canonical store as it is on disk now)
+    actions.extend(skills::project_assets(project_root, true)?);
 
     // Workflows
     actions.extend(skills::workflows_install_project_dry_run(
@@ -123,7 +137,7 @@ pub fn upgrade_project_dry_run(project_root: &Path) -> Result<Vec<String>> {
         None,
     )?);
 
-    // Feature worktrees: only report each feature whose `.claude/` differs
+    // Feature worktrees: only report each feature whose seeded assets differ
     let features_dir = paths::features_dir(project_root);
     let features = crate::state::feature::FeatureState::list(&features_dir)?;
     for (name, _state) in &features {
@@ -131,8 +145,8 @@ pub fn upgrade_project_dry_run(project_root: &Path) -> Result<Vec<String>> {
         if !feature_worktree.is_dir() {
             continue;
         }
-        if claude_settings::seed_feature_claude_would_change(project_root, &feature_worktree)? {
-            actions.push(format!("Would re-seed .claude/ in feature '{name}'"));
+        if seed::seed_feature_assets_would_change(project_root, &feature_worktree)? {
+            actions.push(format!("Would re-seed harness assets in feature '{name}'"));
         }
     }
 
@@ -330,26 +344,117 @@ last_active = "2026-01-01T00:00:00Z"
         // Verify hooks installed
         assert!(hooks_install::is_installed(&root).unwrap());
 
-        // Verify skills installed
-        let skill_path = paths::main_worktree(&root)
-            .join(".claude")
-            .join("skills")
-            .join("pm")
-            .join("SKILL.md");
-        assert!(skill_path.exists());
-
-        // Verify agents installed
-        let agent_path = paths::main_worktree(&root)
-            .join(".claude")
-            .join("agents")
-            .join("reviewer.md");
-        assert!(agent_path.exists());
+        // Skills and agents land in the canonical store and its projection
+        let main = paths::main_worktree(&root);
+        for store in [".agents", ".claude"] {
+            assert!(
+                main.join(store).join("skills/pm/SKILL.md").exists(),
+                "{store}"
+            );
+            assert!(
+                main.join(store).join("agents/reviewer.md").exists(),
+                "{store}"
+            );
+        }
+        assert!(main.join(".agents/pm-baseline.md").exists());
+        assert!(!main.join(".claude/pm-baseline.md").exists());
 
         // Verify workflows installed
         let workflow_path = paths::workflows_dir(&root)
             .join("implement-and-review")
             .join("workflow.md");
         assert!(workflow_path.exists());
+    }
+
+    #[test]
+    fn upgrade_migrates_claude_only_layout() {
+        // A project last touched by a release before the canonical store:
+        // everything under `.claude/`, old-generation hook commands, a
+        // Preserve-policy solo naming `claude`, live registry/feature/message
+        // state. One upgrade must leave it working with no manual steps.
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        let main = paths::main_worktree(&root);
+        let claude = main.join(".claude");
+        fs::create_dir_all(claude.join("agents")).unwrap();
+        fs::create_dir_all(claude.join("skills/pm")).unwrap();
+        fs::write(claude.join("agents/reviewer.md"), "stale bundled def").unwrap();
+        fs::write(claude.join("agents/custom.md"), "user's own def").unwrap();
+        fs::write(claude.join("skills/pm/SKILL.md"), "stale skill").unwrap();
+        fs::write(claude.join("pm-baseline.md"), "stale baseline").unwrap();
+        fs::write(
+            claude.join("settings.json"),
+            r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"pm claude hooks stop","timeout":86400}]}],"SessionStart":[{"hooks":[{"type":"command","command":"pm claude hooks session-start"}]}]}}"#,
+        )
+        .unwrap();
+        let solo = paths::workflows_dir(&root).join("solo");
+        fs::create_dir_all(&solo).unwrap();
+        let solo_cfg =
+            "description = \"old\"\nagents = [\"claude\"]\nbrief_agents = [\"claude\"]\n";
+        fs::write(solo.join("config.toml"), solo_cfg).unwrap();
+        fs::write(solo.join("workflow.md"), "# solo\n## claude\n").unwrap();
+        let agents_toml = root.join(".pm/agents/main.toml");
+        fs::create_dir_all(agents_toml.parent().unwrap()).unwrap();
+        let registry =
+            "[agents.orchestrator]\nagent_type = \"agent\"\nsession_id = \"abc\"\nactive = true\n";
+        fs::write(&agents_toml, registry).unwrap();
+        write_feature_toml(&root, "login");
+        fs::create_dir_all(root.join("login")).unwrap();
+        let feature_toml = fs::read(root.join(".pm/features/login.toml")).unwrap();
+        let msg = root.join(".pm/messages/login/implementer/from-user/001.md");
+        fs::create_dir_all(msg.parent().unwrap()).unwrap();
+        fs::write(&msg, "hello").unwrap();
+
+        let summary = upgrade_project(&root).unwrap();
+        assert!(summary.contains("legacy baseline"), "{summary}");
+
+        let bundled_reviewer = include_str!("../../agents/reviewer.md");
+        for store in [".agents", ".claude"] {
+            assert_eq!(
+                fs::read_to_string(main.join(store).join("agents/reviewer.md")).unwrap(),
+                bundled_reviewer,
+                "{store}"
+            );
+        }
+        assert_eq!(
+            fs::read_to_string(claude.join("agents/custom.md")).unwrap(),
+            "user's own def"
+        );
+        assert!(main.join(".agents/pm-baseline.md").exists());
+        assert!(!claude.join("pm-baseline.md").exists());
+
+        let settings: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(claude.join("settings.json")).unwrap())
+                .unwrap();
+        for (event, cmd) in [
+            ("Stop", "pm harness hooks stop"),
+            ("SessionStart", "pm harness hooks session-start"),
+        ] {
+            let entries = settings["hooks"][event].as_array().unwrap();
+            assert_eq!(entries.len(), 1, "{event}");
+            assert_eq!(entries[0]["hooks"][0]["command"].as_str().unwrap(), cmd);
+        }
+
+        assert_eq!(
+            fs::read_to_string(solo.join("config.toml")).unwrap(),
+            solo_cfg
+        );
+        assert_eq!(fs::read_to_string(&agents_toml).unwrap(), registry);
+        assert_eq!(
+            fs::read(root.join(".pm/features/login.toml")).unwrap(),
+            feature_toml
+        );
+        assert_eq!(fs::read_to_string(&msg).unwrap(), "hello");
+
+        // The feature picked up both stores and the settings.
+        let feat = root.join("login");
+        assert!(feat.join(".agents/agents/reviewer.md").exists());
+        assert!(feat.join(".claude/agents/reviewer.md").exists());
+        assert!(feat.join(".claude/settings.json").exists());
+        assert!(!feat.join(".agents/pm-baseline.md").exists());
+
+        let actions = upgrade_project_dry_run(&root).unwrap();
+        assert!(actions.is_empty(), "second dry-run not empty: {actions:?}");
     }
 
     #[test]
@@ -405,6 +510,8 @@ last_active = "2026-01-01T00:00:00Z"
         // settings.json is only copied if it exists in main, which it does
         // after hooks install
         assert!(feat_settings.exists());
+        assert!(root.join("my-feat/.agents/agents/reviewer.md").exists());
+        assert!(root.join("my-feat/.claude/agents/reviewer.md").exists());
     }
 
     #[test]
@@ -519,12 +626,15 @@ last_active = "2026-01-01T00:00:00Z"
             !root.join(".pm").join(".git").exists(),
             "state repo should not be initialised"
         );
-        let skill_path = paths::main_worktree(&root)
-            .join(".claude")
-            .join("skills")
-            .join("pm")
-            .join("SKILL.md");
-        assert!(!skill_path.exists(), "skill should not be installed");
+        let main = paths::main_worktree(&root);
+        assert!(
+            !main.join(".agents").exists(),
+            ".agents/ should not be created"
+        );
+        assert!(
+            !main.join(".claude").exists(),
+            ".claude/ should not be created"
+        );
     }
 
     #[test]
@@ -550,18 +660,27 @@ last_active = "2026-01-01T00:00:00Z"
         upgrade_project(&root).unwrap();
 
         // Corrupt an installed skill so it's no longer up to date
-        let skill_path = paths::main_worktree(&root)
-            .join(".claude")
-            .join("skills")
-            .join("pm")
-            .join("SKILL.md");
-        fs::write(&skill_path, "stale content").unwrap();
+        let main = paths::main_worktree(&root);
+        fs::write(main.join(".agents/skills/pm/SKILL.md"), "stale content").unwrap();
 
         let actions = upgrade_project_dry_run(&root).unwrap();
         let joined = actions.join("\n");
         assert!(
             joined.contains("Would update Skill 'pm'"),
             "expected update line, got: {joined}"
+        );
+
+        // A drifted projection is reported too, without being written.
+        fs::write(main.join(".claude/skills/pm/SKILL.md"), "drifted").unwrap();
+        let actions = upgrade_project_dry_run(&root).unwrap();
+        let joined = actions.join("\n");
+        assert!(
+            joined.contains("Would project"),
+            "expected projection line, got: {joined}"
+        );
+        assert_eq!(
+            fs::read_to_string(main.join(".claude/skills/pm/SKILL.md")).unwrap(),
+            "drifted"
         );
     }
 
@@ -582,7 +701,7 @@ last_active = "2026-01-01T00:00:00Z"
         let actions = upgrade_project_dry_run(&root).unwrap();
         let joined = actions.join("\n");
         assert!(
-            joined.contains("Would re-seed .claude/ in feature 'stale-feat'"),
+            joined.contains("Would re-seed harness assets in feature 'stale-feat'"),
             "expected feature line, got: {joined}"
         );
     }

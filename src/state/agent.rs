@@ -30,12 +30,12 @@ pub struct AgentEntry {
     /// decide which agents to respawn after a restart.
     #[serde(default = "default_active")]
     pub active: bool,
-    /// The claude agent definition this entry was spawned with, i.e. the
-    /// value passed to `claude --agent`. When `None`, the registry key is
-    /// used as the definition (back-compat: `pm agent spawn implementer`
-    /// stores `None` here and uses `implementer` as the definition).
-    /// When `Some(def)`, the entry was spawned via `pm agent spawn <key>
-    /// --agent <def>` and `def` is used for respawn / restart / fork.
+    /// The agent definition this entry was spawned with (what the harness
+    /// launches). When `None`, the registry key is used as the definition
+    /// (back-compat: `pm agent spawn implementer` stores `None` here and
+    /// uses `implementer` as the definition). When `Some(def)`, the entry
+    /// was spawned via `pm agent spawn <key> --agent <def>` and `def` is
+    /// used for respawn / restart / fork.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_definition: Option<String>,
     /// The harness this entry was last spawned on. Stored — unlike the other
@@ -47,7 +47,7 @@ pub struct AgentEntry {
 }
 
 impl AgentEntry {
-    /// Returns the definition name to pass to `claude --agent`. Falls back
+    /// Returns the definition name the harness launches. Falls back
     /// to `key` (the registry key / display name) when no explicit
     /// definition was recorded — preserving back-compat for entries that
     /// were registered before alias support landed.

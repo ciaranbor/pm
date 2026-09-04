@@ -3,7 +3,7 @@ use std::path::Path;
 use chrono::Utc;
 
 use crate::commands::feat_common::{self, InitStateFields};
-use crate::commands::{agent_spawn, claude_settings, feat_new};
+use crate::commands::{agent_spawn, feat_new, seed};
 use crate::error::{PmError, Result};
 use crate::gh::PrDetails;
 use crate::hooks;
@@ -95,10 +95,10 @@ fn setup_review(
         // Step 2: Create git worktree
         git::add_worktree(&main_worktree, &worktree_path, feature_name)?;
 
-        // Step 2.5: Seed Claude Code settings from main worktree
-        claude_settings::seed_feature_claude(project_root, &worktree_path)?;
+        // Step 2.5: Seed harness assets and settings from main worktree
+        seed::seed_feature_assets(project_root, &worktree_path)?;
 
-        // Step 2.6: this path spawns via `spawn_claude_session` directly,
+        // Step 2.6: this path spawns via `spawn_session` directly,
         // bypassing `agent_spawn`'s validation chokepoint — validate here too,
         // before queuing context so a failure leaves no dead-letter.
         agent_spawn::validate_definition_resolves(project_root, "reviewer")?;
@@ -116,7 +116,7 @@ fn setup_review(
         // blocks until the PR-review context queued above is available.
         // Reuse window :0 so the reviewer takes over the default shell.
         let reuse_target = format!("{session_name}:0");
-        agent_spawn::spawn_claude_session(&agent_spawn::SpawnClaudeParams {
+        agent_spawn::spawn_session(&agent_spawn::SpawnParams {
             project_root,
             feature: feature_name,
             agent_name: Some("reviewer"),
@@ -124,7 +124,7 @@ fn setup_review(
             // alias support needed here.
             agent_definition: None,
             prompt: None,
-            // Reviews are read-only; no --edit, and the model comes from config.
+            // Reviews are read-only; no --permission, and the model comes from config.
             overrides: agent_spawn::SpawnOverrides::default(),
             resume_session: None,
             fork_session: false,

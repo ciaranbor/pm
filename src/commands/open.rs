@@ -40,7 +40,8 @@ fn is_open_recoverable(kind: IssueKind) -> bool {
         | IssueKind::PrMerged
         | IssueKind::PrClosed
         | IssueKind::PrCheckFailed
-        | IssueKind::HooksNotInstalled => false,
+        | IssueKind::HooksNotInstalled
+        | IssueKind::AssetNotProjected => false,
     }
 }
 
@@ -807,7 +808,7 @@ mod tests {
 
         // Install its definition so pre-spawn validation resolves, then
         // register an agent in the main scope.
-        let orch_def = paths::main_worktree(&project_path).join(".claude/agents/orchestrator.md");
+        let orch_def = paths::main_worktree(&project_path).join(".agents/agents/orchestrator.md");
         std::fs::create_dir_all(orch_def.parent().unwrap()).unwrap();
         std::fs::write(&orch_def, "# stub").unwrap();
         let agents_dir = paths::agents_dir(&project_path);

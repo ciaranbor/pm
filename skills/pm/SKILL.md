@@ -13,8 +13,8 @@ This user manages projects with `pm`, a terminal-based project manager built aro
 pm feat new <name> --context "description of the task"
 ```
 
-This creates a git branch, worktree, and tmux session. A Claude Code
-session is automatically started in the feature's tmux session and the
+This creates a git branch, worktree, and tmux session. An agent session
+is automatically started in the feature's tmux session and the
 `--context` text is delivered to the default agent as its first message.
 
 ## Choosing a workflow
@@ -30,15 +30,15 @@ Options:
 
 - `--context <text-or-file>` — initial message delivered to the default agent's inbox (required for agent-driven features)
 - `--base <branch>` — stack on another branch instead of main
-- `--name <override>` — override the derived feature name (useful for branches with slashes)
-- `--no-edit` — disable auto-accept edits in the spawned Claude session
+- `--feature-name <override>` — override the derived feature name (useful for branches with slashes)
+- `--permission <mode>` — permission mode for every spawned agent, in the harness's own terms (e.g. `acceptEdits`)
 
 ## Adopting an existing branch
 
 ```sh
 pm feat adopt <branch> --context "description"
-pm feat adopt <branch> --from /old/worktree/path  # migrate Claude sessions
-pm feat adopt ciaran/feature --name clean-name
+pm feat adopt <branch> --from /old/worktree/path  # migrate harness sessions
+pm feat adopt ciaran/feature --feature-name clean-name
 ```
 
 Creates a feature from a branch that already exists. Does not create a new branch.

@@ -2,6 +2,8 @@ use clap::{ArgGroup, Parser, Subcommand};
 use clap_complete::Shell;
 use std::path::PathBuf;
 
+use pm::harness::Harness;
+
 #[derive(Parser)]
 #[command(
     name = "pm",
@@ -46,12 +48,12 @@ pub enum Commands {
     /// Inter-agent messaging (send, read, next, list, wait)
     #[command(subcommand)]
     Msg(MsgCommands),
-    /// Claude Code settings, skills, and session management
-    #[command(subcommand)]
-    Claude(ClaudeCommands),
-    /// Agent harness integration (hook handlers)
+    /// Agent harness integration: hooks, bundled skills/agents, settings, sessions
     #[command(subcommand)]
     Harness(HarnessCommands),
+    /// Hidden alias for `pm harness` kept for one release
+    #[command(subcommand, hide = true)]
+    Claude(HarnessCommands),
     /// Close all tmux sessions for the current project (counterpart to `pm open`)
     Close {
         /// Close every registered project's sessions, not just the current one
@@ -191,26 +193,34 @@ pub enum WorkflowCommands {
 }
 
 #[derive(Subcommand)]
-pub enum ClaudeCommands {
-    /// Per-feature Claude Code settings
+pub enum HarnessCommands {
+    /// Lifecycle hooks managed by pm (install, plus the handlers the harness calls)
     #[command(subcommand)]
-    Settings(ClaudeSettingsCommands),
-    /// Manage bundled Claude Code skills
+    Hooks(HarnessHooksCommands),
+    /// Manage bundled skills (canonical `.agents/skills/`, projected per harness)
     #[command(subcommand)]
-    Skills(ClaudeSkillsCommands),
-    /// Manage bundled Claude Code agent definitions
+    Skills(HarnessSkillsCommands),
+    /// Manage bundled agent definitions (canonical `.agents/agents/`, projected per harness)
     #[command(subcommand)]
-    Agents(ClaudeAgentsCommands),
-    /// Claude Code lifecycle hooks managed by pm
-    #[command(subcommand)]
-    Hooks(HooksCommands),
-    /// Migrate Claude Code sessions from an old project path to the current directory
+    Agents(HarnessAgentsCommands),
+    /// Per-feature harness settings files
+    Settings {
+        /// Harness whose settings to manage
+        #[arg(long, global = true, default_value = "claude-code")]
+        harness: Harness,
+        #[command(subcommand)]
+        command: HarnessSettingsCommands,
+    },
+    /// Migrate harness sessions from an old project path to the current directory
     Migrate {
         /// The old absolute path where the project previously lived
         #[arg(long)]
         from: PathBuf,
+        /// Harness whose sessions to migrate
+        #[arg(long, default_value = "claude-code")]
+        harness: Harness,
     },
-    /// Export Claude Code sessions for transfer to another machine
+    /// Export harness sessions for transfer to another machine
     Export {
         /// Export sessions for all registered projects (default: current project only)
         #[arg(long)]
@@ -218,16 +228,30 @@ pub enum ClaudeCommands {
         /// Output tarball path (default: pm-claude-<name>.tar.gz in current directory)
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Harness whose sessions to export
+        #[arg(long, default_value = "claude-code")]
+        harness: Harness,
     },
-    /// Import Claude Code sessions from an exported tarball
+    /// Import harness sessions from an exported tarball
     Import {
-        /// Path to the tarball created by `pm claude export`
+        /// Path to the tarball created by `pm harness export`
         tarball: PathBuf,
+        /// Harness whose sessions to import
+        #[arg(long, default_value = "claude-code")]
+        harness: Harness,
+    },
+    /// List the harnesses pm can spawn
+    List,
+    /// Check the installed harness binary for the capabilities pm relies on
+    Probe {
+        /// Harness to probe
+        #[arg(long, default_value = "claude-code")]
+        harness: Harness,
     },
 }
 
 #[derive(Subcommand)]
-pub enum ClaudeAgentsCommands {
+pub enum HarnessAgentsCommands {
     /// List available bundled agent definitions and their install status
     List,
     /// Uninstall bundled agent definitions (project-level by default, or --global)
@@ -237,33 +261,33 @@ pub enum ClaudeAgentsCommands {
         /// Uninstall all bundled agent definitions
         #[arg(long)]
         all: bool,
-        /// Uninstall from ~/.claude/agents/ instead of the project
+        /// Uninstall from ~/.agents/agents/ (and its projections) instead of the project
         #[arg(long)]
         global: bool,
     },
-    /// Install bundled agent definitions (project-level by default, or --global for ~/.claude/agents/)
+    /// Install bundled agent definitions (project-level by default, or --global for ~/.agents/agents/)
     Install {
         /// Agent name (installs all if omitted)
         name: Option<String>,
-        /// Install to ~/.claude/agents/ instead of the project
+        /// Install to ~/.agents/agents/ (projected into ~/.claude/agents/) instead of the project
         #[arg(long)]
         global: bool,
     },
 }
 
 #[derive(Subcommand)]
-pub enum ClaudeSettingsCommands {
-    /// List Claude Code settings (main or feature)
+pub enum HarnessSettingsCommands {
+    /// List settings files (main or feature)
     List {
         /// Feature name (detected from CWD if omitted; works from main worktree too)
         name: Option<String>,
     },
-    /// Push feature's .claude/ settings to main
+    /// Push feature's settings to main
     Push {
         /// Feature name (detected from CWD if omitted)
         name: Option<String>,
     },
-    /// Pull main's .claude/ settings into a feature
+    /// Pull main's settings into a feature
     Pull {
         /// Feature name (detected from CWD if omitted)
         name: Option<String>,
@@ -284,14 +308,14 @@ pub enum ClaudeSettingsCommands {
 }
 
 #[derive(Subcommand)]
-pub enum ClaudeSkillsCommands {
+pub enum HarnessSkillsCommands {
     /// List available bundled skills and their install status
     List,
-    /// Install bundled skills (project-level by default, or --global for ~/.claude/skills/)
+    /// Install bundled skills (project-level by default, or --global for ~/.agents/skills/)
     Install {
         /// Skill name (installs all if omitted)
         name: Option<String>,
-        /// Install to ~/.claude/skills/ instead of the project
+        /// Install to ~/.agents/skills/ (projected into ~/.claude/skills/) instead of the project
         #[arg(long)]
         global: bool,
     },
@@ -302,11 +326,11 @@ pub enum ClaudeSkillsCommands {
         /// Uninstall all bundled skills
         #[arg(long)]
         all: bool,
-        /// Uninstall from ~/.claude/skills/ instead of the project
+        /// Uninstall from ~/.agents/skills/ (and its projections) instead of the project
         #[arg(long)]
         global: bool,
     },
-    /// Pull skills from main into a feature's .claude/skills/
+    /// Pull skills from main into a feature (canonical store and harness projections)
     Pull {
         /// Feature name (detected from CWD if omitted)
         name: Option<String>,
@@ -314,24 +338,9 @@ pub enum ClaudeSkillsCommands {
 }
 
 #[derive(Subcommand)]
-pub enum HooksCommands {
+pub enum HarnessHooksCommands {
     /// Install pm hooks (Stop + SessionStart) into main/.claude/settings.json
     Install,
-    /// Stop hook handler — called by Claude Code on every Stop event (not for direct use)
-    Stop,
-    /// SessionStart hook handler — called by Claude Code on session start (not for direct use)
-    SessionStart,
-}
-
-#[derive(Subcommand)]
-pub enum HarnessCommands {
-    /// Harness lifecycle hook handlers (canonical names for `pm claude hooks stop|session-start`)
-    #[command(subcommand)]
-    Hooks(HarnessHooksCommands),
-}
-
-#[derive(Subcommand)]
-pub enum HarnessHooksCommands {
     /// Stop hook handler — called by the harness on every Stop event (not for direct use)
     Stop,
     /// SessionStart hook handler — called by the harness on session start (not for direct use)
@@ -345,21 +354,23 @@ pub enum AgentCommands {
         /// Agent name (omit to respawn all previously active agents).
         /// Used as the registry key, tmux window name, and `PM_AGENT_NAME`.
         name: Option<String>,
-        /// Claude agent definition to launch (passed to `claude --agent`).
-        /// Defaults to `name` when omitted. Use this to spawn multiple
-        /// agents from the same definition under different display names,
-        /// e.g. `pm agent spawn frontend-dev --agent implementer`.
+        /// Agent definition to launch (`main/.agents/agents/<name>.md` or
+        /// `~/.agents/agents/`). Defaults to `name` when omitted. Use this to
+        /// spawn multiple agents from the same definition under different
+        /// display names, e.g. `pm agent spawn frontend-dev --agent implementer`.
         #[arg(long = "agent", value_name = "DEFINITION")]
         agent_definition: Option<String>,
         /// Initial context for the agent. Use `-` to read the body from stdin
         /// (e.g. `--context - <<'EOF' … EOF`).
         #[arg(long)]
         context: Option<String>,
-        /// Enable acceptEdits permission mode
-        #[arg(long)]
-        edit: bool,
-        /// Model for the spawned Claude session (alias or full id, passed
-        /// unvalidated to `claude --model`); beats `[agents.models]` config
+        /// Permission mode for the spawned session, in the harness's own
+        /// terms (e.g. `acceptEdits`; passed unvalidated); beats
+        /// `[agents.permissions]` config
+        #[arg(long, value_name = "MODE")]
+        permission: Option<String>,
+        /// Model for the spawned session (alias or full id, passed
+        /// unvalidated to the harness); beats `[agents.models]` config
         #[arg(long, value_name = "ID")]
         model: Option<String>,
     },
@@ -496,11 +507,13 @@ pub enum FeatCommands {
         /// Base branch to stack on (defaults to current branch from CWD)
         #[arg(long)]
         base: Option<String>,
-        /// Force --permission-mode acceptEdits on the spawned Claude session
-        #[arg(long)]
-        edit: bool,
+        /// Permission mode for every agent the workflow spawns, in the
+        /// harness's own terms (e.g. `acceptEdits`; passed unvalidated);
+        /// beats `[agents.permissions]`
+        #[arg(long, value_name = "MODE")]
+        permission: Option<String>,
         /// Model for every agent the workflow spawns (alias or full id,
-        /// passed unvalidated to `claude --model`); beats `[agents.models]`
+        /// passed unvalidated to the harness); beats `[agents.models]`
         #[arg(long, value_name = "ID")]
         model: Option<String>,
         /// Workflow name (defaults to 'solo' when --context is given).
@@ -519,14 +532,16 @@ pub enum FeatCommands {
         /// body from stdin, e.g. `--context - <<'EOF' … EOF`)
         #[arg(long)]
         context: Option<String>,
-        /// Migrate Claude Code sessions from this old path
+        /// Migrate harness sessions from this old path
         #[arg(long)]
         from: Option<PathBuf>,
-        /// Force --permission-mode acceptEdits on the spawned Claude session
-        #[arg(long)]
-        edit: bool,
+        /// Permission mode for every agent the workflow spawns, in the
+        /// harness's own terms (e.g. `acceptEdits`; passed unvalidated);
+        /// beats `[agents.permissions]`
+        #[arg(long, value_name = "MODE")]
+        permission: Option<String>,
         /// Model for every agent the workflow spawns (alias or full id,
-        /// passed unvalidated to `claude --model`); beats `[agents.models]`
+        /// passed unvalidated to the harness); beats `[agents.models]`
         #[arg(long, value_name = "ID")]
         model: Option<String>,
         /// Workflow name (defaults to 'solo' when --context is given).

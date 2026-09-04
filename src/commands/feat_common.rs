@@ -118,7 +118,7 @@ pub fn enqueue_initial_context(
 /// Subsequent agents are spawned into new windows.
 ///
 /// The pm Stop hook is responsible for delivering any queued messages on
-/// each agent's empty first turn — `spawn_claude_session` itself passes no
+/// each agent's empty first turn — `spawn_session` itself passes no
 /// initial prompt.
 pub fn spawn_team(
     project_root: &Path,
@@ -132,13 +132,13 @@ pub fn spawn_team(
         // Only the first agent reuses the default shell window. All
         // subsequent agents get their own fresh window.
         let reuse = if idx == 0 { reuse_window } else { None };
-        agent_spawn::spawn_claude_session(&agent_spawn::SpawnClaudeParams {
+        agent_spawn::spawn_session(&agent_spawn::SpawnParams {
             project_root,
             feature: feature_name,
             agent_name: Some(agent.as_str()),
             // Workflow team spawn has no concept of aliasing — the
             // workflow's `agents` entry doubles as the definition.
-            // `spawn_claude_session` falls back to `agent_name` when this
+            // `spawn_session` falls back to `agent_name` when this
             // is `None`.
             agent_definition: None,
             prompt: None,
