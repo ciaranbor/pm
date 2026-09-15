@@ -9,8 +9,12 @@ use crate::tmux;
 
 pub(super) const CONFIG_DIR: &str = ".claude";
 
-/// Claude Code reads settings per worktree, so a feature needs main's copy.
+/// Claude Code reads the project settings (permissions etc.) per worktree,
+/// so a feature needs main's copy.
 pub(super) const SEEDED_FILES: &[&str] = &["settings.json", "settings.local.json"];
+
+/// Applies to every session on the machine; pm's hooks live here.
+pub(super) const USER_SETTINGS_FILE: &str = "settings.json";
 
 pub(super) const PROJECTED_DIRS: &[&str] = &["agents", "skills"];
 

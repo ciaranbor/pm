@@ -124,8 +124,9 @@ pub fn register(
     };
     config.save(&pm_dir)?;
 
-    // Bootstrap default hook scripts
+    // Bootstrap default hook scripts and the harness's user-level hooks
     hooks::bootstrap(&wrapper_dir)?;
+    super::hooks_install::install(Some(&wrapper_dir))?;
 
     // Register in global registry
     // Try to read the origin URL from the main worktree

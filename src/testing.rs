@@ -386,7 +386,7 @@ impl TestServer {
         crate::hooks::bootstrap(&project_path).unwrap();
         crate::commands::docs::bootstrap(&project_path).unwrap();
         crate::commands::state_cmd::init(&project_path).unwrap();
-        crate::commands::hooks_install::install(&project_path).unwrap();
+        crate::commands::hooks_install::install(Some(&project_path)).unwrap();
         crate::commands::skills::install_global().unwrap();
         crate::commands::skills::write_migration_marker(&project_path).unwrap();
 

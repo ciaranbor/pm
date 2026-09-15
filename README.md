@@ -34,12 +34,12 @@ pm init ~/projects/myapp --git https://github.com/org/myapp.git  # clone
 pm register ~/code/myapp --name myapp                      # adopt an existing repo (--move to restructure in place)
 ```
 
-Each gives you a project root with the repo in `main/`, a `.pm/` state
-directory, and the harness's hooks in `main/.claude/`. Bundled skills, agent
-definitions, workflows, and the baseline install once per machine into the
-global tier (see [Asset tiers](#asset-tiers)), not per project. Anything you
-add per project under `main/.agents/` is projected into `main/.claude/`,
-which is generated — gitignore it. Then `cd <root>/main` and create a feature:
+Each gives you a project root with the repo in `main/` and a `.pm/` state
+directory. Bundled skills, agent definitions, workflows, and the baseline
+install once per machine (see [Asset tiers](#asset-tiers)), not per project.
+Anything you add per project under `main/.agents/` is projected into
+`main/.claude/`, which is generated — gitignore it. Then `cd <root>/main`
+and create a feature:
 
 ```sh
 pm feat new login                                          # bare feature, no agents
@@ -87,9 +87,8 @@ Two decoupled layers:
 - **Agent definitions** (`~/.agents/agents/<name>.md`, or
   `main/.agents/agents/` for one project) describe an agent's *job* — what it
   does, how it evaluates work. They carry no routing. pm projects them into
-  each harness's own dir (`~/.claude/agents/`, `main/.claude/agents/` for
-  Claude Code) on `init`/`upgrade`; only the `.agents/` copy counts as a
-  definition.
+  each harness's own dir on `init`/`upgrade`; only the `.agents/` copy counts
+  as a definition.
 - **Workflows** (`<pm config dir>/workflows/<name>/`, or
   `<project>/.pm/workflows/` for one project) define the per-feature
   *topology* — who hands off to whom, who reports to the user.
@@ -189,22 +188,27 @@ Keys are the `--agent` definition, not the display name: an agent spawned as
 
 ### Agents as never-idle message processors
 
-`pm init` installs a Claude Code **Stop hook** into
-`main/.claude/settings.json`. After every turn it blocks until the agent has
-unread messages (calling `pm msg wait` internally), then returns a `block`
-decision that Claude Code delivers as a continuation prompt. The agent reads
-the message, processes it, the turn ends, and the hook fires again. This turns
-every pm-managed agent into a never-idle processor: `--context` at feature
-creation just queues the first message, delivered exactly like any later peer
-message.
+`pm init` and `pm upgrade` install a Claude Code **Stop hook** into the
+harness's user-level settings (`~/.claude/settings.json` for Claude Code),
+once per machine, so every project on it is covered. After every turn it
+blocks until the agent has unread messages (calling `pm msg wait`
+internally), then returns a `block` decision that Claude Code delivers as a
+continuation prompt. The agent reads the message, processes it, the turn
+ends, and the hook fires again. This turns every pm-managed agent into a
+never-idle processor: `--context` at feature creation just queues the first
+message, delivered exactly like any later peer message.
+
+The hook applies to every Claude Code session on the machine, so its command
+is guarded on `PM_AGENT_NAME`: a session pm didn't spawn exits it
+immediately, without needing `pm` on its `PATH`.
 
 Exception: if a background task or session cron is still running and no
 messages are queued, the hook lets the turn end so the work isn't stalled.
 
-Reinstall with `pm harness hooks install` (idempotent, append-only); `pm
-doctor --fix` restores a missing one. The installed commands are `pm harness
-hooks stop|session-start`; entries written by earlier releases as `pm claude
-hooks …` are still recognised and rewritten in place on upgrade.
+Reinstall with `pm harness hooks install` (idempotent, works outside a
+project); `pm doctor --fix` restores a missing one. Earlier releases wrote
+the hooks per project; `pm upgrade` moves them out of the project files, and
+`pm doctor` flags any left behind.
 
 ### Messaging
 
@@ -357,11 +361,11 @@ These round out the tool; each has its full flag reference under `--help`:
 - `pm status` / `pm doctor` — project dashboard; audit and auto-fix drift
   between pm state and git/tmux/GitHub reality.
 - `pm harness` — the agent harness: `hooks`, bundled `skills`/`agents`
-  (installed to `~/.agents/`, projected per harness), per-feature `settings`,
-  and `migrate|export|import` of session data across worktrees and machines
-  (`--harness`, default `claude-code`); `list` the supported harnesses and
-  `probe` the installed binary. `pm claude …` remains as a hidden alias for
-  one release.
+  (installed to `~/.agents/`, projected per harness), per-feature `settings`
+  (permissions etc.), and `migrate|export|import` of session data across
+  worktrees and machines (`--harness`, default `claude-code`); `list` the
+  supported harnesses and `probe` the installed binary. `pm claude …`
+  remains as a hidden alias for one release.
 - `pm upgrade` / `pm self-update` — update bundled assets and the binary.
 - `pm completions <shell>` — generate shell completion scripts.
 - `pm list` — list registered projects.

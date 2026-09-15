@@ -63,8 +63,9 @@ follows is only what the tree *doesn't* tell you.
   resume/fork, permission mode, model) into the command line — permission
   mode and model id are in the harness's own terms and pass through
   unvalidated, deliberately (no pm vocabulary to maintain per harness);
-  `config_dir`/`seeded_files`/`projected_dirs` describe the harness's own
-  layout; `project_assets` is the projection; and
+  `config_dir`/`seeded_files`/`projected_dirs`/`user_settings_file` describe
+  the harness's own layout (`seeded_files` is the project's own settings and
+  permissions, never hooks); `project_assets` is the projection; and
   `supports_prompt_file` is the baseline capability probe. Harness-specific
   knowledge lives only in `harness/<name>.rs`; `agent_spawn` and the registry
   stay neutral. The user-facing surface is `pm harness
@@ -72,9 +73,9 @@ follows is only what the tree *doesn't* tell you.
   CC-only `settings|migrate|export|import` take `--harness` (default
   `claude-code`; `claude_settings/migrate/export/import` keep their names
   because they *are* CC-specific) — with `pm claude …` as a hidden alias for
-  one release. Installed hooks write `pm harness hooks stop|session-start`;
-  `hooks_install` recognises the previous `pm claude hooks …` spelling as
-  pm-owned and rewrites it in place.
+  one release. `hooks_install` writes into `user_settings_file`; it
+  recognises the previous `pm claude hooks …` spelling and the unguarded `pm
+  harness hooks …` as pm-owned.
 
 The sections below document the design decisions you can't recover by reading
 the tree — these are the invariants to preserve.
@@ -83,8 +84,13 @@ the tree — these are the invariants to preserve.
 
 pm agents are never-idle message processors, not one-shot scripts. This
 is implemented with a Claude Code **Stop hook** (`pm harness hooks stop`,
-installed by `pm harness hooks install` into `main/.claude/settings.json`). The
-hook blocks until the agent's inbox has unread messages, then returns:
+installed by `pm harness hooks install` into the user-level
+`~/.claude/settings.json`, once per machine). The installed command is
+`[ -n "$PM_AGENT_NAME" ] || exit 0; pm harness hooks stop`: a user-level
+hook fires in every Claude Code session on the machine, and the guard keeps
+it inert in non-pm sessions without resolving `pm` (`&&` would turn a false
+test into an exit-1 hook error). The hook blocks until the agent's inbox has
+unread messages, then returns:
 
 ```json
 {"decision": "block", "reason": "You have new messages. Run `pm msg read` …"}
@@ -95,9 +101,20 @@ message, processes it, the turn ends, and the hook fires again — blocking
 until the next message arrives.
 
 Exception: if the Stop event reports a running background task or active
-cron and no messages are queued, the hook approves instead of blocking so
-the running work isn't stalled. Recurring crons stay active between fires,
-so an agent with one is message-delivered only at fire boundaries.
+cron and no messages are queued, the hook returns `{}` (the documented
+"allow" — any `decision` other than `block` fails Stop's schema) instead of
+blocking so the running work isn't stalled. Recurring crons stay active
+between fires, so an agent with one is message-delivered only at fire
+boundaries.
+
+Earlier releases wrote the hooks into `main/.claude/settings.json`, seeded
+into each feature. `hooks_install` upserts the user-level file *first* and
+then strips the project files: Claude Code merges both files and runs a
+duplicated handler once, so no turn is ever hookless during the move. There
+is no migration marker — a pm-owned entry in a project file is never the
+user's, so recognise-and-remove is always correct and runs on every install
+(`pm upgrade`, `pm doctor --fix`); `pm doctor` reports leftovers as
+`StaleProjectHooks`.
 
 Initial context delivery differs by path:
 
