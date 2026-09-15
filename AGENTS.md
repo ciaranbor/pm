@@ -253,11 +253,10 @@ baseline (positive "report to the user") and `main.md` (which owns
 
 ### Feature summary lifecycle
 
-Each feature maintains a `summary.md` in its worktree root as a living
-document, kept brief and high signal-to-noise — just what the
-orchestrator needs to triage, plus succinct out-of-scope bugs/ideas.
+Each feature leaves a `summary.md` in its worktree root for the orchestrator
+who triages it after the branch is gone.
 Each workflow's `workflow.md` names the single agent who owns
-`summary.md`, stated in that role's section; format/brevity guidance is
+`summary.md`, stated in that role's section; content guidance is
 single-sourced in the `pm workflow show` command, which appends it to that
 output (not duplicated in the agent defs, the `workflow.md` files, or the
 `pm-workflow` skill body). On `feat delete`, `summary.md` is collected to
