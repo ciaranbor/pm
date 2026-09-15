@@ -192,7 +192,7 @@ mod tests {
         seed_feature_assets(&project, &feature_wt).unwrap();
         assert!(!seed_feature_assets_would_change(&project, &feature_wt).unwrap());
 
-        std::fs::write(main.join(".claude/settings.json"), "{\"changed\":1}").unwrap();
+        write(&main.join(".claude"), "settings.json", "{\"changed\":1}");
         assert!(seed_feature_assets_would_change(&project, &feature_wt).unwrap());
     }
 

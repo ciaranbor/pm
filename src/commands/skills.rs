@@ -773,7 +773,7 @@ pub fn stale_bundled_copies(project_root: &Path) -> Result<Vec<PathBuf>> {
 }
 
 /// Main plus every feature worktree that exists on disk.
-fn worktrees_on_disk(project_root: &Path) -> Result<Vec<PathBuf>> {
+pub(crate) fn worktrees_on_disk(project_root: &Path) -> Result<Vec<PathBuf>> {
     let mut out = vec![paths::main_worktree(project_root)];
     let features_dir = paths::features_dir(project_root);
     if features_dir.is_dir() {

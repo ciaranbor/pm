@@ -16,8 +16,8 @@ use super::skills;
 pub fn upgrade_project(project_root: &Path) -> Result<Vec<String>> {
     let mut updated: Vec<String> = Vec::new();
 
-    // Install hooks
-    let _ = hooks_install::install(project_root)?;
+    // Install hooks at the user level, moving any out of the project files
+    let _ = hooks_install::install(Some(project_root))?;
     updated.push("hooks".to_string());
 
     // Bootstrap information store and state repo (both idempotent)
@@ -86,9 +86,7 @@ pub fn upgrade_project_dry_run(project_root: &Path) -> Result<Vec<String>> {
     let mut actions = Vec::new();
 
     // Hooks
-    if let Some(line) = hooks_install::install_dry_run(project_root)? {
-        actions.push(line);
-    }
+    actions.extend(hooks_install::install_dry_run(Some(project_root))?);
 
     // Information store (.pm/docs/) bootstrap
     for path in super::docs::bootstrap_dry_run(project_root) {
@@ -352,7 +350,7 @@ last_active = "2026-01-01T00:00:00Z"
         assert!(summary.contains("hooks"), "{summary}");
         assert!(summary.contains("docs"), "{summary}");
         assert!(summary.contains("for main"), "{summary}");
-        assert!(hooks_install::is_installed(&root).unwrap());
+        assert!(hooks_install::is_installed().unwrap());
         assert!(skills::is_migrated(&root));
 
         // Bundled assets live only in the global tier now.
@@ -390,7 +388,7 @@ last_active = "2026-01-01T00:00:00Z"
         fs::write(claude.join("pm-baseline.md"), "stale baseline").unwrap();
         fs::write(
             claude.join("settings.json"),
-            r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"pm claude hooks stop","timeout":86400}]}],"SessionStart":[{"hooks":[{"type":"command","command":"pm claude hooks session-start"}]}]}}"#,
+            r#"{"permissions":{"allow":["Read"]},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo mine"}]},{"hooks":[{"type":"command","command":"pm claude hooks stop","timeout":86400}]}],"SessionStart":[{"hooks":[{"type":"command","command":"pm claude hooks session-start"}]}]}}"#,
         )
         .unwrap();
         let solo = paths::workflows_dir(&root).join("solo");
@@ -431,6 +429,10 @@ last_active = "2026-01-01T00:00:00Z"
             dry.contains(&"Would remove .pm/workflows/solo".to_string()),
             "{dry:?}"
         );
+        assert!(
+            dry.contains(&"Would remove pm hooks from main/.claude/settings.json".to_string()),
+            "{dry:?}"
+        );
         assert!(claude.join("agents/reviewer.md").exists(), "dry-run wrote");
 
         let summary = upgrade_project(&root).unwrap().join("\n");
@@ -455,18 +457,20 @@ last_active = "2026-01-01T00:00:00Z"
         );
         assert_eq!(fs::read_to_string(&msg).unwrap(), "hello");
 
-        // Hooks were rewritten to the current command spelling.
+        // Hooks moved to the user level; the project's own settings and
+        // hooks stayed behind.
+        assert!(hooks_install::is_installed().unwrap());
         let settings: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(claude.join("settings.json")).unwrap())
                 .unwrap();
-        for (event, cmd) in [
-            ("Stop", "pm harness hooks stop"),
-            ("SessionStart", "pm harness hooks session-start"),
-        ] {
-            let entries = settings["hooks"][event].as_array().unwrap();
-            assert_eq!(entries.len(), 1, "{event}");
-            assert_eq!(entries[0]["hooks"][0]["command"].as_str().unwrap(), cmd);
-        }
+        assert_eq!(settings["permissions"]["allow"][0], "Read");
+        let stop = settings["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 1, "{settings}");
+        assert_eq!(stop[0]["hooks"][0]["command"], "echo mine");
+        assert!(
+            settings["hooks"].get("SessionStart").is_none(),
+            "{settings}"
+        );
 
         // `solo` now resolves from the global tier, and a second run is a no-op.
         assert!(crate::state::workflow::exists(&root, "solo"));
@@ -509,16 +513,28 @@ last_active = "2026-01-01T00:00:00Z"
 
         write_feature_toml(&root, "my-feat");
         fs::create_dir_all(root.join("my-feat")).unwrap();
-        // A project custom is what a feature now gets seeded with.
-        let custom = paths::main_worktree(&root).join(".agents/agents/custom.md");
+        // A project custom and main's own settings are what a feature gets
+        // seeded with.
+        let main = paths::main_worktree(&root);
+        let custom = main.join(".agents/agents/custom.md");
         fs::create_dir_all(custom.parent().unwrap()).unwrap();
         fs::write(&custom, "custom def").unwrap();
+        fs::create_dir_all(main.join(".claude")).unwrap();
+        fs::write(
+            main.join(".claude/settings.json"),
+            r#"{"permissions":{"allow":["Read"]}}"#,
+        )
+        .unwrap();
 
         let summary = upgrade_project(&root).unwrap().join("\n");
         assert!(summary.contains("1 feature"), "{summary}");
 
         let feat = root.join("my-feat");
-        assert!(feat.join(".claude/settings.json").exists());
+        let seeded: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(feat.join(".claude/settings.json")).unwrap())
+                .unwrap();
+        assert_eq!(seeded["permissions"]["allow"][0], "Read");
+        assert!(seeded.get("hooks").is_none(), "{seeded}");
         assert_eq!(
             fs::read_to_string(feat.join(".agents/agents/custom.md")).unwrap(),
             "custom def"
@@ -570,10 +586,6 @@ last_active = "2026-01-01T00:00:00Z"
         let actions = upgrade_project_dry_run(&root).unwrap();
         let joined = actions.join("\n");
         assert!(
-            joined.contains("Would install pm hooks"),
-            "missing hooks line, got: {joined}"
-        );
-        assert!(
             joined.contains("Would create"),
             "missing docs create lines, got: {joined}"
         );
@@ -616,6 +628,9 @@ last_active = "2026-01-01T00:00:00Z"
         let root = setup_project(dir.path());
 
         upgrade_project(&root).unwrap();
+        let main_claude = paths::main_worktree(&root).join(".claude");
+        fs::create_dir_all(&main_claude).unwrap();
+        fs::write(main_claude.join("settings.json"), r#"{"permissions":{}}"#).unwrap();
 
         write_feature_toml(&root, "stale-feat");
         let feat_claude = root.join("stale-feat").join(".claude");

@@ -1,8 +1,9 @@
 //! `pm harness hooks stop` — the Stop hook that keeps pm agents never-idle.
 //!
 //! Decision: queued messages → `block`; else a running background task or
-//! active cron → `approve` (don't block, so the running work can finish); else
-//! block on `agent_wait` until a message arrives.
+//! active cron → `{}` (let it stop, so the running work can finish); else
+//! block on `agent_wait` until a message arrives. `{}` is the documented
+//! "allow" for Stop: a `decision` other than `block` fails schema validation.
 
 use std::io::Read;
 use std::time::Duration;
@@ -17,7 +18,7 @@ use crate::state::paths;
 const REASON: &str = "You have new messages. Run `pm msg read` to read them.";
 
 /// Run the Stop hook. Prints the decision JSON and returns the exit code.
-/// Non-pm sessions (unresolvable agent/scope) approve, staying invisible.
+/// Non-pm sessions (unresolvable agent/scope) let the turn end, staying invisible.
 pub fn stop() -> i32 {
     match stop_inner() {
         Ok(json) => {
@@ -25,7 +26,7 @@ pub fn stop() -> i32 {
             0
         }
         Err(_) => {
-            print!("{}", approve_decision());
+            print!("{}", allow_decision());
             0
         }
     }
@@ -59,7 +60,7 @@ fn wait_and_decide(
         return Ok(block_decision());
     }
     if busy {
-        return Ok(approve_decision());
+        return Ok(allow_decision());
     }
     agent_wait::agent_wait(project_root, feature, agent, None, poll_interval)?;
     Ok(block_decision())
@@ -80,8 +81,8 @@ fn block_decision() -> String {
     json!({"decision": "block", "reason": REASON}).to_string()
 }
 
-fn approve_decision() -> String {
-    json!({"decision": "approve"}).to_string()
+fn allow_decision() -> String {
+    json!({}).to_string()
 }
 
 /// Read stdin and derive `busy`. Any read/parse failure → not busy, so the
@@ -216,9 +217,7 @@ mod tests {
         .unwrap();
         let elapsed = start.elapsed();
 
-        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(parsed["decision"], "approve");
-        assert!(parsed.get("reason").is_none());
+        assert_eq!(result, "{}");
         assert!(
             elapsed < Duration::from_secs(1),
             "busy path must return promptly, took {elapsed:?}"

@@ -219,3 +219,34 @@ fn feat_review_without_project_root_fails() {
         .failure()
         .stderr(predicate::str::contains("error"));
 }
+
+#[test]
+fn hooks_install_outside_a_project_installs_at_the_user_level() {
+    let dir = tempdir().unwrap();
+    let home = dir.path();
+    pm().env("HOME", home.to_string_lossy().as_ref())
+        .current_dir(home)
+        .args(["harness", "hooks", "install"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Installed pm hooks in"));
+    let settings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(home.join(".claude/settings.json")).unwrap())
+            .unwrap();
+    assert!(settings["hooks"]["Stop"].is_array(), "{settings}");
+    assert!(settings["hooks"]["SessionStart"].is_array(), "{settings}");
+}
+
+#[test]
+fn stop_hook_outside_a_project_lets_the_session_stop() {
+    // A machine-wide hook reaching `pm` from an agent-named session that
+    // isn't in a pm project must neither block nor error.
+    let dir = tempdir().unwrap();
+    pm().env("HOME", dir.path().to_string_lossy().as_ref())
+        .env("PM_AGENT_NAME", "x")
+        .current_dir(dir.path())
+        .args(["harness", "hooks", "stop"])
+        .assert()
+        .success()
+        .stdout("{}");
+}

@@ -94,10 +94,10 @@ pub fn init(
     super::docs::bootstrap(path)?;
     super::state_cmd::init(path)?;
 
-    // Install the pm Stop hook into main/.claude/settings.json so every
-    // agent spawned under this project runs as a never-idle message
-    // processor (see `commands::hooks_install`).
-    hooks_install::install(path)?;
+    // Install the pm hooks into the harness's user-level settings so every
+    // agent spawned on this machine runs as a never-idle message processor
+    // (see `commands::hooks_install`).
+    hooks_install::install(Some(path))?;
 
     // Bundled skills, agent definitions, workflows, and the baseline live in
     // the global tier (see `commands::skills`); a fresh project holds no
@@ -216,7 +216,9 @@ mod tests {
         assert!(!main.join(".agents").exists());
         assert!(!main.join(".claude/agents").exists());
         assert!(!main.join(".claude/skills").exists());
-        assert!(main.join(".claude/settings.json").exists());
+        // Hooks are user-level; a fresh project gets no settings file.
+        assert!(!main.join(".claude/settings.json").exists());
+        assert!(hooks_install::is_installed().unwrap());
         assert!(!paths::workflows_dir(&project_path).exists());
         assert!(skills::is_migrated(&project_path));
     }

@@ -73,6 +73,18 @@ impl Harness {
         }
     }
 
+    /// The harness's user-level settings file under `home`
+    /// (`~/.claude/settings.json` for claude-code), where pm installs its
+    /// hooks once per machine. `None` for a harness without one.
+    pub fn user_settings_file(self, home: &Path) -> Option<PathBuf> {
+        match self {
+            Harness::ClaudeCode => Some(
+                home.join(claude_code::CONFIG_DIR)
+                    .join(claude_code::USER_SETTINGS_FILE),
+            ),
+        }
+    }
+
     /// Whether this harness would resolve its *global* copy of skill `name`
     /// over a project one, so a project custom of that name never applies.
     /// Claude Code ranks personal skills above project skills.

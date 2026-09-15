@@ -39,8 +39,11 @@ pub enum IssueKind {
     PrClosed,
     /// `gh` lookup failed for a linked PR.
     PrCheckFailed,
-    /// pm Stop hook not installed in main/.claude/settings.json.
+    /// pm hooks not installed in the harness's user-level settings file.
     HooksNotInstalled,
+    /// pm hook entries an earlier release wrote into a project-level
+    /// settings file are still there.
+    StaleProjectHooks,
     /// A canonical agent definition has no projected copy for a harness in
     /// use, so validation passes but the harness can't launch it.
     AssetNotProjected,
@@ -102,7 +105,7 @@ enum FixAction {
     },
     /// Update feature status to match GH PR state.
     UpdateStatus { new_status: FeatureStatus },
-    /// Install the pm Stop hook into main/.claude/settings.json.
+    /// Install the pm hooks at the user level and strip them from project files.
     InstallStopHook,
     /// (Re)install the bundled assets into the global tier.
     InstallGlobalAssets,
@@ -178,10 +181,22 @@ pub fn diagnose(
     // Main-scope checks: stop hook installed, main tmux session present.
     let main_session = tmux::session_name(project_name, "main");
     let mut main_issues: Vec<Issue> = Vec::new();
-    if !hooks_install::is_installed(project_root)? {
+    if !hooks_install::is_installed()? {
         main_issues.push(Issue {
             kind: IssueKind::HooksNotInstalled,
-            message: "pm hooks not fully installed (run `pm harness hooks install`)".to_string(),
+            message:
+                "pm hooks not installed in ~/.claude/settings.json (run `pm harness hooks install`)"
+                    .to_string(),
+            fix: Fix::Auto(FixAction::InstallStopHook),
+        });
+    }
+    for path in hooks_install::stale_project_files(project_root)? {
+        main_issues.push(Issue {
+            kind: IssueKind::StaleProjectHooks,
+            message: format!(
+                "pm hooks still in {} (run `pm harness hooks install`)",
+                path.strip_prefix(project_root).unwrap_or(&path).display()
+            ),
             fix: Fix::Auto(FixAction::InstallStopHook),
         });
     }
@@ -764,7 +779,7 @@ fn apply_fix(
             git::add_worktree(main_repo, worktree_path, branch)?;
         }
         FixAction::InstallStopHook => {
-            hooks_install::install(project_root)?;
+            hooks_install::install(Some(project_root))?;
         }
         FixAction::InstallGlobalAssets => {
             crate::commands::skills::install_global()?;
@@ -1202,6 +1217,64 @@ mod tests {
     }
 
     // --- --fix tests ---
+
+    #[test]
+    fn fix_strips_stale_project_hooks() {
+        // A project last upgraded by a release that wrote the hooks into
+        // main/.claude/settings.json (and seeded them into the feature).
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let legacy = r#"{"permissions":{"allow":["Read"]},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"pm claude hooks stop"}]}]}}"#;
+        for wt in ["main", "login"] {
+            let claude = project_path.join(wt).join(".claude");
+            std::fs::create_dir_all(&claude).unwrap();
+            std::fs::write(claude.join("settings.json"), legacy).unwrap();
+        }
+
+        let findings = diagnose(&project_path, server.name(), false).unwrap();
+        let main = findings.iter().find(|f| f.feature() == "main").unwrap();
+        let stale: Vec<&str> = main
+            .issues()
+            .iter()
+            .filter(|i| i.kind() == IssueKind::StaleProjectHooks)
+            .map(|i| i.message())
+            .collect();
+        assert_eq!(stale.len(), 2, "{stale:?}");
+        assert!(stale[0].contains("main/.claude/settings.json"), "{stale:?}");
+        assert!(
+            stale[1].contains("login/.claude/settings.json"),
+            "{stale:?}"
+        );
+        assert!(
+            !main
+                .issues()
+                .iter()
+                .any(|i| i.kind() == IssueKind::HooksNotInstalled)
+        );
+
+        let lines = doctor(&project_path, true, server.name()).unwrap();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("fixed") && l.contains("pm hooks still in")),
+            "got: {lines:?}"
+        );
+        for wt in ["main", "login"] {
+            let settings: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(project_path.join(wt).join(".claude/settings.json"))
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(settings["permissions"]["allow"][0], "Read", "{wt}");
+            assert!(settings.get("hooks").is_none(), "{wt}: {settings}");
+        }
+        let findings = diagnose(&project_path, server.name(), false).unwrap();
+        assert!(
+            findings.iter().all(|f| f.feature() != "main"),
+            "main still has issues after fix"
+        );
+    }
 
     #[test]
     fn fix_recreates_missing_tmux_session() {

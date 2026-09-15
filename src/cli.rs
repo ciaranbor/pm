@@ -204,7 +204,7 @@ pub enum HarnessCommands {
     /// Manage bundled agent definitions (global `~/.agents/agents/`, projected per harness)
     #[command(subcommand)]
     Agents(HarnessAgentsCommands),
-    /// Per-feature harness settings files
+    /// Per-feature harness settings files (permissions etc.)
     Settings {
         /// Harness whose settings to manage
         #[arg(long, global = true, default_value = "claude-code")]
@@ -328,7 +328,7 @@ pub enum HarnessSkillsCommands {
 
 #[derive(Subcommand)]
 pub enum HarnessHooksCommands {
-    /// Install pm hooks (Stop + SessionStart) into main/.claude/settings.json
+    /// Install pm hooks (Stop + SessionStart) into ~/.claude/settings.json, moving any out of project files
     Install,
     /// Stop hook handler — called by the harness on every Stop event (not for direct use)
     Stop,

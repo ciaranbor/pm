@@ -953,8 +953,8 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
         },
         HarnessCommands::Hooks(hooks_cmd) => match hooks_cmd {
             HarnessHooksCommands::Install => {
-                let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-                let msg = commands::hooks_install::install(&project_root)?;
+                let project_root = optional_project_root()?;
+                let msg = commands::hooks_install::install(project_root.as_deref())?;
                 println!("{msg}");
                 Ok(())
             }
