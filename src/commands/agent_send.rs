@@ -112,8 +112,7 @@ pub fn agent_send(
 
     // Deliver the message first, then heal a dead window. This ensures the
     // message is durably queued in the inbox before the agent starts, so it
-    // will be picked up on first read. If the heal spawn fails, the message
-    // remains as a "dead letter" — acceptable since the user can retry.
+    // will be picked up on first read.
     let messages_dir = paths::messages_dir(project_root);
     let is_cross_scope = target_scope.is_some() && target_scope != Some(sender_scope);
     let index = messages::send_with_scope(
@@ -143,7 +142,11 @@ pub fn agent_send(
     // stored definition from the registry entry — preserving aliases. Only
     // append the spawn line when a heal actually happened, keeping the
     // common-case output byte-identical.
-    let (outcome, spawn_msg) = super::agent_spawn::agent_spawn(
+    //
+    // The message is already queued, so a heal failure (e.g. the tmux
+    // socket is unreachable from a sandbox) is not a delivery failure: warn
+    // and exit 0 rather than make the sender think the message was lost.
+    match super::agent_spawn::agent_spawn(
         project_root,
         feature,
         recipient,
@@ -151,9 +154,16 @@ pub fn agent_send(
         None,
         SpawnOverrides::default(),
         tmux_server,
-    )?;
-    if outcome.is_new_window() {
-        status = format!("{status}\n{spawn_msg}");
+    ) {
+        Ok((outcome, spawn_msg)) => {
+            if outcome.is_new_window() {
+                status = format!("{status}\n{spawn_msg}");
+            }
+        }
+        Err(e) => eprintln!(
+            "warning: message {index:03} is queued for '{recipient}@{feature}', but its tmux \
+             window could not be respawned: {e}\n  It will be read if and when that agent next runs."
+        ),
     }
 
     Ok(status)
@@ -213,7 +223,7 @@ fn agent_send_cross_project_with_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::agent::AgentRegistry;
+    use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
     use crate::state::feature::{FeatureState, FeatureStatus};
     use crate::state::project::{ProjectConfig, ProjectInfo};
     use crate::testing::TestServer;
@@ -222,18 +232,15 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::tempdir;
 
-    /// Set up a project with a tmux session for the feature.
-    fn setup_project_with_tmux(dir: &Path, server: &TestServer) -> (PathBuf, String, String) {
+    /// Write `.pm/features/` and a project config named `project_name`.
+    fn setup_project_files(dir: &Path, project_name: &str) -> PathBuf {
         let root = dir.to_path_buf();
         let pm_dir = root.join(".pm");
-        let project_name = server.scope("proj");
-        let feature_name = "login";
-
         std::fs::create_dir_all(pm_dir.join("features")).unwrap();
 
         let config = ProjectConfig {
             project: ProjectInfo {
-                name: project_name.clone(),
+                name: project_name.to_string(),
                 max_features: None,
             },
             setup: Default::default(),
@@ -241,6 +248,15 @@ mod tests {
             agents: Default::default(),
         };
         config.save(&pm_dir).unwrap();
+        root
+    }
+
+    /// Set up a project with a tmux session for the feature.
+    fn setup_project_with_tmux(dir: &Path, server: &TestServer) -> (PathBuf, String, String) {
+        let project_name = server.scope("proj");
+        let feature_name = "login";
+        let root = setup_project_files(dir, &project_name);
+        let pm_dir = root.join(".pm");
 
         let now = Utc::now();
         let state = FeatureState {
@@ -476,6 +492,56 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    #[test]
+    fn send_delivers_when_heal_fails() {
+        // The heal runs after the message is durably queued, so when tmux is
+        // unreachable (the sandboxed-agent case) the send still succeeds and
+        // the message is in the inbox.
+        let dir = tempdir().unwrap();
+        let root = setup_project_files(dir.path(), "proj");
+        create_agent_definition(&root, "reviewer");
+
+        let agents_dir = paths::agents_dir(&root);
+        let mut registry = AgentRegistry::load(&agents_dir, "login").unwrap();
+        registry.register(
+            "reviewer",
+            AgentEntry {
+                agent_type: AgentType::Agent,
+                session_id: String::new(),
+                window_name: "reviewer".to_string(),
+                active: true,
+                agent_definition: None,
+                harness: Default::default(),
+            },
+        );
+        registry.save(&agents_dir, "login").unwrap();
+
+        // No tmux server exists under this socket name, so every tmux call
+        // in the heal fails the way an unreachable socket does.
+        let bogus_server = format!("pm-test-no-server-{}", std::process::id());
+
+        let status = agent_send(
+            &root,
+            "login",
+            None,
+            "reviewer",
+            "implementer",
+            "heal-test message",
+            Some(&bogus_server),
+        )
+        .unwrap();
+        assert_eq!(
+            status,
+            "Message 001 sent to 'reviewer' (from 'implementer')"
+        );
+
+        let messages_dir = paths::messages_dir(&root);
+        let msg = messages::read_at(&messages_dir, "login", "reviewer", "implementer", 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(msg.body.trim(), "heal-test message");
     }
 
     #[test]
