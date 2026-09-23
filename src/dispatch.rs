@@ -822,15 +822,21 @@ fn optional_project_root() -> pm::error::Result<Option<std::path::PathBuf>> {
     }
 }
 
+/// The settings and session commands only exist for Claude Code: codex has
+/// no per-feature settings files, and pm does not manage its sessions.
+fn claude_code_only(harness: Harness, what: &str) -> pm::error::Result<()> {
+    match harness {
+        Harness::ClaudeCode => Ok(()),
+        Harness::Codex => Err(pm::error::PmError::Agent(format!(
+            "{what} are not supported for {harness}; only claude-code has them"
+        ))),
+    }
+}
+
 fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
     match cmd {
         HarnessCommands::Settings { harness, command } => {
-            // Settings files are per harness; only claude-code has them
-            // today. A new variant must add its own arm here, not fall
-            // through to the claude-code implementation.
-            match harness {
-                Harness::ClaudeCode => {}
-            }
+            claude_code_only(harness, "per-feature settings files")?;
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
             match command {
                 HarnessSettingsCommands::List { name } => {
@@ -965,11 +971,8 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
         },
         HarnessCommands::Migrate { from, harness } => {
             let cwd = std::env::current_dir()?;
-            let messages = match harness {
-                Harness::ClaudeCode => {
-                    commands::claude_migrate::migrate_sessions(&from, &cwd, None)?
-                }
-            };
+            claude_code_only(harness, "session migration")?;
+            let messages = commands::claude_migrate::migrate_sessions(&from, &cwd, None)?;
             for msg in messages {
                 println!("{msg}");
             }
@@ -986,15 +989,14 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
             } else {
                 Some(paths::find_project_root(&std::env::current_dir()?)?)
             };
-            let (_, messages) = match harness {
-                Harness::ClaudeCode => commands::claude_export::export(
-                    project_root.as_deref(),
-                    &projects_dir,
-                    all,
-                    output.as_deref(),
-                    None,
-                )?,
-            };
+            claude_code_only(harness, "session export")?;
+            let (_, messages) = commands::claude_export::export(
+                project_root.as_deref(),
+                &projects_dir,
+                all,
+                output.as_deref(),
+                None,
+            )?;
             for msg in messages {
                 println!("{msg}");
             }
@@ -1002,11 +1004,8 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
         }
         HarnessCommands::Import { tarball, harness } => {
             let projects_dir = paths::global_projects_dir()?;
-            let messages = match harness {
-                Harness::ClaudeCode => {
-                    commands::claude_import::import(&tarball, &projects_dir, None)?
-                }
-            };
+            claude_code_only(harness, "session import")?;
+            let messages = commands::claude_import::import(&tarball, &projects_dir, None)?;
             for msg in messages {
                 println!("{msg}");
             }

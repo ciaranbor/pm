@@ -299,13 +299,19 @@ fn project_dir(project_root: &Path, kind: BundledKind) -> PathBuf {
 // --- Projection into harness layouts ---
 
 /// The harnesses whose projections this project maintains: the default plus
-/// any named in `[agents.harness]`. A missing or unreadable project config
-/// contributes nothing (the default still applies).
-pub fn harnesses_in_use(project_root: &Path) -> Vec<Harness> {
-    let project = ProjectConfig::load(&paths::pm_dir(project_root))
-        .map(|c| c.agents)
-        .unwrap_or_default();
-    harness::harnesses_in_use(&project, &GlobalConfig::load_or_default().agents)
+/// any named in `[agents.harness]`. A missing project config contributes
+/// nothing (the default still applies); a malformed one is an error, so the
+/// install paths never quietly fall back to Claude Code alone.
+pub fn harnesses_in_use(project_root: &Path) -> Result<Vec<Harness>> {
+    let project = match ProjectConfig::load(&paths::pm_dir(project_root)) {
+        Ok(config) => config.agents,
+        Err(crate::error::PmError::NotInProject) => Default::default(),
+        Err(e) => return Err(e),
+    };
+    Ok(harness::harnesses_in_use(
+        &project,
+        &GlobalConfig::load_or_default().agents,
+    ))
 }
 
 /// Project the main worktree's canonical store (the project's customs) into
@@ -316,7 +322,7 @@ pub fn project_assets(project_root: &Path, dry_run: bool) -> Result<Vec<String>>
     let main = paths::main_worktree(project_root);
     let canonical = main.join(CANONICAL_DIR);
     let mut lines = Vec::new();
-    for h in harnesses_in_use(project_root) {
+    for h in harnesses_in_use(project_root)? {
         let target = main.join(h.config_dir());
         lines.extend(project_into(&canonical, h, &target, dry_run)?);
     }
@@ -631,7 +637,7 @@ pub fn unprojected_global_definitions_in(
     let canonical = store.dir(BundledKind::Agent);
     let mut out = Vec::new();
     for file in definition_files(&canonical)? {
-        for h in harnesses {
+        for h in harnesses.iter().filter(|h| h.projects_definitions()) {
             let projected = h
                 .global_config_dir(&store.home)
                 .map(|d| d.join("agents").join(&file));
@@ -673,7 +679,7 @@ pub fn shadowed_project_skills_in(
     if !dir.is_dir() {
         return Ok(Vec::new());
     }
-    let harnesses = harnesses_in_use(project_root);
+    let harnesses = harnesses_in_use(project_root)?;
     let mut names: Vec<String> = fs::read_dir(&dir)?
         .filter_map(|e| e.ok())
         .filter(|e| e.path().is_dir())
@@ -734,7 +740,7 @@ pub fn write_migration_marker(project_root: &Path) -> Result<()> {
 pub fn stale_bundled_copies(project_root: &Path) -> Result<Vec<PathBuf>> {
     let mut stores = vec![PathBuf::from(CANONICAL_DIR)];
     stores.extend(
-        harnesses_in_use(project_root)
+        harnesses_in_use(project_root)?
             .into_iter()
             .map(|h| PathBuf::from(h.config_dir())),
     );
@@ -871,7 +877,7 @@ pub fn skills_pull(project_root: &Path, feature_name: &str) -> Result<Vec<PathBu
     let main = paths::main_worktree(project_root);
     let feature = project_root.join(feature_name);
     let mut rels = vec![PathBuf::from(CANONICAL_DIR).join("skills")];
-    for h in harnesses_in_use(project_root) {
+    for h in harnesses_in_use(project_root)? {
         rels.push(PathBuf::from(h.config_dir()).join("skills"));
     }
     let present: Vec<PathBuf> = rels.into_iter().filter(|r| main.join(r).is_dir()).collect();
@@ -955,6 +961,24 @@ pub fn workflows_uninstall(name: Option<&str>) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn harnesses_in_use_defaults_without_config_and_errors_on_a_malformed_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = crate::testing::TestServer::new();
+        let (project, _, _) = server.setup_project_no_tmux(dir.path());
+        let config = paths::pm_dir(&project).join("config.toml");
+
+        std::fs::remove_file(&config).unwrap();
+        assert_eq!(
+            harnesses_in_use(&project).unwrap(),
+            vec![Harness::ClaudeCode]
+        );
+
+        std::fs::write(&config, "[agents.harness]\n[agents.harness]\n").unwrap();
+        assert!(harnesses_in_use(&project).is_err());
+        assert!(crate::commands::hooks_install::install(Some(&project)).is_err());
+    }
 
     fn item(kind: BundledKind, name: &str) -> &'static BundledItem {
         find_item(kind, name).unwrap()
@@ -1102,8 +1126,13 @@ mod tests {
         assert_eq!(store.workflows_dir(), h.join(".config/pm/workflows"));
         for harness in Harness::SUPPORTED {
             let dir = harness.global_config_dir(h).unwrap();
-            assert!(dir.join("agents/reviewer.md").exists(), "{harness}");
-            assert!(dir.join("skills/pm/SKILL.md").exists(), "{harness}");
+            if harness.projects_definitions() {
+                assert!(dir.join("agents/reviewer.md").exists(), "{harness}");
+                assert!(dir.join("skills/pm/SKILL.md").exists(), "{harness}");
+            } else {
+                // codex reads the canonical store itself; nothing lands here.
+                assert!(!dir.exists(), "{harness}");
+            }
             // The baseline is passed by absolute path, never projected.
             assert!(!dir.join("pm-baseline.md").exists(), "{harness}");
         }
@@ -1155,6 +1184,12 @@ mod tests {
                     .exists()
             );
         }
+        // Only a projecting harness can have an unprojected definition.
+        assert!(
+            unprojected_global_definitions_in(&store, &[Harness::Codex])
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             global_store_missing_in(&store),
             vec!["Agent 'reviewer'".to_string()]

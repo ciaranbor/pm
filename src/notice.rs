@@ -95,6 +95,22 @@ pub fn compose_spawn_prompt(project_root: &Path, label: &str) -> Result<Option<S
     compose_from(&baseline, &global, &project, &out)
 }
 
+/// The text [`compose_spawn_prompt`] would deliver, for a harness that takes
+/// it through a hook rather than a file: the baseline alone when no board
+/// has content, `None` when there is nothing at all.
+pub fn compose_spawn_prompt_text(project_root: &Path) -> Result<Option<String>> {
+    let baseline = crate::commands::skills::baseline_path(project_root);
+    let global = paths::global_config_dir()?.join("notices.md");
+    let project = paths::pm_dir(project_root).join("notices.md");
+    Ok(compose_text(&baseline, &global, &project)?.text)
+}
+
+/// The composed prompt text and whether any notice board contributed to it.
+struct Composed {
+    text: Option<String>,
+    boards: bool,
+}
+
 /// Inner composer over explicit paths, so it can be unit-tested without the
 /// real global config dir. See [`compose_spawn_prompt`].
 fn compose_from(
@@ -103,19 +119,35 @@ fn compose_from(
     project: &Path,
     out_path: &Path,
 ) -> Result<Option<String>> {
-    let global_board = read_board(global);
-    let project_board = read_board(project);
-
+    let composed = compose_text(baseline, global, project)?;
     // No board content → behave exactly like seeding the baseline alone.
-    if global_board.is_none() && project_board.is_none() {
+    if !composed.boards {
         return Ok(baseline
             .exists()
             .then(|| baseline.to_string_lossy().into_owned()));
     }
+    std::fs::write(out_path, composed.text.unwrap_or_default())?;
+    Ok(Some(out_path.to_string_lossy().into_owned()))
+}
+
+fn compose_text(baseline: &Path, global: &Path, project: &Path) -> Result<Composed> {
+    let global_board = read_board(global);
+    let project_board = read_board(project);
+    let base = baseline
+        .exists()
+        .then(|| std::fs::read_to_string(baseline))
+        .transpose()?;
+
+    if global_board.is_none() && project_board.is_none() {
+        return Ok(Composed {
+            text: base,
+            boards: false,
+        });
+    }
 
     let mut out = String::new();
-    if baseline.exists() {
-        out.push_str(std::fs::read_to_string(baseline)?.trim_end());
+    if let Some(b) = base {
+        out.push_str(b.trim_end());
         out.push_str("\n\n");
     }
     out.push_str(LEAD);
@@ -130,9 +162,10 @@ fn compose_from(
         out.push_str(&p);
         out.push('\n');
     }
-
-    std::fs::write(out_path, out)?;
-    Ok(Some(out_path.to_string_lossy().into_owned()))
+    Ok(Composed {
+        text: Some(out),
+        boards: true,
+    })
 }
 
 #[cfg(test)]

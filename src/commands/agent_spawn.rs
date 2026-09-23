@@ -5,7 +5,8 @@ use crate::harness::{self, Harness, SpawnSpec};
 use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
 use crate::state::paths;
 use crate::state::project::{
-    AgentSettings, AgentsConfig, GlobalConfig, ProjectConfig, resolve_agent_settings,
+    AgentSettings, AgentsConfig, GlobalConfig, HarnessConfig, ProjectConfig,
+    resolve_agent_settings, resolve_harness_config,
 };
 use crate::state::workflow;
 use crate::tmux;
@@ -94,6 +95,27 @@ pub(crate) fn configured_harness(
     global: &AgentsConfig,
 ) -> Result<Harness> {
     Ok(resolve_agent_settings(project, global, definition)?.harness)
+}
+
+/// Directories outside the worktree an agent must be able to write, for a
+/// harness that sandboxes: pm's state, the shared `.git` every worktree
+/// writes through, the pm config dir, plus any `[harness.codex]
+/// writable_roots` (relative ones resolve against the project root).
+fn writable_dirs(project_root: &Path, config: &HarnessConfig) -> Vec<std::path::PathBuf> {
+    let mut dirs = vec![
+        paths::pm_dir(project_root),
+        paths::main_worktree(project_root).join(".git"),
+    ];
+    dirs.extend(paths::global_config_dir().ok());
+    for root in config.codex.writable_roots.as_deref().unwrap_or(&[]) {
+        let path = Path::new(root);
+        dirs.push(if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            project_root.join(path)
+        });
+    }
+    dirs
 }
 
 /// The shell line sent to the window: pm's own `PM_AGENT_NAME` (so `pm msg`
@@ -200,15 +222,26 @@ fn spawn_session_with_config(
     // baseline path unchanged (or None when the baseline is also absent), so
     // older projects keep spawning exactly as before.
     let append_file = crate::notice::compose_spawn_prompt(params.project_root, window_name)?;
-    let cmd = settings.harness.build_cmd(&SpawnSpec {
-        definition: definition_flag(effective_definition),
-        append_prompt_file: append_file.as_deref(),
-        prompt: effective_prompt,
-        resume_session: params.resume_session,
-        fork_session: params.fork_session,
-        permission_mode: settings.permission_mode.as_deref(),
-        model: settings.model.as_deref(),
-    });
+    let harness_config = resolve_harness_config(&config.harness, &global.harness);
+    let dirs = writable_dirs(params.project_root, &harness_config);
+    // A harness with a directory-trust gate would otherwise stop at an
+    // interactive prompt nobody is watching.
+    settings
+        .harness
+        .trust_worktree(&paths::home_dir()?, &worktree_path)?;
+    let cmd = settings.harness.build_cmd(
+        &SpawnSpec {
+            definition: definition_flag(effective_definition),
+            append_prompt_file: append_file.as_deref(),
+            prompt: effective_prompt,
+            resume_session: params.resume_session,
+            fork_session: params.fork_session,
+            permission_mode: settings.permission_mode.as_deref(),
+            model: settings.model.as_deref(),
+            writable_dirs: &dirs,
+        },
+        &harness_config,
+    );
     let window_target = if let Some(target) = params.reuse_window {
         tmux::rename_window(params.tmux_server, target, window_name)?;
         target.to_string()
@@ -222,13 +255,9 @@ fn spawn_session_with_config(
         )?
     };
 
-    tmux::send_keys(
-        params.tmux_server,
-        &window_target,
-        &window_command(params.agent_name, &cmd),
-    )?;
-
-    // Register in agent registry if this is a named agent
+    // Register before the command is sent: the harness's SessionStart hook
+    // reads the entry, and a hook that fires first would find no agent —
+    // on codex that means no role and no baseline, silently.
     if let Some(name) = params.agent_name {
         let agents_dir = paths::agents_dir(params.project_root);
         let mut registry = AgentRegistry::load(&agents_dir, params.feature)?;
@@ -252,6 +281,12 @@ fn spawn_session_with_config(
         );
         registry.save(&agents_dir, params.feature)?;
     }
+
+    tmux::send_keys(
+        params.tmux_server,
+        &window_target,
+        &window_command(params.agent_name, &cmd),
+    )?;
 
     Ok(window_target)
 }
@@ -508,6 +543,7 @@ mod tests {
     use crate::state::feature::{FeatureState, FeatureStatus};
     use crate::testing::TestServer;
     use chrono::Utc;
+    use std::path::PathBuf;
     use tempfile::tempdir;
 
     /// Write stub `.agents/agents/<name>.md` files in the main worktree so
@@ -538,6 +574,7 @@ mod tests {
             setup: Default::default(),
             github: Default::default(),
             agents: Default::default(),
+            harness: Default::default(),
         };
         config.save(&pm_dir).unwrap();
 
@@ -919,20 +956,121 @@ mod tests {
         assert!(msg.contains("Resumed agent 'reviewer'"));
     }
 
+    /// Point `definition`'s `[agents.harness]` row at `harness` in the
+    /// project config.
+    fn configure_harness(project_root: &Path, definition: &str, harness: &str) {
+        let pm_dir = paths::pm_dir(project_root);
+        let mut config = ProjectConfig::load(&pm_dir).unwrap();
+        config
+            .agents
+            .harness
+            .insert(definition.to_string(), harness.to_string());
+        config.save(&pm_dir).unwrap();
+    }
+
+    #[test]
+    fn spawn_on_codex_launches_codex_trusts_the_worktree_and_records_the_harness() {
+        let _guard = crate::testing::CODEX_CONFIG_LOCK.lock().unwrap();
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+        configure_harness(dir.path(), "reviewer", "codex");
+        let worktree = dir.path().join(&feature);
+        assert!(!Harness::Codex.worktree_trusted(&paths::home_dir().unwrap(), &worktree));
+
+        let (outcome, _) = agent_spawn(
+            dir.path(),
+            &feature,
+            "reviewer",
+            None,
+            None,
+            SpawnOverrides::default(),
+            server.name(),
+        )
+        .unwrap();
+        assert_eq!(outcome, SpawnOutcome::Spawned);
+
+        let target = tmux::find_window(server.name(), &session_name, "reviewer")
+            .unwrap()
+            .expect("window");
+        server.wait_for_pane_text(
+            &target,
+            "PM_AGENT_NAME=reviewer && codex -a 'never' -s 'danger-full-access' 'Stand by.'",
+        );
+        let registry = AgentRegistry::load(&paths::agents_dir(dir.path()), &feature).unwrap();
+        assert_eq!(registry.get("reviewer").unwrap().harness, Harness::Codex);
+        assert!(Harness::Codex.worktree_trusted(&paths::home_dir().unwrap(), &worktree));
+    }
+
+    #[test]
+    fn respawn_after_harness_change_starts_fresh_and_says_so() {
+        // A session id only means something to the harness that produced
+        // it: once config moves the definition to another harness, the dead
+        // agent is respawned without `resume`, and the entry follows.
+        let _guard = crate::testing::CODEX_CONFIG_LOCK.lock().unwrap();
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+
+        agent_spawn(
+            dir.path(),
+            &feature,
+            "reviewer",
+            None,
+            None,
+            SpawnOverrides::default(),
+            server.name(),
+        )
+        .unwrap();
+        let agents_dir = paths::agents_dir(dir.path());
+        let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        registry.get_mut("reviewer").unwrap().session_id = "cc-session".to_string();
+        registry.save(&agents_dir, &feature).unwrap();
+
+        tmux::kill_session(server.name(), &session_name).unwrap();
+        tmux::create_session(server.name(), &session_name, &dir.path().join(&feature)).unwrap();
+        configure_harness(dir.path(), "reviewer", "codex");
+
+        let (outcome, msg) = agent_spawn(
+            dir.path(),
+            &feature,
+            "reviewer",
+            None,
+            None,
+            SpawnOverrides::default(),
+            server.name(),
+        )
+        .unwrap();
+        assert_eq!(outcome, SpawnOutcome::Spawned);
+        assert_eq!(
+            msg,
+            format!(
+                "Spawned agent 'reviewer' in {} (harness changed claude-code → codex; previous \
+                 session not resumed)",
+                tmux::find_window(server.name(), &session_name, "reviewer")
+                    .unwrap()
+                    .unwrap()
+            )
+        );
+        let target = tmux::find_window(server.name(), &session_name, "reviewer")
+            .unwrap()
+            .unwrap();
+        server.wait_for_pane_text(
+            &target,
+            "&& codex -a 'never' -s 'danger-full-access' 'Stand by.'",
+        );
+        let text = tmux::capture_pane(server.name(), &target).unwrap();
+        assert!(!text.contains("resume"), "{text}");
+        let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        assert_eq!(registry.get("reviewer").unwrap().harness, Harness::Codex);
+    }
+
     #[test]
     fn spawn_errors_on_unsupported_harness_and_leaves_nothing() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
         let (session_name, feature) = setup_project(dir.path(), &server);
-
-        let pm_dir = paths::pm_dir(dir.path());
-        let mut config = ProjectConfig::load(&pm_dir).unwrap();
-        config
-            .agents
-            .harness
-            .insert("reviewer".to_string(), "codex".to_string());
-        config.save(&pm_dir).unwrap();
-
+        configure_harness(dir.path(), "reviewer", "opencode");
         let err = agent_spawn(
             dir.path(),
             &feature,
@@ -1293,10 +1431,13 @@ mod tests {
         // other definition passes through.
         let alias = "default";
         assert_eq!(definition_flag(Some(alias)), None, "{alias}");
-        let cmd = Harness::ClaudeCode.build_cmd(&SpawnSpec {
-            definition: definition_flag(Some(alias)),
-            ..Default::default()
-        });
+        let cmd = Harness::ClaudeCode.build_cmd(
+            &SpawnSpec {
+                definition: definition_flag(Some(alias)),
+                ..Default::default()
+            },
+            &HarnessConfig::default(),
+        );
         assert!(
             !cmd.contains("--agent"),
             "vanilla spawn must not pass --agent, got: {cmd}"
@@ -1335,6 +1476,27 @@ mod tests {
         server.wait_for_pane_text(&target, &format!("PM_AGENT_NAME={alias} && claude"));
         let text = tmux::capture_pane(server.name(), &target).unwrap();
         assert!(!text.contains("--agent"), "{alias}: {text}");
+    }
+
+    #[test]
+    fn writable_dirs_are_pm_state_shared_git_config_dir_and_configured_roots() {
+        let root = Path::new("/proj");
+        let config = HarnessConfig {
+            codex: crate::state::project::CodexConfig {
+                writable_roots: Some(vec!["/abs/cache".into(), "main/target".into()]),
+                ..Default::default()
+            },
+        };
+        assert_eq!(
+            writable_dirs(root, &config),
+            vec![
+                PathBuf::from("/proj/.pm"),
+                PathBuf::from("/proj/main/.git"),
+                paths::global_config_dir().unwrap(),
+                PathBuf::from("/abs/cache"),
+                PathBuf::from("/proj/main/target"),
+            ]
+        );
     }
 
     #[test]

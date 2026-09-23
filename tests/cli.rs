@@ -152,10 +152,20 @@ fn claude_is_a_hidden_alias_for_harness() {
 
 #[test]
 fn harness_flag_rejects_unsupported_harness() {
+    pm().args(["harness", "settings", "list", "--harness", "opencode"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("supported: claude-code, codex"));
+}
+
+#[test]
+fn claude_code_only_commands_refuse_codex() {
     pm().args(["harness", "settings", "list", "--harness", "codex"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("supported: claude-code"));
+        .stderr(predicate::str::contains(
+            "per-feature settings files are not supported for codex",
+        ));
 }
 
 #[test]
@@ -163,7 +173,7 @@ fn harness_list_marks_default() {
     pm().args(["harness", "list"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("claude-code (default)"));
+        .stdout(predicate::str::contains("claude-code (default)\ncodex\n"));
 }
 
 #[test]

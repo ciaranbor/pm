@@ -44,6 +44,7 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>) -> String {
         fork_session,
         permission_mode,
         model,
+        writable_dirs: _,
     } = *spec;
 
     let mut parts = vec!["claude".to_string()];

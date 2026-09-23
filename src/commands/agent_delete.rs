@@ -93,6 +93,7 @@ mod tests {
             setup: Default::default(),
             github: Default::default(),
             agents: Default::default(),
+            harness: Default::default(),
         };
         config.save(&pm_dir).unwrap();
 

@@ -306,6 +306,7 @@ fn upgrade_dry_run_at(project_root: &Path) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::harness::Harness;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::tempdir;
@@ -350,7 +351,7 @@ last_active = "2026-01-01T00:00:00Z"
         assert!(summary.contains("hooks"), "{summary}");
         assert!(summary.contains("docs"), "{summary}");
         assert!(summary.contains("for main"), "{summary}");
-        assert!(hooks_install::is_installed().unwrap());
+        assert!(hooks_install::is_installed_for(Harness::ClaudeCode).unwrap());
         assert!(skills::is_migrated(&root));
 
         // Bundled assets live only in the global tier now.
@@ -459,7 +460,7 @@ last_active = "2026-01-01T00:00:00Z"
 
         // Hooks moved to the user level; the project's own settings and
         // hooks stayed behind.
-        assert!(hooks_install::is_installed().unwrap());
+        assert!(hooks_install::is_installed_for(Harness::ClaudeCode).unwrap());
         let settings: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(claude.join("settings.json")).unwrap())
                 .unwrap();

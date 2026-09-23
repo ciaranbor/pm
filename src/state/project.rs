@@ -33,6 +33,38 @@ pub struct ProjectConfig {
     pub github: GithubConfig,
     #[serde(default)]
     pub agents: AgentsConfig,
+    #[serde(default)]
+    pub harness: HarnessConfig,
+}
+
+/// Per-harness settings that have no per-agent shape. Present in both
+/// config tiers; see `resolve_harness_config`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct HarnessConfig {
+    #[serde(default)]
+    pub codex: CodexConfig,
+}
+
+/// `[harness.codex]`: how codex agents are sandboxed. Every value is in
+/// codex's own terms and passed through unvalidated.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CodexConfig {
+    /// `-s <mode>` for agents with no `[agents.permissions]` row; unset means
+    /// `danger-full-access` (pm's default — see the harness docs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<String>,
+    /// `-a <policy>`; unset means `never`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<String>,
+    /// Extra `--add-dir` roots for a sandboxed agent, absolute or relative to
+    /// the project root; a project `[]` masks the global list. pm's own
+    /// state paths are always added.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writable_roots: Option<Vec<String>>,
+    /// Pass `--dangerously-bypass-hook-trust` instead of relying on the
+    /// per-machine interactive hook trust.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bypass_hook_trust: Option<bool>,
 }
 
 /// Per-agent spawn settings. All maps are keyed by the agent *definition*
@@ -78,6 +110,8 @@ pub struct GlobalConfig {
     pub project: GlobalProjectConfig,
     #[serde(default)]
     pub agents: AgentsConfig,
+    #[serde(default)]
+    pub harness: HarnessConfig,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -151,7 +185,34 @@ pub fn resolve_agent_settings(
     })
 }
 
-fn layered(
+/// Resolve the per-harness settings across the two tiers, per key: a set
+/// project value wins; an empty string (or, for a list, `[]`) masks the
+/// global one.
+pub fn resolve_harness_config(project: &HarnessConfig, global: &HarnessConfig) -> HarnessConfig {
+    let (p, g) = (&project.codex, &global.codex);
+    HarnessConfig {
+        codex: CodexConfig {
+            sandbox: layered_opt(&p.sandbox, &g.sandbox),
+            approval: layered_opt(&p.approval, &g.approval),
+            writable_roots: p
+                .writable_roots
+                .clone()
+                .or_else(|| g.writable_roots.clone()),
+            bypass_hook_trust: p.bypass_hook_trust.or(g.bypass_hook_trust),
+        },
+    }
+}
+
+fn layered_opt(project: &Option<String>, global: &Option<String>) -> Option<String> {
+    project
+        .as_ref()
+        .or(global.as_ref())
+        .filter(|v| !v.is_empty())
+        .cloned()
+}
+
+/// One per-agent key across the two tiers: project wins, `""` masks.
+pub(crate) fn layered(
     project: &std::collections::BTreeMap<String, String>,
     global: &std::collections::BTreeMap<String, String>,
     key: &str,
@@ -519,6 +580,7 @@ main_branch = "main"
                 repo: "owner/repo".to_string(),
             },
             agents: Default::default(),
+            harness: Default::default(),
         };
         let serialized = toml::to_string_pretty(&config).unwrap();
         let deserialized: ProjectConfig = toml::from_str(&serialized).unwrap();
@@ -621,7 +683,7 @@ name = "myapp"
         let mut global = AgentsConfig::default();
         global
             .harness
-            .insert("implementer".to_string(), "codex".to_string());
+            .insert("implementer".to_string(), "opencode".to_string());
         global
             .harness
             .insert("reviewer".to_string(), "claude-code".to_string());
@@ -638,23 +700,95 @@ name = "myapp"
     }
 
     #[test]
-    fn agent_settings_unsupported_harness_errors() {
+    fn agent_settings_resolve_codex() {
         let mut global = AgentsConfig::default();
         global
             .harness
             .insert("implementer".to_string(), "codex".to_string());
+        let settings =
+            resolve_agent_settings(&AgentsConfig::default(), &global, "implementer").unwrap();
+        assert_eq!(settings.harness, Harness::Codex);
+    }
+
+    #[test]
+    fn agent_settings_unsupported_harness_errors() {
+        let mut global = AgentsConfig::default();
+        global
+            .harness
+            .insert("implementer".to_string(), "opencode".to_string());
         let err =
             resolve_agent_settings(&AgentsConfig::default(), &global, "implementer").unwrap_err();
         assert!(
-            matches!(err, PmError::HarnessUnsupported { ref value, .. } if value == "codex"),
+            matches!(err, PmError::HarnessUnsupported { ref value, .. } if value == "opencode"),
             "got: {err}"
         );
         assert_eq!(
             err.to_string(),
-            "harness 'codex' is not supported yet; supported: claude-code"
+            "harness 'opencode' is not supported yet; supported: claude-code, codex"
         );
         // Other agents are unaffected by a bad row they don't use.
         resolve_agent_settings(&AgentsConfig::default(), &global, "reviewer").unwrap();
+    }
+
+    #[test]
+    fn harness_codex_config_roundtrips_and_layers_project_over_global() {
+        let project: ProjectConfig = toml::from_str(
+            r#"
+[project]
+name = "myapp"
+
+[harness.codex]
+sandbox = ""
+writable_roots = ["main/target"]
+bypass_hook_trust = true
+"#,
+        )
+        .unwrap();
+        let global: GlobalConfig = toml::from_str(
+            r#"
+[harness.codex]
+sandbox = "workspace-write"
+approval = "on-request"
+writable_roots = ["/global/cache"]
+"#,
+        )
+        .unwrap();
+        let serialized = toml::to_string_pretty(&project).unwrap();
+        assert_eq!(
+            toml::from_str::<ProjectConfig>(&serialized).unwrap(),
+            project
+        );
+
+        let resolved = resolve_harness_config(&project.harness, &global.harness);
+        assert_eq!(
+            resolved.codex,
+            CodexConfig {
+                // "" in the project masks the global sandbox.
+                sandbox: None,
+                approval: Some("on-request".into()),
+                writable_roots: Some(vec!["main/target".into()]),
+                bypass_hook_trust: Some(true),
+            }
+        );
+        // An empty project list masks the global roots.
+        let masked: ProjectConfig =
+            toml::from_str("[project]\nname = \"x\"\n[harness.codex]\nwritable_roots = []\n")
+                .unwrap();
+        assert_eq!(
+            resolve_harness_config(&masked.harness, &global.harness)
+                .codex
+                .writable_roots,
+            Some(Vec::new())
+        );
+        assert_eq!(
+            resolve_harness_config(&HarnessConfig::default(), &global.harness).codex,
+            global.harness.codex
+        );
+        // Absent everywhere: every codex default applies.
+        assert_eq!(
+            resolve_harness_config(&HarnessConfig::default(), &HarnessConfig::default()),
+            HarnessConfig::default()
+        );
     }
 
     #[test]
@@ -765,6 +899,7 @@ default = "implementer"
             setup: SetupConfig::default(),
             github: GithubConfig::default(),
             agents: Default::default(),
+            harness: Default::default(),
         };
         config.save(&pm_dir).unwrap();
 
@@ -824,6 +959,7 @@ default = "implementer"
             setup: SetupConfig::default(),
             github: GithubConfig::default(),
             agents: Default::default(),
+            harness: Default::default(),
         };
         config.save(&pm_dir).unwrap();
 
@@ -862,6 +998,7 @@ default = "implementer"
             setup: SetupConfig::default(),
             github: GithubConfig::default(),
             agents: Default::default(),
+            harness: Default::default(),
         };
         config.save(&pm_dir).unwrap();
 
@@ -904,6 +1041,7 @@ default = "implementer"
             setup: SetupConfig::default(),
             github: GithubConfig::default(),
             agents: Default::default(),
+            harness: Default::default(),
         };
         config.save(&pm_dir).unwrap();
 
@@ -942,6 +1080,7 @@ default = "implementer"
             setup: SetupConfig::default(),
             github: GithubConfig::default(),
             agents: Default::default(),
+            harness: Default::default(),
         };
         config.save(&pm_dir).unwrap();
 
@@ -978,6 +1117,7 @@ default = "implementer"
             setup: SetupConfig::default(),
             github: GithubConfig::default(),
             agents: Default::default(),
+            harness: Default::default(),
         };
         config.save(&pm_dir).unwrap();
 
@@ -1015,6 +1155,7 @@ default = "implementer"
             setup: SetupConfig::default(),
             github: GithubConfig::default(),
             agents: Default::default(),
+            harness: Default::default(),
         };
         config.save(&pm_dir).unwrap();
 

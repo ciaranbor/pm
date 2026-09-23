@@ -47,7 +47,10 @@ fn is_open_recoverable(kind: IssueKind) -> bool {
         | IssueKind::StaleBundledCopies
         | IssueKind::RedundantOverride
         | IssueKind::SkillShadowedByGlobal
-        | IssueKind::LegacyVanillaAgentName => false,
+        | IssueKind::LegacyVanillaAgentName
+        | IssueKind::HooksMalformed
+        | IssueKind::HookUntrusted
+        | IssueKind::WorktreeUntrusted => false,
     }
 }
 
