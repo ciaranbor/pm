@@ -1,6 +1,6 @@
 //! Seed a feature worktree with what its agents need from main: the
-//! projected subdirs of the canonical `.agents/` store and, per harness in
-//! use, the harness's own per-worktree files and projected assets
+//! canonical `.agents/` store (which codex reads directly) and, per harness
+//! in use, the harness's own per-worktree files and projected assets
 //! (harnesses resolve skills and agent definitions from the worktree they
 //! run in, never from main). Copy-only — nothing in the feature is ever
 //! deleted.
@@ -12,6 +12,9 @@ use crate::fs_utils::{sync_file, sync_tree};
 use crate::state::paths;
 
 use super::skills::{self, CANONICAL_DIR};
+
+/// The canonical store's subdirs every feature needs, whatever its harnesses.
+const CANONICAL_SUBDIRS: &[&str] = &["agents", "skills"];
 
 /// Called during `feat new` / `feat adopt` / `pm upgrade`.
 pub fn seed_feature_assets(project_root: &Path, feature_worktree: &Path) -> Result<()> {
@@ -32,24 +35,29 @@ pub fn seed_feature_assets_would_change(
 fn sync_feature(project_root: &Path, feature_worktree: &Path, dry_run: bool) -> Result<bool> {
     let main = paths::main_worktree(project_root);
     let mut changed = false;
-    for harness in skills::harnesses_in_use(project_root) {
+    let harnesses = skills::harnesses_in_use(project_root)?;
+    let mut dirs: Vec<PathBuf> = CANONICAL_SUBDIRS
+        .iter()
+        .map(|sub| Path::new(CANONICAL_DIR).join(sub))
+        .collect();
+    for harness in &harnesses {
         let cfg = harness.config_dir();
-        let mut dirs: Vec<PathBuf> = Vec::new();
         for sub in harness.projected_dirs() {
-            dirs.push(Path::new(CANONICAL_DIR).join(sub));
             dirs.push(Path::new(cfg).join(sub));
         }
-        for rel in dirs {
-            let src = main.join(&rel);
-            if src.is_dir() && !sync_tree(&src, &feature_worktree.join(&rel), dry_run)?.is_empty() {
-                changed = true;
-                if dry_run {
-                    return Ok(true);
-                }
+    }
+    for rel in dirs {
+        let src = main.join(&rel);
+        if src.is_dir() && !sync_tree(&src, &feature_worktree.join(&rel), dry_run)?.is_empty() {
+            changed = true;
+            if dry_run {
+                return Ok(true);
             }
         }
+    }
+    for harness in &harnesses {
         for file in harness.seeded_files() {
-            let rel = Path::new(cfg).join(file);
+            let rel = Path::new(harness.config_dir()).join(file);
             let src = main.join(&rel);
             if src.exists() && sync_file(&src, &feature_worktree.join(&rel), dry_run)? {
                 changed = true;

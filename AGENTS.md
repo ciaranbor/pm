@@ -57,25 +57,33 @@ follows is only what the tree *doesn't* tell you.
 - **Portability** — `path_utils.rs` swaps `~/` ↔ `$HOME` so registry state
   moves between machines.
 - **Harness** (`harness/`) — the agent CLI pm launches, behind a `Harness`
-  enum (`ClaudeCode` only today; string form `claude-code`). Each seam is a
-  `match` in `harness/mod.rs`, never a trait: `build_cmd(&SpawnSpec)` turns
-  the harness-neutral spawn description (definition, prompt file, prompt,
-  resume/fork, permission mode, model) into the command line — permission
-  mode and model id are in the harness's own terms and pass through
-  unvalidated, deliberately (no pm vocabulary to maintain per harness);
+  enum (`ClaudeCode`, `Codex`; string forms `claude-code`, `codex`). Each
+  seam is a `match` in `harness/mod.rs`, never a trait: `build_cmd(&SpawnSpec,
+  &HarnessConfig)` turns the harness-neutral spawn description (definition,
+  prompt file, prompt, resume/fork, permission mode, model, writable dirs)
+  plus the `[harness.<name>]` config into the command line — permission mode
+  and model id are in the harness's own terms and pass through unvalidated,
+  deliberately (no pm vocabulary to maintain per harness);
   `config_dir`/`seeded_files`/`projected_dirs`/`user_settings_file` describe
   the harness's own layout (`seeded_files` is the project's own settings and
-  permissions, never hooks); `project_assets` is the projection; and
-  `supports_prompt_file` is the baseline capability probe. Harness-specific
-  knowledge lives only in `harness/<name>.rs`; `agent_spawn` and the registry
-  stay neutral. The user-facing surface is `pm harness
+  permissions, never hooks); `project_assets` is the projection;
+  `supports_prompt_delivery` is the composed-prompt capability probe;
+  `trust_worktree`/`worktree_trusted`/`hook_trusted`/`malformed_hook_events`
+  are the trust gates (inert for Claude Code); and `session_start_output`
+  is the hook-side prompt channel. Harness-specific knowledge lives only in
+  `harness/<name>.rs`; `agent_spawn` and the registry stay neutral. The
+  user-facing surface is `pm harness
   hooks|skills|agents|settings|migrate|export|import|list|probe` — the
   CC-only `settings|migrate|export|import` take `--harness` (default
   `claude-code`; `claude_settings/migrate/export/import` keep their names
-  because they *are* CC-specific) — with `pm claude …` as a hidden alias for
-  one release. `hooks_install` writes into `user_settings_file`; it
-  recognises the previous `pm claude hooks …` spelling and the unguarded `pm
-  harness hooks …` as pm-owned.
+  because they *are* CC-specific and refuse `codex`) — with `pm claude …`
+  as a hidden alias for one release. `hooks_install` writes into every
+  in-use harness's `user_settings_file` (both take Claude Code's nested
+  `hooks` shape); it recognises the previous `pm claude hooks …` spelling
+  and the unguarded `pm harness hooks …` as pm-owned.
+  `harness::harnesses_in_use` resolves `[agents.harness]` per key with the
+  spawn's project-over-global, `""`-masks precedence, so a project masking a
+  globally configured harness stops pm installing for it.
 
 The sections below document the design decisions you can't recover by reading
 the tree — these are the invariants to preserve.
@@ -83,29 +91,32 @@ the tree — these are the invariants to preserve.
 ### Agents as long-running message processors
 
 pm agents are never-idle message processors, not one-shot scripts. This
-is implemented with a Claude Code **Stop hook** (`pm harness hooks stop`,
-installed by `pm harness hooks install` into the user-level
-`~/.claude/settings.json`, once per machine). The installed command is
-`[ -n "$PM_AGENT_NAME" ] || exit 0; pm harness hooks stop`: a user-level
-hook fires in every Claude Code session on the machine, and the guard keeps
-it inert in non-pm sessions without resolving `pm` (`&&` would turn a false
-test into an exit-1 hook error). The hook blocks until the agent's inbox has
-unread messages, then returns:
+is implemented with a **Stop hook** (`pm harness hooks stop`, installed by
+`pm harness hooks install` into the user-level file of every harness in use
+— `~/.claude/settings.json`, `$CODEX_HOME/hooks.json` — once per machine).
+The installed command is `[ -n "$PM_AGENT_NAME" ] || exit 0; pm harness
+hooks stop`: a user-level hook fires in every session of that harness on the
+machine, and the guard keeps it inert in non-pm sessions without resolving
+`pm` (`&&` would turn a false test into an exit-1 hook error). The hook
+blocks until the agent's inbox has unread messages, then returns:
 
 ```json
 {"decision": "block", "reason": "You have new messages. Run `pm msg read` …"}
 ```
 
-Claude Code delivers this as a continuation prompt. The agent reads the
+The harness delivers this as a continuation prompt. The agent reads the
 message, processes it, the turn ends, and the hook fires again — blocking
 until the next message arrives.
 
 Exception: if the Stop event reports a running background task or active
 cron and no messages are queued, the hook returns `{}` (the documented
-"allow" — any `decision` other than `block` fails Stop's schema) instead of
-blocking so the running work isn't stalled. Recurring crons stay active
-between fires, so an agent with one is message-delivered only at fire
-boundaries.
+"allow" — on both harnesses any `decision` other than `block` fails Stop's
+schema) instead of blocking so the running work isn't stalled. Recurring
+crons stay active between fires, so an agent with one is message-delivered
+only at fire boundaries. Codex's Stop payload carries neither field
+(`additionalProperties: false`) and codex has no second wake source (a
+completed background terminal does not wake the session), so `parse_busy`
+is false there and codex agents block every turn.
 
 Earlier releases wrote the hooks into `main/.claude/settings.json`, seeded
 into each feature. `hooks_install` upserts the user-level file *first* and
@@ -145,6 +156,50 @@ agent can reply without re-addressing.
 "read the body from stdin", so long briefs can be fed via heredoc without
 an approval prompt. (`--context` also accepts a literal string or a file
 path; `agent spawn`'s is stdin-or-literal only.)
+
+#### Codex specifics
+
+Codex (`harness/codex.rs`, minimum 0.153.2) has no launch-time role
+channel, so the SessionStart hook (`pm harness hooks session-start`) does
+double duty: it records the session id for every harness, and for a codex
+agent also prints the composed prompt — definition body (front matter
+stripped) + the same baseline/notice text `compose_spawn_prompt` writes — as
+`hookSpecificOutput.additionalContext`. SessionStart fires with
+`source: "resume"` too, so the role re-applies on `codex resume` without
+`-c developer_instructions`. Codex reads `~/.agents/skills` and
+`<repo>/.agents/skills` itself and never `.claude/`, so `projected_dirs` is
+empty and `seed` copies the canonical store for every feature regardless of
+harness; the "not projected" doctor finding is gated on
+`Harness::projects_definitions`.
+
+Two trust gates live in `$CODEX_HOME/config.toml`. Directory trust
+(`[projects."<canonical path>"] trust_level = "trusted"`) pm writes at the
+spawn chokepoint (`Harness::trust_worktree`, via `toml_edit` so the user's
+file keeps its comments) and `pm doctor --fix` repairs. Hook trust
+(`[hooks.state."<hooks.json>:<snake_case event>:<entry idx>:<hook idx>"]
+trusted_hash`) only codex can write — the hash is not reproducible outside
+the binary — via one interactive "Trust all and continue", re-asked when
+the command text changes; without it codex runs no hook and says nothing,
+so `pm doctor` asserts the entry (`IssueKind::HookUntrusted`) at pm's
+actual entry indices (`hooks_install::pm_hook_position`; pm appends its
+entries so a user's existing hooks keep their indices). A flat hooks.json
+also parses and registers nothing (`IssueKind::HooksMalformed`).
+`[harness.codex] bypass_hook_trust = true` is the explicit opt-out. Codex
+accepts and honours the same `timeout` key, so pm's `86400` lets a Stop
+hook block past the 600 s default.
+
+The command is `codex -a <approval> -s <sandbox> [--add-dir …] [-m id]
+[resume|fork <id>] [prompt]` — subcommands after global options. The
+per-agent permission row is the `-s` sandbox mode, `[harness.codex]
+sandbox` the harness-wide default, and `danger-full-access` the fallback:
+the tmux socket is unreachable from inside any codex sandbox (Seatbelt
+blocks `AF_UNIX` connect regardless of writable roots), so every
+window-touching command fails there and a codex orchestrator needs full
+access. `SpawnSpec.writable_dirs` (pm state dir, `main/.git`, pm config
+dir, configured `writable_roots`) is emitted as `--add-dir` only when a
+sandbox is on; under it reads, git, and message delivery work.
+`-a never` is the default because an approval prompt in an unwatched tmux
+window stalls the agent.
 
 ### Workflows vs agents
 
@@ -197,14 +252,16 @@ agent definition the harness launches, so several agents can run off one definit
 restart, fork, `pm open`, and the dead-window heal all preserve the alias.
 
 The shared baseline is appended to every spawned agent's prompt through the
-harness's prompt-file mechanism (`SpawnSpec.append_prompt_file`;
-`--append-system-prompt-file` on Claude Code), gated on the file existing at
-a single spawn chokepoint (older projects without it spawn unchanged). Its
-content is general to all agents and must **not** mention `.pm`. If a harness
-release drops that mechanism the baseline would silently go dark, so
-`Harness::supports_prompt_file` probes the installed binary: `pm doctor` warns
-when the baseline is installed but unsupported, and `pm harness probe` reports
-the outcome directly.
+harness's prompt mechanism (`SpawnSpec.append_prompt_file` →
+`--append-system-prompt-file` on Claude Code; SessionStart `additionalContext`
+on codex), gated on the file existing at a single spawn chokepoint (older
+projects without it spawn unchanged). Its content is general to all agents
+and must **not** mention `.pm`. If a harness release drops that mechanism the
+baseline would silently go dark, so `Harness::supports_prompt_delivery` probes
+the installed binary (flag presence for Claude Code, minimum version for
+codex): `pm doctor` warns for each harness in use when the baseline is
+installed but unsupported, and `pm harness probe` reports the outcome
+directly.
 
 Per-agent `[agents.*]` settings are resolved at spawn time and deliberately not
 stored on `AgentEntry` — re-reading config per spawn is what lets restart and
@@ -221,6 +278,9 @@ a `session_id` only means something to the harness that produced it, so
 `agent_spawn` resumes via `harness::resumable_session` only when the entry's
 harness still matches config — otherwise it spawns fresh and says so — and
 `agent fork` refuses outright (a fork without the transcript isn't a fork).
+`[harness.<name>]` (`HarnessConfig`, `resolve_harness_config`) is the
+per-harness counterpart with no per-agent shape, layered the same way and
+resolved at the same chokepoint.
 
 The **notice board** (`notice.rs`) is a seeded *directive* surface — terse
 standing instructions hand-written into `notices.md` in the pm config dir and

@@ -84,6 +84,7 @@ pub fn init(
         setup: SetupConfig::default(),
         github: GithubConfig::default(),
         agents: AgentsConfig::default(),
+        harness: Default::default(),
     };
     config.save(&pm_dir)?;
 
@@ -124,6 +125,7 @@ pub fn init(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::harness::Harness;
     use crate::testing::TestServer;
     use tempfile::tempdir;
 
@@ -218,7 +220,7 @@ mod tests {
         assert!(!main.join(".claude/skills").exists());
         // Hooks are user-level; a fresh project gets no settings file.
         assert!(!main.join(".claude/settings.json").exists());
-        assert!(hooks_install::is_installed().unwrap());
+        assert!(hooks_install::is_installed_for(Harness::ClaudeCode).unwrap());
         assert!(!paths::workflows_dir(&project_path).exists());
         assert!(skills::is_migrated(&project_path));
     }

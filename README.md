@@ -87,8 +87,9 @@ Two decoupled layers:
 - **Agent definitions** (`~/.agents/agents/<name>.md`, or
   `main/.agents/agents/` for one project) describe an agent's *job* — what it
   does, how it evaluates work. They carry no routing. pm projects them into
-  each harness's own dir on `init`/`upgrade`; only the `.agents/` copy counts
-  as a definition.
+  each harness's own dir on `init`/`upgrade` where the harness needs that
+  (Claude Code does; codex reads `.agents/` itself); only the `.agents/` copy
+  counts as a definition.
 - **Workflows** (`<pm config dir>/workflows/<name>/`, or
   `<project>/.pm/workflows/` for one project) define the per-feature
   *topology* — who hands off to whom, who reports to the user.
@@ -164,19 +165,21 @@ implementer = "acceptEdits"
 [agents.models]              # alias or full id, passed to the harness unvalidated
 reviewer = "opus"
 
-[agents.harness]             # agent CLI; only "claude-code" (the default) today
+[agents.harness]             # agent CLI: "claude-code" (the default) or "codex"
 implementer = "claude-code"
+reviewer = "codex"
 ```
 
 Permission modes and model ids are in the terms of the agent's harness
-(`--permission-mode` / `--model` values for Claude Code) and reach it
-unvalidated, so a typo surfaces in the agent's tmux window rather than at
-spawn.
+(`--permission-mode` / `--model` values for Claude Code; the `-s` sandbox
+mode / `-m` for codex) and reach it unvalidated, so a typo surfaces in the
+agent's tmux window rather than at spawn.
 
 Any other `[agents.harness]` value is an error at spawn — pm never falls back
 silently. `pm harness list` shows what pm can spawn and `pm agent list` each
 agent's harness; a stored session is only resumed on the harness that
-produced it.
+produced it — change an agent's harness and its next respawn starts a fresh
+session (and `pm agent fork` refuses).
 
 `pm agent spawn`, `pm feat new`, and `pm feat adopt` take `--permission <mode>`
 and `--model <id>` as spawn-time overrides that beat both tiers; on `feat
@@ -186,24 +189,75 @@ remembered — a restart, fork, or heal goes back to config.
 Keys are the `--agent` definition, not the display name: an agent spawned as
 `frontend-dev --agent implementer` takes `implementer`'s row.
 
+### Codex agents
+
+Set `[agents.harness] <def> = "codex"` and pm spawns that agent in the
+codex TUI instead of Claude Code. The same never-idle loop, messaging, and
+skills apply; the differences are what codex needs before it will run
+unattended:
+
+- **Hook trust — one interactive step per machine.** `pm init`/`pm upgrade`
+  install pm's hooks into `$CODEX_HOME/hooks.json`, but codex runs no hook it
+  has not been told to trust, and it fails **silently** when trust is
+  missing (the agent just idles after its first turn). Start `codex` once in
+  a trusted directory and choose **"Trust all and continue"** at the "Hooks
+  need review" prompt. Codex asks again only when a hook's command text
+  changes. `pm doctor` reports a missing trust entry; the escape hatch is
+  `[harness.codex] bypass_hook_trust = true` (passes
+  `--dangerously-bypass-hook-trust`, one warning line per launch).
+- **Directory trust** pm writes itself: each worktree gets a
+  `[projects."<path>"] trust_level = "trusted"` entry in
+  `$CODEX_HOME/config.toml` at spawn (`pm doctor --fix` adds any missing).
+- **No sandbox by default.** pm launches codex with `-a never -s
+  danger-full-access`. pm's tmux socket cannot be reached from inside any
+  codex sandbox (macOS blocks the Unix-socket connect independently of
+  writable roots), so a sandboxed agent cannot spawn, stop, restart, or heal
+  other agents — a codex `main` needs full access. This is the same blast
+  radius pm's Claude Code agents already run with; if you chose codex *for*
+  its sandbox, know that pm turns it off unless you say otherwise:
+
+  ```toml
+  [agents.permissions]          # for a codex agent this is the -s sandbox mode
+  implementer = "workspace-write"
+
+  [harness.codex]               # harness-wide, project beats global per key
+  sandbox = "workspace-write"   # default for codex agents with no permissions row
+  approval = "never"            # -a; "on-request" would stall an unwatched window
+  writable_roots = ["main/target"]   # extra --add-dir; a project [] masks global
+  ```
+
+  A sandboxed codex agent can read, run git, and send and receive messages
+  — pm always adds `--add-dir` for its own state dir, the shared `main/.git`,
+  and the pm config dir — but every tmux-touching command fails. Feature
+  agents that only read and report fit that mode; orchestrators do not.
+- **Role delivery.** Codex has no `--agent`; the agent's definition, the
+  baseline, and the notice boards reach it through the SessionStart hook as
+  developer context, on start and on every `codex resume`.
+- `pm harness probe --harness codex` checks the installed version (0.153.2
+  or newer). `pm harness settings|migrate|export|import` are Claude Code
+  only.
+
 ### Agents as never-idle message processors
 
-`pm init` and `pm upgrade` install a Claude Code **Stop hook** into the
-harness's user-level settings (`~/.claude/settings.json` for Claude Code),
-once per machine, so every project on it is covered. After every turn it
-blocks until the agent has unread messages (calling `pm msg wait`
-internally), then returns a `block` decision that Claude Code delivers as a
-continuation prompt. The agent reads the message, processes it, the turn
-ends, and the hook fires again. This turns every pm-managed agent into a
-never-idle processor: `--context` at feature creation just queues the first
-message, delivered exactly like any later peer message.
+`pm init` and `pm upgrade` install a **Stop hook** into the user-level hooks
+file of every harness in use (`~/.claude/settings.json` for Claude Code,
+`$CODEX_HOME/hooks.json` for codex), once per machine, so every project on
+it is covered. After every turn it blocks until the agent has unread
+messages (calling `pm msg wait` internally), then returns a `block` decision
+that the harness delivers as a continuation prompt. The agent reads the
+message, processes it, the turn ends, and the hook fires again. This turns
+every pm-managed agent into a never-idle processor: `--context` at feature
+creation just queues the first message, delivered exactly like any later
+peer message.
 
-The hook applies to every Claude Code session on the machine, so its command
-is guarded on `PM_AGENT_NAME`: a session pm didn't spawn exits it
+The hook applies to every session of that harness on the machine, so its
+command is guarded on `PM_AGENT_NAME`: a session pm didn't spawn exits it
 immediately, without needing `pm` on its `PATH`.
 
-Exception: if a background task or session cron is still running and no
-messages are queued, the hook lets the turn end so the work isn't stalled.
+Exception: if a Claude Code background task or session cron is still running
+and no messages are queued, the hook lets the turn end so the work isn't
+stalled. Codex has no such second wake source, so its agents block every
+turn.
 
 Reinstall with `pm harness hooks install` (idempotent, works outside a
 project); `pm doctor --fix` restores a missing one. Earlier releases wrote
@@ -305,9 +359,9 @@ conventions, the messaging heredoc form, the `pm workflow show` reminder,
 surfacing out-of-scope problems, what "the user" means — live in a single
 bundled `pm-baseline.md` rather than being repeated per agent.
 `pm init`/`pm upgrade` install it to `~/.agents/pm-baseline.md`, and every
-agent pm spawns
-(including `main`) has it appended to its system prompt
-(`--append-system-prompt-file` on Claude Code).
+agent pm spawns (including `main`) has it appended to its system prompt
+(`--append-system-prompt-file` on Claude Code; SessionStart hook context on
+codex).
 
 ### Notice board
 

@@ -328,7 +328,7 @@ pub enum HarnessSkillsCommands {
 
 #[derive(Subcommand)]
 pub enum HarnessHooksCommands {
-    /// Install pm hooks (Stop + SessionStart) into ~/.claude/settings.json, moving any out of project files
+    /// Install pm hooks (Stop + SessionStart) into each harness's user-level hooks file, moving any out of project files
     Install,
     /// Stop hook handler — called by the harness on every Stop event (not for direct use)
     Stop,

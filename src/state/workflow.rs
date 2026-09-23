@@ -282,6 +282,34 @@ pub fn definition_paths(project_root: &Path, agent: &str, home: Option<&Path>) -
     ]
 }
 
+/// The body of the first definition file found at [`definition_paths`],
+/// without its YAML front matter (the name/description block a harness reads
+/// as metadata, not as prompt). `None` when no file resolves.
+pub fn definition_body(
+    project_root: &Path,
+    agent: &str,
+    home: Option<&Path>,
+) -> Result<Option<String>> {
+    for path in definition_paths(project_root, agent, home) {
+        if path.is_absolute() && path.exists() {
+            let content = std::fs::read_to_string(&path)?;
+            return Ok(Some(strip_front_matter(&content).to_string()));
+        }
+    }
+    Ok(None)
+}
+
+/// `content` after a leading `---` … `---` block, if any.
+fn strip_front_matter(content: &str) -> &str {
+    let Some(rest) = content.strip_prefix("---\n") else {
+        return content;
+    };
+    match rest.find("\n---\n") {
+        Some(end) => rest[end + 5..].trim_start_matches('\n'),
+        None => content,
+    }
+}
+
 /// True iff an agent definition file exists at any of [`definition_paths`].
 /// The feature worktree is intentionally not consulted — at `feat new` time
 /// it doesn't exist yet. `~/…` placeholders (no home) are never checked.
@@ -295,6 +323,42 @@ pub fn definition_exists(project_root: &Path, agent: &str, home: Option<&Path>) 
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn definition_body_drops_front_matter_and_prefers_the_project_tier() {
+        let dir = tempdir().unwrap();
+        let home = tempdir().unwrap();
+        assert_eq!(
+            definition_body(dir.path(), "impl", Some(home.path())).unwrap(),
+            None
+        );
+
+        let global = home.path().join(".agents/agents");
+        std::fs::create_dir_all(&global).unwrap();
+        std::fs::write(
+            global.join("impl.md"),
+            "---\nname: impl\ndescription: x\n---\n\n# Impl\n\nBody --- with dashes\n",
+        )
+        .unwrap();
+        assert_eq!(
+            definition_body(dir.path(), "impl", Some(home.path()))
+                .unwrap()
+                .as_deref(),
+            Some("# Impl\n\nBody --- with dashes\n")
+        );
+
+        let main = paths::main_worktree(dir.path()).join(".agents/agents");
+        std::fs::create_dir_all(&main).unwrap();
+        std::fs::write(main.join("impl.md"), "no front matter").unwrap();
+        assert_eq!(
+            definition_body(dir.path(), "impl", Some(home.path()))
+                .unwrap()
+                .as_deref(),
+            Some("no front matter")
+        );
+        // An unterminated block is body, not metadata.
+        assert_eq!(strip_front_matter("---\nname: x\n"), "---\nname: x\n");
+    }
 
     fn write_workflow(project_root: &Path, name: &str, body: &str) {
         let dir = paths::workflows_dir(project_root).join(name);

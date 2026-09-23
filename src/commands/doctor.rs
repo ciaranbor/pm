@@ -58,6 +58,15 @@ pub enum IssueKind {
     /// An active agent is named `claude`, the removed vanilla alias: it runs
     /// until its window dies, then restart/heal fail to resolve a definition.
     LegacyVanillaAgentName,
+    /// A harness's hooks file has an entry in a shape the harness silently
+    /// registers nothing for.
+    HooksMalformed,
+    /// The harness has not recorded trust for a pm hook, so it silently does
+    /// not run it.
+    HookUntrusted,
+    /// A worktree is not trusted by the harness, so it stops at an
+    /// interactive prompt on launch.
+    WorktreeUntrusted,
 }
 
 /// A single issue detected for a feature.
@@ -116,6 +125,8 @@ enum FixAction {
     },
     /// Clear stale active flag and respawn a dead agent.
     RespawnAgent { agent_name: String },
+    /// Record directory trust for a worktree with the harness.
+    TrustWorktree { harness: Harness, path: PathBuf },
 }
 
 /// Diagnostic finding for a single scope (a feature or `main`).
@@ -169,27 +180,13 @@ pub fn diagnose(
     let project_name = &config.project.name;
 
     let features = FeatureState::list(&features_dir)?;
-    if features.is_empty() {
-        return Ok(Vec::new());
-    }
-
     let main_repo = paths::main_worktree(project_root);
-    let worktrees = git::list_worktrees(&main_repo)?;
-
     let mut findings: Vec<Finding> = Vec::new();
 
     // Main-scope checks: stop hook installed, main tmux session present.
     let main_session = tmux::session_name(project_name, "main");
     let mut main_issues: Vec<Issue> = Vec::new();
-    if !hooks_install::is_installed()? {
-        main_issues.push(Issue {
-            kind: IssueKind::HooksNotInstalled,
-            message:
-                "pm hooks not installed in ~/.claude/settings.json (run `pm harness hooks install`)"
-                    .to_string(),
-            fix: Fix::Auto(FixAction::InstallStopHook),
-        });
-    }
+    main_issues.extend(hook_issues(project_root)?);
     for path in hooks_install::stale_project_files(project_root)? {
         main_issues.push(Issue {
             kind: IssueKind::StaleProjectHooks,
@@ -240,6 +237,7 @@ pub fn diagnose(
         });
     }
 
+    let worktrees = git::list_worktrees(&main_repo)?;
     for (name, state) in &features {
         let mut issues = Vec::new();
 
@@ -452,16 +450,11 @@ pub fn diagnose(
 /// Returns formatted diagnostic lines.
 pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Result<Vec<String>> {
     // Project-independent warnings, appended after the status lines.
-    let warnings: Vec<String> = [
-        baseline_capability_warning(project_root),
-        global_config_warning(),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
+    let mut warnings = baseline_capability_warnings(project_root)?;
+    warnings.extend(global_config_warning());
 
-    // diagnose() returns an empty Vec when the project has no features —
-    // preserve the historical "No features to check" message.
+    // Empty only when the project has no features and the main scope is
+    // clean; main-scope findings are reported even with no features.
     let findings = diagnose(project_root, tmux_server, true)?;
     if findings.is_empty() {
         // Status line first, warnings after — matches the ordering in the
@@ -574,40 +567,110 @@ fn global_config_warning_in(config_dir: &Path) -> Option<String> {
     ))
 }
 
-/// Warn when the shared agent baseline is installed for this project but the
-/// harness binary doesn't support appending a prompt file — how pm applies
-/// the baseline at spawn time. Returns `None` when the baseline isn't
-/// installed (nothing to apply) or the binary can't be probed.
-fn baseline_capability_warning(project_root: &Path) -> Option<String> {
+/// Warn when the shared agent baseline is installed for this project but a
+/// harness in use can't deliver pm's composed prompt — how the baseline
+/// reaches an agent at spawn time. Nothing when the baseline isn't installed
+/// (nothing to apply) or a binary can't be probed.
+fn baseline_capability_warnings(project_root: &Path) -> Result<Vec<String>> {
     if !crate::commands::skills::baseline_path(project_root).exists() {
-        return None;
+        return Ok(Vec::new());
     }
-    let harness = Harness::default();
-    match harness.supports_prompt_file() {
-        Some(false) => Some(format!("baseline — {}", prompt_file_unsupported(harness))),
-        _ => None,
-    }
+    Ok(skills::harnesses_in_use(project_root)?
+        .into_iter()
+        .filter(|h| h.supports_prompt_delivery() == Some(false))
+        .map(|h| format!("baseline — {}", prompt_delivery_unsupported(h)))
+        .collect())
 }
 
-fn prompt_file_unsupported(harness: Harness) -> String {
+fn prompt_delivery_unsupported(harness: Harness) -> String {
     format!(
-        "{harness} does not support appending a prompt file; the shared agent baseline \
+        "{harness} does not support {}; the shared agent baseline \
          (~/.agents/pm-baseline.md) will NOT be applied to spawned agents. Check your \
-         {harness} version."
+         {harness} version.",
+        harness.prompt_mechanism()
     )
 }
 
 /// One line for `pm harness probe`: whether the installed binary supports
 /// the capabilities pm relies on.
 pub fn probe_line(harness: Harness) -> String {
-    match harness.supports_prompt_file() {
-        Some(true) => format!("{harness}: prompt file supported — the shared baseline is applied"),
+    let mechanism = harness.prompt_mechanism();
+    match harness.supports_prompt_delivery() {
+        Some(true) => format!("{harness}: {mechanism} supported — the shared baseline is applied"),
         Some(false) => format!(
-            "{harness}: does not support appending a prompt file — the shared agent \
-             baseline will not be applied to spawned agents"
+            "{harness}: does not support {mechanism} — the shared agent baseline will not be \
+             applied to spawned agents"
         ),
-        None => format!("{harness}: binary not found (or its --help failed); nothing to probe"),
+        None => format!("{harness}: binary not found (or probing it failed); nothing to probe"),
     }
+}
+
+/// Main-scope findings about each harness in use's hooks: pm's entries
+/// missing from its user-level file, entries in a shape it would ignore,
+/// pm hooks it has not been told to trust, and worktrees it would stop at
+/// a trust prompt for. The trust findings exist because codex fails
+/// silently on both counts.
+fn hook_issues(project_root: &Path) -> Result<Vec<Issue>> {
+    let home = paths::home_dir()?;
+    let mut issues = Vec::new();
+    for harness in skills::harnesses_in_use(project_root)? {
+        let file = hooks_install::user_settings_path(harness, &home)?;
+        let shown = crate::path_utils::to_portable(&file);
+        let mut installed = false;
+        if let Some(root) = hooks_install::user_hooks_root(harness, &home)? {
+            for event in harness.malformed_hook_events(&root) {
+                issues.push(Issue {
+                    kind: IssueKind::HooksMalformed,
+                    message: format!(
+                        "{shown} `hooks.{event}` holds a bare hook object; {harness} registers \
+                         nothing for it — wrap it as {{\"hooks\": [...]}}"
+                    ),
+                    fix: Fix::None,
+                });
+            }
+            installed = true;
+            for &(event, markers) in hooks_install::PM_EVENTS {
+                let Some((entry, hook)) = hooks_install::pm_hook_position(&root, event, markers)
+                else {
+                    installed = false;
+                    continue;
+                };
+                if !harness.hook_trusted(&home, event, entry, hook) {
+                    issues.push(Issue {
+                        kind: IssueKind::HookUntrusted,
+                        message: format!(
+                            "{harness} has not trusted pm's {event} hook, so it silently does \
+                             not run: {}",
+                            harness.hook_trust_remedy()
+                        ),
+                        fix: Fix::None,
+                    });
+                }
+            }
+        }
+        if !installed {
+            issues.push(Issue {
+                kind: IssueKind::HooksNotInstalled,
+                message: format!(
+                    "pm hooks not installed in {shown} (run `pm harness hooks install`)"
+                ),
+                fix: Fix::Auto(FixAction::InstallStopHook),
+            });
+        }
+        for wt in skills::worktrees_on_disk(project_root)? {
+            if !harness.worktree_trusted(&home, &wt) {
+                issues.push(Issue {
+                    kind: IssueKind::WorktreeUntrusted,
+                    message: format!(
+                        "{} is not trusted by {harness}; it will stop at a trust prompt on launch",
+                        wt.strip_prefix(project_root).unwrap_or(&wt).display()
+                    ),
+                    fix: Fix::Auto(FixAction::TrustWorktree { harness, path: wt }),
+                });
+            }
+        }
+    }
+    Ok(issues)
 }
 
 /// Main-scope findings about the two asset tiers: what the global tier is
@@ -685,7 +748,10 @@ fn asset_issues(project_root: &Path) -> Result<Vec<Issue>> {
 fn unprojected_definitions(project_root: &Path) -> Result<Vec<(String, Harness)>> {
     let main = paths::main_worktree(project_root);
     let canonical = main.join(skills::CANONICAL_DIR).join("agents");
-    let harnesses = skills::harnesses_in_use(project_root);
+    let harnesses: Vec<Harness> = skills::harnesses_in_use(project_root)?
+        .into_iter()
+        .filter(|h| h.projects_definitions())
+        .collect();
     let mut out = skills::unprojected_global_definitions(&harnesses)?;
     for file in skills::definition_files(&canonical)? {
         for harness in &harnesses {
@@ -795,6 +861,9 @@ fn apply_fix(
                 tmux_server,
             )?;
         }
+        FixAction::TrustWorktree { harness, path } => {
+            harness.trust_worktree(&paths::home_dir()?, path)?;
+        }
     }
     Ok(())
 }
@@ -832,13 +901,53 @@ mod tests {
     }
 
     #[test]
+    fn no_features_still_reports_main_scope_findings() {
+        // Hook and trust findings are about the machine, not a feature, so
+        // a project that has none yet must still hear about them.
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, _) = server.setup_project(dir.path());
+        let pm_dir = paths::pm_dir(&project_path);
+        let mut config = ProjectConfig::load(&pm_dir).unwrap();
+        config
+            .agents
+            .harness
+            .insert("reviewer".to_string(), "codex".to_string());
+        config.save(&pm_dir).unwrap();
+
+        let findings = diagnose(&project_path, server.name(), false).unwrap();
+        let main_kinds: Vec<IssueKind> = findings
+            .iter()
+            .filter(|f| f.feature() == "main")
+            .flat_map(|f| f.issues())
+            .map(|i| i.kind())
+            .collect();
+        assert!(
+            main_kinds.iter().any(|k| matches!(
+                k,
+                IssueKind::HooksNotInstalled
+                    | IssueKind::HookUntrusted
+                    | IssueKind::WorktreeUntrusted
+            )),
+            "{main_kinds:?}"
+        );
+        let lines = doctor(&project_path, false, server.name()).unwrap();
+        assert_ne!(lines, vec!["No features to check"]);
+        assert!(lines[0].contains("issue(s) found"), "{lines:?}");
+    }
+
+    #[test]
     fn capability_warning_skipped_when_baseline_absent() {
         // No `pm-baseline.md` installed → the capability probe is never run
         // and no warning is produced (so `claude` isn't invoked needlessly).
         let dir = tempdir().unwrap();
         let project_root = dir.path();
         std::fs::create_dir_all(paths::main_worktree(project_root).join(".claude")).unwrap();
-        assert!(baseline_capability_warning(project_root).is_none());
+        assert!(
+            baseline_capability_warnings(project_root)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1217,6 +1326,121 @@ mod tests {
     }
 
     // --- --fix tests ---
+
+    #[test]
+    fn codex_in_use_is_checked_for_hooks_trust_and_worktree_trust() {
+        let _guard = crate::testing::CODEX_CONFIG_LOCK.lock().unwrap();
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let home = paths::home_dir().unwrap();
+        let codex_hooks = home.join(".codex/hooks.json");
+        let _ = std::fs::remove_file(&codex_hooks);
+
+        let kinds = |findings: &[Finding]| -> Vec<(IssueKind, String)> {
+            findings
+                .iter()
+                .filter(|f| f.feature() == "main")
+                .flat_map(|f| f.issues())
+                .filter(|i| {
+                    matches!(
+                        i.kind(),
+                        IssueKind::HooksNotInstalled
+                            | IssueKind::HooksMalformed
+                            | IssueKind::HookUntrusted
+                            | IssueKind::WorktreeUntrusted
+                    )
+                })
+                .map(|i| (i.kind(), i.message().to_string()))
+                .collect()
+        };
+
+        // Claude Code only: nothing codex-related.
+        assert!(kinds(&diagnose(&project_path, server.name(), false).unwrap()).is_empty());
+
+        let pm_dir = paths::pm_dir(&project_path);
+        let mut config = ProjectConfig::load(&pm_dir).unwrap();
+        config
+            .agents
+            .harness
+            .insert("reviewer".to_string(), "codex".to_string());
+        config.save(&pm_dir).unwrap();
+
+        let found = kinds(&diagnose(&project_path, server.name(), false).unwrap());
+        assert_eq!(
+            found.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
+            vec![
+                IssueKind::HooksNotInstalled,
+                IssueKind::WorktreeUntrusted,
+                IssueKind::WorktreeUntrusted
+            ],
+            "{found:?}"
+        );
+        assert!(found[0].1.contains(".codex/hooks.json"), "{found:?}");
+        assert!(
+            found[1].1.starts_with("main is not trusted by codex"),
+            "{found:?}"
+        );
+        assert!(
+            found[2].1.starts_with("login is not trusted by codex"),
+            "{found:?}"
+        );
+
+        // --fix installs the hooks and trusts both worktrees; hook trust is
+        // codex's alone to grant, so it remains.
+        let lines = doctor(&project_path, true, server.name()).unwrap();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("fixed") && l.contains("not trusted by codex")),
+            "{lines:?}"
+        );
+        assert!(hooks_install::is_installed_for(Harness::Codex).unwrap());
+        let found = kinds(&diagnose(&project_path, server.name(), false).unwrap());
+        assert_eq!(
+            found.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
+            vec![IssueKind::HookUntrusted, IssueKind::HookUntrusted],
+            "{found:?}"
+        );
+        assert!(found[0].1.contains("pm's Stop hook"), "{found:?}");
+        assert!(found[1].1.contains("pm's SessionStart hook"), "{found:?}");
+
+        // Trust recorded the way codex writes it, at pm's entries' positions.
+        let root = hooks_install::user_hooks_root(Harness::Codex, &home)
+            .unwrap()
+            .unwrap();
+        let mut trust = String::new();
+        for &(event, markers) in hooks_install::PM_EVENTS {
+            let (i, j) = hooks_install::pm_hook_position(&root, event, markers).unwrap();
+            let snake = if event == "Stop" {
+                "stop"
+            } else {
+                "session_start"
+            };
+            trust.push_str(&format!(
+                "[hooks.state.\"{}:{snake}:{i}:{j}\"]\ntrusted_hash = \"sha256:t\"\n",
+                codex_hooks.display()
+            ));
+        }
+        let config_toml = home.join(".codex/config.toml");
+        let existing = std::fs::read_to_string(&config_toml).unwrap();
+        std::fs::write(&config_toml, format!("{existing}\n{trust}")).unwrap();
+        assert!(kinds(&diagnose(&project_path, server.name(), false).unwrap()).is_empty());
+
+        // A flat hooks.json registers nothing in codex: flagged, not "installed".
+        std::fs::write(
+            &codex_hooks,
+            r#"{"hooks":{"Stop":[{"type":"command","command":"pm harness hooks stop"}]}}"#,
+        )
+        .unwrap();
+        let found = kinds(&diagnose(&project_path, server.name(), false).unwrap());
+        assert_eq!(
+            found.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
+            vec![IssueKind::HooksMalformed, IssueKind::HooksNotInstalled],
+            "{found:?}"
+        );
+        let _ = std::fs::remove_file(&codex_hooks);
+    }
 
     #[test]
     fn fix_strips_stale_project_hooks() {

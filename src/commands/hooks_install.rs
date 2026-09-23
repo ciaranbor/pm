@@ -1,5 +1,6 @@
-//! Install pm hooks (Stop + SessionStart) into the harness's user-level
-//! settings file (`~/.claude/settings.json`) — once per machine — and strip
+//! Install pm hooks (Stop + SessionStart) into the user-level hooks file of
+//! every harness in use (`~/.claude/settings.json`, `$CODEX_HOME/hooks.json`
+//! — both take the same nested `hooks` shape) — once per machine — and strip
 //! the entries earlier releases wrote into `main/.claude/settings.json` and
 //! its seeded feature copies. Both halves are idempotent, so `pm init`,
 //! `pm upgrade`, `pm harness hooks install` and `pm doctor --fix` all run
@@ -7,10 +8,13 @@
 //! never left without the hook mid-migration (Claude Code merges the user
 //! and project files and runs a duplicated handler once).
 //!
-//! A user-level hook fires in every Claude Code session on the machine, so
-//! each installed command is guarded on `PM_AGENT_NAME`: a non-pm session
+//! A user-level hook fires in every session of that harness on the machine,
+//! so each installed command is guarded on `PM_AGENT_NAME`: a non-pm session
 //! exits 0 before `pm` is ever resolved, which also keeps the hook inert
-//! when `pm` is not on that session's `PATH`.
+//! when `pm` is not on that session's `PATH`. Codex additionally runs no
+//! hook until the user has trusted it interactively (`pm doctor` reports a
+//! missing trust entry), and pm appends its entries so existing ones keep
+//! their positions — codex keys trust on the entry's index.
 //!
 //! The Stop hook is `pm harness hooks stop`, which blocks until the agent has
 //! unread messages (by calling `agent_wait` internally), then returns
@@ -19,8 +23,9 @@
 //! messages, the turn ends, and the hook fires again.
 //!
 //! The SessionStart hook is `pm harness hooks session-start`, which captures
-//! the session ID from Claude Code's JSON input and writes it to the agent
-//! registry so dead agents can be resumed with `--resume <session_id>`.
+//! the session ID from the harness's JSON input and writes it to the agent
+//! registry so dead agents can be resumed, and on codex also prints the
+//! agent's composed prompt as `additionalContext`.
 //!
 //! Entries written by older releases (`pm claude hooks …`, or the unguarded
 //! `pm harness hooks …`) are recognised as pm-owned: rewritten in place in
@@ -37,11 +42,12 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use crate::commands::skills::worktrees_on_disk;
+use crate::commands::skills::{self, worktrees_on_disk};
 use crate::error::{PmError, Result};
 use crate::fs_utils::write_atomic;
-use crate::harness::Harness;
+use crate::harness::{self, Harness};
 use crate::state::paths;
+use crate::state::project::{AgentsConfig, GlobalConfig};
 
 /// Timeout in seconds for the Stop hook. Claude Code's default is 600s
 /// (10 minutes), which is too short for agents that block waiting for
@@ -63,6 +69,13 @@ const LEGACY_SESSION_START_MARKER: &str = "pm claude hooks session-start";
 const STOP_MARKERS: &[&str] = &[PM_HOOK_MARKER, LEGACY_HOOK_MARKER];
 const SESSION_START_MARKERS: &[&str] = &[PM_SESSION_START_MARKER, LEGACY_SESSION_START_MARKER];
 
+/// The hook events pm installs, with the command markers that identify
+/// pm's entry under each.
+pub const PM_EVENTS: &[(&str, &[&str])] = &[
+    ("Stop", STOP_MARKERS),
+    ("SessionStart", SESSION_START_MARKERS),
+];
+
 /// Shell prefix that makes a hook exit 0 outside pm agent sessions. `||`
 /// rather than `&&`: a false test must not produce a non-zero exit, which
 /// Claude Code would surface as a hook error.
@@ -79,25 +92,42 @@ pub fn session_start_hook_command() -> String {
     format!("{GUARD}{PM_SESSION_START_MARKER}")
 }
 
-/// The user-level settings file pm's hooks live in.
-fn user_settings_path(home: &Path) -> Result<PathBuf> {
-    Harness::ClaudeCode.user_settings_file(home).ok_or_else(|| {
-        PmError::Io(std::io::Error::other(
-            "harness has no user-level settings file",
-        ))
+/// The user-level file `harness`'s pm hooks live in.
+pub fn user_settings_path(harness: Harness, home: &Path) -> Result<PathBuf> {
+    harness.user_settings_file(home).ok_or_else(|| {
+        PmError::Io(std::io::Error::other(format!(
+            "{harness} has no user-level settings file"
+        )))
     })
 }
 
-/// Install pm hooks into the user-level settings file and, when inside a
-/// project, strip pm's entries from its project-level files. Returns a
-/// human-readable status, one line per file changed.
+/// The harnesses whose hooks files pm maintains here: those the project's
+/// agents run on, or — outside a project — those the global config names.
+fn harnesses_for(project_root: Option<&Path>) -> Result<Vec<Harness>> {
+    match project_root {
+        Some(root) => skills::harnesses_in_use(root),
+        None => Ok(harness::harnesses_in_use(
+            &AgentsConfig::default(),
+            &GlobalConfig::load_or_default().agents,
+        )),
+    }
+}
+
+/// Install pm hooks into the user-level file of every harness in use and,
+/// when inside a project, strip pm's entries from its project-level files.
+/// Returns a human-readable status, one line per file changed.
 pub fn install(project_root: Option<&Path>) -> Result<String> {
     let home = paths::home_dir()?;
-    let lines = install_in(&home, project_root, false)?;
+    let harnesses = harnesses_for(project_root)?;
+    let lines = install_in(&home, project_root, &harnesses, false)?;
     if lines.is_empty() {
+        let files: Vec<String> = harnesses
+            .iter()
+            .map(|h| Ok(user_settings_path(*h, &home)?.display().to_string()))
+            .collect::<Result<_>>()?;
         return Ok(format!(
             "pm hooks already installed in {}",
-            user_settings_path(&home)?.display()
+            files.join(", ")
         ));
     }
     Ok(lines.join("\n"))
@@ -106,25 +136,37 @@ pub fn install(project_root: Option<&Path>) -> Result<String> {
 /// Dry-run variant of [`install`]: one `Would …` line per file that would
 /// change; empty when everything is up to date.
 pub fn install_dry_run(project_root: Option<&Path>) -> Result<Vec<String>> {
-    install_in(&paths::home_dir()?, project_root, true)
+    install_in(
+        &paths::home_dir()?,
+        project_root,
+        &harnesses_for(project_root)?,
+        true,
+    )
 }
 
-/// [`install`] against an explicit `home`, for tests that must not share
-/// the per-binary test home. Returns one line per file changed (or, with
-/// `dry_run`, per file that would change).
-fn install_in(home: &Path, project_root: Option<&Path>, dry_run: bool) -> Result<Vec<String>> {
+/// [`install`] against an explicit `home` and harness list, for tests that
+/// must not share the per-binary test home. Returns one line per file
+/// changed (or, with `dry_run`, per file that would change).
+fn install_in(
+    home: &Path,
+    project_root: Option<&Path>,
+    harnesses: &[Harness],
+    dry_run: bool,
+) -> Result<Vec<String>> {
     let mut lines = Vec::new();
-    let user_file = user_settings_path(home)?;
-    if install_global(&user_file, dry_run)? {
-        lines.push(format!(
-            "{} pm hooks in {}",
-            if dry_run {
-                "Would install"
-            } else {
-                "Installed"
-            },
-            user_file.display()
-        ));
+    for harness in harnesses {
+        let user_file = user_settings_path(*harness, home)?;
+        if install_global(&user_file, dry_run)? {
+            lines.push(format!(
+                "{} pm hooks in {}",
+                if dry_run {
+                    "Would install"
+                } else {
+                    "Installed"
+                },
+                user_file.display()
+            ));
+        }
     }
     if let Some(root) = project_root {
         for path in strip_project(root, dry_run)? {
@@ -295,10 +337,7 @@ fn strip_pm_entries(root: &mut Value) -> bool {
         return false;
     };
     let mut changed = false;
-    for (event, markers) in [
-        ("Stop", STOP_MARKERS),
-        ("SessionStart", SESSION_START_MARKERS),
-    ] {
+    for &(event, markers) in PM_EVENTS {
         let Some(array) = hooks.get_mut(event).and_then(|v| v.as_array_mut()) else {
             continue;
         };
@@ -332,38 +371,41 @@ fn command_matches(hook: &Value, markers: &[&str]) -> bool {
         .is_some_and(|cmd| markers.iter().any(|m| cmd.contains(m)))
 }
 
-/// Does any inner hook of this entry carry one of `markers`?
-fn entry_command_matches(entry: &Value, markers: &[&str]) -> bool {
-    entry
-        .get("hooks")
-        .and_then(|v| v.as_array())
-        .is_some_and(|inner| inner.iter().any(|hook| command_matches(hook, markers)))
+/// Whether both pm entries are present in `harness`'s user-level file.
+pub fn is_installed_for(harness: Harness) -> Result<bool> {
+    is_installed_in(harness, &paths::home_dir()?)
 }
 
-/// Whether both pm entries are present in the user-level settings file.
-pub fn is_installed() -> Result<bool> {
-    is_installed_in(&paths::home_dir()?)
-}
-
-/// [`is_installed`] against an explicit `home`.
-fn is_installed_in(home: &Path) -> Result<bool> {
-    let path = user_settings_path(home)?;
-    if !path.exists() {
-        return Ok(false);
-    }
-    let content = std::fs::read_to_string(&path)?;
-    let Ok(parsed) = serde_json::from_str::<Value>(&content) else {
+/// [`is_installed_for`] against an explicit `home`.
+fn is_installed_in(harness: Harness, home: &Path) -> Result<bool> {
+    let Some(parsed) = user_hooks_root(harness, home)? else {
         return Ok(false);
     };
-    Ok(has_pm_entry(&parsed, "Stop", STOP_MARKERS)
-        && has_pm_entry(&parsed, "SessionStart", SESSION_START_MARKERS))
+    Ok(PM_EVENTS
+        .iter()
+        .all(|(event, markers)| pm_hook_position(&parsed, event, markers).is_some()))
 }
 
-fn has_pm_entry(root: &Value, event: &str, markers: &[&str]) -> bool {
-    root.get("hooks")
-        .and_then(|v| v.get(event))
-        .and_then(|v| v.as_array())
-        .is_some_and(|arr| arr.iter().any(|e| entry_command_matches(e, markers)))
+/// The parsed user-level hooks file of `harness`; `None` when it is missing
+/// or not JSON.
+pub fn user_hooks_root(harness: Harness, home: &Path) -> Result<Option<Value>> {
+    let path = user_settings_path(harness, home)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&path)?;
+    Ok(serde_json::from_str::<Value>(&content).ok())
+}
+
+/// Where pm's hook sits under `hooks.<event>`: the entry index and the
+/// inner-hook index — the coordinates codex keys hook trust on.
+pub fn pm_hook_position(root: &Value, event: &str, markers: &[&str]) -> Option<(usize, usize)> {
+    let entries = root.get("hooks")?.get(event)?.as_array()?;
+    entries.iter().enumerate().find_map(|(i, entry)| {
+        let inner = entry.get("hooks")?.as_array()?;
+        let j = inner.iter().position(|h| command_matches(h, markers))?;
+        Some((i, j))
+    })
 }
 
 #[cfg(test)]
@@ -383,6 +425,16 @@ mod tests {
 
     fn user_file(home: &Path) -> PathBuf {
         home.join(".claude/settings.json")
+    }
+
+    const CC: &[Harness] = &[Harness::ClaudeCode];
+
+    fn install_in(home: &Path, project_root: Option<&Path>, dry_run: bool) -> Result<Vec<String>> {
+        super::install_in(home, project_root, CC, dry_run)
+    }
+
+    fn is_installed_in(home: &Path) -> Result<bool> {
+        super::is_installed_in(Harness::ClaudeCode, home)
     }
 
     fn read_json(path: &Path) -> Value {
@@ -445,6 +497,67 @@ mod tests {
         assert!(is_installed_in(&home).unwrap());
         // A fresh project gets no project-level file.
         assert!(!paths::main_worktree(&root).join(".claude").exists());
+    }
+
+    #[test]
+    fn install_covers_every_harness_in_use_with_the_same_nested_shape() {
+        let (_dir, home, root) = setup();
+        // A codex user with a hook of their own, at index 0.
+        let codex_hooks = home.join(".codex/hooks.json");
+        write_json(
+            &codex_hooks,
+            &json!({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "say done"}]}]}}),
+        );
+        let both = [Harness::ClaudeCode, Harness::Codex];
+
+        let lines = super::install_in(&home, Some(&root), &both, false).unwrap();
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(
+            lines[1].ends_with(&codex_hooks.display().to_string()),
+            "{lines:?}"
+        );
+        assert!(super::is_installed_in(Harness::Codex, &home).unwrap());
+        assert!(is_installed_in(&home).unwrap());
+
+        let parsed = read_json(&codex_hooks);
+        // The user's hook keeps position 0 (codex keys its trust on the
+        // index); pm's entry follows.
+        assert_eq!(
+            command_at(&parsed, "/hooks/Stop/0/hooks/0/command"),
+            "say done"
+        );
+        assert_eq!(
+            pm_hook_position(&parsed, "Stop", STOP_MARKERS),
+            Some((1, 0))
+        );
+        assert_eq!(
+            pm_hook_position(&parsed, "SessionStart", SESSION_START_MARKERS),
+            Some((0, 0))
+        );
+        assert_eq!(
+            command_at(&parsed, "/hooks/Stop/1/hooks/0/command"),
+            stop_hook_command()
+        );
+        assert_eq!(
+            parsed
+                .pointer("/hooks/Stop/1/hooks/0/timeout")
+                .and_then(|v| v.as_u64()),
+            Some(STOP_HOOK_TIMEOUT_SECS)
+        );
+        assert!(Harness::Codex.malformed_hook_events(&parsed).is_empty());
+
+        // Idempotent across both files.
+        assert!(
+            super::install_in(&home, Some(&root), &both, true)
+                .unwrap()
+                .is_empty()
+        );
+
+        // A harness not in use is left alone.
+        let (_dir, home, root) = setup();
+        install_in(&home, Some(&root), false).unwrap();
+        assert!(!home.join(".codex").exists());
+        assert!(!super::is_installed_in(Harness::Codex, &home).unwrap());
     }
 
     #[test]

@@ -19,6 +19,11 @@ use std::sync::atomic::{AtomicU32, Ordering};
 /// on CWD), take the read lock.
 pub static CWD_LOCK: RwLock<()> = RwLock::new(());
 
+/// Serialises tests that write the test home's `.codex/config.toml` (codex
+/// directory trust): the write is read-modify-write, so two concurrent
+/// tests could each drop the other's entry.
+pub static CODEX_CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 static TMUX_SERVER_COUNTER: AtomicU32 = AtomicU32::new(0);
 static SHARED_SERVER_NAME: OnceLock<String> = OnceLock::new();
 static TEST_HOME: OnceLock<std::path::PathBuf> = OnceLock::new();
@@ -380,6 +385,7 @@ impl TestServer {
             setup: SetupConfig::default(),
             github: GithubConfig::default(),
             agents: AgentsConfig::default(),
+            harness: Default::default(),
         };
         config.save(&pm_dir).unwrap();
 

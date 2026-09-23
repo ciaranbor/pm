@@ -135,6 +135,7 @@ mod tests {
             setup: Default::default(),
             github: Default::default(),
             agents: Default::default(),
+            harness: Default::default(),
         };
         config.save(&pm_dir).unwrap();
 
@@ -351,6 +352,43 @@ mod tests {
         assert!(result.is_err());
         let err = format!("{}", result.unwrap_err());
         assert!(err.contains("no session_id"), "got: {err}");
+    }
+
+    #[test]
+    fn fork_refuses_to_cross_harnesses() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+        spawn_source_with_session_id(dir.path(), &feature, "reviewer", "src-session-id", &server);
+
+        let pm_dir = paths::pm_dir(dir.path());
+        let mut config = ProjectConfig::load(&pm_dir).unwrap();
+        config
+            .agents
+            .harness
+            .insert("reviewer".to_string(), "codex".to_string());
+        config.save(&pm_dir).unwrap();
+
+        let err = agent_fork(
+            dir.path(),
+            &feature,
+            "reviewer",
+            "reviewer-2",
+            server.name(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("ran on harness claude-code, but config now selects codex"),
+            "got: {err}"
+        );
+        assert!(
+            tmux::find_window(server.name(), &session_name, "reviewer-2")
+                .unwrap()
+                .is_none()
+        );
+        let registry = AgentRegistry::load(&paths::agents_dir(dir.path()), &feature).unwrap();
+        assert!(registry.get("reviewer-2").is_none());
     }
 
     #[test]
