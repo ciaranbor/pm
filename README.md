@@ -229,6 +229,10 @@ unattended:
   changes. `pm doctor` reports a missing trust entry; the escape hatch is
   `[harness.codex] bypass_hook_trust = true` (passes
   `--dangerously-bypass-hook-trust`, one warning line per launch).
+  The hooks file is global, so the prompt appears once in *any* codex
+  session on the machine — including your own non-pm codex work, and even
+  if no pm project uses codex, since pm installs its hooks for every
+  harness it supports.
 - **Directory trust** pm writes itself: each worktree gets a
   `[projects."<path>"] trust_level = "trusted"` entry in
   `$CODEX_HOME/config.toml` at spawn (`pm doctor --fix` adds any missing).
@@ -264,15 +268,17 @@ unattended:
 ### Agents as never-idle message processors
 
 `pm init` and `pm upgrade` install a **Stop hook** into the user-level hooks
-file of every harness in use (`~/.claude/settings.json` for Claude Code,
+file of every supported harness (`~/.claude/settings.json` for Claude Code,
 `$CODEX_HOME/hooks.json` for codex), once per machine, so every project on
-it is covered. After every turn it blocks until the agent has unread
-messages (calling `pm msg wait` internally), then returns a `block` decision
-that the harness delivers as a continuation prompt. The agent reads the
-message, processes it, the turn ends, and the hook fires again. This turns
-every pm-managed agent into a never-idle processor: `--context` at feature
-creation just queues the first message, delivered exactly like any later
-peer message.
+it is covered whichever harness it configures — `$CODEX_HOME` is created if
+codex has never been run, and codex's one-time trust prompt then fires in
+whichever codex session comes first. After every turn it blocks until the
+agent has unread messages (calling `pm msg wait` internally), then returns a
+`block` decision that the harness delivers as a continuation prompt. The
+agent reads the message, processes it, the turn ends, and the hook fires
+again. This turns every pm-managed agent into a never-idle processor:
+`--context` at feature creation just queues the first message, delivered
+exactly like any later peer message.
 
 The hook applies to every session of that harness on the machine, so its
 command is guarded on `PM_AGENT_NAME`: a session pm didn't spawn exits it

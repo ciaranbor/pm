@@ -977,7 +977,6 @@ mod tests {
 
         std::fs::write(&config, "[agents.harness]\n[agents.harness]\n").unwrap();
         assert!(harnesses_in_use(&project).is_err());
-        assert!(crate::commands::hooks_install::install(Some(&project)).is_err());
     }
 
     fn item(kind: BundledKind, name: &str) -> &'static BundledItem {

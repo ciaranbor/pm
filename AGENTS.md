@@ -95,13 +95,21 @@ the tree — these are the invariants to preserve.
 
 pm agents are never-idle message processors, not one-shot scripts. This
 is implemented with a **Stop hook** (`pm harness hooks stop`, installed by
-`pm harness hooks install` into the user-level file of every harness in use
-— `~/.claude/settings.json`, `$CODEX_HOME/hooks.json` — once per machine).
-The installed command is `[ -n "$PM_AGENT_NAME" ] || exit 0; pm harness
-hooks stop`: a user-level hook fires in every session of that harness on the
-machine, and the guard keeps it inert in non-pm sessions without resolving
-`pm` (`&&` would turn a false test into an exit-1 hook error). The hook
-blocks until the agent's inbox has unread messages, then returns:
+`pm harness hooks install` into the user-level file of every *supported*
+harness — `~/.claude/settings.json`, `$CODEX_HOME/hooks.json` — once per
+machine, creating `$CODEX_HOME` if needed). Not only the harnesses in use:
+that is a per-project answer and the install also runs outside any project,
+so a harness named only in some project's `.pm/config.toml` would otherwise
+be skipped and its agents would idle silently. The accepted cost is codex's
+one-time "Hooks need review" prompt in whichever codex session comes first,
+pm-spawned or not. `pm doctor` still checks hooks only for the harnesses the
+project's agents run on, so a trust finding never fires for a harness the
+user doesn't use. The installed command is `[ -n "$PM_AGENT_NAME" ] || exit
+0; pm harness hooks stop`: a user-level hook fires in every session of that
+harness on the machine, and the guard keeps it inert in non-pm sessions
+without resolving `pm` (`&&` would turn a false test into an exit-1 hook
+error). The hook blocks until the agent's inbox has unread messages, then
+returns:
 
 ```json
 {"decision": "block", "reason": "You have new messages. Run `pm msg read` …"}
