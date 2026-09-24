@@ -60,12 +60,12 @@ pub enum Commands {
         #[arg(long)]
         all: bool,
     },
-    /// Delete a project (teardown features, sessions, state, and registry entry)
+    /// Delete a project (teardown features, sessions, state, and registry entry; worktrees stay on disk)
     Delete {
         /// Project name (defaults to current project from CWD)
         #[arg(long)]
         project: Option<String>,
-        /// Skip safety checks and force-remove worktree directories
+        /// Skip safety checks and remove the worktrees, `main` included, from disk
         #[arg(long)]
         force: bool,
         /// Skip confirmation prompt

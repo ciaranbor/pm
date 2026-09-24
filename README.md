@@ -456,7 +456,9 @@ These round out the tool; each has its full flag reference under `--help`:
 - `pm completions <shell>` — generate shell completion scripts.
 - `pm list` — list registered projects.
 - `pm delete` — full project teardown (sessions, `.pm/`, registry entry).
-  Destructive — distinct from `pm close`, which only tears down sessions.
+  Worktrees stay on disk as plain git checkouts; `--force` skips the safety
+  checks and removes them, `main` included. Destructive — distinct from
+  `pm close`, which only tears down sessions.
 
 ## Development
 
