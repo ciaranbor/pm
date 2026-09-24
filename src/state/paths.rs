@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
 
-const PM_DIR_NAME: &str = ".pm";
+pub(crate) const PM_DIR_NAME: &str = ".pm";
 const FEATURES_DIR_NAME: &str = "features";
 const CONFIG_DIR_NAME: &str = "pm";
 const PROJECTS_DIR_NAME: &str = "projects";
