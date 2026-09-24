@@ -5,7 +5,7 @@ use crate::state::agent::AgentRegistry;
 use crate::state::paths;
 use crate::state::project::{GlobalConfig, ProjectConfig};
 
-use super::agent_spawn::{SpawnOverrides, SpawnParams, spawn_session};
+use super::agent_spawn::{SpawnOverrides, SpawnParams, notes_suffix, spawn_session};
 
 /// Fork an existing agent: spawn a new agent that starts with a copy of
 /// the source's conversation history.
@@ -88,7 +88,7 @@ pub fn agent_fork(
         )));
     }
 
-    let window_target = spawn_session(&SpawnParams {
+    let spawned = spawn_session(&SpawnParams {
         project_root,
         feature,
         agent_name: Some(new_name),
@@ -102,7 +102,9 @@ pub fn agent_fork(
     })?;
 
     Ok(format!(
-        "Forked '{source}' as '{new_name}' in {window_target}"
+        "Forked '{source}' as '{new_name}' in {}{}",
+        spawned.window_target,
+        notes_suffix(&spawned.notes)
     ))
 }
 

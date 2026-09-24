@@ -137,6 +137,9 @@ pub fn enqueue_initial_context(
 /// The pm Stop hook is responsible for delivering any queued messages on
 /// each agent's empty first turn — `spawn_session` itself passes no
 /// initial prompt.
+///
+/// Config notes are printed per agent here: the feature commands report
+/// only the feature name, so there is no per-agent status line to carry them.
 pub fn spawn_team(
     project_root: &Path,
     feature_name: &str,
@@ -149,7 +152,7 @@ pub fn spawn_team(
         // Only the first agent reuses the default shell window. All
         // subsequent agents get their own fresh window.
         let reuse = if idx == 0 { reuse_window } else { None };
-        agent_spawn::spawn_session(&agent_spawn::SpawnParams {
+        let spawned = agent_spawn::spawn_session(&agent_spawn::SpawnParams {
             project_root,
             feature: feature_name,
             agent_name: Some(agent.as_str()),
@@ -165,6 +168,9 @@ pub fn spawn_team(
             reuse_window: reuse,
             tmux_server,
         })?;
+        for note in &spawned.notes {
+            eprintln!("note: {agent}: {note}");
+        }
     }
     Ok(())
 }

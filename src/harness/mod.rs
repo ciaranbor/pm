@@ -487,6 +487,23 @@ mod tests {
     }
 
     #[test]
+    fn harnesses_in_use_counts_a_wildcard_row() {
+        let mut global = AgentsConfig::default();
+        global.harness.insert("*".into(), "codex".into());
+        assert_eq!(
+            harnesses_in_use(&AgentsConfig::default(), &global),
+            vec![Harness::ClaudeCode, Harness::Codex]
+        );
+        // A project wildcard masks the global one for every agent.
+        let mut project = AgentsConfig::default();
+        project.harness.insert("*".into(), String::new());
+        assert_eq!(
+            harnesses_in_use(&project, &global),
+            vec![Harness::ClaudeCode]
+        );
+    }
+
+    #[test]
     fn harnesses_in_use_applies_project_over_global_precedence() {
         let mut global = AgentsConfig::default();
         global.harness.insert("main".into(), "codex".into());

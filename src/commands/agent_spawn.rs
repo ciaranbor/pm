@@ -174,11 +174,27 @@ pub struct SpawnParams<'a> {
 /// Callers must validate `agent_name` via `validate_name()` before calling —
 /// the name is interpolated into a shell command.
 ///
-/// Returns the tmux window target.
-pub fn spawn_session(params: &SpawnParams<'_>) -> Result<String> {
+pub fn spawn_session(params: &SpawnParams<'_>) -> Result<SpawnedSession> {
     let pm_dir = paths::pm_dir(params.project_root);
     let config = ProjectConfig::load(&pm_dir)?;
     spawn_session_with_config(params, &config, &GlobalConfig::load_or_default())
+}
+
+/// What [`spawn_session`] launched: the tmux window target and the config
+/// notes the caller should show alongside its own status line.
+pub struct SpawnedSession {
+    pub window_target: String,
+    pub notes: Vec<String>,
+}
+
+/// The parenthetical a status line carries for config notes: empty when
+/// there are none.
+pub fn notes_suffix(notes: &[String]) -> String {
+    if notes.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", notes.join("; "))
+    }
 }
 
 /// Inner implementation that accepts pre-loaded configs to avoid redundant
@@ -187,7 +203,7 @@ fn spawn_session_with_config(
     params: &SpawnParams<'_>,
     config: &ProjectConfig,
     global: &GlobalConfig,
-) -> Result<String> {
+) -> Result<SpawnedSession> {
     let session_name = tmux::session_name(&config.project.name, params.feature);
     let worktree_path = params.project_root.join(params.feature);
 
@@ -288,7 +304,10 @@ fn spawn_session_with_config(
         &window_command(params.agent_name, &cmd),
     )?;
 
-    Ok(window_target)
+    Ok(SpawnedSession {
+        window_target,
+        notes: settings.notes,
+    })
 }
 
 /// Outcome of an [`agent_spawn`] call. Lets callers tell whether work was
@@ -336,10 +355,12 @@ impl SpawnOutcome {
 /// The same path serves "spawn fresh with a brief", "spawn and nudge a
 /// dead agent", and "send a follow-up to an active agent".
 ///
-/// Returns a `(SpawnOutcome, status_message)` pair. The outcome distinguishes
+/// Returns `(SpawnOutcome, status_message, notes)`. The outcome distinguishes
 /// no-op idempotent calls (`AlreadyActive`) from ones that actually created a
 /// new tmux window (`Spawned`/`Resumed`) so callers like `agent_spawn_all`
-/// can report accurate counts.
+/// can report accurate counts. The status message already carries the config
+/// notes; they are returned separately for callers that compose their own
+/// line.
 pub fn agent_spawn(
     project_root: &Path,
     feature: &str,
@@ -348,7 +369,7 @@ pub fn agent_spawn(
     context: Option<&str>,
     overrides: SpawnOverrides<'_>,
     tmux_server: Option<&str>,
-) -> Result<(SpawnOutcome, String)> {
+) -> Result<(SpawnOutcome, String, Vec<String>)> {
     crate::messages::validate_name(agent_name, "agent")?;
     if let Some(def) = agent_definition {
         crate::messages::validate_name(def, "agent")?;
@@ -424,7 +445,7 @@ pub fn agent_spawn(
             } else {
                 format!("Agent '{agent_name}' already active in {target}")
             };
-            return Ok((SpawnOutcome::AlreadyActive, msg));
+            return Ok((SpawnOutcome::AlreadyActive, msg, Vec::new()));
         }
 
         // Agent existed but window is gone — respawn.
@@ -432,7 +453,10 @@ pub fn agent_spawn(
         let harness = configured_harness(effective_definition, &config.agents, &global.agents)?;
         let resume_id = harness::resumable_session(&entry.session_id, entry.harness, harness);
         queue_context()?;
-        let window_target = spawn(None, resume_id.as_deref())?;
+        let SpawnedSession {
+            window_target,
+            notes,
+        } = spawn(None, resume_id.as_deref())?;
 
         let (outcome, mut msg) = if resume_id.is_some() {
             (
@@ -451,18 +475,26 @@ pub fn agent_spawn(
                 entry.harness
             ));
         }
-        return Ok((outcome, msg));
+        msg.push_str(&notes_suffix(&notes));
+        return Ok((outcome, msg, notes));
     }
 
     // New agent, no positional prompt — the Stop hook blocks until any queued
     // context is available, then tells the agent to read it.
     validate_definition_resolves(project_root, effective_definition)?;
     queue_context()?;
-    let window_target = spawn(None, None)?;
+    let SpawnedSession {
+        window_target,
+        notes,
+    } = spawn(None, None)?;
 
     Ok((
         SpawnOutcome::Spawned,
-        format!("Spawned agent '{agent_name}' in {window_target}"),
+        format!(
+            "Spawned agent '{agent_name}' in {window_target}{}",
+            notes_suffix(&notes)
+        ),
+        notes,
     ))
 }
 
@@ -520,7 +552,7 @@ pub fn agent_spawn_all(
             SpawnOverrides::default(),
             tmux_server,
         ) {
-            Ok((outcome, msg)) => {
+            Ok((outcome, msg, _)) => {
                 if outcome.is_new_window() {
                     spawned_count += 1;
                 }
@@ -613,7 +645,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let (session_name, feature) = setup_project(dir.path(), &server);
 
-        let (outcome, msg) = agent_spawn(
+        let (outcome, msg, _) = agent_spawn(
             dir.path(),
             &feature,
             "reviewer",
@@ -656,7 +688,7 @@ mod tests {
 
         setup_active_agent(&server, dir.path(), &session_name, &feature, "reviewer");
 
-        let (outcome, msg) = agent_spawn(
+        let (outcome, msg, _) = agent_spawn(
             dir.path(),
             &feature,
             "reviewer",
@@ -679,7 +711,7 @@ mod tests {
 
         setup_active_agent(&server, dir.path(), &session_name, &feature, "reviewer");
 
-        let (outcome, msg) = agent_spawn(
+        let (outcome, msg, _) = agent_spawn(
             dir.path(),
             &feature,
             "reviewer",
@@ -941,7 +973,7 @@ mod tests {
         tmux::create_session(server.name(), &session_name, &worktree).unwrap();
 
         // Re-spawn should resume
-        let (outcome, msg) = agent_spawn(
+        let (outcome, msg, _) = agent_spawn(
             dir.path(),
             &feature,
             "reviewer",
@@ -978,7 +1010,7 @@ mod tests {
         let worktree = dir.path().join(&feature);
         assert!(!Harness::Codex.worktree_trusted(&paths::home_dir().unwrap(), &worktree));
 
-        let (outcome, _) = agent_spawn(
+        let (outcome, _, _) = agent_spawn(
             dir.path(),
             &feature,
             "reviewer",
@@ -1000,6 +1032,57 @@ mod tests {
         let registry = AgentRegistry::load(&paths::agents_dir(dir.path()), &feature).unwrap();
         assert_eq!(registry.get("reviewer").unwrap().harness, Harness::Codex);
         assert!(Harness::Codex.worktree_trusted(&paths::home_dir().unwrap(), &worktree));
+    }
+
+    #[test]
+    fn spawn_drops_global_row_bound_to_another_harness_and_reports_it() {
+        // Through the chokepoint with an explicit global config, so the
+        // shared test home is left untouched.
+        let _guard = crate::testing::CODEX_CONFIG_LOCK.lock().unwrap();
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+        configure_harness(dir.path(), "reviewer", "codex");
+        let config = ProjectConfig::load(&paths::pm_dir(dir.path())).unwrap();
+        let mut global = GlobalConfig::default();
+        global
+            .agents
+            .models
+            .insert("reviewer".to_string(), "opus".to_string());
+
+        let spawned = spawn_session_with_config(
+            &SpawnParams {
+                project_root: dir.path(),
+                feature: &feature,
+                agent_name: Some("reviewer"),
+                agent_definition: None,
+                prompt: None,
+                overrides: SpawnOverrides::default(),
+                resume_session: None,
+                fork_session: false,
+                reuse_window: None,
+                tmux_server: server.name(),
+            },
+            &config,
+            &global,
+        )
+        .unwrap();
+        assert_eq!(
+            spawned.notes,
+            vec![
+                "global [agents.models] row for 'reviewer' is bound to claude-code, not codex \
+                 — not applied"
+            ]
+        );
+        let target = tmux::find_window(server.name(), &session_name, "reviewer")
+            .unwrap()
+            .unwrap();
+        server.wait_for_pane_text(
+            &target,
+            "&& codex -a 'never' -s 'danger-full-access' 'Stand by.'",
+        );
+        let text = tmux::capture_pane(server.name(), &target).unwrap();
+        assert!(!text.contains("-m "), "{text}");
     }
 
     #[test]
@@ -1031,7 +1114,7 @@ mod tests {
         tmux::create_session(server.name(), &session_name, &dir.path().join(&feature)).unwrap();
         configure_harness(dir.path(), "reviewer", "codex");
 
-        let (outcome, msg) = agent_spawn(
+        let (outcome, msg, _) = agent_spawn(
             dir.path(),
             &feature,
             "reviewer",
@@ -1131,7 +1214,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let (session_name, feature) = setup_project(dir.path(), &server);
 
-        let (outcome, _msg) = agent_spawn(
+        let (outcome, _msg, _) = agent_spawn(
             dir.path(),
             &feature,
             "frontend-dev",
@@ -1353,7 +1436,7 @@ mod tests {
         std::fs::remove_file(&def).unwrap();
         assert!(validate_definition_resolves(dir.path(), "sidekick").is_err());
 
-        let (outcome, msg) = agent_spawn(
+        let (outcome, msg, _) = agent_spawn(
             dir.path(),
             &feature,
             "sidekick",
@@ -1459,7 +1542,7 @@ mod tests {
         let (session_name, feature) = setup_project(dir.path(), &server);
 
         let alias = "default";
-        let (outcome, _) = agent_spawn(
+        let (outcome, _, _) = agent_spawn(
             dir.path(),
             &feature,
             alias,
@@ -1577,6 +1660,34 @@ mod tests {
         )
         .unwrap();
         assert_eq!(settings.model.as_deref(), Some("opus"));
+    }
+
+    #[test]
+    fn spawn_settings_model_flag_applies_on_top_of_a_dropped_global_row() {
+        let project = AgentsConfig {
+            harness: [("reviewer".to_string(), "codex".to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        let global = AgentsConfig {
+            models: [("reviewer".to_string(), "opus".to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        let settings = spawn_settings(
+            SpawnOverrides {
+                permission: None,
+                model: Some("gpt-5"),
+            },
+            Some("reviewer"),
+            &project,
+            &global,
+        )
+        .unwrap();
+        assert_eq!(settings.model.as_deref(), Some("gpt-5"));
+        assert_eq!(settings.notes.len(), 1, "{:?}", settings.notes);
     }
 
     #[test]

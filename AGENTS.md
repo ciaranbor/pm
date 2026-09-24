@@ -278,12 +278,14 @@ directly.
 Per-agent `[agents.*]` settings are resolved at spawn time and deliberately not
 stored on `AgentEntry` — re-reading config per spawn is what lets restart and
 fork pick up edits. Precedence per setting: CLI flag (`--permission`,
-`--model`) > project config > global config > unset (no flag passed). The
+`--model`) > project named row > project `"*"` > global named row > global
+`"*"` > unset (no flag passed); `""` masks. `"*"` (`WILDCARD_AGENT`) is each
+map's default row; it can't collide with an agent name (`[A-Za-z0-9_-]`). The
 flags are spawn-only (`agent_spawn::SpawnOverrides`): `feat new`/`feat adopt`
 apply them to the whole team, and restart/fork/heal don't carry them forward.
 
-`[agents.harness]` is layered the same way (project > global per key, `""`
-masks) and defaults to `claude-code`; any other value is an error at
+`[agents.harness]` is layered the same way and defaults to `claude-code`; any
+other value is an error at
 resolution, never a silent fallback. It is the one setting that *is* stored on
 `AgentEntry` (`harness`, serde-defaulted so older registries load unchanged):
 a `session_id` only means something to the harness that produced it, so
@@ -293,6 +295,14 @@ harness still matches config — otherwise it spawns fresh and says so — and
 `[harness.<name>]` (`HarnessConfig`, `resolve_harness_config`) is the
 per-harness counterpart with no per-agent shape, layered the same way and
 resolved at the same chokepoint.
+
+Model and permission vocabularies are disjoint per harness and pm never
+validates them, so each `[agents.models]`/`[agents.permissions]` row is bound
+to the harness configured under the key it matched (lookup order in README
+Configuration); a mismatched row is dropped, not fallen through, and reported
+on the spawn line (`AgentSettings::notes`). Binding is by key, so a same-key
+contradiction reaches the harness as written. Enforced at resolution, so
+there is no doctor finding.
 
 The **notice board** (`notice.rs`) is a seeded *directive* surface — terse
 standing instructions hand-written into `notices.md` in the pm config dir and

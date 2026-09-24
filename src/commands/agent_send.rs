@@ -155,7 +155,7 @@ pub fn agent_send(
         SpawnOverrides::default(),
         tmux_server,
     ) {
-        Ok((outcome, spawn_msg)) => {
+        Ok((outcome, spawn_msg, _)) => {
             if outcome.is_new_window() {
                 status = format!("{status}\n{spawn_msg}");
             }
