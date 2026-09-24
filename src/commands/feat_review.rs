@@ -116,7 +116,7 @@ fn setup_review(
         // blocks until the PR-review context queued above is available.
         // Reuse window :0 so the reviewer takes over the default shell.
         let reuse_target = format!("{session_name}:0");
-        agent_spawn::spawn_session(&agent_spawn::SpawnParams {
+        let spawned = agent_spawn::spawn_session(&agent_spawn::SpawnParams {
             project_root,
             feature: feature_name,
             agent_name: Some("reviewer"),
@@ -131,6 +131,9 @@ fn setup_review(
             reuse_window: Some(&reuse_target),
             tmux_server,
         })?;
+        for note in &spawned.notes {
+            eprintln!("note: reviewer: {note}");
+        }
 
         // Step 3.6: Run post-create hook
         hooks::run_hook(

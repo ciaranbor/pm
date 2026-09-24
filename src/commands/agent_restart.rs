@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::commands::agent_spawn::{SpawnOutcome, SpawnOverrides};
+use crate::commands::agent_spawn::{SpawnOutcome, SpawnOverrides, notes_suffix};
 use crate::error::Result;
 use crate::state::agent::AgentRegistry;
 use crate::state::paths;
@@ -47,7 +47,7 @@ pub fn agent_restart(
     // window with the agent's name, and respawn). Passing `None` for
     // `agent_definition` lets `agent_spawn` re-read the stored definition
     // from the registry, so aliased agents keep their `--agent <def>` flag.
-    let (outcome, _spawn_msg) = super::agent_spawn::agent_spawn(
+    let (outcome, _spawn_msg, notes) = super::agent_spawn::agent_spawn(
         project_root,
         feature,
         agent_name,
@@ -74,11 +74,12 @@ pub fn agent_restart(
         let _ = tmux::kill_window(tmux_server, target);
     }
 
-    let msg = if outcome == SpawnOutcome::Resumed {
+    let mut msg = if outcome == SpawnOutcome::Resumed {
         format!("Restarted agent '{agent_name}' (resumed session)")
     } else {
         format!("Restarted agent '{agent_name}'")
     };
+    msg.push_str(&notes_suffix(&notes));
 
     Ok(msg)
 }

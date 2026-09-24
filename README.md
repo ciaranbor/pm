@@ -179,25 +179,44 @@ new agent from a copy of another's history. See `pm agent --help`.
 
 Settings live in `<project>/.pm/config.toml`, or `config.toml` in the pm
 config dir (`~/.config/pm/` on Linux, `~/Library/Application Support/pm/` on
-macOS) to apply across projects. Project
-beats global per key; `""` masks the tier below, unset means no flag is passed.
+macOS) to apply across projects. A `"*"` row applies to every agent without a
+row of its own. Per setting, the first of these wins: project named row,
+project `"*"`, global named row, global `"*"`; `""` masks the rows below it,
+unset means no flag is passed.
 
 ```toml
 [agents.permissions]         # harness's own mode string, passed through unvalidated
-implementer = "acceptEdits"
+reviewer = "plan"
 
 [agents.models]              # alias or full id, passed to the harness unvalidated
+"*" = "gpt-5"
 reviewer = "opus"
 
 [agents.harness]             # agent CLI: "claude-code" (the default) or "codex"
-implementer = "claude-code"
-reviewer = "codex"
+"*" = "codex"
+reviewer = "claude-code"
 ```
 
 Permission modes and model ids are in the terms of the agent's harness
 (`--permission-mode` / `--model` values for Claude Code; the `-s` sandbox
 mode / `-m` for codex) and reach it unvalidated, so a typo surfaces in the
 agent's tmux window rather than at spawn.
+
+A model or permission row is bound to the harness configured under the same
+key, looking from the row's own file down: a `reviewer` row to the `reviewer`
+harness row (else that file's `"*"`, else the global file's, else
+`claude-code`), a `"*"` row to the `"*"` harness row. A row bound to a
+harness other than the one the agent spawns on is dropped and the spawn line
+says why. In the example above, `gpt-5` reaches every codex agent and `opus`
+the claude-code reviewer. Change an agent's harness in the project config and
+a global row for that agent no longer applies — set it again next to the new
+harness row: with a global `[agents.models] reviewer = "opus"` and a project
+`[agents.harness] reviewer = "codex"`, the reviewer gets codex's default
+model and the spawn line reads:
+
+```
+Spawned agent 'reviewer' in myapp-login:1 (global [agents.models] row for 'reviewer' is bound to claude-code, not codex — not applied)
+```
 
 Any other `[agents.harness]` value is an error at spawn — pm never falls back
 silently. `pm harness list` shows what pm can spawn and `pm agent list` each
@@ -211,7 +230,9 @@ new`/`feat adopt` they apply to every agent the workflow spawns. Neither is
 remembered — a restart, fork, or heal goes back to config.
 
 Keys are the `--agent` definition, not the display name: an agent spawned as
-`frontend-dev --agent implementer` takes `implementer`'s row.
+`frontend-dev --agent implementer` takes `implementer`'s row. The vanilla
+`default` agent is an ordinary key; `"*"` is the only row that reaches every
+agent.
 
 ### Codex agents
 
