@@ -10,8 +10,10 @@ use crate::tmux;
 pub(super) const CONFIG_DIR: &str = ".claude";
 
 /// Claude Code reads the project settings (permissions etc.) per worktree,
-/// so a feature needs main's copy.
-pub(super) const SEEDED_FILES: &[&str] = &["settings.json", "settings.local.json"];
+/// so a feature needs main's copy. `settings.local.json` is not seeded:
+/// Claude Code saves approvals granted in a linked worktree to the main
+/// checkout's copy, so a worktree copy is a frozen snapshot it never writes.
+pub(super) const SEEDED_FILES: &[&str] = &["settings.json"];
 
 /// Applies to every session on the machine; pm's hooks live here.
 pub(super) const USER_SETTINGS_FILE: &str = "settings.json";

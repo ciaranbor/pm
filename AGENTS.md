@@ -66,7 +66,10 @@ follows is only what the tree *doesn't* tell you.
   deliberately (no pm vocabulary to maintain per harness);
   `config_dir`/`seeded_files`/`projected_dirs`/`user_settings_file` describe
   the harness's own layout (`seeded_files` is the project's own settings and
-  permissions, never hooks); `project_assets` is the projection;
+  permissions, never hooks — and for Claude Code never `settings.local.json`,
+  which Claude Code keeps only at the main checkout for every worktree, so
+  `pm harness settings` skips it too);
+  `project_assets` is the projection;
   `supports_prompt_delivery` is the composed-prompt capability probe;
   `trust_worktree`/`worktree_trusted`/`hook_trusted`/`malformed_hook_events`
   are the trust gates (inert for Claude Code); and `session_start_output`

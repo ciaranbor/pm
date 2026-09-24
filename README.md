@@ -416,7 +416,9 @@ These round out the tool; each has its full flag reference under `--help`:
   between pm state and git/tmux/GitHub reality.
 - `pm harness` — the agent harness: `hooks`, bundled `skills`/`agents`
   (installed to `~/.agents/`, projected per harness), per-feature `settings`
-  (permissions etc.), and `migrate|export|import` of session data across
+  (`settings.json` only — Claude Code keeps `settings.local.json` at the main
+  checkout for every worktree, so pm neither seeds nor syncs it), and
+  `migrate|export|import` of session data across
   worktrees and machines (`--harness`, default `claude-code`); `list` the
   supported harnesses and `probe` the installed binary. `pm claude …`
   remains as a hidden alias for one release.
