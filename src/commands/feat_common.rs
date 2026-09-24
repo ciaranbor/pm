@@ -144,7 +144,6 @@ pub fn spawn_team(
     project_root: &Path,
     feature_name: &str,
     team: &[String],
-    overrides: agent_spawn::SpawnOverrides<'_>,
     reuse_window: Option<&str>,
     tmux_server: Option<&str>,
 ) -> Result<()> {
@@ -162,7 +161,6 @@ pub fn spawn_team(
             // is `None`.
             agent_definition: None,
             prompt: None,
-            overrides,
             resume_session: None,
             fork_session: false,
             reuse_window: reuse,

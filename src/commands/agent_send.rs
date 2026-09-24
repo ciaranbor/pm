@@ -1,6 +1,5 @@
 use std::path::Path;
 
-use crate::commands::agent_spawn::SpawnOverrides;
 use crate::error::{PmError, Result};
 use crate::messages;
 use crate::state::agent::AgentRegistry;
@@ -146,15 +145,8 @@ pub fn agent_send(
     // The message is already queued, so a heal failure (e.g. the tmux
     // socket is unreachable from a sandbox) is not a delivery failure: warn
     // and exit 0 rather than make the sender think the message was lost.
-    match super::agent_spawn::agent_spawn(
-        project_root,
-        feature,
-        recipient,
-        None,
-        None,
-        SpawnOverrides::default(),
-        tmux_server,
-    ) {
+    match super::agent_spawn::agent_spawn(project_root, feature, recipient, None, None, tmux_server)
+    {
         Ok((outcome, spawn_msg, _)) => {
             if outcome.is_new_window() {
                 status = format!("{status}\n{spawn_msg}");
@@ -463,7 +455,6 @@ mod tests {
             "reviewer",
             None,
             None,
-            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -562,7 +553,6 @@ mod tests {
             "frontend-dev",
             Some("implementer"),
             None,
-            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -825,7 +815,6 @@ mod tests {
             "implementer",
             None,
             None,
-            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();

@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use crate::commands::agent_spawn::SpawnOverrides;
 use crate::commands::feat_delete::{self, CleanupParams};
 use crate::commands::{agent_spawn, hooks_install, skills};
 use crate::error::Result;
@@ -900,15 +899,7 @@ fn apply_fix(
             crate::commands::skills::install_global()?;
         }
         FixAction::RespawnAgent { agent_name } => {
-            agent_spawn::agent_spawn(
-                project_root,
-                name,
-                agent_name,
-                None,
-                None,
-                SpawnOverrides::default(),
-                tmux_server,
-            )?;
+            agent_spawn::agent_spawn(project_root, name, agent_name, None, None, tmux_server)?;
         }
         FixAction::TrustWorktree { harness, path } => {
             harness.trust_worktree(&paths::home_dir()?, path)?;

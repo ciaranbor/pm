@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::commands::agent_spawn::{SpawnOutcome, SpawnOverrides, notes_suffix};
+use crate::commands::agent_spawn::{SpawnOutcome, notes_suffix};
 use crate::error::Result;
 use crate::state::agent::AgentRegistry;
 use crate::state::paths;
@@ -53,7 +53,6 @@ pub fn agent_restart(
         agent_name,
         None,
         None,
-        SpawnOverrides::default(),
         tmux_server,
     )?;
 
@@ -165,16 +164,8 @@ mod tests {
         let (session_name, feature) = setup_project(dir.path(), &server);
 
         // Spawn agent first
-        agent_spawn::agent_spawn(
-            dir.path(),
-            &feature,
-            "reviewer",
-            None,
-            None,
-            SpawnOverrides::default(),
-            server.name(),
-        )
-        .unwrap();
+        agent_spawn::agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name())
+            .unwrap();
 
         // Verify window exists
         assert!(
@@ -208,16 +199,8 @@ mod tests {
 
         // Spawn the agent, then create and select a different window so the
         // active window is NOT the agent's at restart time.
-        agent_spawn::agent_spawn(
-            dir.path(),
-            &feature,
-            "reviewer",
-            None,
-            None,
-            SpawnOverrides::default(),
-            server.name(),
-        )
-        .unwrap();
+        agent_spawn::agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name())
+            .unwrap();
 
         let other = tmux::new_window(
             server.name(),
@@ -249,16 +232,8 @@ mod tests {
         let (session_name, feature) = setup_project(dir.path(), &server);
 
         // Spawn agent and set a session_id
-        agent_spawn::agent_spawn(
-            dir.path(),
-            &feature,
-            "reviewer",
-            None,
-            None,
-            SpawnOverrides::default(),
-            server.name(),
-        )
-        .unwrap();
+        agent_spawn::agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name())
+            .unwrap();
 
         let agents_dir = paths::agents_dir(dir.path());
         let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
@@ -274,6 +249,45 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    #[test]
+    fn restart_after_harness_change_reports_it() {
+        let _guard = crate::testing::CODEX_CONFIG_LOCK.lock().unwrap();
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+
+        agent_spawn::agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name())
+            .unwrap();
+        let agents_dir = paths::agents_dir(dir.path());
+        let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        registry.get_mut("reviewer").unwrap().session_id = "cc-session".to_string();
+        registry.save(&agents_dir, &feature).unwrap();
+
+        let pm_dir = paths::pm_dir(dir.path());
+        let mut config = ProjectConfig::load(&pm_dir).unwrap();
+        config
+            .agents
+            .harness
+            .insert("reviewer".to_string(), "codex".to_string());
+        config.save(&pm_dir).unwrap();
+
+        let msg = agent_restart(dir.path(), &feature, "reviewer", server.name()).unwrap();
+        assert_eq!(
+            msg,
+            "Restarted agent 'reviewer' (harness changed claude-code → codex; previous session \
+             not resumed)"
+        );
+        let target = tmux::find_window(server.name(), &session_name, "reviewer")
+            .unwrap()
+            .unwrap();
+        server.wait_for_pane_text(
+            &target,
+            "&& codex -a 'never' -s 'danger-full-access' 'Stand by.'",
+        );
+        let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        assert_eq!(registry.get("reviewer").unwrap().harness, Harness::Codex);
     }
 
     #[test]
@@ -317,7 +331,6 @@ mod tests {
             "frontend-dev",
             Some("implementer"),
             None,
-            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();

@@ -383,8 +383,6 @@ mod tests {
             name_override: Some("eval"),
             context: None,
             from: None,
-            permission: None,
-            model: None,
             workflow: None,
             tmux_server: server.name(),
             session_store: None,

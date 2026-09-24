@@ -54,37 +54,18 @@ fn effective_definition<'a>(
     agent_definition.or(agent_name)
 }
 
-/// Spawn-time CLI overrides (`--permission`, `--model`), both in the
-/// harness's own terms. Resolved on top of config for this spawn only —
-/// never stored on the registry entry, so a restart, fork, or heal goes
-/// back to config.
-#[derive(Default, Clone, Copy)]
-pub struct SpawnOverrides<'a> {
-    pub permission: Option<&'a str>,
-    pub model: Option<&'a str>,
-}
-
 /// The settings a spawn actually launches with: config resolved for this
-/// agent's definition, with the CLI overrides applied on top. A `None`
-/// definition (a plain, unregistered session) takes no config at all, but
-/// the overrides still apply.
+/// agent's definition. A `None` definition (a plain, unregistered session)
+/// takes no config at all.
 fn spawn_settings(
-    overrides: SpawnOverrides<'_>,
     definition: Option<&str>,
     project: &AgentsConfig,
     global: &AgentsConfig,
 ) -> Result<AgentSettings> {
-    let mut settings = definition
+    Ok(definition
         .map(|def| resolve_agent_settings(project, global, def))
         .transpose()?
-        .unwrap_or_default();
-    if let Some(mode) = overrides.permission {
-        settings.permission_mode = Some(mode.to_string());
-    }
-    if let Some(id) = overrides.model {
-        settings.model = Some(id.to_string());
-    }
-    Ok(settings)
+        .unwrap_or_default())
 }
 
 /// The harness config selects for `definition`, checked before a respawn
@@ -151,7 +132,6 @@ pub struct SpawnParams<'a> {
     /// `agent_name` is `None`.
     pub agent_definition: Option<&'a str>,
     pub prompt: Option<&'a str>,
-    pub overrides: SpawnOverrides<'a>,
     pub resume_session: Option<&'a str>,
     /// When `true` and `resume_session` is `Some`, the resumed conversation
     /// gets a fresh session id and the original is left untouched. Used by
@@ -212,12 +192,7 @@ fn spawn_session_with_config(
     // Settings are configured per agent definition, not per display name,
     // and are re-resolved from config on every spawn — never stored on the
     // registry entry — so restart/fork/heal pick up config edits.
-    let settings = spawn_settings(
-        params.overrides,
-        effective_definition,
-        &config.agents,
-        &global.agents,
-    )?;
+    let settings = spawn_settings(effective_definition, &config.agents, &global.agents)?;
 
     // Named agents need a sentinel prompt when none is explicitly provided:
     // a harness with no positional prompt just waits for user input and never
@@ -336,8 +311,6 @@ impl SpawnOutcome {
 
 /// Spawn a named agent in a tmux window within the feature session.
 /// Handles three cases: new agent, already-active agent, and dead-but-resumable agent.
-/// `overrides` carries the spawn-time CLI flags; anything unset there is
-/// looked up from config.
 ///
 /// `agent_name` is the display name (registry key, tmux window, `PM_AGENT_NAME`).
 /// `agent_definition` is the agent definition the harness launches. When
@@ -358,16 +331,16 @@ impl SpawnOutcome {
 /// Returns `(SpawnOutcome, status_message, notes)`. The outcome distinguishes
 /// no-op idempotent calls (`AlreadyActive`) from ones that actually created a
 /// new tmux window (`Spawned`/`Resumed`) so callers like `agent_spawn_all`
-/// can report accurate counts. The status message already carries the config
-/// notes; they are returned separately for callers that compose their own
-/// line.
+/// can report accurate counts. The notes carry every spawn-line remark —
+/// dropped config rows, a harness change that skipped the stored session —
+/// and the status message already includes them; they are returned
+/// separately for callers that compose their own line.
 pub fn agent_spawn(
     project_root: &Path,
     feature: &str,
     agent_name: &str,
     agent_definition: Option<&str>,
     context: Option<&str>,
-    overrides: SpawnOverrides<'_>,
     tmux_server: Option<&str>,
 ) -> Result<(SpawnOutcome, String, Vec<String>)> {
     crate::messages::validate_name(agent_name, "agent")?;
@@ -422,7 +395,6 @@ pub fn agent_spawn(
                 agent_name: Some(agent_name),
                 agent_definition: resolved_definition.as_deref(),
                 prompt,
-                overrides,
                 resume_session: resume,
                 fork_session: false,
                 reuse_window: None,
@@ -455,8 +427,17 @@ pub fn agent_spawn(
         queue_context()?;
         let SpawnedSession {
             window_target,
-            notes,
+            mut notes,
         } = spawn(None, resume_id.as_deref())?;
+        if entry.harness != harness && !entry.session_id.is_empty() {
+            notes.insert(
+                0,
+                format!(
+                    "harness changed {} → {harness}; previous session not resumed",
+                    entry.harness
+                ),
+            );
+        }
 
         let (outcome, mut msg) = if resume_id.is_some() {
             (
@@ -469,12 +450,6 @@ pub fn agent_spawn(
                 format!("Spawned agent '{agent_name}' in {window_target}"),
             )
         };
-        if entry.harness != harness && !entry.session_id.is_empty() {
-            msg.push_str(&format!(
-                " (harness changed {} → {harness}; previous session not resumed)",
-                entry.harness
-            ));
-        }
         msg.push_str(&notes_suffix(&notes));
         return Ok((outcome, msg, notes));
     }
@@ -543,15 +518,7 @@ pub fn agent_spawn_all(
     // `agent_spawn` reads the stored `agent_definition` from the registry
     // when called with `None`, so respawns automatically preserve aliases.
     for name in &agent_names {
-        match agent_spawn(
-            project_root,
-            feature,
-            name,
-            None,
-            None,
-            SpawnOverrides::default(),
-            tmux_server,
-        ) {
+        match agent_spawn(project_root, feature, name, None, None, tmux_server) {
             Ok((outcome, msg, _)) => {
                 if outcome.is_new_window() {
                     spawned_count += 1;
@@ -645,16 +612,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let (session_name, feature) = setup_project(dir.path(), &server);
 
-        let (outcome, msg, _) = agent_spawn(
-            dir.path(),
-            &feature,
-            "reviewer",
-            None,
-            None,
-            SpawnOverrides::default(),
-            server.name(),
-        )
-        .unwrap();
+        let (outcome, msg, _) =
+            agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
         assert_eq!(outcome, SpawnOutcome::Spawned);
         assert!(msg.contains("Spawned agent 'reviewer'"));
 
@@ -688,16 +647,8 @@ mod tests {
 
         setup_active_agent(&server, dir.path(), &session_name, &feature, "reviewer");
 
-        let (outcome, msg, _) = agent_spawn(
-            dir.path(),
-            &feature,
-            "reviewer",
-            None,
-            None,
-            SpawnOverrides::default(),
-            server.name(),
-        )
-        .unwrap();
+        let (outcome, msg, _) =
+            agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
         assert_eq!(outcome, SpawnOutcome::AlreadyActive);
         assert!(!outcome.is_new_window());
         assert!(msg.contains("already active"));
@@ -717,7 +668,6 @@ mod tests {
             "reviewer",
             None,
             Some("focus on auth"),
-            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -737,26 +687,8 @@ mod tests {
         let (session_name, feature) = setup_project(dir.path(), &server);
 
         // Spawn two agents
-        agent_spawn(
-            dir.path(),
-            &feature,
-            "reviewer",
-            None,
-            None,
-            SpawnOverrides::default(),
-            server.name(),
-        )
-        .unwrap();
-        agent_spawn(
-            dir.path(),
-            &feature,
-            "tester",
-            None,
-            None,
-            SpawnOverrides::default(),
-            server.name(),
-        )
-        .unwrap();
+        agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
+        agent_spawn(dir.path(), &feature, "tester", None, None, server.name()).unwrap();
 
         // Kill the session and recreate it (simulating restart — windows gone)
         tmux::kill_session(server.name(), &session_name).unwrap();
@@ -777,26 +709,8 @@ mod tests {
         let (session_name, feature) = setup_project(dir.path(), &server);
 
         // Spawn two agents
-        agent_spawn(
-            dir.path(),
-            &feature,
-            "reviewer",
-            None,
-            None,
-            SpawnOverrides::default(),
-            server.name(),
-        )
-        .unwrap();
-        agent_spawn(
-            dir.path(),
-            &feature,
-            "tester",
-            None,
-            None,
-            SpawnOverrides::default(),
-            server.name(),
-        )
-        .unwrap();
+        agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
+        agent_spawn(dir.path(), &feature, "tester", None, None, server.name()).unwrap();
 
         // Mark tester as inactive (simulating `pm agent stop tester`)
         let agents_dir = paths::agents_dir(dir.path());
@@ -838,26 +752,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let (_session_name, feature) = setup_project(dir.path(), &server);
 
-        agent_spawn(
-            dir.path(),
-            &feature,
-            "reviewer",
-            None,
-            None,
-            SpawnOverrides::default(),
-            server.name(),
-        )
-        .unwrap();
-        agent_spawn(
-            dir.path(),
-            &feature,
-            "tester",
-            None,
-            None,
-            SpawnOverrides::default(),
-            server.name(),
-        )
-        .unwrap();
+        agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
+        agent_spawn(dir.path(), &feature, "tester", None, None, server.name()).unwrap();
 
         // Call spawn_all without killing windows: every agent is already active.
         let result = agent_spawn_all(dir.path(), &feature, server.name()).unwrap();
@@ -897,16 +793,7 @@ mod tests {
         let (_session_name, feature) = setup_project(dir.path(), &server);
 
         // Spawn a good agent first
-        agent_spawn(
-            dir.path(),
-            &feature,
-            "reviewer",
-            None,
-            None,
-            SpawnOverrides::default(),
-            server.name(),
-        )
-        .unwrap();
+        agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
 
         // Manually register a second agent, then destroy the tmux session
         // so that spawning new windows fails for both.
@@ -949,16 +836,7 @@ mod tests {
         let (session_name, feature) = setup_project(dir.path(), &server);
 
         // Spawn agent, then manually set a session_id
-        agent_spawn(
-            dir.path(),
-            &feature,
-            "reviewer",
-            None,
-            None,
-            SpawnOverrides::default(),
-            server.name(),
-        )
-        .unwrap();
+        agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
 
         let agents_dir = paths::agents_dir(dir.path());
         let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
@@ -973,16 +851,8 @@ mod tests {
         tmux::create_session(server.name(), &session_name, &worktree).unwrap();
 
         // Re-spawn should resume
-        let (outcome, msg, _) = agent_spawn(
-            dir.path(),
-            &feature,
-            "reviewer",
-            None,
-            None,
-            SpawnOverrides::default(),
-            server.name(),
-        )
-        .unwrap();
+        let (outcome, msg, _) =
+            agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
         assert_eq!(outcome, SpawnOutcome::Resumed);
         assert!(outcome.is_new_window());
         assert!(msg.contains("Resumed agent 'reviewer'"));
@@ -1010,16 +880,8 @@ mod tests {
         let worktree = dir.path().join(&feature);
         assert!(!Harness::Codex.worktree_trusted(&paths::home_dir().unwrap(), &worktree));
 
-        let (outcome, _, _) = agent_spawn(
-            dir.path(),
-            &feature,
-            "reviewer",
-            None,
-            None,
-            SpawnOverrides::default(),
-            server.name(),
-        )
-        .unwrap();
+        let (outcome, _, _) =
+            agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
         assert_eq!(outcome, SpawnOutcome::Spawned);
 
         let target = tmux::find_window(server.name(), &session_name, "reviewer")
@@ -1057,7 +919,6 @@ mod tests {
                 agent_name: Some("reviewer"),
                 agent_definition: None,
                 prompt: None,
-                overrides: SpawnOverrides::default(),
                 resume_session: None,
                 fork_session: false,
                 reuse_window: None,
@@ -1095,16 +956,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let (session_name, feature) = setup_project(dir.path(), &server);
 
-        agent_spawn(
-            dir.path(),
-            &feature,
-            "reviewer",
-            None,
-            None,
-            SpawnOverrides::default(),
-            server.name(),
-        )
-        .unwrap();
+        agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
         let agents_dir = paths::agents_dir(dir.path());
         let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
         registry.get_mut("reviewer").unwrap().session_id = "cc-session".to_string();
@@ -1113,23 +965,34 @@ mod tests {
         tmux::kill_session(server.name(), &session_name).unwrap();
         tmux::create_session(server.name(), &session_name, &dir.path().join(&feature)).unwrap();
         configure_harness(dir.path(), "reviewer", "codex");
+        // A `"*"` model row binds to the default harness, so it is dropped
+        // for the codex agent: both remarks share one parenthetical.
+        let pm_dir = paths::pm_dir(dir.path());
+        let mut config = ProjectConfig::load(&pm_dir).unwrap();
+        config
+            .agents
+            .models
+            .insert("*".to_string(), "opus".to_string());
+        config.save(&pm_dir).unwrap();
 
-        let (outcome, msg, _) = agent_spawn(
-            dir.path(),
-            &feature,
-            "reviewer",
-            None,
-            None,
-            SpawnOverrides::default(),
-            server.name(),
-        )
-        .unwrap();
+        let (outcome, msg, notes) =
+            agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
         assert_eq!(outcome, SpawnOutcome::Spawned);
+        assert_eq!(
+            notes,
+            vec![
+                "harness changed claude-code → codex; previous session not resumed".to_string(),
+                "project [agents.models] row for '*' is bound to claude-code, not codex — not \
+                 applied"
+                    .to_string(),
+            ]
+        );
         assert_eq!(
             msg,
             format!(
                 "Spawned agent 'reviewer' in {} (harness changed claude-code → codex; previous \
-                 session not resumed)",
+                 session not resumed; project [agents.models] row for '*' is bound to \
+                 claude-code, not codex — not applied)",
                 tmux::find_window(server.name(), &session_name, "reviewer")
                     .unwrap()
                     .unwrap()
@@ -1154,16 +1017,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let (session_name, feature) = setup_project(dir.path(), &server);
         configure_harness(dir.path(), "reviewer", "opencode");
-        let err = agent_spawn(
-            dir.path(),
-            &feature,
-            "reviewer",
-            None,
-            None,
-            SpawnOverrides::default(),
-            server.name(),
-        )
-        .unwrap_err();
+        let err =
+            agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap_err();
         assert!(
             matches!(err, PmError::HarnessUnsupported { .. }),
             "got: {err}"
@@ -1181,26 +1036,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let (_session_name, feature) = setup_project(dir.path(), &server);
 
-        let result = agent_spawn(
-            dir.path(),
-            &feature,
-            "foo:bar",
-            None,
-            None,
-            SpawnOverrides::default(),
-            server.name(),
-        );
+        let result = agent_spawn(dir.path(), &feature, "foo:bar", None, None, server.name());
         assert!(result.is_err());
 
-        let result = agent_spawn(
-            dir.path(),
-            &feature,
-            "../evil",
-            None,
-            None,
-            SpawnOverrides::default(),
-            server.name(),
-        );
+        let result = agent_spawn(dir.path(), &feature, "../evil", None, None, server.name());
         assert!(result.is_err());
     }
 
@@ -1220,7 +1059,6 @@ mod tests {
             "frontend-dev",
             Some("implementer"),
             None,
-            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -1263,7 +1101,6 @@ mod tests {
             "implementer",
             None,
             None,
-            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -1289,7 +1126,6 @@ mod tests {
             "implementer",
             Some("implementer"),
             None,
-            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -1315,7 +1151,6 @@ mod tests {
             "frontend-dev",
             Some("implementer"),
             None,
-            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -1355,7 +1190,6 @@ mod tests {
             "frontend-dev",
             Some("foo:bar"),
             None,
-            SpawnOverrides::default(),
             server.name(),
         );
         assert!(result.is_err());
@@ -1376,7 +1210,6 @@ mod tests {
             "no-such-agent",
             None,
             None,
-            SpawnOverrides::default(),
             server.name(),
         );
         assert!(matches!(
@@ -1408,7 +1241,6 @@ mod tests {
             "no-such-agent",
             None,
             Some("do the thing"),
-            SpawnOverrides::default(),
             server.name(),
         );
         assert!(result.is_err());
@@ -1442,7 +1274,6 @@ mod tests {
             "sidekick",
             None,
             Some("keep going"),
-            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -1469,7 +1300,6 @@ mod tests {
             "frontend-dev",
             Some("ghost-def"),
             None,
-            SpawnOverrides::default(),
             server.name(),
         );
         assert!(matches!(
@@ -1542,16 +1372,8 @@ mod tests {
         let (session_name, feature) = setup_project(dir.path(), &server);
 
         let alias = "default";
-        let (outcome, _, _) = agent_spawn(
-            dir.path(),
-            &feature,
-            alias,
-            None,
-            None,
-            SpawnOverrides::default(),
-            server.name(),
-        )
-        .unwrap();
+        let (outcome, _, _) =
+            agent_spawn(dir.path(), &feature, alias, None, None, server.name()).unwrap();
         assert_eq!(outcome, SpawnOutcome::Spawned);
         let target = tmux::find_window(server.name(), &session_name, alias)
             .unwrap()
@@ -1592,123 +1414,6 @@ mod tests {
     }
 
     #[test]
-    fn spawn_settings_permission_flag_beats_configured_permission_mode() {
-        let project = AgentsConfig {
-            permissions: [("implementer".to_string(), "plan".to_string())]
-                .into_iter()
-                .collect(),
-            models: [("implementer".to_string(), "opus".to_string())]
-                .into_iter()
-                .collect(),
-            ..Default::default()
-        };
-        let settings = spawn_settings(
-            SpawnOverrides {
-                permission: Some("acceptEdits"),
-                model: None,
-            },
-            Some("implementer"),
-            &project,
-            &AgentsConfig::default(),
-        )
-        .unwrap();
-        assert_eq!(settings.permission_mode.as_deref(), Some("acceptEdits"));
-        // --permission is about permissions only; the configured model still applies.
-        assert_eq!(settings.model.as_deref(), Some("opus"));
-    }
-
-    #[test]
-    fn spawn_settings_model_flag_beats_configured_model() {
-        let project = AgentsConfig {
-            permissions: [("implementer".to_string(), "plan".to_string())]
-                .into_iter()
-                .collect(),
-            models: [("implementer".to_string(), "opus".to_string())]
-                .into_iter()
-                .collect(),
-            ..Default::default()
-        };
-        let settings = spawn_settings(
-            SpawnOverrides {
-                permission: None,
-                model: Some("haiku"),
-            },
-            Some("implementer"),
-            &project,
-            &AgentsConfig::default(),
-        )
-        .unwrap();
-        assert_eq!(settings.model.as_deref(), Some("haiku"));
-        // --model is about the model only; the configured permission mode
-        // still applies.
-        assert_eq!(settings.permission_mode.as_deref(), Some("plan"));
-    }
-
-    #[test]
-    fn spawn_settings_model_absent_falls_through_to_config() {
-        let global = AgentsConfig {
-            models: [("implementer".to_string(), "opus".to_string())]
-                .into_iter()
-                .collect(),
-            ..Default::default()
-        };
-        let settings = spawn_settings(
-            SpawnOverrides::default(),
-            Some("implementer"),
-            &AgentsConfig::default(),
-            &global,
-        )
-        .unwrap();
-        assert_eq!(settings.model.as_deref(), Some("opus"));
-    }
-
-    #[test]
-    fn spawn_settings_model_flag_applies_on_top_of_a_dropped_global_row() {
-        let project = AgentsConfig {
-            harness: [("reviewer".to_string(), "codex".to_string())]
-                .into_iter()
-                .collect(),
-            ..Default::default()
-        };
-        let global = AgentsConfig {
-            models: [("reviewer".to_string(), "opus".to_string())]
-                .into_iter()
-                .collect(),
-            ..Default::default()
-        };
-        let settings = spawn_settings(
-            SpawnOverrides {
-                permission: None,
-                model: Some("gpt-5"),
-            },
-            Some("reviewer"),
-            &project,
-            &global,
-        )
-        .unwrap();
-        assert_eq!(settings.model.as_deref(), Some("gpt-5"));
-        assert_eq!(settings.notes.len(), 1, "{:?}", settings.notes);
-    }
-
-    #[test]
-    fn spawn_settings_model_flag_applies_without_definition() {
-        // A plain claude session takes no config, but an explicit flag
-        // is still honoured.
-        let settings = spawn_settings(
-            SpawnOverrides {
-                permission: None,
-                model: Some("haiku"),
-            },
-            None,
-            &AgentsConfig::default(),
-            &AgentsConfig::default(),
-        )
-        .unwrap();
-        assert_eq!(settings.model.as_deref(), Some("haiku"));
-        assert_eq!(settings.permission_mode, None);
-    }
-
-    #[test]
     fn spawn_settings_keyed_by_definition_not_display_name() {
         // A named agent (display `backend-dev`, definition `implementer`)
         // takes the definition's settings, not the display name's.
@@ -1722,24 +1427,12 @@ mod tests {
             ..Default::default()
         };
         let named = effective_definition(Some("implementer"), Some("backend-dev"));
-        let settings = spawn_settings(
-            SpawnOverrides::default(),
-            named,
-            &project,
-            &AgentsConfig::default(),
-        )
-        .unwrap();
+        let settings = spawn_settings(named, &project, &AgentsConfig::default()).unwrap();
         assert_eq!(settings.model.as_deref(), Some("opus"));
 
         // With no override the display name doubles as the definition.
         let plain = effective_definition(None, Some("backend-dev"));
-        let settings = spawn_settings(
-            SpawnOverrides::default(),
-            plain,
-            &project,
-            &AgentsConfig::default(),
-        )
-        .unwrap();
+        let settings = spawn_settings(plain, &project, &AgentsConfig::default()).unwrap();
         assert_eq!(settings.model.as_deref(), Some("haiku"));
     }
 
@@ -1755,13 +1448,7 @@ mod tests {
                 .collect(),
             ..Default::default()
         };
-        let settings = spawn_settings(
-            SpawnOverrides::default(),
-            None,
-            &project,
-            &AgentsConfig::default(),
-        )
-        .unwrap();
+        let settings = spawn_settings(None, &project, &AgentsConfig::default()).unwrap();
         assert_eq!(settings, AgentSettings::default());
     }
 }

@@ -2,7 +2,6 @@ use std::path::Path;
 
 use chrono::Utc;
 
-use crate::commands::agent_spawn;
 use crate::commands::feat_common::{self, InitStateFields};
 use crate::error::{PmError, Result};
 use crate::hooks;
@@ -19,11 +18,6 @@ pub struct FeatAdoptParams<'a> {
     pub context: Option<&'a str>,
     /// Path to an existing worktree to migrate Claude sessions from.
     pub from: Option<&'a Path>,
-    /// `--permission` for every agent the workflow spawns; beats
-    /// `[agents.permissions]`.
-    pub permission: Option<&'a str>,
-    /// `--model` for every agent the workflow spawns; beats `[agents.models]`.
-    pub model: Option<&'a str>,
     /// Workflow to activate for this feature. When `None` and `context` is
     /// provided, defaults to `feat_common::DEFAULT_WORKFLOW` (a context
     /// needs a recipient).
@@ -208,10 +202,6 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
                 params.project_root,
                 &feature_name,
                 team,
-                agent_spawn::SpawnOverrides {
-                    permission: params.permission,
-                    model: params.model,
-                },
                 Some(&reuse_target),
                 params.tmux_server,
             )?;
@@ -272,8 +262,6 @@ mod tests {
             name_override: None,
             context: None,
             from: None,
-            permission: None,
-            model: None,
             workflow: None,
             tmux_server,
             session_store: None,

@@ -637,8 +637,6 @@ mod tests {
             name_override: None,
             context: None,
             base: Some("parent"),
-            permission: None,
-            model: None,
             workflow: None,
             tmux_server: server.name(),
         })
@@ -668,8 +666,6 @@ mod tests {
             name_override: None,
             context: None,
             base: Some("parent"),
-            permission: None,
-            model: None,
             workflow: None,
             tmux_server: server.name(),
         })

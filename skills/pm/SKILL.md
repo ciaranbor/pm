@@ -31,7 +31,6 @@ Options:
 - `--context <text-or-file>` — initial message delivered to the default agent's inbox (required for agent-driven features)
 - `--base <branch>` — stack on another branch instead of main
 - `--feature-name <override>` — override the derived feature name (useful for branches with slashes)
-- `--permission <mode>` — permission mode for every spawned agent, in the harness's own terms (e.g. `acceptEdits`)
 
 ## Adopting an existing branch
 

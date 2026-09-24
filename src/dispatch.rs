@@ -189,8 +189,6 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     name,
                     agent_definition,
                     context,
-                    permission,
-                    model,
                 } => {
                     // `--context -` reads the brief from stdin; any other
                     // value is treated as a literal string (no file resolution).
@@ -202,10 +200,6 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                             &agent_name,
                             agent_definition.as_deref(),
                             context.as_deref(),
-                            commands::agent_spawn::SpawnOverrides {
-                                permission: permission.as_deref(),
-                                model: model.as_deref(),
-                            },
                             None,
                         )?;
                         println!("{msg}");
@@ -213,12 +207,6 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         if agent_definition.is_some() {
                             return Err(PmError::Agent(
                                 "--agent requires a positional NAME (the display name to register under)"
-                                    .to_string(),
-                            ));
-                        }
-                        if permission.is_some() || model.is_some() {
-                            return Err(PmError::Agent(
-                                "--permission/--model require a positional NAME; respawn-all re-resolves settings from config"
                                     .to_string(),
                             ));
                         }
@@ -436,8 +424,6 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     feature_name,
                     context,
                     base,
-                    permission,
-                    model,
                     workflow,
                 } => {
                     let feat_name =
@@ -447,8 +433,6 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                             name_override: feature_name.as_deref(),
                             context: context.as_deref(),
                             base: base.as_deref(),
-                            permission: permission.as_deref(),
-                            model: model.as_deref(),
                             workflow: workflow.as_deref(),
                             tmux_server: None,
                         })?;
@@ -460,8 +444,6 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     feature_name,
                     context,
                     from,
-                    permission,
-                    model,
                     workflow,
                 } => {
                     let feat_name =
@@ -471,8 +453,6 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                             name_override: feature_name.as_deref(),
                             context: context.as_deref(),
                             from: from.as_deref(),
-                            permission: permission.as_deref(),
-                            model: model.as_deref(),
                             workflow: workflow.as_deref(),
                             tmux_server: None,
                             session_store: None,

@@ -224,10 +224,10 @@ agent's harness; a stored session is only resumed on the harness that
 produced it — change an agent's harness and its next respawn starts a fresh
 session (and `pm agent fork` refuses).
 
-`pm agent spawn`, `pm feat new`, and `pm feat adopt` take `--permission <mode>`
-and `--model <id>` as spawn-time overrides that beat both tiers; on `feat
-new`/`feat adopt` they apply to every agent the workflow spawns. Neither is
-remembered — a restart, fork, or heal goes back to config.
+Config is the only way to set these: there is no spawn-time flag, so a
+restart, fork, or heal launches with the same settings as the first spawn.
+For a one-off change, edit the row and spawn, or switch inside the session
+(`/model`, `/permissions` on both harnesses).
 
 Keys are the `--agent` definition, not the display name: an agent spawned as
 `frontend-dev --agent implementer` takes `implementer`'s row. The vanilla
