@@ -417,7 +417,6 @@ When adding or changing commands/features, update:
 
 - `README.md` — user-facing usage examples and command reference
 - `AGENTS.md` — architecture, development guidelines, and any new conventions
-  (`CLAUDE.md` is a symlink to it; edit `AGENTS.md`)
 
 ## Commits
 
