@@ -50,8 +50,10 @@ fn check_all_features_safety(
 
 /// Delete a project: safety-check all features, kill sessions, remove state and registry.
 ///
-/// Without `--force`, worktree directories are left in place (only git worktree bookkeeping
-/// and branches are removed). With `--force`, worktrees are force-removed from disk.
+/// Without `--force`, every worktree directory is left in place — `main` holds the
+/// repository the feature worktrees link into, so it stays with them. With `--force`,
+/// features, `main`, and the then-empty project root are removed from disk; a
+/// symlinked `main` (from `pm register` without `--move`) loses only the link.
 pub fn delete(
     project_root: &Path,
     projects_dir: &Path,
@@ -95,15 +97,24 @@ pub fn delete(
                 }
             }
         }
+    } else {
+        for line in force_loss_warnings(&main_repo) {
+            eprintln!("warning: {line}");
+        }
     }
 
     // --- Confirmation prompt (skip with --yes) ---
     if !yes {
         let feat_count = features.len();
-        if feat_count > 0 {
-            eprint!("Delete project '{project_name}' and its {feat_count} feature(s)? [y/N] ");
+        let what = if force {
+            format!(" and the checkout at {}", main_repo.display())
         } else {
-            eprint!("Delete project '{project_name}'? [y/N] ");
+            String::new()
+        };
+        if feat_count > 0 {
+            eprint!("Delete project '{project_name}', its {feat_count} feature(s){what}? [y/N] ");
+        } else {
+            eprint!("Delete project '{project_name}'{what}? [y/N] ");
         }
         io::stderr().flush()?;
 
@@ -166,6 +177,13 @@ pub fn delete(
         std::fs::remove_file(&registry_file)?;
     }
 
+    // --- Remove the main checkout and the project root (--force only) ---
+    if force {
+        remove_main_checkout(&main_repo)?;
+        // Only an empty root is pm's to remove: anything else in it is the user's.
+        let _ = std::fs::remove_dir(project_root);
+    }
+
     // --- Kill main tmux session (must be last — if the caller is inside this
     // session, the kill terminates this process) ---
     let main_session = tmux::session_name(&project_name, "main");
@@ -174,6 +192,46 @@ pub fn delete(
     }
 
     Ok(project_name)
+}
+
+/// What `--force` would destroy along with `main` that exists nowhere else:
+/// the whole history when the repository has no remote, commits its branch
+/// has not pushed, and uncommitted changes.
+fn force_loss_warnings(main_repo: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let shown = main_repo.display();
+    if git::list_remotes(main_repo)
+        .map(|r| r.trim().is_empty())
+        .unwrap_or(false)
+    {
+        out.push(format!(
+            "{shown} has no remote; --force deletes its only copy of the history"
+        ));
+    } else if git::has_unpushed_commits(main_repo).unwrap_or(false) {
+        out.push(format!(
+            "{shown} has unpushed commits; --force deletes them"
+        ));
+    }
+    if git::has_uncommitted_changes(main_repo).unwrap_or(false) {
+        out.push(format!(
+            "{shown} has uncommitted changes; --force deletes them"
+        ));
+    }
+    out
+}
+
+/// Remove `main` from disk. A symlinked `main` points at a repository pm never
+/// owned, so only the link goes.
+fn remove_main_checkout(main_repo: &Path) -> Result<()> {
+    let Ok(meta) = std::fs::symlink_metadata(main_repo) else {
+        return Ok(());
+    };
+    if meta.file_type().is_symlink() {
+        std::fs::remove_file(main_repo)?;
+    } else {
+        std::fs::remove_dir_all(main_repo)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -302,8 +360,58 @@ mod tests {
 
         assert!(!paths::pm_dir(&project_path).exists());
         assert!(!projects_dir.join(format!("{project_name}.toml")).exists());
-        // --force removes worktree directories from disk
         assert!(!project_path.join("login").exists());
+        assert!(!paths::main_worktree(&project_path).exists());
+        assert!(!project_path.exists());
+    }
+
+    #[test]
+    fn delete_force_removes_only_the_link_of_a_symlinked_main() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
+
+        // Stand in for `pm register` symlink mode: main → a repo pm doesn't own.
+        let main = paths::main_worktree(&project_path);
+        let real_repo = dir.path().join("real-repo");
+        std::fs::rename(&main, &real_repo).unwrap();
+        std::os::unix::fs::symlink(&real_repo, &main).unwrap();
+
+        delete(&project_path, &projects_dir, true, true, server.name()).unwrap();
+
+        assert!(!project_path.exists());
+        assert!(real_repo.join(".git").exists());
+    }
+
+    #[test]
+    fn force_warns_about_history_only_main_holds() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, _) = server.setup_project(dir.path());
+        let main = paths::main_worktree(&project_path);
+
+        let warnings = force_loss_warnings(&main);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("no remote"), "{warnings:?}");
+
+        std::fs::write(main.join("wip.txt"), "wip").unwrap();
+        git::stage_file(&main, "wip.txt").unwrap();
+        let warnings = force_loss_warnings(&main);
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings[1].contains("uncommitted changes"), "{warnings:?}");
+    }
+
+    #[test]
+    fn delete_keeps_a_root_holding_user_files() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
+        std::fs::write(project_path.join("notes.txt"), "mine").unwrap();
+
+        delete(&project_path, &projects_dir, true, true, server.name()).unwrap();
+
+        assert!(!paths::main_worktree(&project_path).exists());
+        assert!(project_path.join("notes.txt").exists());
     }
 
     #[test]
@@ -328,8 +436,10 @@ mod tests {
         // pm state and registry are cleaned up
         assert!(!paths::pm_dir(&project_path).exists());
         assert!(!projects_dir.join(format!("{project_name}.toml")).exists());
-        // Without --force, worktree directory and branch are left on disk
+        // Without --force, worktree directories and branches are left on disk;
+        // the feature worktree is only usable while main's repository stays.
         assert!(project_path.join("login").exists());
+        assert!(main_repo.join(".git").exists());
         assert!(git::branch_exists(&main_repo, "login").unwrap());
     }
 

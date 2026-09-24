@@ -332,13 +332,16 @@ pub fn project_assets(project_root: &Path, dry_run: bool) -> Result<Vec<String>>
 /// Project the global canonical store into every supported harness's own
 /// global dir (`~/.agents` → `~/.claude` for claude-code).
 fn project_global(store: &GlobalStore, dry_run: bool) -> Result<Vec<String>> {
-    let canonical = store.canonical();
+    project_global_from(&store.canonical(), &store.home, dry_run)
+}
+
+fn project_global_from(canonical: &Path, home: &Path, dry_run: bool) -> Result<Vec<String>> {
     let mut lines = Vec::new();
     for h in Harness::SUPPORTED {
-        let Some(target) = h.global_config_dir(&store.home) else {
+        let Some(target) = h.global_config_dir(home) else {
             continue;
         };
-        lines.extend(project_into(&canonical, *h, &target, dry_run)?);
+        lines.extend(project_into(canonical, *h, &target, dry_run)?);
     }
     Ok(lines)
 }
@@ -600,7 +603,22 @@ pub fn install_global_dry_run_in(store: &GlobalStore) -> Result<Vec<String>> {
             lines.push(format!("{line} (global)"));
         }
     }
-    lines.extend(project_global(store, true)?);
+    // The projection diffs the canonical store against the harness dir, so
+    // diff the store as the install would leave it, not as it is now.
+    let staged = tempfile::tempdir()?;
+    let staged_store = GlobalStore::at(staged.path());
+    for kind in BundledKind::ALL {
+        let src = store.dir(kind);
+        if kind.store_subdir().is_some() && src.is_dir() {
+            copy_dir_recursive(&src, &staged_store.dir(kind))?;
+        }
+        install_in(&staged_store.dir(kind), kind, None)?;
+    }
+    lines.extend(project_global_from(
+        &staged_store.canonical(),
+        &store.home,
+        true,
+    )?);
     Ok(lines)
 }
 
@@ -780,13 +798,21 @@ pub fn stale_bundled_copies(project_root: &Path) -> Result<Vec<PathBuf>> {
 
 /// Main plus every feature worktree that exists on disk.
 pub(crate) fn worktrees_on_disk(project_root: &Path) -> Result<Vec<PathBuf>> {
-    let mut out = vec![paths::main_worktree(project_root)];
+    Ok(scoped_worktrees_on_disk(project_root)?
+        .into_iter()
+        .map(|(_, wt)| wt)
+        .collect())
+}
+
+/// [`worktrees_on_disk`] with each worktree's scope name.
+pub(crate) fn scoped_worktrees_on_disk(project_root: &Path) -> Result<Vec<(String, PathBuf)>> {
+    let mut out = vec![("main".to_string(), paths::main_worktree(project_root))];
     let features_dir = paths::features_dir(project_root);
     if features_dir.is_dir() {
         for (name, _) in crate::state::feature::FeatureState::list(&features_dir)? {
             let wt = project_root.join(&name);
             if wt.is_dir() {
-                out.push(wt);
+                out.push((name, wt));
             }
         }
     }
@@ -1097,7 +1123,24 @@ mod tests {
         let store = GlobalStore::at(home.path());
         assert_eq!(global_store_missing_in(&store).len(), BUNDLED_ITEMS.len());
 
+        // With nothing installed yet the preview still names the projection
+        // the install triggers, with the same file count.
+        let dry = install_global_dry_run_in(&store).unwrap();
+        let would_project: Vec<&String> = dry
+            .iter()
+            .filter(|l| l.starts_with("Would project"))
+            .collect();
+        assert_eq!(would_project.len(), 1, "{dry:?}");
+        assert!(!home.path().join(".agents").exists());
+        assert!(!home.path().join(".claude").exists());
+
         let lines = install_global_in(&store).unwrap();
+        let projected = lines.iter().find(|l| l.starts_with("Projected")).unwrap();
+        assert_eq!(
+            would_project[0].trim_start_matches("Would project"),
+            projected.trim_start_matches("Projected"),
+            "{dry:?} vs {lines:?}"
+        );
         assert!(
             lines
                 .iter()
@@ -1147,15 +1190,17 @@ mod tests {
         assert!(install_global_in(&store).unwrap().is_empty());
 
         // A hand-edited global bundled file is rewritten on the next install.
+        // The harness copy already holds the bundled bytes, so no projection
+        // follows the rewrite, and the preview says so.
         fs::write(h.join(".agents/agents/reviewer.md"), "edited").unwrap();
         let dry = install_global_dry_run_in(&store).unwrap();
-        assert_eq!(dry[0], "Would update Agent 'reviewer' (global)");
-        assert!(dry[1].starts_with("Would project"), "{dry:?}");
+        assert_eq!(dry, vec!["Would update Agent 'reviewer' (global)"]);
         assert_eq!(
             fs::read_to_string(h.join(".agents/agents/reviewer.md")).unwrap(),
             "edited"
         );
-        install_global_in(&store).unwrap();
+        let lines = install_global_in(&store).unwrap();
+        assert_eq!(lines, vec!["Rewrote Agent 'reviewer' (global)"]);
         assert_eq!(
             fs::read_to_string(h.join(".agents/agents/reviewer.md")).unwrap(),
             item(BundledKind::Agent, "reviewer").files[0].1

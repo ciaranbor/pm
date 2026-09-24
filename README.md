@@ -235,7 +235,8 @@ unattended:
   harness it supports.
 - **Directory trust** pm writes itself: each worktree gets a
   `[projects."<path>"] trust_level = "trusted"` entry in
-  `$CODEX_HOME/config.toml` at spawn (`pm doctor --fix` adds any missing).
+  `$CODEX_HOME/config.toml` at spawn (`pm doctor --fix` adds any missing for
+  a worktree whose agents or workflow team run on codex).
 - **No sandbox by default.** pm launches codex with `-a never -s
   danger-full-access`. pm's tmux socket cannot be reached from inside any
   codex sandbox (macOS blocks the Unix-socket connect independently of
@@ -338,8 +339,10 @@ record), with durable learnings migrated into `findings.md` first.
 This is distinct from messaging: the store is a database for durable knowledge,
 the queue is for cross-agent/cross-scope communication. Don't conflate them.
 
-On `pm feat delete`/`merge`, a feature's `summary.md` is collected to
-`.pm/summaries/<feature>.md` so the orchestrator can triage it into the store.
+On `pm feat delete`/`merge`, a feature's `summary.md` — the hand-off its
+workflow's summary owner writes for the orchestrator (`pm workflow show` says
+what belongs in it) — is collected to `.pm/summaries/<feature>.md` so the
+orchestrator can triage it into the store.
 
 ### Asset tiers
 
@@ -456,6 +459,9 @@ These round out the tool; each has its full flag reference under `--help`:
 - `pm completions <shell>` — generate shell completion scripts.
 - `pm list` — list registered projects.
 - `pm delete` — full project teardown (sessions, `.pm/`, registry entry).
+  Worktrees stay on disk as plain git checkouts; `--force` skips the safety
+  checks and removes them, `main` included — that is the local repository, so
+  history with no remote goes with it (warned about, never refused).
   Destructive — distinct from `pm close`, which only tears down sessions.
 
 ## Development
