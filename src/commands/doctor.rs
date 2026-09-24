@@ -607,9 +607,9 @@ pub fn probe_line(harness: Harness) -> String {
 
 /// Main-scope findings about each harness in use's hooks: pm's entries
 /// missing from its user-level file, entries in a shape it would ignore,
-/// pm hooks it has not been told to trust, and worktrees it would stop at
-/// a trust prompt for. The trust findings exist because codex fails
-/// silently on both counts. Only harnesses in use, although the install
+/// pm hooks it has not been told to trust, and worktrees whose agents run
+/// on it that it would stop at a trust prompt for. The trust findings exist
+/// because codex fails silently on both counts. Only harnesses in use, although the install
 /// writes every supported harness's file: a trust finding for a harness
 /// none of this project's agents run on would be noise.
 fn hook_issues(project_root: &Path) -> Result<Vec<Issue>> {
@@ -618,6 +618,7 @@ fn hook_issues(project_root: &Path) -> Result<Vec<Issue>> {
 
 /// [`hook_issues`] against an explicit `home`.
 fn hook_issues_in(project_root: &Path, home: &Path) -> Result<Vec<Issue>> {
+    let worktree_harnesses = worktree_harnesses(project_root)?;
     let mut issues = Vec::new();
     for harness in skills::harnesses_in_use(project_root)? {
         let file = hooks_install::user_settings_path(harness, home)?;
@@ -663,20 +664,66 @@ fn hook_issues_in(project_root: &Path, home: &Path) -> Result<Vec<Issue>> {
                 fix: Fix::Auto(FixAction::InstallStopHook),
             });
         }
-        for wt in skills::worktrees_on_disk(project_root)? {
-            if !harness.worktree_trusted(home, &wt) {
+        for (wt, needed) in &worktree_harnesses {
+            if needed.contains(&harness) && !harness.worktree_trusted(home, wt) {
                 issues.push(Issue {
                     kind: IssueKind::WorktreeUntrusted,
                     message: format!(
                         "{} is not trusted by {harness}; it will stop at a trust prompt on launch",
-                        wt.strip_prefix(project_root).unwrap_or(&wt).display()
+                        wt.strip_prefix(project_root).unwrap_or(wt).display()
                     ),
-                    fix: Fix::Auto(FixAction::TrustWorktree { harness, path: wt }),
+                    fix: Fix::Auto(FixAction::TrustWorktree {
+                        harness,
+                        path: wt.clone(),
+                    }),
                 });
             }
         }
     }
     Ok(issues)
+}
+
+/// Each worktree on disk with the harnesses its agents launch on: those of
+/// its registered agents plus, for a feature, its workflow team — the set a
+/// spawn there would need the worktree trusted by.
+fn worktree_harnesses(project_root: &Path) -> Result<Vec<(PathBuf, Vec<Harness>)>> {
+    let project = match ProjectConfig::load(&paths::pm_dir(project_root)) {
+        Ok(config) => config.agents,
+        Err(crate::error::PmError::NotInProject) => Default::default(),
+        Err(e) => return Err(e),
+    };
+    let global = GlobalConfig::load_or_default().agents;
+    let agents_dir = paths::agents_dir(project_root);
+    let features_dir = paths::features_dir(project_root);
+    let mut out = Vec::new();
+    for wt in skills::worktrees_on_disk(project_root)? {
+        let scope = wt
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let registry = AgentRegistry::load(&agents_dir, &scope)?;
+        let mut definitions: Vec<String> = registry
+            .agents
+            .iter()
+            .map(|(key, entry)| entry.effective_definition(key).to_string())
+            .collect();
+        if let Ok(feature) = FeatureState::load(&features_dir, &scope)
+            && let Some(name) = &feature.workflow
+            && let Ok(def) = workflow::WorkflowDef::load(project_root, name)
+        {
+            definitions.extend(def.effective_team().iter().cloned());
+        }
+        let mut harnesses = Vec::new();
+        for def in definitions {
+            if let Ok(h) = agent_spawn::configured_harness(&def, &project, &global)
+                && !harnesses.contains(&h)
+            {
+                harnesses.push(h);
+            }
+        }
+        out.push((wt, harnesses));
+    }
+    Ok(out)
 }
 
 /// Main-scope findings about the two asset tiers: what the global tier is
@@ -920,6 +967,22 @@ mod tests {
             .harness
             .insert("reviewer".to_string(), "codex".to_string());
         config.save(&pm_dir).unwrap();
+        // main runs that agent, so its worktree needs codex's trust.
+        let mut registry = AgentRegistry::default();
+        registry.register(
+            "reviewer",
+            crate::state::agent::AgentEntry {
+                agent_type: AgentType::Agent,
+                session_id: String::new(),
+                window_name: "reviewer".to_string(),
+                active: false,
+                agent_definition: None,
+                harness: Harness::ClaudeCode,
+            },
+        );
+        registry
+            .save(&paths::agents_dir(&project_path), "main")
+            .unwrap();
 
         let findings = diagnose(&project_path, server.name(), false).unwrap();
         let main_kinds: Vec<IssueKind> = findings
@@ -1341,6 +1404,36 @@ mod tests {
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
         let home = paths::home_dir().unwrap();
         let codex_hooks = home.join(".codex/hooks.json");
+
+        // Trust is per worktree: main runs a registered reviewer, login's
+        // workflow team includes one, api has only an implementer.
+        let stopped = |name: &str| crate::state::agent::AgentEntry {
+            agent_type: AgentType::Agent,
+            session_id: String::new(),
+            window_name: name.to_string(),
+            active: false,
+            agent_definition: None,
+            harness: Harness::ClaudeCode,
+        };
+        let agents_dir = paths::agents_dir(&project_path);
+        let mut registry = AgentRegistry::default();
+        registry.register("reviewer", stopped("reviewer"));
+        registry.save(&agents_dir, "main").unwrap();
+        let features_dir = paths::features_dir(&project_path);
+        let mut login = FeatureState::load(&features_dir, "login").unwrap();
+        login.workflow = Some("implement-and-review".to_string());
+        login.save(&features_dir, "login").unwrap();
+        crate::commands::feat_new::feat_new(
+            &crate::commands::feat_new::FeatNewParams::with_defaults(
+                &project_path,
+                "api",
+                server.name(),
+            ),
+        )
+        .unwrap();
+        let mut registry = AgentRegistry::default();
+        registry.register("implementer", stopped("implementer"));
+        registry.save(&agents_dir, "api").unwrap();
 
         fn hook_kinds<'a>(issues: impl Iterator<Item = &'a Issue>) -> Vec<(IssueKind, String)> {
             issues

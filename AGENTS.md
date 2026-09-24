@@ -186,7 +186,8 @@ harness; the "not projected" doctor finding is gated on
 Two trust gates live in `$CODEX_HOME/config.toml`. Directory trust
 (`[projects."<canonical path>"] trust_level = "trusted"`) pm writes at the
 spawn chokepoint (`Harness::trust_worktree`, via `toml_edit` so the user's
-file keeps its comments) and `pm doctor --fix` repairs. Hook trust
+file keeps its comments) and `pm doctor --fix` repairs, for the worktrees
+whose registered agents or workflow team resolve to codex. Hook trust
 (`[hooks.state."<hooks.json>:<snake_case event>:<entry idx>:<hook idx>"]
 trusted_hash`) only codex can write — the hash is not reproducible outside
 the binary — via one interactive "Trust all and continue", re-asked when
