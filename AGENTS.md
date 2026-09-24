@@ -277,12 +277,13 @@ directly.
 
 Per-agent `[agents.*]` settings are resolved at spawn time and deliberately not
 stored on `AgentEntry` — re-reading config per spawn is what lets restart and
-fork pick up edits. Precedence per setting: CLI flag (`--permission`,
-`--model`) > project named row > project `"*"` > global named row > global
-`"*"` > unset (no flag passed); `""` masks. `"*"` (`WILDCARD_AGENT`) is each
-map's default row; it can't collide with an agent name (`[A-Za-z0-9_-]`). The
-flags are spawn-only (`agent_spawn::SpawnOverrides`): `feat new`/`feat adopt`
-apply them to the whole team, and restart/fork/heal don't carry them forward.
+fork pick up edits. Precedence per setting: project named row >
+project `"*"` > global named row > global `"*"` > unset (no harness flag
+emitted); `""` masks. `"*"` (`WILDCARD_AGENT`) is each map's default row; it
+can't collide with an agent name (`[A-Za-z0-9_-]`). There is deliberately no
+spawn-time override flag: a flag has no key to bind it to a harness (next
+paragraphs), and config-only keeps first spawn, restart, fork, and heal
+identical.
 
 `[agents.harness]` is layered the same way and defaults to `claude-code`; any
 other value is an error at

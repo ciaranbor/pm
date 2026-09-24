@@ -119,8 +119,6 @@ mod tests {
             name_override: None,
             context: Some("fix the widget"),
             base: None,
-            permission: None,
-            model: None,
             workflow: Some("implement-and-review"),
             tmux_server: server.name(),
         })

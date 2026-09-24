@@ -335,7 +335,7 @@ pub struct SpawnSpec<'a> {
     pub resume_session: Option<&'a str>,
     /// With `resume_session`, load its transcript under a fresh session id.
     pub fork_session: bool,
-    /// Harness-specific, like `model`: whatever config or `--permission` said.
+    /// Harness-specific, like `model`: whatever the config row said.
     pub permission_mode: Option<&'a str>,
     pub model: Option<&'a str>,
     /// Directories outside the worktree the agent must be able to write

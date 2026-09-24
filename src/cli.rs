@@ -353,15 +353,6 @@ pub enum AgentCommands {
         /// (e.g. `--context - <<'EOF' … EOF`).
         #[arg(long)]
         context: Option<String>,
-        /// Permission mode for the spawned session, in the harness's own
-        /// terms (e.g. `acceptEdits`; passed unvalidated); beats
-        /// `[agents.permissions]` config
-        #[arg(long, value_name = "MODE")]
-        permission: Option<String>,
-        /// Model for the spawned session (alias or full id, passed
-        /// unvalidated to the harness); beats `[agents.models]` config
-        #[arg(long, value_name = "ID")]
-        model: Option<String>,
     },
     /// List agents in the current feature
     List {
@@ -496,15 +487,6 @@ pub enum FeatCommands {
         /// Base branch to stack on (defaults to current branch from CWD)
         #[arg(long)]
         base: Option<String>,
-        /// Permission mode for every agent the workflow spawns, in the
-        /// harness's own terms (e.g. `acceptEdits`; passed unvalidated);
-        /// beats `[agents.permissions]`
-        #[arg(long, value_name = "MODE")]
-        permission: Option<String>,
-        /// Model for every agent the workflow spawns (alias or full id,
-        /// passed unvalidated to the harness); beats `[agents.models]`
-        #[arg(long, value_name = "ID")]
-        model: Option<String>,
         /// Workflow name (defaults to 'solo' when --context is given).
         /// Run `pm workflow list` for installed workflows.
         #[arg(long)]
@@ -524,15 +506,6 @@ pub enum FeatCommands {
         /// Migrate harness sessions from this old path
         #[arg(long)]
         from: Option<PathBuf>,
-        /// Permission mode for every agent the workflow spawns, in the
-        /// harness's own terms (e.g. `acceptEdits`; passed unvalidated);
-        /// beats `[agents.permissions]`
-        #[arg(long, value_name = "MODE")]
-        permission: Option<String>,
-        /// Model for every agent the workflow spawns (alias or full id,
-        /// passed unvalidated to the harness); beats `[agents.models]`
-        #[arg(long, value_name = "ID")]
-        model: Option<String>,
         /// Workflow name (defaults to 'solo' when --context is given).
         /// Run `pm workflow list` for installed workflows.
         #[arg(long)]

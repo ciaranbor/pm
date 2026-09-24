@@ -5,7 +5,7 @@ use crate::state::agent::AgentRegistry;
 use crate::state::paths;
 use crate::state::project::{GlobalConfig, ProjectConfig};
 
-use super::agent_spawn::{SpawnOverrides, SpawnParams, notes_suffix, spawn_session};
+use super::agent_spawn::{SpawnParams, notes_suffix, spawn_session};
 
 /// Fork an existing agent: spawn a new agent that starts with a copy of
 /// the source's conversation history.
@@ -94,7 +94,6 @@ pub fn agent_fork(
         agent_name: Some(new_name),
         agent_definition: Some(&inherited_definition),
         prompt: None,
-        overrides: SpawnOverrides::default(),
         resume_session: Some(&source_session_id),
         fork_session: true,
         reuse_window: None,
@@ -180,16 +179,7 @@ mod tests {
         session_id: &str,
         server: &TestServer,
     ) {
-        agent_spawn::agent_spawn(
-            dir,
-            feature,
-            name,
-            None,
-            None,
-            SpawnOverrides::default(),
-            server.name(),
-        )
-        .unwrap();
+        agent_spawn::agent_spawn(dir, feature, name, None, None, server.name()).unwrap();
         let agents_dir = paths::agents_dir(dir);
         let mut registry = AgentRegistry::load(&agents_dir, feature).unwrap();
         registry.get_mut(name).unwrap().session_id = session_id.to_string();
@@ -292,7 +282,6 @@ mod tests {
             "frontend-dev",
             Some("implementer"),
             None,
-            SpawnOverrides::default(),
             server.name(),
         )
         .unwrap();
@@ -333,16 +322,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let (_session_name, feature) = setup_project(dir.path(), &server);
 
-        agent_spawn::agent_spawn(
-            dir.path(),
-            &feature,
-            "reviewer",
-            None,
-            None,
-            SpawnOverrides::default(),
-            server.name(),
-        )
-        .unwrap();
+        agent_spawn::agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name())
+            .unwrap();
 
         let result = agent_fork(
             dir.path(),
