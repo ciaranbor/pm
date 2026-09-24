@@ -380,8 +380,11 @@ pub fn feat_delete(
     // Trigger post-merge hook when deleting a feature whose PR was merged
     if pr_merged {
         let hook_path = project_root.join(hooks::POST_MERGE_PATH);
-        let base_session = tmux::session_name(project_name, base);
-        hooks::run_hook(tmux_server, &base_session, &base_repo, &hook_path);
+        hooks::run_hook(
+            tmux_server,
+            &hooks::HookContext::post_merge(project_root, project_name, base, name),
+            &hook_path,
+        );
     }
 
     Ok(())

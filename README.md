@@ -74,11 +74,35 @@ The lifecycle: `pm feat new` → work → optionally `pm feat pr create` /
 Inspection and housekeeping subcommands (`list`, `info`, `switch`, `rename`,
 `delete`, `sync`) round out `pm feat` — see `pm feat --help`.
 
+### Lifecycle hooks
+
 Each project is bootstrapped with **lifecycle hooks** under `.pm/hooks/`:
-`post-create.sh` (after `pm feat new`), `post-merge.sh` (after `pm feat merge`),
-and an opt-in `restore.sh` (when `pm open` recreates a session). They run
-asynchronously in a dedicated `hook` tmux window. Edit them to install deps,
-run migrations, reopen an editor, etc.; remove a script to disable it.
+`post-create.sh` (after `pm feat new`/`adopt`/`review` creates a feature),
+`post-merge.sh` (after `pm feat merge`, or `feat delete` of a feature whose PR
+merged), and an opt-in `restore.sh` (when `pm open` recreates a session). They
+run asynchronously in a dedicated `hook` tmux window of the session they
+concern — the new feature's for `post-create`, the base's for `post-merge`,
+each recreated session's for `restore` — with that session's worktree as the
+working directory. Edit them to install deps, run migrations, copy gitignored
+secrets into a new worktree, etc.; remove a script to disable it. pm only
+writes a hook script that is missing, so editing one is safe and later pm
+releases never overwrite it.
+
+Every hook receives its context as `PM_*` environment variables, scoped to
+the hook process (concurrent projects never see each other's values):
+
+| Variable            | Value                                                                 |
+|---------------------|-----------------------------------------------------------------------|
+| `PM_PROJECT_ROOT`   | project root — the directory holding `.pm/` and the worktrees         |
+| `PM_MAIN_WORKTREE`  | the main worktree (`$PM_PROJECT_ROOT/main`)                           |
+| `PM_WORKTREE`       | the worktree the hook concerns (its working directory)                |
+| `PM_SESSION`        | the tmux session the hook window is in                                |
+| `PM_FEATURE`        | feature owning `PM_WORKTREE`/`PM_SESSION`; **empty** (set, `""`) in main scope |
+| `PM_MERGED_FEATURE` | `post-merge` only: the feature that was merged into `PM_WORKTREE`     |
+
+`PM_FEATURE` is always set so `set -u` scripts stay safe; test it with
+`[ -n "$PM_FEATURE" ]`. For a `post-merge` of a stacked feature it names the
+base feature, not the merged one.
 
 ### Workflows and agents
 
