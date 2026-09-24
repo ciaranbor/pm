@@ -1,10 +1,13 @@
 use std::path::Path;
 
 use crate::error::{PmError, Result};
+use crate::harness::Harness;
 use crate::state::feature::FeatureState;
 use crate::state::paths;
 
-const SETTINGS_FILES: &[&str] = &["settings.json", "settings.local.json"];
+fn settings_files() -> &'static [&'static str] {
+    Harness::ClaudeCode.seeded_files()
+}
 
 /// Copy a single settings file from src_dir to dst_dir if it exists in src_dir.
 fn copy_settings_file(src_dir: &Path, dst_dir: &Path, filename: &str) -> Result<()> {
@@ -33,7 +36,7 @@ fn load_file_pairs(project_root: &Path, feature_name: &str) -> Result<Vec<FilePa
     let feature_dir = project_root.join(feature_name).join(".claude");
 
     let mut pairs = Vec::new();
-    for &filename in SETTINGS_FILES {
+    for &filename in settings_files() {
         let main_path = main_dir.join(filename);
         let feature_path = feature_dir.join(filename);
 
@@ -82,7 +85,7 @@ pub fn list(project_root: &Path, feature_name: &str) -> Result<Vec<String>> {
 fn list_settings_dir(claude_dir: &Path) -> Result<Vec<String>> {
     let mut lines = Vec::new();
 
-    for &filename in SETTINGS_FILES {
+    for &filename in settings_files() {
         let path = claude_dir.join(filename);
         if path.exists() {
             let content = std::fs::read_to_string(&path)?;
@@ -115,7 +118,7 @@ pub fn push(project_root: &Path, feature_name: &str) -> Result<()> {
     }
 
     let dst = main_claude_dir(project_root);
-    for filename in SETTINGS_FILES {
+    for filename in settings_files() {
         copy_settings_file(&feature_claude_dir, &dst, filename)?;
     }
     Ok(())
@@ -134,7 +137,7 @@ pub fn pull(project_root: &Path, feature_name: &str) -> Result<()> {
     }
 
     let feature_claude_dir = project_root.join(feature_name).join(".claude");
-    for filename in SETTINGS_FILES {
+    for filename in settings_files() {
         copy_settings_file(&src, &feature_claude_dir, filename)?;
     }
     Ok(())
@@ -414,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn list_main_shows_both_files() {
+    fn list_main_skips_settings_local_json() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project, _, _) = server.setup_project_no_tmux(dir.path());
@@ -426,7 +429,8 @@ mod tests {
         let lines = list_main(&project).unwrap();
         let output = strip_ansi(&lines.join("\n"));
         assert!(output.contains("settings.json"));
-        assert!(output.contains("settings.local.json"));
+        assert!(!output.contains("settings.local.json"));
+        assert!(!output.contains(r#""b":2"#));
     }
 
     #[test]
@@ -464,7 +468,7 @@ mod tests {
     }
 
     #[test]
-    fn list_shows_both_files() {
+    fn list_skips_settings_local_json() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
@@ -476,7 +480,8 @@ mod tests {
         let lines = list(&project, "login").unwrap();
         let output = strip_ansi(&lines.join("\n"));
         assert!(output.contains("settings.json"));
-        assert!(output.contains("settings.local.json"));
+        assert!(!output.contains("settings.local.json"));
+        assert!(!output.contains(r#""b":2"#));
     }
 
     #[test]
@@ -493,24 +498,6 @@ mod tests {
 
         let lines = list(&project, "login").unwrap();
         assert!(lines.is_empty());
-    }
-
-    #[test]
-    fn list_only_local_settings_no_separator() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
-
-        let feat_claude = project.join("login").join(".claude");
-        // Remove settings.json if seeded, keep only settings.local.json
-        let _ = std::fs::remove_file(feat_claude.join("settings.json"));
-        write_json(&feat_claude, "settings.local.json", r#"{"local":true}"#);
-
-        let lines = list(&project, "login").unwrap();
-        let output = strip_ansi(&lines.join("\n"));
-        assert!(!output.contains("settings.json\n\n")); // no blank separator before first file
-        assert!(output.contains("settings.local.json"));
-        assert!(output.contains("\"local\":true"));
     }
 
     #[test]
@@ -551,32 +538,62 @@ mod tests {
         );
     }
 
-    // --- push (feature → main) ---
-
     #[test]
-    fn push_copies_feature_to_main() {
+    fn pull_does_not_copy_settings_local_json() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+
+        let main_claude = paths::main_worktree(&project).join(".claude");
+        write_json(&main_claude, "settings.json", r#"{"pulled":true}"#);
+        write_json(
+            &main_claude,
+            "settings.local.json",
+            r#"{"approvals":"main"}"#,
+        );
+
+        pull(&project, "login").unwrap();
+
+        let feat_claude = project.join("login").join(".claude");
+        assert_eq!(
+            std::fs::read_to_string(feat_claude.join("settings.json")).unwrap(),
+            r#"{"pulled":true}"#
+        );
+        assert!(!feat_claude.join("settings.local.json").exists());
+    }
+
+    // --- push (feature → main) ---
+
+    #[test]
+    fn push_copies_settings_json_and_leaves_main_settings_local_json_alone() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+
+        let main_claude = paths::main_worktree(&project).join(".claude");
+        write_json(
+            &main_claude,
+            "settings.local.json",
+            r#"{"approvals":"current"}"#,
+        );
 
         let feat_claude = project.join("login").join(".claude");
         write_json(&feat_claude, "settings.json", r#"{"pushed":true}"#);
         write_json(
             &feat_claude,
             "settings.local.json",
-            r#"{"local_pushed":true}"#,
+            r#"{"approvals":"stale"}"#,
         );
 
         push(&project, "login").unwrap();
 
-        let main_claude = paths::main_worktree(&project).join(".claude");
         assert_eq!(
             std::fs::read_to_string(main_claude.join("settings.json")).unwrap(),
             r#"{"pushed":true}"#
         );
         assert_eq!(
             std::fs::read_to_string(main_claude.join("settings.local.json")).unwrap(),
-            r#"{"local_pushed":true}"#
+            r#"{"approvals":"current"}"#
         );
     }
 
@@ -990,26 +1007,23 @@ mod tests {
     }
 
     #[test]
-    fn diff_reports_settings_local_json_independently() {
+    fn diff_ignores_settings_local_json() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
-        // settings.json identical, settings.local.json differs
         write_json(&main_claude, "settings.json", r#"{"same":true}"#);
         write_json(&feat_claude, "settings.json", r#"{"same":true}"#);
         write_json(&main_claude, "settings.local.json", r#"{"env":"prod"}"#);
         write_json(&feat_claude, "settings.local.json", r#"{"env":"dev"}"#);
 
-        let output = diff_output(&project, "login");
-        assert!(output.contains("settings.local.json"));
-        assert!(output.contains("env"));
+        assert!(diff(&project, "login").unwrap().is_empty());
     }
 
     #[test]
-    fn merge_handles_settings_local_json_independently() {
+    fn merge_leaves_settings_local_json_untouched() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
@@ -1021,10 +1035,10 @@ mod tests {
 
         merge(&project, "login", false).unwrap();
 
-        let content = std::fs::read_to_string(main_claude.join("settings.local.json")).unwrap();
-        let result: serde_json::Value = serde_json::from_str(&content).unwrap();
-        assert_eq!(result["a"], 1);
-        assert_eq!(result["b"], 2);
+        assert_eq!(
+            std::fs::read_to_string(main_claude.join("settings.local.json")).unwrap(),
+            r#"{"a":1}"#
+        );
     }
 
     #[test]

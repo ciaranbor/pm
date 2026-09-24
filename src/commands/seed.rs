@@ -82,7 +82,7 @@ mod tests {
     }
 
     #[test]
-    fn seed_copies_settings_from_main_worktree() {
+    fn seed_copies_settings_json_but_not_settings_local_json() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project, _, _) = server.setup_project_no_tmux(dir.path());
@@ -100,10 +100,8 @@ mod tests {
             std::fs::read_to_string(dst.join("settings.json")).unwrap(),
             r#"{"permissions":true}"#
         );
-        assert_eq!(
-            std::fs::read_to_string(dst.join("settings.local.json")).unwrap(),
-            r#"{"local":true}"#
-        );
+        assert!(!dst.join("settings.local.json").exists());
+        assert!(!seed_feature_assets_would_change(&project, &feature_wt).unwrap());
     }
 
     #[test]
@@ -122,24 +120,6 @@ mod tests {
         assert!(!feature_wt.join(".claude").exists());
         assert!(!feature_wt.join(".agents").exists());
         assert!(!seed_feature_assets_would_change(&project, &feature_wt).unwrap());
-    }
-
-    #[test]
-    fn seed_copies_only_existing_settings_files() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project, _, _) = server.setup_project_no_tmux(dir.path());
-
-        let main_claude = paths::main_worktree(&project).join(".claude");
-        write(&main_claude, "settings.json", r#"{"only":"this"}"#);
-
-        let feature_wt = project.join("login");
-        std::fs::create_dir_all(&feature_wt).unwrap();
-        seed_feature_assets(&project, &feature_wt).unwrap();
-
-        let dst = feature_wt.join(".claude");
-        assert!(dst.join("settings.json").exists());
-        assert!(!dst.join("settings.local.json").exists());
     }
 
     #[test]
