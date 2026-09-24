@@ -607,14 +607,11 @@ pub fn install_global_dry_run_in(store: &GlobalStore) -> Result<Vec<String>> {
     // diff the store as the install would leave it, not as it is now.
     let staged = tempfile::tempdir()?;
     let staged_store = GlobalStore::at(staged.path());
-    if store.canonical().is_dir() {
-        copy_dir_recursive(&store.canonical(), &staged_store.canonical())?;
-    }
-    for kind in [
-        BundledKind::Skill,
-        BundledKind::Agent,
-        BundledKind::Baseline,
-    ] {
+    for kind in BundledKind::ALL {
+        let src = store.dir(kind);
+        if kind.store_subdir().is_some() && src.is_dir() {
+            copy_dir_recursive(&src, &staged_store.dir(kind))?;
+        }
         install_in(&staged_store.dir(kind), kind, None)?;
     }
     lines.extend(project_global_from(
@@ -801,13 +798,21 @@ pub fn stale_bundled_copies(project_root: &Path) -> Result<Vec<PathBuf>> {
 
 /// Main plus every feature worktree that exists on disk.
 pub(crate) fn worktrees_on_disk(project_root: &Path) -> Result<Vec<PathBuf>> {
-    let mut out = vec![paths::main_worktree(project_root)];
+    Ok(scoped_worktrees_on_disk(project_root)?
+        .into_iter()
+        .map(|(_, wt)| wt)
+        .collect())
+}
+
+/// [`worktrees_on_disk`] with each worktree's scope name.
+pub(crate) fn scoped_worktrees_on_disk(project_root: &Path) -> Result<Vec<(String, PathBuf)>> {
+    let mut out = vec![("main".to_string(), paths::main_worktree(project_root))];
     let features_dir = paths::features_dir(project_root);
     if features_dir.is_dir() {
         for (name, _) in crate::state::feature::FeatureState::list(&features_dir)? {
             let wt = project_root.join(&name);
             if wt.is_dir() {
-                out.push(wt);
+                out.push((name, wt));
             }
         }
     }

@@ -65,7 +65,7 @@ pub enum Commands {
         /// Project name (defaults to current project from CWD)
         #[arg(long)]
         project: Option<String>,
-        /// Skip safety checks and remove the worktrees, `main` included, from disk
+        /// Skip safety checks and remove the worktrees from disk, `main` and its repository included
         #[arg(long)]
         force: bool,
         /// Skip confirmation prompt

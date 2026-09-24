@@ -460,8 +460,9 @@ These round out the tool; each has its full flag reference under `--help`:
 - `pm list` — list registered projects.
 - `pm delete` — full project teardown (sessions, `.pm/`, registry entry).
   Worktrees stay on disk as plain git checkouts; `--force` skips the safety
-  checks and removes them, `main` included. Destructive — distinct from
-  `pm close`, which only tears down sessions.
+  checks and removes them, `main` included — that is the local repository, so
+  history with no remote goes with it (warned about, never refused).
+  Destructive — distinct from `pm close`, which only tears down sessions.
 
 ## Development
 

@@ -696,11 +696,7 @@ fn worktree_harnesses(project_root: &Path) -> Result<Vec<(PathBuf, Vec<Harness>)
     let agents_dir = paths::agents_dir(project_root);
     let features_dir = paths::features_dir(project_root);
     let mut out = Vec::new();
-    for wt in skills::worktrees_on_disk(project_root)? {
-        let scope = wt
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
+    for (scope, wt) in skills::scoped_worktrees_on_disk(project_root)? {
         let registry = AgentRegistry::load(&agents_dir, &scope)?;
         let mut definitions: Vec<String> = registry
             .agents
@@ -1405,19 +1401,20 @@ mod tests {
         let home = paths::home_dir().unwrap();
         let codex_hooks = home.join(".codex/hooks.json");
 
-        // Trust is per worktree: main runs a registered reviewer, login's
-        // workflow team includes one, api has only an implementer.
-        let stopped = |name: &str| crate::state::agent::AgentEntry {
+        // Trust is per worktree: main runs a registered agent whose
+        // definition (not its key) is the reviewer, login's workflow team
+        // includes one, api has only an implementer.
+        let stopped = |name: &str, definition: Option<&str>| crate::state::agent::AgentEntry {
             agent_type: AgentType::Agent,
             session_id: String::new(),
             window_name: name.to_string(),
             active: false,
-            agent_definition: None,
+            agent_definition: definition.map(str::to_string),
             harness: Harness::ClaudeCode,
         };
         let agents_dir = paths::agents_dir(&project_path);
         let mut registry = AgentRegistry::default();
-        registry.register("reviewer", stopped("reviewer"));
+        registry.register("qa", stopped("qa", Some("reviewer")));
         registry.save(&agents_dir, "main").unwrap();
         let features_dir = paths::features_dir(&project_path);
         let mut login = FeatureState::load(&features_dir, "login").unwrap();
@@ -1432,7 +1429,7 @@ mod tests {
         )
         .unwrap();
         let mut registry = AgentRegistry::default();
-        registry.register("implementer", stopped("implementer"));
+        registry.register("implementer", stopped("implementer", None));
         registry.save(&agents_dir, "api").unwrap();
 
         fn hook_kinds<'a>(issues: impl Iterator<Item = &'a Issue>) -> Vec<(IssueKind, String)> {

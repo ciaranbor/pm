@@ -97,11 +97,10 @@ pub fn delete(
                 }
             }
         }
-    } else if git::has_uncommitted_changes(&main_repo).unwrap_or(false) {
-        eprintln!(
-            "warning: {} has uncommitted changes; --force removes it",
-            main_repo.display()
-        );
+    } else {
+        for line in force_loss_warnings(&main_repo) {
+            eprintln!("warning: {line}");
+        }
     }
 
     // --- Confirmation prompt (skip with --yes) ---
@@ -193,6 +192,32 @@ pub fn delete(
     }
 
     Ok(project_name)
+}
+
+/// What `--force` would destroy along with `main` that exists nowhere else:
+/// the whole history when the repository has no remote, commits its branch
+/// has not pushed, and uncommitted changes.
+fn force_loss_warnings(main_repo: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let shown = main_repo.display();
+    if git::list_remotes(main_repo)
+        .map(|r| r.trim().is_empty())
+        .unwrap_or(false)
+    {
+        out.push(format!(
+            "{shown} has no remote; --force deletes its only copy of the history"
+        ));
+    } else if git::has_unpushed_commits(main_repo).unwrap_or(false) {
+        out.push(format!(
+            "{shown} has unpushed commits; --force deletes them"
+        ));
+    }
+    if git::has_uncommitted_changes(main_repo).unwrap_or(false) {
+        out.push(format!(
+            "{shown} has uncommitted changes; --force deletes them"
+        ));
+    }
+    out
 }
 
 /// Remove `main` from disk. A symlinked `main` points at a repository pm never
@@ -335,7 +360,6 @@ mod tests {
 
         assert!(!paths::pm_dir(&project_path).exists());
         assert!(!projects_dir.join(format!("{project_name}.toml")).exists());
-        // --force removes every worktree, main included, and the emptied root
         assert!(!project_path.join("login").exists());
         assert!(!paths::main_worktree(&project_path).exists());
         assert!(!project_path.exists());
@@ -357,6 +381,24 @@ mod tests {
 
         assert!(!project_path.exists());
         assert!(real_repo.join(".git").exists());
+    }
+
+    #[test]
+    fn force_warns_about_history_only_main_holds() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, _) = server.setup_project(dir.path());
+        let main = paths::main_worktree(&project_path);
+
+        let warnings = force_loss_warnings(&main);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("no remote"), "{warnings:?}");
+
+        std::fs::write(main.join("wip.txt"), "wip").unwrap();
+        git::stage_file(&main, "wip.txt").unwrap();
+        let warnings = force_loss_warnings(&main);
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings[1].contains("uncommitted changes"), "{warnings:?}");
     }
 
     #[test]

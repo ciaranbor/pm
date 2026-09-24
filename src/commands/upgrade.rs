@@ -137,10 +137,9 @@ pub fn upgrade_project_dry_run(project_root: &Path) -> Result<Vec<String>> {
     Ok(actions)
 }
 
-/// One line per worktree for the bundled copies a migration would remove
-/// from it — they are pm's own files, identical to the global tier's, so
-/// naming each adds nothing — and one per path elsewhere (`.pm/workflows/`),
-/// which is the user's state. `removed` is relative to the project root.
+/// One line with a file count per worktree a migration would remove bundled
+/// copies from, and one per path elsewhere (`.pm/workflows/`). `removed` is
+/// relative to the project root.
 fn removal_lines(removed: Vec<PathBuf>) -> Vec<String> {
     let mut per_worktree: Vec<(String, usize)> = Vec::new();
     let mut elsewhere = Vec::new();
@@ -162,8 +161,8 @@ fn removal_lines(removed: Vec<PathBuf>) -> Vec<String> {
         .into_iter()
         .map(|(worktree, n)| {
             format!(
-                "Would remove {n} bundled cop{} under {worktree}/",
-                if n == 1 { "y" } else { "ies" }
+                "Would remove {n} bundled file{} under {worktree}/",
+                if n == 1 { "" } else { "s" }
             )
         })
         .collect();
@@ -454,11 +453,11 @@ last_active = "2026-01-01T00:00:00Z"
 
         let dry = upgrade_project_dry_run(&root).unwrap();
         assert!(
-            dry.contains(&"Would remove 3 bundled copies under main/".to_string()),
+            dry.contains(&"Would remove 3 bundled files under main/".to_string()),
             "{dry:?}"
         );
         assert!(
-            dry.contains(&"Would remove 1 bundled copy under login/".to_string()),
+            dry.contains(&"Would remove 1 bundled file under login/".to_string()),
             "{dry:?}"
         );
         assert!(
