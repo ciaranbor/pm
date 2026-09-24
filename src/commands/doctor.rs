@@ -609,15 +609,21 @@ pub fn probe_line(harness: Harness) -> String {
 /// missing from its user-level file, entries in a shape it would ignore,
 /// pm hooks it has not been told to trust, and worktrees it would stop at
 /// a trust prompt for. The trust findings exist because codex fails
-/// silently on both counts.
+/// silently on both counts. Only harnesses in use, although the install
+/// writes every supported harness's file: a trust finding for a harness
+/// none of this project's agents run on would be noise.
 fn hook_issues(project_root: &Path) -> Result<Vec<Issue>> {
-    let home = paths::home_dir()?;
+    hook_issues_in(project_root, &paths::home_dir()?)
+}
+
+/// [`hook_issues`] against an explicit `home`.
+fn hook_issues_in(project_root: &Path, home: &Path) -> Result<Vec<Issue>> {
     let mut issues = Vec::new();
     for harness in skills::harnesses_in_use(project_root)? {
-        let file = hooks_install::user_settings_path(harness, &home)?;
+        let file = hooks_install::user_settings_path(harness, home)?;
         let shown = crate::path_utils::to_portable(&file);
         let mut installed = false;
-        if let Some(root) = hooks_install::user_hooks_root(harness, &home)? {
+        if let Some(root) = hooks_install::user_hooks_root(harness, home)? {
             for event in harness.malformed_hook_events(&root) {
                 issues.push(Issue {
                     kind: IssueKind::HooksMalformed,
@@ -635,7 +641,7 @@ fn hook_issues(project_root: &Path) -> Result<Vec<Issue>> {
                     installed = false;
                     continue;
                 };
-                if !harness.hook_trusted(&home, event, entry, hook) {
+                if !harness.hook_trusted(home, event, entry, hook) {
                     issues.push(Issue {
                         kind: IssueKind::HookUntrusted,
                         message: format!(
@@ -658,7 +664,7 @@ fn hook_issues(project_root: &Path) -> Result<Vec<Issue>> {
             });
         }
         for wt in skills::worktrees_on_disk(project_root)? {
-            if !harness.worktree_trusted(&home, &wt) {
+            if !harness.worktree_trusted(home, &wt) {
                 issues.push(Issue {
                     kind: IssueKind::WorktreeUntrusted,
                     message: format!(
@@ -1335,13 +1341,9 @@ mod tests {
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
         let home = paths::home_dir().unwrap();
         let codex_hooks = home.join(".codex/hooks.json");
-        let _ = std::fs::remove_file(&codex_hooks);
 
-        let kinds = |findings: &[Finding]| -> Vec<(IssueKind, String)> {
-            findings
-                .iter()
-                .filter(|f| f.feature() == "main")
-                .flat_map(|f| f.issues())
+        fn hook_kinds<'a>(issues: impl Iterator<Item = &'a Issue>) -> Vec<(IssueKind, String)> {
+            issues
                 .filter(|i| {
                     matches!(
                         i.kind(),
@@ -1353,9 +1355,19 @@ mod tests {
                 })
                 .map(|i| (i.kind(), i.message().to_string()))
                 .collect()
+        }
+        let kinds = |findings: &[Finding]| -> Vec<(IssueKind, String)> {
+            hook_kinds(
+                findings
+                    .iter()
+                    .filter(|f| f.feature() == "main")
+                    .flat_map(|f| f.issues().iter()),
+            )
         };
 
-        // Claude Code only: nothing codex-related.
+        // Claude Code only: nothing codex-related, although the install
+        // wrote codex's file too.
+        assert!(hooks_install::is_installed_for(Harness::Codex).unwrap());
         assert!(kinds(&diagnose(&project_path, server.name(), false).unwrap()).is_empty());
 
         let pm_dir = paths::pm_dir(&project_path);
@@ -1366,23 +1378,29 @@ mod tests {
             .insert("reviewer".to_string(), "codex".to_string());
         config.save(&pm_dir).unwrap();
 
-        let found = kinds(&diagnose(&project_path, server.name(), false).unwrap());
+        // Against a home nothing has installed into (the shared test home
+        // is written by every concurrent `init`): hooks missing, worktrees
+        // untrusted.
+        let bare_home = dir.path().join("bare-home");
+        let found = hook_kinds(hook_issues_in(&project_path, &bare_home).unwrap().iter());
         assert_eq!(
             found.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
             vec![
+                IssueKind::HooksNotInstalled,
                 IssueKind::HooksNotInstalled,
                 IssueKind::WorktreeUntrusted,
                 IssueKind::WorktreeUntrusted
             ],
             "{found:?}"
         );
-        assert!(found[0].1.contains(".codex/hooks.json"), "{found:?}");
+        assert!(found[0].1.contains(".claude/settings.json"), "{found:?}");
+        assert!(found[1].1.contains(".codex/hooks.json"), "{found:?}");
         assert!(
-            found[1].1.starts_with("main is not trusted by codex"),
+            found[2].1.starts_with("main is not trusted by codex"),
             "{found:?}"
         );
         assert!(
-            found[2].1.starts_with("login is not trusted by codex"),
+            found[3].1.starts_with("login is not trusted by codex"),
             "{found:?}"
         );
 
@@ -1428,18 +1446,26 @@ mod tests {
         assert!(kinds(&diagnose(&project_path, server.name(), false).unwrap()).is_empty());
 
         // A flat hooks.json registers nothing in codex: flagged, not "installed".
+        let flat = bare_home.join(".codex/hooks.json");
+        std::fs::create_dir_all(flat.parent().unwrap()).unwrap();
         std::fs::write(
-            &codex_hooks,
+            &flat,
             r#"{"hooks":{"Stop":[{"type":"command","command":"pm harness hooks stop"}]}}"#,
         )
         .unwrap();
-        let found = kinds(&diagnose(&project_path, server.name(), false).unwrap());
+        let found = hook_kinds(hook_issues_in(&project_path, &bare_home).unwrap().iter());
         assert_eq!(
             found.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
-            vec![IssueKind::HooksMalformed, IssueKind::HooksNotInstalled],
+            vec![
+                IssueKind::HooksNotInstalled,
+                IssueKind::HooksMalformed,
+                IssueKind::HooksNotInstalled,
+                IssueKind::WorktreeUntrusted,
+                IssueKind::WorktreeUntrusted
+            ],
             "{found:?}"
         );
-        let _ = std::fs::remove_file(&codex_hooks);
+        assert!(found[2].1.contains(".codex/hooks.json"), "{found:?}");
     }
 
     #[test]

@@ -1,5 +1,5 @@
 //! Install pm hooks (Stop + SessionStart) into the user-level hooks file of
-//! every harness in use (`~/.claude/settings.json`, `$CODEX_HOME/hooks.json`
+//! every supported harness (`~/.claude/settings.json`, `$CODEX_HOME/hooks.json`
 //! — both take the same nested `hooks` shape) — once per machine — and strip
 //! the entries earlier releases wrote into `main/.claude/settings.json` and
 //! its seeded feature copies. Both halves are idempotent, so `pm init`,
@@ -8,13 +8,17 @@
 //! never left without the hook mid-migration (Claude Code merges the user
 //! and project files and runs a duplicated handler once).
 //!
+//! Every supported harness, not only those in use, creating `$CODEX_HOME`
+//! if absent — see AGENTS.md, "Agents as long-running message processors".
+//!
 //! A user-level hook fires in every session of that harness on the machine,
 //! so each installed command is guarded on `PM_AGENT_NAME`: a non-pm session
 //! exits 0 before `pm` is ever resolved, which also keeps the hook inert
 //! when `pm` is not on that session's `PATH`. Codex additionally runs no
 //! hook until the user has trusted it interactively (`pm doctor` reports a
-//! missing trust entry), and pm appends its entries so existing ones keep
-//! their positions — codex keys trust on the entry's index.
+//! missing trust entry — and asks once in every codex session on the
+//! machine, pm-spawned or not), and pm appends its entries so existing ones
+//! keep their positions — codex keys trust on the entry's index.
 //!
 //! The Stop hook is `pm harness hooks stop`, which blocks until the agent has
 //! unread messages (by calling `agent_wait` internally), then returns
@@ -42,12 +46,11 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use crate::commands::skills::{self, worktrees_on_disk};
+use crate::commands::skills::worktrees_on_disk;
 use crate::error::{PmError, Result};
 use crate::fs_utils::write_atomic;
-use crate::harness::{self, Harness};
+use crate::harness::Harness;
 use crate::state::paths;
-use crate::state::project::{AgentsConfig, GlobalConfig};
 
 /// Timeout in seconds for the Stop hook. Claude Code's default is 600s
 /// (10 minutes), which is too short for agents that block waiting for
@@ -101,27 +104,14 @@ pub fn user_settings_path(harness: Harness, home: &Path) -> Result<PathBuf> {
     })
 }
 
-/// The harnesses whose hooks files pm maintains here: those the project's
-/// agents run on, or — outside a project — those the global config names.
-fn harnesses_for(project_root: Option<&Path>) -> Result<Vec<Harness>> {
-    match project_root {
-        Some(root) => skills::harnesses_in_use(root),
-        None => Ok(harness::harnesses_in_use(
-            &AgentsConfig::default(),
-            &GlobalConfig::load_or_default().agents,
-        )),
-    }
-}
-
-/// Install pm hooks into the user-level file of every harness in use and,
-/// when inside a project, strip pm's entries from its project-level files.
-/// Returns a human-readable status, one line per file changed.
+/// Install pm hooks into the user-level file of every supported harness
+/// and, when inside a project, strip pm's entries from its project-level
+/// files. Returns a human-readable status, one line per file changed.
 pub fn install(project_root: Option<&Path>) -> Result<String> {
     let home = paths::home_dir()?;
-    let harnesses = harnesses_for(project_root)?;
-    let lines = install_in(&home, project_root, &harnesses, false)?;
+    let lines = install_in(&home, project_root, false)?;
     if lines.is_empty() {
-        let files: Vec<String> = harnesses
+        let files: Vec<String> = Harness::SUPPORTED
             .iter()
             .map(|h| Ok(user_settings_path(*h, &home)?.display().to_string()))
             .collect::<Result<_>>()?;
@@ -136,25 +126,15 @@ pub fn install(project_root: Option<&Path>) -> Result<String> {
 /// Dry-run variant of [`install`]: one `Would …` line per file that would
 /// change; empty when everything is up to date.
 pub fn install_dry_run(project_root: Option<&Path>) -> Result<Vec<String>> {
-    install_in(
-        &paths::home_dir()?,
-        project_root,
-        &harnesses_for(project_root)?,
-        true,
-    )
+    install_in(&paths::home_dir()?, project_root, true)
 }
 
-/// [`install`] against an explicit `home` and harness list, for tests that
-/// must not share the per-binary test home. Returns one line per file
-/// changed (or, with `dry_run`, per file that would change).
-fn install_in(
-    home: &Path,
-    project_root: Option<&Path>,
-    harnesses: &[Harness],
-    dry_run: bool,
-) -> Result<Vec<String>> {
+/// [`install`] against an explicit `home`, for tests that must not share
+/// the per-binary test home. Returns one line per file changed (or, with
+/// `dry_run`, per file that would change).
+fn install_in(home: &Path, project_root: Option<&Path>, dry_run: bool) -> Result<Vec<String>> {
     let mut lines = Vec::new();
-    for harness in harnesses {
+    for harness in Harness::SUPPORTED {
         let user_file = user_settings_path(*harness, home)?;
         if install_global(&user_file, dry_run)? {
             lines.push(format!(
@@ -427,10 +407,8 @@ mod tests {
         home.join(".claude/settings.json")
     }
 
-    const CC: &[Harness] = &[Harness::ClaudeCode];
-
-    fn install_in(home: &Path, project_root: Option<&Path>, dry_run: bool) -> Result<Vec<String>> {
-        super::install_in(home, project_root, CC, dry_run)
+    fn codex_file(home: &Path) -> PathBuf {
+        home.join(".codex/hooks.json")
     }
 
     fn is_installed_in(home: &Path) -> Result<bool> {
@@ -474,8 +452,12 @@ mod tests {
         assert!(!home.exists());
 
         let lines = install_in(&home, Some(&root), false).unwrap();
-        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert_eq!(lines.len(), 2, "{lines:?}");
         assert!(lines[0].starts_with("Installed pm hooks in "), "{lines:?}");
+        assert!(
+            lines[1].ends_with(&codex_file(&home).display().to_string()),
+            "{lines:?}"
+        );
 
         let parsed = read_json(&user_file(&home));
         assert_eq!(parsed["hooks"]["Stop"].as_array().unwrap().len(), 1);
@@ -495,22 +477,29 @@ mod tests {
             session_start_hook_command()
         );
         assert!(is_installed_in(&home).unwrap());
+        // Every supported harness, whether or not it is installed or
+        // configured anywhere: a project may name it later.
+        assert!(super::is_installed_in(Harness::Codex, &home).unwrap());
+        assert_eq!(
+            read_json(&codex_file(&home))["hooks"],
+            parsed["hooks"],
+            "same nested shape in both files"
+        );
         // A fresh project gets no project-level file.
         assert!(!paths::main_worktree(&root).join(".claude").exists());
     }
 
     #[test]
-    fn install_covers_every_harness_in_use_with_the_same_nested_shape() {
+    fn install_appends_after_a_codex_users_own_hooks() {
         let (_dir, home, root) = setup();
         // A codex user with a hook of their own, at index 0.
-        let codex_hooks = home.join(".codex/hooks.json");
+        let codex_hooks = codex_file(&home);
         write_json(
             &codex_hooks,
             &json!({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "say done"}]}]}}),
         );
-        let both = [Harness::ClaudeCode, Harness::Codex];
 
-        let lines = super::install_in(&home, Some(&root), &both, false).unwrap();
+        let lines = install_in(&home, Some(&root), false).unwrap();
         assert_eq!(lines.len(), 2, "{lines:?}");
         assert!(
             lines[1].ends_with(&codex_hooks.display().to_string()),
@@ -547,17 +536,26 @@ mod tests {
         assert!(Harness::Codex.malformed_hook_events(&parsed).is_empty());
 
         // Idempotent across both files.
-        assert!(
-            super::install_in(&home, Some(&root), &both, true)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(install_in(&home, Some(&root), true).unwrap().is_empty());
+    }
 
-        // A harness not in use is left alone.
+    #[test]
+    fn install_ignores_the_project_config() {
+        // Which harnesses a project uses is not consulted, so a malformed
+        // config can't block the install or narrow it.
         let (_dir, home, root) = setup();
-        install_in(&home, Some(&root), false).unwrap();
-        assert!(!home.join(".codex").exists());
-        assert!(!super::is_installed_in(Harness::Codex, &home).unwrap());
+        let pm_dir = root.join(".pm");
+        fs::create_dir_all(&pm_dir).unwrap();
+        fs::write(
+            pm_dir.join("config.toml"),
+            "[agents.harness]\n[agents.harness]\n",
+        )
+        .unwrap();
+
+        let lines = install_in(&home, Some(&root), false).unwrap();
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(is_installed_in(&home).unwrap());
+        assert!(super::is_installed_in(Harness::Codex, &home).unwrap());
     }
 
     #[test]
@@ -630,7 +628,8 @@ mod tests {
             assert!(is_installed_in(&home).unwrap(), "{old}");
 
             let lines = install_in(&home, None, false).unwrap();
-            assert_eq!(lines.len(), 1, "{old}: {lines:?}");
+            assert_eq!(lines.len(), 2, "{old}: {lines:?}");
+            assert!(lines[0].ends_with(&user_file(&home).display().to_string()));
 
             let parsed = read_json(&user_file(&home));
             assert_eq!(
@@ -673,8 +672,9 @@ mod tests {
         assert_eq!(stale_project_files(&root).unwrap().len(), 2);
 
         let dry = install_dry_run_in(&home, &root);
-        assert_eq!(dry.len(), 3, "{dry:?}");
+        assert_eq!(dry.len(), 4, "{dry:?}");
         assert!(dry[0].starts_with("Would install pm hooks in "), "{dry:?}");
+        assert!(dry[1].starts_with("Would install pm hooks in "), "{dry:?}");
         assert!(
             dry.contains(&"Would remove pm hooks from main/.claude/settings.json".to_string()),
             "{dry:?}"
@@ -691,7 +691,7 @@ mod tests {
         );
 
         let lines = install_in(&home, Some(&root), false).unwrap();
-        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert_eq!(lines.len(), 4, "{lines:?}");
         assert!(is_installed_in(&home).unwrap());
 
         for path in [&main_file, &feat_file] {
@@ -809,7 +809,7 @@ mod tests {
 
         assert!(stale_project_files(&root).unwrap().is_empty());
         let lines = install_in(&home, Some(&root), false).unwrap();
-        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert_eq!(lines.len(), 2, "{lines:?}");
         assert!(is_installed_in(&home).unwrap());
         assert_eq!(fs::read_to_string(&main_file).unwrap(), "{not json");
     }
