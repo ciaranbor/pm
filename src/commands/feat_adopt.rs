@@ -220,8 +220,7 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
         // Step 3.6: Run post-create hook in a named "hook" window (non-fatal)
         hooks::run_hook(
             params.tmux_server,
-            &session_name,
-            &worktree_path,
+            &hooks::HookContext::scope(params.project_root, project_name, &feature_name),
             &hook_path,
         );
 

@@ -259,8 +259,7 @@ pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
         // Step 4.6: Run post-create hook in a named "hook" window (non-fatal)
         hooks::run_hook(
             params.tmux_server,
-            &session_name,
-            &worktree_path,
+            &hooks::HookContext::scope(params.project_root, project_name, &feature_name),
             &hook_path,
         );
 
@@ -628,6 +627,48 @@ mod tests {
         assert_eq!(state.context, "");
         // No workflow either when --workflow not given.
         assert!(state.workflow.is_none());
+    }
+
+    #[test]
+    fn feat_new_hook_receives_pm_env() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, project_name) = server.setup_project(dir.path());
+
+        let hook_path = project_path.join(hooks::POST_CREATE_PATH);
+        std::fs::write(
+            &hook_path,
+            "#!/bin/sh\nprintf '%s\\n%s\\n%s\\n%s\\n%s\\n' \
+             \"$PM_PROJECT_ROOT\" \"$PM_MAIN_WORKTREE\" \"$PM_WORKTREE\" \"$PM_SESSION\" \
+             \"$PM_FEATURE\" > \"$PM_WORKTREE/hook-env.txt\"\n",
+        )
+        .unwrap();
+
+        feat_new(&FeatNewParams::with_defaults(
+            &project_path,
+            "login",
+            server.name(),
+        ))
+        .unwrap();
+
+        let out = project_path.join("login/hook-env.txt");
+        let mut content = None;
+        for _ in 0..500 {
+            if let Ok(c) = std::fs::read_to_string(&out) {
+                content = Some(c);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let content = content.expect("hook never wrote its environment");
+        let expected = format!(
+            "{}\n{}\n{}\n{}\nlogin\n",
+            project_path.display(),
+            project_path.join("main").display(),
+            project_path.join("login").display(),
+            tmux::session_name(&project_name, "login"),
+        );
+        assert_eq!(content, expected);
     }
 
     #[test]

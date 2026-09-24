@@ -331,6 +331,16 @@ baseline (positive "report to the user") and `main.md` (which owns
 `../.pm/`); intra-feature handoffs stay as messaging, with routing prose in
 `workflows/*/workflow.md`.
 
+### Lifecycle hook environment
+
+`hooks::run_hook` sends `env PM_…=… <script>` to the hook window, so the
+`PM_*` contract (README, "Lifecycle hooks") is per invocation and scoped to
+the hook process. Keep it that way: `tmux set-environment` at session scope
+collides when two projects fire hooks at once and only reaches newly created
+panes, which the found-or-created hook window is not reliably; the user's
+shell profile is not pm's. A new variable is meaningful (or documented as
+empty/unset) for all three hooks before it is added.
+
 ### Feature summary lifecycle
 
 Each feature leaves a `summary.md` in its worktree root for the orchestrator

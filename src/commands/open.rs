@@ -195,7 +195,11 @@ pub fn open(project_root: &Path, tmux_server: Option<&str>) -> Result<OpenResult
             )));
         }
         tmux::create_session(tmux_server, &main_session, &main_path)?;
-        hooks::run_hook(tmux_server, &main_session, &main_path, &restore_hook);
+        hooks::run_hook(
+            tmux_server,
+            &hooks::HookContext::scope(project_root, project_name, "main"),
+            &restore_hook,
+        );
         sessions_restored += 1;
     }
 
@@ -234,7 +238,14 @@ pub fn open(project_root: &Path, tmux_server: Option<&str>) -> Result<OpenResult
                 continue;
             }
             tmux::create_session(tmux_server, &session_name, &worktree_path)?;
-            hooks::run_hook(tmux_server, &session_name, &worktree_path, &restore_hook);
+            hooks::run_hook(
+                tmux_server,
+                &hooks::HookContext {
+                    worktree: worktree_path.clone(),
+                    ..hooks::HookContext::scope(project_root, project_name, name)
+                },
+                &restore_hook,
+            );
             sessions_restored += 1;
         }
         active_features.push(name.clone());

@@ -8,7 +8,6 @@ use crate::hooks;
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
 use crate::state::project::ProjectConfig;
-use crate::tmux;
 
 /// Merge a feature branch into its base branch from the main worktree.
 /// By default, cleans up the feature afterwards (remove worktree, delete branch, remove state, kill session).
@@ -104,8 +103,11 @@ pub fn feat_merge(
         // Run post-merge hook in a named "hook" window within the base session
         let hook_start = Instant::now();
         let hook_path = project_root.join(hooks::POST_MERGE_PATH);
-        let base_session = tmux::session_name(project_name, base);
-        hooks::run_hook(tmux_server, &base_session, &base_repo, &hook_path);
+        hooks::run_hook(
+            tmux_server,
+            &hooks::HookContext::post_merge(project_root, project_name, base, name),
+            &hook_path,
+        );
         if let Some(tl) = tlog.as_mut() {
             tl.record("post-merge-hook", hook_start.elapsed());
         }
@@ -150,7 +152,7 @@ mod tests {
     use crate::commands::{feat_new, init};
     use crate::hooks;
     use crate::testing::TestServer;
-    use crate::tmux as tmux_mod;
+    use crate::tmux;
     use tempfile::tempdir;
 
     #[test]
@@ -238,16 +240,14 @@ mod tests {
 
         // Verify session exists before merge
         assert!(
-            tmux_mod::has_session(server.name(), &tmux::session_name(&project_name, "login"))
-                .unwrap()
+            tmux::has_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap()
         );
 
         feat_merge(&project_path, "login", false, server.name()).unwrap();
 
         // Session killed
         assert!(
-            !tmux_mod::has_session(server.name(), &tmux::session_name(&project_name, "login"))
-                .unwrap()
+            !tmux::has_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap()
         );
         // Worktree removed
         assert!(!project_path.join("login").exists());
@@ -272,8 +272,7 @@ mod tests {
 
         // Session still exists
         assert!(
-            tmux_mod::has_session(server.name(), &tmux::session_name(&project_name, "login"))
-                .unwrap()
+            tmux::has_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap()
         );
         // Worktree still exists
         assert!(project_path.join("login").exists());
@@ -322,8 +321,7 @@ mod tests {
 
         // Session killed
         assert!(
-            !tmux_mod::has_session(server.name(), &tmux::session_name(&project_name, "login"))
-                .unwrap()
+            !tmux::has_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap()
         );
         // Worktree removed
         assert!(!project_path.join("login").exists());
@@ -473,7 +471,7 @@ mod tests {
         TestServer::add_feature_commit(&project_path, "login");
 
         // Kill the session before merging
-        tmux_mod::kill_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
+        tmux::kill_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
 
         feat_merge(&project_path, "login", false, server.name()).unwrap();
 
@@ -509,19 +507,17 @@ mod tests {
 
         // Main session should have 1 window before merge
         let before =
-            tmux_mod::list_windows(server.name(), &tmux::session_name(&project_name, "main"))
-                .unwrap();
+            tmux::list_windows(server.name(), &tmux::session_name(&project_name, "main")).unwrap();
         assert_eq!(before, 1);
 
         feat_merge(&project_path, "login", true, server.name()).unwrap();
 
         // Main session should now have 2 windows: original + hook window
         let after =
-            tmux_mod::list_windows(server.name(), &tmux::session_name(&project_name, "main"))
-                .unwrap();
+            tmux::list_windows(server.name(), &tmux::session_name(&project_name, "main")).unwrap();
         assert_eq!(after, 2);
         // Hook window should be named "hook"
-        let target = tmux_mod::find_window(
+        let target = tmux::find_window(
             server.name(),
             &tmux::session_name(&project_name, "main"),
             "hook",
@@ -555,8 +551,7 @@ mod tests {
 
         // Should still have just 2 windows — the hook window was reused, not duplicated
         let windows =
-            tmux_mod::list_windows(server.name(), &tmux::session_name(&project_name, "main"))
-                .unwrap();
+            tmux::list_windows(server.name(), &tmux::session_name(&project_name, "main")).unwrap();
         assert_eq!(windows, 2);
     }
 
@@ -575,8 +570,7 @@ mod tests {
 
         // Main session should still have just 1 window
         let windows =
-            tmux_mod::list_windows(server.name(), &tmux::session_name(&project_name, "main"))
-                .unwrap();
+            tmux::list_windows(server.name(), &tmux::session_name(&project_name, "main")).unwrap();
         assert_eq!(windows, 1);
     }
 
@@ -590,7 +584,7 @@ mod tests {
         TestServer::add_feature_commit(&project_path, "login");
 
         // Kill the main session before merging
-        tmux_mod::kill_session(server.name(), &tmux::session_name(&project_name, "main")).unwrap();
+        tmux::kill_session(server.name(), &tmux::session_name(&project_name, "main")).unwrap();
 
         // Merge should still succeed — hook skip is non-fatal
         feat_merge(&project_path, "login", true, server.name()).unwrap();

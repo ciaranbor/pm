@@ -133,7 +133,11 @@ fn setup_review(
         })?;
 
         // Step 3.6: Run post-create hook
-        hooks::run_hook(tmux_server, &session_name, &worktree_path, &hook_path);
+        hooks::run_hook(
+            tmux_server,
+            &hooks::HookContext::scope(project_root, project_name, feature_name),
+            &hook_path,
+        );
 
         // Step 4: Update status to review
         state.status = FeatureStatus::Review;
