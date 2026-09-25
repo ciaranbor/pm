@@ -5,9 +5,9 @@ use std::time::Instant;
 
 use crate::error::{PmError, Result};
 use crate::state::agent::AgentRegistry;
-use crate::state::feature::FeatureState;
+use crate::state::feature::{FeatureState, base_checkout};
 use crate::state::paths;
-use crate::state::project::ProjectConfig;
+use crate::state::project::{ProjectConfig, ProjectEntry};
 use crate::{gh, git, hooks, messages, tmux};
 
 /// Accumulates timing entries and appends them to a log file on flush.
@@ -83,9 +83,18 @@ pub struct CleanupParams<'a> {
     /// running. Regular `feat_delete` leaves this false so errors surface
     /// to the user.
     pub best_effort: bool,
-    /// The base worktree name (e.g. "main" or a parent feature name).
-    /// Used to navigate to the correct session after killing the feature session.
-    pub base: &'a str,
+    /// The scope whose session the client is switched to when it was
+    /// attached to the one being killed.
+    pub base_scope: &'a str,
+}
+
+/// The scope to land in after a feature's session is killed: that of its
+/// `base` branch, or `main` when the branch has no checkout (a parent feature
+/// deleted first).
+pub fn base_scope(project_root: &Path, main_branch: &str, base: &str) -> String {
+    base_checkout(project_root, main_branch, base)
+        .map(|c| c.scope)
+        .unwrap_or_else(|_| "main".to_string())
 }
 
 /// Remove a feature's worktree, branch, state file, agent registry,
@@ -239,7 +248,7 @@ pub(crate) fn cleanup_feature_with_timing(
             if let Some(current) = tmux::current_session(params.tmux_server)
                 && current == session_name
             {
-                let base_session = tmux::session_name(params.project_name, params.base);
+                let base_session = tmux::session_name(params.project_name, params.base_scope);
                 let _ = tmux::switch_client(params.tmux_server, &base_session);
             }
             tmux::kill_session(params.tmux_server, &session_name)?;
@@ -301,7 +310,7 @@ fn evaluate_safety(report: &SafetyReport, pr_merged: bool, name: &str) -> Result
 
     if !report.is_merged && !pr_merged {
         return Err(PmError::SafetyCheck(format!(
-            "feature '{name}' has commits not merged into main. Use --force to override."
+            "feature '{name}' has commits not merged into its base. Use --force to override."
         )));
     }
 
@@ -318,6 +327,7 @@ fn evaluate_safety(report: &SafetyReport, pr_merged: bool, name: &str) -> Result
 /// Delete a feature: kill session, remove worktree, delete branch, remove state.
 pub fn feat_delete(
     project_root: &Path,
+    projects_dir: &Path,
     name: &str,
     force: bool,
     tmux_server: Option<&str>,
@@ -329,19 +339,20 @@ pub fn feat_delete(
     let state = FeatureState::load(&features_dir, name)?;
     let config = ProjectConfig::load(&pm_dir)?;
     let project_name = &config.project.name;
+    let main_branch = ProjectEntry::load(projects_dir, project_name)?.main_branch;
 
     let worktree_path = project_root.join(&state.worktree);
-    let base = state.base_or_default();
-    let base_repo = project_root.join(base);
+    let base = state.base_branch(&main_branch);
+    let checkout = base_checkout(project_root, &main_branch, base)?;
+    let base_repo = &checkout.worktree;
 
     // Check if the linked PR was merged on GitHub (handles squash merges
     // where git can't detect the merge). Used for both safety bypass and hook.
-    let pr_merged =
-        !state.pr.is_empty() && gh::pr_is_merged(&base_repo, &state.pr).unwrap_or(false);
+    let pr_merged = !state.pr.is_empty() && gh::pr_is_merged(base_repo, &state.pr).unwrap_or(false);
 
     // Run safety checks unless --force
     let has_untracked = if !force {
-        let report = check_safety(&worktree_path, &base_repo, &state.branch, base)?;
+        let report = check_safety(&worktree_path, base_repo, &state.branch, base)?;
         evaluate_safety(&report, pr_merged, name)?;
 
         if report.has_warnings() {
@@ -364,7 +375,7 @@ pub fn feat_delete(
     let force_worktree = force || has_untracked;
 
     cleanup_feature(&CleanupParams {
-        repo: &base_repo,
+        repo: base_repo,
         worktree_path: &worktree_path,
         branch: &state.branch,
         features_dir: &features_dir,
@@ -374,7 +385,7 @@ pub fn feat_delete(
         tmux_server,
         delete_branch: true,
         best_effort: false,
-        base,
+        base_scope: &checkout.scope,
     })?;
 
     // Trigger post-merge hook when deleting a feature whose PR was merged
@@ -382,7 +393,7 @@ pub fn feat_delete(
         let hook_path = project_root.join(hooks::POST_MERGE_PATH);
         hooks::run_hook(
             tmux_server,
-            &hooks::HookContext::post_merge(project_root, project_name, base, name),
+            &hooks::HookContext::post_merge(project_root, project_name, &checkout.scope, name),
             &hook_path,
         );
     }
@@ -431,7 +442,14 @@ mod tests {
                 .unwrap()
         );
 
-        feat_delete(&project_path, "login", false, server.name()).unwrap();
+        feat_delete(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         // State file removed
         let features_dir = paths::features_dir(&project_path);
@@ -465,7 +483,14 @@ mod tests {
         )
         .unwrap();
 
-        feat_delete(&project_path, "login", false, server.name()).unwrap();
+        feat_delete(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         let collected = project_path.join(".pm/summaries/login.md");
         assert!(collected.exists());
@@ -485,7 +510,13 @@ mod tests {
         std::fs::write(worktree.join("test.txt"), "hello").unwrap();
         git::stage_file(&worktree, "test.txt").unwrap();
 
-        let result = feat_delete(&project_path, "login", false, server.name());
+        let result = feat_delete(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            false,
+            server.name(),
+        );
         assert!(result.is_err());
 
         // State and worktree should persist when safety check blocks
@@ -504,7 +535,14 @@ mod tests {
         std::fs::write(worktree.join("test.txt"), "hello").unwrap();
         git::stage_file(&worktree, "test.txt").unwrap();
 
-        feat_delete(&project_path, "login", true, server.name()).unwrap();
+        feat_delete(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            true,
+            server.name(),
+        )
+        .unwrap();
 
         let features_dir = paths::features_dir(&project_path);
         assert!(!FeatureState::exists(&features_dir, "login"));
@@ -520,7 +558,14 @@ mod tests {
         let main_repo = paths::main_worktree(&project_path);
         git::merge_no_ff(&main_repo, "login").unwrap();
 
-        feat_delete(&project_path, "login", false, server.name()).unwrap();
+        feat_delete(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         let features_dir = paths::features_dir(&project_path);
         assert!(!FeatureState::exists(&features_dir, "login"));
@@ -534,7 +579,7 @@ mod tests {
         let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
-        let result = feat_delete(&project_path, "nonexistent", false, None);
+        let result = feat_delete(&project_path, &projects_dir, "nonexistent", false, None);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), PmError::FeatureNotFound(_)));
     }
@@ -548,7 +593,14 @@ mod tests {
         let worktree = project_path.join("login");
         std::fs::write(worktree.join("untracked.txt"), "hello").unwrap();
 
-        feat_delete(&project_path, "login", false, server.name()).unwrap();
+        feat_delete(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         let features_dir = paths::features_dir(&project_path);
         assert!(!FeatureState::exists(&features_dir, "login"));
@@ -565,7 +617,13 @@ mod tests {
         git::stage_file(&worktree, "feature.txt").unwrap();
         git::commit(&worktree, "feature work").unwrap();
 
-        let result = feat_delete(&project_path, "login", false, server.name());
+        let result = feat_delete(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            false,
+            server.name(),
+        );
         assert!(result.is_err());
 
         let features_dir = paths::features_dir(&project_path);
@@ -633,6 +691,7 @@ mod tests {
         // Create stacked feature based on parent
         feat_new::feat_new(&feat_new::FeatNewParams {
             project_root: &project_path,
+            projects_dir: &TestServer::registry_dir(&project_path),
             name: "child",
             name_override: None,
             context: None,
@@ -647,7 +706,14 @@ mod tests {
         git::merge_no_ff(&parent_wt, "child").unwrap();
 
         // Delete should succeed — child is merged into its base (parent), not main
-        feat_delete(&project_path, "child", false, server.name()).unwrap();
+        feat_delete(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "child",
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         let features_dir = paths::features_dir(&project_path);
         assert!(!FeatureState::exists(&features_dir, "child"));
@@ -662,6 +728,7 @@ mod tests {
         // Create stacked feature based on parent with a commit
         feat_new::feat_new(&feat_new::FeatNewParams {
             project_root: &project_path,
+            projects_dir: &TestServer::registry_dir(&project_path),
             name: "child",
             name_override: None,
             context: None,
@@ -676,7 +743,13 @@ mod tests {
         git::commit(&child_wt, "child commit").unwrap();
 
         // Don't merge into parent — should block
-        let result = feat_delete(&project_path, "child", false, server.name());
+        let result = feat_delete(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "child",
+            false,
+            server.name(),
+        );
         assert!(result.is_err());
 
         let features_dir = paths::features_dir(&project_path);

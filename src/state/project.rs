@@ -344,6 +344,14 @@ pub fn check_feature_limit(project_root: &Path) -> Result<()> {
 }
 
 impl ProjectEntry {
+    /// The main branch recorded for the project rooted at `project_root`.
+    pub fn main_branch(project_root: &Path, projects_dir: &Path) -> Result<String> {
+        let name = ProjectConfig::load(&paths::pm_dir(project_root))?
+            .project
+            .name;
+        Ok(Self::load(projects_dir, &name)?.main_branch)
+    }
+
     /// Resolve `root` to an absolute path, expanding `~/` if present.
     pub fn root_path(&self) -> PathBuf {
         crate::path_utils::resolve(&self.root)

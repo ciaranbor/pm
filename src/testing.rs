@@ -304,6 +304,12 @@ impl TestServer {
         server
     }
 
+    /// The registry dir `setup_project` wrote for a project at `project_path`:
+    /// a sibling `registry/` directory.
+    pub fn registry_dir(project_path: &std::path::Path) -> std::path::PathBuf {
+        project_path.parent().unwrap().join("registry")
+    }
+
     /// Get the shared server name to pass to tmux functions as `Some(&str)`.
     pub fn name(&self) -> Option<&str> {
         Some(shared_server_name())
@@ -333,10 +339,11 @@ impl TestServer {
         dir: &std::path::Path,
         feature_name: &str,
     ) -> (std::path::PathBuf, String) {
-        let (project_path, _, project_name) = self.setup_project(dir);
+        let (project_path, projects_dir, project_name) = self.setup_project(dir);
         crate::commands::feat_new::feat_new(
             &crate::commands::feat_new::FeatNewParams::with_defaults(
                 &project_path,
+                &projects_dir,
                 feature_name,
                 self.name(),
             ),

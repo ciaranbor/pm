@@ -156,7 +156,7 @@ fn setup_review(
             project_name,
             tmux_server,
             delete_branch: true, // fetch_pr created the local branch, so we own it
-            base: "main",
+            base_scope: "main",
         });
         return Err(e);
     }

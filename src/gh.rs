@@ -76,13 +76,17 @@ pub fn create_pr(
     branch: &str,
     draft: bool,
     body: Option<&str>,
-    base: Option<&str>,
+    base: &str,
 ) -> Result<CreatePrResult> {
-    let mut args = vec!["pr", "create", "--fill-first", "--head", branch];
-    if let Some(base) = base {
-        args.push("--base");
-        args.push(base);
-    }
+    let mut args = vec![
+        "pr",
+        "create",
+        "--fill-first",
+        "--head",
+        branch,
+        "--base",
+        base,
+    ];
     if draft {
         args.push("--draft");
     }

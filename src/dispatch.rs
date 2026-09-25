@@ -342,8 +342,13 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         println!("{line}");
                     } else {
                         let target_scope = if upstream {
+                            let main_branch = pm::state::project::ProjectEntry::main_branch(
+                                &project_root,
+                                &paths::global_projects_dir()?,
+                            )?;
                             Some(commands::agent_send::resolve_upstream(
                                 &project_root,
+                                &main_branch,
                                 &feature,
                             )?)
                         } else {
@@ -438,6 +443,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
         }
         Commands::Feat(feat_cmd) => {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+            let projects_dir = paths::global_projects_dir()?;
             match feat_cmd {
                 FeatCommands::New {
                     name,
@@ -449,6 +455,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     let feat_name =
                         commands::feat_new::feat_new(&commands::feat_new::FeatNewParams {
                             project_root: &project_root,
+                            projects_dir: &projects_dir,
                             name: &name,
                             name_override: feature_name.as_deref(),
                             context: context.as_deref(),
@@ -469,6 +476,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     let feat_name =
                         commands::feat_adopt::feat_adopt(&commands::feat_adopt::FeatAdoptParams {
                             project_root: &project_root,
+                            projects_dir: &projects_dir,
                             name: &name,
                             name_override: feature_name.as_deref(),
                             context: context.as_deref(),
@@ -493,7 +501,8 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                 }
                 FeatCommands::Info { name } => {
                     let name = resolve_feature_name(name, &project_root)?;
-                    let lines = commands::feat_info::feat_info(&project_root, &name)?;
+                    let lines =
+                        commands::feat_info::feat_info(&project_root, &projects_dir, &name)?;
                     for line in lines {
                         println!("{line}");
                     }
@@ -521,13 +530,25 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                 }
                 FeatCommands::Delete { name, force } => {
                     let name = resolve_feature_name(name, &project_root)?;
-                    commands::feat_delete::feat_delete(&project_root, &name, force, server)?;
+                    commands::feat_delete::feat_delete(
+                        &project_root,
+                        &projects_dir,
+                        &name,
+                        force,
+                        server,
+                    )?;
                     println!("Deleted feature '{name}'");
                     Ok(())
                 }
                 FeatCommands::Merge { name, keep } => {
                     let name = resolve_feature_name(name, &project_root)?;
-                    commands::feat_merge::feat_merge(&project_root, &name, keep, server)?;
+                    commands::feat_merge::feat_merge(
+                        &project_root,
+                        &projects_dir,
+                        &name,
+                        keep,
+                        server,
+                    )?;
                     if keep {
                         println!("Merged feature '{name}'");
                     } else {
@@ -544,6 +565,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                             .transpose()?;
                         commands::feat_pr::feat_pr(
                             &project_root,
+                            &projects_dir,
                             &name,
                             ready,
                             resolved_body.as_deref(),

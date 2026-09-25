@@ -193,8 +193,9 @@ pub struct RollbackParams<'a> {
     pub tmux_server: Option<&'a str>,
     /// Whether to delete the branch. Set to `false` for `feat_adopt` (user-owned branch).
     pub delete_branch: bool,
-    /// The base worktree name (e.g. "main" or a parent feature name).
-    pub base: &'a str,
+    /// The scope the client lands in if it was attached to the feature's
+    /// session.
+    pub base_scope: &'a str,
 }
 
 /// Best-effort rollback of a partial feature creation. Thin wrapper around
@@ -202,12 +203,12 @@ pub struct RollbackParams<'a> {
 /// (worktree removal, state file, agent registry, message queue, tmux
 /// session) runs even if an earlier one fails.
 pub fn rollback_creation(params: &RollbackParams<'_>) {
-    let base_worktree = params.project_root.join(params.base);
+    let main_worktree = paths::main_worktree(params.project_root);
     let worktree_path = params.project_root.join(params.feature_name);
     let features_dir = paths::features_dir(params.project_root);
 
     let _ = feat_delete::cleanup_feature(&feat_delete::CleanupParams {
-        repo: &base_worktree,
+        repo: &main_worktree,
         worktree_path: &worktree_path,
         branch: params.branch,
         features_dir: &features_dir,
@@ -217,7 +218,7 @@ pub fn rollback_creation(params: &RollbackParams<'_>) {
         tmux_server: params.tmux_server,
         delete_branch: params.delete_branch,
         best_effort: true,
-        base: params.base,
+        base_scope: params.base_scope,
     });
 }
 

@@ -65,6 +65,7 @@ mod tests {
         crate::commands::feat_new::feat_new(
             &crate::commands::feat_new::FeatNewParams::with_defaults(
                 &project_path,
+                &projects_dir,
                 "login",
                 server.name(),
             ),

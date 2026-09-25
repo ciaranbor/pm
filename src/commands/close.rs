@@ -101,16 +101,18 @@ mod tests {
     fn close_kills_all_sessions() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _projects_dir, project_name) = server.setup_project(dir.path());
+        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
 
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "login",
             server.name(),
         ))
         .unwrap();
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "api",
             server.name(),
         ))
@@ -138,6 +140,7 @@ mod tests {
 
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "login",
             server.name(),
         ))

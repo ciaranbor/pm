@@ -57,10 +57,11 @@ pub struct FeatureState {
 }
 
 impl FeatureState {
-    /// Return the base branch, defaulting to "main" when empty.
-    pub fn base_or_default(&self) -> &str {
+    /// The branch this feature stacks on. Features created before `base` was
+    /// recorded have it empty; they were all based on the main branch.
+    pub fn base_branch<'a>(&'a self, main_branch: &'a str) -> &'a str {
         if self.base.is_empty() {
-            "main"
+            main_branch
         } else {
             &self.base
         }
@@ -139,10 +140,80 @@ impl FeatureState {
     }
 }
 
+/// Where a base branch is checked out within the project: the scope whose
+/// session pm returns to after a feature is torn down, and the worktree pm
+/// merges into.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BaseCheckout {
+    /// `main`, or the name of the feature whose branch is `base`.
+    pub scope: String,
+    pub worktree: PathBuf,
+}
+
+/// Locate the checkout of `base` (see [`BaseCheckout`]). `main_branch` is
+/// the registry's; anything else must be the branch of a known feature,
+/// which may not share its name (`feat/x` lives in worktree `feat-x`).
+pub fn base_checkout(project_root: &Path, main_branch: &str, base: &str) -> Result<BaseCheckout> {
+    if base == main_branch {
+        return Ok(BaseCheckout {
+            scope: "main".to_string(),
+            worktree: crate::state::paths::main_worktree(project_root),
+        });
+    }
+    let features_dir = crate::state::paths::features_dir(project_root);
+    FeatureState::list(&features_dir)?
+        .into_iter()
+        .find(|(_, state)| state.branch == base)
+        .map(|(name, state)| BaseCheckout {
+            scope: name,
+            worktree: project_root.join(&state.worktree),
+        })
+        .ok_or_else(|| PmError::BaseNotCheckedOut(base.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn base_branch_falls_back_to_the_main_branch_when_unrecorded() {
+        let mut state = make_feature(FeatureStatus::Wip);
+        state.base = String::new();
+        assert_eq!(state.base_branch("master"), "master");
+        state.base = "parent".to_string();
+        assert_eq!(state.base_branch("master"), "parent");
+    }
+
+    #[test]
+    fn base_checkout_maps_main_branch_to_main_scope() {
+        let dir = tempdir().unwrap();
+        let checkout = base_checkout(dir.path(), "master", "master").unwrap();
+        assert_eq!(checkout.scope, "main");
+        assert_eq!(checkout.worktree, dir.path().join("main"));
+    }
+
+    #[test]
+    fn base_checkout_finds_a_feature_by_branch_not_name() {
+        let dir = tempdir().unwrap();
+        let features_dir = crate::state::paths::features_dir(dir.path());
+        let mut state = make_feature(FeatureStatus::Wip);
+        state.branch = "feat/x".to_string();
+        state.worktree = "feat-x".to_string();
+        state.save(&features_dir, "feat-x").unwrap();
+
+        let checkout = base_checkout(dir.path(), "main", "feat/x").unwrap();
+        assert_eq!(checkout.scope, "feat-x");
+        assert_eq!(checkout.worktree, dir.path().join("feat-x"));
+    }
+
+    #[test]
+    fn base_checkout_errors_when_the_branch_has_no_checkout() {
+        let dir = tempdir().unwrap();
+        // A `main` branch in a master-default repo is not the main scope.
+        let err = base_checkout(dir.path(), "master", "main").unwrap_err();
+        assert!(matches!(err, PmError::BaseNotCheckedOut(b) if b == "main"));
+    }
 
     fn make_feature(status: FeatureStatus) -> FeatureState {
         FeatureState {

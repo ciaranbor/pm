@@ -5,6 +5,7 @@ use crate::error::Result;
 use crate::git;
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
+use crate::state::project::ProjectEntry;
 
 /// Human-readable label for a feature status derived from PR state.
 fn pr_status_label(status: FeatureStatus) -> &'static str {
@@ -20,7 +21,7 @@ fn pr_status_label(status: FeatureStatus) -> &'static str {
 
 /// Display full details for a single feature.
 /// Returns formatted lines for display.
-pub fn feat_info(project_root: &Path, name: &str) -> Result<Vec<String>> {
+pub fn feat_info(project_root: &Path, projects_dir: &Path, name: &str) -> Result<Vec<String>> {
     let features_dir = paths::features_dir(project_root);
     let mut state = FeatureState::load(&features_dir, name)?;
 
@@ -61,7 +62,8 @@ pub fn feat_info(project_root: &Path, name: &str) -> Result<Vec<String>> {
     }
 
     // Show branch divergence from base
-    let base = state.base_or_default();
+    let main_branch = ProjectEntry::main_branch(project_root, projects_dir)?;
+    let base = state.base_branch(&main_branch);
     match git::branch_divergence(&main_repo, &state.branch, base) {
         Ok(div) => {
             lines.push(format!("divergence:  {} {base}", div));
@@ -115,6 +117,7 @@ mod tests {
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(&feat_new::FeatNewParams {
             project_root: &project_path,
+            projects_dir: &projects_dir,
             name: "alpha",
             name_override: None,
             context: Some("fix the widget"),
@@ -124,7 +127,7 @@ mod tests {
         })
         .unwrap();
 
-        let lines = feat_info(&project_path, "alpha").unwrap();
+        let lines = feat_info(&project_path, &projects_dir, "alpha").unwrap();
         let output = lines.join("\n");
         assert!(output.contains("name:        alpha"));
         assert!(output.contains("status:      wip"));
@@ -190,6 +193,7 @@ mod tests {
         // Create a feature (worktree at project_path/tracked)
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "tracked",
             server.name(),
         ))
@@ -209,7 +213,7 @@ mod tests {
             .output()
             .unwrap();
 
-        let lines = feat_info(&project_path, "tracked").unwrap();
+        let lines = feat_info(&project_path, &projects_dir, "tracked").unwrap();
         let output = lines.join("\n");
         assert!(
             output.contains("remote:      origin/tracked"),
@@ -225,7 +229,7 @@ mod tests {
         let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
-        let result = feat_info(&project_path, "nonexistent");
+        let result = feat_info(&project_path, &projects_dir, "nonexistent");
         assert!(result.is_err());
     }
 
@@ -238,12 +242,13 @@ mod tests {
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "beta",
             server.name(),
         ))
         .unwrap();
 
-        let lines = feat_info(&project_path, "beta").unwrap();
+        let lines = feat_info(&project_path, &projects_dir, "beta").unwrap();
         let output = lines.join("\n");
         // base is always set (detected from CWD when not explicit)
         assert!(!output.contains("pr:"));
@@ -259,6 +264,7 @@ mod tests {
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "diverge",
             server.name(),
         ))
@@ -270,7 +276,7 @@ mod tests {
         git::stage_file(&wt_path, "feat.txt").unwrap();
         git::commit(&wt_path, "feature commit").unwrap();
 
-        let lines = feat_info(&project_path, "diverge").unwrap();
+        let lines = feat_info(&project_path, &projects_dir, "diverge").unwrap();
         let output = lines.join("\n");
         assert!(
             output.contains("divergence:  1 commit ahead main"),
@@ -287,12 +293,13 @@ mod tests {
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "synced",
             server.name(),
         ))
         .unwrap();
 
-        let lines = feat_info(&project_path, "synced").unwrap();
+        let lines = feat_info(&project_path, &projects_dir, "synced").unwrap();
         let output = lines.join("\n");
         assert!(
             output.contains("divergence:  up to date main"),
@@ -309,6 +316,7 @@ mod tests {
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "behind",
             server.name(),
         ))
@@ -320,7 +328,7 @@ mod tests {
         git::stage_file(&main_repo, "main.txt").unwrap();
         git::commit(&main_repo, "main commit").unwrap();
 
-        let lines = feat_info(&project_path, "behind").unwrap();
+        let lines = feat_info(&project_path, &projects_dir, "behind").unwrap();
         let output = lines.join("\n");
         assert!(
             output.contains("divergence:  1 commit behind main"),
@@ -337,6 +345,7 @@ mod tests {
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "both",
             server.name(),
         ))
@@ -354,7 +363,7 @@ mod tests {
         git::stage_file(&main_repo, "main.txt").unwrap();
         git::commit(&main_repo, "main commit").unwrap();
 
-        let lines = feat_info(&project_path, "both").unwrap();
+        let lines = feat_info(&project_path, &projects_dir, "both").unwrap();
         let output = lines.join("\n");
         assert!(
             output.contains("divergence:  1 commit ahead, 1 behind main"),

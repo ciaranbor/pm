@@ -516,7 +516,7 @@ mod tests {
     fn feat_new_copies_claude_settings_to_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _, _) = server.setup_project(dir.path());
+        let (project, projects_dir, _) = server.setup_project(dir.path());
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"seeded":true}"#);
@@ -524,6 +524,7 @@ mod tests {
         crate::commands::feat_new::feat_new(
             &crate::commands::feat_new::FeatNewParams::with_defaults(
                 &project,
+                &projects_dir,
                 "login",
                 server.name(),
             ),

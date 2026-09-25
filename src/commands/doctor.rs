@@ -107,7 +107,7 @@ enum FixAction {
     CleanupInitializing {
         worktree: String,
         branch: String,
-        base: String,
+        base_scope: String,
     },
     /// Recreate a missing tmux session.
     RecreateTmuxSession {
@@ -203,11 +203,14 @@ pub fn diagnose(
     }
     main_issues.extend(asset_issues(project_root)?);
     main_issues.extend(legacy_vanilla_agent_issues(project_root, "main"));
-    main_issues.extend(main_branch_issue(
-        &main_repo,
-        &paths::global_projects_dir()?,
-        project_name,
-    ));
+    let main_branch = ProjectEntry::load(&paths::global_projects_dir()?, project_name)
+        .ok()
+        .map(|e| e.main_branch);
+    main_issues.extend(
+        main_branch
+            .as_deref()
+            .and_then(|recorded| main_branch_issue(&main_repo, recorded)),
+    );
     if !tmux::has_session(tmux_server, &main_session)? {
         main_issues.push(Issue {
             kind: IssueKind::TmuxSessionMissing,
@@ -375,7 +378,10 @@ pub fn diagnose(
                 fix: Fix::Auto(FixAction::CleanupInitializing {
                     worktree: state.worktree.clone(),
                     branch: state.branch.clone(),
-                    base: state.base_or_default().to_string(),
+                    base_scope: main_branch
+                        .as_deref()
+                        .map(|mb| feat_delete::base_scope(project_root, mb, state.base_branch(mb)))
+                        .unwrap_or_else(|| "main".to_string()),
                 }),
             });
         }
@@ -853,13 +859,11 @@ fn legacy_vanilla_agent_issues(project_root: &Path, scope: &str) -> Vec<Issue> {
         .collect()
 }
 
-/// Flag a registry `main_branch` the repository has no branch for.
-fn main_branch_issue(main_repo: &Path, projects_dir: &Path, project_name: &str) -> Option<Issue> {
-    let entry = ProjectEntry::load(projects_dir, project_name).ok()?;
-    if git::branch_exists(main_repo, &entry.main_branch).unwrap_or(true) {
+/// Flag a `recorded` registry main branch the repository has no branch for.
+fn main_branch_issue(main_repo: &Path, recorded: &str) -> Option<Issue> {
+    if git::branch_exists(main_repo, recorded).unwrap_or(true) {
         return None;
     }
-    let recorded = &entry.main_branch;
     Some(match git::main_branch(main_repo) {
         Ok(branch) => Issue {
             kind: IssueKind::MainBranchMissing,
@@ -896,7 +900,7 @@ fn apply_fix(
         FixAction::CleanupInitializing {
             worktree,
             branch,
-            base,
+            base_scope,
         } => {
             let worktree_path = project_root.join(worktree);
             feat_delete::cleanup_feature(&CleanupParams {
@@ -910,7 +914,7 @@ fn apply_fix(
                 tmux_server,
                 delete_branch: true,
                 best_effort: false,
-                base,
+                base_scope,
             })?;
         }
         FixAction::RecreateTmuxSession {
@@ -1188,13 +1192,13 @@ mod tests {
     fn main_branch_issue_flags_a_recorded_branch_the_repo_lacks() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, projects_dir, name) = server.setup_project_no_tmux(dir.path());
+        let (project_path, _, _) = server.setup_project_no_tmux(dir.path());
         let main = paths::main_worktree(&project_path);
 
-        assert!(main_branch_issue(&main, &projects_dir, &name).is_none());
+        assert!(main_branch_issue(&main, "main").is_none());
 
         git::rename_branch(&main, "main", "master").unwrap();
-        let issue = main_branch_issue(&main, &projects_dir, &name).unwrap();
+        let issue = main_branch_issue(&main, "main").unwrap();
         assert_eq!(issue.kind(), IssueKind::MainBranchMissing);
         assert!(
             matches!(&issue.fix, Fix::Auto(FixAction::RecordMainBranch { branch }) if branch == "master"),
@@ -1203,7 +1207,7 @@ mod tests {
         );
 
         git::run_git(&main, &["checkout", "--detach"]).unwrap();
-        let issue = main_branch_issue(&main, &projects_dir, &name).unwrap();
+        let issue = main_branch_issue(&main, "main").unwrap();
         assert!(matches!(issue.fix, Fix::Skip), "{}", issue.message());
     }
 
@@ -1389,15 +1393,17 @@ mod tests {
     fn multiple_features_all_checked() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "alpha",
             server.name(),
         ))
         .unwrap();
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "beta",
             server.name(),
         ))
@@ -1483,6 +1489,7 @@ mod tests {
         crate::commands::feat_new::feat_new(
             &crate::commands::feat_new::FeatNewParams::with_defaults(
                 &project_path,
+                &TestServer::registry_dir(&project_path),
                 "api",
                 server.name(),
             ),

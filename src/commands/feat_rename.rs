@@ -191,6 +191,7 @@ mod tests {
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &TestServer::registry_dir(&project_path),
             "signup",
             server.name(),
         ))
@@ -371,7 +372,7 @@ mod tests {
         // feature name.
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
         // Create a slash-bearing branch and adopt it with --name-override
         // so feature_name ("eval") differs from branch ("ciaran/eval").
@@ -379,6 +380,7 @@ mod tests {
         git::create_branch(&main_repo, "ciaran/eval").unwrap();
         crate::commands::feat_adopt::feat_adopt(&crate::commands::feat_adopt::FeatAdoptParams {
             project_root: &project_path,
+            projects_dir: &projects_dir,
             name: "ciaran/eval",
             name_override: Some("eval"),
             context: None,

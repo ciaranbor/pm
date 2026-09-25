@@ -8,7 +8,7 @@ use crate::state::paths;
 use crate::state::project::{ProjectConfig, ProjectEntry};
 use crate::{gh, git, messages, tmux};
 
-use super::feat_delete::{CleanupParams, check_safety, cleanup_feature};
+use super::feat_delete::{CleanupParams, base_scope, check_safety, cleanup_feature};
 
 /// Collect safety problems across all features. Returns a list of blocking messages.
 fn check_all_features_safety(
@@ -68,10 +68,10 @@ pub fn delete(
 
     let features = FeatureState::list(&features_dir)?;
     let main_repo = paths::main_worktree(project_root);
+    let main_branch = ProjectEntry::load(projects_dir, &project_name)?.main_branch;
 
     // --- Safety checks (skip with --force) ---
     if !force && !features.is_empty() {
-        let main_branch = ProjectEntry::load(projects_dir, &project_name)?.main_branch;
         let blockers = check_all_features_safety(project_root, &features, &main_branch)?;
         if !blockers.is_empty() {
             let mut msg = String::from("Cannot delete project — the following issues were found:");
@@ -144,7 +144,11 @@ pub fn delete(
                 tmux_server,
                 delete_branch: true,
                 best_effort: false,
-                base: state.base_or_default(),
+                base_scope: &base_scope(
+                    project_root,
+                    &main_branch,
+                    state.base_branch(&main_branch),
+                ),
             })?;
         } else {
             // Soft teardown: remove pm state and tmux session, but leave
@@ -266,12 +270,14 @@ mod tests {
 
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "login",
             server.name(),
         ))
         .unwrap();
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "api",
             server.name(),
         ))
@@ -299,6 +305,7 @@ mod tests {
 
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "login",
             server.name(),
         ))
@@ -324,6 +331,7 @@ mod tests {
 
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "login",
             server.name(),
         ))
@@ -353,6 +361,7 @@ mod tests {
 
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "login",
             server.name(),
         ))
@@ -376,6 +385,7 @@ mod tests {
 
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "login",
             server.name(),
         ))
@@ -451,6 +461,7 @@ mod tests {
 
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "login",
             server.name(),
         ))
@@ -492,12 +503,14 @@ mod tests {
         // Create two features — one clean (merged), one dirty
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "clean",
             server.name(),
         ))
         .unwrap();
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "dirty",
             server.name(),
         ))
