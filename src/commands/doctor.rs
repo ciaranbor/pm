@@ -7,7 +7,7 @@ use crate::harness::Harness;
 use crate::state::agent::{AgentRegistry, AgentType};
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
-use crate::state::project::{GlobalConfig, ProjectConfig};
+use crate::state::project::{GlobalConfig, ProjectConfig, ProjectEntry};
 use crate::state::workflow;
 use crate::{gh, git, tmux};
 
@@ -66,6 +66,9 @@ pub enum IssueKind {
     /// A worktree is not trusted by the harness, so it stops at an
     /// interactive prompt on launch.
     WorktreeUntrusted,
+    /// The registry's `main_branch` names a branch the repository does not
+    /// have, so merge-safety checks compare against nothing.
+    MainBranchMissing,
 }
 
 /// A single issue detected for a feature.
@@ -126,6 +129,8 @@ enum FixAction {
     RespawnAgent { agent_name: String },
     /// Record directory trust for a worktree with the harness.
     TrustWorktree { harness: Harness, path: PathBuf },
+    /// Rewrite the registry entry's `main_branch`.
+    RecordMainBranch { branch: String },
 }
 
 /// Diagnostic finding for a single scope (a feature or `main`).
@@ -198,6 +203,11 @@ pub fn diagnose(
     }
     main_issues.extend(asset_issues(project_root)?);
     main_issues.extend(legacy_vanilla_agent_issues(project_root, "main"));
+    main_issues.extend(main_branch_issue(
+        &main_repo,
+        &paths::global_projects_dir()?,
+        project_name,
+    ));
     if !tmux::has_session(tmux_server, &main_session)? {
         main_issues.push(Issue {
             kind: IssueKind::TmuxSessionMissing,
@@ -843,6 +853,31 @@ fn legacy_vanilla_agent_issues(project_root: &Path, scope: &str) -> Vec<Issue> {
         .collect()
 }
 
+/// Flag a registry `main_branch` the repository has no branch for.
+fn main_branch_issue(main_repo: &Path, projects_dir: &Path, project_name: &str) -> Option<Issue> {
+    let entry = ProjectEntry::load(projects_dir, project_name).ok()?;
+    if git::branch_exists(main_repo, &entry.main_branch).unwrap_or(true) {
+        return None;
+    }
+    let recorded = &entry.main_branch;
+    Some(match git::main_branch(main_repo) {
+        Ok(branch) => Issue {
+            kind: IssueKind::MainBranchMissing,
+            message: format!(
+                "registry records main branch '{recorded}', which the repo lacks; the repo's main branch is '{branch}'"
+            ),
+            fix: Fix::Auto(FixAction::RecordMainBranch { branch }),
+        },
+        Err(_) => Issue {
+            kind: IssueKind::MainBranchMissing,
+            message: format!(
+                "registry records main branch '{recorded}', which the repo lacks, and it has neither origin/HEAD nor a checked-out branch"
+            ),
+            fix: Fix::Skip,
+        },
+    })
+}
+
 /// Apply a single fix action. Returns the notes a respawn produced; empty
 /// for every other action.
 fn apply_fix(
@@ -897,6 +932,12 @@ fn apply_fix(
         }
         FixAction::InstallStopHook => {
             hooks_install::install(Some(project_root))?;
+        }
+        FixAction::RecordMainBranch { branch } => {
+            let projects_dir = paths::global_projects_dir()?;
+            let mut entry = ProjectEntry::load(&projects_dir, project_name)?;
+            entry.main_branch = branch.clone();
+            entry.save(&projects_dir, project_name)?;
         }
         FixAction::InstallGlobalAssets => {
             crate::commands::skills::install_global()?;
@@ -1141,6 +1182,29 @@ mod tests {
             !lines.iter().any(|l| l.contains("uses removed")),
             "{lines:?}"
         );
+    }
+
+    #[test]
+    fn main_branch_issue_flags_a_recorded_branch_the_repo_lacks() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, projects_dir, name) = server.setup_project_no_tmux(dir.path());
+        let main = paths::main_worktree(&project_path);
+
+        assert!(main_branch_issue(&main, &projects_dir, &name).is_none());
+
+        git::rename_branch(&main, "main", "master").unwrap();
+        let issue = main_branch_issue(&main, &projects_dir, &name).unwrap();
+        assert_eq!(issue.kind(), IssueKind::MainBranchMissing);
+        assert!(
+            matches!(&issue.fix, Fix::Auto(FixAction::RecordMainBranch { branch }) if branch == "master"),
+            "{}",
+            issue.message()
+        );
+
+        git::run_git(&main, &["checkout", "--detach"]).unwrap();
+        let issue = main_branch_issue(&main, &projects_dir, &name).unwrap();
+        assert!(matches!(issue.fix, Fix::Skip), "{}", issue.message());
     }
 
     #[test]

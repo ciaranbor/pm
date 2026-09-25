@@ -63,8 +63,7 @@ pub fn init(
     let main_path = paths::main_worktree(path);
     let main_branch = if let Some(url) = git_url {
         git::clone_repo(url, &main_path)?;
-        // Detect default branch from the cloned remote
-        git::default_branch(&main_path).unwrap_or_else(|_| "main".to_string())
+        git::main_branch(&main_path)?
     } else {
         git::init_repo(&main_path)?;
         "main".to_string()

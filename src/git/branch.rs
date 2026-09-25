@@ -45,6 +45,19 @@ pub fn current_branch(repo: &Path) -> Result<String> {
     run_git(repo, &["rev-parse", "--abbrev-ref", "HEAD"])
 }
 
+/// The branch HEAD is on, including an unborn branch in a repo with no
+/// commits. Errors on a detached HEAD.
+pub fn head_branch(repo: &Path) -> Result<String> {
+    run_git(repo, &["symbolic-ref", "--short", "HEAD"])
+}
+
+/// The branch pm treats as a repo's main branch: the remote's default
+/// (`origin/HEAD`), else the branch HEAD is on. Errors only when neither
+/// resolves (no remote HEAD and a detached HEAD).
+pub fn main_branch(repo: &Path) -> Result<String> {
+    default_branch(repo).or_else(|_| head_branch(repo))
+}
+
 /// Check if a branch is fully merged into the given target branch.
 /// Uses `merge-base --is-ancestor` which handles worktree edge cases
 /// and doesn't require parsing branch listings.
@@ -268,6 +281,21 @@ mod tests {
         add_worktree(&repo_path, &wt_path, "feature").unwrap();
 
         assert_eq!(current_branch(&wt_path).unwrap(), "feature");
+    }
+
+    #[test]
+    fn head_branch_names_an_unborn_branch_and_rejects_detached_head() {
+        let dir = tempdir().unwrap();
+        let unborn = dir.path().join("unborn");
+        std::fs::create_dir_all(&unborn).unwrap();
+        run_git(&unborn, &["init", "--initial-branch=trunk"]).unwrap();
+        assert_eq!(head_branch(&unborn).unwrap(), "trunk");
+
+        let repo_path = dir.path().join("repo");
+        init_repo(&repo_path).unwrap();
+        assert_eq!(head_branch(&repo_path).unwrap(), "main");
+        run_git(&repo_path, &["checkout", "--detach"]).unwrap();
+        assert!(head_branch(&repo_path).is_err());
     }
 
     #[test]

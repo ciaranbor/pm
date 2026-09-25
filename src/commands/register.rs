@@ -32,6 +32,8 @@ pub fn register(
     if !crate::git::is_git_repo(&repo_path) {
         return Err(PmError::NotAGitRepo(repo_path.to_path_buf()));
     }
+    let main_branch = crate::git::main_branch(&repo_path)
+        .map_err(|_| PmError::DetachedHead(repo_path.to_path_buf()))?;
 
     // Determine project name
     let project_name = name
@@ -139,7 +141,7 @@ pub fn register(
     };
     let entry = ProjectEntry {
         root: crate::path_utils::to_portable(&wrapper_dir),
-        main_branch: "main".to_string(),
+        main_branch,
         repo_url,
         state_remote: None,
     };
@@ -162,6 +164,61 @@ mod tests {
 
     fn create_git_repo(path: &Path) {
         git::init_repo(path).unwrap();
+    }
+
+    #[test]
+    fn register_records_the_branch_the_repo_is_on() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let name = server.scope("masterrepo");
+        let repo_path = dir.path().join(&name);
+        std::fs::create_dir_all(&repo_path).unwrap();
+        git::run_git(&repo_path, &["init", "--initial-branch=master"]).unwrap();
+        git::run_git(&repo_path, &["commit", "--allow-empty", "-m", "init"]).unwrap();
+        let projects_dir = dir.path().join("registry");
+
+        register(&repo_path, None, &projects_dir, false, server.name(), None).unwrap();
+
+        let entry = ProjectEntry::load(&projects_dir, &name).unwrap();
+        assert_eq!(entry.main_branch, "master");
+    }
+
+    #[test]
+    fn register_prefers_the_remote_default_over_the_checked_out_branch() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let name = server.scope("remoterepo");
+        let bare = dir.path().join("remote.git");
+        git::init_bare(&bare).unwrap();
+        let staging = dir.path().join("staging");
+        create_git_repo(&staging);
+        git::add_remote(&staging, "origin", &bare.to_string_lossy()).unwrap();
+        git::push_branch(&staging, "main").unwrap();
+        let repo_path = dir.path().join(&name);
+        git::clone_repo(&bare.to_string_lossy(), &repo_path).unwrap();
+        git::run_git(&repo_path, &["checkout", "-b", "fix-login"]).unwrap();
+        let projects_dir = dir.path().join("registry");
+
+        register(&repo_path, None, &projects_dir, false, server.name(), None).unwrap();
+
+        let entry = ProjectEntry::load(&projects_dir, &name).unwrap();
+        assert_eq!(entry.main_branch, "main");
+    }
+
+    #[test]
+    fn register_refuses_a_detached_head_and_leaves_the_repo_alone() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let name = server.scope("detached");
+        let repo_path = dir.path().join(&name);
+        create_git_repo(&repo_path);
+        git::run_git(&repo_path, &["checkout", "--detach"]).unwrap();
+        let projects_dir = dir.path().join("registry");
+
+        let err = register(&repo_path, None, &projects_dir, true, server.name(), None).unwrap_err();
+        assert!(matches!(err, PmError::DetachedHead(_)), "{err}");
+        assert!(repo_path.join(".git").exists());
+        assert!(!projects_dir.join(format!("{name}.toml")).exists());
     }
 
     #[test]
