@@ -112,12 +112,15 @@ error). The hook blocks until the agent's inbox has unread messages, then
 returns:
 
 ```json
-{"decision": "block", "reason": "You have new messages. Run `pm msg read` …"}
+{"decision": "block", "reason": "You have new messages from a, b. Run `pm msg read` …"}
 ```
 
 The harness delivers this as a continuation prompt. The agent reads the
 message, processes it, the turn ends, and the hook fires again — blocking
-until the next message arrives.
+until the next message arrives. Because the hook's instruction is a bare
+`pm msg read`, a bare read must never error when several senders have
+unread messages: it takes the oldest sender's message (one sender per read;
+README has the selection and footer details).
 
 Exception: if the Stop event reports a running background task or active
 cron and no messages are queued, the hook returns `{}` (the documented

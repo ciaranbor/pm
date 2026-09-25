@@ -32,15 +32,18 @@ initiating a new conversation or addressing a specific agent.
 ## Reading
 
 ```sh
-pm msg read                            # next unread, advances cursor
+pm msg read                            # next unread from the oldest sender, advances cursor
 pm msg read --from <sender>            # scope to one sender
 pm msg read --from <sender> --index 3  # re-read msg 3 (no advance)
 pm msg read --from <sender> --index +2 # peek two past cursor (no advance)
 pm msg read --from <sender> --index -1 # re-read last processed (no advance)
 ```
 
-`--from` is required only when the inbox is ambiguous and always required
-with `--index`.
+Each read takes one sender's next message. With several senders unread, a
+bare read picks the sender whose earliest unread message is oldest and ends
+with a footer naming the rest (`2 more senders pending: b, c — …`); read
+again to take the next. `--from` overrides the pick and is required with
+`--index`.
 
 ## Listing and waiting
 

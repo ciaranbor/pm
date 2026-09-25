@@ -14,8 +14,16 @@ use crate::commands::agent_wait;
 use crate::messages;
 use crate::state::paths;
 
-/// Reason text returned after messages arrive.
-const REASON: &str = "You have new messages. Run `pm msg read` to read them.";
+/// Reason text returned after messages arrive; `senders` is oldest first.
+fn reason(senders: &[String]) -> String {
+    if senders.is_empty() {
+        return "You have new messages. Run `pm msg read` to read them.".to_string();
+    }
+    format!(
+        "You have new messages from {}. Run `pm msg read` to read them.",
+        senders.join(", ")
+    )
+}
 
 /// Run the Stop hook. Prints the decision JSON and returns the exit code.
 /// Non-pm sessions (unresolvable agent/scope) let the turn end, staying invisible.
@@ -56,29 +64,35 @@ fn wait_and_decide(
     agent: &str,
     poll_interval: Option<Duration>,
 ) -> crate::error::Result<String> {
-    if count_unread(project_root, feature, agent)? > 0 {
-        return Ok(block_decision());
+    let senders = unread_senders(project_root, feature, agent)?;
+    if !senders.is_empty() {
+        return Ok(block_decision(&senders));
     }
     if busy {
         return Ok(allow_decision());
     }
     agent_wait::agent_wait(project_root, feature, agent, None, poll_interval)?;
-    Ok(block_decision())
+    let senders = unread_senders(project_root, feature, agent)?;
+    Ok(block_decision(&senders))
 }
 
-/// Count unread messages across all senders without blocking.
-fn count_unread(
+/// Senders with unread messages, oldest first — the order bare `pm msg read`
+/// will take them in.
+fn unread_senders(
     project_root: &std::path::Path,
     feature: &str,
     agent: &str,
-) -> crate::error::Result<u32> {
+) -> crate::error::Result<Vec<String>> {
     let messages_dir = paths::messages_dir(project_root);
-    let summaries = messages::check(&messages_dir, feature, agent)?;
-    Ok(summaries.iter().map(|s| s.count).sum())
+    Ok(
+        messages::resolve_sender(&messages_dir, feature, agent, None)?
+            .map(|c| std::iter::once(c.sender).chain(c.pending).collect())
+            .unwrap_or_default(),
+    )
 }
 
-fn block_decision() -> String {
-    json!({"decision": "block", "reason": REASON}).to_string()
+fn block_decision(senders: &[String]) -> String {
+    json!({"decision": "block", "reason": reason(senders)}).to_string()
 }
 
 fn allow_decision() -> String {
@@ -175,7 +189,10 @@ mod tests {
 
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["decision"], "block");
-        assert_eq!(parsed["reason"], REASON);
+        assert_eq!(
+            parsed["reason"],
+            "You have new messages from implementer. Run `pm msg read` to read them."
+        );
     }
 
     #[test]
@@ -196,7 +213,10 @@ mod tests {
 
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["decision"], "block");
-        assert_eq!(parsed["reason"], REASON);
+        assert_eq!(
+            parsed["reason"],
+            "You have new messages from implementer. Run `pm msg read` to read them."
+        );
     }
 
     #[test]
@@ -249,7 +269,36 @@ mod tests {
         let result = handle.join().unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["decision"], "block");
-        assert_eq!(parsed["reason"], REASON);
+        assert_eq!(
+            parsed["reason"],
+            "You have new messages from implementer. Run `pm msg read` to read them."
+        );
+    }
+
+    #[test]
+    fn reason_names_pending_senders_oldest_first() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        let mdir = paths::messages_dir(&root);
+        for sender in ["zed", "amy"] {
+            crate::messages::send(&mdir, "login", "reviewer", sender, "hi").unwrap();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+
+        let result = wait_and_decide(
+            false,
+            &root,
+            "login",
+            "reviewer",
+            Some(Duration::from_millis(50)),
+        )
+        .unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(
+            parsed["reason"],
+            "You have new messages from zed, amy. Run `pm msg read` to read them."
+        );
     }
 
     #[test]
