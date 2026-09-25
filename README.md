@@ -497,10 +497,8 @@ cargo clippy
 cargo fmt
 ```
 
-Tests spawn real tmux sessions. `cargo test` runs are capped at 4 threads via
-`.cargo/config.toml` to keep pty usage well under macOS limits. To clean up
-stale test servers: `for s in /tmp/tmux-$(id -u)/pm-test-*; do tmux -L
-$(basename "$s") kill-server 2>/dev/null; rm -f "$s"; done`.
+Tests spawn real tmux sessions on a private server; `AGENTS.md` (Development)
+has the pty budget and how to clean up leaked test servers.
 
 Setting `PM_TMUX_SERVER=<name>` makes every `pm` command target that tmux
 server (`tmux -L <name>`) instead of the default one. `scripts/sandbox` uses
