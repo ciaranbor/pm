@@ -494,10 +494,12 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
                             project_name,
                             tmux_server,
                         ) {
-                            Ok(()) => {
+                            Ok(notes) => {
                                 lines.push(format!(
-                                    "  {} — fixed: {}",
-                                    finding.feature, issue.message
+                                    "  {} — fixed: {}{}",
+                                    finding.feature,
+                                    issue.message,
+                                    agent_spawn::notes_suffix(&notes)
                                 ));
                                 fixed_count += 1;
                             }
@@ -841,7 +843,8 @@ fn legacy_vanilla_agent_issues(project_root: &Path, scope: &str) -> Vec<Issue> {
         .collect()
 }
 
-/// Apply a single fix action.
+/// Apply a single fix action. Returns the notes a respawn produced; empty
+/// for every other action.
 fn apply_fix(
     action: &FixAction,
     project_root: &Path,
@@ -850,7 +853,7 @@ fn apply_fix(
     name: &str,
     project_name: &str,
     tmux_server: Option<&str>,
-) -> Result<()> {
+) -> Result<Vec<String>> {
     match action {
         FixAction::RemoveState => {
             FeatureState::delete(features_dir, name)?;
@@ -899,13 +902,15 @@ fn apply_fix(
             crate::commands::skills::install_global()?;
         }
         FixAction::RespawnAgent { agent_name } => {
-            agent_spawn::agent_spawn(project_root, name, agent_name, None, None, tmux_server)?;
+            let (_, _, notes) =
+                agent_spawn::agent_spawn(project_root, name, agent_name, None, None, tmux_server)?;
+            return Ok(notes);
         }
         FixAction::TrustWorktree { harness, path } => {
             harness.trust_worktree(&paths::home_dir()?, path)?;
         }
     }
-    Ok(())
+    Ok(Vec::new())
 }
 
 #[cfg(test)]
@@ -1791,6 +1796,46 @@ mod tests {
             )
             .unwrap()
             .is_some()
+        );
+    }
+
+    #[test]
+    fn fix_respawn_reports_spawn_notes() {
+        let _guard = crate::testing::CODEX_CONFIG_LOCK.lock().unwrap();
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+
+        let agents_dir = paths::agents_dir(&project_path);
+        let mut registry = AgentRegistry::default();
+        registry.register(
+            "reviewer",
+            crate::state::agent::AgentEntry {
+                agent_type: AgentType::Agent,
+                session_id: "cc-session".to_string(),
+                window_name: "reviewer".to_string(),
+                active: true,
+                agent_definition: None,
+                harness: Harness::ClaudeCode,
+            },
+        );
+        registry.save(&agents_dir, "login").unwrap();
+        // Config moves reviewer off the harness its session was recorded under.
+        let pm_dir = paths::pm_dir(&project_path);
+        let mut config = ProjectConfig::load(&pm_dir).unwrap();
+        config
+            .agents
+            .harness
+            .insert("reviewer".to_string(), "codex".to_string());
+        config.save(&pm_dir).unwrap();
+
+        let lines = doctor(&project_path, true, server.name()).unwrap();
+        assert!(
+            lines.iter().any(|l| l.contains(
+                "login — fixed: agent 'reviewer' registered as active but window missing \
+                 (harness changed claude-code → codex; previous session not resumed)"
+            )),
+            "got: {lines:?}"
         );
     }
 
