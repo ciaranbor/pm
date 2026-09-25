@@ -739,17 +739,6 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             clap_complete::generate(shell, &mut cmd, "pm", &mut std::io::stdout());
             Ok(())
         }
-        Commands::Summary { command } => match command {
-            SummaryCommands::Write { content } => {
-                let path = std::path::Path::new(&content);
-                let body = if path.exists() {
-                    std::fs::read_to_string(path)?
-                } else {
-                    content
-                };
-                commands::summary::run(&body)
-            }
-        },
         Commands::Workflow(workflow_cmd) => {
             // `install`/`uninstall`/`list` act on the global tier, so they
             // work outside a project too; `show` needs the feature's scope.

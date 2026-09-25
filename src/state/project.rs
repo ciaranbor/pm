@@ -5,7 +5,7 @@ use crate::error::{PmError, Result};
 use crate::harness::Harness;
 use crate::state::paths;
 
-/// Thin pointer stored in the global registry (~/.config/pm/projects/<name>.toml).
+/// Thin pointer stored in the global registry (`~/.config/pm/projects/<name>.toml`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectEntry {
     pub root: String,
@@ -23,7 +23,7 @@ fn default_main_branch() -> String {
     "main".to_string()
 }
 
-/// Project configuration stored at <project-root>/.pm/config.toml.
+/// Project configuration stored at `<project-root>/.pm/config.toml`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectConfig {
     pub project: ProjectInfo,
@@ -409,7 +409,7 @@ impl ProjectEntry {
 }
 
 impl ProjectConfig {
-    /// Save to <project-root>/.pm/config.toml using atomic write.
+    /// Save to `<project-root>/.pm/config.toml` using atomic write.
     pub fn save(&self, pm_dir: &Path) -> Result<()> {
         std::fs::create_dir_all(pm_dir)?;
         let path = pm_dir.join("config.toml");
@@ -422,7 +422,7 @@ impl ProjectConfig {
         Ok(())
     }
 
-    /// Load from <project-root>/.pm/config.toml.
+    /// Load from `<project-root>/.pm/config.toml`.
     pub fn load(pm_dir: &Path) -> Result<Self> {
         let path = pm_dir.join("config.toml");
         if !path.exists() {

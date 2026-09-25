@@ -138,7 +138,9 @@ cargo run -- <args>            # test local changes (development only)
 **Important:** Use `pm` (the installed binary) for pm commands; use `cargo
 run --` only to test local, uncommitted changes.
 
-Before completing any task, always run: `cargo fmt && cargo clippy && cargo test`
+Before completing any task, always run:
+`cargo fmt && cargo clippy && cargo test && cargo doc --no-deps` — the last
+must emit no warnings.
 
 **Important:** Tests create real tmux sessions that consume ptys. A check in
 `TestServer::new()` aborts the run once the system-wide pty count reaches 300

@@ -103,11 +103,6 @@ pub enum Commands {
     /// Git-backed state management (.pm/ backup and sync)
     #[command(subcommand)]
     State(StateCommands),
-    /// Write a summary doc from a feature worktree
-    Summary {
-        #[command(subcommand)]
-        command: SummaryCommands,
-    },
     /// Per-feature workflow management
     #[command(subcommand)]
     Workflow(WorkflowCommands),
@@ -158,15 +153,6 @@ pub enum StateCommands {
     },
     /// Backfill repo_url and state_remote in global registry from existing projects
     Backfill,
-}
-
-#[derive(Subcommand)]
-pub enum SummaryCommands {
-    /// Write (or overwrite) the summary doc for the current feature
-    Write {
-        /// Content string or path to a file
-        content: String,
-    },
 }
 
 #[derive(Subcommand)]

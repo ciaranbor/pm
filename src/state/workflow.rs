@@ -104,9 +104,9 @@ impl WorkflowDef {
         )
     }
 
-    /// Test-friendly variant of [`validate`] that takes an explicit home
+    /// Test-friendly variant of [`Self::validate`] that takes an explicit home
     /// directory instead of reading `$HOME` from the process environment.
-    /// Production callers should use [`validate`]; tests use this to avoid
+    /// Production callers should use [`Self::validate`]; tests use this to avoid
     /// races on process-global `$HOME`.
     pub fn validate_with_home(
         &self,
