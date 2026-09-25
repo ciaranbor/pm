@@ -4,6 +4,11 @@
 //! active cron → `{}` (let it stop, so the running work can finish); else
 //! block on `agent_wait` until a message arrives. `{}` is the documented
 //! "allow" for Stop: a `decision` other than `block` fails schema validation.
+//! Recurring crons stay active between fires, so an agent with one is
+//! message-delivered only at fire boundaries. Codex's Stop payload carries
+//! neither field and codex has no second wake source (a finished background
+//! terminal does not wake the session), so `parse_busy` is false there and
+//! codex agents block every turn.
 
 use std::io::Read;
 use std::time::Duration;
