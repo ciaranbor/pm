@@ -513,11 +513,11 @@ pub(crate) fn apply_remote_and_pull(
         .cloned()
         .unwrap(); // safe: we checked non-empty above
 
-    if fresh {
-        // Remote is authoritative: reset to the remote branch.
-        git::reset_hard(dir, &remote_ref)?;
-        Ok(format!("Set {label} remote to {url} and pulled"))
-    } else {
+    // Work on a local branch named after the remote's, tracking it, so a
+    // later `push` updates that branch rather than creating a second one.
+    let local_branch = remote_ref.strip_prefix("origin/").unwrap_or(&remote_ref);
+
+    if !fresh {
         // Existing repo connecting to a remote for the first time.
         // Commit dirty state so it's preserved in the reflog, then reset
         // to the remote branch. On first connect, local and remote will
@@ -533,9 +533,9 @@ pub(crate) fn apply_remote_and_pull(
             "warning: resetting {label} to remote — local state is overwritten \
              (previous commits are preserved in git reflog)"
         );
-        git::reset_hard(dir, &remote_ref)?;
-        Ok(format!("Set {label} remote to {url} and pulled"))
     }
+    git::reset_to_remote_branch(dir, local_branch, &remote_ref)?;
+    Ok(format!("Set {label} remote to {url} and pulled"))
 }
 
 // ---------------------------------------------------------------------------
@@ -1043,19 +1043,81 @@ mod tests {
 
     /// Create a bare repo with content pushed to it (simulates a real remote).
     fn create_populated_bare(bare_path: &std::path::Path) {
+        create_populated_bare_on(bare_path, "main");
+    }
+
+    /// Create a bare repo whose only branch is `branch`, with content on it.
+    fn create_populated_bare_on(bare_path: &std::path::Path, branch: &str) {
         git::init_bare(bare_path).unwrap();
 
         // Clone, add content, push
         let staging = bare_path.parent().unwrap().join("staging");
         git::clone_repo(&bare_path.to_string_lossy(), &staging).unwrap();
-        // git clone of empty bare may not have a branch; create initial commit
+        git::run_git(
+            &staging,
+            &["symbolic-ref", "HEAD", &format!("refs/heads/{branch}")],
+        )
+        .unwrap();
         std::fs::write(staging.join("remote-file.txt"), "from remote").unwrap();
         git::add_all(&staging).unwrap();
         git::commit_with_message(&staging, "seed remote content").unwrap();
-        let branch = git::current_branch(&staging).unwrap();
-        git::push(&staging, "origin", &branch).unwrap();
+        git::push(&staging, "origin", branch).unwrap();
         // Clean up staging clone
         std::fs::remove_dir_all(&staging).unwrap();
+    }
+
+    fn remote_branches(bare: &std::path::Path) -> Vec<String> {
+        git::run_git(
+            bare,
+            &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+        )
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect()
+    }
+
+    /// After connecting to a remote whose only branch is `master`, the state
+    /// repo must work on `master` and push there — never grow an `origin/main`.
+    fn assert_tracks_master_remote(root: &std::path::Path, bare: &std::path::Path) {
+        let pm_dir = paths::pm_dir(root);
+        assert_eq!(git::current_branch(&pm_dir).unwrap(), "master");
+        assert!(pm_dir.join("remote-file.txt").exists());
+
+        std::fs::write(root.join(".pm").join("features").join("t.toml"), "x").unwrap();
+        let msg = push(root).unwrap();
+        assert!(msg.contains("Committed and pushed"), "unexpected: {msg}");
+
+        assert_eq!(remote_branches(bare), vec!["master".to_string()]);
+        assert_eq!(
+            git::run_git(bare, &["rev-parse", "master"]).unwrap(),
+            git::run_git(&pm_dir, &["rev-parse", "HEAD"]).unwrap()
+        );
+    }
+
+    #[test]
+    fn init_with_remote_on_master_only_remote_tracks_master() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        let bare = dir.path().join("state-remote.git");
+        create_populated_bare_on(&bare, "master");
+
+        init_inner(&root, false, Some(&bare.to_string_lossy())).unwrap();
+
+        assert_tracks_master_remote(&root, &bare);
+    }
+
+    #[test]
+    fn init_with_remote_on_existing_repo_master_only_remote_tracks_master() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        init(&root).unwrap();
+        let bare = dir.path().join("state-remote.git");
+        create_populated_bare_on(&bare, "master");
+
+        init_inner(&root, false, Some(&bare.to_string_lossy())).unwrap();
+
+        assert_tracks_master_remote(&root, &bare);
     }
 
     // -- init --remote tests (project-level) --

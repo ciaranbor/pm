@@ -93,6 +93,17 @@ pub fn remote_tracking_branch(repo: &Path, branch: &str) -> Result<Option<String
     }
 }
 
+/// Check out `branch` reset to `remote_ref` and tracking it, discarding any
+/// local changes or untracked files in the way (like `reset --hard`, but
+/// switching to the branch named after the remote's).
+pub fn reset_to_remote_branch(repo: &Path, branch: &str, remote_ref: &str) -> Result<()> {
+    run_git(
+        repo,
+        &["checkout", "--force", "-B", branch, "--track", remote_ref],
+    )?;
+    Ok(())
+}
+
 /// Set the upstream tracking branch for the current branch.
 /// Equivalent to `git branch --set-upstream-to=<upstream>`.
 pub fn set_upstream(repo: &Path, upstream: &str) -> Result<()> {

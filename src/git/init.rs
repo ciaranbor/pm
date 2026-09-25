@@ -5,7 +5,8 @@ use crate::error::{PmError, Result};
 
 use super::run_git;
 
-/// Initialize a new git repository at the given path with an initial commit.
+/// Initialize a new git repository at the given path with an initial commit
+/// on `main`, whatever `init.defaultBranch` says.
 pub fn init_repo(path: &Path) -> Result<()> {
     std::fs::create_dir_all(path)?;
 
@@ -18,7 +19,8 @@ pub fn init_repo(path: &Path) -> Result<()> {
         return Err(PmError::Git(stderr));
     }
 
-    // Create initial commit so branches can be created
+    // Retargeting the unborn HEAD works on every git version, unlike `init -b`.
+    run_git(path, &["symbolic-ref", "HEAD", "refs/heads/main"])?;
     run_git(path, &["commit", "--allow-empty", "-m", "Initial commit"])?;
 
     Ok(())
@@ -63,6 +65,29 @@ mod tests {
         // git log should succeed and show at least one commit
         let output = run_git(&repo_path, &["log", "--oneline"]).unwrap();
         assert!(!output.is_empty());
+    }
+
+    #[test]
+    fn init_repo_commits_on_main_regardless_of_default_branch() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().join("myrepo");
+        std::fs::create_dir_all(&repo_path).unwrap();
+        // Leave an unborn HEAD pointing at master, as `git init` does when
+        // init.defaultBranch is master (or unset on git < 2.28).
+        run_git(&repo_path, &["-c", "init.defaultBranch=master", "init"]).unwrap();
+        assert_eq!(
+            run_git(&repo_path, &["symbolic-ref", "HEAD"]).unwrap(),
+            "refs/heads/master"
+        );
+
+        init_repo(&repo_path).unwrap();
+
+        assert_eq!(
+            run_git(&repo_path, &["symbolic-ref", "--short", "HEAD"]).unwrap(),
+            "main"
+        );
+        assert!(run_git(&repo_path, &["rev-parse", "--verify", "refs/heads/main"]).is_ok());
+        assert!(run_git(&repo_path, &["rev-parse", "--verify", "refs/heads/master"]).is_err());
     }
 
     #[test]
