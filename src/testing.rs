@@ -74,17 +74,16 @@ fn enforce_system_pty_cap() -> Result<(), String> {
     Ok(())
 }
 
-/// Directory tmux uses for its unix sockets. Honours `TMUX_TMPDIR` (matching
-/// tmux itself) and falls back to `/tmp/tmux-<uid>`.
+/// Directory tmux uses for its unix sockets: `tmux-<uid>` under
+/// `TMUX_TMPDIR` (matching tmux itself), or under `/tmp`.
 fn tmux_socket_dir() -> std::path::PathBuf {
-    if let Ok(dir) = std::env::var("TMUX_TMPDIR")
-        && !dir.is_empty()
-    {
-        return std::path::PathBuf::from(dir);
-    }
+    let base = std::env::var("TMUX_TMPDIR")
+        .ok()
+        .filter(|d| !d.is_empty())
+        .unwrap_or_else(|| "/tmp".to_string());
     // Safety: getuid is always safe to call.
     let uid = unsafe { libc::getuid() };
-    std::path::PathBuf::from(format!("/tmp/tmux-{uid}"))
+    std::path::PathBuf::from(base).join(format!("tmux-{uid}"))
 }
 
 /// Check whether a pid refers to a live process. Uses `kill(pid, 0)` which

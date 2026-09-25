@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# A throwaway pm environment: its own HOME (registry, config dir, global
+# assets, gitconfig), a private tmux server, and the built `pm` plus harness
+# shims first on PATH. Nothing in it touches the real ~/ or the default tmux
+# server. Naming follows the lib tests (server `pm-test-<name>`, HOME
+# `$TMPDIR/pm-test-home-<name>`) so the recovery command in AGENTS.md covers
+# a sandbox too, and `cargo test` reaps one whose name is a dead pid.
+set -eu
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/sandbox [COMMAND] [OPTIONS] [-- CMD...]
+
+  (none)                        up if needed, shell, then down on exit
+  up [--real] [--pm P] [--shell S]  create the sandbox (builds pm unless --pm)
+  run [-C DIR] -- CMD...        run CMD with the sandbox's environment
+                                (cwd DIR, relative to the sandbox HOME)
+  shell                         interactive shell inside the sandbox
+  attach [SESSION]              attach to the sandbox's tmux server
+  status                        sessions, windows, recorded harness invocations
+  path                          print the sandbox HOME
+  trust DIR...                  (--real) mark DIRs trusted for claude, so an
+                                agent spawned there skips the trust prompt;
+                                run it before `pm feat new`/`pm agent spawn`
+                                (relative to the sandbox HOME, exact paths —
+                                claude does not inherit trust from parents)
+  down                          kill the server and delete the HOME
+
+  -n NAME    sandbox name (default: "default", or $PM_SANDBOX)
+  --real     real claude/codex instead of shims, with ~/.claude.json and
+             ~/.codex/auth.json copied in. Credentials are not: log in once
+             (attach, then /login) or export CLAUDE_CODE_OAUTH_TOKEN or
+             ANTHROPIC_API_KEY before `up` (the sandbox inherits them), and
+             `trust` each project dir before spawning agents in it
+  --shell S  shell tmux windows run (default: $SHELL, non-login, no rc files
+             since HOME is the sandbox)
+
+Inside the sandbox, `pm` is the built binary and `claude`/`codex` are shims
+that record their invocation under $HOME/log and hold the window open.
+Example:
+  scripts/sandbox up
+  scripts/sandbox run -- pm init proj
+  scripts/sandbox run -C proj/main -- pm feat new login --context 'Do X'
+  scripts/sandbox status
+  scripts/sandbox down
+USAGE
+}
+
+die() { echo "sandbox: $*" >&2; exit 1; }
+
+here=$(cd "$(dirname "$0")/.." && pwd -P)
+name=${PM_SANDBOX:-default}
+real=0 pm_bin="" shell_bin="" cdir="" cmd="" session=""
+dirs=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    -n) name=$2; shift 2 ;;
+    --real) real=1; shift ;;
+    --pm) pm_bin=$2; shift 2 ;;
+    --shell) shell_bin=$2; shift 2 ;;
+    -C) cdir=$2; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    -*) usage >&2; die "unknown option: $1" ;;
+    *) if [ -z "$cmd" ]; then cmd=$1
+       elif [ "$cmd" = attach ] && [ -z "$session" ]; then session=$1
+       elif [ "$cmd" = trust ]; then dirs+=("$1")
+       else usage >&2; die "unexpected argument: $1 (put a command after --)"
+       fi
+       shift ;;
+  esac
+done
+case $name in
+  *[!A-Za-z0-9_-]*|"") die "invalid sandbox name '$name' (use [A-Za-z0-9_-])" ;;
+esac
+
+tmpbase=$(cd "${TMPDIR:-/tmp}" && pwd -P)
+home="$tmpbase/pm-test-home-$name"
+server="pm-test-$name"
+uid=$(id -u)
+socket="${TMUX_TMPDIR:-/tmp}/tmux-$uid/$server"
+
+# The sandbox environment: everything the real machine could leak through
+# is unset, and the sandbox's own bin/ leads PATH.
+sandbox_env=(-u TMUX -u XDG_CONFIG_HOME -u CODEX_HOME -u PM_AGENT_NAME
+  -u GIT_CONFIG_GLOBAL -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL
+  -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL
+  HOME="$home" PM_TMUX_SERVER="$server" PM_SANDBOX="$name"
+  PATH="$home/bin:$PATH")
+scrubbed() { env "${sandbox_env[@]}" "$@"; }
+stmux() { scrubbed tmux -L "$server" "$@"; }
+exists() { [ -d "$home" ]; }
+require() { exists || die "no sandbox '$name' (scripts/sandbox up -n $name)"; }
+
+up() {
+  exists && die "sandbox '$name' already exists at $home (down first)"
+  if [ -z "$pm_bin" ]; then
+    (cd "$here" && cargo build -q)
+    pm_bin=$here/target/debug/pm
+  fi
+  mkdir -p "$home/bin" "$home/log"
+  printf '[user]\n\tname = Sandbox\n\temail = sandbox@example.com\n[init]\n\tdefaultBranch = main\n' \
+    > "$home/.gitconfig"
+  ln -s "$pm_bin" "$home/bin/pm"
+  if [ "$real" = 1 ]; then
+    [ -f "$HOME/.claude.json" ] && cp "$HOME/.claude.json" "$home/.claude.json"
+    if [ -f "$HOME/.codex/auth.json" ]; then
+      mkdir -p "$home/.codex" && cp "$HOME/.codex/auth.json" "$home/.codex/auth.json"
+    fi
+  else
+    for h in claude codex; do
+      cp "$here/scripts/harness-shim.sh" "$home/bin/$h"
+      chmod +x "$home/bin/$h"
+    done
+  fi
+  # A stale socket under this name (pid reuse) would point tmux at a dead
+  # server.
+  stmux kill-server 2>/dev/null || true
+  rm -f "$socket"
+  # The server is created in the sandbox env because every pane inherits
+  # the server's environment, not the client's.
+  stmux new-session -d -s keepalive -c /tmp
+  # Windows would otherwise run a login shell, whose profile (macOS
+  # path_helper) moves system dirs ahead of the sandbox's bin/.
+  stmux set -g default-command "${shell_bin:-${SHELL:-/bin/sh}}"
+  echo "sandbox '$name' up: HOME=$home  tmux -L $server"
+}
+
+run() {
+  require
+  [ $# -gt 0 ] || die "run: no command after --"
+  case $cdir in
+    "") cd "$home" ;;
+    /*) cd "$cdir" ;;
+    *) cd "$home/$cdir" ;;
+  esac
+  exec env "${sandbox_env[@]}" "$@"
+}
+
+shell() {
+  require
+  cd "$home"
+  echo "sandbox '$name': HOME=$home, tmux -L $server; exit to leave"
+  scrubbed "${SHELL:-/bin/sh}" || true
+}
+
+attach() {
+  require
+  if [ -n "$session" ]; then exec stmux attach -t "$session"; else exec stmux attach; fi
+}
+
+status() {
+  require
+  echo "HOME=$home  server=$server"
+  stmux list-windows -a -F '#{session_name}:#{window_index} #{window_name}' 2>/dev/null \
+    || echo "(server not running)"
+  for f in "$home"/log/*.argv; do
+    [ -f "$f" ] || continue
+    echo "--- ${f##*/}"
+    sed 's/^/  /' "$f"
+  done
+}
+
+# The server is killed even when the HOME is already gone (macOS prunes
+# idle $TMPDIR entries), so a sandbox can never leak its server.
+trust() {
+  require
+  [ $# -gt 0 ] || die "trust: no directory given"
+  [ -f "$home/.claude.json" ] || echo '{}' > "$home/.claude.json"
+  for d in "$@"; do
+    case $d in /*) ;; *) d="$home/$d" ;; esac
+    node -e '
+      const fs = require("fs");
+      const [file, dir] = process.argv.slice(1);
+      const j = JSON.parse(fs.readFileSync(file, "utf8"));
+      j.projects = j.projects || {};
+      j.projects[dir] = { ...(j.projects[dir] || {}), hasTrustDialogAccepted: true };
+      fs.writeFileSync(file, JSON.stringify(j, null, 2));
+    ' "$home/.claude.json" "$d"
+    echo "trusted $d"
+  done
+}
+
+down() {
+  stmux kill-server 2>/dev/null || true
+  rm -f "$socket"
+  if exists; then
+    rm -rf "$home"
+    echo "sandbox '$name' down"
+  else
+    echo "no sandbox '$name'"
+  fi
+}
+
+case $cmd in
+  "") created=0
+      if ! exists; then up; created=1; fi
+      shell
+      if [ "$created" = 1 ]; then down; fi ;;
+  up) up ;;
+  run) run "$@" ;;
+  shell) shell ;;
+  attach) attach ;;
+  status) status ;;
+  path) echo "$home" ;;
+  trust) trust ${dirs[@]+"${dirs[@]}"} ;;
+  down) down ;;
+  *) usage >&2; die "unknown command: $cmd" ;;
+esac

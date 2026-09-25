@@ -499,4 +499,9 @@ Tests spawn real tmux sessions. `cargo test` runs are capped at 4 threads via
 stale test servers: `for s in /tmp/tmux-$(id -u)/pm-test-*; do tmux -L
 $(basename "$s") kill-server 2>/dev/null; rm -f "$s"; done`.
 
+Setting `PM_TMUX_SERVER=<name>` makes every `pm` command target that tmux
+server (`tmux -L <name>`) instead of the default one. `scripts/sandbox` uses
+it to give you a throwaway pm environment for trying changes by hand (see
+`AGENTS.md`).
+
 See `AGENTS.md` for architecture and development guidelines.

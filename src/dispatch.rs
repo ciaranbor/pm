@@ -113,6 +113,14 @@ fn parse_agent_at_scope(input: &str) -> (&str, Option<&str>) {
     (input, None)
 }
 
+/// The tmux server every command in this process targets: `PM_TMUX_SERVER`
+/// as a `-L` socket name, or the default server when unset or empty.
+fn tmux_server_from_env() -> Option<String> {
+    std::env::var("PM_TMUX_SERVER")
+        .ok()
+        .filter(|s| !s.is_empty())
+}
+
 /// Hook handlers hand back a process exit code; a non-zero one is the
 /// handler's whole answer to the harness and must reach it verbatim.
 fn exit_unless_ok(code: i32) -> pm::error::Result<()> {
@@ -123,14 +131,23 @@ fn exit_unless_ok(code: i32) -> pm::error::Result<()> {
 }
 
 pub fn run(cli: Cli) -> pm::error::Result<()> {
+    let server = tmux_server_from_env();
+    let server = server.as_deref();
     match cli.command {
         Commands::Init { path, git } => {
             let projects_dir = paths::global_projects_dir()?;
-            commands::init::init(&path, &projects_dir, git.as_deref(), None)
+            commands::init::init(&path, &projects_dir, git.as_deref(), server)
         }
         Commands::Register { path, name, r#move } => {
             let projects_dir = paths::global_projects_dir()?;
-            commands::register::register(&path, name.as_deref(), &projects_dir, r#move, None, None)
+            commands::register::register(
+                &path,
+                name.as_deref(),
+                &projects_dir,
+                r#move,
+                server,
+                None,
+            )
         }
         Commands::List => {
             let projects_dir = paths::global_projects_dir()?;
@@ -146,7 +163,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
         }
         Commands::Open => {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-            let result = commands::open::open(&project_root, None)?;
+            let result = commands::open::open(&project_root, server)?;
             if result.sessions_restored == 0 && result.agents_respawned == 0 {
                 println!("Project sessions opened");
             } else {
@@ -159,7 +176,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             // session so `pm open` leaves the user in the project rather than
             // detached.
             let inside_tmux = std::env::var("TMUX").is_ok();
-            if let Err(e) = tmux::connect_session(None, &result.main_session, inside_tmux) {
+            if let Err(e) = tmux::connect_session(server, &result.main_session, inside_tmux) {
                 eprintln!("warning: could not connect to {}: {e}", result.main_session);
             }
             Ok(())
@@ -167,13 +184,13 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
         Commands::Harness(cmd) | Commands::Claude(cmd) => dispatch_harness(cmd),
         Commands::Close { all } => {
             if all {
-                let messages = commands::close::close_all(None)?;
+                let messages = commands::close::close_all(server)?;
                 for m in messages {
                     println!("{m}");
                 }
             } else {
                 let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-                let (project_name, killed) = commands::close::close(&project_root, None)?;
+                let (project_name, killed) = commands::close::close(&project_root, server)?;
                 println!(
                     "Closed project {project_name} (killed {killed} session{})",
                     if killed == 1 { "" } else { "s" }
@@ -200,7 +217,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                             &agent_name,
                             agent_definition.as_deref(),
                             context.as_deref(),
-                            None,
+                            server,
                         )?;
                         println!("{msg}");
                     } else {
@@ -210,8 +227,11 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                                     .to_string(),
                             ));
                         }
-                        let result =
-                            commands::agent_spawn::agent_spawn_all(&project_root, &feature, None)?;
+                        let result = commands::agent_spawn::agent_spawn_all(
+                            &project_root,
+                            &feature,
+                            server,
+                        )?;
                         for msg in &result.successes {
                             println!("{msg}");
                         }
@@ -227,7 +247,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         &project_root,
                         &target_scope,
                         &names,
-                        None,
+                        server,
                     );
                     report_agent_op_results(results, "stop")
                 }
@@ -237,7 +257,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         &project_root,
                         &target_scope,
                         &names,
-                        None,
+                        server,
                     );
                     report_agent_op_results(results, "delete")
                 }
@@ -247,7 +267,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         &project_root,
                         &target_scope,
                         &names,
-                        None,
+                        server,
                     );
                     report_agent_op_results(results, "restart")
                 }
@@ -264,7 +284,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         &feature,
                         &source,
                         &name,
-                        None,
+                        server,
                     )?;
                     println!("{msg}");
                     Ok(())
@@ -336,7 +356,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                             recipient,
                             &sender,
                             &message,
-                            None,
+                            server,
                         )?;
                         println!("{line}");
                     }
@@ -392,7 +412,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         &feature,
                         &sender,
                         &message,
-                        None,
+                        server,
                     )?;
                     println!("{line}");
                     Ok(())
@@ -434,7 +454,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                             context: context.as_deref(),
                             base: base.as_deref(),
                             workflow: workflow.as_deref(),
-                            tmux_server: None,
+                            tmux_server: server,
                         })?;
                     println!("Created feature '{feat_name}'");
                     Ok(())
@@ -454,7 +474,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                             context: context.as_deref(),
                             from: from.as_deref(),
                             workflow: workflow.as_deref(),
-                            tmux_server: None,
+                            tmux_server: server,
                             session_store: None,
                         })?;
                     println!("Adopted feature '{feat_name}'");
@@ -487,13 +507,13 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         )
                     });
                     if let Some(name) = name {
-                        commands::feat_switch::feat_switch(&project_root, &name, None)
+                        commands::feat_switch::feat_switch(&project_root, &name, server)
                     } else {
                         let items = commands::feat_switch::feat_switch_menu(&project_root)?;
                         let pm_dir = paths::pm_dir(&project_root);
                         let config = pm::state::project::ProjectConfig::load(&pm_dir)?;
                         tmux::display_menu(
-                            None,
+                            server,
                             &format!("{} features", config.project.name),
                             &items,
                         )
@@ -501,13 +521,13 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                 }
                 FeatCommands::Delete { name, force } => {
                     let name = resolve_feature_name(name, &project_root)?;
-                    commands::feat_delete::feat_delete(&project_root, &name, force, None)?;
+                    commands::feat_delete::feat_delete(&project_root, &name, force, server)?;
                     println!("Deleted feature '{name}'");
                     Ok(())
                 }
                 FeatCommands::Merge { name, keep } => {
                     let name = resolve_feature_name(name, &project_root)?;
-                    commands::feat_merge::feat_merge(&project_root, &name, keep, None)?;
+                    commands::feat_merge::feat_merge(&project_root, &name, keep, server)?;
                     if keep {
                         println!("Merged feature '{name}'");
                     } else {
@@ -554,13 +574,18 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                 }
                 FeatCommands::Rename { old_name, new_name } => {
                     let old_name = resolve_feature_name(old_name, &project_root)?;
-                    commands::feat_rename::feat_rename(&project_root, &old_name, &new_name, None)?;
+                    commands::feat_rename::feat_rename(
+                        &project_root,
+                        &old_name,
+                        &new_name,
+                        server,
+                    )?;
                     println!("Renamed feature '{old_name}' to '{new_name}'");
                     Ok(())
                 }
                 FeatCommands::Review { pr } => {
                     let feature_name =
-                        commands::feat_review::feat_review(&project_root, &pr, None)?;
+                        commands::feat_review::feat_review(&project_root, &pr, server)?;
                     println!("Created review feature '{feature_name}'");
                     Ok(())
                 }
@@ -592,7 +617,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                 paths::find_project_root(&std::env::current_dir()?)?
             };
             let project_name =
-                commands::delete::delete(&project_root, &projects_dir, force, yes, None)?;
+                commands::delete::delete(&project_root, &projects_dir, force, yes, server)?;
             println!("Deleted project '{project_name}'");
             Ok(())
         }
@@ -604,7 +629,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             } else {
                 paths::find_project_root(&std::env::current_dir()?)?
             };
-            let lines = commands::status::status(&project_root, None)?;
+            let lines = commands::status::status(&project_root, server)?;
             for line in lines {
                 println!("{line}");
             }
@@ -618,7 +643,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             } else {
                 paths::find_project_root(&std::env::current_dir()?)?
             };
-            let lines = commands::doctor::doctor(&project_root, fix, None)?;
+            let lines = commands::doctor::doctor(&project_root, fix, server)?;
             for line in lines {
                 println!("{line}");
             }
@@ -632,7 +657,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             Ok(())
         }
         Commands::Restore => {
-            let messages = commands::restore::restore(None)?;
+            let messages = commands::restore::restore(server)?;
             for msg in messages {
                 println!("{msg}");
             }
