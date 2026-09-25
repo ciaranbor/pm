@@ -1,7 +1,9 @@
 use std::path::Path;
 use std::time::Instant;
 
-use crate::commands::feat_delete::{CleanupParams, TimingLog, cleanup_feature_with_timing};
+use crate::commands::feat_delete::{
+    CleanupParams, MissingBase, TimingLog, cleanup_feature_with_timing,
+};
 use crate::error::{PmError, Result};
 use crate::git;
 use crate::hooks;
@@ -28,7 +30,16 @@ pub fn feat_merge(
     let main_branch = ProjectEntry::load(projects_dir, project_name)?.main_branch;
 
     let base = state.base_branch(&main_branch);
-    let checkout = base_checkout(project_root, &main_branch, base)?;
+    let checkout = match base_checkout(project_root, &main_branch, base) {
+        Err(PmError::BaseNotCheckedOut(_)) => {
+            let missing = MissingBase::probe(&paths::main_worktree(project_root), base)?;
+            return Err(PmError::SafetyCheck(format!(
+                "cannot merge feature '{name}': {}",
+                missing.hint(name, base, &main_branch)
+            )));
+        }
+        other => other?,
+    };
     let base_repo = &checkout.worktree;
     let worktree_path = project_root.join(&state.worktree);
 
@@ -747,12 +758,8 @@ mod tests {
     fn merge_legacy_feature_on_master_default_project_lands_on_master() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_master_project(dir.path());
         let main_repo = paths::main_worktree(&project_path);
-        git::rename_branch(&main_repo, "main", "master").unwrap();
-        let mut entry = ProjectEntry::load(&projects_dir, &project_name).unwrap();
-        entry.main_branch = "master".to_string();
-        entry.save(&projects_dir, &project_name).unwrap();
 
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
@@ -773,6 +780,55 @@ mod tests {
         assert_eq!(git::current_branch(&main_repo).unwrap(), "master");
         assert!(main_repo.join("feature.txt").exists());
         assert!(!FeatureState::exists(&features_dir, "login"));
+    }
+
+    #[test]
+    fn merge_stacked_feature_after_parent_gone_refuses_with_hint() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, projects_dir) = server.setup_orphaned_child(dir.path());
+
+        let err =
+            feat_merge(&project_path, &projects_dir, "child", false, server.name()).unwrap_err();
+
+        let msg = format!("{err}");
+        assert!(msg.contains("cannot merge feature 'child'"), "{msg}");
+        assert!(msg.contains("base branch 'parent' is gone"), "{msg}");
+        assert!(msg.contains("git rebase master"), "{msg}");
+        let main_repo = paths::main_worktree(&project_path);
+        assert!(!main_repo.join("child.txt").exists());
+        assert!(FeatureState::exists(
+            &paths::features_dir(&project_path),
+            "child"
+        ));
+    }
+
+    #[test]
+    fn merge_feature_based_on_a_non_pm_branch_refuses_with_adopt_hint() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, projects_dir, _) = server.setup_master_project(dir.path());
+        let main_repo = paths::main_worktree(&project_path);
+        git::create_branch_from(&main_repo, "develop", "master").unwrap();
+        feat_new::feat_new(&feat_new::FeatNewParams {
+            project_root: &project_path,
+            projects_dir: &projects_dir,
+            name: "child",
+            name_override: None,
+            context: None,
+            base: Some("develop"),
+            workflow: None,
+            tmux_server: server.name(),
+        })
+        .unwrap();
+
+        let err =
+            feat_merge(&project_path, &projects_dir, "child", false, server.name()).unwrap_err();
+
+        let msg = format!("{err}");
+        assert!(msg.contains("'develop' is not checked out"), "{msg}");
+        assert!(msg.contains("pm feat adopt develop"), "{msg}");
+        assert!(!msg.contains("gone"), "{msg}");
     }
 
     #[test]

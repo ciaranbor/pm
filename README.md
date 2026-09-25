@@ -68,7 +68,9 @@ workflow. See `pm feat new --help` for stacking, naming, and editor options.
 A **feature** is a branch + worktree + tmux session, tracked in `.pm/`. Omit
 `--base` and the base is detected from your CWD, so `pm feat new child` inside
 a feature worktree stacks on it (stacked features merge into their parent, not
-main).
+main). If the parent is merged or deleted first, the child's base is gone:
+`pm feat delete --force` still removes it, but `merge` and the non-forced
+`delete` refuse and tell you how to rebase it onto a live branch.
 
 The lifecycle: `pm feat new` → work → optionally `pm feat pr create` /
 `pm feat ready` / `pm feat review` → `pm feat merge` (cleans up by default).

@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use crate::error::{PmError, Result};
 use crate::state::agent::AgentRegistry;
-use crate::state::feature::{FeatureState, base_checkout};
+use crate::state::feature::{BaseCheckout, FeatureState, base_checkout};
 use crate::state::paths;
 use crate::state::project::{ProjectConfig, ProjectEntry};
 use crate::{gh, git, hooks, messages, tmux};
@@ -95,6 +95,54 @@ pub fn base_scope(project_root: &Path, main_branch: &str, base: &str) -> String 
     base_checkout(project_root, main_branch, base)
         .map(|c| c.scope)
         .unwrap_or_else(|_| "main".to_string())
+}
+
+/// Why a feature's base branch has no checkout in this project.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissingBase {
+    /// The branch no longer exists: the parent feature was merged or deleted.
+    Gone,
+    /// The branch exists but is neither the main branch nor a feature's.
+    NoCheckout,
+}
+
+impl MissingBase {
+    pub fn probe(main_worktree: &Path, base: &str) -> Result<Self> {
+        Ok(if git::branch_exists(main_worktree, base)? {
+            Self::NoCheckout
+        } else {
+            Self::Gone
+        })
+    }
+
+    /// The situation, as an error-message clause.
+    pub fn reason(self, base: &str) -> String {
+        match self {
+            Self::Gone => format!(
+                "base branch '{base}' is gone (the feature it was stacked on was merged or deleted)"
+            ),
+            Self::NoCheckout => format!(
+                "base branch '{base}' is not checked out in this project (it is neither the main branch nor a feature's)"
+            ),
+        }
+    }
+
+    /// [`Self::reason`] plus the way out for a command that needs the base
+    /// checked out. pm never guesses a replacement base, so the choice is
+    /// the user's.
+    pub fn hint(self, feature: &str, base: &str, main_branch: &str) -> String {
+        let reason = self.reason(base);
+        match self {
+            Self::Gone => format!(
+                "{reason}. Rebase onto a live branch (`git rebase {main_branch}` in the worktree) \
+                 and set `base = \"{main_branch}\"` in .pm/features/{feature}.toml, \
+                 or discard the feature with `pm feat delete --force {feature}`."
+            ),
+            Self::NoCheckout => {
+                format!("{reason}. Give it one with `pm feat adopt {base}`, then retry.")
+            }
+        }
+    }
 }
 
 /// Remove a feature's worktree, branch, state file, agent registry,
@@ -343,7 +391,19 @@ pub fn feat_delete(
 
     let worktree_path = project_root.join(&state.worktree);
     let base = state.base_branch(&main_branch);
-    let checkout = base_checkout(project_root, &main_branch, base)?;
+    // Every git operation here resolves refs from any checkout of the repo,
+    // so the base's own checkout is a preference, not a need; only the
+    // merged-into-base safety check is unanswerable once the base is gone.
+    let checkout = match base_checkout(project_root, &main_branch, base) {
+        Err(PmError::BaseNotCheckedOut(_)) => BaseCheckout::main(project_root),
+        other => other?,
+    };
+    if !force && MissingBase::probe(&checkout.worktree, base)? == MissingBase::Gone {
+        return Err(PmError::SafetyCheck(format!(
+            "cannot check whether feature '{name}' is merged: {}",
+            MissingBase::Gone.hint(name, base, &main_branch)
+        )));
+    }
     let base_repo = &checkout.worktree;
 
     // Check if the linked PR was merged on GitHub (handles squash merges
@@ -717,6 +777,79 @@ mod tests {
 
         let features_dir = paths::features_dir(&project_path);
         assert!(!FeatureState::exists(&features_dir, "child"));
+    }
+
+    #[test]
+    fn delete_force_stacked_feature_after_parent_gone_removes_worktree_and_branch() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, projects_dir) = server.setup_orphaned_child(dir.path());
+
+        feat_delete(&project_path, &projects_dir, "child", true, server.name()).unwrap();
+
+        let main = paths::main_worktree(&project_path);
+        assert!(!project_path.join("child").exists());
+        assert!(!git::branch_exists(&main, "child").unwrap());
+        assert!(!FeatureState::exists(
+            &paths::features_dir(&project_path),
+            "child"
+        ));
+    }
+
+    #[test]
+    fn delete_stacked_feature_after_parent_gone_blocks_without_force() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, projects_dir) = server.setup_orphaned_child(dir.path());
+
+        let err =
+            feat_delete(&project_path, &projects_dir, "child", false, server.name()).unwrap_err();
+
+        let msg = format!("{err}");
+        assert!(msg.contains("base branch 'parent' is gone"), "{msg}");
+        assert!(msg.contains("--force child"), "{msg}");
+        assert!(msg.contains("git rebase master"), "{msg}");
+        assert!(project_path.join("child").exists());
+        assert!(FeatureState::exists(
+            &paths::features_dir(&project_path),
+            "child"
+        ));
+    }
+
+    #[test]
+    fn delete_feature_based_on_a_non_pm_branch_checks_merge_against_it() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, projects_dir, _) = server.setup_master_project(dir.path());
+        let main = paths::main_worktree(&project_path);
+        git::create_branch_from(&main, "develop", "master").unwrap();
+        feat_new::feat_new(&feat_new::FeatNewParams {
+            project_root: &project_path,
+            projects_dir: &projects_dir,
+            name: "child",
+            name_override: None,
+            context: None,
+            base: Some("develop"),
+            workflow: None,
+            tmux_server: server.name(),
+        })
+        .unwrap();
+        TestServer::add_feature_commit(&project_path, "child");
+
+        let unmerged = feat_delete(&project_path, &projects_dir, "child", false, server.name());
+        assert!(
+            matches!(&unmerged, Err(PmError::SafetyCheck(m)) if m.contains("not merged into its base")),
+            "{unmerged:?}"
+        );
+
+        git::run_git(&main, &["branch", "-f", "develop", "child"]).unwrap();
+        feat_delete(&project_path, &projects_dir, "child", false, server.name()).unwrap();
+
+        assert!(!git::branch_exists(&main, "child").unwrap());
+        assert!(!FeatureState::exists(
+            &paths::features_dir(&project_path),
+            "child"
+        ));
     }
 
     #[test]
