@@ -557,6 +557,17 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     }
                     Ok(())
                 }
+                FeatCommands::Rebase { name, onto } => {
+                    let name = resolve_feature_name(name, &project_root)?;
+                    let base = commands::feat_rebase::feat_rebase(
+                        &project_root,
+                        &projects_dir,
+                        &name,
+                        onto.as_deref(),
+                    )?;
+                    println!("Rebased feature '{name}' onto '{base}'");
+                    Ok(())
+                }
                 FeatCommands::Pr(pr_cmd) => match pr_cmd {
                     PrCommands::Create { name, ready, body } => {
                         let name = resolve_feature_name(name, &project_root)?;

@@ -533,6 +533,14 @@ pub enum FeatCommands {
         /// Feature name (detected from CWD if omitted)
         name: Option<String>,
     },
+    /// Rebase a feature onto a branch and record it as the feature's base
+    Rebase {
+        /// Feature name (detected from CWD if omitted)
+        name: Option<String>,
+        /// Branch to rebase onto (defaults to the feature's current base)
+        #[arg(long)]
+        onto: Option<String>,
+    },
     /// Rename a feature (branch, worktree, tmux session, state)
     Rename {
         /// New feature name
