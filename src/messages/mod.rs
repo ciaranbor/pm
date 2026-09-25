@@ -11,7 +11,7 @@ use crate::error::Result;
 // Re-export public API
 pub use cursor::{cursor_for, next};
 pub use types::{
-    LastRead, Message, MessageMeta, MessageStatus, MessageSummary, SenderResolution, UnreadSummary,
+    LastRead, Message, MessageMeta, MessageStatus, MessageSummary, SenderChoice, UnreadSummary,
 };
 pub use validation::validate_name;
 
@@ -205,6 +205,23 @@ pub fn check(messages_dir: &Path, feature: &str, agent: &str) -> Result<Vec<Unre
     Ok(summaries)
 }
 
+/// Load the metadata recorded for one message, `None` when the message
+/// predates metadata.
+fn load_meta(
+    messages_dir: &Path,
+    feature: &str,
+    agent: &str,
+    sender: &str,
+    index: u32,
+) -> Result<Option<MessageMeta>> {
+    let meta_path = meta_dir(messages_dir, feature, agent, sender).join(format!("{index:03}.json"));
+    if !meta_path.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&meta_path)?;
+    Ok(Some(serde_json::from_str(&content)?))
+}
+
 /// Load a single message at an absolute index from a specific sender. Pure
 /// read: does not touch the cursor. Returns `Ok(None)` if the index does
 /// not refer to an existing message file (out of range, never sent, or the
@@ -231,18 +248,12 @@ pub fn read_at(
     }
 
     let body = std::fs::read_to_string(&msg_path)?;
-    let meta_path = meta_dir(messages_dir, feature, agent, sender).join(format!("{index:03}.json"));
-    let meta = if meta_path.exists() {
-        let content = std::fs::read_to_string(&meta_path)?;
-        serde_json::from_str(&content)?
-    } else {
-        MessageMeta {
-            sender: sender.to_string(),
-            timestamp: Utc::now(),
-            sender_scope: None,
-            sender_project: None,
-        }
-    };
+    let meta = load_meta(messages_dir, feature, agent, sender, index)?.unwrap_or(MessageMeta {
+        sender: sender.to_string(),
+        timestamp: Utc::now(),
+        sender_scope: None,
+        sender_project: None,
+    });
 
     Ok(Some(Message {
         index,
@@ -252,29 +263,53 @@ pub fn read_at(
     }))
 }
 
-/// Resolve which sender a single-message command operates on. If `from` is
-/// provided, it is returned verbatim as `Explicit`. Otherwise, the senders
-/// with unread messages are examined and the caller gets `Implicit(s)`
-/// (exactly one), `NoUnread` (zero), or `Ambiguous(_)` (more than one).
+/// Resolve which sender a read operates on: `from` when given, otherwise the
+/// sender whose earliest unread message is oldest. `pending` lists every
+/// other sender with unread messages, oldest first. `None` only when nothing
+/// is unread and no `from` was given.
+///
+/// A sender's age is the timestamp of its earliest unread message. Missing
+/// or unreadable metadata (a legacy message, or `send` caught between writing
+/// the body and the meta) counts as undated and sorts first, so this never
+/// fails on a message that `check` reports.
 pub fn resolve_sender(
     messages_dir: &Path,
     feature: &str,
     agent: &str,
     from: Option<&str>,
-) -> Result<SenderResolution> {
+) -> Result<Option<SenderChoice>> {
     if let Some(s) = from {
         validate_name(s, "sender")?;
-        return Ok(SenderResolution::Explicit(s.to_string()));
     }
 
-    let summaries = check(messages_dir, feature, agent)?;
-    match summaries.len() {
-        0 => Ok(SenderResolution::NoUnread),
-        1 => Ok(SenderResolution::Implicit(summaries[0].sender.clone())),
-        _ => Ok(SenderResolution::Ambiguous(
-            summaries.into_iter().map(|s| s.sender).collect(),
-        )),
-    }
+    let csr = cursor::load_cursor(&cursor::cursor_path(messages_dir, feature, agent))?;
+    let mut dated: Vec<(Option<chrono::DateTime<Utc>>, String)> =
+        check(messages_dir, feature, agent)?
+            .into_iter()
+            .map(|s| {
+                let next = csr.get(s.sender.as_str()).copied().unwrap_or(0) + 1;
+                let sent = load_meta(messages_dir, feature, agent, &s.sender, next)
+                    .ok()
+                    .flatten()
+                    .map(|m| m.timestamp);
+                (sent, s.sender)
+            })
+            .collect();
+    dated.sort();
+    let mut senders: Vec<String> = dated.into_iter().map(|(_, sender)| sender).collect();
+
+    let sender = match from {
+        Some(s) => {
+            senders.retain(|name| name != s);
+            s.to_string()
+        }
+        None if senders.is_empty() => return Ok(None),
+        None => senders.remove(0),
+    };
+    Ok(Some(SenderChoice {
+        sender,
+        pending: senders,
+    }))
 }
 
 /// Enumerate all messages in an agent's inbox (optionally scoped to one
@@ -323,15 +358,11 @@ pub fn list(
                 .take(60)
                 .collect::<String>();
 
-            let meta_path =
-                meta_dir(messages_dir, feature, agent, sender).join(format!("{i:03}.json"));
-            let (timestamp, sender_scope, sender_project) = if meta_path.exists() {
-                let content = std::fs::read_to_string(&meta_path)?;
-                let m: MessageMeta = serde_json::from_str(&content)?;
-                (m.timestamp, m.sender_scope, m.sender_project)
-            } else {
-                (Utc::now(), None, None)
-            };
+            let (timestamp, sender_scope, sender_project) =
+                match load_meta(messages_dir, feature, agent, sender, i)? {
+                    Some(m) => (m.timestamp, m.sender_scope, m.sender_project),
+                    None => (Utc::now(), None, None),
+                };
 
             let status = if i <= cur {
                 MessageStatus::Read
@@ -674,13 +705,32 @@ mod tests {
 
     // ----- resolve_sender (--from resolution) -----
 
+    fn choice(sender: &str, pending: &[&str]) -> SenderChoice {
+        SenderChoice {
+            sender: sender.to_string(),
+            pending: pending.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
     #[test]
     fn resolve_sender_explicit_passthrough() {
         let dir = tempdir().unwrap();
         let mdir = messages_dir(dir.path());
 
         let r = resolve_sender(&mdir, "login", "reviewer", Some("implementer")).unwrap();
-        assert_eq!(r, SenderResolution::Explicit("implementer".to_string()));
+        assert_eq!(r, Some(choice("implementer", &[])));
+    }
+
+    #[test]
+    fn resolve_sender_explicit_lists_other_unread_senders_as_pending() {
+        let dir = tempdir().unwrap();
+        let mdir = messages_dir(dir.path());
+
+        send(&mdir, "login", "reviewer", "implementer", "a").unwrap();
+        send(&mdir, "login", "reviewer", "user", "b").unwrap();
+
+        let r = resolve_sender(&mdir, "login", "reviewer", Some("user")).unwrap();
+        assert_eq!(r, Some(choice("user", &["implementer"])));
     }
 
     #[test]
@@ -690,7 +740,7 @@ mod tests {
 
         send(&mdir, "login", "reviewer", "implementer", "msg").unwrap();
         let r = resolve_sender(&mdir, "login", "reviewer", None).unwrap();
-        assert_eq!(r, SenderResolution::Implicit("implementer".to_string()));
+        assert_eq!(r, Some(choice("implementer", &[])));
     }
 
     #[test]
@@ -699,7 +749,7 @@ mod tests {
         let mdir = messages_dir(dir.path());
 
         let r = resolve_sender(&mdir, "login", "reviewer", None).unwrap();
-        assert_eq!(r, SenderResolution::NoUnread);
+        assert_eq!(r, None);
     }
 
     #[test]
@@ -711,30 +761,66 @@ mod tests {
         next(&mdir, "login", "reviewer", "implementer").unwrap();
 
         let r = resolve_sender(&mdir, "login", "reviewer", None).unwrap();
-        assert_eq!(r, SenderResolution::NoUnread);
+        assert_eq!(r, None);
     }
 
     #[test]
-    fn resolve_sender_ambiguous_when_multiple_unread() {
+    fn resolve_sender_picks_oldest_unread_sender_and_orders_pending_by_age() {
+        // Queued out of name order: "zed" first, then "amy", then "mid".
         let dir = tempdir().unwrap();
         let mdir = messages_dir(dir.path());
 
-        send(&mdir, "login", "reviewer", "implementer", "a").unwrap();
-        send(&mdir, "login", "reviewer", "user", "b").unwrap();
+        for sender in ["zed", "amy", "mid"] {
+            send(&mdir, "login", "reviewer", sender, "hi").unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
 
         let r = resolve_sender(&mdir, "login", "reviewer", None).unwrap();
-        match r {
-            SenderResolution::Ambiguous(senders) => {
-                assert_eq!(senders, vec!["implementer".to_string(), "user".to_string()]);
-            }
-            other => panic!("expected Ambiguous, got {other:?}"),
-        }
+        assert_eq!(r, Some(choice("zed", &["amy", "mid"])));
+    }
+
+    #[test]
+    fn resolve_sender_ages_by_earliest_unread_not_latest() {
+        // "amy" sent first but that message was read; her remaining unread
+        // is newer than "zed"'s, so zed is oldest.
+        let dir = tempdir().unwrap();
+        let mdir = messages_dir(dir.path());
+
+        send(&mdir, "login", "reviewer", "amy", "read already").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        send(&mdir, "login", "reviewer", "zed", "unread").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        send(&mdir, "login", "reviewer", "amy", "unread").unwrap();
+        next(&mdir, "login", "reviewer", "amy").unwrap();
+
+        let r = resolve_sender(&mdir, "login", "reviewer", None).unwrap();
+        assert_eq!(r, Some(choice("zed", &["amy"])));
+    }
+
+    #[test]
+    fn resolve_sender_tolerates_unreadable_meta() {
+        // `send` writes the body before the meta, so a poll can see an empty
+        // `.json`; it must count as undated, not fail the read or the hook.
+        let dir = tempdir().unwrap();
+        let mdir = messages_dir(dir.path());
+
+        send(&mdir, "login", "reviewer", "amy", "dated").unwrap();
+        send(&mdir, "login", "reviewer", "zed", "undated").unwrap();
+        std::fs::write(
+            meta_dir(&mdir, "login", "reviewer", "zed").join("001.json"),
+            "",
+        )
+        .unwrap();
+
+        assert_eq!(check(&mdir, "login", "reviewer").unwrap().len(), 2);
+        let r = resolve_sender(&mdir, "login", "reviewer", None).unwrap();
+        assert_eq!(r, Some(choice("zed", &["amy"])));
     }
 
     #[test]
     fn resolve_sender_implicit_picks_the_unread_one() {
         // Two senders exist, but only one has unread. Implicit resolution
-        // picks that sender, not "ambiguous".
+        // picks that sender with nothing pending.
         let dir = tempdir().unwrap();
         let mdir = messages_dir(dir.path());
 
@@ -743,20 +829,7 @@ mod tests {
         next(&mdir, "login", "reviewer", "implementer").unwrap();
 
         let r = resolve_sender(&mdir, "login", "reviewer", None).unwrap();
-        assert_eq!(r, SenderResolution::Implicit("user".to_string()));
-    }
-
-    #[test]
-    fn resolution_into_sender_surfaces_friendly_errors() {
-        // NoUnread turns into a "No new messages" error; Ambiguous lists the senders.
-        let no_unread = SenderResolution::NoUnread;
-        let err = no_unread.into_sender().unwrap_err();
-        assert_eq!(format!("{err}"), "No new messages");
-
-        let ambig = SenderResolution::Ambiguous(vec!["a".to_string(), "b".to_string()]);
-        let err = ambig.into_sender().unwrap_err();
-        assert!(format!("{err}").contains("specify --from"));
-        assert!(format!("{err}").contains("a,b"));
+        assert_eq!(r, Some(choice("user", &[])));
     }
 
     // ----- list -----

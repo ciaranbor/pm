@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::error::{PmError, Result};
-use crate::messages::{self, Message, SenderResolution};
+use crate::messages::{self, Message};
 use crate::state::paths;
 
 /// Parsed `--index` spec from the CLI. `None` means "no --index given".
@@ -106,21 +106,18 @@ pub fn agent_read(
         None => {
             // Next-unread mode: resolve sender, read cursor + 1, then
             // advance the cursor so the next call returns the following
-            // message. If nothing is unread (NoUnread, or --from given
-            // but the explicit sender has no new messages), emit the
-            // friendly "No new messages" output.
-            let resolution = messages::resolve_sender(&messages_dir, feature, agent, from)?;
-            if let SenderResolution::NoUnread = resolution {
+            // message. One sender per read: other senders with unread
+            // messages are only named in the footer.
+            let Some(choice) = messages::resolve_sender(&messages_dir, feature, agent, from)?
+            else {
                 return Ok(vec!["No new messages".to_string()]);
-            }
-            let sender = resolution.into_sender()?;
+            };
+            let sender = choice.sender;
             let cur = messages::cursor_for(&messages_dir, feature, agent, &sender)?;
             let msg = messages::read_at(&messages_dir, feature, agent, &sender, cur + 1)?;
-            match msg {
+            let mut lines = match msg {
                 Some(m) => {
-                    // Advance cursor past this message.
                     messages::next(&messages_dir, feature, agent, &sender)?;
-                    // Record last-read metadata for `pm msg reply`.
                     messages::save_last_read(
                         &messages_dir,
                         feature,
@@ -132,10 +129,15 @@ pub fn agent_read(
                             index: m.index,
                         },
                     )?;
-                    Ok(format_message(&m, Some(feature)))
+                    format_message(&m, Some(feature))
                 }
-                None => Ok(vec![format!("No new messages from {sender}")]),
+                None => vec![format!("No new messages from {sender}")],
+            };
+            if !choice.pending.is_empty() {
+                lines.push(String::new());
+                lines.push(pending_footer(&choice.pending));
             }
+            Ok(lines)
         }
         Some(spec) => {
             // --index requires explicit --from: the caller is deliberately
@@ -153,6 +155,22 @@ pub fn agent_read(
             }
         }
     }
+}
+
+/// `pending` is oldest first, so the hint names the sender a bare read
+/// would pick next.
+fn pending_footer(pending: &[String]) -> String {
+    let noun = if pending.len() == 1 {
+        "sender"
+    } else {
+        "senders"
+    };
+    format!(
+        "{} more {noun} pending: {} — pm msg read --from {}",
+        pending.len(),
+        pending.join(", "),
+        pending[0]
+    )
 }
 
 fn format_message(m: &Message, current_scope: Option<&str>) -> Vec<String> {
@@ -338,19 +356,95 @@ mod tests {
     }
 
     #[test]
-    fn read_implicit_ambiguous_errors() {
+    fn read_multiple_senders_reads_oldest_and_names_the_rest() {
+        // Three senders queued out of name order. Each bare read takes one
+        // sender's next message and names the remaining senders, oldest
+        // first, so a sequence of bare reads drains the inbox by age.
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
-        messages::send(&mdir, "login", "reviewer", "implementer", "a").unwrap();
-        messages::send(&mdir, "login", "reviewer", "user", "b").unwrap();
+        for sender in ["zed", "amy", "mid"] {
+            messages::send(
+                &mdir,
+                "login",
+                "reviewer",
+                sender,
+                &format!("from {sender}"),
+            )
+            .unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
 
-        let err = agent_read(&root, "login", "reviewer", None, None).unwrap_err();
-        let s = format!("{err}");
-        assert!(s.contains("multiple senders"));
-        assert!(s.contains("implementer"));
-        assert!(s.contains("user"));
+        let lines = agent_read(&root, "login", "reviewer", None, None).unwrap();
+        assert!(lines[0].starts_with("--- from zed [001]"));
+        assert_eq!(lines[1], "from zed");
+        assert_eq!(
+            lines.last().unwrap(),
+            "2 more senders pending: amy, mid — pm msg read --from amy"
+        );
+        assert_eq!(
+            messages::cursor_for(&mdir, "login", "reviewer", "amy").unwrap(),
+            0,
+            "pending senders' cursors must not move"
+        );
+
+        let lines = agent_read(&root, "login", "reviewer", None, None).unwrap();
+        assert!(lines[0].starts_with("--- from amy [001]"));
+        assert_eq!(
+            lines.last().unwrap(),
+            "1 more sender pending: mid — pm msg read --from mid"
+        );
+
+        let lines = agent_read(&root, "login", "reviewer", None, None).unwrap();
+        assert!(lines[0].starts_with("--- from mid [001]"));
+        assert!(!lines.iter().any(|l| l.contains("pending")));
+
+        assert_eq!(
+            agent_read(&root, "login", "reviewer", None, None).unwrap(),
+            vec!["No new messages"]
+        );
+    }
+
+    #[test]
+    fn read_explicit_from_still_names_other_pending_senders() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        let mdir = paths::messages_dir(&root);
+        messages::send(&mdir, "login", "reviewer", "zed", "a").unwrap();
+        messages::send(&mdir, "login", "reviewer", "amy", "b").unwrap();
+
+        let lines = agent_read(&root, "login", "reviewer", Some("amy"), None).unwrap();
+        assert!(lines[0].starts_with("--- from amy [001]"));
+        assert_eq!(
+            lines.last().unwrap(),
+            "1 more sender pending: zed — pm msg read --from zed"
+        );
+    }
+
+    #[test]
+    fn read_multiple_senders_records_last_read_for_the_sender_read() {
+        // `pm msg reply` must target the message just read, not a sender
+        // that is merely pending.
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+
+        let mdir = paths::messages_dir(&root);
+        messages::send_with_scope(&mdir, "login", "reviewer", "zed", "first", Some("main"))
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        messages::send_with_scope(&mdir, "login", "reviewer", "amy", "second", Some("other"))
+            .unwrap();
+
+        agent_read(&root, "login", "reviewer", None, None).unwrap();
+
+        let lr = messages::load_last_read(&mdir, "login", "reviewer")
+            .unwrap()
+            .unwrap();
+        assert_eq!(lr.sender, "zed");
+        assert_eq!(lr.sender_scope.as_deref(), Some("main"));
+        assert_eq!(lr.index, 1);
     }
 
     #[test]

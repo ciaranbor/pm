@@ -330,7 +330,7 @@ pm msg send reviewer <<'EOF'              # multi-line / markdown body via hered
 Details here.
 EOF
 pm msg send impl@main "note"              # cross-scope: agent in another scope
-pm msg read                               # next unread (auto-picks sender if unambiguous)
+pm msg read                               # next unread from the oldest sender
 pm msg reply "short reply"                # reply to the last-read cross-scope message
 pm msg wait                               # block until a new message arrives
 pm msg list                               # enumerate inbox with cursor markers
@@ -343,8 +343,10 @@ Conventions worth knowing (the rest is in `pm msg --help`):
   positional `"…"` form for trivial one-liners.
 - **`read` reads *and* advances.** `--index <n>` (requires `--from`) re-reads a
   past message without moving the cursor; history stays on disk forever.
-- **`--from` is needed only when ambiguous** — if only one sender has unread,
-  it's auto-selected.
+- **One sender per read.** Without `--from`, the sender whose earliest unread
+  message is oldest is picked; when others are also waiting the output ends
+  with `N more senders pending: b, c — pm msg read --from b`. `--from`
+  overrides the pick.
 
 Identity resolves as `PM_AGENT_NAME` (set by `pm agent spawn`) > `$USER` >
 `"user"`, so spawned agents need no `--as-agent`.
