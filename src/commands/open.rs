@@ -50,7 +50,8 @@ fn is_open_recoverable(kind: IssueKind) -> bool {
         | IssueKind::LegacyVanillaAgentName
         | IssueKind::HooksMalformed
         | IssueKind::HookUntrusted
-        | IssueKind::WorktreeUntrusted => false,
+        | IssueKind::WorktreeUntrusted
+        | IssueKind::MainBranchMissing => false,
     }
 }
 

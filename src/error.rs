@@ -38,6 +38,9 @@ pub enum PmError {
     #[error("Not a git repository: {0}")]
     NotAGitRepo(PathBuf),
 
+    #[error("HEAD is detached in {0}: check out the branch pm should record as main, then retry")]
+    DetachedHead(PathBuf),
+
     #[error("Repo already registered as project \"{0}\"")]
     RepoAlreadyRegistered(String),
 

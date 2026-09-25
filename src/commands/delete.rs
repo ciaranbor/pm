@@ -5,7 +5,7 @@ use crate::error::{PmError, Result};
 use crate::state::agent::AgentRegistry;
 use crate::state::feature::FeatureState;
 use crate::state::paths;
-use crate::state::project::ProjectConfig;
+use crate::state::project::{ProjectConfig, ProjectEntry};
 use crate::{gh, git, messages, tmux};
 
 use super::feat_delete::{CleanupParams, check_safety, cleanup_feature};
@@ -71,7 +71,8 @@ pub fn delete(
 
     // --- Safety checks (skip with --force) ---
     if !force && !features.is_empty() {
-        let blockers = check_all_features_safety(project_root, &features, "main")?;
+        let main_branch = ProjectEntry::load(projects_dir, &project_name)?.main_branch;
+        let blockers = check_all_features_safety(project_root, &features, &main_branch)?;
         if !blockers.is_empty() {
             let mut msg = String::from("Cannot delete project — the following issues were found:");
             for b in &blockers {
@@ -337,6 +338,34 @@ mod tests {
         assert!(result.is_err());
 
         assert!(paths::pm_dir(&project_path).exists());
+    }
+
+    #[test]
+    fn delete_checks_merges_against_the_registered_main_branch() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
+        let main = paths::main_worktree(&project_path);
+        git::rename_branch(&main, "main", "master").unwrap();
+        let mut entry = ProjectEntry::load(&projects_dir, &project_name).unwrap();
+        entry.main_branch = "master".to_string();
+        entry.save(&projects_dir, &project_name).unwrap();
+
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
+            &project_path,
+            "login",
+            server.name(),
+        ))
+        .unwrap();
+        let worktree = project_path.join("login");
+        std::fs::write(worktree.join("feature.txt"), "content").unwrap();
+        git::stage_file(&worktree, "feature.txt").unwrap();
+        git::commit(&worktree, "feature work").unwrap();
+        git::merge_no_ff(&main, "login").unwrap();
+
+        delete(&project_path, &projects_dir, false, true, server.name()).unwrap();
+
+        assert!(!paths::pm_dir(&project_path).exists());
     }
 
     #[test]

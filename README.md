@@ -35,11 +35,12 @@ pm register ~/code/myapp --name myapp                      # adopt an existing r
 ```
 
 Each gives you a project root with the repo in `main/` and a `.pm/` state
-directory. Bundled skills, agent definitions, workflows, and the baseline
-install once per machine (see [Asset tiers](#asset-tiers)), not per project.
-Anything you add per project under `main/.agents/` is projected into
-`main/.claude/`, which is generated — gitignore it. Then `cd <root>/main`
-and create a feature:
+directory. pm records the repo's default branch (`origin/HEAD`, else the
+checked-out branch) as the project's main branch. Bundled skills, agent
+definitions, workflows, and the baseline install once per machine (see
+[Asset tiers](#asset-tiers)), not per project. Anything you add per project
+under `main/.agents/` is projected into `main/.claude/`, which is generated
+— gitignore it. Then `cd <root>/main` and create a feature:
 
 ```sh
 pm feat new login                                          # bare feature, no agents
