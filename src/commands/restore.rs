@@ -201,7 +201,7 @@ fn restore_project(
     }
 
     // Step 3: Open the project (recreate tmux sessions)
-    match super::open::open(&root, tmux_server) {
+    match super::open::open(&root, projects_dir, tmux_server) {
         Ok(result) => {
             if result.sessions_restored > 0 || result.agents_respawned > 0 {
                 messages.push(format!(

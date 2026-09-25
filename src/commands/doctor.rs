@@ -175,6 +175,7 @@ impl Finding {
 /// healthy ones — callers can filter by inspecting [`Finding::issues`]).
 pub fn diagnose(
     project_root: &Path,
+    projects_dir: &Path,
     tmux_server: Option<&str>,
     check_pr_state: bool,
 ) -> Result<Vec<Finding>> {
@@ -203,7 +204,7 @@ pub fn diagnose(
     }
     main_issues.extend(asset_issues(project_root)?);
     main_issues.extend(legacy_vanilla_agent_issues(project_root, "main"));
-    let main_branch = ProjectEntry::load(&paths::global_projects_dir()?, project_name)
+    let main_branch = ProjectEntry::load(projects_dir, project_name)
         .ok()
         .map(|e| e.main_branch);
     main_issues.extend(
@@ -463,14 +464,19 @@ pub fn diagnose(
 /// With `fix == true`, auto-resolves clear-cut issues and skips ambiguous ones.
 ///
 /// Returns formatted diagnostic lines.
-pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Result<Vec<String>> {
+pub fn doctor(
+    project_root: &Path,
+    projects_dir: &Path,
+    fix: bool,
+    tmux_server: Option<&str>,
+) -> Result<Vec<String>> {
     // Project-independent warnings, appended after the status lines.
     let mut warnings = baseline_capability_warnings(project_root)?;
     warnings.extend(global_config_warning());
 
     // Empty only when the project has no features and the main scope is
     // clean; main-scope findings are reported even with no features.
-    let findings = diagnose(project_root, tmux_server, true)?;
+    let findings = diagnose(project_root, projects_dir, tmux_server, true)?;
     if findings.is_empty() {
         // Status line first, warnings after — matches the ordering in the
         // normal path below.
@@ -482,8 +488,6 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
     let pm_dir = paths::pm_dir(project_root);
     let config = ProjectConfig::load(&pm_dir)?;
     let project_name = &config.project.name;
-    let features_dir = paths::features_dir(project_root);
-    let main_repo = paths::main_worktree(project_root);
 
     let mut lines = Vec::new();
     let mut total_issues = 0;
@@ -504,8 +508,7 @@ pub fn doctor(project_root: &Path, fix: bool, tmux_server: Option<&str>) -> Resu
                         match apply_fix(
                             action,
                             project_root,
-                            &features_dir,
-                            &main_repo,
+                            projects_dir,
                             &finding.feature,
                             project_name,
                             tmux_server,
@@ -887,12 +890,13 @@ fn main_branch_issue(main_repo: &Path, recorded: &str) -> Option<Issue> {
 fn apply_fix(
     action: &FixAction,
     project_root: &Path,
-    features_dir: &Path,
-    main_repo: &Path,
+    projects_dir: &Path,
     name: &str,
     project_name: &str,
     tmux_server: Option<&str>,
 ) -> Result<Vec<String>> {
+    let features_dir = &paths::features_dir(project_root);
+    let main_repo = &paths::main_worktree(project_root);
     match action {
         FixAction::RemoveState => {
             FeatureState::delete(features_dir, name)?;
@@ -938,10 +942,9 @@ fn apply_fix(
             hooks_install::install(Some(project_root))?;
         }
         FixAction::RecordMainBranch { branch } => {
-            let projects_dir = paths::global_projects_dir()?;
-            let mut entry = ProjectEntry::load(&projects_dir, project_name)?;
+            let mut entry = ProjectEntry::load(projects_dir, project_name)?;
             entry.main_branch = branch.clone();
-            entry.save(&projects_dir, project_name)?;
+            entry.save(projects_dir, project_name)?;
         }
         FixAction::InstallGlobalAssets => {
             crate::commands::skills::install_global()?;
@@ -970,8 +973,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
 
-        let lines = doctor(&project_path, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
         assert!(lines[0].contains("all healthy"), "got: {:?}", lines);
         assert!(
             lines
@@ -984,9 +988,9 @@ mod tests {
     fn no_features_reports_empty() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
-        let lines = doctor(&project_path, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
         assert_eq!(lines, vec!["No features to check"]);
     }
 
@@ -996,7 +1000,7 @@ mod tests {
         // a project that has none yet must still hear about them.
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
         let pm_dir = paths::pm_dir(&project_path);
         let mut config = ProjectConfig::load(&pm_dir).unwrap();
         config
@@ -1021,7 +1025,7 @@ mod tests {
             .save(&paths::agents_dir(&project_path), "main")
             .unwrap();
 
-        let findings = diagnose(&project_path, server.name(), false).unwrap();
+        let findings = diagnose(&project_path, &projects_dir, server.name(), false).unwrap();
         let main_kinds: Vec<IssueKind> = findings
             .iter()
             .filter(|f| f.feature() == "main")
@@ -1037,7 +1041,7 @@ mod tests {
             )),
             "{main_kinds:?}"
         );
-        let lines = doctor(&project_path, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
         assert_ne!(lines, vec!["No features to check"]);
         assert!(lines[0].contains("issue(s) found"), "{lines:?}");
     }
@@ -1061,6 +1065,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
         let planner = paths::main_worktree(&project_path).join(".agents/agents/planner.md");
         std::fs::create_dir_all(planner.parent().unwrap()).unwrap();
         std::fs::write(&planner, "# planner").unwrap();
@@ -1069,7 +1074,7 @@ mod tests {
             unprojected_definitions(&project_path).unwrap(),
             vec![("planner".to_string(), Harness::ClaudeCode)]
         );
-        let lines = doctor(&project_path, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
         assert!(
             lines
                 .iter()
@@ -1079,7 +1084,7 @@ mod tests {
 
         crate::commands::skills::project_assets(&project_path, false).unwrap();
         assert!(unprojected_definitions(&project_path).unwrap().is_empty());
-        let lines = doctor(&project_path, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
         assert!(
             !lines.iter().any(|l| l.contains("not projected")),
             "{lines:?}"
@@ -1091,6 +1096,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
         let bundled_reviewer = include_str!("../../agents/reviewer.md");
 
         // A pre-migration project: bundled copies present, no marker.
@@ -1099,7 +1105,7 @@ mod tests {
         std::fs::write(claude_agents.join("reviewer.md"), bundled_reviewer).unwrap();
         std::fs::remove_file(paths::migrations_dir(&project_path).join("global-assets")).unwrap();
 
-        let lines = doctor(&project_path, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
         assert!(
             lines
                 .iter()
@@ -1108,7 +1114,7 @@ mod tests {
         );
 
         crate::commands::skills::migrate_project_to_global(&project_path, false).unwrap();
-        let lines = doctor(&project_path, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
         assert!(
             !lines.iter().any(|l| l.contains("pre-migration")),
             "{lines:?}"
@@ -1120,7 +1126,7 @@ mod tests {
         std::fs::create_dir_all(&canonical).unwrap();
         std::fs::write(canonical.join("reviewer.md"), bundled_reviewer).unwrap();
         crate::commands::skills::project_assets(&project_path, false).unwrap();
-        let lines = doctor(&project_path, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
         assert!(
             lines
                 .iter()
@@ -1130,7 +1136,7 @@ mod tests {
 
         std::fs::write(canonical.join("reviewer.md"), "my reviewer").unwrap();
         crate::commands::skills::project_assets(&project_path, false).unwrap();
-        let lines = doctor(&project_path, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
         assert!(
             !lines.iter().any(|l| l.contains("identical to the bundled")),
             "{lines:?}"
@@ -1142,6 +1148,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
         let agents_dir = paths::agents_dir(&project_path);
         let mut registry = AgentRegistry::load(&agents_dir, "login").unwrap();
         registry.register(
@@ -1168,7 +1175,7 @@ mod tests {
         );
         registry.save(&agents_dir, "login").unwrap();
 
-        let lines = doctor(&project_path, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
         assert!(
             lines.iter().any(|l| l.contains("login")
                 && l.contains("agent 'claude' uses removed vanilla agent name")),
@@ -1181,7 +1188,7 @@ mod tests {
 
         registry.get_mut("claude").unwrap().active = false;
         registry.save(&agents_dir, "login").unwrap();
-        let lines = doctor(&project_path, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
         assert!(
             !lines.iter().any(|l| l.contains("uses removed")),
             "{lines:?}"
@@ -1212,6 +1219,41 @@ mod tests {
     }
 
     #[test]
+    fn main_branch_missing_is_read_from_and_fixed_in_the_given_registry() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
+        let main = paths::main_worktree(&project_path);
+
+        git::rename_branch(&main, "main", "master").unwrap();
+
+        let findings = diagnose(&project_path, &projects_dir, server.name(), false).unwrap();
+        let main_scope = findings.iter().find(|f| f.feature == "main").unwrap();
+        assert!(
+            main_scope
+                .issues
+                .iter()
+                .any(|i| i.kind() == IssueKind::MainBranchMissing),
+            "{:?}",
+            main_scope
+                .issues
+                .iter()
+                .map(Issue::message)
+                .collect::<Vec<_>>()
+        );
+
+        let lines = doctor(&project_path, &projects_dir, true, server.name()).unwrap();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("fixed") && l.contains("main branch 'main'")),
+            "got: {lines:?}"
+        );
+        let entry = ProjectEntry::load(&projects_dir, &project_name).unwrap();
+        assert_eq!(entry.main_branch, "master");
+    }
+
+    #[test]
     fn global_config_warning_flags_unparseable_file() {
         let dir = tempdir().unwrap();
         std::fs::write(dir.path().join("config.toml"), "[project\nmax_features =").unwrap();
@@ -1238,11 +1280,12 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
 
         // Remove directory on disk without telling git — simulates real drift
         std::fs::remove_dir_all(project_path.join("login")).unwrap();
 
-        let lines = doctor(&project_path, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
         assert!(
             lines
                 .iter()
@@ -1263,13 +1306,14 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
 
         // Deregister worktree from git but leave directory on disk
         let main_repo = paths::main_worktree(&project_path);
         git::remove_worktree_force(&main_repo, &project_path.join("login")).unwrap();
         std::fs::create_dir_all(project_path.join("login")).unwrap();
 
-        let lines = doctor(&project_path, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
         assert!(
             lines
                 .iter()
@@ -1283,6 +1327,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
 
         // Remove worktree first (branch can't be deleted while checked out), then branch
         let main_repo = paths::main_worktree(&project_path);
@@ -1291,7 +1336,7 @@ mod tests {
         // Re-create the directory so the only issue is the missing branch
         std::fs::create_dir_all(project_path.join("login")).unwrap();
 
-        let lines = doctor(&project_path, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
         assert!(
             lines.iter().any(|l| l.contains("branch 'login' not found")),
             "got: {lines:?}"
@@ -1310,11 +1355,12 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
 
         // Kill the feature's tmux session
         tmux::kill_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
 
-        let lines = doctor(&project_path, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
         assert!(
             lines
                 .iter()
@@ -1328,6 +1374,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
 
         // Manually set the feature status to initializing
         let features_dir = paths::features_dir(&project_path);
@@ -1335,7 +1382,7 @@ mod tests {
         state.status = FeatureStatus::Initializing;
         state.save(&features_dir, "login").unwrap();
 
-        let lines = doctor(&project_path, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
         assert!(
             lines.iter().any(|l| l.contains("stuck on 'initializing'")),
             "got: {lines:?}"
@@ -1343,10 +1390,47 @@ mod tests {
     }
 
     #[test]
+    fn stuck_initializing_cleanup_returns_to_the_base_feature_scope() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "parent");
+        let projects_dir = TestServer::registry_dir(&project_path);
+        feat_new::feat_new(&feat_new::FeatNewParams {
+            project_root: &project_path,
+            projects_dir: &projects_dir,
+            name: "child",
+            name_override: None,
+            context: None,
+            base: Some("parent"),
+            workflow: None,
+            tmux_server: server.name(),
+        })
+        .unwrap();
+
+        let features_dir = paths::features_dir(&project_path);
+        let mut state = FeatureState::load(&features_dir, "child").unwrap();
+        state.status = FeatureStatus::Initializing;
+        state.save(&features_dir, "child").unwrap();
+
+        let findings = diagnose(&project_path, &projects_dir, server.name(), false).unwrap();
+        let child = findings.iter().find(|f| f.feature == "child").unwrap();
+        let base_scope = child
+            .issues
+            .iter()
+            .find_map(|i| match &i.fix {
+                Fix::Auto(FixAction::CleanupInitializing { base_scope, .. }) => Some(base_scope),
+                _ => None,
+            })
+            .expect("stuck-initializing issue");
+        assert_eq!(base_scope, "parent");
+    }
+
+    #[test]
     fn missing_workflow_directory_detected() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
 
         // Point the feature at a workflow whose directory does not exist.
         let features_dir = paths::features_dir(&project_path);
@@ -1354,7 +1438,7 @@ mod tests {
         state.workflow = Some("ghost-workflow".to_string());
         state.save(&features_dir, "login").unwrap();
 
-        let lines = doctor(&project_path, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
         assert!(
             lines.iter().any(|l| l.contains("login")
                 && l.contains("workflow 'ghost-workflow'")
@@ -1368,6 +1452,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
 
         // Create a workflow directory and point the feature at it.
         let wf_dir = paths::workflows_dir(&project_path).join("real-workflow");
@@ -1378,7 +1463,7 @@ mod tests {
         state.workflow = Some("real-workflow".to_string());
         state.save(&features_dir, "login").unwrap();
 
-        let lines = doctor(&project_path, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
         assert!(
             !lines.iter().any(|l| l.contains("workflow")),
             "got: {lines:?}"
@@ -1409,7 +1494,7 @@ mod tests {
         ))
         .unwrap();
 
-        let lines = doctor(&project_path, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
         assert!(lines[0].contains("2 feature(s)"), "got: {:?}", lines);
         assert!(lines.iter().any(|l| l.contains("alpha")));
         assert!(lines.iter().any(|l| l.contains("beta")));
@@ -1420,6 +1505,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
 
         // Remove worktree + branch + tmux session — fully orphaned
         let main_repo = paths::main_worktree(&project_path);
@@ -1427,7 +1513,7 @@ mod tests {
         git::delete_branch(&main_repo, "login").unwrap();
         tmux::kill_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
 
-        let lines = doctor(&project_path, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
         // Orphan is reported as a single consolidated issue
         assert!(
             lines.iter().any(|l| l.contains("orphaned state file")),
@@ -1440,12 +1526,13 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
 
         // Remove only the worktree directory — branch still exists, so not orphaned
         std::fs::remove_dir_all(project_path.join("login")).unwrap();
         tmux::kill_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
 
-        let lines = doctor(&project_path, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
         let issue_lines: Vec<_> = lines
             .iter()
             .filter(|l| l.contains("login") && !l.contains("ok"))
@@ -1464,6 +1551,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
         let home = paths::home_dir().unwrap();
         let codex_hooks = home.join(".codex/hooks.json");
 
@@ -1525,7 +1613,10 @@ mod tests {
         // Claude Code only: nothing codex-related, although the install
         // wrote codex's file too.
         assert!(hooks_install::is_installed_for(Harness::Codex).unwrap());
-        assert!(kinds(&diagnose(&project_path, server.name(), false).unwrap()).is_empty());
+        assert!(
+            kinds(&diagnose(&project_path, &projects_dir, server.name(), false).unwrap())
+                .is_empty()
+        );
 
         let pm_dir = paths::pm_dir(&project_path);
         let mut config = ProjectConfig::load(&pm_dir).unwrap();
@@ -1563,7 +1654,7 @@ mod tests {
 
         // --fix installs the hooks and trusts both worktrees; hook trust is
         // codex's alone to grant, so it remains.
-        let lines = doctor(&project_path, true, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, true, server.name()).unwrap();
         assert!(
             lines
                 .iter()
@@ -1571,7 +1662,7 @@ mod tests {
             "{lines:?}"
         );
         assert!(hooks_install::is_installed_for(Harness::Codex).unwrap());
-        let found = kinds(&diagnose(&project_path, server.name(), false).unwrap());
+        let found = kinds(&diagnose(&project_path, &projects_dir, server.name(), false).unwrap());
         assert_eq!(
             found.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
             vec![IssueKind::HookUntrusted, IssueKind::HookUntrusted],
@@ -1600,7 +1691,10 @@ mod tests {
         let config_toml = home.join(".codex/config.toml");
         let existing = std::fs::read_to_string(&config_toml).unwrap();
         std::fs::write(&config_toml, format!("{existing}\n{trust}")).unwrap();
-        assert!(kinds(&diagnose(&project_path, server.name(), false).unwrap()).is_empty());
+        assert!(
+            kinds(&diagnose(&project_path, &projects_dir, server.name(), false).unwrap())
+                .is_empty()
+        );
 
         // A flat hooks.json registers nothing in codex: flagged, not "installed".
         let flat = bare_home.join(".codex/hooks.json");
@@ -1632,6 +1726,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
         let legacy = r#"{"permissions":{"allow":["Read"]},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"pm claude hooks stop"}]}]}}"#;
         for wt in ["main", "login"] {
             let claude = project_path.join(wt).join(".claude");
@@ -1639,7 +1734,7 @@ mod tests {
             std::fs::write(claude.join("settings.json"), legacy).unwrap();
         }
 
-        let findings = diagnose(&project_path, server.name(), false).unwrap();
+        let findings = diagnose(&project_path, &projects_dir, server.name(), false).unwrap();
         let main = findings.iter().find(|f| f.feature() == "main").unwrap();
         let stale: Vec<&str> = main
             .issues()
@@ -1660,7 +1755,7 @@ mod tests {
                 .any(|i| i.kind() == IssueKind::HooksNotInstalled)
         );
 
-        let lines = doctor(&project_path, true, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, true, server.name()).unwrap();
         assert!(
             lines
                 .iter()
@@ -1676,7 +1771,7 @@ mod tests {
             assert_eq!(settings["permissions"]["allow"][0], "Read", "{wt}");
             assert!(settings.get("hooks").is_none(), "{wt}: {settings}");
         }
-        let findings = diagnose(&project_path, server.name(), false).unwrap();
+        let findings = diagnose(&project_path, &projects_dir, server.name(), false).unwrap();
         assert!(
             findings.iter().all(|f| f.feature() != "main"),
             "main still has issues after fix"
@@ -1688,12 +1783,13 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
         let session_name = tmux::session_name(&project_name, "login");
 
         tmux::kill_session(server.name(), &session_name).unwrap();
         assert!(!tmux::has_session(server.name(), &session_name).unwrap());
 
-        let lines = doctor(&project_path, true, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, true, server.name()).unwrap();
         assert!(
             lines
                 .iter()
@@ -1708,13 +1804,14 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
 
         let features_dir = paths::features_dir(&project_path);
         let mut state = FeatureState::load(&features_dir, "login").unwrap();
         state.status = FeatureStatus::Initializing;
         state.save(&features_dir, "login").unwrap();
 
-        let lines = doctor(&project_path, true, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, true, server.name()).unwrap();
         assert!(
             lines
                 .iter()
@@ -1739,6 +1836,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
 
         // Remove worktree, branch, and tmux session — leaving only the state file
         let main_repo = paths::main_worktree(&project_path);
@@ -1749,7 +1847,7 @@ mod tests {
         let features_dir = paths::features_dir(&project_path);
         assert!(FeatureState::exists(&features_dir, "login"));
 
-        let lines = doctor(&project_path, true, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, true, server.name()).unwrap();
         assert!(
             lines
                 .iter()
@@ -1764,13 +1862,14 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
 
         // Remove worktree directory — branch still exists, so doctor can recreate
         let main_repo = paths::main_worktree(&project_path);
         git::remove_worktree_force(&main_repo, &project_path.join("login")).unwrap();
         assert!(!project_path.join("login").exists());
 
-        let lines = doctor(&project_path, true, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, true, server.name()).unwrap();
         assert!(
             lines
                 .iter()
@@ -1786,10 +1885,11 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
 
         tmux::kill_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
 
-        let lines = doctor(&project_path, true, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, true, server.name()).unwrap();
         assert!(
             lines[0].contains("fixed"),
             "summary should mention fixed count, got: {:?}",
@@ -1802,6 +1902,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
 
         // Register an agent as active, but don't create its window
         let agents_dir = paths::agents_dir(&project_path);
@@ -1819,7 +1920,7 @@ mod tests {
         );
         registry.save(&agents_dir, "login").unwrap();
 
-        let lines = doctor(&project_path, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
         assert!(
             lines
                 .iter()
@@ -1833,6 +1934,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
 
         // Register an agent as active, but don't create its window
         let agents_dir = paths::agents_dir(&project_path);
@@ -1850,7 +1952,7 @@ mod tests {
         );
         registry.save(&agents_dir, "login").unwrap();
 
-        let lines = doctor(&project_path, true, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, true, server.name()).unwrap();
         assert!(
             lines
                 .iter()
@@ -1876,6 +1978,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
 
         let agents_dir = paths::agents_dir(&project_path);
         let mut registry = AgentRegistry::default();
@@ -1900,7 +2003,7 @@ mod tests {
             .insert("reviewer".to_string(), "codex".to_string());
         config.save(&pm_dir).unwrap();
 
-        let lines = doctor(&project_path, true, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, true, server.name()).unwrap();
         assert!(
             lines.iter().any(|l| l.contains(
                 "login — fixed: agent 'reviewer' registered as active but window missing \
@@ -1915,12 +2018,13 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
 
         // Register an agent AND create its window with a non-shell process
         let session_name = tmux::session_name(&project_name, "login");
         server.spawn_fake_agent(&project_path, &session_name, "login", "reviewer");
 
-        let lines = doctor(&project_path, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
         assert!(lines[0].contains("all healthy"), "got: {lines:?}");
     }
 }

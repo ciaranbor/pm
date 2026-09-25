@@ -163,7 +163,8 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
         }
         Commands::Open => {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-            let result = commands::open::open(&project_root, server)?;
+            let projects_dir = paths::global_projects_dir()?;
+            let result = commands::open::open(&project_root, &projects_dir, server)?;
             if result.sessions_restored == 0 && result.agents_respawned == 0 {
                 println!("Project sessions opened");
             } else {
@@ -644,28 +645,28 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             Ok(())
         }
         Commands::Status { project } => {
+            let projects_dir = paths::global_projects_dir()?;
             let project_root = if let Some(name) = project {
-                let projects_dir = paths::global_projects_dir()?;
                 let entry = pm::state::project::ProjectEntry::load(&projects_dir, &name)?;
                 entry.root_path()
             } else {
                 paths::find_project_root(&std::env::current_dir()?)?
             };
-            let lines = commands::status::status(&project_root, server)?;
+            let lines = commands::status::status(&project_root, &projects_dir, server)?;
             for line in lines {
                 println!("{line}");
             }
             Ok(())
         }
         Commands::Doctor { fix, project } => {
+            let projects_dir = paths::global_projects_dir()?;
             let project_root = if let Some(name) = project {
-                let projects_dir = paths::global_projects_dir()?;
                 let entry = pm::state::project::ProjectEntry::load(&projects_dir, &name)?;
                 entry.root_path()
             } else {
                 paths::find_project_root(&std::env::current_dir()?)?
             };
-            let lines = commands::doctor::doctor(&project_root, fix, server)?;
+            let lines = commands::doctor::doctor(&project_root, &projects_dir, fix, server)?;
             for line in lines {
                 println!("{line}");
             }

@@ -62,8 +62,12 @@ fn is_open_recoverable(kind: IssueKind) -> bool {
 /// `gh pr view` network calls on every `pm open` — that's a `pm doctor` job.
 ///
 /// Returns lines of the form `"  <scope> — <message>"`.
-fn collect_drift_warnings(project_root: &Path, tmux_server: Option<&str>) -> Result<Vec<String>> {
-    let findings = doctor::diagnose(project_root, tmux_server, false)?;
+fn collect_drift_warnings(
+    project_root: &Path,
+    projects_dir: &Path,
+    tmux_server: Option<&str>,
+) -> Result<Vec<String>> {
+    let findings = doctor::diagnose(project_root, projects_dir, tmux_server, false)?;
     let mut warnings: Vec<String> = Vec::new();
     for finding in &findings {
         for issue in finding.issues() {
@@ -83,8 +87,8 @@ fn collect_drift_warnings(project_root: &Path, tmux_server: Option<&str>) -> Res
 ///
 /// Failures during diagnosis are themselves printed as warnings rather than
 /// aborting open — diagnostics are best-effort, recovery is the priority.
-fn warn_about_drift(project_root: &Path, tmux_server: Option<&str>) {
-    let warnings = match collect_drift_warnings(project_root, tmux_server) {
+fn warn_about_drift(project_root: &Path, projects_dir: &Path, tmux_server: Option<&str>) {
+    let warnings = match collect_drift_warnings(project_root, projects_dir, tmux_server) {
         Ok(w) => w,
         Err(e) => {
             eprintln!("warning: pre-open diagnostics failed: {e}");
@@ -167,7 +171,11 @@ fn respawn_agents_for_scope(
 /// printed to stderr rather than aborting the entire open.
 ///
 /// The `tmux_server` parameter allows tests to use an isolated tmux server.
-pub fn open(project_root: &Path, tmux_server: Option<&str>) -> Result<OpenResult> {
+pub fn open(
+    project_root: &Path,
+    projects_dir: &Path,
+    tmux_server: Option<&str>,
+) -> Result<OpenResult> {
     let pm_dir = paths::pm_dir(project_root);
     let config = ProjectConfig::load(&pm_dir)?;
     let project_name = &config.project.name;
@@ -175,7 +183,7 @@ pub fn open(project_root: &Path, tmux_server: Option<&str>) -> Result<OpenResult
     // Run doctor's diagnostic checks and warn about state drift before doing
     // any restoration. This surfaces issues like orphaned features or missing
     // branches that `pm open` cannot fix on its own.
-    warn_about_drift(project_root, tmux_server);
+    warn_about_drift(project_root, projects_dir, tmux_server);
 
     // Backfill hook scripts for projects created before lifecycle hooks existed
     hooks::bootstrap(project_root)?;
@@ -307,10 +315,11 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
 
         tmux::kill_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
 
-        let warnings = collect_drift_warnings(&project_path, server.name()).unwrap();
+        let warnings = collect_drift_warnings(&project_path, &projects_dir, server.name()).unwrap();
         assert!(
             !warnings.iter().any(|w| w.contains("tmux session")),
             "tmux session warning should be filtered out, got: {warnings:?}"
@@ -322,6 +331,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
 
         // Fully orphan the feature: remove worktree, branch, and session.
         let main_repo = paths::main_worktree(&project_path);
@@ -329,7 +339,7 @@ mod tests {
         git::delete_branch(&main_repo, "login").unwrap();
         tmux::kill_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
 
-        let warnings = collect_drift_warnings(&project_path, server.name()).unwrap();
+        let warnings = collect_drift_warnings(&project_path, &projects_dir, server.name()).unwrap();
         assert!(
             warnings.iter().any(|w| w.contains("orphaned state file")),
             "expected orphaned-state warning, got: {warnings:?}"
@@ -341,13 +351,14 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
 
         let features_dir = paths::features_dir(&project_path);
         let mut state = FeatureState::load(&features_dir, "login").unwrap();
         state.status = FeatureStatus::Initializing;
         state.save(&features_dir, "login").unwrap();
 
-        let warnings = collect_drift_warnings(&project_path, server.name()).unwrap();
+        let warnings = collect_drift_warnings(&project_path, &projects_dir, server.name()).unwrap();
         assert!(
             warnings
                 .iter()
@@ -361,8 +372,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
 
-        let warnings = collect_drift_warnings(&project_path, server.name()).unwrap();
+        let warnings = collect_drift_warnings(&project_path, &projects_dir, server.name()).unwrap();
         assert!(
             warnings.is_empty(),
             "healthy project should produce no warnings, got: {warnings:?}"
@@ -377,7 +389,7 @@ mod tests {
         let server = TestServer::new();
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
-        let projects_dir = dir.path().join("registry");
+        let projects_dir = TestServer::registry_dir(&project_path);
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
@@ -395,7 +407,7 @@ mod tests {
         tmux::kill_session(server.name(), &tmux::session_name(&name, "main")).unwrap();
 
         // open should still succeed; the orphaned feature is just warned about.
-        let result = open(&project_path, server.name()).unwrap();
+        let result = open(&project_path, &projects_dir, server.name()).unwrap();
         assert!(
             tmux::has_session(server.name(), &tmux::session_name(&name, "main")).unwrap(),
             "main session should be restored despite drift warning"
@@ -411,14 +423,14 @@ mod tests {
         let server = TestServer::new();
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
-        let projects_dir = dir.path().join("registry");
+        let projects_dir = TestServer::registry_dir(&project_path);
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         // Kill the main session that init created
         tmux::kill_session(server.name(), &tmux::session_name(&name, "main")).unwrap();
         assert!(!tmux::has_session(server.name(), &tmux::session_name(&name, "main")).unwrap());
 
-        open(&project_path, server.name()).unwrap();
+        open(&project_path, &projects_dir, server.name()).unwrap();
 
         assert!(tmux::has_session(server.name(), &tmux::session_name(&name, "main")).unwrap());
     }
@@ -429,13 +441,13 @@ mod tests {
         let server = TestServer::new();
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
-        let projects_dir = dir.path().join("registry");
+        let projects_dir = TestServer::registry_dir(&project_path);
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         // Main session already exists from init — open should not fail
         assert!(tmux::has_session(server.name(), &tmux::session_name(&name, "main")).unwrap());
 
-        open(&project_path, server.name()).unwrap();
+        open(&project_path, &projects_dir, server.name()).unwrap();
 
         assert!(tmux::has_session(server.name(), &tmux::session_name(&name, "main")).unwrap());
     }
@@ -446,7 +458,7 @@ mod tests {
         let server = TestServer::new();
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
-        let projects_dir = dir.path().join("registry");
+        let projects_dir = TestServer::registry_dir(&project_path);
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
@@ -460,7 +472,7 @@ mod tests {
         tmux::kill_session(server.name(), &tmux::session_name(&name, "login")).unwrap();
         assert!(!tmux::has_session(server.name(), &tmux::session_name(&name, "login")).unwrap());
 
-        open(&project_path, server.name()).unwrap();
+        open(&project_path, &projects_dir, server.name()).unwrap();
 
         assert!(tmux::has_session(server.name(), &tmux::session_name(&name, "login")).unwrap());
     }
@@ -471,7 +483,7 @@ mod tests {
         let server = TestServer::new();
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
-        let projects_dir = dir.path().join("registry");
+        let projects_dir = TestServer::registry_dir(&project_path);
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
@@ -484,7 +496,7 @@ mod tests {
         // Feature session exists — open should not fail
         assert!(tmux::has_session(server.name(), &tmux::session_name(&name, "login")).unwrap());
 
-        open(&project_path, server.name()).unwrap();
+        open(&project_path, &projects_dir, server.name()).unwrap();
 
         assert!(tmux::has_session(server.name(), &tmux::session_name(&name, "login")).unwrap());
     }
@@ -495,7 +507,7 @@ mod tests {
         let server = TestServer::new();
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
-        let projects_dir = dir.path().join("registry");
+        let projects_dir = TestServer::registry_dir(&project_path);
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
@@ -514,7 +526,7 @@ mod tests {
         // Kill the feature session
         tmux::kill_session(server.name(), &tmux::session_name(&name, "login")).unwrap();
 
-        open(&project_path, server.name()).unwrap();
+        open(&project_path, &projects_dir, server.name()).unwrap();
 
         // Should NOT recreate session for merged feature
         assert!(!tmux::has_session(server.name(), &tmux::session_name(&name, "login")).unwrap());
@@ -526,13 +538,13 @@ mod tests {
         let server = TestServer::new();
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
-        let projects_dir = dir.path().join("registry");
+        let projects_dir = TestServer::registry_dir(&project_path);
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         // Kill main
         tmux::kill_session(server.name(), &tmux::session_name(&name, "main")).unwrap();
 
-        open(&project_path, server.name()).unwrap();
+        open(&project_path, &projects_dir, server.name()).unwrap();
 
         let sessions: Vec<_> = tmux::list_sessions(server.name())
             .unwrap()
@@ -549,14 +561,14 @@ mod tests {
         let server = TestServer::new();
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
-        let projects_dir = dir.path().join("registry");
+        let projects_dir = TestServer::registry_dir(&project_path);
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         // Simulate a pre-hooks project by removing the bootstrapped hooks
         std::fs::remove_dir_all(project_path.join(".pm/hooks")).unwrap();
         assert!(!project_path.join(hooks::POST_CREATE_PATH).exists());
 
-        open(&project_path, server.name()).unwrap();
+        open(&project_path, &projects_dir, server.name()).unwrap();
 
         assert!(project_path.join(hooks::POST_CREATE_PATH).is_file());
         assert!(project_path.join(hooks::POST_MERGE_PATH).is_file());
@@ -569,14 +581,14 @@ mod tests {
         let server = TestServer::new();
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
-        let projects_dir = dir.path().join("registry");
+        let projects_dir = TestServer::registry_dir(&project_path);
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         // Kill session and delete the main worktree
         tmux::kill_session(server.name(), &tmux::session_name(&name, "main")).unwrap();
         std::fs::remove_dir_all(paths::main_worktree(&project_path)).unwrap();
 
-        let result = open(&project_path, server.name());
+        let result = open(&project_path, &projects_dir, server.name());
         assert!(result.is_err());
     }
 
@@ -586,7 +598,7 @@ mod tests {
         let server = TestServer::new();
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
-        let projects_dir = dir.path().join("registry");
+        let projects_dir = TestServer::registry_dir(&project_path);
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
@@ -610,7 +622,7 @@ mod tests {
         tmux::kill_session(server.name(), &tmux::session_name(&name, "main")).unwrap();
         tmux::kill_session(server.name(), &tmux::session_name(&name, "login")).unwrap();
 
-        open(&project_path, server.name()).unwrap();
+        open(&project_path, &projects_dir, server.name()).unwrap();
 
         // Verify sessions were created and hook windows exist (restore hook ran)
         assert!(tmux::has_session(server.name(), &tmux::session_name(&name, "main")).unwrap());
@@ -633,7 +645,7 @@ mod tests {
         let server = TestServer::new();
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
-        let projects_dir = dir.path().join("registry");
+        let projects_dir = TestServer::registry_dir(&project_path);
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         // Create a restore hook
@@ -647,7 +659,7 @@ mod tests {
         }
 
         // Sessions already exist from init — open should NOT run restore hook
-        open(&project_path, server.name()).unwrap();
+        open(&project_path, &projects_dir, server.name()).unwrap();
 
         // No hook window should exist since sessions were not recreated
         assert!(
@@ -663,7 +675,7 @@ mod tests {
         let server = TestServer::new();
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
-        let projects_dir = dir.path().join("registry");
+        let projects_dir = TestServer::registry_dir(&project_path);
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
@@ -685,7 +697,7 @@ mod tests {
         tmux::kill_session(server.name(), &tmux::session_name(&name, "api")).unwrap();
         std::fs::remove_dir_all(project_path.join("login")).unwrap();
 
-        open(&project_path, server.name()).unwrap();
+        open(&project_path, &projects_dir, server.name()).unwrap();
 
         // login skipped (missing worktree), api recreated
         assert!(!tmux::has_session(server.name(), &tmux::session_name(&name, "login")).unwrap());
@@ -698,11 +710,11 @@ mod tests {
         let server = TestServer::new();
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
-        let projects_dir = dir.path().join("registry");
+        let projects_dir = TestServer::registry_dir(&project_path);
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         // All sessions already exist from init
-        let result = open(&project_path, server.name()).unwrap();
+        let result = open(&project_path, &projects_dir, server.name()).unwrap();
         assert_eq!(result.sessions_restored, 0);
         assert_eq!(result.agents_respawned, 0);
     }
@@ -713,7 +725,7 @@ mod tests {
         let server = TestServer::new();
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
-        let projects_dir = dir.path().join("registry");
+        let projects_dir = TestServer::registry_dir(&project_path);
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
@@ -727,7 +739,7 @@ mod tests {
         tmux::kill_session(server.name(), &tmux::session_name(&name, "main")).unwrap();
         tmux::kill_session(server.name(), &tmux::session_name(&name, "login")).unwrap();
 
-        let result = open(&project_path, server.name()).unwrap();
+        let result = open(&project_path, &projects_dir, server.name()).unwrap();
         assert_eq!(result.sessions_restored, 2); // main + login
         assert_eq!(result.agents_respawned, 0);
     }
@@ -738,7 +750,7 @@ mod tests {
         let server = TestServer::new();
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
-        let projects_dir = dir.path().join("registry");
+        let projects_dir = TestServer::registry_dir(&project_path);
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
@@ -767,7 +779,7 @@ mod tests {
         // Kill the feature session (simulating reboot)
         tmux::kill_session(server.name(), &tmux::session_name(&name, "login")).unwrap();
 
-        let result = open(&project_path, server.name()).unwrap();
+        let result = open(&project_path, &projects_dir, server.name()).unwrap();
 
         // Session restored and agent respawned
         assert_eq!(result.sessions_restored, 1);
@@ -791,7 +803,7 @@ mod tests {
         let server = TestServer::new();
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
-        let projects_dir = dir.path().join("registry");
+        let projects_dir = TestServer::registry_dir(&project_path);
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
@@ -820,7 +832,7 @@ mod tests {
         // Kill the feature session
         tmux::kill_session(server.name(), &tmux::session_name(&name, "login")).unwrap();
 
-        open(&project_path, server.name()).unwrap();
+        open(&project_path, &projects_dir, server.name()).unwrap();
 
         // After open, the agent should be respawned (window exists)
         let session_name = tmux::session_name(&name, "login");
@@ -834,7 +846,7 @@ mod tests {
         let server = TestServer::new();
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
-        let projects_dir = dir.path().join("registry");
+        let projects_dir = TestServer::registry_dir(&project_path);
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         // Install its definition so pre-spawn validation resolves, then
@@ -860,7 +872,7 @@ mod tests {
         // Kill the main session (simulating reboot)
         tmux::kill_session(server.name(), &tmux::session_name(&name, "main")).unwrap();
 
-        let result = open(&project_path, server.name()).unwrap();
+        let result = open(&project_path, &projects_dir, server.name()).unwrap();
 
         // Session restored and agent respawned
         assert_eq!(result.sessions_restored, 1);
@@ -886,7 +898,7 @@ mod tests {
         let server = TestServer::new();
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
-        let projects_dir = dir.path().join("registry");
+        let projects_dir = TestServer::registry_dir(&project_path);
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
@@ -916,7 +928,7 @@ mod tests {
         // But the agent window doesn't exist (it was in a different window that wasn't preserved).
         assert!(tmux::has_session(server.name(), &tmux::session_name(&name, "login")).unwrap());
 
-        let result = open(&project_path, server.name()).unwrap();
+        let result = open(&project_path, &projects_dir, server.name()).unwrap();
 
         // Session was NOT restored (it already existed)
         assert_eq!(result.sessions_restored, 0);
@@ -943,7 +955,7 @@ mod tests {
         let server = TestServer::new();
         let name = server.scope("myapp");
         let project_path = dir.path().join(&name);
-        let projects_dir = dir.path().join("registry");
+        let projects_dir = TestServer::registry_dir(&project_path);
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
@@ -970,11 +982,11 @@ mod tests {
         registry.save(&agents_dir, "login").unwrap();
 
         // First open: agent window doesn't exist yet → spawn count = 1
-        let first = open(&project_path, server.name()).unwrap();
+        let first = open(&project_path, &projects_dir, server.name()).unwrap();
         assert_eq!(first.agents_respawned, 1);
 
         // Second open: nothing to do, every agent is already running.
-        let second = open(&project_path, server.name()).unwrap();
+        let second = open(&project_path, &projects_dir, server.name()).unwrap();
         assert_eq!(
             second.sessions_restored, 0,
             "no sessions should be created on idempotent re-run"
