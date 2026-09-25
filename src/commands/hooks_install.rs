@@ -9,16 +9,22 @@
 //! and project files and runs a duplicated handler once).
 //!
 //! Every supported harness, not only those in use, creating `$CODEX_HOME`
-//! if absent — see AGENTS.md, "Agents as long-running message processors".
+//! if absent: which harnesses are in use is a per-project answer and the
+//! install also runs outside any project, so a harness named only in some
+//! project's `.pm/config.toml` would otherwise be skipped and its agents
+//! would idle silently. The accepted cost is codex's one-time trust prompt
+//! in whichever codex session comes first, pm-spawned or not. `pm doctor`
+//! checks only the harnesses the project's agents run on.
 //!
 //! A user-level hook fires in every session of that harness on the machine,
 //! so each installed command is guarded on `PM_AGENT_NAME`: a non-pm session
 //! exits 0 before `pm` is ever resolved, which also keeps the hook inert
-//! when `pm` is not on that session's `PATH`. Codex additionally runs no
-//! hook until the user has trusted it interactively (`pm doctor` reports a
-//! missing trust entry — and asks once in every codex session on the
-//! machine, pm-spawned or not), and pm appends its entries so existing ones
-//! keep their positions — codex keys trust on the entry's index.
+//! when `pm` is not on that session's `PATH`. The guard is `[ -n … ] || exit
+//! 0; pm …`, not `&&` — `&&` would turn a false test into an exit-1 hook
+//! error. Codex additionally runs no hook until the user has trusted it
+//! interactively (`pm doctor` reports a missing trust entry), and pm appends
+//! its entries so existing ones keep their positions — codex keys trust on
+//! the entry's index.
 //!
 //! The Stop hook is `pm harness hooks stop`, which blocks until the agent has
 //! unread messages (by calling `agent_wait` internally), then returns
@@ -35,11 +41,8 @@
 //! `pm harness hooks …`) are recognised as pm-owned: rewritten in place in
 //! the user file, removed from project files.
 //!
-//! # Stop-hook prototype
-//!
-//! Verified empirically (see `agents-as-message-processors` feature):
-//! `{"decision":"block","reason":"..."}` loops indefinitely across real turns
-//! (tested 82 consecutive turns with no hard cap). `stop_hook_active` is
+//! `{"decision":"block"}` loops indefinitely across real turns (verified
+//! over 82 consecutive turns with no hard cap); `stop_hook_active` is
 //! advisory or auto-resetting.
 
 use std::path::{Path, PathBuf};
@@ -52,9 +55,9 @@ use crate::fs_utils::write_atomic;
 use crate::harness::Harness;
 use crate::state::paths;
 
-/// Timeout in seconds for the Stop hook. Claude Code's default is 600s
-/// (10 minutes), which is too short for agents that block waiting for
-/// messages. 24 hours gives ample headroom.
+/// Timeout in seconds for the Stop hook. Both harnesses honour the same
+/// `timeout` key and default to 600s, which is too short for agents that
+/// block waiting for messages; 24 hours gives ample headroom.
 pub const STOP_HOOK_TIMEOUT_SECS: u64 = 86400;
 
 /// Marker string used to identify pm-owned Stop hook entries in

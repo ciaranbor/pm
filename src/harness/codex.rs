@@ -1,4 +1,6 @@
 //! Codex: `codex -a <policy> -s <sandbox> … [resume|fork <id>] [prompt]`.
+//! `-a never` is the default because an approval prompt in an unwatched tmux
+//! window stalls the agent.
 //!
 //! Codex has no launch-time role channel (no `--agent`), so pm's composed
 //! prompt — definition body, baseline, notice boards — is injected by the

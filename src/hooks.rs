@@ -1,3 +1,13 @@
+//! Lifecycle hooks: the user's `.pm/hooks/*.sh` scripts, run in a `hook`
+//! window of the session they concern.
+//!
+//! A hook's context reaches it as `PM_*` variables on the command line
+//! (`env PM_…=… <script>`), so the contract is per invocation and scoped to
+//! the hook process. Session-scoped `tmux set-environment` would collide
+//! when two projects fire hooks at once and only reaches newly created
+//! panes, which the found-or-created hook window is not reliably; the
+//! user's shell profile is not pm's to write.
+
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
@@ -151,7 +161,8 @@ fn hook_command(ctx: &HookContext, hook_path: &Path) -> String {
     cmd
 }
 
-/// Bootstrap default hook scripts into a project's .pm/hooks/ directory.
+/// Write the default hook scripts a project is missing. Existing scripts
+/// are the user's, not a bundled asset, so they are never overwritten.
 pub fn bootstrap(project_root: &Path) -> Result<()> {
     write_default_hook(project_root, POST_CREATE_PATH, DEFAULT_POST_CREATE)?;
     write_default_hook(project_root, POST_MERGE_PATH, DEFAULT_POST_MERGE)?;

@@ -121,7 +121,8 @@ impl Harness {
     }
 
     /// Per-worktree files under [`config_dir`](Self::config_dir) that a
-    /// feature worktree needs a copy of from main.
+    /// feature worktree needs a copy of from main: the project's own
+    /// settings and permissions, never hooks (those are user-level).
     pub fn seeded_files(self) -> &'static [&'static str] {
         match self {
             Harness::ClaudeCode => claude_code::SEEDED_FILES,
@@ -280,8 +281,9 @@ pub(crate) fn project_by_copy(
 
 /// Every harness the project's agents run on: the default plus whatever
 /// `[agents.harness]` resolves to for any configured agent, with the same
-/// project-over-global, `""`-masks precedence as a spawn. Unparseable values
-/// are skipped here — they error at spawn, where it matters.
+/// project-over-global, `""`-masks precedence as a spawn, so pm stops
+/// installing for a masked harness. Unparseable values are skipped here —
+/// they error at spawn, where it matters.
 pub fn harnesses_in_use(project: &AgentsConfig, global: &AgentsConfig) -> Vec<Harness> {
     let mut out = vec![Harness::default()];
     for key in project.harness.keys().chain(global.harness.keys()) {

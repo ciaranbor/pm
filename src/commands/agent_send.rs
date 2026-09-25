@@ -1,3 +1,8 @@
+//! `pm msg send`: a queue that never spawns a new agent. Same-scope and
+//! cross-scope sends (`--scope`/`--upstream`, same project) heal a dead
+//! window of an active recipient after queuing; a cross-project send only
+//! queues, since the target agent lives in a project this one can't spawn in.
+
 use std::path::Path;
 
 use crate::error::{PmError, Result};
@@ -7,14 +12,10 @@ use crate::state::feature::FeatureState;
 use crate::state::paths;
 use crate::state::project::ProjectEntry;
 
-/// Whether the recipient agent is currently flagged active. Loaded once
-/// from disk per call to avoid redundant TOML parses.
-///
-/// `agent_send` no longer spawns *new* agents, so it doesn't need to know
-/// whether a definition file or registry entry exists for resurrection —
-/// only whether the agent is supposed to be running (`active`). A dead
-/// window of an active agent is healed by `agent_spawn` after the message
-/// is queued.
+/// Whether the recipient agent is currently flagged active — the only
+/// thing a send needs to know, since it never resurrects a stopped agent;
+/// a dead window of an active one is healed by `agent_spawn` after the
+/// message is queued.
 fn recipient_is_active(project_root: &Path, feature: &str, agent_name: &str) -> Result<bool> {
     let agents_dir = paths::agents_dir(project_root);
     let registry = AgentRegistry::load(&agents_dir, feature)?;
