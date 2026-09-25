@@ -20,6 +20,11 @@ pub enum PmError {
     #[error("Branch not found: {0}")]
     BranchNotFound(String),
 
+    #[error(
+        "base branch '{0}' is not checked out in this project (neither the main branch nor a feature's)"
+    )]
+    BaseNotCheckedOut(String),
+
     #[error("Feature already exists: {0}")]
     FeatureAlreadyExists(String),
 

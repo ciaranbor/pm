@@ -8,7 +8,7 @@ use std::path::Path;
 use crate::error::{PmError, Result};
 use crate::messages;
 use crate::state::agent::AgentRegistry;
-use crate::state::feature::FeatureState;
+use crate::state::feature::{FeatureState, base_checkout};
 use crate::state::paths;
 use crate::state::project::ProjectEntry;
 
@@ -59,10 +59,14 @@ fn agent_not_found_hint(recipient: &str, sender_scope: &str, target_scope: &str)
     )
 }
 
-/// Resolve the `--upstream` flag to a concrete scope name by looking up
-/// the current feature's base. Errors if the current scope is "main"
-/// (no parent) or if the feature state cannot be loaded.
-pub fn resolve_upstream(project_root: &Path, current_scope: &str) -> Result<String> {
+/// Resolve the `--upstream` flag to the scope holding the current feature's
+/// base branch. Errors if the current scope is "main" (no parent), if the
+/// feature state cannot be loaded, or if the base is checked out nowhere.
+pub fn resolve_upstream(
+    project_root: &Path,
+    main_branch: &str,
+    current_scope: &str,
+) -> Result<String> {
     if current_scope == "main" {
         return Err(PmError::Messaging(
             "--upstream cannot be used from the main scope (there is no parent scope)".to_string(),
@@ -70,7 +74,7 @@ pub fn resolve_upstream(project_root: &Path, current_scope: &str) -> Result<Stri
     }
     let features_dir = paths::features_dir(project_root);
     let state = FeatureState::load(&features_dir, current_scope)?;
-    Ok(state.base_or_default().to_string())
+    Ok(base_checkout(project_root, main_branch, state.base_branch(main_branch))?.scope)
 }
 
 /// Send a message to an agent's inbox.
@@ -297,7 +301,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = setup_project_minimal(dir.path());
 
-        let err = resolve_upstream(&root, "main").unwrap_err();
+        let err = resolve_upstream(&root, "main", "main").unwrap_err();
         assert!(format!("{err}").contains("--upstream cannot be used from the main scope"));
     }
 
@@ -320,33 +324,43 @@ mod tests {
         };
         state.save(&root.join(".pm/features"), "login").unwrap();
 
-        assert_eq!(resolve_upstream(&root, "login").unwrap(), "main");
+        assert_eq!(resolve_upstream(&root, "main", "login").unwrap(), "main");
     }
 
     #[test]
-    fn resolve_upstream_stacked_feature() {
+    fn resolve_upstream_stacked_feature_targets_the_parent_scope() {
         let dir = tempdir().unwrap();
         let root = setup_project_minimal(dir.path());
 
         let now = Utc::now();
-        let state = FeatureState {
+        let parent = FeatureState {
             status: FeatureStatus::Wip,
-            branch: "login-v2".to_string(),
-            worktree: "login-v2".to_string(),
-            base: "login".to_string(),
+            branch: "me/login".to_string(),
+            worktree: "login".to_string(),
+            base: "main".to_string(),
             pr: String::new(),
             context: String::new(),
             workflow: None,
             created: now,
             last_active: now,
         };
-        state.save(&root.join(".pm/features"), "login-v2").unwrap();
+        parent.save(&root.join(".pm/features"), "login").unwrap();
+        let child = FeatureState {
+            branch: "login-v2".to_string(),
+            worktree: "login-v2".to_string(),
+            base: "me/login".to_string(),
+            ..parent.clone()
+        };
+        child.save(&root.join(".pm/features"), "login-v2").unwrap();
 
-        assert_eq!(resolve_upstream(&root, "login-v2").unwrap(), "login");
+        assert_eq!(
+            resolve_upstream(&root, "main", "login-v2").unwrap(),
+            "login"
+        );
     }
 
     #[test]
-    fn resolve_upstream_defaults_to_main_when_base_empty() {
+    fn resolve_upstream_empty_base_targets_main_scope_on_master_project() {
         let dir = tempdir().unwrap();
         let root = setup_project_minimal(dir.path());
 
@@ -355,7 +369,7 @@ mod tests {
             status: FeatureStatus::Wip,
             branch: "login".to_string(),
             worktree: "login".to_string(),
-            base: String::new(), // empty base defaults to "main"
+            base: String::new(),
             pr: String::new(),
             context: String::new(),
             workflow: None,
@@ -364,7 +378,7 @@ mod tests {
         };
         state.save(&root.join(".pm/features"), "login").unwrap();
 
-        assert_eq!(resolve_upstream(&root, "login").unwrap(), "main");
+        assert_eq!(resolve_upstream(&root, "master", "login").unwrap(), "main");
     }
 
     // --- agent_send ---

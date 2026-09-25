@@ -105,6 +105,7 @@ mod tests {
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "alpha",
             server.name(),
         ))
@@ -123,12 +124,14 @@ mod tests {
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "alpha",
             server.name(),
         ))
         .unwrap();
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "beta",
             server.name(),
         ))

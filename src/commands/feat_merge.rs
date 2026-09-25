@@ -5,15 +5,16 @@ use crate::commands::feat_delete::{CleanupParams, TimingLog, cleanup_feature_wit
 use crate::error::{PmError, Result};
 use crate::git;
 use crate::hooks;
-use crate::state::feature::{FeatureState, FeatureStatus};
+use crate::state::feature::{FeatureState, FeatureStatus, base_checkout};
 use crate::state::paths;
-use crate::state::project::ProjectConfig;
+use crate::state::project::{ProjectConfig, ProjectEntry};
 
-/// Merge a feature branch into its base branch from the main worktree.
+/// Merge a feature branch into its base branch from the base's checkout.
 /// By default, cleans up the feature afterwards (remove worktree, delete branch, remove state, kill session).
 /// With `keep`, preserve the feature instead.
 pub fn feat_merge(
     project_root: &Path,
+    projects_dir: &Path,
     name: &str,
     keep: bool,
     tmux_server: Option<&str>,
@@ -24,9 +25,11 @@ pub fn feat_merge(
     let state = FeatureState::load(&features_dir, name)?;
     let config = ProjectConfig::load(&pm_dir)?;
     let project_name = &config.project.name;
+    let main_branch = ProjectEntry::load(projects_dir, project_name)?.main_branch;
 
-    let base = state.base_or_default();
-    let base_repo = project_root.join(base);
+    let base = state.base_branch(&main_branch);
+    let checkout = base_checkout(project_root, &main_branch, base)?;
+    let base_repo = &checkout.worktree;
     let worktree_path = project_root.join(&state.worktree);
 
     let merge_start = Instant::now();
@@ -51,25 +54,26 @@ pub fn feat_merge(
         }
 
         // Block if the base worktree has uncommitted changes
-        if git::has_uncommitted_changes(&base_repo)? {
+        if git::has_uncommitted_changes(base_repo)? {
             return Err(PmError::SafetyCheck(format!(
-                "{base} worktree has uncommitted changes — commit or stash before merging"
+                "{} worktree has uncommitted changes — commit or stash before merging",
+                checkout.scope
             )));
         }
 
         // Check if the branch is already merged locally
         let check_start = Instant::now();
-        let mut already_merged = git::branch_merged_into(&base_repo, &state.branch, base)?;
+        let mut already_merged = git::branch_merged_into(base_repo, &state.branch, base)?;
 
         // If not merged locally, check whether the base has an upstream and, if so,
         // fetch and re-check against it. tracking_branch is a local lookup, so
         // checking it first lets us skip the network fetch entirely when there is
         // no upstream. The branch may have been merged upstream (e.g. via GitHub PR).
         if !already_merged
-            && let Ok(Some(tracking)) = git::tracking_branch(&base_repo, base)
-            && let Ok(()) = git::fetch(&base_repo)
+            && let Ok(Some(tracking)) = git::tracking_branch(base_repo, base)
+            && let Ok(()) = git::fetch(base_repo)
         {
-            already_merged = git::branch_merged_into(&base_repo, &state.branch, &tracking)?;
+            already_merged = git::branch_merged_into(base_repo, &state.branch, &tracking)?;
         }
 
         if let Some(tl) = tlog.as_mut() {
@@ -79,7 +83,7 @@ pub fn feat_merge(
         if already_merged {
             // Branch was merged (locally or upstream) — pull to update local base
             let pull_start = Instant::now();
-            if let Err(e) = git::pull(&base_repo) {
+            if let Err(e) = git::pull(base_repo) {
                 eprintln!("warning: git pull failed: {e}");
             }
             if let Some(tl) = tlog.as_mut() {
@@ -88,9 +92,9 @@ pub fn feat_merge(
         } else {
             // Perform the merge from the base worktree
             let merge_ff_start = Instant::now();
-            if let Err(e) = git::merge_no_ff(&base_repo, &state.branch) {
+            if let Err(e) = git::merge_no_ff(base_repo, &state.branch) {
                 // Abort the failed merge to leave base worktree clean
-                if let Err(abort_err) = git::merge_abort(&base_repo) {
+                if let Err(abort_err) = git::merge_abort(base_repo) {
                     eprintln!("Warning: merge --abort failed: {abort_err}");
                 }
                 return Err(e);
@@ -105,7 +109,7 @@ pub fn feat_merge(
         let hook_path = project_root.join(hooks::POST_MERGE_PATH);
         hooks::run_hook(
             tmux_server,
-            &hooks::HookContext::post_merge(project_root, project_name, base, name),
+            &hooks::HookContext::post_merge(project_root, project_name, &checkout.scope, name),
             &hook_path,
         );
         if let Some(tl) = tlog.as_mut() {
@@ -127,7 +131,7 @@ pub fn feat_merge(
     } else {
         cleanup_feature_with_timing(
             &CleanupParams {
-                repo: &base_repo,
+                repo: base_repo,
                 worktree_path: &worktree_path,
                 branch: &state.branch,
                 features_dir: &features_dir,
@@ -137,7 +141,7 @@ pub fn feat_merge(
                 tmux_server,
                 delete_branch: true,
                 best_effort: false,
-                base,
+                base_scope: &checkout.scope,
             },
             &mut tlog,
         )?;
@@ -163,7 +167,14 @@ mod tests {
 
         TestServer::add_feature_commit(&project_path, "login");
 
-        feat_merge(&project_path, "login", true, server.name()).unwrap();
+        feat_merge(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            true,
+            server.name(),
+        )
+        .unwrap();
 
         // Verify the feature file is now in main
         let main_repo = paths::main_worktree(&project_path);
@@ -178,7 +189,14 @@ mod tests {
 
         TestServer::add_feature_commit(&project_path, "login");
 
-        feat_merge(&project_path, "login", true, server.name()).unwrap();
+        feat_merge(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            true,
+            server.name(),
+        )
+        .unwrap();
 
         // Check that the latest commit in main is a merge commit (has two parents)
         let main_repo = paths::main_worktree(&project_path);
@@ -198,7 +216,13 @@ mod tests {
         std::fs::write(worktree.join("dirty.txt"), "uncommitted").unwrap();
         git::stage_file(&worktree, "dirty.txt").unwrap();
 
-        let result = feat_merge(&project_path, "login", true, server.name());
+        let result = feat_merge(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            true,
+            server.name(),
+        );
         assert!(result.is_err());
         assert!(
             result
@@ -219,7 +243,13 @@ mod tests {
         std::fs::write(main_repo.join("dirty.txt"), "uncommitted").unwrap();
         git::stage_file(&main_repo, "dirty.txt").unwrap();
 
-        let result = feat_merge(&project_path, "login", true, server.name());
+        let result = feat_merge(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            true,
+            server.name(),
+        );
         assert!(result.is_err());
         assert!(
             result
@@ -243,7 +273,14 @@ mod tests {
             tmux::has_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap()
         );
 
-        feat_merge(&project_path, "login", false, server.name()).unwrap();
+        feat_merge(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         // Session killed
         assert!(
@@ -268,7 +305,14 @@ mod tests {
 
         TestServer::add_feature_commit(&project_path, "login");
 
-        feat_merge(&project_path, "login", true, server.name()).unwrap();
+        feat_merge(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            true,
+            server.name(),
+        )
+        .unwrap();
 
         // Session still exists
         assert!(
@@ -293,10 +337,24 @@ mod tests {
 
         TestServer::add_feature_commit(&project_path, "login");
 
-        feat_merge(&project_path, "login", true, server.name()).unwrap();
+        feat_merge(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            true,
+            server.name(),
+        )
+        .unwrap();
 
         // Second merge with --keep should succeed (no-op)
-        feat_merge(&project_path, "login", true, server.name()).unwrap();
+        feat_merge(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            true,
+            server.name(),
+        )
+        .unwrap();
 
         // State should still be Merged
         let features_dir = paths::features_dir(&project_path);
@@ -314,10 +372,24 @@ mod tests {
         TestServer::add_feature_commit(&project_path, "login");
 
         // First merge with --keep to set status to Merged
-        feat_merge(&project_path, "login", true, server.name()).unwrap();
+        feat_merge(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            true,
+            server.name(),
+        )
+        .unwrap();
 
         // Second merge without --keep should clean up
-        feat_merge(&project_path, "login", false, server.name()).unwrap();
+        feat_merge(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         // Session killed
         assert!(
@@ -342,7 +414,14 @@ mod tests {
         TestServer::add_feature_commit(&project_path, "login");
 
         // First merge with --keep to set status to Merged
-        feat_merge(&project_path, "login", true, server.name()).unwrap();
+        feat_merge(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            true,
+            server.name(),
+        )
+        .unwrap();
 
         // Add uncommitted changes to the feature worktree
         let worktree = project_path.join("login");
@@ -350,7 +429,13 @@ mod tests {
         git::stage_file(&worktree, "dirty.txt").unwrap();
 
         // Second merge without --keep should fail due to uncommitted changes
-        let result = feat_merge(&project_path, "login", false, server.name());
+        let result = feat_merge(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            false,
+            server.name(),
+        );
         assert!(result.is_err());
         assert!(
             result
@@ -377,7 +462,13 @@ mod tests {
         git::stage_file(&worktree, "shared.txt").unwrap();
         git::commit(&worktree, "feature change").unwrap();
 
-        let result = feat_merge(&project_path, "login", true, server.name());
+        let result = feat_merge(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            true,
+            server.name(),
+        );
         assert!(result.is_err());
 
         // Main worktree should be clean — merge was aborted
@@ -406,7 +497,14 @@ mod tests {
         git::merge_no_ff(&main_repo, "login").unwrap();
 
         // Now pm feat merge should succeed without attempting a redundant merge
-        feat_merge(&project_path, "login", false, server.name()).unwrap();
+        feat_merge(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         // Cleanup should have happened
         assert!(!project_path.join("login").exists());
@@ -452,7 +550,14 @@ mod tests {
         assert!(!main_repo.join("feature.txt").exists());
 
         // pm feat merge should fetch, detect the remote merge, pull, and clean up
-        feat_merge(&project_path, "login", false, server.name()).unwrap();
+        feat_merge(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         // Verify pull brought in the merged changes
         assert!(main_repo.join("feature.txt").exists());
@@ -473,7 +578,14 @@ mod tests {
         // Kill the session before merging
         tmux::kill_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
 
-        feat_merge(&project_path, "login", false, server.name()).unwrap();
+        feat_merge(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         // Everything still cleaned up
         assert!(!project_path.join("login").exists());
@@ -491,7 +603,7 @@ mod tests {
         let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
-        let result = feat_merge(&project_path, "nonexistent", true, None);
+        let result = feat_merge(&project_path, &projects_dir, "nonexistent", true, None);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), PmError::FeatureNotFound(_)));
     }
@@ -510,7 +622,14 @@ mod tests {
             tmux::list_windows(server.name(), &tmux::session_name(&project_name, "main")).unwrap();
         assert_eq!(before, 1);
 
-        feat_merge(&project_path, "login", true, server.name()).unwrap();
+        feat_merge(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            true,
+            server.name(),
+        )
+        .unwrap();
 
         // Main session should now have 2 windows: original + hook window
         let after =
@@ -534,11 +653,19 @@ mod tests {
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
         TestServer::add_feature_commit(&project_path, "login");
-        feat_merge(&project_path, "login", true, server.name()).unwrap();
+        feat_merge(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            true,
+            server.name(),
+        )
+        .unwrap();
 
         // Create a second feature and merge it too
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &TestServer::registry_dir(&project_path),
             "api",
             server.name(),
         ))
@@ -547,7 +674,14 @@ mod tests {
         std::fs::write(worktree.join("api.txt"), "api work").unwrap();
         git::stage_file(&worktree, "api.txt").unwrap();
         git::commit(&worktree, "api work").unwrap();
-        feat_merge(&project_path, "api", true, server.name()).unwrap();
+        feat_merge(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "api",
+            true,
+            server.name(),
+        )
+        .unwrap();
 
         // Should still have just 2 windows — the hook window was reused, not duplicated
         let windows =
@@ -566,7 +700,14 @@ mod tests {
         std::fs::remove_file(project_path.join(hooks::POST_MERGE_PATH)).unwrap();
 
         TestServer::add_feature_commit(&project_path, "login");
-        feat_merge(&project_path, "login", true, server.name()).unwrap();
+        feat_merge(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            true,
+            server.name(),
+        )
+        .unwrap();
 
         // Main session should still have just 1 window
         let windows =
@@ -587,12 +728,51 @@ mod tests {
         tmux::kill_session(server.name(), &tmux::session_name(&project_name, "main")).unwrap();
 
         // Merge should still succeed — hook skip is non-fatal
-        feat_merge(&project_path, "login", true, server.name()).unwrap();
+        feat_merge(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            true,
+            server.name(),
+        )
+        .unwrap();
 
         // Verify the merge itself worked
         let features_dir = paths::features_dir(&project_path);
         let state = FeatureState::load(&features_dir, "login").unwrap();
         assert_eq!(state.status, FeatureStatus::Merged);
+    }
+
+    #[test]
+    fn merge_legacy_feature_on_master_default_project_lands_on_master() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
+        let main_repo = paths::main_worktree(&project_path);
+        git::rename_branch(&main_repo, "main", "master").unwrap();
+        let mut entry = ProjectEntry::load(&projects_dir, &project_name).unwrap();
+        entry.main_branch = "master".to_string();
+        entry.save(&projects_dir, &project_name).unwrap();
+
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
+            &project_path,
+            &projects_dir,
+            "login",
+            server.name(),
+        ))
+        .unwrap();
+        // A feature recorded before `base` existed.
+        let features_dir = paths::features_dir(&project_path);
+        let mut state = FeatureState::load(&features_dir, "login").unwrap();
+        state.base = String::new();
+        state.save(&features_dir, "login").unwrap();
+        TestServer::add_feature_commit(&project_path, "login");
+
+        feat_merge(&project_path, &projects_dir, "login", false, server.name()).unwrap();
+
+        assert_eq!(git::current_branch(&main_repo).unwrap(), "master");
+        assert!(main_repo.join("feature.txt").exists());
+        assert!(!FeatureState::exists(&features_dir, "login"));
     }
 
     #[test]
@@ -610,6 +790,7 @@ mod tests {
         // Create stacked feature based on parent
         feat_new::feat_new(&feat_new::FeatNewParams {
             project_root: &project_path,
+            projects_dir: &TestServer::registry_dir(&project_path),
             name: "child",
             name_override: None,
             context: None,
@@ -623,7 +804,14 @@ mod tests {
         git::stage_file(&child_wt, "child.txt").unwrap();
         git::commit(&child_wt, "child commit").unwrap();
 
-        feat_merge(&project_path, "child", true, server.name()).unwrap();
+        feat_merge(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "child",
+            true,
+            server.name(),
+        )
+        .unwrap();
 
         // Child's changes should appear in parent worktree, not main
         assert!(parent_wt.join("child.txt").exists());
@@ -639,6 +827,7 @@ mod tests {
 
         feat_new::feat_new(&feat_new::FeatNewParams {
             project_root: &project_path,
+            projects_dir: &TestServer::registry_dir(&project_path),
             name: "child",
             name_override: None,
             context: None,
@@ -652,7 +841,14 @@ mod tests {
         git::stage_file(&child_wt, "child.txt").unwrap();
         git::commit(&child_wt, "child commit").unwrap();
 
-        feat_merge(&project_path, "child", false, server.name()).unwrap();
+        feat_merge(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "child",
+            false,
+            server.name(),
+        )
+        .unwrap();
 
         // Cleaned up
         assert!(!project_path.join("child").exists());

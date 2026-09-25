@@ -5,6 +5,7 @@ use crate::gh;
 use crate::git;
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
+use crate::state::project::ProjectEntry;
 
 /// Resolve the PR body: explicit body wins, then PR template, then None.
 fn resolve_pr_body(worktree_path: &Path, body: Option<&str>) -> Result<Option<String>> {
@@ -31,10 +32,17 @@ fn resolve_pr_body(worktree_path: &Path, body: Option<&str>) -> Result<Option<St
 /// - Falls back to `.github/pull_request_template.md` if present
 /// - Stores the PR number in feature state
 /// - Sets status to Review only when `--ready`, keeps Wip for draft PRs
-pub fn feat_pr(project_root: &Path, name: &str, ready: bool, body: Option<&str>) -> Result<()> {
+pub fn feat_pr(
+    project_root: &Path,
+    projects_dir: &Path,
+    name: &str,
+    ready: bool,
+    body: Option<&str>,
+) -> Result<()> {
     let features_dir = paths::features_dir(project_root);
     let mut state = FeatureState::load(&features_dir, name)?;
     let worktree_path = project_root.join(&state.worktree);
+    let main_branch = ProjectEntry::main_branch(project_root, projects_dir)?;
 
     // Push the branch to origin
     git::push_branch(&worktree_path, &state.branch)?;
@@ -55,14 +63,12 @@ pub fn feat_pr(project_root: &Path, name: &str, ready: bool, body: Option<&str>)
         let pr_body = resolve_pr_body(&worktree_path, body)?;
 
         let draft = !ready;
-        let base = state.base_or_default();
-        let base_arg = if base == "main" { None } else { Some(base) };
         let result = gh::create_pr(
             &worktree_path,
             &state.branch,
             draft,
             pr_body.as_deref(),
-            base_arg,
+            state.base_branch(&main_branch),
         )?;
         eprintln!("{}", result.url);
         result.number
@@ -169,9 +175,9 @@ mod tests {
     fn feat_pr_fails_for_nonexistent_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
-        let result = feat_pr(&project_path, "nonexistent", false, None);
+        let result = feat_pr(&project_path, &projects_dir, "nonexistent", false, None);
         assert!(result.is_err());
     }
 

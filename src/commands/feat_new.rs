@@ -3,12 +3,13 @@ use std::path::Path;
 use chrono::Utc;
 
 use crate::commands::feat_common::{self, InitStateFields};
+use crate::commands::feat_delete;
 use crate::commands::seed;
 use crate::error::{PmError, Result};
 use crate::hooks;
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
-use crate::state::project::ProjectConfig;
+use crate::state::project::{ProjectConfig, ProjectEntry};
 use crate::{git, tmux};
 
 /// Derive a feature name from a branch name, replacing `/` with `-`.
@@ -70,26 +71,32 @@ fn resolve_stdin_context_from(
     }
 }
 
-/// Resolve the base branch for a new feature.
-/// If explicitly provided, use that. Otherwise detect the current branch from `cwd`.
-pub fn resolve_base(project_root: &Path, base: Option<&str>, cwd: &Path) -> Result<String> {
+/// Resolve the base branch for a new feature: the explicit `base`, else the
+/// branch checked out at `cwd` (the main worktree when `cwd` is outside the
+/// project), else `main_branch` when HEAD there is detached or not a repo.
+pub fn resolve_base(
+    project_root: &Path,
+    main_branch: &str,
+    base: Option<&str>,
+    cwd: &Path,
+) -> Result<String> {
     if let Some(b) = base {
         return Ok(b.to_string());
     }
-    // Detect from CWD: find which worktree we're in and get its branch
     let main_worktree = paths::main_worktree(project_root);
-    // Try CWD first, fall back to main worktree
     let detect_from = if cwd.starts_with(project_root) {
         cwd
     } else {
         main_worktree.as_path()
     };
-    git::current_branch(detect_from).or_else(|_| Ok("main".to_string()))
+    Ok(git::head_branch(detect_from).unwrap_or_else(|_| main_branch.to_string()))
 }
 
 /// Parameters for creating a new feature.
 pub struct FeatNewParams<'a> {
     pub project_root: &'a Path,
+    /// The project registry, holding the project's `main_branch`.
+    pub projects_dir: &'a Path,
     pub name: &'a str,
     pub name_override: Option<&'a str>,
     pub context: Option<&'a str>,
@@ -109,11 +116,13 @@ impl<'a> FeatNewParams<'a> {
     /// Test helper: build params with all optional fields set to defaults.
     pub fn with_defaults(
         project_root: &'a Path,
+        projects_dir: &'a Path,
         name: &'a str,
         tmux_server: Option<&'a str>,
     ) -> Self {
         Self {
             project_root,
+            projects_dir,
             name,
             name_override: None,
             context: None,
@@ -181,8 +190,9 @@ pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
     let resolved_context = params.context.map(resolve_context).transpose()?;
 
     // Resolve base branch (explicit, or detected from CWD)
+    let main_branch = ProjectEntry::load(params.projects_dir, project_name)?.main_branch;
     let cwd = std::env::current_dir()?;
-    let resolved_base = resolve_base(params.project_root, params.base, &cwd)?;
+    let resolved_base = resolve_base(params.project_root, &main_branch, params.base, &cwd)?;
 
     // Step 1: Write state with status = initializing
     let mut state = feat_common::write_initializing_state(
@@ -268,7 +278,7 @@ pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
             project_name,
             tmux_server: params.tmux_server,
             delete_branch: true, // feat_new owns the branch and may destroy it on failure
-            base: &resolved_base,
+            base_scope: &feat_delete::base_scope(params.project_root, &main_branch, &resolved_base),
         });
         return Err(e);
     }
@@ -336,11 +346,12 @@ mod tests {
     fn feat_new_creates_all_resources() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, project_name) = server.setup_project(dir.path());
+        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
         let before = Utc::now();
 
         feat_new(&FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "login",
             server.name(),
         ))
@@ -374,16 +385,18 @@ mod tests {
     fn feat_new_duplicate_name_fails() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
         feat_new(&FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "login",
             server.name(),
         ))
         .unwrap();
         let result = feat_new(&FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "login",
             server.name(),
         ));
@@ -399,7 +412,7 @@ mod tests {
     fn feat_new_tmux_failure_cleans_up_all_resources() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, project_name) = server.setup_project(dir.path());
+        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
 
         // Pre-create a tmux session with the name feat_new will use,
         // so create_session fails with "duplicate session"
@@ -412,6 +425,7 @@ mod tests {
 
         let result = feat_new(&FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "login",
             server.name(),
         ));
@@ -431,7 +445,7 @@ mod tests {
     fn feat_new_worktree_failure_cleans_up_branch_and_state() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
         // Pre-create the worktree path so add_worktree fails
         std::fs::create_dir(project_path.join("login")).unwrap();
@@ -439,6 +453,7 @@ mod tests {
 
         let result = feat_new(&FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "login",
             server.name(),
         ));
@@ -457,12 +472,12 @@ mod tests {
     fn feat_new_with_text_context_enqueues_message_to_brief_agents() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
         feat_new(&FeatNewParams {
             context: Some("Implement login page per issue #42"),
             workflow: Some("implement-and-review"),
-            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+            ..FeatNewParams::with_defaults(&project_path, &projects_dir, "login", server.name())
         })
         .unwrap();
 
@@ -490,7 +505,7 @@ mod tests {
     fn feat_new_with_file_context_reads_file() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
         // Create a temp file with context content
         let brief_path = dir.path().join("brief.md");
@@ -499,7 +514,7 @@ mod tests {
         feat_new(&FeatNewParams {
             context: Some(brief_path.to_str().unwrap()),
             workflow: Some("implement-and-review"),
-            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+            ..FeatNewParams::with_defaults(&project_path, &projects_dir, "login", server.name())
         })
         .unwrap();
 
@@ -524,7 +539,7 @@ mod tests {
     fn feat_new_with_context_stores_resolved_content_in_state() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
         // Pass a file path as context — state should store the file contents, not the path
         let brief_path = dir.path().join("brief.md");
@@ -533,7 +548,7 @@ mod tests {
         feat_new(&FeatNewParams {
             context: Some(brief_path.to_str().unwrap()),
             workflow: Some("implement-and-review"),
-            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+            ..FeatNewParams::with_defaults(&project_path, &projects_dir, "login", server.name())
         })
         .unwrap();
 
@@ -546,12 +561,12 @@ mod tests {
     fn feat_new_with_context_creates_claude_window() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, project_name) = server.setup_project(dir.path());
+        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
 
         feat_new(&FeatNewParams {
             context: Some("Build the login page"),
             workflow: Some("implement-and-review"),
-            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+            ..FeatNewParams::with_defaults(&project_path, &projects_dir, "login", server.name())
         })
         .unwrap();
 
@@ -566,12 +581,12 @@ mod tests {
     fn feat_new_with_workflow_spawns_named_agent() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, project_name) = server.setup_project(dir.path());
+        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
 
         feat_new(&FeatNewParams {
             context: Some("Build the login page"),
             workflow: Some("research-only"),
-            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+            ..FeatNewParams::with_defaults(&project_path, &projects_dir, "login", server.name())
         })
         .unwrap();
 
@@ -591,10 +606,11 @@ mod tests {
     fn feat_new_without_context_has_shell_and_hook_windows() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, project_name) = server.setup_project(dir.path());
+        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
 
         feat_new(&FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "login",
             server.name(),
         ))
@@ -622,7 +638,7 @@ mod tests {
     fn feat_new_hook_receives_pm_env() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, project_name) = server.setup_project(dir.path());
+        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
 
         let hook_path = project_path.join(hooks::POST_CREATE_PATH);
         std::fs::write(
@@ -635,6 +651,7 @@ mod tests {
 
         feat_new(&FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "login",
             server.name(),
         ))
@@ -664,13 +681,14 @@ mod tests {
     fn feat_new_skips_hook_when_script_removed() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, project_name) = server.setup_project(dir.path());
+        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
 
         // Remove the bootstrapped hook script
         std::fs::remove_file(project_path.join(hooks::POST_CREATE_PATH)).unwrap();
 
         feat_new(&FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "login",
             server.name(),
         ))
@@ -686,17 +704,18 @@ mod tests {
     fn feat_new_with_base_stores_base_in_state() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
         feat_new(&FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "login",
             server.name(),
         ))
         .unwrap();
         feat_new(&FeatNewParams {
             base: Some("login"),
-            ..FeatNewParams::with_defaults(&project_path, "stacked", server.name())
+            ..FeatNewParams::with_defaults(&project_path, &projects_dir, "stacked", server.name())
         })
         .unwrap();
 
@@ -709,11 +728,12 @@ mod tests {
     fn feat_new_with_base_branches_from_parent() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
         // Create parent feature with a commit
         feat_new(&FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "parent",
             server.name(),
         ))
@@ -726,7 +746,7 @@ mod tests {
         // Create stacked feature based on parent
         feat_new(&FeatNewParams {
             base: Some("parent"),
-            ..FeatNewParams::with_defaults(&project_path, "child", server.name())
+            ..FeatNewParams::with_defaults(&project_path, &projects_dir, "child", server.name())
         })
         .unwrap();
 
@@ -739,10 +759,11 @@ mod tests {
     fn feat_new_without_base_defaults_to_main() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
         feat_new(&FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "login",
             server.name(),
         ))
@@ -756,7 +777,7 @@ mod tests {
     #[test]
     fn resolve_base_returns_explicit_base() {
         let dir = tempdir().unwrap();
-        let result = resolve_base(dir.path(), Some("my-branch"), dir.path()).unwrap();
+        let result = resolve_base(dir.path(), "main", Some("my-branch"), dir.path()).unwrap();
         assert_eq!(result, "my-branch");
     }
 
@@ -773,23 +794,38 @@ mod tests {
         git::add_worktree(&main_path, &parent_wt, "parent").unwrap();
 
         // Simulate CWD being inside the parent worktree
-        let result = resolve_base(&project_path, None, &parent_wt).unwrap();
+        let result = resolve_base(&project_path, "main", None, &parent_wt).unwrap();
         assert_eq!(result, "parent");
     }
 
     #[test]
-    fn resolve_base_falls_back_to_main_when_outside_project() {
+    fn resolve_base_outside_project_detects_from_main_worktree() {
         let dir = tempdir().unwrap();
         let project_path = dir.path().join("myproject");
         std::fs::create_dir_all(&project_path).unwrap();
         let main_path = paths::main_worktree(&project_path);
         git::init_repo(&main_path).unwrap();
+        git::rename_branch(&main_path, "main", "master").unwrap();
 
-        // CWD is outside the project
         let outside = dir.path().join("elsewhere");
         std::fs::create_dir_all(&outside).unwrap();
-        let result = resolve_base(&project_path, None, &outside).unwrap();
-        assert_eq!(result, "main");
+        let result = resolve_base(&project_path, "master", None, &outside).unwrap();
+        assert_eq!(result, "master");
+    }
+
+    #[test]
+    fn resolve_base_falls_back_to_main_branch_on_detached_head() {
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().join("myproject");
+        std::fs::create_dir_all(&project_path).unwrap();
+        let main_path = paths::main_worktree(&project_path);
+        git::init_repo(&main_path).unwrap();
+        git::run_git(&main_path, &["checkout", "--detach"]).unwrap();
+
+        let outside = dir.path().join("elsewhere");
+        std::fs::create_dir_all(&outside).unwrap();
+        let result = resolve_base(&project_path, "master", None, &outside).unwrap();
+        assert_eq!(result, "master");
     }
 
     #[test]
@@ -827,11 +863,12 @@ mod tests {
     fn feat_new_slash_collision_detected() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
         // Create "ciaran-login" first
         feat_new(&FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "ciaran-login",
             server.name(),
         ))
@@ -840,6 +877,7 @@ mod tests {
         // "ciaran/login" sanitizes to "ciaran-login" — should conflict
         let result = feat_new(&FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "ciaran/login",
             server.name(),
         ));
@@ -854,10 +892,11 @@ mod tests {
     fn feat_new_slash_branch_sanitizes_feature_name() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, project_name) = server.setup_project(dir.path());
+        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
 
         feat_new(&FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "ciaran/login",
             server.name(),
         ))
@@ -887,11 +926,16 @@ mod tests {
     fn feat_new_with_name_override() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, project_name) = server.setup_project(dir.path());
+        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
 
         feat_new(&FeatNewParams {
             name_override: Some("eval"),
-            ..FeatNewParams::with_defaults(&project_path, "ciaran/eval", server.name())
+            ..FeatNewParams::with_defaults(
+                &project_path,
+                &projects_dir,
+                "ciaran/eval",
+                server.name(),
+            )
         })
         .unwrap();
 
@@ -909,7 +953,7 @@ mod tests {
     fn feat_new_blocked_by_feature_limit() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
         // Set max_features = 1
         let pm_dir = paths::pm_dir(&project_path);
@@ -920,6 +964,7 @@ mod tests {
         // Create first feature — should succeed
         feat_new(&FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "first",
             server.name(),
         ))
@@ -928,6 +973,7 @@ mod tests {
         // Second feature should be blocked
         let result = feat_new(&FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "second",
             server.name(),
         ));
@@ -941,7 +987,7 @@ mod tests {
     fn feat_new_allowed_under_feature_limit() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
         // Set max_features = 2
         let pm_dir = paths::pm_dir(&project_path);
@@ -952,6 +998,7 @@ mod tests {
         // First feature
         feat_new(&FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "first",
             server.name(),
         ))
@@ -960,6 +1007,7 @@ mod tests {
         // Second feature should also succeed (2/2 would block, but 1/2 is fine)
         feat_new(&FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "second",
             server.name(),
         ))
@@ -975,12 +1023,12 @@ mod tests {
     fn feat_new_context_without_workflow_defaults_to_solo() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, project_name) = server.setup_project(dir.path());
+        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
 
         feat_new(&FeatNewParams {
             context: Some("do X"),
             workflow: None,
-            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+            ..FeatNewParams::with_defaults(&project_path, &projects_dir, "login", server.name())
         })
         .unwrap();
 
@@ -1025,7 +1073,7 @@ mod tests {
         // one, so validation fails until the migration deletes it.
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, project_name) = server.setup_project(dir.path());
+        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
         let cfg = paths::workflows_dir(&project_path).join("solo");
         std::fs::create_dir_all(&cfg).unwrap();
         std::fs::write(
@@ -1039,7 +1087,7 @@ mod tests {
         let err = feat_new(&FeatNewParams {
             context: Some("do X"),
             workflow: None,
-            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+            ..FeatNewParams::with_defaults(&project_path, &projects_dir, "login", server.name())
         })
         .unwrap_err();
         assert!(
@@ -1055,7 +1103,7 @@ mod tests {
         feat_new(&FeatNewParams {
             context: Some("do X"),
             workflow: None,
-            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+            ..FeatNewParams::with_defaults(&project_path, &projects_dir, "login", server.name())
         })
         .unwrap();
         assert_vanilla_spawned(&project_path, &project_name, server.name(), "default");
@@ -1067,7 +1115,7 @@ mod tests {
         // definitions live only in the global store, spawns like any other.
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, project_name) = server.setup_project(dir.path());
+        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
         let wf = paths::global_workflows_dir()
             .unwrap()
             .join("global-custom-flow");
@@ -1083,7 +1131,7 @@ mod tests {
         feat_new(&FeatNewParams {
             workflow: Some("global-custom-flow"),
             context: Some("do X"),
-            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+            ..FeatNewParams::with_defaults(&project_path, &projects_dir, "login", server.name())
         })
         .unwrap();
 
@@ -1106,11 +1154,11 @@ mod tests {
         // every team agent, but queues no messages — the user drives them.
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
         feat_new(&FeatNewParams {
             workflow: Some("implement-and-review"),
-            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+            ..FeatNewParams::with_defaults(&project_path, &projects_dir, "login", server.name())
         })
         .unwrap();
 
@@ -1148,12 +1196,12 @@ mod tests {
     fn feat_new_nonexistent_workflow_errors() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
         let result = feat_new(&FeatNewParams {
             context: Some("do X"),
             workflow: Some("does-not-exist"),
-            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+            ..FeatNewParams::with_defaults(&project_path, &projects_dir, "login", server.name())
         });
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), PmError::WorkflowNotFound(_)));
@@ -1170,7 +1218,7 @@ mod tests {
         // error before any side effects.
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
         let workflows = paths::workflows_dir(&project_path).join("empty");
         std::fs::create_dir_all(&workflows).unwrap();
@@ -1180,7 +1228,7 @@ mod tests {
         let result = feat_new(&FeatNewParams {
             context: Some("do X"),
             workflow: Some("empty"),
-            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+            ..FeatNewParams::with_defaults(&project_path, &projects_dir, "login", server.name())
         });
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -1201,7 +1249,7 @@ mod tests {
         // records the workflow and spawns nothing (empty team).
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
         let workflows = paths::workflows_dir(&project_path).join("empty");
         std::fs::create_dir_all(&workflows).unwrap();
@@ -1210,7 +1258,7 @@ mod tests {
 
         feat_new(&FeatNewParams {
             workflow: Some("empty"),
-            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+            ..FeatNewParams::with_defaults(&project_path, &projects_dir, "login", server.name())
         })
         .unwrap();
 
@@ -1223,7 +1271,7 @@ mod tests {
     fn feat_new_workflow_with_unknown_team_agent_errors() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
         // Inject a workflow whose team references a missing agent.
         let workflows = paths::workflows_dir(&project_path).join("broken");
@@ -1238,7 +1286,7 @@ mod tests {
         let result = feat_new(&FeatNewParams {
             context: Some("do X"),
             workflow: Some("broken"),
-            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+            ..FeatNewParams::with_defaults(&project_path, &projects_dir, "login", server.name())
         });
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -1259,12 +1307,12 @@ mod tests {
         // spawn but only the researcher is briefed.
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, project_name) = server.setup_project(dir.path());
+        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
 
         feat_new(&FeatNewParams {
             context: Some("Research the auth flow"),
             workflow: Some("research-implement-review"),
-            ..FeatNewParams::with_defaults(&project_path, "login", server.name())
+            ..FeatNewParams::with_defaults(&project_path, &projects_dir, "login", server.name())
         })
         .unwrap();
 

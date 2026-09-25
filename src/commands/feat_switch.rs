@@ -72,6 +72,7 @@ mod tests {
 
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "login",
             server.name(),
         ))
@@ -98,12 +99,14 @@ mod tests {
 
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "login",
             server.name(),
         ))
         .unwrap();
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
+            &projects_dir,
             "api",
             server.name(),
         ))
