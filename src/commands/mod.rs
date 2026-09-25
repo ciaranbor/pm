@@ -43,6 +43,7 @@ pub mod seed;
 pub mod self_update;
 pub mod skills;
 pub mod state_cmd;
+pub mod state_gitignore;
 pub mod status;
 pub mod upgrade;
 pub mod workflow;

@@ -7,7 +7,7 @@ const FEATURES_DIR_NAME: &str = "features";
 const CONFIG_DIR_NAME: &str = "pm";
 const PROJECTS_DIR_NAME: &str = "projects";
 
-const WORKFLOWS_DIR_NAME: &str = "workflows";
+pub(crate) const WORKFLOWS_DIR_NAME: &str = "workflows";
 
 /// The user's home directory. Every global-tier path (the `~/.agents` store,
 /// the pm config dir) derives from it. Under `cfg(test)` this is a per-binary
