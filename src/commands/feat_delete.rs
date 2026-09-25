@@ -134,9 +134,9 @@ impl MissingBase {
         let reason = self.reason(base);
         match self {
             Self::Gone => format!(
-                "{reason}. Rebase onto a live branch (`git rebase {main_branch}` in the worktree) \
-                 and set `base = \"{main_branch}\"` in .pm/features/{feature}.toml, \
-                 or discard the feature with `pm feat delete --force {feature}`."
+                "{reason}. Move it onto a live branch with \
+                 `pm feat rebase {feature} --onto {main_branch}`, \
+                 or discard it with `pm feat delete --force {feature}`."
             ),
             Self::NoCheckout => {
                 format!("{reason}. Give it one with `pm feat adopt {base}`, then retry.")
@@ -808,7 +808,7 @@ mod tests {
         let msg = format!("{err}");
         assert!(msg.contains("base branch 'parent' is gone"), "{msg}");
         assert!(msg.contains("--force child"), "{msg}");
-        assert!(msg.contains("git rebase master"), "{msg}");
+        assert!(msg.contains("pm feat rebase child --onto master"), "{msg}");
         assert!(project_path.join("child").exists());
         assert!(FeatureState::exists(
             &paths::features_dir(&project_path),

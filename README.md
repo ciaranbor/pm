@@ -75,7 +75,7 @@ main). If the parent is merged or deleted first, the child's base is gone:
 The lifecycle: `pm feat new` → work → optionally `pm feat pr create` /
 `pm feat ready` / `pm feat review` → `pm feat merge` (cleans up by default).
 Inspection and housekeeping subcommands (`list`, `info`, `switch`, `rename`,
-`delete`, `sync`) round out `pm feat` — see `pm feat --help`.
+`rebase`, `delete`, `sync`) round out `pm feat` — see `pm feat --help`.
 
 ### Lifecycle hooks
 

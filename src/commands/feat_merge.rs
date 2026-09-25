@@ -794,7 +794,7 @@ mod tests {
         let msg = format!("{err}");
         assert!(msg.contains("cannot merge feature 'child'"), "{msg}");
         assert!(msg.contains("base branch 'parent' is gone"), "{msg}");
-        assert!(msg.contains("git rebase master"), "{msg}");
+        assert!(msg.contains("pm feat rebase child --onto master"), "{msg}");
         let main_repo = paths::main_worktree(&project_path);
         assert!(!main_repo.join("child.txt").exists());
         assert!(FeatureState::exists(

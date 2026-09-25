@@ -1,11 +1,13 @@
 mod branch;
 mod init;
+mod rebase;
 mod remote;
 pub(crate) mod status;
 mod worktree;
 
 pub use branch::*;
 pub use init::*;
+pub use rebase::*;
 pub use remote::*;
 pub use status::*;
 pub use worktree::*;
