@@ -20,6 +20,8 @@ use crate::harness::{self, Harness};
 use crate::state::paths;
 use crate::state::project::{GlobalConfig, ProjectConfig};
 
+use super::state_gitignore;
+
 /// The canonical asset store, relative to the main worktree or home.
 pub const CANONICAL_DIR: &str = ".agents";
 
@@ -587,6 +589,10 @@ pub fn install_global_in(store: &GlobalStore) -> Result<Vec<String>> {
             lines.push(format!("{verb} {label} '{}' (global)", item.name));
         }
     }
+    lines.extend(state_gitignore::sync_global_registry_ignore(
+        &store.config_dir,
+        false,
+    )?);
     lines.extend(project_global(store, false)?);
     Ok(lines)
 }
@@ -603,6 +609,10 @@ pub fn install_global_dry_run_in(store: &GlobalStore) -> Result<Vec<String>> {
             lines.push(format!("{line} (global)"));
         }
     }
+    lines.extend(state_gitignore::sync_global_registry_ignore(
+        &store.config_dir,
+        true,
+    )?);
     // The projection diffs the canonical store against the harness dir, so
     // diff the store as the install would leave it, not as it is now.
     let staged = tempfile::tempdir()?;
@@ -972,11 +982,25 @@ pub fn is_bundled_workflow(name: &str) -> bool {
     items_of_kind(BundledKind::Workflow).any(|i| i.name == name)
 }
 
+/// The bundled workflow names, sorted.
+pub fn bundled_workflow_names() -> Vec<&'static str> {
+    let mut names: Vec<_> = items_of_kind(BundledKind::Workflow)
+        .map(|i| i.name)
+        .collect();
+    names.sort_unstable();
+    names
+}
+
 /// (Re)install bundled workflows into the global tier, overwriting any
 /// on-disk content — the way to revert a hand-edited global copy.
 pub fn workflows_install(name: Option<&str>) -> Result<Vec<String>> {
     let store = GlobalStore::resolve()?;
-    install_messages(&store.workflows_dir(), BundledKind::Workflow, name)
+    let mut lines = install_messages(&store.workflows_dir(), BundledKind::Workflow, name)?;
+    lines.extend(state_gitignore::sync_global_registry_ignore(
+        &store.config_dir,
+        false,
+    )?);
+    Ok(lines)
 }
 
 pub fn workflows_uninstall(name: Option<&str>) -> Result<Vec<String>> {
@@ -1116,6 +1140,92 @@ mod tests {
     }
 
     // --- Global tier ---
+
+    /// A registry repo that committed a bundled workflow (as pre-fix
+    /// releases did) and a custom one.
+    fn registry_with_committed_workflows(store: &GlobalStore, bundled: &str) {
+        crate::git::init_repo(&store.config_dir).unwrap();
+        for name in [bundled, "mine"] {
+            let dir = store.workflows_dir().join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("config.toml"), "stale\n").unwrap();
+        }
+        crate::git::add_all(&store.config_dir).unwrap();
+        crate::git::commit(&store.config_dir, "old release").unwrap();
+    }
+
+    #[test]
+    fn install_global_untracks_committed_bundled_workflows_and_keeps_customs() {
+        let home = tempfile::tempdir().unwrap();
+        let store = GlobalStore::at(home.path());
+        let names = bundled_workflow_names();
+        let bundled = names[0];
+        registry_with_committed_workflows(&store, bundled);
+        let repo = &store.config_dir;
+        assert!(!crate::git::ls_files(repo, "workflows").unwrap().is_empty());
+
+        let lines = install_global_in(&store).unwrap();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("Untracked 1 bundled workflow(s)")),
+            "{lines:?}"
+        );
+
+        let tracked = crate::git::ls_files(repo, "workflows").unwrap();
+        assert_eq!(tracked, vec!["workflows/mine/config.toml".to_string()]);
+        // Untracked, not deleted — and the install rewrote it.
+        for name in &names {
+            assert!(
+                store
+                    .workflows_dir()
+                    .join(name)
+                    .join("config.toml")
+                    .is_file()
+            );
+        }
+
+        // The next push is clean: `add -A` re-adds nothing bundled.
+        crate::git::add_all(repo).unwrap();
+        crate::git::commit(repo, "sync").unwrap();
+        assert_eq!(crate::git::status_short(repo).unwrap().trim(), "");
+        assert_eq!(
+            crate::git::ls_files(repo, "workflows").unwrap(),
+            vec!["workflows/mine/config.toml".to_string()]
+        );
+
+        let again = install_global_in(&store).unwrap();
+        assert!(
+            !again.iter().any(|l| l.contains("bundled workflow")),
+            "{again:?}"
+        );
+    }
+
+    #[test]
+    fn install_global_dry_run_reports_untrack_without_touching_the_index() {
+        let home = tempfile::tempdir().unwrap();
+        let store = GlobalStore::at(home.path());
+        let bundled = bundled_workflow_names()[0];
+        registry_with_committed_workflows(&store, bundled);
+        let before = crate::git::ls_files(&store.config_dir, "workflows").unwrap();
+
+        let lines = install_global_dry_run_in(&store).unwrap();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("Would untrack 1 bundled workflow(s)")),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.starts_with("Would ignore")),
+            "{lines:?}"
+        );
+        assert_eq!(
+            crate::git::ls_files(&store.config_dir, "workflows").unwrap(),
+            before
+        );
+        assert!(!store.config_dir.join(".gitignore").exists());
+    }
 
     #[test]
     fn install_global_writes_every_kind_and_projects_into_harness_dirs() {

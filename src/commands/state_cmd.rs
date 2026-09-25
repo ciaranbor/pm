@@ -1,3 +1,11 @@
+//! `pm state`: the two git-backed state repos. The project repo is
+//! `<project>/.pm/`, where pm controls every file. The global registry repo
+//! is the pm config dir: the project registry, global config, and the
+//! global workflow tier — minus the bundled workflows, which
+//! [`super::state_gitignore`] keeps out of it. Both sync the same way:
+//! `push`/`pull` auto-commit whatever `git add -A` finds, so the index is
+//! pm's, and a remote is opt-in.
+
 use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 
@@ -391,18 +399,6 @@ pub fn status(project_root: &Path) -> Result<String> {
 // Global registry repo (~/.config/pm/)
 // ---------------------------------------------------------------------------
 
-/// Default .gitignore for the global registry.
-///
-/// The project-level `.pm/` directory doesn't need a `.gitignore` because
-/// pm controls all files there. The global registry may accumulate
-/// machine-specific ephemeral files (lock files, pid files) that should
-/// not be committed.
-const GLOBAL_GITIGNORE: &str = "\
-# Ephemeral / machine-specific state
-*.lock
-*.pid
-";
-
 fn global_ctx(dir: &Path) -> RepoContext<'_> {
     RepoContext {
         dir,
@@ -438,10 +434,7 @@ fn global_init_at(dir: &Path, interactive: bool, remote_url: Option<&str>) -> Re
         already_init_msg: "Global registry repo already initialised",
         already_has_remote_error: "global registry repo already initialised with a remote (remove it first to reset)",
         pre_init: Some(Box::new(|dir: &Path| {
-            let gitignore_path = dir.join(".gitignore");
-            if !gitignore_path.exists() {
-                std::fs::write(&gitignore_path, GLOBAL_GITIGNORE)?;
-            }
+            super::state_gitignore::write_global_gitignore(dir, false)?;
             Ok(())
         })),
         post_remote: None,
@@ -1329,6 +1322,24 @@ mod tests {
         assert!(msg.contains("Initialised"));
         assert!(global.join(".git").exists());
         assert!(global.join(".gitignore").exists());
+    }
+
+    #[test]
+    fn global_init_adds_the_bundled_block_to_a_pre_existing_gitignore() {
+        let dir = tempdir().unwrap();
+        let global = setup_global_dir(dir.path());
+        std::fs::write(global.join(".gitignore"), "*.lock\n").unwrap();
+        let bundled = crate::commands::skills::bundled_workflow_names()[0];
+        let wf = global.join("workflows").join(bundled);
+        std::fs::create_dir_all(&wf).unwrap();
+        std::fs::write(wf.join("config.toml"), "x").unwrap();
+
+        global_init_at(&global, false, None).unwrap();
+
+        let committed = git::cat_file(&global, "HEAD:.gitignore").unwrap();
+        assert!(committed.starts_with("*.lock\n"));
+        assert!(git::ls_files(&global, "workflows").unwrap().is_empty());
+        assert!(wf.join("config.toml").is_file());
     }
 
     #[test]

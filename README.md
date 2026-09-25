@@ -460,6 +460,14 @@ pm state init --global --remote <global-registry-url>
 pm restore                       # clone repos, pull state, recreate worktrees + sessions
 ```
 
+The global registry repo syncs your global custom workflows but never the
+bundled ones: its `.gitignore` carries a block pm regenerates from the
+bundle, so `pm upgrade` rewriting them never dirties the repo. If an earlier
+release committed them, `pm upgrade` untracks them and stages the deletion —
+commit it with `pm state push --global`. A machine that pulls that commit
+loses the bundled dirs from disk (and hits a conflict if its own copies
+differ) until it runs `pm upgrade`, which reinstalls them.
+
 See `pm state --help` and `pm restore --help`.
 
 ## Other commands
