@@ -150,15 +150,22 @@ pub struct BaseCheckout {
     pub worktree: PathBuf,
 }
 
+impl BaseCheckout {
+    /// The main scope's checkout.
+    pub fn main(project_root: &Path) -> Self {
+        Self {
+            scope: "main".to_string(),
+            worktree: crate::state::paths::main_worktree(project_root),
+        }
+    }
+}
+
 /// Locate the checkout of `base` (see [`BaseCheckout`]). `main_branch` is
 /// the registry's; anything else must be the branch of a known feature,
 /// which may not share its name (`feat/x` lives in worktree `feat-x`).
 pub fn base_checkout(project_root: &Path, main_branch: &str, base: &str) -> Result<BaseCheckout> {
     if base == main_branch {
-        return Ok(BaseCheckout {
-            scope: "main".to_string(),
-            worktree: crate::state::paths::main_worktree(project_root),
-        });
+        return Ok(BaseCheckout::main(project_root));
     }
     let features_dir = crate::state::paths::features_dir(project_root);
     FeatureState::list(&features_dir)?

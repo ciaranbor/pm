@@ -352,12 +352,8 @@ mod tests {
     fn delete_checks_merges_against_the_registered_main_branch() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_master_project(dir.path());
         let main = paths::main_worktree(&project_path);
-        git::rename_branch(&main, "main", "master").unwrap();
-        let mut entry = ProjectEntry::load(&projects_dir, &project_name).unwrap();
-        entry.main_branch = "master".to_string();
-        entry.save(&projects_dir, &project_name).unwrap();
 
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,

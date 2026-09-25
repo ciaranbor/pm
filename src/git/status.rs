@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::error::{PmError, Result};
 
@@ -31,30 +31,6 @@ pub fn has_unpushed_commits(worktree: &Path) -> Result<bool> {
 
     let output = run_git(worktree, &["rev-list", "@{upstream}..HEAD"])?;
     Ok(!output.trim().is_empty())
-}
-
-/// Add a pattern to the repo's `.git/info/exclude` (local-only ignore).
-/// Works from any worktree by resolving the shared git common dir.
-pub fn exclude_pattern(repo: &Path, pattern: &str) -> Result<()> {
-    let common_dir = run_git(repo, &["rev-parse", "--git-common-dir"])?;
-    let common_path = if Path::new(&common_dir).is_absolute() {
-        PathBuf::from(&common_dir)
-    } else {
-        repo.join(&common_dir)
-    };
-    let info_dir = common_path.join("info");
-    std::fs::create_dir_all(&info_dir)?;
-    let exclude_path = info_dir.join("exclude");
-    let existing = std::fs::read_to_string(&exclude_path).unwrap_or_default();
-    if !existing.lines().any(|l| l.trim() == pattern) {
-        use std::io::Write;
-        let mut f = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&exclude_path)?;
-        writeln!(f, "{pattern}")?;
-    }
-    Ok(())
 }
 
 /// Stage all changes in the given repo/worktree (`git add -A`).
@@ -122,10 +98,12 @@ pub fn ls_files(repo: &Path, path: &str) -> Result<Vec<String>> {
         .collect())
 }
 
-/// Remove a path from the git index without deleting it from disk.
-/// Equivalent to `git rm --cached -r <path>`.
+/// Remove a path from the git index without deleting it from disk
+/// (`git rm --cached -rf <path>`). Forced because the index is the only
+/// thing touched: a staged-but-uncommitted version of the path is not worth
+/// refusing over when the working tree keeps the files.
 pub fn rm_cached(repo: &Path, path: &str) -> Result<()> {
-    run_git(repo, &["rm", "--cached", "-r", path])?;
+    run_git(repo, &["rm", "--cached", "-r", "-f", path])?;
     Ok(())
 }
 

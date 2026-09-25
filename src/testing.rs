@@ -333,6 +333,65 @@ impl TestServer {
         (project_path, projects_dir, name)
     }
 
+    /// `setup_project` with the main branch renamed to `master` and recorded
+    /// as such, so a test cannot pass by assuming `main`.
+    pub fn setup_master_project(
+        &self,
+        dir: &std::path::Path,
+    ) -> (std::path::PathBuf, std::path::PathBuf, String) {
+        let (project_path, projects_dir, project_name) = self.setup_project(dir);
+        let main = crate::state::paths::main_worktree(&project_path);
+        crate::git::rename_branch(&main, "main", "master").unwrap();
+        let mut entry =
+            crate::state::project::ProjectEntry::load(&projects_dir, &project_name).unwrap();
+        entry.main_branch = "master".to_string();
+        entry.save(&projects_dir, &project_name).unwrap();
+        (project_path, projects_dir, project_name)
+    }
+
+    /// A `master`-default project holding a `child` feature stacked on a
+    /// `parent` feature that has since been merged and cleaned up, so
+    /// `child`'s base branch no longer exists. Each feature has one commit.
+    pub fn setup_orphaned_child(
+        &self,
+        dir: &std::path::Path,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
+        use crate::commands::{feat_merge, feat_new};
+        let (project_path, projects_dir, _) = self.setup_master_project(dir);
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
+            &project_path,
+            &projects_dir,
+            "parent",
+            self.name(),
+        ))
+        .unwrap();
+        Self::add_feature_commit(&project_path, "parent");
+        feat_new::feat_new(&feat_new::FeatNewParams {
+            project_root: &project_path,
+            projects_dir: &projects_dir,
+            name: "child",
+            name_override: None,
+            context: None,
+            base: Some("parent"),
+            workflow: None,
+            tmux_server: self.name(),
+        })
+        .unwrap();
+        let child = project_path.join("child");
+        std::fs::write(child.join("child.txt"), "child work").unwrap();
+        crate::git::stage_file(&child, "child.txt").unwrap();
+        crate::git::commit(&child, "child work").unwrap();
+        feat_merge::feat_merge(&project_path, &projects_dir, "parent", false, self.name()).unwrap();
+        assert!(
+            !crate::git::branch_exists(
+                &crate::state::paths::main_worktree(&project_path),
+                "parent"
+            )
+            .unwrap()
+        );
+        (project_path, projects_dir)
+    }
+
     /// Create a project and a feature, returning `(project_path, project_name)`.
     pub fn setup_project_with_feature(
         &self,
