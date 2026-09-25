@@ -7,7 +7,11 @@ use crate::state::project::ProjectConfig;
 use crate::{commands::doctor, gh};
 
 /// Show a project dashboard: name, root, features with statuses, PR info, and doctor issues.
-pub fn status(project_root: &Path, tmux_server: Option<&str>) -> Result<Vec<String>> {
+pub fn status(
+    project_root: &Path,
+    projects_dir: &Path,
+    tmux_server: Option<&str>,
+) -> Result<Vec<String>> {
     let pm_dir = paths::pm_dir(project_root);
     let config = ProjectConfig::load(&pm_dir)?;
     let features_dir = paths::features_dir(project_root);
@@ -62,7 +66,7 @@ pub fn status(project_root: &Path, tmux_server: Option<&str>) -> Result<Vec<Stri
     }
 
     // Doctor issues
-    let doctor_lines = doctor::doctor(project_root, false, tmux_server)?;
+    let doctor_lines = doctor::doctor(project_root, projects_dir, false, tmux_server)?;
     let has_issues = !doctor_lines.is_empty()
         && !doctor_lines[0].contains("No features")
         && !doctor_lines[0].contains("all healthy");
@@ -93,9 +97,9 @@ mod tests {
     fn status_shows_project_info() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
-        let lines = status(&project_path, server.name()).unwrap();
+        let lines = status(&project_path, &projects_dir, server.name()).unwrap();
         assert!(lines[0].contains("Project:") && lines[0].contains(&server.scope("myapp")));
         assert!(lines[1].contains("Root:"));
         assert!(lines[2].contains("Features: 0"));
@@ -121,7 +125,7 @@ mod tests {
         ))
         .unwrap();
 
-        let lines = status(&project_path, server.name()).unwrap();
+        let lines = status(&project_path, &projects_dir, server.name()).unwrap();
         assert!(lines[2].contains("Features: 2"));
         assert!(
             lines
@@ -148,7 +152,7 @@ mod tests {
         ))
         .unwrap();
 
-        let lines = status(&project_path, server.name()).unwrap();
+        let lines = status(&project_path, &projects_dir, server.name()).unwrap();
         assert!(!lines.iter().any(|l| l.contains("Issues:")));
     }
 
@@ -169,7 +173,7 @@ mod tests {
         crate::tmux::kill_session(server.name(), &format!("{}/login", server.scope("myapp")))
             .unwrap();
 
-        let lines = status(&project_path, server.name()).unwrap();
+        let lines = status(&project_path, &projects_dir, server.name()).unwrap();
         assert!(lines.iter().any(|l| l.contains("Issues:")));
         assert!(lines.iter().any(|l| l.contains("tmux session")));
     }
@@ -178,9 +182,9 @@ mod tests {
     fn status_with_no_features() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
-        let lines = status(&project_path, server.name()).unwrap();
+        let lines = status(&project_path, &projects_dir, server.name()).unwrap();
         assert!(lines[2].contains("Features: 0"));
         // No feature lines, no issues section
         assert_eq!(lines.len(), 3);
@@ -210,7 +214,7 @@ mod tests {
         crate::tmux::kill_session(server.name(), &format!("{}/beta", server.scope("myapp")))
             .unwrap();
 
-        let lines = status(&project_path, server.name()).unwrap();
+        let lines = status(&project_path, &projects_dir, server.name()).unwrap();
         // Both features listed
         assert!(
             lines
@@ -258,7 +262,7 @@ mod tests {
         state.status = FeatureStatus::Review;
         state.save(&features_dir, "login").unwrap();
 
-        let lines = status(&project_path, server.name()).unwrap();
+        let lines = status(&project_path, &projects_dir, server.name()).unwrap();
         // gh CLI won't work in test, so we expect "status unknown"
         assert!(
             lines.iter().any(|l| l.contains("PR #42")),
