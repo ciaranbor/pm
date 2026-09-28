@@ -5,9 +5,6 @@ description: Exercise a pm build by hand or end to end without touching the real
 
 # pm sandbox
 
-Exercise pm only inside a sandbox. Never run a build under test against the
-real registry, the real `~/`, or the default tmux server.
-
 - `scripts/sandbox` provides an isolated `$HOME`, a private tmux server, and
   the built `pm` plus recording `claude`/`codex` shims on `PATH`.
   `scripts/sandbox --help` is the reference. Usual loop: `up`,

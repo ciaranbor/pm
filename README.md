@@ -406,9 +406,12 @@ skill shadowed this way.
 
 Project-specific procedures for agents — how to run, test, or review
 *here* — go in a project skill of your own, `main/.agents/skills/<name>/`,
-which `pm upgrade` projects for the harness. A skill's body loads only when
-its description matches the task, so a rule agents must always know belongs
-in the description. pm's own `.agents/skills/pm-sandbox/` is an example.
+which `pm upgrade` projects for the harness and copies into feature
+worktrees. Only a skill's description is in view when the agent decides
+whether to load it, so put the trigger and any rule agents must always see
+there. pm's own `.agents/skills/pm-sandbox/` is an example. A project that
+commits such a skill keeps each branch's version: pm never writes over a
+file the feature's branch tracks.
 
 Upgrading an existing project removes the per-project copies of bundled
 assets that earlier releases installed — your own files are never touched.
