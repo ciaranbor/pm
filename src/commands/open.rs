@@ -54,7 +54,9 @@ fn is_open_recoverable(kind: IssueKind) -> bool {
         | IssueKind::WorktreeUntrusted
         | IssueKind::MainBranchMissing
         | IssueKind::HarnessUnusable
-        | IssueKind::LoopStopped => false,
+        | IssueKind::LoopStopped
+        | IssueKind::AgentModelMissing
+        | IssueKind::HarnessConfigInvalid => false,
     }
 }
 

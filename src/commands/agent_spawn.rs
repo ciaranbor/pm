@@ -233,16 +233,26 @@ fn spawn_session_with_config(
         model: settings.model.as_deref(),
         writable_dirs: &dirs,
     };
-    let pre = settings.harness.pre_launch(
-        &LaunchContext {
-            project_root: params.project_root,
-            feature: params.feature,
-            worktree: &worktree_path,
-            agent: window_name,
-        },
-        &spec,
-        &harness_config,
-    )?;
+    let pre = settings
+        .harness
+        .pre_launch(
+            &LaunchContext {
+                project_root: params.project_root,
+                feature: params.feature,
+                worktree: &worktree_path,
+                agent: window_name,
+            },
+            &spec,
+            &harness_config,
+        )
+        // A refusal for want of a model row may be about one the
+        // resolution dropped.
+        .map_err(|e| match (e, &settings.model, &settings.dropped_model) {
+            (PmError::Agent(message), None, Some(dropped)) => {
+                PmError::Agent(format!("{message} ({dropped})"))
+            }
+            (e, _, _) => e,
+        })?;
     let cmd = settings.harness.build_cmd(&spec, &harness_config, &pre);
     let window_target = if let Some(target) = params.reuse_window {
         tmux::rename_window(params.tmux_server, target, window_name)?;
@@ -1043,7 +1053,22 @@ mod tests {
         let mut config = ProjectConfig::load(&pm_dir).unwrap();
         config.harness.opencode.binary =
             Some(crate::testing::fake_opencode(project_root, answer, exit));
+        config
+            .agents
+            .models
+            .entry(definition.to_string())
+            .or_insert_with(|| "local/qwen".to_string());
         config.save(&pm_dir).unwrap();
+    }
+
+    /// The config file the stand-in TUI was launched with.
+    fn opencode_config(project_root: &Path) -> serde_json::Value {
+        let env = std::fs::read_to_string(project_root.join("env")).unwrap();
+        let path = env
+            .lines()
+            .find_map(|line| line.strip_prefix("OPENCODE_CONFIG="))
+            .unwrap();
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
     }
 
     /// Wait for the window's shell to have launched the stand-in TUI, and
@@ -1112,7 +1137,106 @@ mod tests {
         assert_eq!(content, "OPENCODE_CONFIG_CONTENT=", "{env}");
         let path = config.strip_prefix("OPENCODE_CONFIG=").unwrap();
         assert_ne!(path, "/caller/opencode.json");
-        assert_eq!(std::fs::read_to_string(path).unwrap().trim(), "{}");
+        assert_eq!(opencode_config(dir.path())["model"], "local/qwen");
+    }
+
+    #[test]
+    fn spawn_on_opencode_renders_the_providers_of_both_config_tiers() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (_, feature) = setup_project(dir.path(), &server);
+        configure_opencode(dir.path(), "reviewer", r#"{"data":{"id":"ses_abc"}}"#, 0);
+        let pm_dir = paths::pm_dir(dir.path());
+        let mut config = ProjectConfig::load(&pm_dir).unwrap();
+        config.harness.opencode.providers = [(
+            "local".to_string(),
+            "package = \"project-pkg\"".parse().unwrap(),
+        )]
+        .into();
+        config.save(&pm_dir).unwrap();
+        let global: GlobalConfig = toml::from_str(
+            r#"
+[harness.opencode.providers.local]
+package = "global-pkg"
+settings = { baseURL = "http://127.0.0.1:8000/v1" }
+
+[harness.opencode.providers.second]
+package = "second-pkg"
+"#,
+        )
+        .unwrap();
+
+        let agents_dir = paths::agents_dir(dir.path());
+        std::fs::create_dir_all(&agents_dir).unwrap();
+        spawn_session_with_config(
+            &SpawnParams {
+                project_root: dir.path(),
+                feature: &feature,
+                agent_name: Some("reviewer"),
+                agent_definition: None,
+                prompt: None,
+                resume_session: None,
+                fork_session: false,
+                reuse_window: None,
+                tmux_server: server.name(),
+            },
+            &ProjectConfig::load(&pm_dir).unwrap(),
+            &global,
+        )
+        .unwrap();
+        opencode_tui_argv(dir.path());
+
+        assert_eq!(
+            opencode_config(dir.path()),
+            serde_json::json!({
+                "model": "local/qwen",
+                "enabled_providers": ["local", "second"],
+                "providers": {
+                    "local": {"package": "project-pkg", "models": {"qwen": {}}},
+                    "second": {"package": "second-pkg"},
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn spawn_on_opencode_without_a_model_row_is_refused_and_says_which_row_was_dropped() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+        configure_opencode(dir.path(), "reviewer", r#"{"data":{"id":"ses_abc"}}"#, 0);
+        let pm_dir = paths::pm_dir(dir.path());
+        let mut config = ProjectConfig::load(&pm_dir).unwrap();
+        config.agents.models.remove("reviewer");
+        // Bound to the `*` harness, which is not opencode.
+        config
+            .agents
+            .models
+            .insert("*".to_string(), "opus".to_string());
+        config.save(&pm_dir).unwrap();
+
+        let err = agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("opencode agent 'reviewer' has no [agents.models] row"),
+            "{err}"
+        );
+        assert!(
+            err.ends_with(
+                "(project [agents.models] row for '*' is bound to claude-code, not opencode — \
+                 not applied)"
+            ),
+            "{err}"
+        );
+        assert!(crate::testing::fake_opencode_calls(dir.path()).is_empty());
+        assert!(
+            tmux::find_window(server.name(), &session_name, "reviewer")
+                .unwrap()
+                .is_none()
+        );
+        let registry = AgentRegistry::load(&paths::agents_dir(dir.path()), &feature).unwrap();
+        assert!(registry.get("reviewer").is_none());
     }
 
     #[test]
@@ -1158,16 +1282,10 @@ mod tests {
             serde_json::json!({"providerID": "nowhere", "id": "does-not-exist"})
         );
         opencode_tui_argv(dir.path());
-        let env = std::fs::read_to_string(dir.path().join("env")).unwrap();
-        let path = env
-            .lines()
-            .next()
-            .unwrap()
-            .strip_prefix("OPENCODE_CONFIG=")
-            .unwrap();
-        let config: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-        assert_eq!(config["enabled_providers"], serde_json::json!(["nowhere"]));
+        assert_eq!(
+            opencode_config(dir.path())["enabled_providers"],
+            serde_json::json!(["nowhere"])
+        );
     }
 
     #[test]
@@ -1228,53 +1346,6 @@ mod tests {
         // loads, and a window that dies first must still be resumable.
         let registry = AgentRegistry::load(&paths::agents_dir(dir.path()), &feature).unwrap();
         assert_eq!(registry.get("reviewer").unwrap().session_id, "ses_first");
-    }
-
-    #[test]
-    fn respawn_on_opencode_after_the_model_row_is_removed_starts_a_fresh_session() {
-        let server = TestServer::new();
-        let dir = tempdir().unwrap();
-        let (session_name, feature) = setup_project(dir.path(), &server);
-        let pinned = |id: &str| {
-            format!(r#"{{"data":{{"id":"{id}","model":{{"providerID":"local","id":"qwen"}}}}}}"#)
-        };
-        configure_opencode(dir.path(), "reviewer", &pinned("ses_first"), 0);
-        let set_model = |model: Option<&str>| {
-            let pm_dir = paths::pm_dir(dir.path());
-            let mut config = ProjectConfig::load(&pm_dir).unwrap();
-            match model {
-                Some(m) => config.agents.models.insert("reviewer".into(), m.into()),
-                None => config.agents.models.remove("reviewer"),
-            };
-            config.save(&pm_dir).unwrap();
-        };
-        set_model(Some("local/qwen"));
-        agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
-        opencode_tui_argv(dir.path());
-
-        tmux::kill_session(server.name(), &session_name).unwrap();
-        tmux::create_session(server.name(), &session_name, &dir.path().join(&feature)).unwrap();
-        set_model(None);
-        configure_opencode(dir.path(), "reviewer", &pinned("ses_second"), 0);
-
-        let (outcome, msg, notes) =
-            agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
-        assert_eq!(
-            notes,
-            [
-                "session ses_first is pinned to model local/qwen, which opencode cannot unpin; \
-              started a fresh session"
-            ]
-        );
-        assert!(msg.ends_with(&format!("({})", notes[0])), "{msg}");
-        assert_eq!(outcome, SpawnOutcome::Spawned);
-        assert!(msg.starts_with("Spawned agent 'reviewer' in "), "{msg}");
-        let registry = AgentRegistry::load(&paths::agents_dir(dir.path()), &feature).unwrap();
-        assert_eq!(registry.get("reviewer").unwrap().session_id, "ses_second");
-        assert_eq!(
-            opencode_tui_argv(dir.path()),
-            ["--standalone", "--auto", "--session", "ses_second"]
-        );
     }
 
     #[test]

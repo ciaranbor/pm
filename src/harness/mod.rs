@@ -100,6 +100,24 @@ impl Harness {
         }
     }
 
+    /// Whether an agent on this harness is refused without an
+    /// `[agents.models]` row.
+    pub fn requires_model(self) -> bool {
+        match self {
+            Harness::ClaudeCode | Harness::Codex => false,
+            Harness::OpenCode => true,
+        }
+    }
+
+    /// What is wrong with the harness's `[harness.<name>]` settings for
+    /// agents started in `worktree`, where only the harness can tell.
+    pub fn config_issues(self, config: &HarnessConfig, worktree: &Path) -> Vec<String> {
+        match self {
+            Harness::ClaudeCode | Harness::Codex => Vec::new(),
+            Harness::OpenCode => opencode::config_issues(&config.opencode, worktree),
+        }
+    }
+
     /// How the composed prompt reaches an agent, for probe and doctor
     /// messages.
     pub fn prompt_mechanism(self) -> String {
