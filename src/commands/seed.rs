@@ -250,7 +250,6 @@ mod tests {
 
         seed_feature_assets(&project, &feature_wt).unwrap();
         assert_kept("seed");
-        // Files the branch doesn't track are still seeded.
         assert_eq!(
             std::fs::read_to_string(feature_wt.join(".agents/skills/custom/notes.md")).unwrap(),
             "untracked"

@@ -409,9 +409,13 @@ Project-specific procedures for agents — how to run, test, or review
 which `pm upgrade` projects for the harness and copies into feature
 worktrees. Only a skill's description is in view when the agent decides
 whether to load it, so put the trigger and any rule agents must always see
-there. pm's own `.agents/skills/pm-sandbox/` is an example. A project that
-commits such a skill keeps each branch's version: pm never writes over a
-file the feature's branch tracks.
+there. pm's own `.agents/skills/pm-sandbox/` is an example.
+
+If the project commits such a skill, pm never writes over a file the
+feature's branch tracks, so an edit made on a feature branch survives
+`pm upgrade`. The edit takes effect for agents only once it is merged and
+projected from main: a Claude Code agent in a feature worktree loads
+`.claude/skills/`, which is copied from main's projection.
 
 Upgrading an existing project removes the per-project copies of bundled
 assets that earlier releases installed — your own files are never touched.
