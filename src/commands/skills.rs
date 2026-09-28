@@ -937,26 +937,6 @@ fn uninstall_global(kind: BundledKind, name: Option<&str>) -> Result<Vec<String>
     Ok(messages)
 }
 
-/// Copy main's custom skills — the canonical store and each harness's
-/// projection — into the feature worktree's matching directories, leaving
-/// alone any file the feature's branch tracks. Returns the directories
-/// copied (relative to a worktree); empty when main has none.
-pub fn skills_pull(project_root: &Path, feature_name: &str) -> Result<Vec<PathBuf>> {
-    super::claude_settings::require_feature(project_root, feature_name)?;
-
-    let main = paths::main_worktree(project_root);
-    let feature = project_root.join(feature_name);
-    let mut rels = vec![PathBuf::from(CANONICAL_DIR).join("skills")];
-    for h in harnesses_in_use(project_root)? {
-        rels.push(PathBuf::from(h.config_dir()).join("skills"));
-    }
-    let present: Vec<PathBuf> = rels.into_iter().filter(|r| main.join(r).is_dir()).collect();
-    for rel in &present {
-        super::seed::sync_untracked(&main, &feature, rel, false)?;
-    }
-    Ok(present)
-}
-
 // --- Public API: Agents ---
 
 pub fn agents_list(project_root: Option<&Path>) -> Result<Vec<String>> {
@@ -1505,61 +1485,6 @@ mod tests {
         assert!(project_assets(project_root, true).unwrap().is_empty());
     }
 
-    // --- skills pull ---
-
-    fn project_with_feature(project_root: &Path) {
-        let features_dir = paths::features_dir(project_root);
-        fs::create_dir_all(&features_dir).unwrap();
-        fs::write(
-            features_dir.join("my-feat.toml"),
-            "status = \"wip\"\nbranch = \"my-feat\"\nworktree = \"my-feat\"\nbase = \"main\"\n\
-             pr = \"\"\ncontext = \"\"\ncreated = \"2026-01-01T00:00:00Z\"\n\
-             last_active = \"2026-01-01T00:00:00Z\"\n",
-        )
-        .unwrap();
-        fs::create_dir_all(paths::main_worktree(project_root)).unwrap();
-        fs::create_dir_all(project_root.join("my-feat")).unwrap();
-    }
-
-    #[test]
-    fn pull_copies_custom_skills_from_both_stores_and_overwrites() {
-        let tmp = tempfile::tempdir().unwrap();
-        let project_root = tmp.path();
-        project_with_feature(project_root);
-        let main = paths::main_worktree(project_root);
-        for store in [".agents", ".claude"] {
-            let dir = main.join(store).join("skills/foo");
-            fs::create_dir_all(&dir).unwrap();
-            fs::write(dir.join("SKILL.md"), "updated content").unwrap();
-        }
-        let feature_skill = project_root.join("my-feat/.claude/skills/foo/SKILL.md");
-        fs::create_dir_all(feature_skill.parent().unwrap()).unwrap();
-        fs::write(&feature_skill, "old content").unwrap();
-
-        let copied = skills_pull(project_root, "my-feat").unwrap();
-        assert_eq!(copied.len(), 2, "{copied:?}");
-        assert_eq!(
-            fs::read_to_string(&feature_skill).unwrap(),
-            "updated content"
-        );
-        assert_eq!(
-            fs::read_to_string(project_root.join("my-feat/.agents/skills/foo/SKILL.md")).unwrap(),
-            "updated content"
-        );
-    }
-
-    #[test]
-    fn pull_is_a_noop_without_customs_and_errors_on_unknown_feature() {
-        let tmp = tempfile::tempdir().unwrap();
-        let project_root = tmp.path();
-        project_with_feature(project_root);
-        assert!(skills_pull(project_root, "my-feat").unwrap().is_empty());
-        assert!(!project_root.join("my-feat/.agents").exists());
-
-        let err = skills_pull(project_root, "nonexistent").unwrap_err();
-        assert!(matches!(err, PmError::FeatureNotFound(_)));
-    }
-
     // --- Baseline ---
 
     #[test]
@@ -1591,6 +1516,20 @@ mod tests {
     }
 
     // --- Migration ---
+
+    fn project_with_feature(project_root: &Path) {
+        let features_dir = paths::features_dir(project_root);
+        fs::create_dir_all(&features_dir).unwrap();
+        fs::write(
+            features_dir.join("my-feat.toml"),
+            "status = \"wip\"\nbranch = \"my-feat\"\nworktree = \"my-feat\"\nbase = \"main\"\n\
+             pr = \"\"\ncontext = \"\"\ncreated = \"2026-01-01T00:00:00Z\"\n\
+             last_active = \"2026-01-01T00:00:00Z\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(paths::main_worktree(project_root)).unwrap();
+        fs::create_dir_all(project_root.join("my-feat")).unwrap();
+    }
 
     /// A pre-migration project: bundled copies in main's canonical store and
     /// harness dir, a seeded feature, both baselines, bundled and custom

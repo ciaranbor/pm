@@ -198,6 +198,15 @@ pub enum HarnessCommands {
         #[command(subcommand)]
         command: HarnessSettingsCommands,
     },
+    /// Pull main's custom skills, agent definitions and settings into a feature
+    /// (never overwrites a file the feature's branch tracks)
+    Pull {
+        /// Feature name (detected from CWD if omitted)
+        name: Option<String>,
+        /// Preview the files that would be written without writing them
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Migrate harness sessions from an old project path to the current directory
     Migrate {
         /// The old absolute path where the project previously lived
@@ -304,11 +313,6 @@ pub enum HarnessSkillsCommands {
         /// Uninstall all bundled skills
         #[arg(long)]
         all: bool,
-    },
-    /// Pull skills from main into a feature (canonical store and harness projections)
-    Pull {
-        /// Feature name (detected from CWD if omitted)
-        name: Option<String>,
     },
 }
 

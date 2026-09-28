@@ -5,12 +5,12 @@ use crate::state::paths;
 use crate::state::project::ProjectEntry;
 
 use super::hooks_install;
-use super::seed;
 use super::skills;
 
 /// Upgrade a single project: reinstall hooks, bootstrap state, migrate any
-/// pre-global-tier bundled copies away, project the project's own customs
-/// for each harness in use, then re-seed every active feature worktree.
+/// pre-global-tier bundled copies away, and project the project's own
+/// customs for each harness in use. Feature worktrees are untouched except by
+/// that migration, which removes only pm-owned files.
 /// The global asset tier is installed separately (see [`upgrade_all`] and
 /// [`upgrade`]) since it is shared by every project.
 pub fn upgrade_project(project_root: &Path) -> Result<Vec<String>> {
@@ -51,27 +51,7 @@ pub fn upgrade_project(project_root: &Path) -> Result<Vec<String>> {
     let notes = skills::project_assets(project_root, false)?;
     updated.push("projections".to_string());
 
-    // Re-seed each active feature worktree
-    let features_dir = paths::features_dir(project_root);
-    let features = crate::state::feature::FeatureState::list(&features_dir)?;
-    let mut feature_count = 0;
-    for (name, _state) in &features {
-        let feature_worktree = project_root.join(name);
-        if feature_worktree.is_dir() {
-            seed::seed_feature_assets(project_root, &feature_worktree)?;
-            feature_count += 1;
-        }
-    }
-
-    let parts = updated.join(", ");
-    let summary = if feature_count > 0 {
-        format!(
-            "Upgraded {parts} for main + {feature_count} feature{}",
-            if feature_count == 1 { "" } else { "s" }
-        )
-    } else {
-        format!("Upgraded {parts} for main")
-    };
+    let summary = format!("Upgraded {} for main", updated.join(", "));
     let mut lines = vec![summary];
     lines.extend(notes);
     Ok(lines)
@@ -120,19 +100,6 @@ pub fn upgrade_project_dry_run(project_root: &Path) -> Result<Vec<String>> {
 
     // Projections (compares the canonical store as it is on disk now)
     actions.extend(skills::project_assets(project_root, true)?);
-
-    // Feature worktrees: only report each feature whose seeded assets differ
-    let features_dir = paths::features_dir(project_root);
-    let features = crate::state::feature::FeatureState::list(&features_dir)?;
-    for (name, _state) in &features {
-        let feature_worktree = project_root.join(name);
-        if !feature_worktree.is_dir() {
-            continue;
-        }
-        if seed::seed_feature_assets_would_change(project_root, &feature_worktree)? {
-            actions.push(format!("Would re-seed harness assets in feature '{name}'"));
-        }
-    }
 
     Ok(actions)
 }
@@ -541,59 +508,63 @@ last_active = "2026-01-01T00:00:00Z"
         );
     }
 
-    #[test]
-    fn upgrade_reseeds_feature_worktrees() {
-        let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
-
-        write_feature_toml(&root, "my-feat");
-        fs::create_dir_all(root.join("my-feat")).unwrap();
-        // A project custom and main's own settings are what a feature gets
-        // seeded with.
-        let main = paths::main_worktree(&root);
-        let custom = main.join(".agents/agents/custom.md");
-        fs::create_dir_all(custom.parent().unwrap()).unwrap();
-        fs::write(&custom, "custom def").unwrap();
-        fs::create_dir_all(main.join(".claude")).unwrap();
-        fs::write(
-            main.join(".claude/settings.json"),
-            r#"{"permissions":{"allow":["Read"]}}"#,
-        )
-        .unwrap();
-
-        let summary = upgrade_project(&root).unwrap().join("\n");
-        assert!(summary.contains("1 feature"), "{summary}");
-
-        let feat = root.join("my-feat");
-        let seeded: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(feat.join(".claude/settings.json")).unwrap())
-                .unwrap();
-        assert_eq!(seeded["permissions"]["allow"][0], "Read");
-        assert!(seeded.get("hooks").is_none(), "{seeded}");
-        assert_eq!(
-            fs::read_to_string(feat.join(".agents/agents/custom.md")).unwrap(),
-            "custom def"
-        );
-        assert_eq!(
-            fs::read_to_string(feat.join(".claude/agents/custom.md")).unwrap(),
-            "custom def"
-        );
-        assert!(!feat.join(".claude/agents/reviewer.md").exists());
+    /// Every file under `dir`, relative to it, with its bytes.
+    fn snapshot(dir: &std::path::Path) -> Vec<(PathBuf, Vec<u8>)> {
+        fn walk(dir: &std::path::Path, base: &std::path::Path, out: &mut Vec<(PathBuf, Vec<u8>)>) {
+            for entry in fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    out.push((path.strip_prefix(base).unwrap().to_path_buf(), Vec::new()));
+                    walk(&path, base, out);
+                } else {
+                    out.push((
+                        path.strip_prefix(base).unwrap().to_path_buf(),
+                        fs::read(&path).unwrap(),
+                    ));
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(dir, dir, &mut out);
+        out.sort();
+        out
     }
 
     #[test]
-    fn upgrade_reports_multiple_features_and_skips_missing_worktrees() {
+    fn upgrade_leaves_feature_worktrees_untouched() {
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
 
-        for name in &["feat-a", "feat-b", "feat-c"] {
-            write_feature_toml(&root, name);
-            fs::create_dir_all(root.join(name)).unwrap();
+        // Main has customs and settings the feature lacks or holds stale.
+        let main = paths::main_worktree(&root);
+        for rel in [
+            ".agents/agents/custom.md",
+            ".agents/skills/howto/SKILL.md",
+            ".claude/settings.json",
+        ] {
+            let path = main.join(rel);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, "main's").unwrap();
         }
-        write_feature_toml(&root, "orphan");
+        write_feature_toml(&root, "my-feat");
+        let feat = root.join("my-feat");
+        for rel in [
+            ".agents/agents/custom.md",
+            ".claude/settings.json",
+            "src/lib.rs",
+        ] {
+            let path = feat.join(rel);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, "feature's").unwrap();
+        }
+        let before = snapshot(&feat);
 
-        let summary = upgrade_project(&root).unwrap().join("\n");
-        assert!(summary.contains("3 features"), "{summary}");
+        upgrade_project(&root).unwrap();
+
+        assert_eq!(snapshot(&feat), before);
+        // Main's own projection still ran.
+        assert!(main.join(".claude/agents/custom.md").exists());
+        assert!(upgrade_project_dry_run(&root).unwrap().is_empty());
     }
 
     #[test]
@@ -655,30 +626,6 @@ last_active = "2026-01-01T00:00:00Z"
             "expected projection line, got: {actions:?}"
         );
         assert!(!main.join(".claude/agents/custom.md").exists());
-    }
-
-    #[test]
-    fn dry_run_reports_feature_reseed_when_stale() {
-        let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
-
-        upgrade_project(&root).unwrap();
-        let main_claude = paths::main_worktree(&root).join(".claude");
-        fs::create_dir_all(&main_claude).unwrap();
-        fs::write(main_claude.join("settings.json"), r#"{"permissions":{}}"#).unwrap();
-
-        write_feature_toml(&root, "stale-feat");
-        let feat_claude = root.join("stale-feat").join(".claude");
-        fs::create_dir_all(&feat_claude).unwrap();
-        fs::write(feat_claude.join("settings.json"), "{}").unwrap();
-
-        let actions = upgrade_project_dry_run(&root).unwrap();
-        assert!(
-            actions
-                .iter()
-                .any(|a| a == "Would re-seed harness assets in feature 'stale-feat'"),
-            "expected feature line, got: {actions:?}"
-        );
     }
 
     #[test]

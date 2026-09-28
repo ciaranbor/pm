@@ -948,17 +948,6 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
                 }
                 Ok(())
             }
-            HarnessSkillsCommands::Pull { name } => {
-                let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-                let name = resolve_feature_name(name, &project_root)?;
-                let copied = commands::skills::skills_pull(&project_root, &name)?;
-                if copied.is_empty() {
-                    println!("No custom skills in main to pull into feature '{name}'");
-                } else {
-                    println!("Pulled skills from main into feature '{name}'");
-                }
-                Ok(())
-            }
         },
         HarnessCommands::Agents(agents_cmd) => match agents_cmd {
             HarnessAgentsCommands::List => {
@@ -998,6 +987,19 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
                 exit_unless_ok(commands::hooks_session_start::session_start())
             }
         },
+        HarnessCommands::Pull { name, dry_run } => {
+            let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+            let name = resolve_feature_name(name, &project_root)?;
+            let files = commands::seed::pull(&project_root, &name, dry_run)?;
+            if files.is_empty() {
+                println!("Feature '{name}' is up to date with main");
+            }
+            let verb = if dry_run { "Would write" } else { "Wrote" };
+            for file in files {
+                println!("{verb} {name}/{}", file.display());
+            }
+            Ok(())
+        }
         HarnessCommands::Migrate { from, harness } => {
             let cwd = std::env::current_dir()?;
             claude_code_only(harness, "session migration")?;
