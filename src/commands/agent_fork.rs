@@ -348,6 +348,10 @@ mod tests {
             .agents
             .harness
             .insert("reviewer".to_string(), "opencode".to_string());
+        config
+            .agents
+            .models
+            .insert("reviewer".to_string(), "local/qwen".to_string());
         config.harness.opencode.binary = Some(crate::testing::fake_opencode(
             dir.path(),
             r#"{"data":{"id":"ses_source"}}"#,

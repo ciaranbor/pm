@@ -57,6 +57,10 @@ pub struct OpenCodeConfig {
     /// The opencode executable; unset means `opencode` from `PATH`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binary: Option<String>,
+    /// `[harness.opencode.providers.<id>]`: provider entries in opencode's
+    /// own schema, rendered into every opencode agent's config.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub providers: std::collections::BTreeMap<String, toml::Table>,
 }
 
 /// `[harness.codex]`: how codex agents are sandboxed. Every value is in
@@ -180,6 +184,8 @@ pub struct AgentSettings {
     /// One line per configured row the resolution dropped, for the spawn
     /// message.
     pub notes: Vec<String>,
+    /// The one of `notes` about the model row, when that was dropped.
+    pub dropped_model: Option<String>,
 }
 
 type Rows = std::collections::BTreeMap<String, String>;
@@ -206,8 +212,7 @@ pub fn resolve_agent_settings(
         .transpose()?
         .unwrap_or_default();
 
-    let mut notes = Vec::new();
-    let mut resolve = |table: &str, project_rows: &Rows, global_rows: &Rows| {
+    let resolve = |table: &str, project_rows: &Rows, global_rows: &Rows| {
         let tiers: [(&str, &Rows, &[&Rows]); 2] = [
             (
                 "project",
@@ -221,27 +226,32 @@ pub fn resolve_agent_settings(
                 continue;
             };
             if value.is_empty() {
-                return None;
+                return (None, None);
             }
             let (bound, bound_name) = bound_harness(harness_tiers, key);
             if bound == Some(harness) {
-                return Some(value.clone());
+                return (Some(value.clone()), None);
             }
-            notes.push(format!(
+            let dropped = format!(
                 "{tier} [agents.{table}] row for '{key}' is bound to {bound_name}, not \
                  {harness} — not applied"
-            ));
-            return None;
+            );
+            return (None, Some(dropped));
         }
-        None
+        (None, None)
     };
-    let permission_mode = resolve("permissions", &project.permissions, &global.permissions);
-    let model = resolve("models", &project.models, &global.models);
+    let (permission_mode, dropped_permissions) =
+        resolve("permissions", &project.permissions, &global.permissions);
+    let (model, dropped_model) = resolve("models", &project.models, &global.models);
     Ok(AgentSettings {
         permission_mode,
         model,
         harness,
-        notes,
+        notes: dropped_permissions
+            .into_iter()
+            .chain(dropped_model.clone())
+            .collect(),
+        dropped_model,
     })
 }
 
@@ -258,14 +268,19 @@ fn bound_harness(tiers: &[&Rows], key: &str) -> (Option<Harness>, String) {
 
 /// Resolve the per-harness settings across the two tiers, per key: a set
 /// project value wins; an empty string (or, for a list, `[]`) masks the
-/// global one.
+/// global one. A provider entry is one key: the project's replaces the
+/// global one of the same id whole, and an empty project table masks it.
 pub fn resolve_harness_config(project: &HarnessConfig, global: &HarnessConfig) -> HarnessConfig {
     let (p, g) = (&project.codex, &global.codex);
     let (po, go) = (&project.opencode, &global.opencode);
+    let mut providers = go.providers.clone();
+    providers.extend(po.providers.clone());
+    providers.retain(|_, entry| !entry.is_empty());
     HarnessConfig {
         opencode: OpenCodeConfig {
             auto: po.auto.or(go.auto),
             binary: layered_opt(&po.binary, &go.binary),
+            providers,
         },
         codex: CodexConfig {
             sandbox: layered_opt(&p.sandbox, &g.sandbox),
@@ -1106,6 +1121,68 @@ writable_roots = ["/global/cache"]
             resolve_harness_config(&HarnessConfig::default(), &HarnessConfig::default()),
             HarnessConfig::default()
         );
+    }
+
+    #[test]
+    fn opencode_providers_layer_whole_entries_project_over_global() {
+        let global: GlobalConfig = toml::from_str(
+            r#"
+[harness.opencode.providers.local]
+package = "@opencode/ai/providers/openai-compatible"
+env = ["LOCAL_API_KEY"]
+settings = { baseURL = "http://127.0.0.1:8000/v1" }
+
+[harness.opencode.providers.hosted]
+package = "pkg"
+
+[harness.opencode.providers.shared]
+package = "shared-pkg"
+"#,
+        )
+        .unwrap();
+        let project: ProjectConfig = toml::from_str(
+            r#"
+[project]
+name = "myapp"
+
+[harness.opencode.providers.local]
+package = "other"
+
+[harness.opencode.providers.hosted]
+
+[harness.opencode.providers.mine]
+package = "mine-pkg"
+"#,
+        )
+        .unwrap();
+
+        let resolved = resolve_harness_config(&project.harness, &global.harness).opencode;
+        let table = |text: &str| text.parse::<toml::Table>().unwrap();
+        assert_eq!(
+            resolved.providers,
+            [
+                // Replaced whole: the global entry's `env` and `settings` are gone.
+                ("local".to_string(), table("package = \"other\"")),
+                ("mine".to_string(), table("package = \"mine-pkg\"")),
+                ("shared".to_string(), table("package = \"shared-pkg\"")),
+            ]
+            .into()
+        );
+
+        assert_eq!(
+            resolve_harness_config(&HarnessConfig::default(), &global.harness)
+                .opencode
+                .providers,
+            global.harness.opencode.providers
+        );
+    }
+
+    #[test]
+    fn config_without_providers_serializes_no_providers_table() {
+        let config: ProjectConfig = toml::from_str("[project]\nname = \"x\"\n").unwrap();
+        let written = toml::to_string_pretty(&config).unwrap();
+        assert_eq!(toml::from_str::<ProjectConfig>(&written).unwrap(), config);
+        assert!(!written.contains("providers"), "{written}");
     }
 
     #[test]

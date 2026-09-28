@@ -32,8 +32,8 @@ Usage: scripts/sandbox [COMMAND] [OPTIONS] [-- CMD...]
              are not: log in once (attach, then /login) or export
              CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY before `up` (the
              sandbox inherits them), and `trust` each project dir before
-             spawning agents in it. opencode gets nothing copied: write its
-             providers to $HOME/.config/opencode/opencode.json
+             spawning agents in it. opencode gets nothing copied: set its
+             providers in pm config ([harness.opencode.providers.<id>])
   --shell S  shell tmux windows run (default: $SHELL, non-login, no rc files
              since HOME is the sandbox)
 

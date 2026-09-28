@@ -207,9 +207,9 @@ Permission modes and model ids are in the terms of the agent's harness:
 `--permission-mode` / `--model` values for Claude Code, the `-s` sandbox
 mode / `-m` for codex, a permission rule list / `<provider>/<model>` for
 opencode. On Claude Code and codex pm passes them through as written, so a
-typo surfaces in the agent's tmux window. On opencode a row of the wrong
-shape is an error at spawn, and a model opencode cannot resolve fails the
-agent's first turn (see [opencode agents](#opencode-agents)).
+typo surfaces in the agent's tmux window. On opencode a missing row or one
+of the wrong shape is an error at spawn, and a model opencode cannot resolve
+fails the agent's first turn (see [opencode agents](#opencode-agents)).
 
 A model or permission row is bound to the harness configured under the same
 key, looking from the row's own file down: a `reviewer` row to the `reviewer`
@@ -356,23 +356,63 @@ harnesses; what differs:
   ahead of the row for its own state dir, the shared `main/.git`, and the pm
   config dir, so reading `.pm/` does not prompt — unless a later rule of the
   row matches those paths, which wins.
-- **A model row is binding.** Left to its config, opencode replaces a
-  model it cannot resolve with its default one — hosted by opencode when no
-  provider is configured — without an error. pm therefore pins the
-  `[agents.models]` row on the agent's session and limits the agent to that
-  row's provider. A row opencode cannot resolve then fails the agent's first
-  turn (`Model unavailable`) before any request is made, and the loop stops
-  and reports it as above. An agent with **no** row runs on whatever
-  opencode's own config selects. opencode cannot unpin a session, so after
-  a row is removed the agent's next respawn starts a fresh session, and says
-  so; `pm agent fork` of such an agent is refused until the row is back.
+- **A model row is required, and binding.** Left to its config, opencode
+  replaces a model it cannot resolve with its default one — hosted by
+  opencode when no provider is configured — without an error. pm therefore
+  refuses to spawn (or respawn, or fork) an opencode agent that has no
+  `[agents.models]` row, pins the row on the agent's session, and limits the
+  agent to the row's provider and the providers pm config defines. A row
+  opencode cannot resolve then fails the agent's first turn (`Model
+  unavailable`) before any request is made, and the loop stops and reports
+  it as above.
+- **Providers are pm config.** Each `[harness.opencode.providers.<id>]`
+  table is an entry of opencode's own `providers` object and is written to
+  every opencode agent's config as it stands, so a subagent can run on
+  another provider than its parent's. A project entry replaces the global
+  one of the same id whole; an empty project table removes it.
+
+  ```toml
+  [agents.harness]
+  qa = "opencode"
+
+  [agents.models]
+  qa = "local/mlx-community/Qwen3.8-27B-4bit"
+
+  [harness.opencode.providers.local]
+  package = "@opencode/ai/providers/openai-compatible"
+  settings = { baseURL = "http://127.0.0.1:8000/v1" }
+  env = ["LOCAL_API_KEY"]       # optional: the variable holding the key
+  # optional; quote ids holding `/` or `.`:
+  models = { "mlx-community/Qwen3.8-27B-4bit" = { name = "Qwen" } }
+  ```
+
+  opencode resolves no model a provider does not list, so pm adds the row's
+  model to its provider's `models`; a mistyped id therefore fails at the
+  endpoint, not before. A row may still name a provider pm config does not
+  define — one opencode ships (`anthropic/…`) or one from your own
+  `~/.config/opencode/opencode.json`: pm allows it and leaves its definition
+  alone. Once pm config defines the same id, pm's entry replaces that
+  file's whole.
+- **Keys are named, never stored.** Name the variable — `env = ["NAME"]`,
+  or `{env:NAME}` inside a value — and set it in the environment agents
+  start in. An `apiKey` that is not exactly `{env:NAME}`, or an
+  `Authorization` header without an `{env:…}`, is an error at spawn.
+  opencode sends the request **without a key** when the variable is unset;
+  the spawn line and `pm doctor` say when pm's own environment lacks it.
+- **opencode's own config can undo the restriction.** opencode merges
+  `~/.config/opencode/opencode.json[c]` and any `.opencode/` directory above
+  the worktree into the agent's config. A provider restriction there
+  (`enabled_providers`) replaces pm's: the agent's model becomes `Model
+  unavailable` and that file's providers are allowed. `pm doctor` reports
+  such a file, and an entry opencode dropped because a field has the wrong
+  type (it drops unknown keys silently).
 - **Forking needs a turn.** opencode refuses to fork a session that has had
   none, so `pm agent fork` fails for an agent that has not processed a
   message yet.
-- Providers and credentials are opencode's own (`~/.config/opencode/`); pm
-  sets only the model and the permission rules, in a config file of its own
-  named by `OPENCODE_CONFIG`. An agent never inherits `OPENCODE_CONFIG` or
-  `OPENCODE_CONFIG_CONTENT` from the shell that spawned it.
+- pm writes the model, the providers and the permission rules to a config
+  file of its own named by `OPENCODE_CONFIG`. An agent never inherits
+  `OPENCODE_CONFIG` or `OPENCODE_CONFIG_CONTENT` from the shell that spawned
+  it.
 - `pm harness probe --harness opencode` checks the installed version. `pm
   harness settings|migrate|export|import` are Claude Code only.
 

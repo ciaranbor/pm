@@ -56,6 +56,8 @@ Design decisions you can't recover by reading the tree. Preserve them.
 - Hooks read the agent's identity from their environment, so a spawn never
   attaches to a shared harness server, whose hooks run in its own.
 - opencode's Stop hook is a bundled plugin; a loop that stops itself must say so.
+- An opencode agent never spawns without a model row and reaches only the
+  providers pm config names; keys are named by env var, never stored.
 - Three context-delivery contracts: `feat new`/`feat adopt --workflow` spawn
   the whole team and brief only `brief_agents` (a context with none to brief
   is an error); `agent spawn --context` enqueues, then spawns or no-ops;
@@ -113,8 +115,7 @@ Design decisions you can't recover by reading the tree. Preserve them.
 - `summary.md` is the standing feature→project channel, triaged by the
   orchestrator on cleanup. Completion is the user's merge; there is no
   agent-driven "done" status.
-- The `feat new` brief is non-repliable, so the agent has no `main` reply
-  target.
+- The `feat new` brief is non-repliable: the agent has no `main` reply target.
 
 ### Lifecycle hooks
 
@@ -189,9 +190,8 @@ TDD. Tests use real git repos and real tmux sessions, not mocks.
 When adding or changing commands/features, update:
 
 - `README.md` — user-facing usage examples and command reference
-- `AGENTS.md` — invariants and conventions only. Mechanism goes in the
-  owning module's `//!`; user-facing behaviour in README. Keep this file
-  under 200 lines.
+- `AGENTS.md` — invariants and conventions only, under 200 lines. Mechanism
+  goes in the owning module's `//!`; user-facing behaviour in README.
 
 ## Commits
 

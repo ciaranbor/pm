@@ -33,18 +33,18 @@
 //! `OPENCODE_CONFIG_CONTENT` always removed, so an agent never runs on the
 //! config of whoever spawned it.
 //!
-//! The `[agents.models]` row is `<provider>/<model>[#variant]`. opencode
-//! does not reject a model it cannot resolve — not in config, not at
-//! `session.create`, not at `session.switchModel` — and a session whose
-//! model comes from config then runs on opencode's default model, which with
-//! no provider configured is a hosted one. So the row is also **pinned on
-//! the session** (at creation, and again on every resume and fork, which is
-//! what makes an edited row apply), and the config limits the agent to the
-//! row's provider (`enabled_providers`). A pinned model opencode cannot
-//! resolve fails the turn with `Model unavailable` before any request is
-//! made; the plugin then stops the loop and reports it. opencode cannot
-//! unpin a session, so once the row is removed a pinned session is not
-//! resumed: the agent starts a fresh one, and a fork is refused.
+//! The `[agents.models]` row is `<provider>/<model>[#variant]`, and an
+//! agent without one is refused: opencode does not reject a model it cannot
+//! resolve — not in config, not at `session.create`, not at
+//! `session.switchModel` — and a session whose model comes from config runs
+//! on opencode's default model, which with no provider configured is a
+//! hosted one. So the row is **pinned on the session** (at creation, and
+//! again on every resume and fork, which is what makes an edited row
+//! apply), and the config limits the agent (`enabled_providers`) to the
+//! row's provider and the ones pm config defines ([`providers`]). A pinned
+//! model opencode cannot resolve fails the turn with `Model unavailable`
+//! before any request is made; the plugin then stops the loop and reports
+//! it.
 //!
 //! The `[agents.permissions]` row is opencode's own rule list, a JSON array
 //! such as `[{"action":"edit","resource":"*","effect":"deny"}]`; the last
@@ -52,6 +52,8 @@
 //! default, because an approval prompt in an unwatched window stalls the
 //! agent. With `[harness.opencode] auto = false` pm puts allow rules for its
 //! own state dirs ahead of the row, which can still override them.
+
+mod providers;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -62,6 +64,7 @@ use crate::error::{PmError, Result};
 use crate::fs_utils::write_atomic;
 use crate::harness::{LaunchContext, PreLaunch, Projection, SpawnSpec};
 use crate::state::project::OpenCodeConfig;
+use crate::state::workflow::VANILLA_AGENT;
 use crate::tmux;
 
 pub(super) const CONFIG_DIR: &str = ".opencode";
@@ -224,40 +227,29 @@ pub(super) fn pre_launch(
     spec: &SpawnSpec<'_>,
     cfg: &OpenCodeConfig,
 ) -> Result<PreLaunch> {
-    let model = spec.model.map(ModelRef::parse).transpose()?;
-    let config = render_config(spec, cfg, model.as_ref())?;
+    let Some(row) = spec.model else {
+        return Err(PmError::Agent(format!(
+            "opencode agent '{}' has no [agents.models] row; without one opencode picks the \
+             model itself, a hosted one unless its own config says otherwise. Set \
+             `[agents.models] {} = \"<provider>/<model>\"`",
+            ctx.agent,
+            spec.definition.unwrap_or(VANILLA_AGENT)
+        )));
+    };
+    let model = ModelRef::parse(row)?;
+    let config = render_config(spec, cfg, row, &model)?;
 
-    let mut notes = Vec::new();
-    let session_id = match (spec.resume_session, &model) {
-        (Some(source), Some(model)) => {
+    let session_id = match spec.resume_session {
+        Some(source) => {
             let id = if spec.fork_session {
                 fork_session(cfg, source)?
             } else {
                 source.to_string()
             };
-            pin_model(cfg, &id, model)?;
+            pin_model(cfg, &id, &model)?;
             id
         }
-        (Some(source), None) => match pinned_model(cfg, source)? {
-            None if spec.fork_session => fork_session(cfg, source)?,
-            None => source.to_string(),
-            Some(pinned) if spec.fork_session => {
-                return Err(PmError::Agent(format!(
-                    "session {source} is pinned to model {pinned} and '{}' has no \
-                     [agents.models] row; opencode cannot unpin a session, so a fork would \
-                     keep that model — set the row, then fork",
-                    ctx.agent
-                )));
-            }
-            Some(pinned) => {
-                notes.push(format!(
-                    "session {source} is pinned to model {pinned}, which opencode cannot \
-                     unpin; started a fresh session"
-                ));
-                create_session(cfg, ctx, spec.definition, None)?
-            }
-        },
-        (None, _) => create_session(cfg, ctx, spec.definition, model.as_ref())?,
+        None => create_session(cfg, ctx, spec.definition, &model)?,
     };
 
     let mut env = vec![(SESSION_ENV.to_string(), session_id.clone())];
@@ -277,20 +269,36 @@ pub(super) fn pre_launch(
         session_id: Some(session_id),
         env,
         env_remove: vec![CONFIG_CONTENT_ENV.to_string()],
-        notes,
+        // `pm doctor` covers the providers this agent's row does not name.
+        notes: providers::unset_key_notes(
+            cfg.providers.get_key_value(model.provider),
+            providers::set_in_environment,
+        ),
     })
 }
 
-/// The per-spawn config; `{}` when the spawn sets nothing.
+/// What `pm doctor` reports about `[harness.opencode]` for agents started
+/// in `worktree`.
+pub(super) fn config_issues(cfg: &OpenCodeConfig, worktree: &Path) -> Vec<String> {
+    providers::config_issues(cfg, worktree)
+}
+
+/// The per-spawn config.
 fn render_config(
     spec: &SpawnSpec<'_>,
     cfg: &OpenCodeConfig,
-    model: Option<&ModelRef<'_>>,
+    row: &str,
+    model: &ModelRef<'_>,
 ) -> Result<Value> {
     let mut config = serde_json::Map::new();
-    if let (Some(row), Some(model)) = (spec.model, model) {
-        config.insert("model".to_string(), json!(row));
-        config.insert("enabled_providers".to_string(), json!([model.provider]));
+    config.insert("model".to_string(), json!(row));
+    config.insert(
+        "enabled_providers".to_string(),
+        json!(providers::enabled(&cfg.providers, model)),
+    );
+    let defined = providers::render(&cfg.providers, Some(model))?;
+    if !defined.is_empty() {
+        config.insert("providers".to_string(), Value::Object(defined));
     }
 
     let mut rules = Vec::new();
@@ -326,7 +334,7 @@ fn create_session(
     cfg: &OpenCodeConfig,
     ctx: &LaunchContext<'_>,
     definition: Option<&str>,
-    model: Option<&ModelRef<'_>>,
+    model: &ModelRef<'_>,
 ) -> Result<String> {
     // The TUI reports its location by the resolved cwd.
     let directory = ctx
@@ -336,12 +344,10 @@ fn create_session(
     let mut body = json!({
         "location": {"directory": directory},
         "title": format!("pm:{}", ctx.agent),
+        "model": model.to_json(),
     });
     if let Some(def) = definition {
         body["agent"] = json!(def);
-    }
-    if let Some(model) = model {
-        body["model"] = model.to_json();
     }
     let body = body.to_string();
     session_id(&api(cfg, &["session.create", "--data", &body])?)
@@ -355,18 +361,6 @@ fn pin_model(cfg: &OpenCodeConfig, session: &str, model: &ModelRef<'_>) -> Resul
         &["session.switchModel", "--param", &param, "--data", &body],
     )?;
     Ok(())
-}
-
-/// The model pinned on `session`, as `<provider>/<model>`. A session that
-/// has only ever run on the config's model has none.
-fn pinned_model(cfg: &OpenCodeConfig, session: &str) -> Result<Option<String>> {
-    let param = format!("sessionID={session}");
-    let response = api(cfg, &["session.get", "--param", &param])?;
-    let model = response.pointer("/data/model");
-    let part = |key: &str| model.and_then(|m| m.get(key)).and_then(Value::as_str);
-    Ok(part("providerID")
-        .zip(part("id"))
-        .map(|(provider, id)| format!("{provider}/{id}")))
 }
 
 fn fork_session(cfg: &OpenCodeConfig, source: &str) -> Result<String> {
@@ -541,6 +535,13 @@ mod tests {
         }
     }
 
+    fn with_model() -> SpawnSpec<'static> {
+        SpawnSpec {
+            model: Some("local/qwen"),
+            ..Default::default()
+        }
+    }
+
     fn ctx<'a>(dir: &'a Path, agent: &'a str) -> LaunchContext<'a> {
         LaunchContext {
             project_root: dir,
@@ -612,6 +613,7 @@ mod tests {
         let off = OpenCodeConfig {
             auto: Some(false),
             binary: Some("/opt/open code/bin/opencode".into()),
+            ..Default::default()
         };
         assert_eq!(
             build_cmd(&SpawnSpec::default(), &off, &PreLaunch::default()),
@@ -633,7 +635,6 @@ mod tests {
         let cfg = fake_opencode(dir.path(), r#"{"data":{"id":"ses_new"}}"#, 0);
 
         for spec in [
-            SpawnSpec::default(),
             SpawnSpec {
                 model: Some("local/qwen"),
                 ..Default::default()
@@ -683,6 +684,7 @@ mod tests {
             &SpawnSpec {
                 definition: Some("rev"),
                 append_prompt_file: Some("/x/baseline.md"),
+                model: Some("local/qwen"),
                 ..Default::default()
             },
             &cfg,
@@ -714,6 +716,7 @@ mod tests {
                 "location": {"directory": worktree.canonicalize().unwrap()},
                 "title": "pm:frontend-rev",
                 "agent": "rev",
+                "model": {"providerID": "local", "id": "qwen"},
             })
         );
     }
@@ -739,15 +742,13 @@ mod tests {
             assert!(removed.contains(&key), "{key} reaches the api call");
         }
 
-        // An agent with no row of its own still gets a config file, so an
-        // inherited `OPENCODE_CONFIG` cannot apply, and the inline form is
-        // removed outright.
+        // The agent's own file replaces an inherited `OPENCODE_CONFIG`, and
+        // the inline form is removed outright.
         let dir = tempfile::tempdir().unwrap();
         let cfg = fake_opencode(dir.path(), r#"{"data":{"id":"ses_new"}}"#, 0);
-        let pre = pre_launch(&ctx(dir.path(), "reviewer"), &SpawnSpec::default(), &cfg).unwrap();
-        assert_eq!(written_config(&pre), json!({}));
+        let pre = pre_launch(&ctx(dir.path(), "reviewer"), &with_model(), &cfg).unwrap();
         assert_eq!(pre.env_remove, [CONFIG_CONTENT_ENV]);
-        let cmd = build_cmd(&SpawnSpec::default(), &cfg, &pre);
+        let cmd = build_cmd(&with_model(), &cfg, &pre);
         assert!(
             cmd.starts_with("'env' '-u' 'OPENCODE_CONFIG_CONTENT' "),
             "{cmd}"
@@ -762,13 +763,136 @@ mod tests {
     }
 
     #[test]
-    fn pre_launch_vanilla_session_names_no_agent_and_no_model() {
+    fn pre_launch_vanilla_session_names_no_agent() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = fake_opencode(dir.path(), r#"{"data":{"id":"ses_new"}}"#, 0);
-        pre_launch(&ctx(dir.path(), "default"), &SpawnSpec::default(), &cfg).unwrap();
+        pre_launch(&ctx(dir.path(), "default"), &with_model(), &cfg).unwrap();
         let body = body_of(&fake_opencode_argv(dir.path()));
         assert!(body.get("agent").is_none(), "{body}");
-        assert!(body.get("model").is_none(), "{body}");
+    }
+
+    #[test]
+    fn an_agent_without_a_model_row_is_refused_before_any_call() {
+        // Left to pick a model itself, opencode runs a hosted one.
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = fake_opencode(dir.path(), r#"{"data":{"id":"ses_new"}}"#, 0);
+        for (resume_session, fork_session) in [
+            (None, false),
+            (Some("ses_old"), false),
+            (Some("ses_old"), true),
+        ] {
+            let err = pre_launch(
+                &ctx(dir.path(), "frontend-rev"),
+                &SpawnSpec {
+                    definition: Some("reviewer"),
+                    resume_session,
+                    fork_session,
+                    ..Default::default()
+                },
+                &cfg,
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(
+                err.contains("opencode agent 'frontend-rev' has no [agents.models] row"),
+                "{err}"
+            );
+            assert!(
+                err.ends_with("Set `[agents.models] reviewer = \"<provider>/<model>\"`"),
+                "{err}"
+            );
+        }
+        let err = pre_launch(&ctx(dir.path(), "default"), &SpawnSpec::default(), &cfg)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("`[agents.models] default = "), "{err}");
+        assert!(fake_opencode_calls(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn configured_providers_are_written_and_all_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = fake_opencode(dir.path(), r#"{"data":{"id":"ses_new"}}"#, 0);
+        cfg.providers = [
+            (
+                "local".to_string(),
+                "package = \"pkg\"\nsettings = { baseURL = \"http://127.0.0.1:8000/v1\" }"
+                    .parse()
+                    .unwrap(),
+            ),
+            (
+                "second".to_string(),
+                "package = \"pkg\"\nmodels = { small = {} }"
+                    .parse()
+                    .unwrap(),
+            ),
+        ]
+        .into();
+        let spec = SpawnSpec {
+            model: Some("local/qwen"),
+            ..Default::default()
+        };
+        let pre = pre_launch(&ctx(dir.path(), "reviewer"), &spec, &cfg).unwrap();
+        assert_eq!(
+            written_config(&pre),
+            json!({
+                "model": "local/qwen",
+                "enabled_providers": ["local", "second"],
+                "providers": {
+                    "local": {
+                        "package": "pkg",
+                        "settings": {"baseURL": "http://127.0.0.1:8000/v1"},
+                        "models": {"qwen": {}},
+                    },
+                    "second": {"package": "pkg", "models": {"small": {}}},
+                },
+            })
+        );
+        assert!(pre.notes.is_empty(), "{:?}", pre.notes);
+    }
+
+    #[test]
+    fn a_stored_key_is_refused_before_any_call_and_never_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = fake_opencode(dir.path(), r#"{"data":{"id":"ses_new"}}"#, 0);
+        cfg.providers = [(
+            "local".to_string(),
+            "settings = { apiKey = \"sk-live-123\" }".parse().unwrap(),
+        )]
+        .into();
+        let context = ctx(dir.path(), "keyed");
+        let err = pre_launch(&context, &with_model(), &cfg)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("`settings.apiKey` must name"), "{err}");
+        assert!(fake_opencode_calls(dir.path()).is_empty());
+        let file = spawn_file(context.project_root, context.feature, context.agent, "json");
+        assert!(!file.unwrap().exists());
+    }
+
+    #[test]
+    fn a_provider_whose_key_is_unset_is_remarked_on_not_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = fake_opencode(dir.path(), r#"{"data":{"id":"ses_new"}}"#, 0);
+        cfg.providers = [
+            (
+                "local".to_string(),
+                "env = [\"PM_TEST_KEY_NOBODY_SETS\"]".parse().unwrap(),
+            ),
+            // Not the provider of this agent's row.
+            (
+                "hosted".to_string(),
+                "env = [\"PM_TEST_OTHER_KEY_NOBODY_SETS\"]".parse().unwrap(),
+            ),
+        ]
+        .into();
+        let pre = pre_launch(&ctx(dir.path(), "reviewer"), &with_model(), &cfg).unwrap();
+        assert_eq!(pre.notes.len(), 1, "{:?}", pre.notes);
+        assert!(
+            pre.notes[0].contains("provider 'local' takes its key from PM_TEST_KEY_NOBODY_SETS"),
+            "{:?}",
+            pre.notes
+        );
     }
 
     #[test]
@@ -827,102 +951,6 @@ mod tests {
             );
         }
         assert!(fake_opencode_calls(dir.path()).is_empty());
-    }
-
-    #[test]
-    fn pre_launch_resume_reuses_a_stored_session_that_is_not_pinned() {
-        let dir = tempfile::tempdir().unwrap();
-        let cfg = fake_opencode(dir.path(), r#"{"data":{"id":"ses_stored"}}"#, 0);
-        let pre = pre_launch(
-            &ctx(dir.path(), "reviewer"),
-            &SpawnSpec {
-                resume_session: Some("ses_stored"),
-                ..Default::default()
-            },
-            &cfg,
-        )
-        .unwrap();
-        assert_eq!(pre.session_id.as_deref(), Some("ses_stored"));
-        assert!(pre.notes.is_empty(), "{:?}", pre.notes);
-        assert_eq!(
-            fake_opencode_calls(dir.path()),
-            [[
-                "api",
-                "--standalone",
-                "session.get",
-                "--param",
-                "sessionID=ses_stored"
-            ]]
-        );
-    }
-
-    #[test]
-    fn a_pinned_session_whose_row_was_removed_is_replaced_not_resumed() {
-        // opencode has no way to unpin, and the agent must run on what
-        // config says now.
-        let dir = tempfile::tempdir().unwrap();
-        let cfg = fake_opencode(
-            dir.path(),
-            r#"{"data":{"id":"ses_fresh","model":{"providerID":"local","id":"qwen","variant":"default"}}}"#,
-            0,
-        );
-        let pre = pre_launch(
-            &ctx(dir.path(), "reviewer"),
-            &SpawnSpec {
-                definition: Some("reviewer"),
-                resume_session: Some("ses_stored"),
-                ..Default::default()
-            },
-            &cfg,
-        )
-        .unwrap();
-
-        assert_eq!(pre.session_id.as_deref(), Some("ses_fresh"));
-        assert_eq!(env_of(&pre, SESSION_ENV), Some("ses_fresh"));
-        assert_eq!(
-            pre.notes,
-            [
-                "session ses_stored is pinned to model local/qwen, which opencode cannot unpin; \
-              started a fresh session"
-            ]
-        );
-        let calls = fake_opencode_calls(dir.path());
-        assert_eq!(calls.len(), 2, "{calls:?}");
-        assert_eq!(calls[0][2], "session.get");
-        assert_eq!(calls[1][2], "session.create");
-        let body = body_of(&calls[1]);
-        assert_eq!(body["agent"], "reviewer");
-        assert!(body.get("model").is_none(), "{body}");
-        assert_eq!(written_config(&pre), json!({}));
-    }
-
-    #[test]
-    fn a_pinned_session_whose_row_was_removed_is_not_forked() {
-        let dir = tempfile::tempdir().unwrap();
-        let cfg = fake_opencode(
-            dir.path(),
-            r#"{"data":{"id":"ses_x","model":{"providerID":"local","id":"qwen"}}}"#,
-            0,
-        );
-        let err = pre_launch(
-            &ctx(dir.path(), "reviewer-2"),
-            &SpawnSpec {
-                resume_session: Some("ses_source"),
-                fork_session: true,
-                ..Default::default()
-            },
-            &cfg,
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(
-            err.contains("session ses_source is pinned to model local/qwen"),
-            "{err}"
-        );
-        assert!(err.ends_with("set the row, then fork"), "{err}");
-        let calls = fake_opencode_calls(dir.path());
-        assert_eq!(calls.len(), 1, "{calls:?}");
-        assert_eq!(calls[0][2], "session.get");
     }
 
     #[test]
@@ -1030,18 +1058,14 @@ mod tests {
             binary: Some(dir.path().join("nope").to_string_lossy().into_owned()),
             ..Default::default()
         };
-        let err = pre_launch(
-            &ctx(dir.path(), "reviewer"),
-            &SpawnSpec::default(),
-            &missing,
-        )
-        .unwrap_err()
-        .to_string();
+        let err = pre_launch(&ctx(dir.path(), "reviewer"), &with_model(), &missing)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("could not run"), "{err}");
 
         for answer in [r#"{"data":{}}"#, ""] {
             let cfg = fake_opencode(dir.path(), answer, 0);
-            let err = pre_launch(&ctx(dir.path(), "reviewer"), &SpawnSpec::default(), &cfg)
+            let err = pre_launch(&ctx(dir.path(), "reviewer"), &with_model(), &cfg)
                 .unwrap_err()
                 .to_string();
             assert!(err.contains("returned no session id"), "{answer}: {err}");
@@ -1057,14 +1081,25 @@ mod tests {
         );
     }
 
+    /// [`render_config`] for `spec` on the row `local/qwen`, less what the
+    /// row itself puts there.
+    fn rendered(spec: &SpawnSpec<'_>, cfg: &OpenCodeConfig) -> Result<Value> {
+        let row = "local/qwen";
+        let mut config = render_config(spec, cfg, row, &ModelRef::parse(row)?)?;
+        let own = config.as_object_mut().unwrap();
+        assert_eq!(own.remove("model"), Some(json!(row)));
+        assert_eq!(own.remove("enabled_providers"), Some(json!(["local"])));
+        Ok(config)
+    }
+
     #[test]
-    fn render_config_is_empty_without_settings_under_auto() {
+    fn render_config_sets_no_rules_without_a_permissions_row_under_auto() {
         let dirs = vec![PathBuf::from("/proj/.pm")];
         let spec = SpawnSpec {
             writable_dirs: &dirs,
             ..Default::default()
         };
-        assert_eq!(render_config(&spec, &cfg(), None).unwrap(), json!({}));
+        assert_eq!(rendered(&spec, &cfg()).unwrap(), json!({}));
     }
 
     #[test]
@@ -1076,7 +1111,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            render_config(&spec, &cfg(), None).unwrap(),
+            rendered(&spec, &cfg()).unwrap(),
             json!({
                 "permissions": [
                     {"action": "edit", "resource": "*", "effect": "deny"},
@@ -1103,7 +1138,7 @@ mod tests {
         // Last match wins in opencode, so the row can still override pm's
         // allows.
         assert_eq!(
-            render_config(&spec, &off, None).unwrap(),
+            rendered(&spec, &off).unwrap(),
             json!({"permissions": [
                 {"action": "external_directory", "resource": "/proj/.pm/*", "effect": "allow"},
                 {"action": "external_directory", "resource": "/proj/main/.git/*", "effect": "allow"},
@@ -1119,7 +1154,7 @@ mod tests {
                 permission_mode: Some(row),
                 ..Default::default()
             };
-            let err = render_config(&spec, &cfg(), None).unwrap_err().to_string();
+            let err = rendered(&spec, &cfg()).unwrap_err().to_string();
             assert!(err.contains("must be a JSON array"), "{row}: {err}");
             assert!(err.ends_with(&format!("got: {row}")), "{row}: {err}");
         }

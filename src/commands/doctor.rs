@@ -9,7 +9,8 @@ use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
 use crate::state::project::{
-    GlobalConfig, HarnessConfig, ProjectConfig, ProjectEntry, resolve_harness_config,
+    AgentsConfig, GlobalConfig, HarnessConfig, ProjectConfig, ProjectEntry, WILDCARD_AGENT,
+    resolve_agent_settings, resolve_harness_config,
 };
 use crate::state::workflow;
 use crate::{gh, git, tmux};
@@ -80,6 +81,12 @@ pub enum IssueKind {
     /// An agent's emulated never-idle loop stopped itself, so the agent no
     /// longer wakes for messages.
     LoopStopped,
+    /// An agent runs on a harness that refuses to spawn it without an
+    /// `[agents.models]` row, and has none.
+    AgentModelMissing,
+    /// A harness in use reports a problem with its `[harness.<name>]`
+    /// settings.
+    HarnessConfigInvalid,
 }
 
 /// A single issue detected for a feature.
@@ -218,6 +225,7 @@ pub fn diagnose(
             fix: Fix::Auto(FixAction::InstallStopHook),
         });
     }
+    main_issues.extend(harness_config_issues(project_root)?);
     main_issues.extend(asset_issues(project_root)?);
     main_issues.extend(legacy_vanilla_agent_issues(project_root, "main"));
     main_issues.extend(loop_stopped_issues(project_root, "main"));
@@ -726,16 +734,71 @@ fn hook_issues_in(project_root: &Path, home: &Path) -> Result<Vec<Issue>> {
     Ok(issues)
 }
 
-/// Each worktree on disk with the harnesses its agents launch on: those of
-/// its registered agents plus, for a feature, its workflow team — the set a
-/// spawn there would need the worktree trusted by.
-fn worktree_harnesses(project_root: &Path) -> Result<Vec<(PathBuf, Vec<Harness>)>> {
+/// Main-scope findings about what each harness in use is configured with:
+/// agents it will refuse for want of a model row, and whatever the harness
+/// itself reports about its `[harness.<name>]` settings.
+fn harness_config_issues(project_root: &Path) -> Result<Vec<Issue>> {
+    let (project, global) = agents_configs(project_root)?;
+    let mut definitions: Vec<String> = project
+        .harness
+        .keys()
+        .chain(global.harness.keys())
+        .filter(|key| *key != WILDCARD_AGENT)
+        .cloned()
+        .collect();
+    for (_, launched) in worktree_definitions(project_root)? {
+        definitions.extend(launched);
+    }
+    definitions.sort();
+    definitions.dedup();
+
+    let mut issues = Vec::new();
+    for definition in definitions {
+        let Ok(settings) = resolve_agent_settings(&project, &global, &definition) else {
+            continue;
+        };
+        if settings.harness.requires_model() && settings.model.is_none() {
+            let dropped: Vec<String> = settings.dropped_model.into_iter().collect();
+            issues.push(Issue {
+                kind: IssueKind::AgentModelMissing,
+                message: format!(
+                    "agent '{definition}' runs on {} and has no [agents.models] row, so it \
+                     will not spawn{}",
+                    settings.harness,
+                    agent_spawn::notes_suffix(&dropped)
+                ),
+                fix: Fix::None,
+            });
+        }
+    }
+
+    let config = harness_config(Some(project_root));
+    let main = paths::main_worktree(project_root);
+    for harness in skills::harnesses_in_use(project_root)? {
+        for message in harness.config_issues(&config, &main) {
+            issues.push(Issue {
+                kind: IssueKind::HarnessConfigInvalid,
+                message,
+                fix: Fix::None,
+            });
+        }
+    }
+    Ok(issues)
+}
+
+/// The `[agents.*]` tables of the two tiers.
+fn agents_configs(project_root: &Path) -> Result<(AgentsConfig, AgentsConfig)> {
     let project = match ProjectConfig::load(&paths::pm_dir(project_root)) {
         Ok(config) => config.agents,
         Err(crate::error::PmError::NotInProject) => Default::default(),
         Err(e) => return Err(e),
     };
-    let global = GlobalConfig::load_or_default().agents;
+    Ok((project, GlobalConfig::load_or_default().agents))
+}
+
+/// Each worktree on disk with the definitions launched in it: those of its
+/// registered agents plus, for a feature, its workflow team.
+fn worktree_definitions(project_root: &Path) -> Result<Vec<(PathBuf, Vec<String>)>> {
     let agents_dir = paths::agents_dir(project_root);
     let features_dir = paths::features_dir(project_root);
     let mut out = Vec::new();
@@ -752,6 +815,17 @@ fn worktree_harnesses(project_root: &Path) -> Result<Vec<(PathBuf, Vec<Harness>)
         {
             definitions.extend(def.effective_team().iter().cloned());
         }
+        out.push((wt, definitions));
+    }
+    Ok(out)
+}
+
+/// Each worktree on disk with the harnesses its agents launch on — the set
+/// a spawn there would need the worktree trusted by.
+fn worktree_harnesses(project_root: &Path) -> Result<Vec<(PathBuf, Vec<Harness>)>> {
+    let (project, global) = agents_configs(project_root)?;
+    let mut out = Vec::new();
+    for (wt, definitions) in worktree_definitions(project_root)? {
         let mut harnesses = Vec::new();
         for def in definitions {
             if let Ok(h) = agent_spawn::configured_harness(&def, &project, &global)
@@ -1285,6 +1359,79 @@ mod tests {
     }
 
     #[test]
+    fn opencode_agents_without_a_model_row_and_refused_providers_are_reported() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, _) = server.setup_project_no_tmux(dir.path());
+        assert!(harness_config_issues(&project_path).unwrap().is_empty());
+
+        use_opencode(&project_path, "*", "opencode v2.0.18");
+        let pm_dir = paths::pm_dir(&project_path);
+        let mut config = ProjectConfig::load(&pm_dir).unwrap();
+        let agents = &mut config.agents;
+        for (definition, harness) in [("reviewer", "opencode"), ("planner", "claude-code")] {
+            agents.harness.insert(definition.into(), harness.into());
+        }
+        agents.models.insert("reviewer".into(), "local/qwen".into());
+        config.harness.opencode.providers = [(
+            "local".to_string(),
+            "settings = { apiKey = \"sk-live-123\" }".parse().unwrap(),
+        )]
+        .into();
+        config.save(&pm_dir).unwrap();
+        // Launched in a worktree, on the harness `*` names, with no row.
+        let mut registry = AgentRegistry::default();
+        registry.register(
+            "frontend-dev",
+            crate::state::agent::AgentEntry {
+                agent_type: AgentType::Agent,
+                session_id: String::new(),
+                window_name: "frontend-dev".to_string(),
+                active: false,
+                agent_definition: Some("implementer".to_string()),
+                harness: Harness::OpenCode,
+                spawned_at: None,
+            },
+        );
+        registry
+            .save(&paths::agents_dir(&project_path), "main")
+            .unwrap();
+
+        let issues = harness_config_issues(&project_path).unwrap();
+        assert_eq!(
+            messages(&issues, IssueKind::AgentModelMissing),
+            [
+                "agent 'implementer' runs on opencode and has no [agents.models] row, so it will \
+              not spawn"
+            ]
+        );
+        let invalid = messages(&issues, IssueKind::HarnessConfigInvalid);
+        assert_eq!(invalid.len(), 1, "{invalid:?}");
+        assert!(
+            invalid[0].starts_with("[harness.opencode.providers.local] `settings.apiKey` must"),
+            "{invalid:?}"
+        );
+        assert!(!invalid[0].contains("sk-live"), "{invalid:?}");
+
+        // A row that exists but is bound to another harness.
+        let mut config = ProjectConfig::load(&pm_dir).unwrap();
+        let agents = &mut config.agents;
+        agents.harness.insert("*".into(), "claude-code".into());
+        agents.models.remove("reviewer");
+        agents.models.insert("*".into(), "opus".into());
+        config.save(&pm_dir).unwrap();
+        let issues = harness_config_issues(&project_path).unwrap();
+        assert_eq!(
+            messages(&issues, IssueKind::AgentModelMissing),
+            [
+                "agent 'reviewer' runs on opencode and has no [agents.models] row, so it will \
+              not spawn (project [agents.models] row for '*' is bound to claude-code, not \
+              opencode — not applied)"
+            ]
+        );
+    }
+
+    #[test]
     fn opencode_definition_without_a_projected_copy_is_flagged() {
         // opencode runs its built-in prompt for a name it cannot find, with
         // no error, so the projected file is the only thing to check.
@@ -1364,6 +1511,7 @@ mod tests {
                 },
                 &crate::harness::SpawnSpec {
                     resume_session: Some("ses_1"),
+                    model: Some("local/qwen"),
                     ..Default::default()
                 },
                 &HarnessConfig {
