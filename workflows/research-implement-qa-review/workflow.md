@@ -14,9 +14,14 @@ complete after the hand-off.
 ## implementer
 
 Wait for the researcher's brief before acting. You own `summary.md`.
-When the change is ready, hand off to qa, stating what the change is
-meant to do, and leave the worktree unchanged while qa runs. Fix what qa
-reports and hand back until qa passes, then hand off to the reviewer.
+When the change is ready, hand off to qa, and leave the worktree unchanged
+while qa runs. Fix what qa reports and hand back until qa passes, then
+hand off to the reviewer.
+
+Every handoff to qa is behaviour-level: what a user can now do, how to
+trigger it, and what they should see. No commit hashes or file paths, and
+leave out changes with no user-visible behaviour; those go to the reviewer
+only.
 
 qa must have passed the final behaviour and the reviewer must have
 approved the final tree. After a fix for a review finding that changes
