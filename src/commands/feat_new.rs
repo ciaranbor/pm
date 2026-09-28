@@ -1302,48 +1302,55 @@ mod tests {
 
     #[test]
     fn feat_new_full_team_spawned_brief_only_to_brief_agents() {
-        // research-implement-review: agents = [researcher, implementer,
-        // reviewer], brief_agents = [researcher]. With --context, all three
-        // spawn but only the researcher is briefed.
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
-
-        feat_new(&FeatNewParams {
-            context: Some("Research the auth flow"),
-            workflow: Some("research-implement-review"),
-            ..FeatNewParams::with_defaults(&project_path, &projects_dir, "login", server.name())
-        })
-        .unwrap();
-
-        // All three team windows exist.
-        let session = tmux::session_name(&project_name, "login");
-        for agent in ["researcher", "implementer", "reviewer"] {
-            assert!(
-                tmux::find_window(server.name(), &session, agent)
-                    .unwrap()
-                    .is_some(),
-                "expected '{agent}' window"
-            );
-        }
-
-        // Brief queued only to the researcher.
         let messages_dir = paths::messages_dir(&project_path);
-        assert_eq!(
-            crate::messages::list(&messages_dir, "login", "researcher", None)
-                .unwrap()
-                .len(),
-            1
-        );
-        assert!(
-            crate::messages::list(&messages_dir, "login", "implementer", None)
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            crate::messages::list(&messages_dir, "login", "reviewer", None)
-                .unwrap()
-                .is_empty()
-        );
+
+        for (feature, workflow, team, briefed) in [
+            (
+                "login",
+                "research-implement-review",
+                &["researcher", "implementer", "reviewer"][..],
+                "researcher",
+            ),
+            (
+                "signup",
+                "implement-qa-review",
+                &["implementer", "qa", "reviewer"][..],
+                "implementer",
+            ),
+            (
+                "logout",
+                "research-implement-qa-review",
+                &["researcher", "implementer", "qa", "reviewer"][..],
+                "researcher",
+            ),
+        ] {
+            feat_new(&FeatNewParams {
+                context: Some("Research the auth flow"),
+                workflow: Some(workflow),
+                ..FeatNewParams::with_defaults(&project_path, &projects_dir, feature, server.name())
+            })
+            .unwrap_or_else(|e| panic!("{workflow}: {e}"));
+
+            let session = tmux::session_name(&project_name, feature);
+            for agent in team {
+                assert!(
+                    tmux::find_window(server.name(), &session, agent)
+                        .unwrap()
+                        .is_some(),
+                    "{workflow}: expected '{agent}' window"
+                );
+                let queued = crate::messages::list(&messages_dir, feature, agent, None)
+                    .unwrap()
+                    .len();
+                assert_eq!(
+                    queued,
+                    usize::from(*agent == briefed),
+                    "{workflow}: brief count for '{agent}'"
+                );
+            }
+        }
     }
 }

@@ -1,0 +1,4 @@
+description = "Implementer → qa → reviewer; each gate loops with the implementer"
+agents = ["implementer", "qa", "reviewer"]
+brief_agents = ["implementer"]
+when_to_use = "A feature with little ambiguity whose change has user-facing behaviour to exercise."

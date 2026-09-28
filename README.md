@@ -134,6 +134,7 @@ Bundled agents:
 | **implementer** | Drains its inbox, implements each message, runs tests, addresses reviewer feedback |
 | **reviewer** | Diffs the branch against base, evaluates quality/correctness, sends feedback |
 | **researcher** | Read-only; explores the problem space and sends a refined brief to the implementer |
+| **qa** | Runs the change as a user would, in an isolated environment; reports bugs to the implementer and testing gaps for the summary |
 
 The definition name `default` is **reserved**: it always means a
 definition-less vanilla agent session (no definition passed to the
@@ -150,6 +151,8 @@ Bundled workflows:
 | **solo** | Single developer owns the feature end-to-end (default when `--context` is given without `--workflow`) |
 | **implement-and-review** | Implementer drains tasks; reviewer ↔ implementer loop |
 | **research-implement-review** | Researcher → implementer → reviewer |
+| **implement-qa-review** | Implementer → qa → reviewer; each gate loops with the implementer |
+| **research-implement-qa-review** | Researcher → implementer → qa → reviewer |
 | **research-only** | Researcher explores and reports findings to the user |
 | **pr-review** | Reviewer reviews a checked-out PR and reports to the user (used by `pm feat review`) |
 

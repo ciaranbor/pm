@@ -127,6 +127,11 @@ const BUNDLED_ITEMS: &[BundledItem] = &[
     },
     BundledItem {
         kind: BundledKind::Agent,
+        name: "qa",
+        files: &[("qa.md", include_str!("../../agents/qa.md"))],
+    },
+    BundledItem {
+        kind: BundledKind::Agent,
         name: "main",
         files: &[("main.md", include_str!("../../agents/main.md"))],
     },
@@ -165,6 +170,34 @@ const BUNDLED_ITEMS: &[BundledItem] = &[
             (
                 "research-implement-review/workflow.md",
                 include_str!("../../workflows/research-implement-review/workflow.md"),
+            ),
+        ],
+    },
+    BundledItem {
+        kind: BundledKind::Workflow,
+        name: "implement-qa-review",
+        files: &[
+            (
+                "implement-qa-review/config.toml",
+                include_str!("../../workflows/implement-qa-review/config.toml"),
+            ),
+            (
+                "implement-qa-review/workflow.md",
+                include_str!("../../workflows/implement-qa-review/workflow.md"),
+            ),
+        ],
+    },
+    BundledItem {
+        kind: BundledKind::Workflow,
+        name: "research-implement-qa-review",
+        files: &[
+            (
+                "research-implement-qa-review/config.toml",
+                include_str!("../../workflows/research-implement-qa-review/config.toml"),
+            ),
+            (
+                "research-implement-qa-review/workflow.md",
+                include_str!("../../workflows/research-implement-qa-review/workflow.md"),
             ),
         ],
     },

@@ -1,0 +1,4 @@
+description = "Researcher → implementer → qa → reviewer"
+agents = ["researcher", "implementer", "qa", "reviewer"]
+brief_agents = ["researcher"]
+when_to_use = "A single feature with ambiguous aspects needing exploration first, whose change has user-facing behaviour to exercise."
