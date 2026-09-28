@@ -1,14 +1,17 @@
-//! Seed a feature worktree with what its agents need from main: the
-//! canonical `.agents/` store (which codex reads directly) and, per harness
-//! in use, the harness's own per-worktree files and projected assets
+//! Bring a feature worktree up to date with what its agents need from main:
+//! the canonical `.agents/` store (which codex reads directly) and, per
+//! harness in use, the harness's own per-worktree files and projected assets
 //! (harnesses resolve skills and agent definitions from the worktree they
-//! run in, never from main). Copy-only — nothing in the feature is ever
-//! deleted — and a file the feature's branch tracks in git is never written:
-//! its content is the branch's, and reaches or leaves main by merge.
+//! run in, never from main). Runs when a feature is created and on an
+//! explicit `pm harness pull` — never as a side effect of another command,
+//! so a live feature changes only when someone asks. Copy-only — nothing in
+//! the feature is ever deleted — and a file the feature's branch tracks in
+//! git is never written: its content is the branch's, and reaches or leaves
+//! main by merge.
 
 use std::path::{Path, PathBuf};
 
-use crate::error::Result;
+use crate::error::{PmError, Result};
 use std::collections::HashSet;
 
 use crate::fs_utils::{sync_file, sync_tree_except};
@@ -20,25 +23,35 @@ use super::skills::{self, CANONICAL_DIR};
 /// The canonical store's subdirs every feature needs, whatever its harnesses.
 const CANONICAL_SUBDIRS: &[&str] = &["agents", "skills"];
 
-/// Called during `feat new` / `feat adopt` / `pm upgrade`.
+/// Called during `feat new` / `feat adopt` / `feat review`.
 pub fn seed_feature_assets(project_root: &Path, feature_worktree: &Path) -> Result<()> {
     sync_feature(project_root, feature_worktree, false).map(|_| ())
 }
 
-/// Whether [`seed_feature_assets`] would change anything in the feature:
-/// a seeded file missing or differing. Feature-only files don't count.
-pub fn seed_feature_assets_would_change(
-    project_root: &Path,
-    feature_worktree: &Path,
-) -> Result<bool> {
-    sync_feature(project_root, feature_worktree, true)
+/// `pm harness pull`: seed an existing feature again. Returns the files
+/// written (or, with `dry_run`, that would be), relative to the worktree.
+pub fn pull(project_root: &Path, feature_name: &str, dry_run: bool) -> Result<Vec<PathBuf>> {
+    super::claude_settings::require_feature(project_root, feature_name)?;
+    let worktree = project_root.join(feature_name);
+    if !worktree.is_dir() {
+        return Err(PmError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!(
+                "feature '{feature_name}' has no worktree at {}",
+                worktree.display()
+            ),
+        )));
+    }
+    sync_feature(project_root, &worktree, dry_run)
 }
 
-/// Returns whether anything was (or, with `dry_run`, would be) written; in
-/// `dry_run` it stops at the first difference.
-fn sync_feature(project_root: &Path, feature_worktree: &Path, dry_run: bool) -> Result<bool> {
+fn sync_feature(
+    project_root: &Path,
+    feature_worktree: &Path,
+    dry_run: bool,
+) -> Result<Vec<PathBuf>> {
     let main = paths::main_worktree(project_root);
-    let mut changed = false;
+    let mut written = Vec::new();
     let harnesses = skills::harnesses_in_use(project_root)?;
     let mut dirs: Vec<PathBuf> = CANONICAL_SUBDIRS
         .iter()
@@ -51,12 +64,8 @@ fn sync_feature(project_root: &Path, feature_worktree: &Path, dry_run: bool) -> 
         }
     }
     for rel in dirs {
-        if sync_untracked(&main, feature_worktree, &rel, dry_run)? {
-            changed = true;
-            if dry_run {
-                return Ok(true);
-            }
-        }
+        let files = sync_untracked(&main, feature_worktree, &rel, dry_run)?;
+        written.extend(files.into_iter().map(|f| rel.join(f)));
     }
     for harness in &harnesses {
         for file in harness.seeded_files() {
@@ -66,31 +75,26 @@ fn sync_feature(project_root: &Path, feature_worktree: &Path, dry_run: bool) -> 
                 && tracked_under(feature_worktree, &rel)?.is_empty()
                 && sync_file(&src, &feature_worktree.join(&rel), dry_run)?
             {
-                changed = true;
-                if dry_run {
-                    return Ok(true);
-                }
+                written.push(rel);
             }
         }
     }
-    Ok(changed)
+    Ok(written)
 }
 
 /// Sync the directory `rel` from `main` into `worktree`, skipping files the
-/// worktree's branch tracks. Returns whether anything was (or would be)
-/// written; a `rel` main doesn't have is a no-op.
-pub(super) fn sync_untracked(
-    main: &Path,
-    worktree: &Path,
-    rel: &Path,
-    dry_run: bool,
-) -> Result<bool> {
+/// worktree's branch tracks. Returns the files written (or, with `dry_run`,
+/// that would be), relative to `rel`; a `rel` main doesn't have is a no-op.
+fn sync_untracked(main: &Path, worktree: &Path, rel: &Path, dry_run: bool) -> Result<Vec<PathBuf>> {
     let src = main.join(rel);
     if !src.is_dir() {
-        return Ok(false);
+        return Ok(Vec::new());
     }
     let keep = tracked_under(worktree, rel)?;
-    Ok(!sync_tree_except(&src, &worktree.join(rel), &keep, dry_run)?.is_empty())
+    Ok(sync_tree_except(&src, &worktree.join(rel), &keep, dry_run)?
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect())
 }
 
 /// Files under `rel` that `worktree`'s branch tracks, relative to `rel`
@@ -116,6 +120,10 @@ mod tests {
         std::fs::write(dir.join(filename), content).unwrap();
     }
 
+    fn read(path: PathBuf) -> String {
+        std::fs::read_to_string(path).unwrap()
+    }
+
     #[test]
     fn seed_copies_settings_json_but_not_settings_local_json() {
         let dir = tempdir().unwrap();
@@ -131,12 +139,8 @@ mod tests {
         seed_feature_assets(&project, &feature_wt).unwrap();
 
         let dst = feature_wt.join(".claude");
-        assert_eq!(
-            std::fs::read_to_string(dst.join("settings.json")).unwrap(),
-            r#"{"permissions":true}"#
-        );
+        assert_eq!(read(dst.join("settings.json")), r#"{"permissions":true}"#);
         assert!(!dst.join("settings.local.json").exists());
-        assert!(!seed_feature_assets_would_change(&project, &feature_wt).unwrap());
     }
 
     #[test]
@@ -154,7 +158,6 @@ mod tests {
 
         assert!(!feature_wt.join(".claude").exists());
         assert!(!feature_wt.join(".agents").exists());
-        assert!(!seed_feature_assets_would_change(&project, &feature_wt).unwrap());
     }
 
     #[test]
@@ -179,7 +182,6 @@ mod tests {
 
         let feature_wt = project.join("login");
         std::fs::create_dir_all(&feature_wt).unwrap();
-        assert!(seed_feature_assets_would_change(&project, &feature_wt).unwrap());
         seed_feature_assets(&project, &feature_wt).unwrap();
 
         for (rel, expected) in [
@@ -188,76 +190,125 @@ mod tests {
             (".claude/agents/reviewer.md", "# projected"),
             (".claude/skills/pm/SKILL.md", "# projected skill"),
         ] {
-            assert_eq!(
-                std::fs::read_to_string(feature_wt.join(rel)).unwrap(),
-                expected,
-                "{rel}"
-            );
+            assert_eq!(read(feature_wt.join(rel)), expected, "{rel}");
         }
         // The baseline is applied from main by absolute path, never seeded.
         assert!(!feature_wt.join(".agents/pm-baseline.md").exists());
-        assert!(!seed_feature_assets_would_change(&project, &feature_wt).unwrap());
     }
 
     #[test]
-    fn would_change_detects_drift_in_either_store() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project, _, _) = server.setup_project_no_tmux(dir.path());
-        let main = paths::main_worktree(&project);
-        let feature_wt = project.join("login");
-        std::fs::create_dir_all(&feature_wt).unwrap();
-        seed_feature_assets(&project, &feature_wt).unwrap();
-        assert!(!seed_feature_assets_would_change(&project, &feature_wt).unwrap());
-
-        write(&main.join(".agents/agents"), "extra.md", "new");
-        assert!(seed_feature_assets_would_change(&project, &feature_wt).unwrap());
-        seed_feature_assets(&project, &feature_wt).unwrap();
-        assert!(!seed_feature_assets_would_change(&project, &feature_wt).unwrap());
-
-        write(&main.join(".claude"), "settings.json", "{\"changed\":1}");
-        assert!(seed_feature_assets_would_change(&project, &feature_wt).unwrap());
-    }
-
-    #[test]
-    fn seed_and_pull_leave_a_skill_the_feature_branch_tracks() {
+    fn pull_brings_customs_added_to_main_after_the_feature_was_created() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
         let main = paths::main_worktree(&project);
         let feature_wt = project.join("login");
-        let skill = ".agents/skills/custom/SKILL.md";
+        assert!(pull(&project, "login", true).unwrap().is_empty());
 
-        write(&main.join(".agents/skills/custom"), "SKILL.md", "main's");
-        write(&main.join(".agents/skills/custom"), "notes.md", "untracked");
-        write(
-            &feature_wt.join(".agents/skills/custom"),
-            "SKILL.md",
-            "edited on the feature branch",
+        write(&main.join(".agents/agents"), "custom.md", "custom def");
+        write(&main.join(".claude/agents"), "custom.md", "custom def");
+        write(&main.join(".agents/skills/howto"), "SKILL.md", "skill");
+        write(&main.join(".claude/skills/howto"), "SKILL.md", "skill");
+        write(&main.join(".claude"), "settings.json", r#"{"changed":1}"#);
+        write(&feature_wt.join(".agents/agents"), "local-only.md", "keep");
+
+        let expected: Vec<PathBuf> = [
+            ".agents/agents/custom.md",
+            ".agents/skills/howto/SKILL.md",
+            ".claude/agents/custom.md",
+            ".claude/skills/howto/SKILL.md",
+            ".claude/settings.json",
+        ]
+        .iter()
+        .map(PathBuf::from)
+        .collect();
+
+        assert_eq!(pull(&project, "login", true).unwrap(), expected);
+        assert!(
+            !feature_wt.join(".agents/agents/custom.md").exists(),
+            "dry-run wrote"
         );
-        git::stage_file(&feature_wt, skill).unwrap();
-        git::commit(&feature_wt, "edit skill").unwrap();
+
+        assert_eq!(pull(&project, "login", false).unwrap(), expected);
+        assert_eq!(
+            read(feature_wt.join(".agents/agents/custom.md")),
+            "custom def"
+        );
+        assert_eq!(
+            read(feature_wt.join(".claude/agents/custom.md")),
+            "custom def"
+        );
+        assert_eq!(
+            read(feature_wt.join(".claude/skills/howto/SKILL.md")),
+            "skill"
+        );
+        assert_eq!(
+            read(feature_wt.join(".claude/settings.json")),
+            r#"{"changed":1}"#
+        );
+        assert!(feature_wt.join(".agents/agents/local-only.md").exists());
+        assert!(pull(&project, "login", false).unwrap().is_empty());
+
+        let err = pull(&project, "nonexistent", false).unwrap_err();
+        assert!(matches!(err, PmError::FeatureNotFound(_)));
+
+        // A registered feature whose worktree is gone is not recreated.
+        std::fs::remove_dir_all(&feature_wt).unwrap();
+        write(&main.join(".agents/agents"), "later.md", "later");
+        assert!(pull(&project, "login", false).is_err());
+        assert!(!feature_wt.exists());
+    }
+
+    #[test]
+    fn seed_and_pull_leave_files_the_feature_branch_tracks() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let main = paths::main_worktree(&project);
+        let feature_wt = project.join("login");
+        let tracked = [
+            ".agents/skills/custom/SKILL.md",
+            ".agents/agents/custom.md",
+            ".claude/settings.json",
+        ];
+
+        write(&main.join(".agents/skills/custom"), "notes.md", "untracked");
+        for rel in tracked {
+            let rel = Path::new(rel);
+            let name = rel.file_name().unwrap().to_str().unwrap();
+            write(&main.join(rel.parent().unwrap()), name, "main's");
+            write(
+                &feature_wt.join(rel.parent().unwrap()),
+                name,
+                "edited on the feature branch",
+            );
+            git::stage_file(&feature_wt, &rel.to_string_lossy()).unwrap();
+        }
+        git::commit(&feature_wt, "edit customs").unwrap();
 
         let assert_kept = |step: &str| {
-            assert_eq!(
-                std::fs::read_to_string(feature_wt.join(skill)).unwrap(),
-                "edited on the feature branch",
-                "{step}"
-            );
-            let status = git::status_short(&feature_wt).unwrap();
-            assert!(!status.contains("SKILL.md"), "{step}: {status}");
+            for rel in tracked {
+                assert_eq!(
+                    read(feature_wt.join(rel)),
+                    "edited on the feature branch",
+                    "{step}: {rel}"
+                );
+            }
         };
 
         seed_feature_assets(&project, &feature_wt).unwrap();
         assert_kept("seed");
         assert_eq!(
-            std::fs::read_to_string(feature_wt.join(".agents/skills/custom/notes.md")).unwrap(),
+            read(feature_wt.join(".agents/skills/custom/notes.md")),
             "untracked"
         );
-        assert!(!seed_feature_assets_would_change(&project, &feature_wt).unwrap());
 
-        skills::skills_pull(&project, "login").unwrap();
-        assert_kept("skills pull");
+        write(&main.join(".agents/skills/custom"), "notes.md", "newer");
+        assert_eq!(
+            pull(&project, "login", false).unwrap(),
+            vec![PathBuf::from(".agents/skills/custom/notes.md")]
+        );
+        assert_kept("pull");
     }
 
     #[test]
@@ -297,16 +348,14 @@ mod tests {
         seed_feature_assets(&project, &feature_wt).unwrap();
 
         assert_eq!(
-            std::fs::read_to_string(feature_wt.join(".claude/skills/pm/SKILL.md")).unwrap(),
+            read(feature_wt.join(".claude/skills/pm/SKILL.md")),
             "updated content"
         );
         assert_eq!(
-            std::fs::read_to_string(feature_wt.join(".agents/skills/pm/SKILL.md")).unwrap(),
+            read(feature_wt.join(".agents/skills/pm/SKILL.md")),
             "updated content"
         );
         assert!(feature_wt.join(".claude/agents/local-only.md").exists());
         assert!(feature_wt.join(".agents/agents/local-only.md").exists());
-        // Feature-only files never count as drift.
-        assert!(!seed_feature_assets_would_change(&project, &feature_wt).unwrap());
     }
 }

@@ -478,6 +478,7 @@ edit:
 ```sh
 cp ~/.agents/agents/reviewer.md <project>/main/.agents/agents/reviewer.md
 pm upgrade                                     # projects it for the harness
+pm harness pull <feature>                      # existing features don't get it otherwise
 ```
 
 For workflows, copy `<pm config dir>/workflows/<name>/` into
@@ -494,17 +495,28 @@ skill shadowed this way.
 
 Project-specific procedures for agents — how to run, test, or review
 *here* — go in a project skill of your own, `main/.agents/skills/<name>/`,
-which `pm upgrade` projects for the harness and copies into feature
-worktrees. Only a skill's description is in view when the agent decides
-whether to load it, so put the trigger and any rule agents must always see
-there. pm's own `.agents/skills/pm-sandbox/` is an example.
+which `pm upgrade` projects for the harness. Only a skill's description is
+in view when the agent decides whether to load it, so put the trigger and
+any rule agents must always see there. pm's own
+`.agents/skills/pm-sandbox/` is an example.
 
-If the project commits such a skill, pm never writes over a file the
-feature's branch tracks, so an edit made on a feature branch survives
-`pm upgrade`. A codex agent in that feature reads the edited file directly.
-A Claude Code agent does not until the edit is merged and projected from
-main: it loads the feature's `.claude/skills/`, which is copied from main's
-projection.
+**Features get main's customs when they are created, and not again.**
+`pm feat new`/`adopt`/`review` copy main's custom skills, agent definitions
+and `.claude/settings.json` into the new worktree; `pm upgrade` never
+modifies a feature worktree. A custom added to or changed in main afterwards
+does not reach an existing feature until someone pulls it:
+
+```sh
+pm harness pull [feature]             # feature detected from CWD if omitted
+pm harness pull [feature] --dry-run   # list what would be written
+```
+
+Both the creation-time copy and the pull take main's working copy, and
+neither writes over a file the feature's branch tracks, so an edit committed
+on a feature branch survives. A codex agent in that feature reads the edited
+file directly. A Claude Code agent does not until the edit is merged and
+projected from main: it loads the feature's `.claude/skills/`, which is
+copied from main's projection.
 
 Upgrading an existing project removes the per-project copies of bundled
 assets that earlier releases installed — your own files are never touched.
@@ -586,7 +598,8 @@ These round out the tool; each has its full flag reference under `--help`:
 - `pm harness` — the agent harness: `hooks`, bundled `skills`/`agents`
   (installed to `~/.agents/`, projected per harness), per-feature `settings`
   (`settings.json` only — Claude Code keeps `settings.local.json` at the main
-  checkout for every worktree, so pm neither seeds nor syncs it), and
+  checkout for every worktree, so pm neither seeds nor syncs it), `pull`
+  of main's customs into a feature (see Asset tiers), and
   `migrate|export|import` of session data across
   worktrees and machines (`--harness`, default `claude-code`); `list` the
   supported harnesses and `probe` the installed binary. `pm claude …`
