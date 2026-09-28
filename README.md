@@ -404,6 +404,20 @@ globally (edit `~/.agents/skills/<name>/`, accepting that `pm upgrade`
 rewrites it) or copy it to a name of your own. `pm doctor` flags a project
 skill shadowed this way.
 
+Project-specific procedures for agents — how to run, test, or review
+*here* — go in a project skill of your own, `main/.agents/skills/<name>/`,
+which `pm upgrade` projects for the harness and copies into feature
+worktrees. Only a skill's description is in view when the agent decides
+whether to load it, so put the trigger and any rule agents must always see
+there. pm's own `.agents/skills/pm-sandbox/` is an example.
+
+If the project commits such a skill, pm never writes over a file the
+feature's branch tracks, so an edit made on a feature branch survives
+`pm upgrade`. A codex agent in that feature reads the edited file directly.
+A Claude Code agent does not until the edit is merged and projected from
+main: it loads the feature's `.claude/skills/`, which is copied from main's
+projection.
+
 Upgrading an existing project removes the per-project copies of bundled
 assets that earlier releases installed — your own files are never touched.
 The copies under `.pm/workflows/` are recoverable from `.pm/` git history

@@ -905,8 +905,9 @@ fn uninstall_global(kind: BundledKind, name: Option<&str>) -> Result<Vec<String>
 }
 
 /// Copy main's custom skills — the canonical store and each harness's
-/// projection — into the feature worktree's matching directories. Returns
-/// the directories copied (relative to a worktree); empty when main has none.
+/// projection — into the feature worktree's matching directories, leaving
+/// alone any file the feature's branch tracks. Returns the directories
+/// copied (relative to a worktree); empty when main has none.
 pub fn skills_pull(project_root: &Path, feature_name: &str) -> Result<Vec<PathBuf>> {
     super::claude_settings::require_feature(project_root, feature_name)?;
 
@@ -918,7 +919,7 @@ pub fn skills_pull(project_root: &Path, feature_name: &str) -> Result<Vec<PathBu
     }
     let present: Vec<PathBuf> = rels.into_iter().filter(|r| main.join(r).is_dir()).collect();
     for rel in &present {
-        copy_dir_recursive(&main.join(rel), &feature.join(rel))?;
+        super::seed::sync_untracked(&main, &feature, rel, false)?;
     }
     Ok(present)
 }
