@@ -3,12 +3,16 @@
 //! in use, the harness's own per-worktree files and projected assets
 //! (harnesses resolve skills and agent definitions from the worktree they
 //! run in, never from main). Copy-only — nothing in the feature is ever
-//! deleted.
+//! deleted — and a file the feature's branch tracks in git is never written:
+//! its content is the branch's, and reaches or leaves main by merge.
 
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
-use crate::fs_utils::{sync_file, sync_tree};
+use std::collections::HashSet;
+
+use crate::fs_utils::{sync_file, sync_tree_except};
+use crate::git;
 use crate::state::paths;
 
 use super::skills::{self, CANONICAL_DIR};
@@ -47,8 +51,7 @@ fn sync_feature(project_root: &Path, feature_worktree: &Path, dry_run: bool) -> 
         }
     }
     for rel in dirs {
-        let src = main.join(&rel);
-        if src.is_dir() && !sync_tree(&src, &feature_worktree.join(&rel), dry_run)?.is_empty() {
+        if sync_untracked(&main, feature_worktree, &rel, dry_run)? {
             changed = true;
             if dry_run {
                 return Ok(true);
@@ -59,7 +62,10 @@ fn sync_feature(project_root: &Path, feature_worktree: &Path, dry_run: bool) -> 
         for file in harness.seeded_files() {
             let rel = Path::new(harness.config_dir()).join(file);
             let src = main.join(&rel);
-            if src.exists() && sync_file(&src, &feature_worktree.join(&rel), dry_run)? {
+            if src.exists()
+                && tracked_under(feature_worktree, &rel)?.is_empty()
+                && sync_file(&src, &feature_worktree.join(&rel), dry_run)?
+            {
                 changed = true;
                 if dry_run {
                     return Ok(true);
@@ -68,6 +74,35 @@ fn sync_feature(project_root: &Path, feature_worktree: &Path, dry_run: bool) -> 
         }
     }
     Ok(changed)
+}
+
+/// Sync the directory `rel` from `main` into `worktree`, skipping files the
+/// worktree's branch tracks. Returns whether anything was (or would be)
+/// written; a `rel` main doesn't have is a no-op.
+pub(super) fn sync_untracked(
+    main: &Path,
+    worktree: &Path,
+    rel: &Path,
+    dry_run: bool,
+) -> Result<bool> {
+    let src = main.join(rel);
+    if !src.is_dir() {
+        return Ok(false);
+    }
+    let keep = tracked_under(worktree, rel)?;
+    Ok(!sync_tree_except(&src, &worktree.join(rel), &keep, dry_run)?.is_empty())
+}
+
+/// Files under `rel` that `worktree`'s branch tracks, relative to `rel`
+/// (the empty path when `rel` is itself a tracked file).
+fn tracked_under(worktree: &Path, rel: &Path) -> Result<HashSet<PathBuf>> {
+    if !git::is_git_repo(worktree) {
+        return Ok(HashSet::new());
+    }
+    Ok(git::ls_files(worktree, &rel.to_string_lossy())?
+        .iter()
+        .filter_map(|f| Path::new(f).strip_prefix(rel).ok().map(Path::to_path_buf))
+        .collect())
 }
 
 #[cfg(test)]
@@ -182,6 +217,49 @@ mod tests {
 
         write(&main.join(".claude"), "settings.json", "{\"changed\":1}");
         assert!(seed_feature_assets_would_change(&project, &feature_wt).unwrap());
+    }
+
+    #[test]
+    fn seed_and_pull_leave_a_skill_the_feature_branch_tracks() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let main = paths::main_worktree(&project);
+        let feature_wt = project.join("login");
+        let skill = ".agents/skills/custom/SKILL.md";
+
+        write(&main.join(".agents/skills/custom"), "SKILL.md", "main's");
+        write(&main.join(".agents/skills/custom"), "notes.md", "untracked");
+        write(
+            &feature_wt.join(".agents/skills/custom"),
+            "SKILL.md",
+            "edited on the feature branch",
+        );
+        git::stage_file(&feature_wt, skill).unwrap();
+        git::commit(&feature_wt, "edit skill").unwrap();
+
+        let assert_kept = |step: &str| {
+            assert_eq!(
+                std::fs::read_to_string(feature_wt.join(skill)).unwrap(),
+                "edited on the feature branch",
+                "{step}"
+            );
+            let status = git::status_short(&feature_wt).unwrap();
+            assert!(!status.contains("SKILL.md"), "{step}: {status}");
+        };
+
+        seed_feature_assets(&project, &feature_wt).unwrap();
+        assert_kept("seed");
+        // Files the branch doesn't track are still seeded.
+        assert_eq!(
+            std::fs::read_to_string(feature_wt.join(".agents/skills/custom/notes.md")).unwrap(),
+            "untracked"
+        );
+        // A tracked file that differs from main's is not drift.
+        assert!(!seed_feature_assets_would_change(&project, &feature_wt).unwrap());
+
+        skills::skills_pull(&project, "login").unwrap();
+        assert_kept("skills pull");
     }
 
     #[test]

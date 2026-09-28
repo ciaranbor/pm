@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
@@ -24,8 +25,19 @@ pub fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
 /// meaning a differing file already existed there. With `dry_run` nothing is
 /// written, only reported.
 pub fn sync_tree(src: &Path, dst: &Path, dry_run: bool) -> Result<Vec<(PathBuf, bool)>> {
+    sync_tree_except(src, dst, &HashSet::new(), dry_run)
+}
+
+/// [`sync_tree`], leaving alone every file in `keep` (paths relative to
+/// `dst`).
+pub fn sync_tree_except(
+    src: &Path,
+    dst: &Path,
+    keep: &HashSet<PathBuf>,
+    dry_run: bool,
+) -> Result<Vec<(PathBuf, bool)>> {
     let mut out = Vec::new();
-    sync_tree_into(src, dst, Path::new(""), dry_run, &mut out)?;
+    sync_tree_into(src, dst, Path::new(""), keep, dry_run, &mut out)?;
     out.sort();
     Ok(out)
 }
@@ -34,6 +46,7 @@ fn sync_tree_into(
     src: &Path,
     dst: &Path,
     rel: &Path,
+    keep: &HashSet<PathBuf>,
     dry_run: bool,
     out: &mut Vec<(PathBuf, bool)>,
 ) -> Result<()> {
@@ -43,7 +56,10 @@ fn sync_tree_into(
         let src_path = src.join(&rel_path);
         let dst_path = dst.join(&rel_path);
         if src_path.is_dir() {
-            sync_tree_into(src, dst, &rel_path, dry_run, out)?;
+            sync_tree_into(src, dst, &rel_path, keep, dry_run, out)?;
+            continue;
+        }
+        if keep.contains(&rel_path) {
             continue;
         }
         let existed = dst_path.exists();

@@ -88,11 +88,12 @@ pub fn ref_exists(repo: &Path, refspec: &str) -> Result<bool> {
 }
 
 /// Tracked files under `path` (`git ls-files -- <path>`), relative to the
-/// repo root; empty when nothing there is tracked.
+/// repo root; empty when nothing there is tracked. NUL-delimited, so names
+/// git would otherwise quote come back verbatim.
 pub fn ls_files(repo: &Path, path: &str) -> Result<Vec<String>> {
-    let output = run_git(repo, &["ls-files", "--", path])?;
+    let output = run_git(repo, &["ls-files", "-z", "--", path])?;
     Ok(output
-        .lines()
+        .split('\0')
         .filter(|l| !l.is_empty())
         .map(|l| l.to_string())
         .collect())
