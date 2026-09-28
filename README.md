@@ -404,6 +404,12 @@ globally (edit `~/.agents/skills/<name>/`, accepting that `pm upgrade`
 rewrites it) or copy it to a name of your own. `pm doctor` flags a project
 skill shadowed this way.
 
+Project-specific procedures for agents — how to run, test, or review
+*here* — go in a project skill of your own, `main/.agents/skills/<name>/`,
+which `pm upgrade` projects for the harness. A skill's body loads only when
+its description matches the task, so a rule agents must always know belongs
+in the description. pm's own `.agents/skills/pm-sandbox/` is an example.
+
 Upgrading an existing project removes the per-project copies of bundled
 assets that earlier releases installed — your own files are never touched.
 The copies under `.pm/workflows/` are recoverable from `.pm/` git history
