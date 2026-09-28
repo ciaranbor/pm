@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::error::{PmError, Result};
-use crate::harness::{self, Harness, SpawnSpec};
+use crate::harness::{self, Harness, LaunchContext, SpawnSpec};
 use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
 use crate::state::paths;
 use crate::state::project::{
@@ -165,6 +165,9 @@ pub fn spawn_session(params: &SpawnParams<'_>) -> Result<SpawnedSession> {
 pub struct SpawnedSession {
     pub window_target: String,
     pub notes: Vec<String>,
+    /// Whether the session asked for was the one opened. False for a fresh
+    /// spawn, and when the harness had to replace the session it was given.
+    pub resumed: bool,
 }
 
 /// The parenthetical a status line carries for config notes: empty when
@@ -220,19 +223,27 @@ fn spawn_session_with_config(
     settings
         .harness
         .trust_worktree(&paths::home_dir()?, &worktree_path)?;
-    let cmd = settings.harness.build_cmd(
-        &SpawnSpec {
-            definition: definition_flag(effective_definition),
-            append_prompt_file: append_file.as_deref(),
-            prompt: effective_prompt,
-            resume_session: params.resume_session,
-            fork_session: params.fork_session,
-            permission_mode: settings.permission_mode.as_deref(),
-            model: settings.model.as_deref(),
-            writable_dirs: &dirs,
+    let spec = SpawnSpec {
+        definition: definition_flag(effective_definition),
+        append_prompt_file: append_file.as_deref(),
+        prompt: effective_prompt,
+        resume_session: params.resume_session,
+        fork_session: params.fork_session,
+        permission_mode: settings.permission_mode.as_deref(),
+        model: settings.model.as_deref(),
+        writable_dirs: &dirs,
+    };
+    let pre = settings.harness.pre_launch(
+        &LaunchContext {
+            project_root: params.project_root,
+            feature: params.feature,
+            worktree: &worktree_path,
+            agent: window_name,
         },
+        &spec,
         &harness_config,
-    );
+    )?;
+    let cmd = settings.harness.build_cmd(&spec, &harness_config, &pre);
     let window_target = if let Some(target) = params.reuse_window {
         tmux::rename_window(params.tmux_server, target, window_name)?;
         target.to_string()
@@ -263,7 +274,7 @@ fn spawn_session_with_config(
             name,
             AgentEntry {
                 agent_type: AgentType::Agent,
-                session_id: String::new(),
+                session_id: pre.session_id.clone().unwrap_or_default(),
                 window_name: name.to_string(),
                 active: true,
                 agent_definition: stored_definition,
@@ -280,9 +291,18 @@ fn spawn_session_with_config(
         &window_command(params.agent_name, &cmd),
     )?;
 
+    let resumed = match (params.resume_session, &pre.session_id) {
+        (Some(_), _) if params.fork_session => false,
+        (Some(asked), Some(opened)) => asked == opened,
+        (asked, None) => asked.is_some(),
+        (None, Some(_)) => false,
+    };
+    let mut notes = settings.notes;
+    notes.extend(pre.notes);
     Ok(SpawnedSession {
         window_target,
-        notes: settings.notes,
+        notes,
+        resumed,
     })
 }
 
@@ -429,6 +449,7 @@ pub fn agent_spawn(
         let SpawnedSession {
             window_target,
             mut notes,
+            resumed,
         } = spawn(None, resume_id.as_deref())?;
         if entry.harness != harness && !entry.session_id.is_empty() {
             notes.insert(
@@ -440,7 +461,7 @@ pub fn agent_spawn(
             );
         }
 
-        let (outcome, mut msg) = if resume_id.is_some() {
+        let (outcome, mut msg) = if resumed {
             (
                 SpawnOutcome::Resumed,
                 format!("Resumed agent '{agent_name}' in {window_target}"),
@@ -462,6 +483,7 @@ pub fn agent_spawn(
     let SpawnedSession {
         window_target,
         notes,
+        ..
     } = spawn(None, None)?;
 
     Ok((
@@ -1013,12 +1035,254 @@ mod tests {
         assert_eq!(registry.get("reviewer").unwrap().harness, Harness::Codex);
     }
 
+    /// Run `definition` on opencode, played by a stand-in that answers
+    /// every call with `answer` and keeps its record in `project_root`.
+    fn configure_opencode(project_root: &Path, definition: &str, answer: &str, exit: i32) {
+        configure_harness(project_root, definition, "opencode");
+        let pm_dir = paths::pm_dir(project_root);
+        let mut config = ProjectConfig::load(&pm_dir).unwrap();
+        config.harness.opencode.binary =
+            Some(crate::testing::fake_opencode(project_root, answer, exit));
+        config.save(&pm_dir).unwrap();
+    }
+
+    /// Wait for the window's shell to have launched the stand-in TUI, and
+    /// return what it was launched with.
+    fn opencode_tui_argv(project_root: &Path) -> Vec<String> {
+        for _ in 0..500 {
+            let argv = crate::testing::fake_opencode_argv(project_root);
+            if argv.first().is_some_and(|first| first == "--standalone") {
+                return argv;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!(
+            "the window never launched opencode; last record: {:?}",
+            crate::testing::fake_opencode_argv(project_root)
+        );
+    }
+
+    #[test]
+    fn spawn_on_opencode_creates_the_session_before_the_window_and_records_it() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+        configure_opencode(dir.path(), "reviewer", r#"{"data":{"id":"ses_abc"}}"#, 0);
+
+        let (outcome, _, _) =
+            agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
+        assert_eq!(outcome, SpawnOutcome::Spawned);
+
+        // Known at spawn, not reported later by a hook.
+        let registry = AgentRegistry::load(&paths::agents_dir(dir.path()), &feature).unwrap();
+        let entry = registry.get("reviewer").unwrap();
+        assert_eq!(entry.harness, Harness::OpenCode);
+        assert_eq!(entry.session_id, "ses_abc");
+
+        assert_eq!(
+            opencode_tui_argv(dir.path()),
+            ["--standalone", "--auto", "--session", "ses_abc"]
+        );
+        let target = tmux::find_window(server.name(), &session_name, "reviewer")
+            .unwrap()
+            .expect("window");
+        server.wait_for_pane_text(&target, "'PM_OPENCODE_SESSION=ses_abc'");
+    }
+
+    #[test]
+    fn spawn_on_opencode_from_inside_another_opencode_agent_uses_its_own_config() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+        configure_opencode(dir.path(), "reviewer", r#"{"data":{"id":"ses_abc"}}"#, 0);
+        // What every window of this session inherits when the session was
+        // started from an opencode agent's shell.
+        for (key, value) in [
+            ("OPENCODE_CONFIG", "/caller/opencode.json"),
+            ("OPENCODE_CONFIG_CONTENT", r#"{"model":"caller/model"}"#),
+        ] {
+            server.set_session_env(&session_name, key, value);
+        }
+
+        agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
+        opencode_tui_argv(dir.path());
+
+        let env = std::fs::read_to_string(dir.path().join("env")).unwrap();
+        let (config, content) = env.trim_end().split_once('\n').unwrap();
+        assert_eq!(content, "OPENCODE_CONFIG_CONTENT=", "{env}");
+        let path = config.strip_prefix("OPENCODE_CONFIG=").unwrap();
+        assert_ne!(path, "/caller/opencode.json");
+        assert_eq!(std::fs::read_to_string(path).unwrap().trim(), "{}");
+    }
+
+    #[test]
+    fn spawn_on_opencode_pins_the_configured_model_or_refuses_the_row() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+        configure_opencode(dir.path(), "reviewer", r#"{"data":{"id":"ses_abc"}}"#, 0);
+        let set_model = |model: &str| {
+            let pm_dir = paths::pm_dir(dir.path());
+            let mut config = ProjectConfig::load(&pm_dir).unwrap();
+            config
+                .agents
+                .models
+                .insert("reviewer".to_string(), model.to_string());
+            config.save(&pm_dir).unwrap();
+        };
+
+        // A row opencode's session API cannot take never reaches opencode.
+        set_model("opus");
+        let err = agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("must be `<provider>/<model>[#variant]`"),
+            "{err}"
+        );
+        assert!(crate::testing::fake_opencode_calls(dir.path()).is_empty());
+        assert!(
+            tmux::find_window(server.name(), &session_name, "reviewer")
+                .unwrap()
+                .is_none()
+        );
+
+        // One it can take is pinned on the session, where a model opencode
+        // cannot resolve fails the turn instead of running on its default.
+        set_model("nowhere/does-not-exist");
+        agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
+        let create = crate::testing::fake_opencode_calls(dir.path()).remove(0);
+        let body: serde_json::Value = serde_json::from_str(create.last().unwrap()).unwrap();
+        assert_eq!(
+            body["model"],
+            serde_json::json!({"providerID": "nowhere", "id": "does-not-exist"})
+        );
+        opencode_tui_argv(dir.path());
+        let env = std::fs::read_to_string(dir.path().join("env")).unwrap();
+        let path = env
+            .lines()
+            .next()
+            .unwrap()
+            .strip_prefix("OPENCODE_CONFIG=")
+            .unwrap();
+        let config: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(config["enabled_providers"], serde_json::json!(["nowhere"]));
+    }
+
+    #[test]
+    fn spawn_on_opencode_that_cannot_create_a_session_leaves_nothing() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+        configure_opencode(
+            dir.path(),
+            "reviewer",
+            r#"{"_tag":"InvalidRequestError","message":"no such directory"}"#,
+            1,
+        );
+
+        let err = agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("opencode session.create failed: no such directory"),
+            "{err}"
+        );
+        assert!(
+            tmux::find_window(server.name(), &session_name, "reviewer")
+                .unwrap()
+                .is_none()
+        );
+        let registry = AgentRegistry::load(&paths::agents_dir(dir.path()), &feature).unwrap();
+        assert!(registry.get("reviewer").is_none());
+    }
+
+    #[test]
+    fn respawn_on_opencode_reopens_the_stored_session_and_keeps_it_recorded() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+        configure_opencode(dir.path(), "reviewer", r#"{"data":{"id":"ses_first"}}"#, 0);
+        agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
+        opencode_tui_argv(dir.path());
+
+        tmux::kill_session(server.name(), &session_name).unwrap();
+        tmux::create_session(server.name(), &session_name, &dir.path().join(&feature)).unwrap();
+        // A second session would be a fresh agent with no transcript.
+        configure_opencode(dir.path(), "reviewer", r#"{"data":{"id":"ses_second"}}"#, 0);
+        for entry in std::fs::read_dir(dir.path()).unwrap().flatten() {
+            if entry.file_name().to_string_lossy().starts_with("argv") {
+                std::fs::remove_file(entry.path()).unwrap();
+            }
+        }
+
+        let (outcome, _, _) =
+            agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
+        assert_eq!(outcome, SpawnOutcome::Resumed);
+        assert_eq!(
+            opencode_tui_argv(dir.path()),
+            ["--standalone", "--auto", "--session", "ses_first"]
+        );
+        // No SessionStart hook refills it on opencode before the plugin
+        // loads, and a window that dies first must still be resumable.
+        let registry = AgentRegistry::load(&paths::agents_dir(dir.path()), &feature).unwrap();
+        assert_eq!(registry.get("reviewer").unwrap().session_id, "ses_first");
+    }
+
+    #[test]
+    fn respawn_on_opencode_after_the_model_row_is_removed_starts_a_fresh_session() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+        let pinned = |id: &str| {
+            format!(r#"{{"data":{{"id":"{id}","model":{{"providerID":"local","id":"qwen"}}}}}}"#)
+        };
+        configure_opencode(dir.path(), "reviewer", &pinned("ses_first"), 0);
+        let set_model = |model: Option<&str>| {
+            let pm_dir = paths::pm_dir(dir.path());
+            let mut config = ProjectConfig::load(&pm_dir).unwrap();
+            match model {
+                Some(m) => config.agents.models.insert("reviewer".into(), m.into()),
+                None => config.agents.models.remove("reviewer"),
+            };
+            config.save(&pm_dir).unwrap();
+        };
+        set_model(Some("local/qwen"));
+        agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
+        opencode_tui_argv(dir.path());
+
+        tmux::kill_session(server.name(), &session_name).unwrap();
+        tmux::create_session(server.name(), &session_name, &dir.path().join(&feature)).unwrap();
+        set_model(None);
+        configure_opencode(dir.path(), "reviewer", &pinned("ses_second"), 0);
+
+        let (outcome, msg, notes) =
+            agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
+        assert_eq!(
+            notes,
+            [
+                "session ses_first is pinned to model local/qwen, which opencode cannot unpin; \
+              started a fresh session"
+            ]
+        );
+        assert!(msg.ends_with(&format!("({})", notes[0])), "{msg}");
+        assert_eq!(outcome, SpawnOutcome::Spawned);
+        assert!(msg.starts_with("Spawned agent 'reviewer' in "), "{msg}");
+        let registry = AgentRegistry::load(&paths::agents_dir(dir.path()), &feature).unwrap();
+        assert_eq!(registry.get("reviewer").unwrap().session_id, "ses_second");
+        assert_eq!(
+            opencode_tui_argv(dir.path()),
+            ["--standalone", "--auto", "--session", "ses_second"]
+        );
+    }
+
     #[test]
     fn spawn_errors_on_unsupported_harness_and_leaves_nothing() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
         let (session_name, feature) = setup_project(dir.path(), &server);
-        configure_harness(dir.path(), "reviewer", "opencode");
+        configure_harness(dir.path(), "reviewer", "aider");
         let err =
             agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap_err();
         assert!(
@@ -1352,6 +1616,7 @@ mod tests {
                 ..Default::default()
             },
             &HarnessConfig::default(),
+            &harness::PreLaunch::default(),
         );
         assert!(
             !cmd.contains("--agent"),
@@ -1393,6 +1658,7 @@ mod tests {
                 writable_roots: Some(vec!["/abs/cache".into(), "main/target".into()]),
                 ..Default::default()
             },
+            ..Default::default()
         };
         assert_eq!(
             writable_dirs(root, &config),

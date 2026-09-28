@@ -10,11 +10,11 @@ use super::agent_spawn::{SpawnParams, notes_suffix, spawn_session};
 /// Fork an existing agent: spawn a new agent that starts with a copy of
 /// the source's conversation history.
 ///
-/// Implemented via Claude Code's built-in `--fork-session` flag, which
-/// loads the source's transcript and assigns the resumed conversation a
-/// fresh session id. The source's session file is left untouched, so the
-/// source can keep running and the two histories diverge cleanly from
-/// the moment of the fork.
+/// Implemented by the harness's own fork (Claude Code's `--fork-session`,
+/// `codex fork`, opencode's `session.fork`), which loads the source's
+/// transcript under a fresh session id. The source's session is left
+/// untouched, so the source can keep running and the two histories diverge
+/// cleanly from the moment of the fork.
 ///
 /// Errors if:
 /// - `source` does not exist in the registry
@@ -335,6 +335,101 @@ mod tests {
         assert!(result.is_err());
         let err = format!("{}", result.unwrap_err());
         assert!(err.contains("no session_id"), "got: {err}");
+    }
+
+    #[test]
+    fn fork_on_opencode_opens_the_session_opencode_forked() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+        let pm_dir = paths::pm_dir(dir.path());
+        let mut config = ProjectConfig::load(&pm_dir).unwrap();
+        config
+            .agents
+            .harness
+            .insert("reviewer".to_string(), "opencode".to_string());
+        config.harness.opencode.binary = Some(crate::testing::fake_opencode(
+            dir.path(),
+            r#"{"data":{"id":"ses_source"}}"#,
+            0,
+        ));
+        config.save(&pm_dir).unwrap();
+        agent_spawn::agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name())
+            .unwrap();
+
+        crate::testing::fake_opencode(dir.path(), r#"{"data":{"id":"ses_fork"}}"#, 0);
+        agent_fork(
+            dir.path(),
+            &feature,
+            "reviewer",
+            "reviewer-2",
+            server.name(),
+        )
+        .unwrap();
+
+        let registry = AgentRegistry::load(&paths::agents_dir(dir.path()), &feature).unwrap();
+        assert_eq!(registry.get("reviewer").unwrap().session_id, "ses_source");
+        let fork = registry.get("reviewer-2").unwrap();
+        assert_eq!(fork.session_id, "ses_fork");
+        assert_eq!(fork.harness, Harness::OpenCode);
+        assert_eq!(fork.agent_definition.as_deref(), Some("reviewer"));
+        let target = tmux::find_window(server.name(), &session_name, "reviewer-2")
+            .unwrap()
+            .expect("window");
+        server.wait_for_pane_text(&target, "'PM_OPENCODE_SESSION=ses_fork'");
+    }
+
+    #[test]
+    fn fork_on_opencode_reports_why_opencode_refused_and_registers_nothing() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+        let pm_dir = paths::pm_dir(dir.path());
+        let mut config = ProjectConfig::load(&pm_dir).unwrap();
+        config
+            .agents
+            .harness
+            .insert("reviewer".to_string(), "opencode".to_string());
+        config
+            .agents
+            .models
+            .insert("reviewer".to_string(), "local/qwen".to_string());
+        config.harness.opencode.binary = Some(crate::testing::fake_opencode(
+            dir.path(),
+            r#"{"data":{"id":"ses_source"}}"#,
+            0,
+        ));
+        config.save(&pm_dir).unwrap();
+        agent_spawn::agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name())
+            .unwrap();
+
+        // What opencode answers for a source that has not had a turn yet.
+        crate::testing::fake_opencode(
+            dir.path(),
+            "{\"_tag\":\"InvalidRequestError\",\"message\":\"Cannot fork empty session: \
+             ses_source\",\"kind\":\"empty_session\"}\nHTTP 400 Bad Request",
+            1,
+        );
+        let err = agent_fork(
+            dir.path(),
+            &feature,
+            "reviewer",
+            "reviewer-2",
+            server.name(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("opencode session.fork failed: Cannot fork empty session: ses_source"),
+            "{err}"
+        );
+        let registry = AgentRegistry::load(&paths::agents_dir(dir.path()), &feature).unwrap();
+        assert!(registry.get("reviewer-2").is_none());
+        assert!(
+            tmux::find_window(server.name(), &session_name, "reviewer-2")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

@@ -850,12 +850,13 @@ fn optional_project_root() -> pm::error::Result<Option<std::path::PathBuf>> {
     }
 }
 
-/// The settings and session commands only exist for Claude Code: codex has
-/// no per-feature settings files, and pm does not manage its sessions.
+/// The settings and session commands only exist for Claude Code: the other
+/// harnesses have no per-feature settings files, and pm does not manage
+/// their sessions.
 fn claude_code_only(harness: Harness, what: &str) -> pm::error::Result<()> {
     match harness {
         Harness::ClaudeCode => Ok(()),
-        Harness::Codex => Err(pm::error::PmError::Agent(format!(
+        Harness::Codex | Harness::OpenCode => Err(pm::error::PmError::Agent(format!(
             "{what} are not supported for {harness}; only claude-code has them"
         ))),
     }
@@ -1050,7 +1051,10 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
             Ok(())
         }
         HarnessCommands::Probe { harness } => {
-            println!("{}", commands::doctor::probe_line(harness));
+            println!(
+                "{}",
+                commands::doctor::probe_line(harness, optional_project_root()?.as_deref())
+            );
             Ok(())
         }
     }

@@ -610,3 +610,126 @@ fn codex_spawn_builds_the_command_and_trusts_the_worktree() {
     );
     assert!(trust.contains("trust_level = \"trusted\""), "{trust}");
 }
+
+/// Catches: opencode's env-prefixed command line through the real shell;
+/// the session created before the window, from the real config dir, with
+/// the caller's own agent identity and opencode config kept out of that
+/// call and out of the window; `--standalone` on both invocations (the shim
+/// refuses one without it); and the plugin installed under the real
+/// `~/.config/opencode`.
+#[test]
+#[ignore]
+fn opencode_spawn_creates_the_session_then_opens_it_standalone() {
+    let s = Smoke::new();
+    let login = s.init_with_feature();
+    s.set_agents_config("harness", "\"*\" = \"opencode\"");
+    s.set_agents_config("models", "reviewer = \"local/qwen[1m]\"");
+    // As when an opencode agent spawns another: pm inherits the spawner's
+    // identity and config, and so does every window of its session.
+    let inherited = r#"{"model":"caller/model"}"#;
+    for (key, value) in [
+        ("OPENCODE_CONFIG", "/caller/opencode.json"),
+        ("OPENCODE_CONFIG_CONTENT", inherited),
+    ] {
+        s.tmux(&["set-environment", "-t", "proj/login", key, value]);
+    }
+
+    s.pm(&login)
+        .env("PM_AGENT_NAME", "main")
+        .env("PM_OPENCODE_SESSION", "ses_of_main")
+        .env("OPENCODE_CONFIG", "/caller/opencode.json")
+        .env("OPENCODE_CONFIG_CONTENT", inherited)
+        .args(["agent", "spawn", "reviewer"])
+        .assert()
+        .success();
+
+    let api: Vec<PathBuf> = std::fs::read_dir(s.home().join("log"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "api"))
+        .collect();
+    assert_eq!(api.len(), 1, "{api:?}");
+    let call = parse_record(&std::fs::read_to_string(&api[0]).unwrap()).unwrap();
+    assert_eq!(
+        call.argv[1..4],
+        ["api", "--standalone", "session.create"],
+        "{call:?}"
+    );
+    let body: serde_json::Value = serde_json::from_str(call.argv.last().unwrap()).unwrap();
+    assert_eq!(body["agent"], "reviewer");
+    assert_eq!(body["title"], "pm:reviewer");
+    assert_eq!(
+        body["model"],
+        serde_json::json!({"providerID": "local", "id": "qwen[1m]"})
+    );
+    let api_text = std::fs::read_to_string(&api[0]).unwrap();
+    assert!(
+        api_text.ends_with("OPENCODE_CONFIG=\nOPENCODE_CONFIG_CONTENT=\n"),
+        "the spawner's config reached opencode: {api_text}"
+    );
+    assert_eq!(
+        Path::new(body["location"]["directory"].as_str().unwrap()),
+        login.canonicalize().unwrap()
+    );
+    assert_eq!(
+        call.agent_name, "",
+        "the spawner's identity reached opencode"
+    );
+    let pid = api[0]
+        .file_stem()
+        .and_then(|f| f.to_str())
+        .and_then(|f| f.rsplit('-').next())
+        .unwrap();
+    let session = format!("ses_shim{pid}");
+
+    let records = s.argv_records("reviewer", 1);
+    let rec = &records[0];
+    let expected: Vec<String> = [
+        s.home().join("bin/opencode").to_string_lossy().to_string(),
+        "--standalone".into(),
+        "--auto".into(),
+        "--session".into(),
+        session.clone(),
+    ]
+    .into();
+    assert_eq!(rec.argv, expected);
+    assert_eq!(rec.agent_name, "reviewer");
+    assert_eq!(Path::new(&rec.cwd), login);
+
+    let window = std::fs::read_dir(s.home().join("log"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|f| f.to_str())
+                .is_some_and(|f| f.starts_with("opencode-reviewer-") && f.ends_with(".argv"))
+        })
+        .unwrap();
+    let window = std::fs::read_to_string(window).unwrap();
+    let config = window
+        .lines()
+        .find_map(|l| l.strip_prefix("OPENCODE_CONFIG="))
+        .unwrap();
+    assert_ne!(config, "/caller/opencode.json");
+    let config: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(config).unwrap()).unwrap();
+    assert_eq!(
+        config,
+        serde_json::json!({"model": "local/qwen[1m]", "enabled_providers": ["local"]})
+    );
+    assert!(window.ends_with("OPENCODE_CONFIG_CONTENT=\n"), "{window}");
+
+    let registry = std::fs::read_to_string(s.proj().join(".pm/agents/login.toml")).unwrap();
+    assert!(
+        registry.contains(&format!("session_id = \"{session}\"")),
+        "{registry}"
+    );
+    assert!(registry.contains("harness = \"opencode\""), "{registry}");
+
+    let plugin = s.home().join(".config/opencode/plugins/pm-never-idle");
+    for file in ["index.ts", "loop.ts", "pm.ts"] {
+        assert!(plugin.join(file).is_file(), "{file}");
+    }
+}

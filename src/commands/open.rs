@@ -52,7 +52,9 @@ fn is_open_recoverable(kind: IssueKind) -> bool {
         | IssueKind::HooksMalformed
         | IssueKind::HookUntrusted
         | IssueKind::WorktreeUntrusted
-        | IssueKind::MainBranchMissing => false,
+        | IssueKind::MainBranchMissing
+        | IssueKind::HarnessUnusable
+        | IssueKind::LoopStopped => false,
     }
 }
 

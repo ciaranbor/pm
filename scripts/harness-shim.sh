@@ -1,15 +1,44 @@
 #!/bin/sh
-# Stand-in for `claude`/`codex` inside a pm sandbox: answers pm's capability
-# probes, otherwise records how it was invoked and holds the window open like
-# a running agent would. One record per invocation (pid suffix) so a respawn
-# leaves a second one.
+# Stand-in for `claude`/`codex`/`opencode` inside a pm sandbox: answers pm's
+# capability probes and pre-launch calls, otherwise records how it was
+# invoked and holds the window open like a running agent would. One record
+# per invocation (pid suffix) so a respawn leaves a second one.
+name=$(basename "$0")
 case $1 in
   --help) echo "  --append-system-prompt-file <file>"; exit 0 ;;
-  --version) echo "$(basename "$0") 0.156.0"; exit 0 ;;
+  --version)
+    case $name in
+      opencode) echo "opencode v2.0.18" ;;
+      *) echo "$name 0.156.0" ;;
+    esac
+    exit 0 ;;
 esac
+if [ "$name" = opencode ]; then
+  # Without it opencode starts a server shared by every agent of this HOME.
+  case " $* " in
+    *" --standalone "*) ;;
+    *) echo "opencode shim: --standalone missing: $*" >&2; exit 2 ;;
+  esac
+  if [ "$1" = api ]; then
+    {
+      printf 'argc=%s\n' "$#"
+      printf '%s\n' "$0" "$@"
+      printf 'cwd=%s\nPM_AGENT_NAME=%s\n' "$PWD" "$PM_AGENT_NAME"
+      printf 'OPENCODE_CONFIG=%s\nOPENCODE_CONFIG_CONTENT=%s\n' \
+        "$OPENCODE_CONFIG" "$OPENCODE_CONFIG_CONTENT"
+    } > "$HOME/log/$name-api-$$.api"
+    echo "{\"data\":{\"id\":\"ses_shim$$\"}}"
+    exit 0
+  fi
+fi
 {
   printf 'argc=%s\n' "$#"
   printf '%s\n' "$0" "$@"
   printf 'cwd=%s\nPM_AGENT_NAME=%s\n' "$PWD" "$PM_AGENT_NAME"
-} > "$HOME/log/$(basename "$0")-${PM_AGENT_NAME:-default}-$$.argv"
+  if [ "$name" = opencode ]; then
+    printf 'PM_OPENCODE_SESSION=%s\n' "$PM_OPENCODE_SESSION"
+    printf 'OPENCODE_CONFIG=%s\nOPENCODE_CONFIG_CONTENT=%s\n' \
+      "$OPENCODE_CONFIG" "$OPENCODE_CONFIG_CONTENT"
+  fi
+} > "$HOME/log/$name-${PM_AGENT_NAME:-default}-$$.argv"
 exec sleep 600

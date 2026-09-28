@@ -115,8 +115,8 @@ Two decoupled layers:
   `main/.agents/agents/` for one project) describe an agent's *job* — what it
   does, how it evaluates work. They carry no routing. pm projects them into
   each harness's own dir on `init`/`upgrade` where the harness needs that
-  (Claude Code does; codex reads `.agents/` itself); only the `.agents/` copy
-  counts as a definition.
+  (Claude Code and opencode do; codex reads `.agents/` itself); only the
+  `.agents/` copy counts as a definition.
 - **Workflows** (`<pm config dir>/workflows/<name>/`, or
   `<project>/.pm/workflows/` for one project) define the per-feature
   *topology* — who hands off to whom, who reports to the user.
@@ -191,22 +191,25 @@ project `"*"`, global named row, global `"*"`; `""` masks the rows below it,
 unset means no flag is passed.
 
 ```toml
-[agents.permissions]         # harness's own mode string, passed through unvalidated
+[agents.permissions]         # harness's own mode string
 reviewer = "plan"
 
-[agents.models]              # alias or full id, passed to the harness unvalidated
+[agents.models]              # alias or full id, in the harness's own terms
 "*" = "gpt-5"
 reviewer = "opus"
 
-[agents.harness]             # agent CLI: "claude-code" (the default) or "codex"
+[agents.harness]             # agent CLI: "claude-code" (the default), "codex" or "opencode"
 "*" = "codex"
 reviewer = "claude-code"
 ```
 
-Permission modes and model ids are in the terms of the agent's harness
-(`--permission-mode` / `--model` values for Claude Code; the `-s` sandbox
-mode / `-m` for codex) and reach it unvalidated, so a typo surfaces in the
-agent's tmux window rather than at spawn.
+Permission modes and model ids are in the terms of the agent's harness:
+`--permission-mode` / `--model` values for Claude Code, the `-s` sandbox
+mode / `-m` for codex, a permission rule list / `<provider>/<model>` for
+opencode. On Claude Code and codex pm passes them through as written, so a
+typo surfaces in the agent's tmux window. On opencode a row of the wrong
+shape is an error at spawn, and a model opencode cannot resolve fails the
+agent's first turn (see [opencode agents](#opencode-agents)).
 
 A model or permission row is bound to the harness configured under the same
 key, looking from the row's own file down: a `reviewer` row to the `reviewer`
@@ -233,7 +236,7 @@ session (and `pm agent fork` refuses).
 Config is the only way to set these: there is no spawn-time flag, so a
 restart, fork, or heal launches with the same settings as the first spawn.
 For a one-off change, edit the row and spawn, or switch inside the session
-(`/model`, `/permissions` on both harnesses).
+(`/model`, `/permissions` on Claude Code and codex).
 
 Keys are the `--agent` definition, not the display name: an agent spawned as
 `frontend-dev --agent implementer` takes `implementer`'s row. The vanilla
@@ -298,12 +301,88 @@ unattended:
   or newer, the first with `--no-daemon`). `pm harness
   settings|migrate|export|import` are Claude Code only.
 
+### opencode agents
+
+Set `[agents.harness] <def> = "opencode"` and pm spawns that agent in the
+opencode TUI (2.0.18 or later). Messaging and skills work as on the other
+harnesses; what differs:
+
+- **The never-idle loop is a plugin.** opencode has no Stop hook, so `pm
+  init`/`pm upgrade` install `pm-never-idle` under
+  `~/.config/opencode/plugins/` (or `$XDG_CONFIG_HOME/opencode/plugins/`).
+  When the agent's turn ends it waits for a message exactly as the Stop hook
+  does, then prompts the session. It does nothing in a session pm didn't
+  spawn. The files are pm's: an upgrade overwrites them, and opencode
+  reloads the plugin in running agents when it does.
+- **The loop stops itself rather than run away.** If five turns in a row are
+  prompted for unread messages and read none — the model fails every turn,
+  or the agent cannot read its inbox — the plugin stops prompting, says so
+  in the session, and `pm doctor` reports the agent. After a failed turn it
+  waits 30 seconds before asking again. Fix the cause, then `pm agent
+  restart <name>`.
+- **Always `--standalone`.** pm launches `opencode --standalone --auto
+  --session <id>`, with the session created beforehand. Without
+  `--standalone` every opencode command shares one background server per
+  `$HOME`, and that server's plugins act under the identity of whichever
+  agent started it. If you run `opencode` yourself in an agent's window,
+  pass `--standalone` too.
+- **An unknown agent name is silent.** opencode reads definitions from
+  `~/.config/opencode/agents/` and `<worktree>/.opencode/agents/`, where pm
+  projects them, and runs its built-in prompt — no error — for a name it
+  finds in neither. `pm doctor` flags a definition with no projected copy;
+  `pm upgrade` projects it.
+- **Permissions.** `--auto` approves whatever no rule denies, because an
+  approval prompt in an unwatched window stalls the agent. An
+  `[agents.permissions]` row is opencode's own rule list as a JSON array;
+  the last matching rule wins:
+
+  ```toml
+  [agents.harness]
+  reviewer = "opencode"
+
+  [agents.models]               # "<provider>/<model>"
+  reviewer = "anthropic/claude-opus-5"
+
+  [agents.permissions]
+  reviewer = '[{"action":"edit","resource":"*","effect":"deny"}]'
+
+  [harness.opencode]            # harness-wide, project beats global per key
+  auto = false                  # drop --auto; asks then wait for an answer
+  binary = "/opt/opencode/bin/opencode"   # default: opencode from PATH
+  ```
+
+  With `auto = false` pm adds
+  `{"action":"external_directory","resource":"<dir>/*","effect":"allow"}`
+  ahead of the row for its own state dir, the shared `main/.git`, and the pm
+  config dir, so reading `.pm/` does not prompt — unless a later rule of the
+  row matches those paths, which wins.
+- **A model row is binding.** Left to its config, opencode replaces a
+  model it cannot resolve with its default one — hosted by opencode when no
+  provider is configured — without an error. pm therefore pins the
+  `[agents.models]` row on the agent's session and limits the agent to that
+  row's provider. A row opencode cannot resolve then fails the agent's first
+  turn (`Model unavailable`) before any request is made, and the loop stops
+  and reports it as above. An agent with **no** row runs on whatever
+  opencode's own config selects. opencode cannot unpin a session, so after
+  a row is removed the agent's next respawn starts a fresh session, and says
+  so; `pm agent fork` of such an agent is refused until the row is back.
+- **Forking needs a turn.** opencode refuses to fork a session that has had
+  none, so `pm agent fork` fails for an agent that has not processed a
+  message yet.
+- Providers and credentials are opencode's own (`~/.config/opencode/`); pm
+  sets only the model and the permission rules, in a config file of its own
+  named by `OPENCODE_CONFIG`. An agent never inherits `OPENCODE_CONFIG` or
+  `OPENCODE_CONFIG_CONTENT` from the shell that spawned it.
+- `pm harness probe --harness opencode` checks the installed version. `pm
+  harness settings|migrate|export|import` are Claude Code only.
+
 ### Agents as never-idle message processors
 
 `pm init` and `pm upgrade` install a **Stop hook** into the user-level hooks
 file of every supported harness (`~/.claude/settings.json` for Claude Code,
-`$CODEX_HOME/hooks.json` for codex), once per machine, so every project on
-it is covered whichever harness it configures — `$CODEX_HOME` is created if
+`$CODEX_HOME/hooks.json` for codex; opencode gets a
+[plugin](#opencode-agents) that does the same), once per machine, so every
+project on it is covered whichever harness it configures — `$CODEX_HOME` is created if
 codex has never been run, and codex's one-time trust prompt then fires in
 whichever codex session comes first. After every turn it blocks until the
 agent has unread messages (calling `pm msg wait` internally), then returns a
@@ -320,7 +399,8 @@ immediately, without needing `pm` on its `PATH`.
 Exception: if a Claude Code background task or session cron is still running
 and no messages are queued, the hook lets the turn end so the work isn't
 stalled. Codex has no such second wake source, so its agents block every
-turn.
+turn; so do opencode's, where the plugin only starts waiting once the turn
+is over.
 
 Reinstall with `pm harness hooks install` (idempotent, works outside a
 project); `pm doctor --fix` restores a missing one. Earlier releases wrote
@@ -442,7 +522,7 @@ bundled `pm-baseline.md` rather than being repeated per agent.
 `pm init`/`pm upgrade` install it to `~/.agents/pm-baseline.md`, and every
 agent pm spawns (including `main`) has it appended to its system prompt
 (`--append-system-prompt-file` on Claude Code; SessionStart hook context on
-codex).
+codex; the plugin's context hook on opencode).
 
 ### Notice board
 

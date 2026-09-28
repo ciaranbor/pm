@@ -24,6 +24,54 @@ pub static CWD_LOCK: RwLock<()> = RwLock::new(());
 /// tests could each drop the other's entry.
 pub static CODEX_CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Write a stand-in `opencode` into `dir` and return its path, for
+/// `[harness.opencode] binary`. It records its arguments in `<dir>/argv`,
+/// one per line, and the opencode config its environment names in
+/// `<dir>/env`, keeping earlier invocations as `argv.1`, `argv.2`, …; then
+/// it prints `answer` and exits with `exit` — enough to play `opencode
+/// api`, `opencode --version`, and the TUI a window launches.
+pub fn fake_opencode(dir: &std::path::Path, answer: &str, exit: i32) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = dir.join("opencode");
+    let script = format!(
+        "#!/bin/sh\nn=1; while [ -e '{log}'.$n ]; do n=$((n+1)); done\n\
+         [ -e '{log}' ] && mv '{log}' '{log}'.$n\n\
+         printf '%s\\n' \"$@\" > '{log}.tmp' && mv '{log}.tmp' '{log}'\n\
+         printf 'OPENCODE_CONFIG=%s\\nOPENCODE_CONFIG_CONTENT=%s\\n' \\\n\
+         \"$OPENCODE_CONFIG\" \"$OPENCODE_CONFIG_CONTENT\" > '{env}'\n\
+         cat <<'ANSWER'\n{answer}\nANSWER\nexit {exit}\n",
+        log = dir.join("argv").display(),
+        env = dir.join("env").display(),
+    );
+    std::fs::write(&bin, script).expect("write fake opencode");
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod fake opencode");
+    bin.to_string_lossy().into_owned()
+}
+
+/// What the last [`fake_opencode`] invocation in `dir` was called with;
+/// empty when it has not run.
+pub fn fake_opencode_argv(dir: &std::path::Path) -> Vec<String> {
+    read_lines(&dir.join("argv"))
+}
+
+/// Every [`fake_opencode`] invocation in `dir`, oldest first.
+pub fn fake_opencode_calls(dir: &std::path::Path) -> Vec<Vec<String>> {
+    let mut calls: Vec<Vec<String>> = (1..)
+        .map(|n| dir.join(format!("argv.{n}")))
+        .take_while(|path| path.exists())
+        .map(|path| read_lines(&path))
+        .collect();
+    calls.extend(Some(fake_opencode_argv(dir)).filter(|last| !last.is_empty()));
+    calls
+}
+
+fn read_lines(path: &std::path::Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .map(|text| text.lines().map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
 static TMUX_SERVER_COUNTER: AtomicU32 = AtomicU32::new(0);
 static SHARED_SERVER_NAME: OnceLock<String> = OnceLock::new();
 static TEST_HOME: OnceLock<std::path::PathBuf> = OnceLock::new();
@@ -518,6 +566,20 @@ impl TestServer {
     /// Poll a window's scrollback until `needle` appears (the shell echoes
     /// typed commands, so this observes what a spawn actually launched).
     /// Panics with the captured text on timeout.
+    /// Set a variable every new window of `session` inherits, as when the
+    /// session was created from a shell that had it.
+    pub fn set_session_env(&self, session: &str, key: &str, value: &str) {
+        let mut command = std::process::Command::new("tmux");
+        if let Some(name) = self.name() {
+            command.args(["-L", name]);
+        }
+        let status = command
+            .args(["set-environment", "-t", session, key, value])
+            .status()
+            .expect("run tmux");
+        assert!(status.success(), "tmux set-environment {key}");
+    }
+
     pub fn wait_for_pane_text(&self, target: &str, needle: &str) {
         let mut last = String::new();
         for _ in 0..500 {

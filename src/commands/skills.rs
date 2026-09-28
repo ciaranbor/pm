@@ -1270,21 +1270,21 @@ mod tests {
         // With nothing installed yet the preview still names the projection
         // the install triggers, with the same file count.
         let dry = install_global_dry_run_in(&store).unwrap();
-        let would_project: Vec<&String> = dry
+        let would_project: Vec<&str> = dry
             .iter()
-            .filter(|l| l.starts_with("Would project"))
+            .filter_map(|l| l.strip_prefix("Would project"))
             .collect();
-        assert_eq!(would_project.len(), 1, "{dry:?}");
+        assert_eq!(would_project.len(), 2, "{dry:?}");
         assert!(!home.path().join(".agents").exists());
         assert!(!home.path().join(".claude").exists());
+        assert!(!home.path().join(".config/opencode").exists());
 
         let lines = install_global_in(&store).unwrap();
-        let projected = lines.iter().find(|l| l.starts_with("Projected")).unwrap();
-        assert_eq!(
-            would_project[0].trim_start_matches("Would project"),
-            projected.trim_start_matches("Projected"),
-            "{dry:?} vs {lines:?}"
-        );
+        let projected: Vec<&str> = lines
+            .iter()
+            .filter_map(|l| l.strip_prefix("Projected"))
+            .collect();
+        assert_eq!(would_project, projected, "{dry:?} vs {lines:?}");
         assert!(
             lines
                 .iter()
@@ -1314,7 +1314,11 @@ mod tests {
             let dir = harness.global_config_dir(h).unwrap();
             if harness.projects_definitions() {
                 assert!(dir.join("agents/reviewer.md").exists(), "{harness}");
-                assert!(dir.join("skills/pm/SKILL.md").exists(), "{harness}");
+                assert_eq!(
+                    dir.join("skills/pm/SKILL.md").exists(),
+                    harness.projected_dirs().contains(&"skills"),
+                    "{harness}"
+                );
             } else {
                 // codex reads the canonical store itself; nothing lands here.
                 assert!(!dir.exists(), "{harness}");
@@ -1387,7 +1391,10 @@ mod tests {
         fs::write(home.path().join(".agents/agents/planner.md"), "# planner").unwrap();
         assert_eq!(
             unprojected_global_definitions_in(&store, Harness::SUPPORTED).unwrap(),
-            vec![("planner".to_string(), Harness::ClaudeCode)]
+            vec![
+                ("planner".to_string(), Harness::ClaudeCode),
+                ("planner".to_string(), Harness::OpenCode),
+            ]
         );
         assert!(
             unprojected_global_definitions_in(&store, &[])
@@ -1401,10 +1408,16 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        assert_eq!(
-            fs::read_to_string(home.path().join(".claude/agents/planner.md")).unwrap(),
-            "# planner"
-        );
+        for projected in [
+            ".claude/agents/planner.md",
+            ".config/opencode/agents/planner.md",
+        ] {
+            assert_eq!(
+                fs::read_to_string(home.path().join(projected)).unwrap(),
+                "# planner",
+                "{projected}"
+            );
+        }
     }
 
     #[test]

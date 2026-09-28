@@ -2,11 +2,12 @@
 //! every supported harness (`~/.claude/settings.json`, `$CODEX_HOME/hooks.json`
 //! — both take the same nested `hooks` shape) — once per machine — and strip
 //! the entries earlier releases wrote into `main/.claude/settings.json` and
-//! its seeded feature copies. Both halves are idempotent, so `pm init`,
-//! `pm upgrade`, `pm harness hooks install` and `pm doctor --fix` all run
-//! them unconditionally; the global upsert runs first so a live session is
-//! never left without the hook mid-migration (Claude Code merges the user
-//! and project files and runs a duplicated handler once).
+//! its seeded feature copies. A harness whose loop is a plugin gets
+//! [`Harness::plugin_files`] written instead. Both halves are idempotent, so
+//! `pm init`, `pm upgrade`, `pm harness hooks install` and `pm doctor --fix`
+//! all run them unconditionally; the global upsert runs first so a live
+//! session is never left without the hook mid-migration (Claude Code merges
+//! the user and project files and runs a duplicated handler once).
 //!
 //! Every supported harness, not only those in use, creating `$CODEX_HOME`
 //! if absent: which harnesses are in use is a per-project answer and the
@@ -100,13 +101,26 @@ pub fn session_start_hook_command() -> String {
     format!("{GUARD}{PM_SESSION_START_MARKER}")
 }
 
-/// The user-level file `harness`'s pm hooks live in.
-pub fn user_settings_path(harness: Harness, home: &Path) -> Result<PathBuf> {
-    harness.user_settings_file(home).ok_or_else(|| {
-        PmError::Io(std::io::Error::other(format!(
-            "{harness} has no user-level settings file"
-        )))
+/// Where `harness`'s never-idle loop is installed, for messages: its hooks
+/// file, else the directory of its plugin.
+pub fn install_location(harness: Harness, home: &Path) -> Option<PathBuf> {
+    harness.user_settings_file(home).or_else(|| {
+        let (first, _) = harness.plugin_files(home).into_iter().next()?;
+        first.parent().map(Path::to_path_buf)
     })
+}
+
+/// The plugin files of `harness` that are missing or differ from the
+/// bundled content.
+pub fn stale_plugin_files(harness: Harness, home: &Path) -> Vec<PathBuf> {
+    harness
+        .plugin_files(home)
+        .into_iter()
+        .filter(|(path, content)| {
+            std::fs::read_to_string(path).map_or(true, |found| found != *content)
+        })
+        .map(|(path, _)| path)
+        .collect()
 }
 
 /// Install pm hooks into the user-level file of every supported harness
@@ -118,8 +132,9 @@ pub fn install(project_root: Option<&Path>) -> Result<String> {
     if lines.is_empty() {
         let files: Vec<String> = Harness::SUPPORTED
             .iter()
-            .map(|h| Ok(user_settings_path(*h, &home)?.display().to_string()))
-            .collect::<Result<_>>()?;
+            .filter_map(|h| install_location(*h, &home))
+            .map(|path| path.display().to_string())
+            .collect();
         return Ok(format!(
             "pm hooks already installed in {}",
             files.join(", ")
@@ -139,18 +154,21 @@ pub fn install_dry_run(project_root: Option<&Path>) -> Result<Vec<String>> {
 /// `dry_run`, per file that would change).
 fn install_in(home: &Path, project_root: Option<&Path>, dry_run: bool) -> Result<Vec<String>> {
     let mut lines = Vec::new();
+    let verb = if dry_run {
+        "Would install"
+    } else {
+        "Installed"
+    };
     for harness in Harness::SUPPORTED {
-        let user_file = user_settings_path(*harness, home)?;
-        if install_global(&user_file, dry_run)? {
-            lines.push(format!(
-                "{} pm hooks in {}",
-                if dry_run {
-                    "Would install"
-                } else {
-                    "Installed"
-                },
-                user_file.display()
-            ));
+        if let Some(user_file) = harness.user_settings_file(home)
+            && install_global(&user_file, dry_run)?
+        {
+            lines.push(format!("{verb} pm hooks in {}", user_file.display()));
+        }
+        if install_plugin(*harness, home, dry_run)?
+            && let Some(dir) = install_location(*harness, home)
+        {
+            lines.push(format!("{verb} pm plugin in {}", dir.display()));
         }
     }
     if let Some(root) = project_root {
@@ -179,6 +197,21 @@ fn install_global(user_file: &Path, dry_run: bool) -> Result<bool> {
         write_settings(user_file, &root)?;
     }
     Ok(true)
+}
+
+/// Write the plugin files that are missing or out of date. Returns whether
+/// any was (or would be).
+fn install_plugin(harness: Harness, home: &Path, dry_run: bool) -> Result<bool> {
+    let stale = stale_plugin_files(harness, home);
+    if dry_run {
+        return Ok(!stale.is_empty());
+    }
+    for (path, content) in harness.plugin_files(home) {
+        if stale.contains(&path) {
+            write_atomic(&path, content.as_bytes())?;
+        }
+    }
+    Ok(!stale.is_empty())
 }
 
 /// Remove pm-owned entries from the project-level settings file of main and
@@ -356,13 +389,20 @@ fn command_matches(hook: &Value, markers: &[&str]) -> bool {
         .is_some_and(|cmd| markers.iter().any(|m| cmd.contains(m)))
 }
 
-/// Whether both pm entries are present in `harness`'s user-level file.
+/// Whether `harness`'s never-idle loop is installed: both pm entries in its
+/// user-level file, or its plugin files current.
 pub fn is_installed_for(harness: Harness) -> Result<bool> {
     is_installed_in(harness, &paths::home_dir()?)
 }
 
 /// [`is_installed_for`] against an explicit `home`.
 fn is_installed_in(harness: Harness, home: &Path) -> Result<bool> {
+    if !stale_plugin_files(harness, home).is_empty() {
+        return Ok(false);
+    }
+    if harness.user_settings_file(home).is_none() {
+        return Ok(true);
+    }
     let Some(parsed) = user_hooks_root(harness, home)? else {
         return Ok(false);
     };
@@ -371,10 +411,12 @@ fn is_installed_in(harness: Harness, home: &Path) -> Result<bool> {
         .all(|(event, markers)| pm_hook_position(&parsed, event, markers).is_some()))
 }
 
-/// The parsed user-level hooks file of `harness`; `None` when it is missing
-/// or not JSON.
+/// The parsed user-level hooks file of `harness`; `None` when it has none,
+/// or the file is missing or not JSON.
 pub fn user_hooks_root(harness: Harness, home: &Path) -> Result<Option<Value>> {
-    let path = user_settings_path(harness, home)?;
+    let Some(path) = harness.user_settings_file(home) else {
+        return Ok(None);
+    };
     if !path.exists() {
         return Ok(None);
     }
@@ -414,6 +456,10 @@ mod tests {
 
     fn codex_file(home: &Path) -> PathBuf {
         home.join(".codex/hooks.json")
+    }
+
+    fn plugin_dir(home: &Path) -> PathBuf {
+        home.join(".config/opencode/plugins/pm-never-idle")
     }
 
     fn is_installed_in(home: &Path) -> Result<bool> {
@@ -457,7 +503,7 @@ mod tests {
         assert!(!home.exists());
 
         let lines = install_in(&home, Some(&root), false).unwrap();
-        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines.len(), 3, "{lines:?}");
         assert!(lines[0].starts_with("Installed pm hooks in "), "{lines:?}");
         assert!(
             lines[1].ends_with(&codex_file(&home).display().to_string()),
@@ -492,6 +538,58 @@ mod tests {
         );
         // A fresh project gets no project-level file.
         assert!(!paths::main_worktree(&root).join(".claude").exists());
+        assert_eq!(
+            lines[2],
+            format!("Installed pm plugin in {}", plugin_dir(&home).display())
+        );
+    }
+
+    #[test]
+    fn install_writes_the_opencode_plugin_and_replaces_a_stale_copy() {
+        let (_dir, home, _root) = setup();
+        assert!(!super::is_installed_in(Harness::OpenCode, &home).unwrap());
+        let dry = install_in(&home, None, true).unwrap();
+        assert!(
+            dry.contains(&format!(
+                "Would install pm plugin in {}",
+                plugin_dir(&home).display()
+            )),
+            "{dry:?}"
+        );
+        assert!(!plugin_dir(&home).exists(), "dry-run wrote the plugin");
+
+        install_in(&home, None, false).unwrap();
+        assert!(super::is_installed_in(Harness::OpenCode, &home).unwrap());
+        let index = plugin_dir(&home).join("index.ts");
+        let bundled = fs::read_to_string(&index).unwrap();
+        // The entry point resolves its import beside itself.
+        assert!(plugin_dir(&home).join("loop.ts").is_file());
+        assert!(install_in(&home, None, false).unwrap().is_empty());
+
+        // An older release's copy, and a user's own plugin beside pm's.
+        fs::write(&index, "export default {}").unwrap();
+        let theirs = home.join(".config/opencode/plugins/mine/index.ts");
+        fs::create_dir_all(theirs.parent().unwrap()).unwrap();
+        fs::write(&theirs, "export default { id: 'mine' }").unwrap();
+        assert!(!super::is_installed_in(Harness::OpenCode, &home).unwrap());
+        assert_eq!(
+            stale_plugin_files(Harness::OpenCode, &home),
+            vec![index.clone()]
+        );
+
+        let lines = install_in(&home, None, false).unwrap();
+        assert_eq!(
+            lines,
+            vec![format!(
+                "Installed pm plugin in {}",
+                plugin_dir(&home).display()
+            )]
+        );
+        assert_eq!(fs::read_to_string(&index).unwrap(), bundled);
+        assert_eq!(
+            fs::read_to_string(&theirs).unwrap(),
+            "export default { id: 'mine' }"
+        );
     }
 
     #[test]
@@ -505,7 +603,7 @@ mod tests {
         );
 
         let lines = install_in(&home, Some(&root), false).unwrap();
-        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines.len(), 3, "{lines:?}");
         assert!(
             lines[1].ends_with(&codex_hooks.display().to_string()),
             "{lines:?}"
@@ -558,7 +656,7 @@ mod tests {
         .unwrap();
 
         let lines = install_in(&home, Some(&root), false).unwrap();
-        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines.len(), 3, "{lines:?}");
         assert!(is_installed_in(&home).unwrap());
         assert!(super::is_installed_in(Harness::Codex, &home).unwrap());
     }
@@ -633,7 +731,7 @@ mod tests {
             assert!(is_installed_in(&home).unwrap(), "{old}");
 
             let lines = install_in(&home, None, false).unwrap();
-            assert_eq!(lines.len(), 2, "{old}: {lines:?}");
+            assert_eq!(lines.len(), 3, "{old}: {lines:?}");
             assert!(lines[0].ends_with(&user_file(&home).display().to_string()));
 
             let parsed = read_json(&user_file(&home));
@@ -677,7 +775,7 @@ mod tests {
         assert_eq!(stale_project_files(&root).unwrap().len(), 2);
 
         let dry = install_dry_run_in(&home, &root);
-        assert_eq!(dry.len(), 4, "{dry:?}");
+        assert_eq!(dry.len(), 5, "{dry:?}");
         assert!(dry[0].starts_with("Would install pm hooks in "), "{dry:?}");
         assert!(dry[1].starts_with("Would install pm hooks in "), "{dry:?}");
         assert!(
@@ -696,7 +794,7 @@ mod tests {
         );
 
         let lines = install_in(&home, Some(&root), false).unwrap();
-        assert_eq!(lines.len(), 4, "{lines:?}");
+        assert_eq!(lines.len(), 5, "{lines:?}");
         assert!(is_installed_in(&home).unwrap());
 
         for path in [&main_file, &feat_file] {
@@ -814,7 +912,7 @@ mod tests {
 
         assert!(stale_project_files(&root).unwrap().is_empty());
         let lines = install_in(&home, Some(&root), false).unwrap();
-        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines.len(), 3, "{lines:?}");
         assert!(is_installed_in(&home).unwrap());
         assert_eq!(fs::read_to_string(&main_file).unwrap(), "{not json");
     }
