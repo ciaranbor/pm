@@ -254,7 +254,6 @@ mod tests {
             std::fs::read_to_string(feature_wt.join(".agents/skills/custom/notes.md")).unwrap(),
             "untracked"
         );
-        // A tracked file that differs from main's is not drift.
         assert!(!seed_feature_assets_would_change(&project, &feature_wt).unwrap());
 
         skills::skills_pull(&project, "login").unwrap();

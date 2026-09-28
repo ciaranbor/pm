@@ -413,9 +413,10 @@ there. pm's own `.agents/skills/pm-sandbox/` is an example.
 
 If the project commits such a skill, pm never writes over a file the
 feature's branch tracks, so an edit made on a feature branch survives
-`pm upgrade`. The edit takes effect for agents only once it is merged and
-projected from main: a Claude Code agent in a feature worktree loads
-`.claude/skills/`, which is copied from main's projection.
+`pm upgrade`. A codex agent in that feature reads the edited file directly.
+A Claude Code agent does not until the edit is merged and projected from
+main: it loads the feature's `.claude/skills/`, which is copied from main's
+projection.
 
 Upgrading an existing project removes the per-project copies of bundled
 assets that earlier releases installed — your own files are never touched.
