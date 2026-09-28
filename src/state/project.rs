@@ -43,6 +43,20 @@ pub struct ProjectConfig {
 pub struct HarnessConfig {
     #[serde(default)]
     pub codex: CodexConfig,
+    #[serde(default)]
+    pub opencode: OpenCodeConfig,
+}
+
+/// `[harness.opencode]`: settings every opencode agent shares.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct OpenCodeConfig {
+    /// Pass `--auto`, approving whatever no permission rule denies; unset
+    /// means `true`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto: Option<bool>,
+    /// The opencode executable; unset means `opencode` from `PATH`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary: Option<String>,
 }
 
 /// `[harness.codex]`: how codex agents are sandboxed. Every value is in
@@ -247,7 +261,12 @@ fn bound_harness(tiers: &[&Rows], key: &str) -> (Option<Harness>, String) {
 /// global one.
 pub fn resolve_harness_config(project: &HarnessConfig, global: &HarnessConfig) -> HarnessConfig {
     let (p, g) = (&project.codex, &global.codex);
+    let (po, go) = (&project.opencode, &global.opencode);
     HarnessConfig {
+        opencode: OpenCodeConfig {
+            auto: po.auto.or(go.auto),
+            binary: layered_opt(&po.binary, &go.binary),
+        },
         codex: CodexConfig {
             sandbox: layered_opt(&p.sandbox, &g.sandbox),
             approval: layered_opt(&p.approval, &g.approval),
@@ -1013,16 +1032,16 @@ name = "myapp"
         let mut global = AgentsConfig::default();
         global
             .harness
-            .insert("implementer".to_string(), "opencode".to_string());
+            .insert("implementer".to_string(), "aider".to_string());
         let err =
             resolve_agent_settings(&AgentsConfig::default(), &global, "implementer").unwrap_err();
         assert!(
-            matches!(err, PmError::HarnessUnsupported { ref value, .. } if value == "opencode"),
+            matches!(err, PmError::HarnessUnsupported { ref value, .. } if value == "aider"),
             "got: {err}"
         );
         assert_eq!(
             err.to_string(),
-            "harness 'opencode' is not supported yet; supported: claude-code, codex"
+            "harness 'aider' is not supported yet; supported: claude-code, codex, opencode"
         );
         // Other agents are unaffected by a bad row they don't use.
         resolve_agent_settings(&AgentsConfig::default(), &global, "reviewer").unwrap();

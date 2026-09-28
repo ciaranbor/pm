@@ -27,16 +27,19 @@ Usage: scripts/sandbox [COMMAND] [OPTIONS] [-- CMD...]
   down                          kill the server and delete the HOME
 
   -n NAME    sandbox name (default: "default", or $PM_SANDBOX)
-  --real     real claude/codex instead of shims, with ~/.claude.json and
-             ~/.codex/auth.json copied in. Credentials are not: log in once
-             (attach, then /login) or export CLAUDE_CODE_OAUTH_TOKEN or
-             ANTHROPIC_API_KEY before `up` (the sandbox inherits them), and
-             `trust` each project dir before spawning agents in it
+  --real     real claude/codex/opencode instead of shims, with
+             ~/.claude.json and ~/.codex/auth.json copied in. Credentials
+             are not: log in once (attach, then /login) or export
+             CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY before `up` (the
+             sandbox inherits them), and `trust` each project dir before
+             spawning agents in it. opencode gets nothing copied: write its
+             providers to $HOME/.config/opencode/opencode.json
   --shell S  shell tmux windows run (default: $SHELL, non-login, no rc files
              since HOME is the sandbox)
 
-Inside the sandbox, `pm` is the built binary and `claude`/`codex` are shims
-that record their invocation under $HOME/log and hold the window open.
+Inside the sandbox, `pm` is the built binary and `claude`/`codex`/`opencode`
+are shims that record their invocation under $HOME/log and hold the window
+open.
 Example:
   scripts/sandbox up
   scripts/sandbox run -- pm init proj
@@ -82,7 +85,9 @@ socket="${TMUX_TMPDIR:-/tmp}/tmux-$uid/$server"
 
 # The sandbox environment: everything the real machine could leak through
 # is unset, and the sandbox's own bin/ leads PATH.
-sandbox_env=(-u TMUX -u XDG_CONFIG_HOME -u CODEX_HOME -u PM_AGENT_NAME
+sandbox_env=(-u TMUX -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME
+  -u XDG_CACHE_HOME -u CODEX_HOME -u PM_AGENT_NAME -u PM_OPENCODE_SESSION
+  -u OPENCODE_CONFIG -u OPENCODE_CONFIG_CONTENT
   -u GIT_CONFIG_GLOBAL -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL
   -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL
   HOME="$home" PM_TMUX_SERVER="$server" PM_SANDBOX="$name"
@@ -108,7 +113,7 @@ up() {
       mkdir -p "$home/.codex" && cp "$HOME/.codex/auth.json" "$home/.codex/auth.json"
     fi
   else
-    for h in claude codex; do
+    for h in claude codex opencode; do
       cp "$here/scripts/harness-shim.sh" "$home/bin/$h"
       chmod +x "$home/bin/$h"
     done
@@ -154,7 +159,7 @@ status() {
   echo "HOME=$home  server=$server"
   stmux list-windows -a -F '#{session_name}:#{window_index} #{window_name}' 2>/dev/null \
     || echo "(server not running)"
-  for f in "$home"/log/*.argv; do
+  for f in "$home"/log/*.argv "$home"/log/*.api; do
     [ -f "$f" ] || continue
     echo "--- ${f##*/}"
     sed 's/^/  /' "$f"

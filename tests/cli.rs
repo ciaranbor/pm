@@ -152,20 +152,32 @@ fn claude_is_a_hidden_alias_for_harness() {
 
 #[test]
 fn harness_flag_rejects_unsupported_harness() {
-    pm().args(["harness", "settings", "list", "--harness", "opencode"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("supported: claude-code, codex"));
-}
-
-#[test]
-fn claude_code_only_commands_refuse_codex() {
-    pm().args(["harness", "settings", "list", "--harness", "codex"])
+    pm().args(["harness", "settings", "list", "--harness", "aider"])
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "per-feature settings files are not supported for codex",
+            "supported: claude-code, codex, opencode",
         ));
+}
+
+#[test]
+fn claude_code_only_commands_refuse_the_other_harnesses() {
+    for harness in ["codex", "opencode"] {
+        for (args, what) in [
+            (vec!["settings", "list"], "per-feature settings files"),
+            (vec!["export"], "session export"),
+            (vec!["import", "sessions.tar.gz"], "session import"),
+        ] {
+            pm().arg("harness")
+                .args(&args)
+                .args(["--harness", harness])
+                .assert()
+                .failure()
+                .stderr(predicate::str::contains(format!(
+                    "{what} are not supported for {harness}"
+                )));
+        }
+    }
 }
 
 #[test]
@@ -173,7 +185,7 @@ fn harness_list_marks_default() {
     pm().args(["harness", "list"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("claude-code (default)\ncodex\n"));
+        .stdout("claude-code (default)\ncodex\nopencode\n");
 }
 
 #[test]

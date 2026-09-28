@@ -23,15 +23,20 @@ fn read_board(path: &Path) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-/// A per-user `0700` subdir of the temp dir to hold composed prompt files.
-/// Isolating writes here closes the shared-`/tmp` symlink/pre-creation vector
+/// A per-user `0700` subdir of the temp dir to hold the files a spawn hands
+/// its harness. Isolating writes here closes the shared-`/tmp` symlink/pre-creation vector
 /// (CWE-377): on a multi-user host another user can't plant a symlink or seed
 /// attacker-controlled prompt text under a directory only we own. Refuses a
 /// pre-existing symlink in our place rather than following it.
-fn prompt_dir() -> Result<PathBuf> {
+pub(crate) fn spawn_dir() -> Result<PathBuf> {
     // SAFETY: getuid() is always safe — no args, can't fail.
     let uid = unsafe { libc::getuid() };
-    let dir = std::env::temp_dir().join(format!("pm-spawn-{uid}"));
+    // Under the test home, which is removed with the run.
+    #[cfg(test)]
+    let base = crate::testing::test_home().to_path_buf();
+    #[cfg(not(test))]
+    let base = std::env::temp_dir();
+    let dir = base.join(format!("pm-spawn-{uid}"));
     #[cfg(unix)]
     {
         use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
@@ -91,7 +96,7 @@ pub fn compose_spawn_prompt(project_root: &Path, label: &str) -> Result<Option<S
     let baseline = crate::commands::skills::baseline_path(project_root);
     let global = paths::global_config_dir()?.join("notices.md");
     let project = paths::pm_dir(project_root).join("notices.md");
-    let out = prompt_dir()?.join(prompt_filename(project_root, label));
+    let out = spawn_dir()?.join(prompt_filename(project_root, label));
     compose_from(&baseline, &global, &project, &out)
 }
 
@@ -331,9 +336,9 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn prompt_dir_is_owner_only_and_writable() {
+    fn spawn_dir_is_owner_only_and_writable() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = prompt_dir().unwrap();
+        let dir = spawn_dir().unwrap();
         assert!(dir.is_dir());
         assert!(
             !std::fs::symlink_metadata(&dir)
@@ -349,6 +354,6 @@ mod tests {
             "prompt dir must not be group/other accessible"
         );
         // Idempotent across calls (spawns happen repeatedly).
-        assert_eq!(dir, prompt_dir().unwrap());
+        assert_eq!(dir, spawn_dir().unwrap());
     }
 }

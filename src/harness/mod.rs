@@ -8,6 +8,7 @@
 
 mod claude_code;
 mod codex;
+mod opencode;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -27,6 +28,8 @@ pub enum Harness {
     #[default]
     ClaudeCode,
     Codex,
+    #[serde(rename = "opencode")]
+    OpenCode,
 }
 
 impl Harness {
@@ -35,18 +38,43 @@ impl Harness {
         match self {
             Harness::ClaudeCode => "claude-code",
             Harness::Codex => "codex",
+            Harness::OpenCode => "opencode",
         }
     }
 
     /// Every harness pm can spawn, in the order shown in error messages.
-    pub const SUPPORTED: &[Harness] = &[Harness::ClaudeCode, Harness::Codex];
+    pub const SUPPORTED: &[Harness] = &[Harness::ClaudeCode, Harness::Codex, Harness::OpenCode];
+
+    /// What must happen before the harness's command runs, beyond
+    /// [`trust_worktree`](Self::trust_worktree): anything the command line
+    /// depends on that only the harness can produce (opencode: the session
+    /// the TUI opens). Runs at the spawn chokepoint before the window
+    /// exists, so a failure leaves nothing behind.
+    pub fn pre_launch(
+        self,
+        ctx: &LaunchContext<'_>,
+        spec: &SpawnSpec<'_>,
+        config: &HarnessConfig,
+    ) -> Result<PreLaunch> {
+        match self {
+            Harness::ClaudeCode | Harness::Codex => Ok(PreLaunch::default()),
+            Harness::OpenCode => opencode::pre_launch(ctx, spec, &config.opencode),
+        }
+    }
 
     /// The command line that launches an agent for `spec`, with the
-    /// harness's own `[harness.<name>]` settings from `config`.
-    pub fn build_cmd(self, spec: &SpawnSpec<'_>, config: &HarnessConfig) -> String {
+    /// harness's own `[harness.<name>]` settings from `config` and what
+    /// [`pre_launch`](Self::pre_launch) prepared.
+    pub fn build_cmd(
+        self,
+        spec: &SpawnSpec<'_>,
+        config: &HarnessConfig,
+        pre: &PreLaunch,
+    ) -> String {
         match self {
             Harness::ClaudeCode => claude_code::build_cmd(spec),
             Harness::Codex => codex::build_cmd(spec, &config.codex),
+            Harness::OpenCode => opencode::build_cmd(spec, &config.opencode, pre),
         }
     }
 
@@ -54,10 +82,21 @@ impl Harness {
     /// (the shared baseline and notice boards) to a spawned agent — see
     /// [`prompt_mechanism`](Self::prompt_mechanism). `None` when the binary
     /// can't be probed at all.
-    pub fn supports_prompt_delivery(self) -> Option<bool> {
+    pub fn supports_prompt_delivery(self, config: &HarnessConfig) -> Option<bool> {
         match self {
             Harness::ClaudeCode => claude_code::supports_append_file(),
             Harness::Codex => codex::version_supported(),
+            Harness::OpenCode => opencode::version_supported(&config.opencode),
+        }
+    }
+
+    /// Why no agent can run on this harness as installed, for a harness
+    /// whose never-idle loop depends on the installed release. `None` when
+    /// it can, and for a harness with a native Stop hook.
+    pub fn unusable_reason(self, config: &HarnessConfig) -> Option<String> {
+        match self {
+            Harness::ClaudeCode | Harness::Codex => None,
+            Harness::OpenCode => opencode::unusable_reason(&config.opencode),
         }
     }
 
@@ -73,6 +112,10 @@ impl Harness {
                  (needs codex >= {})",
                 codex::min_version_string()
             ),
+            Harness::OpenCode => format!(
+                "the pm-never-idle plugin's context hook (needs opencode >= {})",
+                opencode::min_version_string()
+            ),
         }
     }
 
@@ -83,11 +126,13 @@ impl Harness {
         match self {
             Harness::ClaudeCode => claude_code::CONFIG_DIR,
             Harness::Codex => codex::CONFIG_DIR,
+            Harness::OpenCode => opencode::CONFIG_DIR,
         }
     }
 
     /// The harness's global config dir under `home` (`~/.claude` for
-    /// claude-code, `$CODEX_HOME` or `~/.codex` for codex), where the global
+    /// claude-code, `$CODEX_HOME` or `~/.codex` for codex,
+    /// `$XDG_CONFIG_HOME/opencode` or `~/.config/opencode` for opencode), where the global
     /// canonical store is projected and the user-level settings live. `None`
     /// for a harness with no global dir — such a harness would need the
     /// global assets projected into each project's own dir instead, which
@@ -96,19 +141,46 @@ impl Harness {
         match self {
             Harness::ClaudeCode => Some(home.join(claude_code::CONFIG_DIR)),
             Harness::Codex => Some(codex::home_dir(home)),
+            Harness::OpenCode => Some(opencode::global_dir(home)),
         }
     }
 
     /// The harness's user-level file that pm installs its hooks into, once
     /// per machine (`~/.claude/settings.json`, `$CODEX_HOME/hooks.json`).
     /// Both take the same nested `hooks` shape. `None` for a harness
-    /// without one.
+    /// whose loop is not a hooks entry; see
+    /// [`plugin_files`](Self::plugin_files).
     pub fn user_settings_file(self, home: &Path) -> Option<PathBuf> {
         let dir = self.global_config_dir(home)?;
-        Some(match self {
-            Harness::ClaudeCode => dir.join(claude_code::USER_SETTINGS_FILE),
-            Harness::Codex => dir.join(codex::HOOKS_FILE),
-        })
+        match self {
+            Harness::ClaudeCode => Some(dir.join(claude_code::USER_SETTINGS_FILE)),
+            Harness::Codex => Some(dir.join(codex::HOOKS_FILE)),
+            Harness::OpenCode => None,
+        }
+    }
+
+    /// Files pm owns outright in the harness's user-level dir and writes
+    /// verbatim, once per machine, with their bundled content — the
+    /// counterpart of [`user_settings_file`](Self::user_settings_file) for a
+    /// harness whose never-idle loop is a plugin. Empty for the others.
+    pub fn plugin_files(self, home: &Path) -> Vec<(PathBuf, &'static str)> {
+        match self {
+            Harness::ClaudeCode | Harness::Codex => Vec::new(),
+            Harness::OpenCode => opencode::plugin_files(home),
+        }
+    }
+
+    /// Why this agent's never-idle loop stopped itself, if it did. Only a
+    /// harness whose loop pm emulates can report one.
+    pub fn loop_stopped(self, project_root: &Path, scope: &str, agent: &str) -> Option<String> {
+        match self {
+            Harness::ClaudeCode | Harness::Codex => None,
+            Harness::OpenCode => {
+                let file = opencode::trip_file(project_root, scope, agent).ok()?;
+                let reason = std::fs::read_to_string(file).ok()?;
+                Some(reason.trim().to_string())
+            }
+        }
     }
 
     /// Whether this harness would resolve its *global* copy of skill `name`
@@ -117,7 +189,7 @@ impl Harness {
     pub fn project_skill_shadowed_by_global(self, home: &Path, name: &str) -> bool {
         match self {
             Harness::ClaudeCode => claude_code::personal_skill_exists(home, name),
-            Harness::Codex => false,
+            Harness::Codex | Harness::OpenCode => false,
         }
     }
 
@@ -127,7 +199,7 @@ impl Harness {
     pub fn seeded_files(self) -> &'static [&'static str] {
         match self {
             Harness::ClaudeCode => claude_code::SEEDED_FILES,
-            Harness::Codex => &[],
+            Harness::Codex | Harness::OpenCode => &[],
         }
     }
 
@@ -139,6 +211,7 @@ impl Harness {
         match self {
             Harness::ClaudeCode => claude_code::PROJECTED_DIRS,
             Harness::Codex => &[],
+            Harness::OpenCode => opencode::PROJECTED_DIRS,
         }
     }
 
@@ -163,6 +236,7 @@ impl Harness {
                 claude_code::project_assets(canonical_root, target_root, dry_run)
             }
             Harness::Codex => Ok(Projection::default()),
+            Harness::OpenCode => opencode::project_assets(canonical_root, target_root, dry_run),
         }
     }
 
@@ -171,7 +245,7 @@ impl Harness {
     /// whether anything was written.
     pub fn trust_worktree(self, home: &Path, worktree: &Path) -> Result<bool> {
         match self {
-            Harness::ClaudeCode => Ok(false),
+            Harness::ClaudeCode | Harness::OpenCode => Ok(false),
             Harness::Codex => codex::trust_dir(&codex::home_dir(home), worktree),
         }
     }
@@ -180,7 +254,7 @@ impl Harness {
     /// without a directory-trust gate.
     pub fn worktree_trusted(self, home: &Path, worktree: &Path) -> bool {
         match self {
-            Harness::ClaudeCode => true,
+            Harness::ClaudeCode | Harness::OpenCode => true,
             Harness::Codex => codex::dir_trusted(&codex::home_dir(home), worktree),
         }
     }
@@ -190,7 +264,7 @@ impl Harness {
     /// silently. Always true for a harness without hook trust.
     pub fn hook_trusted(self, home: &Path, event: &str, entry: usize, hook: usize) -> bool {
         match self {
-            Harness::ClaudeCode => true,
+            Harness::ClaudeCode | Harness::OpenCode => true,
             Harness::Codex => {
                 let codex_home = codex::home_dir(home);
                 let key =
@@ -204,7 +278,7 @@ impl Harness {
     /// silently register nothing for.
     pub fn malformed_hook_events(self, hooks_root: &serde_json::Value) -> Vec<String> {
         match self {
-            Harness::ClaudeCode => Vec::new(),
+            Harness::ClaudeCode | Harness::OpenCode => Vec::new(),
             Harness::Codex => codex::flat_hook_events(hooks_root),
         }
     }
@@ -212,7 +286,7 @@ impl Harness {
     /// How a user grants the harness's hook trust, for the doctor finding.
     pub fn hook_trust_remedy(self) -> &'static str {
         match self {
-            Harness::ClaudeCode => "",
+            Harness::ClaudeCode | Harness::OpenCode => "",
             Harness::Codex => codex::HOOK_TRUST_REMEDY,
         }
     }
@@ -221,7 +295,7 @@ impl Harness {
     /// SessionStart hook rather than the command line.
     pub fn injects_prompt_at_session_start(self) -> bool {
         match self {
-            Harness::ClaudeCode => false,
+            Harness::ClaudeCode | Harness::OpenCode => false,
             Harness::Codex => true,
         }
     }
@@ -231,7 +305,7 @@ impl Harness {
     /// [inject there](Self::injects_prompt_at_session_start).
     pub fn session_start_output(self, context: &str) -> Option<String> {
         match self {
-            Harness::ClaudeCode => None,
+            Harness::ClaudeCode | Harness::OpenCode => None,
             Harness::Codex => Some(codex::session_start_output(context)),
         }
     }
@@ -346,6 +420,32 @@ pub struct SpawnSpec<'a> {
     pub writable_dirs: &'a [PathBuf],
 }
 
+/// Where a spawn happens, for [`Harness::pre_launch`].
+#[derive(Debug, Clone, Copy)]
+pub struct LaunchContext<'a> {
+    pub project_root: &'a Path,
+    /// The scope the agent belongs to.
+    pub feature: &'a str,
+    pub worktree: &'a Path,
+    /// The agent's display name.
+    pub agent: &'a str,
+}
+
+/// What [`Harness::pre_launch`] prepared for the command line.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct PreLaunch {
+    /// The session the harness will open, known before it starts — recorded
+    /// on the registry entry at spawn. `None` for a harness that reports its
+    /// session through the SessionStart hook.
+    pub session_id: Option<String>,
+    /// Environment the command must run with.
+    pub env: Vec<(String, String)>,
+    /// Variables the command must not inherit from the window's shell.
+    pub env_remove: Vec<String>,
+    /// Remarks for the spawn line.
+    pub notes: Vec<String>,
+}
+
 /// A session id is bound to the harness that produced it. Returns the id
 /// to resume only when `stored` (the harness recorded on the registry
 /// entry) still matches `resolved` (what config says now); otherwise the
@@ -373,13 +473,15 @@ mod tests {
 
     #[test]
     fn unsupported_name_errors_with_supported_list() {
-        let err = "opencode".parse::<Harness>().unwrap_err().to_string();
+        let err = "aider".parse::<Harness>().unwrap_err().to_string();
         assert_eq!(
             err,
-            "harness 'opencode' is not supported yet; supported: claude-code, codex"
+            "harness 'aider' is not supported yet; supported: claude-code, codex, opencode"
         );
         assert_eq!("codex".parse::<Harness>().unwrap(), Harness::Codex);
         assert_eq!(Harness::Codex.to_string(), "codex");
+        assert_eq!("opencode".parse::<Harness>().unwrap(), Harness::OpenCode);
+        assert_eq!(Harness::OpenCode.to_string(), "opencode");
     }
 
     #[test]
@@ -395,6 +497,12 @@ mod tests {
         assert_eq!(toml_str.trim(), r#"h = "claude-code""#);
         let back: Wrap = toml::from_str(&toml_str).unwrap();
         assert_eq!(back.h, Harness::ClaudeCode);
+        // The registry's spelling is the config's, for every harness.
+        for h in Harness::SUPPORTED {
+            let stored = toml::to_string(&Wrap { h: *h }).unwrap();
+            assert_eq!(stored.trim(), format!("h = \"{h}\""));
+            assert_eq!(toml::from_str::<Wrap>(&stored).unwrap().h, *h);
+        }
     }
 
     #[test]
@@ -413,6 +521,7 @@ mod tests {
                 writable_dirs: &dirs,
             },
             &HarnessConfig::default(),
+            &PreLaunch::default(),
         );
         assert_eq!(
             cmd,
@@ -477,7 +586,7 @@ mod tests {
         project
             .harness
             .insert("implementer".into(), "claude-code".into());
-        project.harness.insert("x".into(), "opencode".into());
+        project.harness.insert("x".into(), "aider".into());
         assert_eq!(
             harnesses_in_use(&project, &AgentsConfig::default()),
             vec![Harness::ClaudeCode]

@@ -9,7 +9,7 @@ use crate::tmux;
 
 /// Restart a single agent: kill its tmux window, then respawn it.
 /// The `active` flag stays `true` throughout. If the agent has a stored
-/// `session_id`, passes `--resume` to claude on respawn. If the entry
+/// `session_id`, its harness resumes that session on respawn. If the entry
 /// records an explicit `agent_definition`, the definition is preserved
 /// across the restart (relayed via `agent_spawn` reading the registry).
 pub fn agent_restart(

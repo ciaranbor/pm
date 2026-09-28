@@ -55,6 +55,7 @@ Design decisions you can't recover by reading the tree. Preserve them.
   `pm doctor` checks only those the project's agents run on, deliberately.
 - Hooks read the agent's identity from their environment, so a spawn never
   attaches to a shared harness server, whose hooks run in its own.
+- opencode's Stop hook is a bundled plugin; a loop that stops itself must say so.
 - Three context-delivery contracts: `feat new`/`feat adopt --workflow` spawn
   the whole team and brief only `brief_agents` (a context with none to brief
   is an error); `agent spawn --context` enqueues, then spawns or no-ops;
@@ -142,7 +143,7 @@ run --` only to test local, uncommitted changes.
 
 Before completing any task, always run:
 `cargo fmt && cargo clippy && cargo test && cargo doc --no-deps` — the last
-must emit no warnings.
+must emit no warnings. `cargo test` needs `node` 22.18+ (opencode plugin).
 
 **Important:** Tests create real tmux sessions that consume ptys. A check in
 `TestServer::new()` aborts the run once the system-wide pty count reaches 300
@@ -156,11 +157,10 @@ recover from a runaway run: `tmux -L pm-test-<pid> kill-server` (or `for s in
 
 ### Sandbox and smoke tests
 
-`scripts/sandbox` (`--help`) is a throwaway pm environment for trying changes
-by hand or from an agent: its own `$HOME`, a private tmux server reached
-through `PM_TMUX_SERVER` (the one production seam), and the built `pm` plus
-recording `claude`/`codex` shims first on `PATH`. `tests/smoke.rs` runs the
-built binary end to end in such a sandbox: `cargo test --test smoke --
+`scripts/sandbox` (`--help`) is a throwaway pm environment: its own `$HOME`,
+a private tmux server reached through `PM_TMUX_SERVER` (the one production
+seam), and the built `pm` plus recording harness shims first on `PATH`.
+`tests/smoke.rs` runs the built binary in one: `cargo test --test smoke --
 --ignored`. Add a scenario only when the failure mode is environmental — cwd
 or scope detection, the real config dir, inherited env, a command run from
 inside the session it kills; never to mirror a lib test.

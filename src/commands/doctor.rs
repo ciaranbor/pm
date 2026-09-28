@@ -8,7 +8,9 @@ use crate::harness::Harness;
 use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
-use crate::state::project::{GlobalConfig, ProjectConfig, ProjectEntry};
+use crate::state::project::{
+    GlobalConfig, HarnessConfig, ProjectConfig, ProjectEntry, resolve_harness_config,
+};
 use crate::state::workflow;
 use crate::{gh, git, tmux};
 
@@ -73,6 +75,11 @@ pub enum IssueKind {
     /// The registry's `main_branch` names a branch the repository does not
     /// have, so merge-safety checks compare against nothing.
     MainBranchMissing,
+    /// A harness in use can't run agents as installed.
+    HarnessUnusable,
+    /// An agent's emulated never-idle loop stopped itself, so the agent no
+    /// longer wakes for messages.
+    LoopStopped,
 }
 
 /// A single issue detected for a feature.
@@ -213,6 +220,7 @@ pub fn diagnose(
     }
     main_issues.extend(asset_issues(project_root)?);
     main_issues.extend(legacy_vanilla_agent_issues(project_root, "main"));
+    main_issues.extend(loop_stopped_issues(project_root, "main"));
     let main_branch = ProjectEntry::load(projects_dir, project_name)
         .ok()
         .map(|e| e.main_branch);
@@ -384,6 +392,7 @@ pub fn diagnose(
         }
 
         issues.extend(legacy_vanilla_agent_issues(project_root, name));
+        issues.extend(loop_stopped_issues(project_root, name));
 
         // Check 7: PR status drift (skipped when `check_pr_state` is false to
         // avoid network round-trips on latency-sensitive callers like
@@ -575,11 +584,25 @@ fn baseline_capability_warnings(project_root: &Path) -> Result<Vec<String>> {
     if !crate::commands::skills::baseline_path(project_root).exists() {
         return Ok(Vec::new());
     }
+    let config = harness_config(Some(project_root));
     Ok(skills::harnesses_in_use(project_root)?
         .into_iter()
-        .filter(|h| h.supports_prompt_delivery() == Some(false))
+        // An unusable harness is reported as a finding of its own.
+        .filter(|h| h.unusable_reason(&config).is_none())
+        .filter(|h| h.supports_prompt_delivery(&config) == Some(false))
         .map(|h| format!("baseline — {}", prompt_delivery_unsupported(h)))
         .collect())
+}
+
+/// The `[harness.*]` settings in effect: the project's over the global
+/// ones, or the global ones alone outside a project. Advisory, so an
+/// unreadable project config yields the global settings.
+fn harness_config(project_root: Option<&Path>) -> HarnessConfig {
+    let project = project_root
+        .and_then(|root| ProjectConfig::load(&paths::pm_dir(root)).ok())
+        .map(|config| config.harness)
+        .unwrap_or_default();
+    resolve_harness_config(&project, &GlobalConfig::load_or_default().harness)
 }
 
 fn prompt_delivery_unsupported(harness: Harness) -> String {
@@ -593,9 +616,9 @@ fn prompt_delivery_unsupported(harness: Harness) -> String {
 
 /// One line for `pm harness probe`: whether the installed binary supports
 /// the capabilities pm relies on.
-pub fn probe_line(harness: Harness) -> String {
+pub fn probe_line(harness: Harness, project_root: Option<&Path>) -> String {
     let mechanism = harness.prompt_mechanism();
-    match harness.supports_prompt_delivery() {
+    match harness.supports_prompt_delivery(&harness_config(project_root)) {
         Some(true) => format!("{harness}: {mechanism} supported — the shared baseline is applied"),
         Some(false) => format!(
             "{harness}: does not support {mechanism} — the shared agent baseline will not be \
@@ -619,11 +642,31 @@ fn hook_issues(project_root: &Path) -> Result<Vec<Issue>> {
 /// [`hook_issues`] against an explicit `home`.
 fn hook_issues_in(project_root: &Path, home: &Path) -> Result<Vec<Issue>> {
     let worktree_harnesses = worktree_harnesses(project_root)?;
+    let config = harness_config(Some(project_root));
     let mut issues = Vec::new();
     for harness in skills::harnesses_in_use(project_root)? {
-        let file = hooks_install::user_settings_path(harness, home)?;
-        let shown = crate::path_utils::to_portable(&file);
-        let mut installed = false;
+        if let Some(reason) = harness.unusable_reason(&config) {
+            issues.push(Issue {
+                kind: IssueKind::HarnessUnusable,
+                message: format!("agents configured for {harness} cannot run: {reason}"),
+                fix: Fix::None,
+            });
+        }
+        let shown = hooks_install::install_location(harness, home)
+            .map(|path| crate::path_utils::to_portable(&path))
+            .unwrap_or_default();
+        let has_hooks_file = harness.user_settings_file(home).is_some();
+        let mut installed = !has_hooks_file;
+        if !hooks_install::stale_plugin_files(harness, home).is_empty() {
+            issues.push(Issue {
+                kind: IssueKind::HooksNotInstalled,
+                message: format!(
+                    "pm plugin for {harness} missing or out of date in {shown} (run `pm \
+                     harness hooks install`)"
+                ),
+                fix: Fix::Auto(FixAction::InstallStopHook),
+            });
+        }
         if let Some(root) = hooks_install::user_hooks_root(harness, home)? {
             for event in harness.malformed_hook_events(&root) {
                 issues.push(Issue {
@@ -868,6 +911,31 @@ fn agent_issues(
         }
     }
     Ok(issues)
+}
+
+/// Agents of `scope` whose never-idle loop stopped itself. Not fixable
+/// here: a restart re-arms the loop, but whatever stopped it (a model that
+/// fails every turn, an inbox the agent cannot read) would stop it again.
+fn loop_stopped_issues(project_root: &Path, scope: &str) -> Vec<Issue> {
+    let Ok(registry) = AgentRegistry::load(&paths::agents_dir(project_root), scope) else {
+        return Vec::new();
+    };
+    registry
+        .agents
+        .iter()
+        .filter(|(_, entry)| entry.agent_type == AgentType::Agent && entry.active)
+        .filter_map(|(name, entry)| {
+            let reason = entry.harness.loop_stopped(project_root, scope, name)?;
+            Some(Issue {
+                kind: IssueKind::LoopStopped,
+                message: format!(
+                    "agent '{name}' no longer wakes for messages — its never-idle loop \
+                     stopped: {reason}. Fix the cause, then `pm agent restart {name}`"
+                ),
+                fix: Fix::None,
+            })
+        })
+        .collect()
 }
 
 /// One warning per active agent in `scope` whose effective definition is
@@ -1123,6 +1191,212 @@ mod tests {
             !lines.iter().any(|l| l.contains("not projected")),
             "{lines:?}"
         );
+    }
+
+    /// Put `definition` on opencode, played by a stand-in reporting `version`.
+    fn use_opencode(project_path: &Path, definition: &str, version: &str) {
+        let pm_dir = paths::pm_dir(project_path);
+        let mut config = ProjectConfig::load(&pm_dir).unwrap();
+        config
+            .agents
+            .harness
+            .insert(definition.to_string(), "opencode".to_string());
+        config.harness.opencode.binary =
+            Some(crate::testing::fake_opencode(project_path, version, 0));
+        config.save(&pm_dir).unwrap();
+    }
+
+    fn messages(issues: &[Issue], kind: IssueKind) -> Vec<String> {
+        issues
+            .iter()
+            .filter(|i| i.kind() == kind)
+            .map(|i| i.message().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn opencode_in_use_is_checked_for_its_plugin_and_installed_release() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, _) = server.setup_project_no_tmux(dir.path());
+        let home = dir.path().join("home");
+
+        // Not in use: nothing about opencode, whatever is installed.
+        let issues = hook_issues_in(&project_path, &home).unwrap();
+        assert!(
+            issues.iter().all(|i| !i.message().contains("opencode")),
+            "{:?}",
+            issues.iter().map(Issue::message).collect::<Vec<_>>()
+        );
+
+        use_opencode(&project_path, "reviewer", "opencode v2.0.17");
+        let issues = hook_issues_in(&project_path, &home).unwrap();
+        assert_eq!(
+            messages(&issues, IssueKind::HarnessUnusable),
+            vec![
+                "agents configured for opencode cannot run: installed opencode is `opencode \
+                 v2.0.17`; pm's never-idle plugin needs 2.0.18 or later"
+            ]
+        );
+        let plugin = messages(&issues, IssueKind::HooksNotInstalled)
+            .into_iter()
+            .filter(|m| m.contains("opencode"))
+            .collect::<Vec<_>>();
+        assert_eq!(plugin.len(), 1, "{plugin:?}");
+        assert!(
+            plugin[0].starts_with("pm plugin for opencode missing or out of date in "),
+            "{plugin:?}"
+        );
+        assert!(
+            plugin[0].contains(".config/opencode/plugins/pm-never-idle"),
+            "{plugin:?}"
+        );
+        // No trust gate on opencode.
+        assert!(
+            issues
+                .iter()
+                .all(|i| i.kind() != IssueKind::WorktreeUntrusted
+                    && i.kind() != IssueKind::HookUntrusted)
+        );
+
+        use_opencode(&project_path, "reviewer", "opencode v2.0.18");
+        for (path, content) in Harness::OpenCode.plugin_files(&home) {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, content).unwrap();
+        }
+        let issues = hook_issues_in(&project_path, &home).unwrap();
+        assert!(
+            issues.iter().all(|i| !i.message().contains("opencode")),
+            "{:?}",
+            issues.iter().map(Issue::message).collect::<Vec<_>>()
+        );
+
+        // A copy an upgrade has not replaced yet.
+        let (index, _) = Harness::OpenCode.plugin_files(&home).remove(0);
+        std::fs::write(index, "export default {}").unwrap();
+        let issues = hook_issues_in(&project_path, &home).unwrap();
+        assert_eq!(
+            messages(&issues, IssueKind::HooksNotInstalled)
+                .iter()
+                .filter(|m| m.contains("opencode"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn opencode_definition_without_a_projected_copy_is_flagged() {
+        // opencode runs its built-in prompt for a name it cannot find, with
+        // no error, so the projected file is the only thing to check.
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, _) = server.setup_project_no_tmux(dir.path());
+        use_opencode(&project_path, "planner", "opencode v2.0.18");
+        let planner = paths::main_worktree(&project_path).join(".agents/agents/planner.md");
+        std::fs::create_dir_all(planner.parent().unwrap()).unwrap();
+        std::fs::write(&planner, "# planner").unwrap();
+
+        assert!(
+            unprojected_definitions(&project_path)
+                .unwrap()
+                .contains(&("planner".to_string(), Harness::OpenCode))
+        );
+        let issues = asset_issues(&project_path).unwrap();
+        assert!(
+            messages(&issues, IssueKind::AssetNotProjected).contains(
+                &"canonical agent 'planner' not projected for opencode (run `pm upgrade`)"
+                    .to_string()
+            ),
+            "{:?}",
+            issues.iter().map(Issue::message).collect::<Vec<_>>()
+        );
+
+        crate::commands::skills::project_assets(&project_path, false).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(
+                paths::main_worktree(&project_path).join(".opencode/agents/planner.md")
+            )
+            .unwrap(),
+            "# planner"
+        );
+        assert!(
+            !unprojected_definitions(&project_path)
+                .unwrap()
+                .iter()
+                .any(|(name, _)| name == "planner")
+        );
+    }
+
+    #[test]
+    fn stopped_loop_is_reported_for_the_agent_it_stopped() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, _) = server.setup_project_no_tmux(dir.path());
+        let entry = |harness| crate::state::agent::AgentEntry {
+            agent_type: AgentType::Agent,
+            session_id: "ses_1".to_string(),
+            window_name: "reviewer".to_string(),
+            active: true,
+            agent_definition: None,
+            harness,
+            spawned_at: None,
+        };
+        let agents_dir = paths::agents_dir(&project_path);
+        let mut registry = AgentRegistry::default();
+        registry.register("reviewer", entry(Harness::OpenCode));
+        registry.save(&agents_dir, "login").unwrap();
+        // The same name in another scope, and on a harness with a native hook.
+        registry.save(&agents_dir, "signup").unwrap();
+        let mut native = AgentRegistry::default();
+        native.register("reviewer", entry(Harness::ClaudeCode));
+        native.save(&agents_dir, "main").unwrap();
+
+        assert!(loop_stopped_issues(&project_path, "login").is_empty());
+
+        // Written where the spawn told the plugin to write it.
+        let pre = Harness::OpenCode
+            .pre_launch(
+                &crate::harness::LaunchContext {
+                    project_root: &project_path,
+                    feature: "login",
+                    worktree: &project_path,
+                    agent: "reviewer",
+                },
+                &crate::harness::SpawnSpec {
+                    resume_session: Some("ses_1"),
+                    ..Default::default()
+                },
+                &HarnessConfig {
+                    opencode: crate::state::project::OpenCodeConfig {
+                        binary: Some(crate::testing::fake_opencode(
+                            dir.path(),
+                            r#"{"data":{"id":"ses_1"}}"#,
+                            0,
+                        )),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let (_, trip_file) = pre
+            .env
+            .iter()
+            .find(|(key, _)| key == "PM_OPENCODE_TRIP_FILE")
+            .expect("the spawn names a trip file");
+        std::fs::write(trip_file, "5 consecutive turns read none\n").unwrap();
+
+        let issues = loop_stopped_issues(&project_path, "login");
+        assert_eq!(
+            messages(&issues, IssueKind::LoopStopped),
+            vec![
+                "agent 'reviewer' no longer wakes for messages — its never-idle loop stopped: 5 \
+                 consecutive turns read none. Fix the cause, then `pm agent restart reviewer`"
+            ]
+        );
+        assert!(loop_stopped_issues(&project_path, "signup").is_empty());
+        assert!(loop_stopped_issues(&project_path, "main").is_empty());
+        std::fs::remove_file(trip_file).unwrap();
     }
 
     #[test]
