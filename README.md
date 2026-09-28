@@ -286,9 +286,14 @@ unattended:
 - **Role delivery.** Codex has no `--agent`; the agent's definition, the
   baseline, and the notice boards reach it through the SessionStart hook as
   developer context, on start and on every `codex resume`.
-- `pm harness probe --harness codex` checks the installed version (0.153.2
-  or newer). `pm harness settings|migrate|export|import` are Claude Code
-  only.
+- **No shared daemon.** pm always launches codex with `--no-daemon`: attached
+  to codex's background server, hooks run in the server's environment
+  instead of the agent's, and the agent idles unreachable after its first
+  turn. `pm doctor` reports a running agent that has recorded no session
+  id after a grace period; restart it with `pm agent restart <name>`.
+- `pm harness probe --harness codex` checks the installed version (0.156.0
+  or newer, the first with `--no-daemon`). `pm harness
+  settings|migrate|export|import` are Claude Code only.
 
 ### Agents as never-idle message processors
 

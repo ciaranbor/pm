@@ -1,6 +1,15 @@
-//! Codex: `codex -a <policy> -s <sandbox> … [resume|fork <id>] [prompt]`.
-//! `-a never` is the default because an approval prompt in an unwatched tmux
-//! window stalls the agent.
+//! Codex: `codex --no-daemon -a <policy> -s <sandbox> … [resume|fork <id>]
+//! [prompt]`. `-a never` is the default because an approval prompt in an
+//! unwatched tmux window stalls the agent.
+//!
+//! `--no-daemon` is unconditional. Without it the TUI attaches to the
+//! per-user app-server daemon (started on demand since 0.157), and hooks then
+//! execute in the daemon, whose environment is that of whichever client
+//! started it: `PM_AGENT_NAME` is absent or another agent's, so pm's guarded
+//! hooks exit silently — no session id, no role, no Stop block — and the
+//! agent idles after its first turn. With the flag the TUI runs its own
+//! server in-process and hooks inherit the window's environment, whether or
+//! not a daemon is running.
 //!
 //! Codex has no launch-time role channel (no `--agent`), so pm's composed
 //! prompt — definition body, baseline, notice boards — is injected by the
@@ -38,8 +47,9 @@ pub(super) const CONFIG_DIR: &str = ".codex";
 pub(super) const HOOKS_FILE: &str = "hooks.json";
 const CONFIG_FILE: &str = "config.toml";
 
-/// Earliest release with the measured hook behaviour pm relies on.
-pub(super) const MIN_VERSION: (u32, u32, u32) = (0, 153, 2);
+/// Earliest release that accepts `--no-daemon`; older ones reject the
+/// command line outright.
+pub(super) const MIN_VERSION: (u32, u32, u32) = (0, 156, 0);
 
 /// The sandbox mode with nothing to open up.
 const FULL_ACCESS: &str = "danger-full-access";
@@ -86,6 +96,7 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>, cfg: &CodexConfig) -> String {
 
     let mut parts = vec![
         "codex".to_string(),
+        "--no-daemon".to_string(),
         "-a".to_string(),
         tmux::shell_quote(approval),
         "-s".to_string(),
@@ -256,7 +267,7 @@ pub(super) fn trust_dir(codex_home: &Path, dir: &Path) -> Result<bool> {
     Ok(true)
 }
 
-/// `(major, minor, patch)` from `codex --version` output (`codex-cli 0.153.2`).
+/// `(major, minor, patch)` from `codex --version` output (`codex-cli 0.156.0`).
 fn parse_version(output: &str) -> Option<(u32, u32, u32)> {
     let token = output.split_whitespace().last()?;
     let mut nums = token
@@ -310,7 +321,10 @@ mod tests {
         );
         // The definition and prompt file are delivered by the SessionStart
         // hook, never on the command line.
-        assert_eq!(cmd, "codex -a 'never' -s 'danger-full-access' 'Stand by.'");
+        assert_eq!(
+            cmd,
+            "codex --no-daemon -a 'never' -s 'danger-full-access' 'Stand by.'"
+        );
     }
 
     #[test]
@@ -332,7 +346,7 @@ mod tests {
         );
         assert_eq!(
             cmd,
-            "codex -a 'on-request' -s 'workspace-write' --add-dir '/proj/.pm' \
+            "codex --no-daemon -a 'on-request' -s 'workspace-write' --add-dir '/proj/.pm' \
              --add-dir '/proj/main/.git' -m 'gpt-5'"
         );
 
@@ -345,7 +359,7 @@ mod tests {
             },
             &cfg(),
         );
-        assert_eq!(cmd, "codex -a 'never' -s 'danger-full-access'");
+        assert_eq!(cmd, "codex --no-daemon -a 'never' -s 'danger-full-access'");
     }
 
     #[test]
@@ -360,7 +374,7 @@ mod tests {
         );
         assert_eq!(
             cmd,
-            "codex -a 'never' -s 'danger-full-access' resume abc 'go'"
+            "codex --no-daemon -a 'never' -s 'danger-full-access' resume abc 'go'"
         );
         let cmd = build_cmd(
             &SpawnSpec {
@@ -370,7 +384,10 @@ mod tests {
             },
             &cfg(),
         );
-        assert_eq!(cmd, "codex -a 'never' -s 'danger-full-access' fork abc");
+        assert_eq!(
+            cmd,
+            "codex --no-daemon -a 'never' -s 'danger-full-access' fork abc"
+        );
         // A fork without a source is a plain spawn.
         let cmd = build_cmd(
             &SpawnSpec {
@@ -379,7 +396,7 @@ mod tests {
             },
             &cfg(),
         );
-        assert_eq!(cmd, "codex -a 'never' -s 'danger-full-access'");
+        assert_eq!(cmd, "codex --no-daemon -a 'never' -s 'danger-full-access'");
     }
 
     #[test]
@@ -390,7 +407,7 @@ mod tests {
         };
         assert_eq!(
             build_cmd(&SpawnSpec::default(), &config),
-            "codex -a 'never' -s 'danger-full-access' --dangerously-bypass-hook-trust"
+            "codex --no-daemon -a 'never' -s 'danger-full-access' --dangerously-bypass-hook-trust"
         );
         let config = CodexConfig {
             bypass_hook_trust: Some(false),
@@ -398,7 +415,7 @@ mod tests {
         };
         assert_eq!(
             build_cmd(&SpawnSpec::default(), &config),
-            "codex -a 'never' -s 'danger-full-access'"
+            "codex --no-daemon -a 'never' -s 'danger-full-access'"
         );
     }
 
@@ -506,11 +523,11 @@ mod tests {
 
     #[test]
     fn parse_version_reads_codex_cli_output() {
-        assert_eq!(parse_version("codex-cli 0.153.2"), Some((0, 153, 2)));
+        assert_eq!(parse_version("codex-cli 0.156.0"), Some((0, 156, 0)));
         assert_eq!(parse_version("codex-cli 1.2.0-alpha.3\n"), Some((1, 2, 0)));
         assert_eq!(parse_version("codex-cli"), None);
         assert_eq!(parse_version(""), None);
-        assert!(parse_version("codex-cli 0.153.2").unwrap() >= MIN_VERSION);
-        assert!(parse_version("codex-cli 0.152.9").unwrap() < MIN_VERSION);
+        assert!(parse_version("codex-cli 0.156.0").unwrap() >= MIN_VERSION);
+        assert!(parse_version("codex-cli 0.155.1").unwrap() < MIN_VERSION);
     }
 }

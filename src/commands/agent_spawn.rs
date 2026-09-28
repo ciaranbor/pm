@@ -268,6 +268,7 @@ fn spawn_session_with_config(
                 active: true,
                 agent_definition: stored_definition,
                 harness: settings.harness,
+                spawned_at: Some(chrono::Utc::now()),
             },
         );
         registry.save(&agents_dir, params.feature)?;
@@ -808,6 +809,7 @@ mod tests {
                 active: true,
                 agent_definition: None,
                 harness: Harness::ClaudeCode,
+                spawned_at: None,
             },
         );
         registry.save(&agents_dir, &feature).unwrap();
@@ -889,7 +891,7 @@ mod tests {
             .expect("window");
         server.wait_for_pane_text(
             &target,
-            "PM_AGENT_NAME=reviewer && codex -a 'never' -s 'danger-full-access' 'Stand by.'",
+            "PM_AGENT_NAME=reviewer && codex --no-daemon -a 'never' -s 'danger-full-access' 'Stand by.'",
         );
         let registry = AgentRegistry::load(&paths::agents_dir(dir.path()), &feature).unwrap();
         assert_eq!(registry.get("reviewer").unwrap().harness, Harness::Codex);
@@ -940,7 +942,7 @@ mod tests {
             .unwrap();
         server.wait_for_pane_text(
             &target,
-            "&& codex -a 'never' -s 'danger-full-access' 'Stand by.'",
+            "&& codex --no-daemon -a 'never' -s 'danger-full-access' 'Stand by.'",
         );
         let text = tmux::capture_pane(server.name(), &target).unwrap();
         assert!(!text.contains("-m "), "{text}");
@@ -1003,7 +1005,7 @@ mod tests {
             .unwrap();
         server.wait_for_pane_text(
             &target,
-            "&& codex -a 'never' -s 'danger-full-access' 'Stand by.'",
+            "&& codex --no-daemon -a 'never' -s 'danger-full-access' 'Stand by.'",
         );
         let text = tmux::capture_pane(server.name(), &target).unwrap();
         assert!(!text.contains("resume"), "{text}");

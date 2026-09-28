@@ -487,6 +487,7 @@ mod tests {
                 active: true,
                 agent_definition: None,
                 harness: crate::harness::Harness::ClaudeCode,
+                spawned_at: None,
             },
         );
         registry.save(&agents_dir, "login").unwrap();

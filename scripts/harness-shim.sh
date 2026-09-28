@@ -5,7 +5,7 @@
 # leaves a second one.
 case $1 in
   --help) echo "  --append-system-prompt-file <file>"; exit 0 ;;
-  --version) echo "$(basename "$0") 0.153.2"; exit 0 ;;
+  --version) echo "$(basename "$0") 0.156.0"; exit 0 ;;
 esac
 {
   printf 'argc=%s\n' "$#"

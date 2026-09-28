@@ -284,7 +284,7 @@ mod tests {
             .unwrap();
         server.wait_for_pane_text(
             &target,
-            "&& codex -a 'never' -s 'danger-full-access' 'Stand by.'",
+            "&& codex --no-daemon -a 'never' -s 'danger-full-access' 'Stand by.'",
         );
         let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
         assert_eq!(registry.get("reviewer").unwrap().harness, Harness::Codex);
@@ -308,6 +308,7 @@ mod tests {
                 active: true,
                 agent_definition: None,
                 harness: Harness::ClaudeCode,
+                spawned_at: None,
             },
         );
         registry.save(&agents_dir, &feature).unwrap();
@@ -380,6 +381,7 @@ mod tests {
                 active: true,
                 agent_definition: None,
                 harness: Harness::ClaudeCode,
+                spawned_at: None,
             },
         );
         registry.save(&agents_dir, &feature).unwrap();

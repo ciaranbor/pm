@@ -527,6 +527,7 @@ mod tests {
                 active: true,
                 agent_definition: None,
                 harness: Default::default(),
+                spawned_at: None,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
