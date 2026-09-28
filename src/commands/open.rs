@@ -31,6 +31,7 @@ fn is_open_recoverable(kind: IssueKind) -> bool {
     match kind {
         IssueKind::TmuxSessionMissing | IssueKind::AgentWindowMissing => true,
         IssueKind::OrphanedState
+        | IssueKind::AgentSessionNotStarted
         | IssueKind::WorktreeDirMissing
         | IssueKind::DirNotGitWorktree
         | IssueKind::GitWorktreeNoDir
@@ -55,13 +56,16 @@ fn is_open_recoverable(kind: IssueKind) -> bool {
     }
 }
 
+const FIXABLE_SUFFIX: &str = " [fixable: `pm doctor --fix`]";
+
 /// Collect drift warnings to print before opening: doctor findings minus the
 /// issue kinds that open will auto-restore.
 ///
 /// PR drift checks are skipped (`check_pr_state = false`) to avoid making
 /// `gh pr view` network calls on every `pm open` — that's a `pm doctor` job.
 ///
-/// Returns lines of the form `"  <scope> — <message>"`.
+/// Returns lines of the form `"  <scope> — <message>"`, with
+/// [`FIXABLE_SUFFIX`] on those `pm doctor --fix` resolves.
 fn collect_drift_warnings(
     project_root: &Path,
     projects_dir: &Path,
@@ -74,7 +78,16 @@ fn collect_drift_warnings(
             if is_open_recoverable(issue.kind()) {
                 continue;
             }
-            warnings.push(format!("  {} — {}", finding.feature(), issue.message()));
+            let suffix = if issue.auto_fixable() {
+                FIXABLE_SUFFIX
+            } else {
+                ""
+            };
+            warnings.push(format!(
+                "  {} — {}{suffix}",
+                finding.feature(),
+                issue.message()
+            ));
         }
     }
     Ok(warnings)
@@ -104,7 +117,6 @@ fn warn_about_drift(project_root: &Path, projects_dir: &Path, tmux_server: Optio
     for line in &warnings {
         eprintln!("{line}");
     }
-    eprintln!("(run `pm doctor --fix` to address)");
 }
 
 /// Respawn agents for a given scope.
@@ -341,8 +353,32 @@ mod tests {
 
         let warnings = collect_drift_warnings(&project_path, &projects_dir, server.name()).unwrap();
         assert!(
-            warnings.iter().any(|w| w.contains("orphaned state file")),
+            warnings
+                .iter()
+                .any(|w| w.contains("orphaned state file") && w.ends_with(FIXABLE_SUFFIX)),
             "expected orphaned-state warning, got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn drift_warnings_do_not_offer_fix_for_an_agent_with_no_session_id() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
+        let session_name = tmux::session_name(&project_name, "login");
+        server.spawn_fake_agent(&project_path, &session_name, "login", "reviewer");
+        let agents_dir = paths::agents_dir(&project_path);
+        let mut registry = AgentRegistry::load(&agents_dir, "login").unwrap();
+        registry.get_mut("reviewer").unwrap().spawned_at =
+            Some(chrono::Utc::now() - chrono::Duration::hours(1));
+        registry.save(&agents_dir, "login").unwrap();
+
+        let warnings = collect_drift_warnings(&project_path, &projects_dir, server.name()).unwrap();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].ends_with("(run `pm agent restart reviewer --scope login`)"),
+            "{warnings:?}"
         );
     }
 
@@ -772,6 +808,7 @@ mod tests {
                 active: true,
                 agent_definition: None,
                 harness: crate::harness::Harness::ClaudeCode,
+                spawned_at: None,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -825,6 +862,7 @@ mod tests {
                 active: true,
                 agent_definition: None,
                 harness: crate::harness::Harness::ClaudeCode,
+                spawned_at: None,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -865,6 +903,7 @@ mod tests {
                 active: true,
                 agent_definition: None,
                 harness: crate::harness::Harness::ClaudeCode,
+                spawned_at: None,
             },
         );
         registry.save(&agents_dir, "main").unwrap();
@@ -920,6 +959,7 @@ mod tests {
                 active: true,
                 agent_definition: None,
                 harness: crate::harness::Harness::ClaudeCode,
+                spawned_at: None,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -977,6 +1017,7 @@ mod tests {
                 active: true,
                 agent_definition: None,
                 harness: crate::harness::Harness::ClaudeCode,
+                spawned_at: None,
             },
         );
         registry.save(&agents_dir, "login").unwrap();

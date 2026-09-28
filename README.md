@@ -289,9 +289,14 @@ unattended:
 - **Role delivery.** Codex has no `--agent`; the agent's definition, the
   baseline, and the notice boards reach it through the SessionStart hook as
   developer context, on start and on every `codex resume`.
-- `pm harness probe --harness codex` checks the installed version (0.153.2
-  or newer). `pm harness settings|migrate|export|import` are Claude Code
-  only.
+- **No shared daemon.** pm always launches codex with `--no-daemon`: attached
+  to codex's background server, hooks run in the server's environment
+  instead of the agent's, and the agent idles unreachable after its first
+  turn. `pm doctor` reports a running agent that has recorded no session
+  id after a grace period; restart it with `pm agent restart <name>`.
+- `pm harness probe --harness codex` checks the installed version (0.156.0
+  or newer, the first with `--no-daemon`). `pm harness
+  settings|migrate|export|import` are Claude Code only.
 
 ### Agents as never-idle message processors
 
@@ -406,6 +411,20 @@ under a bundled skill's name never applies. Customise a bundled skill
 globally (edit `~/.agents/skills/<name>/`, accepting that `pm upgrade`
 rewrites it) or copy it to a name of your own. `pm doctor` flags a project
 skill shadowed this way.
+
+Project-specific procedures for agents — how to run, test, or review
+*here* — go in a project skill of your own, `main/.agents/skills/<name>/`,
+which `pm upgrade` projects for the harness and copies into feature
+worktrees. Only a skill's description is in view when the agent decides
+whether to load it, so put the trigger and any rule agents must always see
+there. pm's own `.agents/skills/pm-sandbox/` is an example.
+
+If the project commits such a skill, pm never writes over a file the
+feature's branch tracks, so an edit made on a feature branch survives
+`pm upgrade`. A codex agent in that feature reads the edited file directly.
+A Claude Code agent does not until the edit is merged and projected from
+main: it loads the feature's `.claude/skills/`, which is copied from main's
+projection.
 
 Upgrading an existing project removes the per-project copies of bundled
 assets that earlier releases installed — your own files are never touched.

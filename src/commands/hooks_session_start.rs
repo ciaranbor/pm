@@ -178,6 +178,7 @@ mod tests {
                 active: true,
                 agent_definition: agent_definition.map(String::from),
                 harness,
+                spawned_at: None,
             },
         );
         registry.save(&agents_dir, feature).unwrap();

@@ -22,10 +22,12 @@ Re-running the project's test suite is not QA; the implementer has done it.
 
 ## Getting something to run
 
-Find out how this project is built and run — its README, contributor docs,
-build scripts, CI config — rather than assuming. Your project may provide
-testing instructions; follow them where they exist. Build from the working
-tree, so you exercise the change and not an installed release.
+Look first for a project skill that describes how to run or exercise the
+project, and follow it when there is one. Without one, find out how the
+project is built and run — its README, contributor docs, build scripts, CI
+config — rather than assuming, and say in your report that you improvised.
+Build from the working tree, so you exercise the change and not an
+installed release.
 
 If the project has scaffolding for this (a sandbox, a dev server, fixtures,
 end-to-end tooling), use it. Otherwise use the change as a user would: the
@@ -53,7 +55,8 @@ Keep two kinds apart:
 ## Report
 
 - Verdict: passed, failed, or blocked
-- What you ran: the build command, the environment, how it was isolated
+- What you ran: the build command, the environment, how it was isolated,
+  and whether a project skill guided you or you improvised
 - Each bug: steps to reproduce from a clean state, expected, observed
   (output verbatim)
 - What you did not exercise, and why

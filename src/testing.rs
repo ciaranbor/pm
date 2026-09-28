@@ -583,6 +583,7 @@ impl TestServer {
                 active: true,
                 agent_definition: None,
                 harness: crate::harness::Harness::ClaudeCode,
+                spawned_at: None,
             },
         );
         registry.save(&agents_dir, feature).unwrap();
