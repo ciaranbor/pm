@@ -51,9 +51,10 @@ Design decisions you can't recover by reading the tree. Preserve them.
   task or active cron and nothing is queued, so the running work isn't
   stalled (its completion wakes the agent). Codex reports neither and has no
   second wake source, so codex agents block every turn.
-- Hooks are installed once per machine for **every supported harness**, not
-  only those in use; `pm doctor` checks only the harnesses the project's
-  agents run on. The asymmetry is deliberate.
+- Hooks are installed once per machine for **every supported harness**;
+  `pm doctor` checks only those the project's agents run on, deliberately.
+- Hooks read the agent's identity from their environment, so a spawn never
+  attaches to a shared harness server, whose hooks run in its own.
 - Three context-delivery contracts: `feat new`/`feat adopt --workflow` spawn
   the whole team and brief only `brief_agents` (a context with none to brief
   is an error); `agent spawn --context` enqueues, then spawns or no-ops;

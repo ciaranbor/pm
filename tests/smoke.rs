@@ -591,6 +591,7 @@ fn codex_spawn_builds_the_command_and_trusts_the_worktree() {
     let rec = &records[0];
     let expected: Vec<String> = [
         s.home().join("bin/codex").to_string_lossy().to_string(),
+        "--no-daemon".into(),
         "-a".into(),
         "never".into(),
         "-s".into(),

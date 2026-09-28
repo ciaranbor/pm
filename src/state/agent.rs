@@ -44,6 +44,9 @@ pub struct AgentEntry {
     /// produced it; see `harness::resumable_session`.
     #[serde(default)]
     pub harness: Harness,
+    /// When the window now running this agent was launched, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spawned_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl AgentEntry {
@@ -89,6 +92,14 @@ impl AgentRegistry {
         std::fs::write(&tmp, &content)?;
         std::fs::rename(&tmp, &path)?;
         Ok(())
+    }
+
+    /// When the registry file for a feature was last written; `None` when
+    /// it is missing or the filesystem reports no modification time.
+    pub fn modified(agents_dir: &Path, feature: &str) -> Option<std::time::SystemTime> {
+        std::fs::metadata(agents_dir.join(format!("{feature}.toml")))
+            .and_then(|m| m.modified())
+            .ok()
     }
 
     /// Register or update an agent.
@@ -141,6 +152,7 @@ mod tests {
             active: true,
             agent_definition: None,
             harness: Harness::ClaudeCode,
+            spawned_at: None,
         }
     }
 
@@ -200,6 +212,7 @@ mod tests {
                 active: false,
                 agent_definition: None,
                 harness: Harness::ClaudeCode,
+                spawned_at: None,
             },
         );
 
@@ -280,6 +293,7 @@ mod tests {
                 active: true,
                 agent_definition: Some("implementer".to_string()),
                 harness: Harness::ClaudeCode,
+                spawned_at: None,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -301,6 +315,7 @@ mod tests {
             active: true,
             agent_definition: None,
             harness: Harness::ClaudeCode,
+            spawned_at: None,
         };
         let toml = toml::to_string_pretty(&registry_entry).unwrap();
         assert!(
@@ -358,6 +373,7 @@ active = true
                 active: false,
                 agent_definition: None,
                 harness: Harness::ClaudeCode,
+                spawned_at: None,
             },
         );
 

@@ -1,10 +1,11 @@
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use crate::commands::feat_delete::{self, CleanupParams};
 use crate::commands::{agent_spawn, hooks_install, skills};
 use crate::error::Result;
 use crate::harness::Harness;
-use crate::state::agent::{AgentRegistry, AgentType};
+use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
 use crate::state::project::{GlobalConfig, ProjectConfig, ProjectEntry};
@@ -28,6 +29,9 @@ pub enum IssueKind {
     TmuxSessionMissing,
     /// Agent registered as active but its tmux window is gone.
     AgentWindowMissing,
+    /// An active agent's window is up but no session id has been recorded
+    /// for it since its spawn.
+    AgentSessionNotStarted,
     /// Feature status stuck on `initializing`.
     StuckInitializing,
     /// Feature references a workflow whose directory is missing.
@@ -87,6 +91,11 @@ impl Issue {
     /// Human-readable description of the issue.
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    /// Whether `pm doctor --fix` resolves the issue.
+    pub fn auto_fixable(&self) -> bool {
+        matches!(self.fix, Fix::Auto(_))
     }
 }
 
@@ -222,26 +231,12 @@ pub fn diagnose(
             }),
         });
     } else {
-        // Check main-scope agent windows
-        let agents_dir = paths::agents_dir(project_root);
-        if let Ok(registry) = AgentRegistry::load(&agents_dir, "main") {
-            for (agent_name, entry) in &registry.agents {
-                if entry.agent_type != AgentType::Agent || !entry.active {
-                    continue;
-                }
-                if tmux::find_window(tmux_server, &main_session, &entry.window_name)?.is_none() {
-                    main_issues.push(Issue {
-                        kind: IssueKind::AgentWindowMissing,
-                        message: format!(
-                            "agent '{agent_name}' registered as active but window missing"
-                        ),
-                        fix: Fix::Auto(FixAction::RespawnAgent {
-                            agent_name: agent_name.clone(),
-                        }),
-                    });
-                }
-            }
-        }
+        main_issues.extend(agent_issues(
+            project_root,
+            "main",
+            &main_session,
+            tmux_server,
+        )?);
     }
     if !main_issues.is_empty() {
         findings.push(Finding {
@@ -346,28 +341,13 @@ pub fn diagnose(
                     fix: fix_action,
                 });
             } else {
-                // Check 4b: agent windows alive within existing session
-                let agents_dir = paths::agents_dir(project_root);
-                if let Ok(registry) = AgentRegistry::load(&agents_dir, name) {
-                    for (agent_name, entry) in &registry.agents {
-                        if entry.agent_type != AgentType::Agent || !entry.active {
-                            continue;
-                        }
-                        if tmux::find_window(tmux_server, &session_name, &entry.window_name)?
-                            .is_none()
-                        {
-                            issues.push(Issue {
-                                kind: IssueKind::AgentWindowMissing,
-                                message: format!(
-                                    "agent '{agent_name}' registered as active but window missing"
-                                ),
-                                fix: Fix::Auto(FixAction::RespawnAgent {
-                                    agent_name: agent_name.clone(),
-                                }),
-                            });
-                        }
-                    }
-                }
+                // Check 4b: agents within the existing session
+                issues.extend(agent_issues(
+                    project_root,
+                    name,
+                    &session_name,
+                    tmux_server,
+                )?);
             }
         }
 
@@ -837,6 +817,59 @@ fn unprojected_definitions(project_root: &Path) -> Result<Vec<(String, Harness)>
     Ok(out)
 }
 
+/// How long after its spawn an agent may go without a recorded session id
+/// before that is reported.
+const SESSION_START_GRACE: Duration = Duration::from_secs(60);
+
+/// Findings about `scope`'s active agents, given its tmux session exists.
+fn agent_issues(
+    project_root: &Path,
+    scope: &str,
+    session_name: &str,
+    tmux_server: Option<&str>,
+) -> Result<Vec<Issue>> {
+    let agents_dir = paths::agents_dir(project_root);
+    let Ok(registry) = AgentRegistry::load(&agents_dir, scope) else {
+        return Ok(Vec::new());
+    };
+    // An entry with no spawn time is at least as old as the file holding it.
+    let registry_written = AgentRegistry::modified(&agents_dir, scope);
+    let past_grace = |entry: &AgentEntry| {
+        entry
+            .spawned_at
+            .map(SystemTime::from)
+            .or(registry_written)
+            .and_then(|since| since.elapsed().ok())
+            .is_some_and(|age| age > SESSION_START_GRACE)
+    };
+    let mut issues = Vec::new();
+    for (agent_name, entry) in &registry.agents {
+        if entry.agent_type != AgentType::Agent || !entry.active {
+            continue;
+        }
+        if tmux::find_window(tmux_server, session_name, &entry.window_name)?.is_none() {
+            issues.push(Issue {
+                kind: IssueKind::AgentWindowMissing,
+                message: format!("agent '{agent_name}' registered as active but window missing"),
+                fix: Fix::Auto(FixAction::RespawnAgent {
+                    agent_name: agent_name.clone(),
+                }),
+            });
+        } else if entry.session_id.is_empty() && past_grace(entry) {
+            issues.push(Issue {
+                kind: IssueKind::AgentSessionNotStarted,
+                message: format!(
+                    "agent '{agent_name}' is running but its {} session has recorded no \
+                     session id (run `pm agent restart {agent_name} --scope {scope}`)",
+                    entry.harness
+                ),
+                fix: Fix::None,
+            });
+        }
+    }
+    Ok(issues)
+}
+
 /// One warning per active agent in `scope` whose effective definition is
 /// `claude`, the removed vanilla alias (spawned by a pre-`default` solo).
 fn legacy_vanilla_agent_issues(project_root: &Path, scope: &str) -> Vec<Issue> {
@@ -1019,6 +1052,7 @@ mod tests {
                 active: false,
                 agent_definition: None,
                 harness: Harness::ClaudeCode,
+                spawned_at: None,
             },
         );
         registry
@@ -1160,6 +1194,7 @@ mod tests {
                 active: true,
                 agent_definition: None,
                 harness: Harness::ClaudeCode,
+                spawned_at: None,
             },
         );
         registry.register(
@@ -1171,6 +1206,7 @@ mod tests {
                 active: true,
                 agent_definition: Some("default".to_string()),
                 harness: Harness::ClaudeCode,
+                spawned_at: None,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -1565,6 +1601,7 @@ mod tests {
             active: false,
             agent_definition: definition.map(str::to_string),
             harness: Harness::ClaudeCode,
+            spawned_at: None,
         };
         let agents_dir = paths::agents_dir(&project_path);
         let mut registry = AgentRegistry::default();
@@ -1916,6 +1953,7 @@ mod tests {
                 active: true,
                 agent_definition: None,
                 harness: crate::harness::Harness::ClaudeCode,
+                spawned_at: None,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -1948,6 +1986,7 @@ mod tests {
                 active: true,
                 agent_definition: None,
                 harness: crate::harness::Harness::ClaudeCode,
+                spawned_at: None,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -1991,6 +2030,7 @@ mod tests {
                 active: true,
                 agent_definition: None,
                 harness: Harness::ClaudeCode,
+                spawned_at: None,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -2026,5 +2066,84 @@ mod tests {
 
         let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
         assert!(lines[0].contains("all healthy"), "got: {lines:?}");
+    }
+
+    #[test]
+    fn running_agent_with_no_session_id_is_flagged_once_past_its_own_grace_period() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
+        let session_name = tmux::session_name(&project_name, "login");
+        server.spawn_fake_agent(&project_path, &session_name, "login", "reviewer");
+        server.spawn_fake_agent(&project_path, &session_name, "login", "implementer");
+
+        let agents_dir = paths::agents_dir(&project_path);
+        let long_ago = chrono::Utc::now() - 2 * SESSION_START_GRACE;
+        let save = |edit: &dyn Fn(&mut AgentEntry)| {
+            let mut registry = AgentRegistry::load(&agents_dir, "login").unwrap();
+            edit(registry.get_mut("reviewer").unwrap());
+            registry.save(&agents_dir, "login").unwrap();
+        };
+        let login_issues = || -> Vec<(IssueKind, String)> {
+            diagnose(&project_path, &projects_dir, server.name(), false)
+                .unwrap()
+                .iter()
+                .filter(|f| f.feature() == "login")
+                .flat_map(|f| f.issues())
+                .map(|i| (i.kind(), i.message().to_string()))
+                .collect()
+        };
+
+        // Just spawned: the hook may simply not have fired yet.
+        save(&|e| {
+            e.harness = Harness::Codex;
+            e.spawned_at = Some(chrono::Utc::now());
+        });
+        assert_eq!(login_issues(), vec![]);
+
+        // The registry was written a moment ago, as it is whenever another
+        // agent in the scope records its session; the reviewer's own spawn
+        // is what counts.
+        save(&|e| e.spawned_at = Some(long_ago));
+        assert_eq!(
+            login_issues(),
+            vec![(
+                IssueKind::AgentSessionNotStarted,
+                "agent 'reviewer' is running but its codex session has recorded no session id \
+                 (run `pm agent restart reviewer --scope login`)"
+                    .to_string()
+            )]
+        );
+
+        save(&|e| e.active = false);
+        assert_eq!(login_issues(), vec![]);
+
+        save(&|e| {
+            e.active = true;
+            e.session_id = "sess-1".to_string();
+        });
+        assert_eq!(login_issues(), vec![]);
+
+        // An entry with no spawn time is as old as the registry file.
+        save(&|e| {
+            e.session_id.clear();
+            e.spawned_at = None;
+        });
+        assert_eq!(login_issues(), vec![]);
+        std::fs::File::options()
+            .write(true)
+            .open(agents_dir.join("login.toml"))
+            .unwrap()
+            .set_modified(SystemTime::from(long_ago))
+            .unwrap();
+        let kinds: Vec<IssueKind> = login_issues().into_iter().map(|(k, _)| k).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                IssueKind::AgentSessionNotStarted,
+                IssueKind::AgentSessionNotStarted
+            ]
+        );
     }
 }

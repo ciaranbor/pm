@@ -21,7 +21,9 @@
 //! exits 0 before `pm` is ever resolved, which also keeps the hook inert
 //! when `pm` is not on that session's `PATH`. The guard is `[ -n … ] || exit
 //! 0; pm …`, not `&&` — `&&` would turn a false test into an exit-1 hook
-//! error. Codex additionally runs no hook until the user has trusted it
+//! error. The guard reads the environment the hook runs in, so it
+//! identifies a session only when that is the session's own. Codex
+//! additionally runs no hook until the user has trusted it
 //! interactively (`pm doctor` reports a missing trust entry), and pm appends
 //! its entries so existing ones keep their positions — codex keys trust on
 //! the entry's index.

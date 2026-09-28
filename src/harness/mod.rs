@@ -69,7 +69,8 @@ impl Harness {
                 "appending a prompt file (--append-system-prompt-file)".to_string()
             }
             Harness::Codex => format!(
-                "SessionStart hook context injection (needs codex >= {})",
+                "SessionStart hook context injection outside the shared daemon \
+                 (needs codex >= {})",
                 codex::min_version_string()
             ),
         }

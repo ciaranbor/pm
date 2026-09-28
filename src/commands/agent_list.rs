@@ -98,6 +98,7 @@ mod tests {
                 active: true,
                 agent_definition: None,
                 harness: Harness::ClaudeCode,
+                spawned_at: None,
             },
         );
         // tester: inactive
@@ -110,6 +111,7 @@ mod tests {
                 active: false,
                 agent_definition: None,
                 harness: Harness::ClaudeCode,
+                spawned_at: None,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -144,6 +146,7 @@ mod tests {
                 active: true,
                 agent_definition: Some("implementer".to_string()),
                 harness: Harness::ClaudeCode,
+                spawned_at: None,
             },
         );
         // Non-aliased
@@ -156,6 +159,7 @@ mod tests {
                 active: true,
                 agent_definition: None,
                 harness: Harness::ClaudeCode,
+                spawned_at: None,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -196,6 +200,7 @@ mod tests {
                 active: true,
                 agent_definition: None,
                 harness: Harness::ClaudeCode,
+                spawned_at: None,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -220,6 +225,7 @@ mod tests {
                 active: true,
                 agent_definition: None,
                 harness: Harness::ClaudeCode,
+                spawned_at: None,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
