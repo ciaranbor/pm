@@ -708,7 +708,7 @@ These round out the tool; each has its full flag reference under `--help`:
 ```sh
 cargo build
 cargo test
-cargo clippy
+cargo clippy --all-targets
 cargo fmt
 ```
 

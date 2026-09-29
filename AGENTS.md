@@ -135,7 +135,7 @@ Design decisions you can't recover by reading the tree. Preserve them.
 ```sh
 cargo build                    # build
 cargo test                     # run all tests
-cargo clippy                   # lint
+cargo clippy --all-targets     # lint, tests included
 cargo fmt                      # format
 cargo run -- <args>            # test local changes (development only)
 ```
@@ -144,8 +144,9 @@ cargo run -- <args>            # test local changes (development only)
 run --` only to test local, uncommitted changes.
 
 Before completing any task, always run:
-`cargo fmt && cargo clippy && cargo test && cargo doc --no-deps` — the last
-must emit no warnings. `cargo test` needs `node` 22.18+ (opencode plugin).
+`cargo fmt && cargo clippy --all-targets && cargo test && cargo doc --no-deps`
+— the last must emit no warnings. `cargo test` needs `node` 22.18+
+(opencode plugin).
 
 **Important:** Tests create real tmux sessions that consume ptys. A check in
 `TestServer::new()` aborts the run once the system-wide pty count reaches 300
