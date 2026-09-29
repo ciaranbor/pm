@@ -154,10 +154,6 @@ pub fn send_full(
     std::fs::create_dir_all(&sdir)?;
     std::fs::create_dir_all(&mdir)?;
 
-    let index = max_index(&sdir)? + 1;
-    let msg_path = sdir.join(format!("{index:03}.md"));
-    let meta_path = mdir.join(format!("{index:03}.json"));
-
     let meta = MessageMeta {
         sender: sender.to_string(),
         timestamp: Utc::now(),
@@ -165,8 +161,26 @@ pub fn send_full(
         sender_project: sender_project.map(|s| s.to_string()),
     };
 
-    std::fs::write(&msg_path, body)?;
-    std::fs::write(&meta_path, serde_json::to_string_pretty(&meta)?)?;
+    // Sends from one sender take turns, so an index becomes visible only
+    // after every lower one. Readers find a message by its body file, so the
+    // meta goes in first and each file is renamed in whole. A send that dies
+    // part way leaves at most a meta with no body, which the next send
+    // overwrites; the lock goes with the process.
+    let lock = std::fs::File::create(mdir.join(".lock"))?;
+    lock.lock()?;
+    let index = max_index(&sdir)? + 1;
+    let write = |dir: &Path, name: String, content: &[u8]| -> Result<()> {
+        let mut file = tempfile::NamedTempFile::new_in(dir)?;
+        std::io::Write::write_all(&mut file, content)?;
+        file.persist(dir.join(name)).map_err(|e| e.error)?;
+        Ok(())
+    };
+    write(
+        &mdir,
+        format!("{index:03}.json"),
+        serde_json::to_string_pretty(&meta)?.as_bytes(),
+    )?;
+    write(&sdir, format!("{index:03}.md"), body.as_bytes())?;
 
     Ok(index)
 }
@@ -269,9 +283,8 @@ pub fn read_at(
 /// is unread and no `from` was given.
 ///
 /// A sender's age is the timestamp of its earliest unread message. Missing
-/// or unreadable metadata (a legacy message, or `send` caught between writing
-/// the body and the meta) counts as undated and sorts first, so this never
-/// fails on a message that `check` reports.
+/// or unreadable metadata (a legacy message) counts as undated and sorts
+/// first, so this never fails on a message that `check` reports.
 pub fn resolve_sender(
     messages_dir: &Path,
     feature: &str,
@@ -454,6 +467,56 @@ mod tests {
     use super::*;
     use crate::error::PmError;
     use tempfile::tempdir;
+
+    #[test]
+    fn a_send_after_one_that_died_part_way_is_delivered() {
+        let dir = tempdir().unwrap();
+        let messages_dir = dir.path();
+        send(messages_dir, "login", "reviewer", "user", "first").unwrap();
+        next(messages_dir, "login", "reviewer", "user").unwrap();
+        std::fs::write(
+            meta_dir(messages_dir, "login", "reviewer", "user").join("002.json"),
+            "{",
+        )
+        .unwrap();
+
+        send(messages_dir, "login", "reviewer", "user", "second").unwrap();
+
+        let cursor = cursor_for(messages_dir, "login", "reviewer", "user").unwrap();
+        let read = read_at(messages_dir, "login", "reviewer", "user", cursor + 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(read.body, "second");
+    }
+
+    #[test]
+    fn concurrent_sends_and_reads_never_fail_or_lose_a_message() {
+        let dir = tempdir().unwrap();
+        let messages_dir = dir.path().to_path_buf();
+        send(&messages_dir, "login", "reviewer", "user", "first").unwrap();
+        let per_sender = 100;
+        let senders: Vec<_> = (0..2)
+            .map(|_| {
+                let messages_dir = messages_dir.clone();
+                std::thread::spawn(move || {
+                    for i in 0..per_sender {
+                        send(&messages_dir, "login", "reviewer", "user", &format!("m{i}")).unwrap();
+                    }
+                })
+            })
+            .collect();
+        while !senders.iter().all(|t| t.is_finished()) {
+            let listed = list(&messages_dir, "login", "reviewer", None).unwrap();
+            let latest = listed.last().unwrap().index;
+            read_at(&messages_dir, "login", "reviewer", "user", latest).unwrap();
+        }
+        for t in senders {
+            t.join().unwrap();
+        }
+
+        let listed = list(&messages_dir, "login", "reviewer", None).unwrap();
+        assert_eq!(listed.len(), 1 + 2 * per_sender);
+    }
 
     fn messages_dir(dir: &Path) -> PathBuf {
         dir.join("messages")
