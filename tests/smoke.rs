@@ -474,6 +474,24 @@ fn spawn_builds_the_command_through_the_real_shell() {
     assert_eq!(Path::new(&rec.cwd), login);
 }
 
+/// Catches: `agent spawn --scope` resolving the target from the caller's
+/// cwd instead of the flag, run from `main` as an orchestrator would.
+#[test]
+#[ignore]
+fn spawn_from_main_into_a_feature_with_scope() {
+    let s = Smoke::new();
+    let login = s.init_with_feature();
+    s.pm(&s.proj().join("main"))
+        .args(["agent", "spawn", "reviewer", "--scope", "login"])
+        .assert()
+        .success();
+
+    let records = s.argv_records("reviewer", 1);
+    assert_eq!(Path::new(&records[0].cwd), login);
+    assert!(s.find_window("proj/login", "reviewer").is_some());
+    assert!(s.find_window("proj/main", "reviewer").is_none());
+}
+
 /// Catches: the rename-then-kill ordering in `agent restart`, which only
 /// matters when the caller's own process lives in the window being replaced.
 #[test]

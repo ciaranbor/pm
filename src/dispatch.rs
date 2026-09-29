@@ -204,13 +204,14 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
         }
         Commands::Agent(agent_cmd) => {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-            let feature = resolve_scope(&project_root)?;
             match agent_cmd {
                 AgentCommands::Spawn {
                     name,
                     agent_definition,
                     context,
+                    scope,
                 } => {
+                    let feature = resolve_scope_with_flag(&project_root, scope)?;
                     // `--context -` reads the brief from stdin; any other
                     // value is treated as a literal string (no file resolution).
                     let context = commands::feat_new::resolve_stdin_context(context.as_deref())?;
@@ -246,7 +247,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     Ok(())
                 }
                 AgentCommands::Stop { names, scope } => {
-                    let target_scope = scope.unwrap_or(feature);
+                    let target_scope = resolve_scope_with_flag(&project_root, scope)?;
                     let results = commands::agent_stop::agent_stop_many(
                         &project_root,
                         &target_scope,
@@ -256,7 +257,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     report_agent_op_results(results, "stop")
                 }
                 AgentCommands::Delete { names, scope } => {
-                    let target_scope = scope.unwrap_or(feature);
+                    let target_scope = resolve_scope_with_flag(&project_root, scope)?;
                     let results = commands::agent_delete::agent_delete_many(
                         &project_root,
                         &target_scope,
@@ -266,7 +267,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     report_agent_op_results(results, "delete")
                 }
                 AgentCommands::Restart { names, scope } => {
-                    let target_scope = scope.unwrap_or(feature);
+                    let target_scope = resolve_scope_with_flag(&project_root, scope)?;
                     let results = commands::agent_restart::agent_restart_many(
                         &project_root,
                         &target_scope,
@@ -276,6 +277,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     report_agent_op_results(results, "restart")
                 }
                 AgentCommands::List { active } => {
+                    let feature = resolve_scope(&project_root)?;
                     let lines = commands::agent_list::agent_list(&project_root, &feature, active)?;
                     for line in lines {
                         println!("{line}");
@@ -283,6 +285,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     Ok(())
                 }
                 AgentCommands::Fork { source, name } => {
+                    let feature = resolve_scope(&project_root)?;
                     let msg = commands::agent_fork::agent_fork(
                         &project_root,
                         &feature,

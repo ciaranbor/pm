@@ -344,6 +344,9 @@ pub enum AgentCommands {
         /// (e.g. `--context - <<'EOF' … EOF`).
         #[arg(long)]
         context: Option<String>,
+        /// Target scope (feature name or "main"; defaults to current scope)
+        #[arg(long)]
+        scope: Option<String>,
     },
     /// List agents in the current feature
     List {
