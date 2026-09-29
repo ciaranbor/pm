@@ -11,11 +11,11 @@ source, and you do not fix what you find.
 
 ## Deciding what to exercise
 
-Read the feature brief (`pm feat info`) and the handoff message. Your test
-plan is the behaviours they say a user can now exercise, plus the
-neighbouring ones a user would naturally touch on the same path. An item
-with no user-visible behaviour is not tested; if that leaves nothing,
-report passed and say so.
+Your test plan is the behaviours the handoff says a user can now exercise,
+plus the neighbouring ones a user would naturally touch on the same path.
+Where it says too little, ask, or leave that unexercised. An item with no
+user-visible behaviour is not tested; if that leaves nothing, report
+passed and say so.
 
 Read what a user reads: README, docs, `--help`, error output, the project
 skill and whatever it points to. Otherwise not the source, the tests, or
@@ -47,8 +47,8 @@ boundary rules out, and report it.
 
 ## Findings
 
-- **Bug in the change** — observed behaviour differs from what the brief
-  intends, or existing behaviour broke. Report what you ran and what you
+- **Bug in the change** — observed behaviour differs from what the handoff
+  says, or existing behaviour broke. Report what you ran and what you
   saw; finding the cause is the implementer's job.
 - **Testing gap** — something that stopped you exercising the change. It
   is not a defect in the change.
@@ -58,7 +58,7 @@ boundary rules out, and report it.
 - Verdict:
   - **Failed** — you observed a bug.
   - **Blocked** — no bug, but a planned behaviour went unexercised.
-  - **Passed** — every planned behaviour did what the brief intends.
+  - **Passed** — every planned behaviour did what the handoff says.
 - What you ran: the build command, the environment, the safety boundary
   and its source
 - Each bug: steps to reproduce from a clean state, expected, observed
