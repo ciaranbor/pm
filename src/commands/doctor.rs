@@ -94,6 +94,9 @@ pub enum IssueKind {
     /// A harness in use reports a problem with its `[harness.<name>]`
     /// settings.
     HarnessConfigInvalid,
+    /// A feature worktree has a rebase paused, so its branch does not yet
+    /// hold the rebased commits and `pm feat merge` refuses it.
+    RebaseInProgress,
 }
 
 /// A single issue detected for a feature.
@@ -417,6 +420,16 @@ pub fn diagnose(
                 &worktree_path,
             )?);
         }
+
+        if dir_exists && git::rebase_in_progress(&worktree_path).unwrap_or(false) {
+            issues.push(Issue {
+                kind: IssueKind::RebaseInProgress,
+                message: "rebase in progress (finish with `git rebase --continue` or `--abort`)"
+                    .to_string(),
+                fix: Fix::None,
+            });
+        }
+
         issues.extend(legacy_vanilla_agent_issues(project_root, name));
         issues.extend(loop_stopped_issues(project_root, name));
 

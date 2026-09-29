@@ -179,6 +179,30 @@ mod tests {
     }
 
     #[test]
+    fn status_reports_a_feature_paused_mid_rebase() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
+            &project_path,
+            &projects_dir,
+            "login",
+            server.name(),
+        ))
+        .unwrap();
+        TestServer::add_feature_commit(&project_path, "login");
+        TestServer::pause_rebase(&project_path.join("login"), "main");
+
+        let lines = status(&project_path, &projects_dir, server.name()).unwrap();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("login") && l.contains("rebase in progress")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
     fn status_with_no_features() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();

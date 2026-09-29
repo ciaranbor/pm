@@ -76,6 +76,8 @@ The lifecycle: `pm feat new` → work → optionally `pm feat pr create` /
 `pm feat ready` / `pm feat review` → `pm feat merge` (cleans up by default).
 Inspection and housekeeping subcommands (`list`, `info`, `switch`, `rename`,
 `rebase`, `delete`, `sync`) round out `pm feat` — see `pm feat --help`.
+`merge` refuses a feature or base worktree with uncommitted changes or a
+paused rebase; `feat info`, `pm status` and `pm doctor` show a paused rebase.
 
 `pm register`, `pm feat adopt --from` and `pm feat rename` carry agent
 sessions to the new path for every harness in use, and print what they did.

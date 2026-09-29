@@ -45,6 +45,12 @@ pub fn feat_info(project_root: &Path, projects_dir: &Path, name: &str) -> Result
     lines.push(format!("status:      {}", state.status));
     lines.push(format!("branch:      {}", state.branch));
     lines.push(format!("worktree:    {}", state.worktree));
+    if git::rebase_in_progress(&project_root.join(&state.worktree)).unwrap_or(false) {
+        lines.push(
+            "rebase:      in progress (finish with `git rebase --continue` or `--abort`)"
+                .to_string(),
+        );
+    }
     // Don't fail info display if remote lookup errors
     let remote = git::remote_tracking_branch(&main_repo, &state.branch).unwrap_or(None);
     lines.push(format!(
@@ -140,6 +146,24 @@ mod tests {
         assert!(output.contains("context:     fix the widget"));
         assert!(output.contains("created:"));
         assert!(output.contains("last_active:"));
+    }
+
+    #[test]
+    fn feat_info_shows_a_paused_rebase() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
+        let rebase_line = |lines: Vec<String>| lines.into_iter().find(|l| l.starts_with("rebase:"));
+        TestServer::add_feature_commit(&project_path, "login");
+        assert_eq!(
+            rebase_line(feat_info(&project_path, &projects_dir, "login").unwrap()),
+            None
+        );
+
+        TestServer::pause_rebase(&project_path.join("login"), "main");
+        let line = rebase_line(feat_info(&project_path, &projects_dir, "login").unwrap());
+        assert!(line.unwrap().contains("in progress"));
     }
 
     #[test]
