@@ -259,7 +259,9 @@ mod tests {
 
     #[test]
     fn restart_after_harness_change_reports_it() {
-        let _guard = crate::testing::CODEX_CONFIG_LOCK.lock().unwrap();
+        let _guard = crate::testing::CODEX_CONFIG_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let server = TestServer::new();
         let dir = tempdir().unwrap();
         let (session_name, feature) = setup_project(dir.path(), &server);

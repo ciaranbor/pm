@@ -533,12 +533,14 @@ mod tests {
         let target = new_window(server.name(), &name, dir.path(), Some("agent"), true).unwrap();
         // A child of the pane's shell, as a harness is.
         send_keys(server.name(), &target, "sleep 999").unwrap();
-        for _ in 0..500 {
-            if pane_command(server.name(), &target).unwrap() == "sleep" {
-                break;
+        let started = (0..500).any(|_| {
+            let running = pane_command(server.name(), &target).unwrap() == "sleep";
+            if !running {
+                std::thread::sleep(std::time::Duration::from_millis(20));
             }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+            running
+        });
+        assert!(started, "sleep never started in {target}");
         let pids = pane_processes(server.name(), &target).unwrap();
         assert!(pids.len() > 1, "{pids:?}");
         assert_eq!(

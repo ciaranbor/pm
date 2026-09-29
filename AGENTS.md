@@ -150,11 +150,11 @@ must emit no warnings. `cargo test` needs `node` 22.18+ (opencode plugin).
 `TestServer::new()` aborts the run once the system-wide pty count reaches 300
 (macOS limit is 511); a pty-budget failure means leaked tmux sessions. Runs are
 capped at 4 threads via `.cargo/config.toml`. Each test binary owns one
-`pm-test-<pid>` tmux server with a `keepalive` session; dead-pid servers are
-reaped at the next run's start and the current one is killed at exit. To
-recover from a runaway run: `tmux -L pm-test-<pid> kill-server` (or `for s in
-/tmp/tmux-$(id -u)/pm-test-*; do tmux -L $(basename "$s") kill-server; rm -f
-"$s"; done`). Always pass `-L` when touching a test server by hand.
+`pm-test-<pid>` tmux server (no tmux config, `/bin/sh` windows, a `keepalive`
+session); dead-pid servers are reaped at the next run's start and the current
+one is killed at exit. To recover from a runaway run: `tmux -L pm-test-<pid>
+kill-server` (or `for s in /tmp/tmux-$(id -u)/pm-test-*; do tmux -L $(basename
+"$s") kill-server; rm -f "$s"; done`). Always pass `-L` to a test server by hand.
 
 ### Sandbox and smoke tests
 
