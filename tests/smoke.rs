@@ -874,6 +874,90 @@ fn interrupting_pm_kills_the_opencode_call_it_is_waiting_on() {
     }
 }
 
+/// Catches: the `opencode serve` a session migration runs its moves through
+/// outliving a Ctrl-C to pm that lands mid-move.
+#[test]
+#[ignore]
+fn interrupting_pm_mid_migration_kills_its_opencode_server() {
+    use std::os::unix::process::ExitStatusExt;
+
+    let s = Smoke::new();
+    s.pm(s.home())
+        .args(["init", &s.proj().to_string_lossy()])
+        .assert()
+        .success();
+    let (server_pid, child_pid, moving) = (
+        s.home().join("serve.pid"),
+        s.home().join("serve-child.pid"),
+        s.home().join("moving"),
+    );
+    let fake = s.home().join("fake-opencode");
+    std::fs::write(
+        &fake,
+        format!(
+            "#!/bin/sh\ncase \"$*\" in\n\
+             --version*) echo 2.0.18 ;;\n\
+             serve*) echo $$ > {server}; echo 'server listening on http://127.0.0.1:9'\n\
+             sleep 300 & echo $! > {child}; wait ;;\n\
+             *session.list*) echo '{{\"data\":[{{\"id\":\"ses_a\"}}],\"cursor\":{{}}}}' ;;\n\
+             *) touch {moving}; sleep 300 ;;\n\
+             esac\n",
+            server = shell_quote(&server_pid.to_string_lossy()),
+            child = shell_quote(&child_pid.to_string_lossy()),
+            moving = shell_quote(&moving.to_string_lossy()),
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    s.append_config(&format!(
+        "[harness.opencode]\nbinary = {:?}\n",
+        fake.to_string_lossy()
+    ));
+
+    let mut pm = s
+        .run_cmd(&s.proj().join("main"), "pm")
+        .args([
+            "harness",
+            "migrate",
+            "--harness",
+            "opencode",
+            "--from",
+            "/gone/old",
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let start = Instant::now();
+    let written = |file: &PathBuf| std::fs::read_to_string(file).is_ok_and(|t| !t.is_empty());
+    while !moving.exists() || !written(&server_pid) || !written(&child_pid) {
+        assert!(
+            start.elapsed() < WAIT,
+            "pm never asked opencode to move a session"
+        );
+        std::thread::sleep(POLL);
+    }
+    // SAFETY: signals a process this test started.
+    unsafe {
+        libc::kill(pm.id() as libc::pid_t, libc::SIGINT);
+    }
+    assert_eq!(pm.wait().unwrap().signal(), Some(libc::SIGINT));
+
+    for file in [&server_pid, &child_pid] {
+        let pid: libc::pid_t = std::fs::read_to_string(file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let start = Instant::now();
+        // SAFETY: signal 0 only probes for the process.
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            assert!(start.elapsed() < WAIT, "{} outlived pm", file.display());
+            std::thread::sleep(POLL);
+        }
+    }
+}
+
 /// Catches: the binary probes resolving `claude` and `codex` through the
 /// real `PATH` (lib tests skip them), and the refusal coming before the
 /// worktree, branch and session rather than being rolled back after them.
