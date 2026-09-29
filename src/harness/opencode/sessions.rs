@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use super::{api, api_error, binary, command, detached, installed_version, run_api};
+use super::{api, binary, bounded, command, detached, installed_version, refusal, run_api};
 use crate::error::{PmError, Result};
 use crate::harness::{ImportOutcome, InUse, per_session_outcome};
 use crate::state::project::OpenCodeConfig;
@@ -117,18 +117,13 @@ fn list(cfg: &OpenCodeConfig, dir: &Path) -> Result<Vec<Session>> {
 /// either stream.
 fn session_command(cfg: &OpenCodeConfig, verb: &str, args: &[&str]) -> Result<(String, String)> {
     let mut command = command(cfg, &["session", verb], args);
-    let out = command.output().map_err(|e| {
-        PmError::Agent(format!(
-            "could not run `{}` for session {verb}: {e}",
-            command.get_program().to_string_lossy()
-        ))
-    })?;
+    let out = bounded::output(&mut command, &format!("session {verb}"), bounded::TRANSFER)?;
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     if !out.status.success() {
         return Err(PmError::Agent(format!(
             "opencode session {verb} failed: {}",
-            api_error(&stdout, &stderr)
+            refusal(&stdout, &stderr).message
         )));
     }
     Ok((stdout, stderr))
@@ -235,9 +230,7 @@ impl Drop for MoveServer<'_> {
 }
 
 pub(in crate::harness) fn unreachable(cfg: &OpenCodeConfig) -> Option<String> {
-    installed_version(cfg)
-        .is_none()
-        .then(|| format!("`{}` could not be run", binary(cfg)))
+    installed_version(cfg).err()
 }
 
 pub(in crate::harness) fn migrate(

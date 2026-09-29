@@ -126,6 +126,15 @@ impl Harness {
         }
     }
 
+    /// What a spawn remarks on about an agent's `[agents.models]` row
+    /// without refusing it.
+    pub fn row_notes(self, config: &HarnessConfig, model: Option<&str>) -> Vec<String> {
+        match self {
+            Harness::ClaudeCode | Harness::Codex => Vec::new(),
+            Harness::OpenCode => opencode::row_notes(&config.opencode, model),
+        }
+    }
+
     /// What is wrong with the harness's `[harness.<name>]` settings for
     /// agents started in `worktree`, where only the harness can tell.
     pub fn config_issues(self, config: &HarnessConfig, worktree: &Path) -> Vec<String> {
@@ -254,6 +263,23 @@ impl Harness {
     /// them — the precondition for a "not projected" finding.
     pub fn projects_definitions(self) -> bool {
         self.projected_dirs().contains(&"agents")
+    }
+
+    /// Whether the harness, started in `worktree`, finds `definition`: its
+    /// projected copy is in the worktree's config dir or the global one.
+    /// Always true for a harness that reads the canonical store itself.
+    pub fn definition_projected(self, worktree: &Path, home: &Path, definition: &str) -> bool {
+        if !self.projects_definitions() {
+            return true;
+        }
+        let file = format!("{definition}.md");
+        [
+            Some(worktree.join(self.config_dir())),
+            self.global_config_dir(home),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|dir| dir.join("agents").join(&file).is_file())
     }
 
     /// Project the canonical asset store (`<canonical_root>/{agents,skills}`)

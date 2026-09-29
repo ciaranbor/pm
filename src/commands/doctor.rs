@@ -88,6 +88,9 @@ pub enum IssueKind {
     /// An agent has a model or permission row its harness refuses to spawn
     /// with.
     AgentRowInvalid,
+    /// An agent's model row names a model its provider's entry does not
+    /// declare; the spawn goes ahead.
+    AgentModelUndeclared,
     /// A harness in use reports a problem with its `[harness.<name>]`
     /// settings.
     HarnessConfigInvalid,
@@ -702,8 +705,9 @@ fn hook_issues_in(project_root: &Path, home: &Path) -> Result<Vec<Issue>> {
 }
 
 /// Main-scope findings about what each harness in use is configured with:
-/// agents it will refuse for want of a model row, and whatever the harness
-/// itself reports about its `[harness.<name>]` settings.
+/// agents it will refuse for want of a model row or remarks on at spawn,
+/// and whatever the harness itself reports about its `[harness.<name>]`
+/// settings.
 fn harness_config_issues(project_root: &Path) -> Result<Vec<Issue>> {
     let (project, global) = agents_configs(project_root)?;
     let mut definitions: Vec<String> = project
@@ -719,11 +723,22 @@ fn harness_config_issues(project_root: &Path) -> Result<Vec<Issue>> {
     definitions.sort();
     definitions.dedup();
 
+    let config = harness_config(Some(project_root));
     let mut issues = Vec::new();
     for definition in definitions {
         let Ok(settings) = resolve_agent_settings(&project, &global, &definition) else {
             continue;
         };
+        for note in settings
+            .harness
+            .row_notes(&config, settings.model.as_deref())
+        {
+            issues.push(Issue {
+                kind: IssueKind::AgentModelUndeclared,
+                message: format!("agent '{definition}': {note}"),
+                fix: Fix::None,
+            });
+        }
         if let Some(dropped) = harness_check::missing_model_row(&settings) {
             issues.push(Issue {
                 kind: IssueKind::AgentModelMissing,
@@ -744,7 +759,6 @@ fn harness_config_issues(project_root: &Path) -> Result<Vec<Issue>> {
         }
     }
 
-    let config = harness_config(Some(project_root));
     let main = paths::main_worktree(project_root);
     for harness in skills::harnesses_in_use(project_root)? {
         for message in harness.config_issues(&config, &main) {
@@ -1424,6 +1438,34 @@ mod tests {
                 "agent 'reviewer' will not spawn: [agents.models] row for an opencode agent \
                  must be `<provider>/<model>[#variant]`; got: qwen"
             ]
+        );
+    }
+
+    #[test]
+    fn an_opencode_model_its_provider_does_not_declare_is_reported() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, _) = server.setup_project_no_tmux(dir.path());
+        use_opencode(&project_path, "reviewer", "opencode v2.0.18");
+        let pm_dir = paths::pm_dir(&project_path);
+        let mut config = ProjectConfig::load(&pm_dir).unwrap();
+        config
+            .agents
+            .models
+            .insert("reviewer".into(), "local/qwen-typo".into());
+        config.harness.opencode.providers = [(
+            "local".to_string(),
+            "models = { qwen = {} }".parse().unwrap(),
+        )]
+        .into();
+        config.save(&pm_dir).unwrap();
+
+        let issues = harness_config_issues(&project_path).unwrap();
+        assert_eq!(
+            messages(&issues, IssueKind::AgentModelUndeclared),
+            ["agent 'reviewer': model 'qwen-typo' is not among those \
+                 [harness.opencode.providers.local] declares (qwen); if it is a typo, every turn \
+                 fails at the endpoint"]
         );
     }
 

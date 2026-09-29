@@ -46,31 +46,45 @@ pub fn fake_opencode(dir: &std::path::Path, answer: &str, exit: i32) -> String {
 /// A [`fake_opencode`] whose n-th invocation in `dir` prints the n-th of
 /// `answers`, and every later one the last.
 pub fn fake_opencode_sequence(dir: &std::path::Path, answers: &[&str], exit: i32) -> String {
+    let scripted: Vec<(&str, i32)> = answers.iter().map(|answer| (*answer, exit)).collect();
+    fake_opencode_scripted(dir, &scripted)
+}
+
+/// A [`fake_opencode_sequence`] whose n-th invocation also exits with the
+/// n-th code.
+pub fn fake_opencode_scripted(dir: &std::path::Path, answers: &[(&str, i32)]) -> String {
     use std::os::unix::fs::PermissionsExt;
     let bin = dir.join("opencode");
     let answer_file = |name: &str| dir.join(format!("answer.{name}"));
-    for stale in (1..).map(|n| answer_file(&n.to_string())) {
-        if std::fs::remove_file(stale).is_err() {
+    let exit_file = |name: &str| dir.join(format!("exit.{name}"));
+    for stale in (1..).map(|n| n.to_string()) {
+        let _ = std::fs::remove_file(exit_file(&stale));
+        if std::fs::remove_file(answer_file(&stale)).is_err() {
             break;
         }
     }
     let (last, earlier) = answers.split_last().expect("at least one answer");
-    for (n, answer) in earlier.iter().enumerate() {
-        std::fs::write(answer_file(&(n + 1).to_string()), format!("{answer}\n"))
+    let write = |name: &str, (answer, exit): &(&str, i32)| {
+        std::fs::write(answer_file(name), format!("{answer}\n"))
             .expect("write fake opencode answer");
+        std::fs::write(exit_file(name), exit.to_string()).expect("write fake opencode exit");
+    };
+    for (n, answer) in earlier.iter().enumerate() {
+        write(&(n + 1).to_string(), answer);
     }
-    std::fs::write(answer_file("last"), format!("{last}\n")).expect("write fake opencode answer");
+    write("last", last);
     let script = format!(
         "#!/bin/sh\nn=1; while [ -e '{log}'.$n ]; do n=$((n+1)); done\n\
          k=$n; [ -e '{log}' ] && mv '{log}' '{log}'.$n && k=$((n+1))\n\
          printf 'OPENCODE_CONFIG=%s\\nOPENCODE_CONFIG_CONTENT=%s\\n' \\\n\
          \"$OPENCODE_CONFIG\" \"$OPENCODE_CONFIG_CONTENT\" > '{env}.tmp' && mv '{env}.tmp' '{env}'\n\
          printf '%s\\n' \"$@\" > '{log}.tmp' && mv '{log}.tmp' '{log}'\n\
-         a='{answer}'.$k; [ -e \"$a\" ] || a='{answer}'.last\n\
-         cat \"$a\"\nexit {exit}\n",
+         a='{answer}'.$k; e='{exit}'.$k; [ -e \"$a\" ] || {{ a='{answer}'.last; e='{exit}'.last; }}\n\
+         cat \"$a\"\nexit \"$(cat \"$e\")\"\n",
         log = dir.join("argv").display(),
         env = dir.join("env").display(),
         answer = dir.join("answer").display(),
+        exit = dir.join("exit").display(),
     );
     std::fs::write(&bin, script).expect("write fake opencode");
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755))

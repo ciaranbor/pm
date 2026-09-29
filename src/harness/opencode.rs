@@ -26,9 +26,10 @@
 //! opencode does not read `.agents/agents/`: definitions are projected to
 //! `<config dir>/agents/` and selected by name at `session.create`. An
 //! unknown name is **silent** — the session runs the built-in prompt — and
-//! no opencode command lists config-defined agents, so `pm doctor` checks the
-//! projected file instead. Skills need no projection (`.agents/skills` is
-//! read directly), and there is no directory or plugin trust gate.
+//! no opencode command lists config-defined agents, so a spawn refuses a
+//! definition whose projected file it cannot find. Skills need no
+//! projection (`.agents/skills` is read directly), and there is no
+//! directory or plugin trust gate.
 //!
 //! Per-agent settings reach opencode through a config file written for
 //! every spawn and named by `OPENCODE_CONFIG`. It is always written, and
@@ -46,7 +47,10 @@
 //! row's provider and the ones pm config defines ([`providers`]). A pinned
 //! model opencode cannot resolve fails the turn with `Model unavailable`
 //! before any request is made; the plugin then stops the loop and reports
-//! it.
+//! the turn's error.
+//!
+//! A resumed session opencode no longer holds is refused by the pin
+//! (`SessionNotFoundError`), and the spawn starts a fresh one instead.
 //!
 //! The `[agents.permissions]` row is opencode's own rule list, a JSON array
 //! such as `[{"action":"edit","resource":"*","effect":"deny"}]`; the last
@@ -55,6 +59,7 @@
 //! agent. With `[harness.opencode] auto = false` pm puts allow rules for its
 //! own state dirs ahead of the row, which can still override them.
 
+mod bounded;
 mod providers;
 pub(super) mod sessions;
 
@@ -101,6 +106,9 @@ const PROMPT_ENV: &str = "PM_APPEND_PROMPT_FILE";
 const TRIP_ENV: &str = "PM_OPENCODE_TRIP_FILE";
 const CONFIG_ENV: &str = "OPENCODE_CONFIG";
 const CONFIG_CONTENT_ENV: &str = "OPENCODE_CONFIG_CONTENT";
+
+/// The `_tag` of opencode's error for a session id its store does not hold.
+const SESSION_NOT_FOUND: &str = "SessionNotFoundError";
 
 /// Removed from pm's own `opencode api` calls. pm often runs inside an
 /// agent: neither that agent's identity nor its opencode config may reach a
@@ -241,17 +249,32 @@ pub(super) fn pre_launch(
         )));
     };
     let model = ModelRef::parse(row)?;
+    if let Some(def) = spec.definition {
+        unprojected_definition(ctx, def, &crate::state::paths::home_dir()?)?;
+    }
     let config = render_config(spec, cfg, row, &model)?;
 
+    let mut notes = Vec::new();
     let session_id = match spec.resume_session {
-        Some(source) => {
-            let id = if spec.fork_session {
-                fork_session(cfg, source)?
-            } else {
-                source.to_string()
-            };
-            pin_model(cfg, &id, &model)?;
+        Some(source) if spec.fork_session => {
+            let id = fork_session(cfg, source)?;
+            if !pin_model(cfg, &id, &model)? {
+                return Err(PmError::Agent(format!(
+                    "opencode forked session {source} as {id}, then did not find {id} to pin \
+                     the model on"
+                )));
+            }
             id
+        }
+        Some(source) => {
+            if pin_model(cfg, source, &model)? {
+                source.to_string()
+            } else {
+                notes.push(format!(
+                    "opencode no longer has session {source}; previous session not resumed"
+                ));
+                create_session(cfg, ctx, spec.definition, &model)?
+            }
         }
         None => create_session(cfg, ctx, spec.definition, &model)?,
     };
@@ -268,23 +291,58 @@ pub(super) fn pre_launch(
     ));
     let path = spawn_file(ctx.project_root, ctx.feature, ctx.agent, "json")?;
     write_atomic(&path, format!("{config:#}\n").as_bytes())?;
+    notes.extend(providers::undeclared_model_note(&cfg.providers, &model));
+    // `pm doctor` covers the providers this agent's row does not name.
+    notes.extend(providers::unset_key_notes(
+        cfg.providers.get_key_value(model.provider),
+        providers::set_in_environment,
+    ));
     env.push((CONFIG_ENV.to_string(), path.to_string_lossy().into_owned()));
     Ok(PreLaunch {
         session_id: Some(session_id),
         env,
         env_remove: vec![CONFIG_CONTENT_ENV.to_string()],
-        // `pm doctor` covers the providers this agent's row does not name.
-        notes: providers::unset_key_notes(
-            cfg.providers.get_key_value(model.provider),
-            providers::set_in_environment,
-        ),
+        notes,
     })
+}
+
+/// Refuse `definition` when opencode, started in the agent's worktree, would
+/// not find it. `pm upgrade` projects into main and the global dir only; a
+/// feature worktree gets main's copy from `pm harness pull`.
+fn unprojected_definition(ctx: &LaunchContext<'_>, definition: &str, home: &Path) -> Result<()> {
+    let opencode = super::Harness::OpenCode;
+    if opencode.definition_projected(ctx.worktree, home, definition) {
+        return Ok(());
+    }
+    let main = crate::state::paths::main_worktree(ctx.project_root);
+    let pull = format!("`pm harness pull {}`", ctx.feature);
+    let fix = if ctx.worktree == main {
+        "run `pm upgrade`".to_string()
+    } else if opencode.definition_projected(&main, home, definition) {
+        format!("run {pull}")
+    } else {
+        format!("run `pm upgrade`, then {pull}")
+    };
+    Err(PmError::Agent(format!(
+        "definition '{definition}' is not projected for opencode, which would run agent '{}' \
+         without its role; {fix}",
+        ctx.agent
+    )))
 }
 
 /// What `pm doctor` reports about `[harness.opencode]` for agents started
 /// in `worktree`.
 pub(super) fn config_issues(cfg: &OpenCodeConfig, worktree: &Path) -> Vec<String> {
     providers::config_issues(cfg, worktree)
+}
+
+/// What is worth remarking on about a model row that a spawn still takes.
+pub(super) fn row_notes(cfg: &OpenCodeConfig, model: Option<&str>) -> Vec<String> {
+    model
+        .and_then(|row| ModelRef::parse(row).ok())
+        .and_then(|model| providers::undeclared_model_note(&cfg.providers, &model))
+        .into_iter()
+        .collect()
 }
 
 /// An `[agents.permissions]` row: opencode's own rule list.
@@ -374,14 +432,19 @@ fn create_session(
     session_id(&api(cfg, &["session.create", "--data", &body])?)
 }
 
-fn pin_model(cfg: &OpenCodeConfig, session: &str, model: &ModelRef<'_>) -> Result<()> {
+/// Pin `model` on `session`; false when opencode has no such session.
+fn pin_model(cfg: &OpenCodeConfig, session: &str, model: &ModelRef<'_>) -> Result<bool> {
     let param = format!("sessionID={session}");
     let body = json!({"model": model.to_json()}).to_string();
-    api(
-        cfg,
-        &["session.switchModel", "--param", &param, "--data", &body],
-    )?;
-    Ok(())
+    let args = ["session.switchModel", "--param", &param, "--data", &body];
+    match try_api(command(cfg, &["api"], &args), &args)? {
+        Ok(_) => Ok(true),
+        Err(refusal) if refusal.tag.as_deref() == Some(SESSION_NOT_FOUND) => Ok(false),
+        Err(refusal) => Err(PmError::Agent(format!(
+            "opencode session.switchModel failed: {}",
+            refusal.message
+        ))),
+    }
 }
 
 fn fork_session(cfg: &OpenCodeConfig, source: &str) -> Result<String> {
@@ -427,26 +490,35 @@ fn api(cfg: &OpenCodeConfig, args: &[&str]) -> Result<Value> {
 
 /// Run an `opencode api` command line for the operation `args` names and
 /// read its answer.
-fn run_api(mut command: Command, args: &[&str]) -> Result<Value> {
+fn run_api(command: Command, args: &[&str]) -> Result<Value> {
     let operation = args.first().copied().unwrap_or_default();
-    let out = command.output().map_err(|e| {
-        PmError::Agent(format!(
-            "could not run `{}` for {operation}: {e}",
-            command.get_program().to_string_lossy()
-        ))
-    })?;
+    try_api(command, args)?.map_err(|refusal| {
+        PmError::Agent(format!("opencode {operation} failed: {}", refusal.message))
+    })
+}
+
+/// What opencode answered a call it refused with: the `_tag` of its error
+/// object, when it printed one, and the message to show.
+#[derive(Debug)]
+struct Refusal {
+    tag: Option<String>,
+    message: String,
+}
+
+/// [`run_api`], with a call opencode refused handed back instead of
+/// reported, for a caller that acts on the refusal.
+fn try_api(mut command: Command, args: &[&str]) -> Result<std::result::Result<Value, Refusal>> {
+    let operation = args.first().copied().unwrap_or_default();
+    let out = bounded::output(&mut command, operation, bounded::CALL)?;
     let stdout = String::from_utf8_lossy(&out.stdout);
     if !out.status.success() {
-        return Err(PmError::Agent(format!(
-            "opencode {operation} failed: {}",
-            api_error(&stdout, &String::from_utf8_lossy(&out.stderr))
-        )));
+        return Ok(Err(refusal(&stdout, &String::from_utf8_lossy(&out.stderr))));
     }
     // A call that succeeds with nothing to return prints nothing.
     if stdout.trim().is_empty() {
-        return Ok(Value::Null);
+        return Ok(Ok(Value::Null));
     }
-    serde_json::from_str(stdout.trim()).map_err(|e| {
+    serde_json::from_str(stdout.trim()).map(Ok).map_err(|e| {
         PmError::Agent(format!(
             "opencode {operation} returned unreadable output ({e}): {}",
             stdout.trim()
@@ -454,22 +526,25 @@ fn run_api(mut command: Command, args: &[&str]) -> Result<Value> {
     })
 }
 
-/// The `message` of the error object opencode prints on stdout, else
-/// whatever it printed.
-fn api_error(stdout: &str, stderr: &str) -> String {
+/// The error object opencode prints on stdout, else whatever it printed.
+fn refusal(stdout: &str, stderr: &str) -> Refusal {
     stdout
         .lines()
         .find_map(|line| {
-            serde_json::from_str::<Value>(line)
-                .ok()?
-                .get("message")?
-                .as_str()
-                .map(str::to_string)
+            let error = serde_json::from_str::<Value>(line).ok()?;
+            Some(Refusal {
+                message: error.get("message")?.as_str()?.to_string(),
+                tag: error
+                    .get("_tag")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            })
         })
-        .unwrap_or_else(|| {
-            format!("{} {}", stdout.trim(), stderr.trim())
+        .unwrap_or_else(|| Refusal {
+            tag: None,
+            message: format!("{} {}", stdout.trim(), stderr.trim())
                 .trim()
-                .to_string()
+                .to_string(),
         })
 }
 
@@ -496,32 +571,36 @@ fn parse_version(output: &str) -> Option<(u32, u32, u32)> {
     Some((nums.next()??, nums.next()??, nums.next()??))
 }
 
-/// The installed version's raw string, or `None` when opencode can't be
-/// run. `--version` starts no server, so it needs no `--standalone`.
-fn installed_version(cfg: &OpenCodeConfig) -> Option<String> {
-    let out = Command::new(binary(cfg))
-        .arg("--version")
-        .stdin(Stdio::null())
-        .output()
-        .ok()?;
+/// The installed version's raw string, or why opencode could not be asked.
+/// `--version` starts no server, so it needs no `--standalone`.
+fn installed_version(cfg: &OpenCodeConfig) -> std::result::Result<String, String> {
+    let mut command = Command::new(binary(cfg));
+    command.arg("--version").stdin(Stdio::null());
+    let unrunnable = || format!("`{}` could not be run", binary(cfg));
+    let out = bounded::run(&mut command, bounded::CALL).map_err(|failure| match failure {
+        bounded::Failure::TimedOut { .. } => failure.describe("--version"),
+        bounded::Failure::Unrunnable { .. } => unrunnable(),
+    })?;
     if !out.status.success() {
-        return None;
+        return Err(unrunnable());
     }
-    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 /// Whether the installed opencode is at least [`MIN_VERSION`]; `None` when
 /// it can't be probed.
 pub(super) fn version_supported(cfg: &OpenCodeConfig) -> Option<bool> {
-    Some(parse_version(&installed_version(cfg)?)? >= MIN_VERSION)
+    Some(parse_version(&installed_version(cfg).ok()?)? >= MIN_VERSION)
 }
 
 pub(super) fn unusable_reason(cfg: &OpenCodeConfig) -> Option<String> {
-    let Some(found) = installed_version(cfg) else {
-        return Some(format!(
-            "`{}` could not be run; install opencode or set `[harness.opencode] binary`",
-            binary(cfg)
-        ));
+    let found = match installed_version(cfg) {
+        Ok(found) => found,
+        Err(reason) => {
+            return Some(format!(
+                "{reason}; install opencode or set `[harness.opencode] binary`"
+            ));
+        }
     };
     match parse_version(&found) {
         Some(version) if version >= MIN_VERSION => None,
@@ -579,6 +658,13 @@ mod tests {
             worktree: dir,
             agent,
         }
+    }
+
+    /// `definition` as `pm upgrade` projects it into `worktree`.
+    fn project_definition(worktree: &Path, definition: &str) {
+        let agents = worktree.join(CONFIG_DIR).join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(agents.join(format!("{definition}.md")), "# stub").unwrap();
     }
 
     fn env_of<'a>(pre: &'a PreLaunch, key: &str) -> Option<&'a str> {
@@ -701,7 +787,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().join("proj");
         let worktree = project.join("login");
-        std::fs::create_dir_all(&worktree).unwrap();
+        project_definition(&worktree, "rev");
         let cfg = fake_opencode(dir.path(), r#"{"data":{"id":"ses_new","agent":"rev"}}"#, 0);
 
         let pre = pre_launch(
@@ -1015,6 +1101,207 @@ mod tests {
         assert_eq!(
             body_of(&calls[0]),
             json!({"model": {"providerID": "anthropic", "id": "claude-opus-5"}})
+        );
+    }
+
+    #[test]
+    fn resuming_a_session_opencode_no_longer_has_starts_a_fresh_one_and_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        project_definition(dir.path(), "reviewer");
+        // What opencode 2.0.18 answers for a session its store does not hold.
+        let missing = "{\"_tag\":\"SessionNotFoundError\",\"sessionID\":\"ses_gone\",\
+                       \"message\":\"Session not found: ses_gone\"}\nHTTP 404 Not Found";
+        let cfg = OpenCodeConfig {
+            binary: Some(crate::testing::fake_opencode_scripted(
+                dir.path(),
+                &[(missing, 1), (r#"{"data":{"id":"ses_new"}}"#, 0)],
+            )),
+            ..Default::default()
+        };
+
+        let pre = pre_launch(
+            &ctx(dir.path(), "reviewer"),
+            &SpawnSpec {
+                definition: Some("reviewer"),
+                resume_session: Some("ses_gone"),
+                model: Some("local/qwen"),
+                ..Default::default()
+            },
+            &cfg,
+        )
+        .unwrap();
+
+        assert_eq!(pre.session_id.as_deref(), Some("ses_new"));
+        assert_eq!(
+            pre.notes,
+            ["opencode no longer has session ses_gone; previous session not resumed"]
+        );
+        let calls = fake_opencode_calls(dir.path());
+        assert_eq!(calls[1][2], "session.create");
+        assert_eq!(body_of(&calls[1])["agent"], "reviewer");
+    }
+
+    #[test]
+    fn a_resume_opencode_refuses_for_another_reason_is_reported_not_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = fake_opencode(
+            dir.path(),
+            "{\"_tag\":\"InvalidRequestError\",\"message\":\"database is locked\"}",
+            1,
+        );
+        let err = pre_launch(
+            &ctx(dir.path(), "reviewer"),
+            &SpawnSpec {
+                resume_session: Some("ses_x"),
+                model: Some("local/qwen"),
+                ..Default::default()
+            },
+            &cfg,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.ends_with("opencode session.switchModel failed: database is locked"),
+            "{err}"
+        );
+        assert_eq!(fake_opencode_calls(dir.path()).len(), 1);
+    }
+
+    #[test]
+    fn a_definition_opencode_would_not_find_is_refused_with_the_fix_for_its_worktree() {
+        // opencode runs an unknown agent name on its built-in prompt.
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = fake_opencode(dir.path(), r#"{"data":{"id":"ses_new"}}"#, 0);
+        let main = dir.path().join("main");
+        let login = dir.path().join("login");
+        let spec = SpawnSpec {
+            definition: Some("def"),
+            model: Some("local/qwen"),
+            ..Default::default()
+        };
+        let refusal = |feature: &str, worktree: &Path| {
+            let ctx = LaunchContext {
+                project_root: dir.path(),
+                feature,
+                worktree,
+                agent: "frontend-rev",
+            };
+            pre_launch(&ctx, &spec, &cfg).unwrap_err().to_string()
+        };
+        let refused = "definition 'def' is not projected for opencode, which would run agent \
+                       'frontend-rev' without its role; ";
+
+        // `pm upgrade` projects into main, never into a feature worktree.
+        let err = refusal("main", &main);
+        assert!(
+            err.ends_with(&format!("{refused}run `pm upgrade`")),
+            "{err}"
+        );
+        let err = refusal("login", &login);
+        assert!(
+            err.ends_with(&format!(
+                "{refused}run `pm upgrade`, then `pm harness pull login`"
+            )),
+            "{err}"
+        );
+        project_definition(&main, "def");
+        let err = refusal("login", &login);
+        assert!(
+            err.ends_with(&format!("{refused}run `pm harness pull login`")),
+            "{err}"
+        );
+        assert!(fake_opencode_calls(dir.path()).is_empty());
+
+        project_definition(&login, "def");
+        let ctx = LaunchContext {
+            project_root: dir.path(),
+            feature: "login",
+            worktree: &login,
+            agent: "frontend-rev",
+        };
+        pre_launch(&ctx, &spec, &cfg).unwrap();
+    }
+
+    #[test]
+    fn a_model_its_provider_does_not_declare_is_remarked_on_not_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = fake_opencode(dir.path(), r#"{"data":{"id":"ses_new"}}"#, 0);
+        cfg.providers = [(
+            "local".to_string(),
+            "models = { \"Qwen3.8-27B-4bit\" = {} }".parse().unwrap(),
+        )]
+        .into();
+        let spawn = |row| {
+            pre_launch(
+                &ctx(dir.path(), "reviewer"),
+                &SpawnSpec {
+                    model: Some(row),
+                    ..Default::default()
+                },
+                &cfg,
+            )
+            .unwrap()
+            .notes
+        };
+        assert_eq!(
+            spawn("local/Qwen3.8-27B-4bi"),
+            [
+                "model 'Qwen3.8-27B-4bi' is not among those [harness.opencode.providers.local] \
+              declares (Qwen3.8-27B-4bit); if it is a typo, every turn fails at the endpoint"
+            ]
+        );
+        // Written into the config all the same: the endpoint may serve it.
+        assert_eq!(
+            written_config(
+                &pre_launch(
+                    &ctx(dir.path(), "reviewer"),
+                    &SpawnSpec {
+                        model: Some("local/Qwen3.8-27B-4bi"),
+                        ..Default::default()
+                    },
+                    &cfg,
+                )
+                .unwrap()
+            )["providers"]["local"]["models"]["Qwen3.8-27B-4bi"],
+            json!({})
+        );
+        assert!(spawn("local/Qwen3.8-27B-4bit").is_empty());
+    }
+
+    #[test]
+    fn a_fork_opencode_cannot_then_find_to_pin_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = OpenCodeConfig {
+            binary: Some(crate::testing::fake_opencode_scripted(
+                dir.path(),
+                &[
+                    (r#"{"data":{"id":"ses_fork"}}"#, 0),
+                    (
+                        r#"{"_tag":"SessionNotFoundError","message":"Session not found: ses_fork"}"#,
+                        1,
+                    ),
+                ],
+            )),
+            ..Default::default()
+        };
+        let err = pre_launch(
+            &ctx(dir.path(), "reviewer-2"),
+            &SpawnSpec {
+                resume_session: Some("ses_source"),
+                fork_session: true,
+                model: Some("local/qwen"),
+                ..Default::default()
+            },
+            &cfg,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.ends_with(
+                "opencode forked session ses_source as ses_fork, then did not find ses_fork to \
+                 pin the model on"
+            ),
+            "{err}"
         );
     }
 

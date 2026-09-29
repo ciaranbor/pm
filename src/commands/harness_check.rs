@@ -15,6 +15,7 @@ use crate::state::project::{
     AgentSettings, AgentsConfig, GlobalConfig, HarnessConfig, ProjectConfig, WILDCARD_AGENT,
     resolve_agent_settings, resolve_harness_config,
 };
+use crate::state::workflow::is_vanilla;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProblemKind {
@@ -140,6 +141,7 @@ pub fn check_team(project_root: &Path, workflow: &str, team: &[String]) -> Resul
         &config.agents,
         &global.agents,
         &resolve_harness_config(&config.harness, &global.harness),
+        &paths::main_worktree(project_root),
         &paths::home_dir()?,
         team,
     )?;
@@ -173,6 +175,7 @@ fn team_problems(
     project: &AgentsConfig,
     global: &AgentsConfig,
     config: &HarnessConfig,
+    main: &Path,
     home: &Path,
     team: &[String],
 ) -> Result<TeamProblems> {
@@ -205,6 +208,12 @@ fn team_problems(
                 for issue in row_issues(&settings) {
                     out.lines.push(format!("{member} ({harness}): {issue}"));
                 }
+                if !is_vanilla(member) && !harness.definition_projected(main, home, member) {
+                    out.lines.push(format!(
+                        "{member} ({harness}): definition '{member}' is not projected for \
+                         {harness}, so the agent would start without its role (run `pm upgrade`)"
+                    ));
+                }
             }
         }
         if out.lines.len() > before {
@@ -230,6 +239,20 @@ mod tests {
         home
     }
 
+    /// A main worktree with every test member's definition projected for
+    /// every harness that projects them.
+    fn projected_main(dir: &Path) -> std::path::PathBuf {
+        let main = dir.join("main");
+        for harness in Harness::SUPPORTED {
+            let agents = main.join(harness.config_dir()).join("agents");
+            std::fs::create_dir_all(&agents).unwrap();
+            for member in ["implementer", "reviewer", "qa"] {
+                std::fs::write(agents.join(format!("{member}.md")), "# stub").unwrap();
+            }
+        }
+        main
+    }
+
     fn mixed_agents() -> AgentsConfig {
         let mut agents = AgentsConfig::default();
         agents.harness.insert("reviewer".into(), "codex".into());
@@ -253,6 +276,7 @@ mod tests {
             &mixed_agents(),
             &AgentsConfig::default(),
             &config,
+            &projected_main(dir.path()),
             &home,
             &team(&["implementer", "reviewer", "qa"]),
         )
@@ -293,6 +317,7 @@ mod tests {
             &agents,
             &AgentsConfig::default(),
             &config,
+            &projected_main(dir.path()),
             &home,
             &team(&["implementer", "reviewer", "qa"]),
         )
@@ -311,6 +336,7 @@ mod tests {
             &agents,
             &AgentsConfig::default(),
             &HarnessConfig::default(),
+            &projected_main(dir.path()),
             &home,
             &team(&["implementer", "reviewer"]),
         )
@@ -346,6 +372,7 @@ mod tests {
             &agents,
             &AgentsConfig::default(),
             &config,
+            &projected_main(dir.path()),
             &home,
             &team(&["reviewer", "qa"]),
         )
@@ -368,6 +395,52 @@ mod tests {
             "{:?}",
             problems.lines
         );
+    }
+
+    #[test]
+    fn a_definition_the_harness_would_not_find_is_a_problem_of_its_member() {
+        let dir = tempdir().unwrap();
+        let home = home_with_hooks(dir.path());
+        let config = opencode_reporting(dir.path(), "opencode v2.0.18");
+        let mut agents = mixed_agents();
+        agents.models.insert("qa".into(), "local/qwen".into());
+        agents.models.insert("default".into(), "local/qwen".into());
+        agents.harness.insert("default".into(), "opencode".into());
+        agents.harness.insert("reviewer".into(), "opencode".into());
+        agents.models.insert("reviewer".into(), "local/qwen".into());
+        let main = dir.path().join("main");
+        let check = |members: &[&str]| {
+            team_problems(
+                &agents,
+                &AgentsConfig::default(),
+                &config,
+                &main,
+                &home,
+                &team(members),
+            )
+            .unwrap()
+        };
+
+        // Launched without its role; the vanilla name has no definition.
+        assert_eq!(
+            check(&["qa", "default"]).lines,
+            [
+                "qa (opencode): definition 'qa' is not projected for opencode, so the agent would \
+              start without its role (run `pm upgrade`)"
+            ]
+        );
+
+        // Either tier's projection is found.
+        let project = main.join(".opencode/agents");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("qa.md"), "# stub").unwrap();
+        let global = Harness::OpenCode
+            .global_config_dir(&home)
+            .unwrap()
+            .join("agents");
+        std::fs::create_dir_all(&global).unwrap();
+        std::fs::write(global.join("reviewer.md"), "# stub").unwrap();
+        assert_eq!(check(&["qa", "reviewer"]), TeamProblems::default());
     }
 
     #[test]
@@ -405,6 +478,7 @@ mod tests {
             &agents,
             &AgentsConfig::default(),
             &config,
+            &projected_main(dir.path()),
             &home,
             &team(&["qa"]),
         )
