@@ -294,6 +294,17 @@ pub fn resolve_harness_config(project: &HarnessConfig, global: &HarnessConfig) -
     }
 }
 
+/// The `[harness.*]` settings in effect for `project_root`: the project's
+/// over `global`, or `global` alone outside a project and for a project
+/// whose config cannot be read.
+pub fn harness_config_in(project_root: Option<&Path>, global: &HarnessConfig) -> HarnessConfig {
+    let project = project_root
+        .and_then(|root| ProjectConfig::load(&paths::pm_dir(root)).ok())
+        .map(|config| config.harness)
+        .unwrap_or_default();
+    resolve_harness_config(&project, global)
+}
+
 fn layered_opt(project: &Option<String>, global: &Option<String>) -> Option<String> {
     project
         .as_ref()

@@ -161,23 +161,34 @@ fn harness_flag_rejects_unsupported_harness() {
 }
 
 #[test]
-fn claude_code_only_commands_refuse_the_other_harnesses() {
+fn settings_are_refused_for_the_other_harnesses() {
     for harness in ["codex", "opencode"] {
-        for (args, what) in [
-            (vec!["settings", "list"], "per-feature settings files"),
-            (vec!["export"], "session export"),
-            (vec!["import", "sessions.tar.gz"], "session import"),
-        ] {
-            pm().arg("harness")
-                .args(&args)
-                .args(["--harness", harness])
-                .assert()
-                .failure()
-                .stderr(predicate::str::contains(format!(
-                    "{what} are not supported for {harness}"
-                )));
-        }
+        pm().args(["harness", "settings", "list", "--harness", harness])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(format!(
+                "per-feature settings files are not supported for {harness}"
+            )));
     }
+}
+
+#[test]
+fn session_commands_run_for_the_other_harnesses() {
+    let home = tempdir().unwrap();
+    pm().current_dir(home.path())
+        .env("HOME", home.path())
+        .env_remove("CODEX_HOME")
+        .args([
+            "harness",
+            "migrate",
+            "--from",
+            "/old/path",
+            "--harness",
+            "codex",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Nothing to migrate"));
 }
 
 #[test]

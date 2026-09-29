@@ -5,6 +5,10 @@
 //! spawn chokepoint, the asset installer, the hooks, and the registry stay
 //! harness-neutral. Per-agent settings that only the harness can interpret
 //! (model id, permission mode) are passed through verbatim.
+//!
+//! Session portability (`pm harness migrate|export|import`) is three seams
+//! over each harness's own store. All of them preserve session ids, so a
+//! registry entry stays valid across a move; none opens a harness's database.
 
 mod claude_code;
 mod codex;
@@ -326,6 +330,127 @@ impl Harness {
             Harness::ClaudeCode | Harness::OpenCode => None,
             Harness::Codex => Some(codex::session_start_output(context)),
         }
+    }
+
+    /// The harness's name in an export's file and root directory names.
+    pub fn export_tag(self) -> &'static str {
+        match self {
+            Harness::ClaudeCode => "claude",
+            Harness::Codex => "codex",
+            Harness::OpenCode => "opencode",
+        }
+    }
+
+    /// Make the sessions recorded at `from` resumable at `to`, which must
+    /// exist. Sessions named in `in_use` have an agent running on them and
+    /// are left alone by a harness that would rebind them in place.
+    pub fn migrate_sessions(
+        self,
+        store: &SessionStore<'_>,
+        from: &Path,
+        to: &Path,
+        in_use: &[InUse],
+    ) -> Result<Vec<String>> {
+        match self {
+            Harness::ClaudeCode => {
+                claude_code::sessions::migrate_sessions(&store.claude_base(), from, to)
+            }
+            Harness::Codex => Ok(vec![codex::sessions::MIGRATE_NOTE.to_string()]),
+            Harness::OpenCode => {
+                opencode::sessions::migrate(&store.config.opencode, from, to, in_use)
+            }
+        }
+    }
+
+    /// Write the sessions recorded at `dir` into `staging`, which is created
+    /// when there are any. Returns what was written, for the report; `None`
+    /// when `dir` has no sessions.
+    pub fn export_sessions(
+        self,
+        store: &SessionStore<'_>,
+        dir: &Path,
+        staging: &Path,
+    ) -> Result<Option<String>> {
+        match self {
+            Harness::ClaudeCode => {
+                claude_code::sessions::export(&store.claude_base(), dir, staging)
+            }
+            Harness::Codex => codex::sessions::export(&codex::home_dir(store.home), dir, staging),
+            Harness::OpenCode => opencode::sessions::export(&store.config.opencode, dir, staging),
+        }
+    }
+
+    /// Install what [`export_sessions`](Self::export_sessions) wrote to
+    /// `staging` for the directory `from` as sessions of `to`. Never
+    /// replaces a session the store already has.
+    pub fn import_sessions(
+        self,
+        store: &SessionStore<'_>,
+        staging: &Path,
+        from: &Path,
+        to: &Path,
+    ) -> Result<ImportOutcome> {
+        match self {
+            Harness::ClaudeCode => {
+                claude_code::sessions::import(&store.claude_base(), staging, from, to)
+            }
+            Harness::Codex => codex::sessions::import(&codex::home_dir(store.home), staging),
+            Harness::OpenCode => opencode::sessions::import(&store.config.opencode, staging, to),
+        }
+    }
+}
+
+/// How the session seams reach a harness's store.
+#[derive(Debug, Clone, Copy)]
+pub struct SessionStore<'a> {
+    /// The user's home; a harness with a file store derives it from here.
+    pub home: &'a Path,
+    /// The `[harness.*]` settings in effect where the sessions belong.
+    pub config: &'a HarnessConfig,
+}
+
+impl SessionStore<'_> {
+    fn claude_base(&self) -> PathBuf {
+        self.home.join(claude_code::CONFIG_DIR)
+    }
+}
+
+/// A session an agent is running on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InUse {
+    pub session_id: String,
+    /// `<scope>/<agent>`, for the report.
+    pub agent: String,
+}
+
+/// What importing one directory's sessions did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportOutcome {
+    /// Nothing was written, and why.
+    Skipped(String),
+    Imported {
+        /// What was imported, for the report.
+        detail: String,
+        notes: Vec<String>,
+    },
+}
+
+/// `imported` of `total` sessions were new to the store; the rest were
+/// already there and left untouched.
+pub(crate) fn per_session_outcome(imported: usize, total: usize) -> ImportOutcome {
+    if total == 0 {
+        return ImportOutcome::Skipped("no sessions in the export".to_string());
+    }
+    if imported == 0 {
+        return ImportOutcome::Skipped(format!("all {total} session(s) already exist locally"));
+    }
+    let detail = match total - imported {
+        0 => format!("{imported} session(s)"),
+        present => format!("{imported} session(s), {present} already present"),
+    };
+    ImportOutcome::Imported {
+        detail,
+        notes: Vec::new(),
     }
 }
 

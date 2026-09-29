@@ -2,9 +2,12 @@ use clap::CommandFactory;
 
 use crate::cli::*;
 use pm::commands;
+use pm::commands::harness_export::ExportParams;
+use pm::commands::harness_migrate::MigrateParams;
 use pm::error::PmError;
 use pm::harness::Harness;
 use pm::state::paths;
+use pm::state::project::GlobalConfig;
 use pm::tmux;
 
 fn resolve_feature_name(
@@ -484,7 +487,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                             from: from.as_deref(),
                             workflow: workflow.as_deref(),
                             tmux_server: server,
-                            session_store: None,
+                            home: None,
                         })?;
                     println!("Adopted feature '{feat_name}'");
                     Ok(())
@@ -850,9 +853,7 @@ fn optional_project_root() -> pm::error::Result<Option<std::path::PathBuf>> {
     }
 }
 
-/// The settings and session commands only exist for Claude Code: the other
-/// harnesses have no per-feature settings files, and pm does not manage
-/// their sessions.
+/// Per-feature settings files only exist for Claude Code.
 fn claude_code_only(harness: Harness, what: &str) -> pm::error::Result<()> {
     match harness {
         Harness::ClaudeCode => Ok(()),
@@ -1002,8 +1003,16 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
         }
         HarnessCommands::Migrate { from, harness } => {
             let cwd = std::env::current_dir()?;
-            claude_code_only(harness, "session migration")?;
-            let messages = commands::claude_migrate::migrate_sessions(&from, &cwd, None)?;
+            let project_root = optional_project_root()?;
+            let messages = commands::harness_migrate::migrate(&MigrateParams {
+                harness,
+                from: &from,
+                to: &cwd,
+                project_root: project_root.as_deref(),
+                home: &paths::home_dir()?,
+                global: &GlobalConfig::load_or_default().harness,
+                tmux_server: tmux_server_from_env().as_deref(),
+            })?;
             for msg in messages {
                 println!("{msg}");
             }
@@ -1014,29 +1023,33 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
             output,
             harness,
         } => {
-            let projects_dir = paths::global_projects_dir()?;
             let project_root = if all {
                 None
             } else {
                 Some(paths::find_project_root(&std::env::current_dir()?)?)
             };
-            claude_code_only(harness, "session export")?;
-            let (_, messages) = commands::claude_export::export(
-                project_root.as_deref(),
-                &projects_dir,
+            let (_, messages) = commands::harness_export::export(&ExportParams {
+                harness,
+                project_root: project_root.as_deref(),
+                projects_dir: &paths::global_projects_dir()?,
                 all,
-                output.as_deref(),
-                None,
-            )?;
+                output: output.as_deref(),
+                home: &paths::home_dir()?,
+                global: &GlobalConfig::load_or_default().harness,
+            })?;
             for msg in messages {
                 println!("{msg}");
             }
             Ok(())
         }
         HarnessCommands::Import { tarball, harness } => {
-            let projects_dir = paths::global_projects_dir()?;
-            claude_code_only(harness, "session import")?;
-            let messages = commands::claude_import::import(&tarball, &projects_dir, None)?;
+            let messages = commands::harness_import::import(
+                harness,
+                &tarball,
+                &paths::global_projects_dir()?,
+                &paths::home_dir()?,
+                &GlobalConfig::load_or_default().harness,
+            )?;
             for msg in messages {
                 println!("{msg}");
             }

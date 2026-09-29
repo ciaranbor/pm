@@ -19,7 +19,7 @@ pub fn register(
     projects_dir: &Path,
     move_repo: bool,
     tmux_server: Option<&str>,
-    claude_base: Option<&Path>,
+    home: Option<&Path>,
 ) -> Result<()> {
     // Validate the repo path exists and is a git repo
     let repo_path = repo_path.canonicalize().map_err(|_| {
@@ -100,14 +100,7 @@ pub fn register(
 
     // Migrate Claude Code sessions from original repo path to new main path
     let new_main = paths::main_worktree(&wrapper_dir);
-    match super::claude_migrate::migrate_sessions(&repo_path, &new_main, claude_base) {
-        Ok(msgs) => {
-            for msg in msgs {
-                eprintln!("{msg}");
-            }
-        }
-        Err(e) => eprintln!("Warning: Claude session migration failed: {e}"),
-    }
+    super::harness_migrate::carry_sessions(&repo_path, &new_main, home);
 
     // Create .pm/ structure
     let pm_dir = paths::pm_dir(&wrapper_dir);
@@ -481,7 +474,7 @@ mod tests {
         let projects_dir = dir.path().join("registry");
 
         // Set up fake Claude session data keyed to the original repo path
-        let claude_base = dir.path().join("claude");
+        let claude_base = dir.path().join(".claude");
         let repo_canonical = repo_path.canonicalize().unwrap();
         let old_key = repo_canonical.to_string_lossy().replace('/', "-");
         let old_session_dir = claude_base.join("projects").join(&old_key);
@@ -498,7 +491,7 @@ mod tests {
             &projects_dir,
             false,
             server.name(),
-            Some(claude_base.as_path()),
+            Some(dir.path()),
         )
         .unwrap();
 
@@ -522,7 +515,7 @@ mod tests {
         let projects_dir = dir.path().join("registry");
 
         // Set up fake Claude session data keyed to the original repo path
-        let claude_base = dir.path().join("claude");
+        let claude_base = dir.path().join(".claude");
         let repo_canonical = repo_path.canonicalize().unwrap();
         let old_key = repo_canonical.to_string_lossy().replace('/', "-");
         let old_session_dir = claude_base.join("projects").join(&old_key);
@@ -539,7 +532,7 @@ mod tests {
             &projects_dir,
             true,
             server.name(),
-            Some(claude_base.as_path()),
+            Some(dir.path()),
         )
         .unwrap();
 

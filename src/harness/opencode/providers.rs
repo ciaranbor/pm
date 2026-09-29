@@ -32,7 +32,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
-use super::{CONFIG_ENV, ModelRef, api_command};
+use super::{CONFIG_ENV, ModelRef, command};
 use crate::error::{PmError, Result};
 use crate::state::project::OpenCodeConfig;
 
@@ -248,7 +248,7 @@ fn merged_config_issues(
     )]));
     std::fs::write(file.path(), config.to_string()).ok()?;
 
-    let out = api_command(cfg, &["config.get"])
+    let out = command(cfg, &["api"], &["config.get"])
         .env(CONFIG_ENV, file.path())
         .current_dir(worktree)
         .output()

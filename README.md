@@ -298,8 +298,8 @@ unattended:
   turn. `pm doctor` reports a running agent that has recorded no session
   id after a grace period; restart it with `pm agent restart <name>`.
 - `pm harness probe --harness codex` checks the installed version (0.156.0
-  or newer, the first with `--no-daemon`). `pm harness
-  settings|migrate|export|import` are Claude Code only.
+  or newer, the first with `--no-daemon`). `pm harness settings` is Claude
+  Code only.
 
 ### opencode agents
 
@@ -413,8 +413,11 @@ harnesses; what differs:
   file of its own named by `OPENCODE_CONFIG`. An agent never inherits
   `OPENCODE_CONFIG` or `OPENCODE_CONFIG_CONTENT` from the shell that spawned
   it.
+- **Moved worktree.** Stop the agent, then run `pm harness migrate --harness
+  opencode --from <old path>` in the new directory; opencode cannot resume
+  a session whose directory is gone.
 - `pm harness probe --harness opencode` checks the installed version. `pm
-  harness settings|migrate|export|import` are Claude Code only.
+  harness settings` is Claude Code only.
 
 ### Agents as never-idle message processors
 

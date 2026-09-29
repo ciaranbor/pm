@@ -1,6 +1,8 @@
 //! Claude Code: `claude --agent <def> …`, reading definitions and skills
 //! from `.claude/{agents,skills}` (never from `.agents/`).
 
+pub(super) mod sessions;
+
 use std::path::Path;
 
 use crate::error::Result;
