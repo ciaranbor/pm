@@ -184,12 +184,12 @@ pub fn feat_rename_in(
             stopped.push((agent, processes));
         }
     }
-    let all: Vec<u32> = stopped.iter().flat_map(|(_, pids)| pids.clone()).collect();
+    let all: Vec<tmux::Process> = stopped.iter().flat_map(|(_, ps)| ps.clone()).collect();
     let left = tmux::wait_for_exit(&all, EXIT_WAIT);
     let _ = crate::state::runtime::remove_scope(project_root, old_name);
     let lingering: Vec<String> = stopped
         .iter()
-        .filter(|(_, pids)| pids.iter().any(|pid| left.contains(pid)))
+        .filter(|(_, ps)| ps.iter().any(|p| left.contains(p)))
         .map(|(agent, _)| {
             format!(
                 "Warning: agent '{agent}' had not exited after {}s; its session was carried \
