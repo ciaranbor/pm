@@ -27,9 +27,9 @@ pub struct FeatAdoptParams<'a> {
     pub workflow: Option<&'a str>,
     /// Allows tests to use an isolated tmux server. Pass `None` in production.
     pub tmux_server: Option<&'a str>,
-    /// Root of the harness's session store (`~/.claude` for claude-code),
-    /// for migration. `None` uses the real one.
-    pub session_store: Option<&'a Path>,
+    /// The home holding the session store, for migration. `None` uses the
+    /// user's.
+    pub home: Option<&'a Path>,
 }
 
 /// Adopt an existing branch as a pm feature: worktree + tmux session + state file.
@@ -169,18 +169,7 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
         // Always use the original --from path for migration since claude
         // sessions are keyed by the original path, not the backup location.
         if let Some(old_path) = params.from {
-            match super::claude_migrate::migrate_sessions(
-                old_path,
-                &worktree_path,
-                params.session_store,
-            ) {
-                Ok(msgs) => {
-                    for msg in msgs {
-                        eprintln!("{msg}");
-                    }
-                }
-                Err(e) => eprintln!("Warning: Claude session migration failed: {e}"),
-            }
+            super::harness_migrate::carry_sessions(old_path, &worktree_path, params.home);
         }
 
         // Step 2.7: Enqueue the initial context as a message to each
@@ -271,7 +260,7 @@ mod tests {
             from: None,
             workflow: None,
             tmux_server,
-            session_store: None,
+            home: None,
         }
     }
 
@@ -575,7 +564,7 @@ mod tests {
         create_branch(&project_path, "login");
 
         // Set up fake Claude session data keyed to some old path
-        let claude_base = dir.path().join("claude");
+        let claude_base = dir.path().join(".claude");
         let old_path = std::path::Path::new("/tmp/old-repo");
         let old_key = old_path.to_string_lossy().replace('/', "-");
         let old_session_dir = claude_base.join("projects").join(&old_key);
@@ -588,7 +577,7 @@ mod tests {
 
         feat_adopt(&FeatAdoptParams {
             from: Some(old_path),
-            session_store: Some(claude_base.as_path()),
+            home: Some(dir.path()),
             ..default_adopt_params(&project_path, &projects_dir, "login", server.name())
         })
         .unwrap();
@@ -675,7 +664,7 @@ mod tests {
         assert!(old_worktree.exists());
 
         // Set up fake Claude session data keyed to the old worktree path
-        let claude_base = dir.path().join("claude");
+        let claude_base = dir.path().join(".claude");
         let old_key = old_worktree.to_string_lossy().replace('/', "-");
         let old_session_dir = claude_base.join("projects").join(&old_key);
         std::fs::create_dir_all(&old_session_dir).unwrap();
@@ -688,7 +677,7 @@ mod tests {
         // This should succeed despite the branch already having a worktree
         feat_adopt(&FeatAdoptParams {
             from: Some(old_worktree.as_path()),
-            session_store: Some(claude_base.as_path()),
+            home: Some(dir.path()),
             ..default_adopt_params(&project_path, &projects_dir, "login", server.name())
         })
         .unwrap();

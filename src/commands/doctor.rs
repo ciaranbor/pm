@@ -10,7 +10,7 @@ use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
 use crate::state::project::{
     AgentsConfig, GlobalConfig, HarnessConfig, ProjectConfig, ProjectEntry, WILDCARD_AGENT,
-    resolve_agent_settings, resolve_harness_config,
+    harness_config_in, resolve_agent_settings,
 };
 use crate::state::workflow;
 use crate::{gh, git, tmux};
@@ -602,15 +602,9 @@ fn baseline_capability_warnings(project_root: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
-/// The `[harness.*]` settings in effect: the project's over the global
-/// ones, or the global ones alone outside a project. Advisory, so an
-/// unreadable project config yields the global settings.
+/// Advisory, so an unreadable project config yields the global settings.
 fn harness_config(project_root: Option<&Path>) -> HarnessConfig {
-    let project = project_root
-        .and_then(|root| ProjectConfig::load(&paths::pm_dir(root)).ok())
-        .map(|config| config.harness)
-        .unwrap_or_default();
-    resolve_harness_config(&project, &GlobalConfig::load_or_default().harness)
+    harness_config_in(project_root, &GlobalConfig::load_or_default().harness)
 }
 
 fn prompt_delivery_unsupported(harness: Harness) -> String {

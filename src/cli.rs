@@ -207,7 +207,7 @@ pub enum HarnessCommands {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Migrate harness sessions from an old project path to the current directory
+    /// Make harness sessions recorded at an old path resumable in the current directory
     Migrate {
         /// The old absolute path where the project previously lived
         #[arg(long)]
@@ -216,12 +216,13 @@ pub enum HarnessCommands {
         #[arg(long, default_value = "claude-code")]
         harness: Harness,
     },
-    /// Export harness sessions for transfer to another machine
+    /// Export the sessions of a project's main worktree for transfer to another machine
     Export {
         /// Export sessions for all registered projects (default: current project only)
         #[arg(long)]
         all: bool,
-        /// Output tarball path (default: pm-claude-<name>.tar.gz in current directory)
+        /// Output tarball path (default: pm-<harness>-<name>.tar.gz in current directory,
+        /// `pm-claude-…` for claude-code)
         #[arg(short, long)]
         output: Option<PathBuf>,
         /// Harness whose sessions to export

@@ -31,17 +31,37 @@ pub static CODEX_CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// it prints `answer` and exits with `exit` — enough to play `opencode
 /// api`, `opencode --version`, and the TUI a window launches.
 pub fn fake_opencode(dir: &std::path::Path, answer: &str, exit: i32) -> String {
+    fake_opencode_sequence(dir, &[answer], exit)
+}
+
+/// A [`fake_opencode`] whose n-th invocation in `dir` prints the n-th of
+/// `answers`, and every later one the last.
+pub fn fake_opencode_sequence(dir: &std::path::Path, answers: &[&str], exit: i32) -> String {
     use std::os::unix::fs::PermissionsExt;
     let bin = dir.join("opencode");
+    let answer_file = |name: &str| dir.join(format!("answer.{name}"));
+    for stale in (1..).map(|n| answer_file(&n.to_string())) {
+        if std::fs::remove_file(stale).is_err() {
+            break;
+        }
+    }
+    let (last, earlier) = answers.split_last().expect("at least one answer");
+    for (n, answer) in earlier.iter().enumerate() {
+        std::fs::write(answer_file(&(n + 1).to_string()), format!("{answer}\n"))
+            .expect("write fake opencode answer");
+    }
+    std::fs::write(answer_file("last"), format!("{last}\n")).expect("write fake opencode answer");
     let script = format!(
         "#!/bin/sh\nn=1; while [ -e '{log}'.$n ]; do n=$((n+1)); done\n\
-         [ -e '{log}' ] && mv '{log}' '{log}'.$n\n\
+         k=$n; [ -e '{log}' ] && mv '{log}' '{log}'.$n && k=$((n+1))\n\
          printf '%s\\n' \"$@\" > '{log}.tmp' && mv '{log}.tmp' '{log}'\n\
          printf 'OPENCODE_CONFIG=%s\\nOPENCODE_CONFIG_CONTENT=%s\\n' \\\n\
          \"$OPENCODE_CONFIG\" \"$OPENCODE_CONFIG_CONTENT\" > '{env}'\n\
-         cat <<'ANSWER'\n{answer}\nANSWER\nexit {exit}\n",
+         a='{answer}'.$k; [ -e \"$a\" ] || a='{answer}'.last\n\
+         cat \"$a\"\nexit {exit}\n",
         log = dir.join("argv").display(),
         env = dir.join("env").display(),
+        answer = dir.join("answer").display(),
     );
     std::fs::write(&bin, script).expect("write fake opencode");
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755))

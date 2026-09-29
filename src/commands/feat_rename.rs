@@ -387,7 +387,7 @@ mod tests {
             from: None,
             workflow: None,
             tmux_server: server.name(),
-            session_store: None,
+            home: None,
         })
         .unwrap();
 

@@ -31,6 +31,13 @@
 //! `danger-full-access` — the same blast radius as pm's Claude Code agents.
 //! A sandboxed agent (`workspace-write` + writable roots) can still read,
 //! run git, and send messages; it cannot spawn, heal, or stop agents.
+//!
+//! A resume or fork carries `-c tui.resume_cwd="current"`: when a session
+//! was last run in another directory the TUI otherwise stops at an
+//! interactive directory chooser, which stalls an unwatched window. The
+//! session then continues in the window's directory.
+
+pub(super) mod sessions;
 
 use std::path::{Path, PathBuf};
 
@@ -55,6 +62,8 @@ pub(super) const MIN_VERSION: (u32, u32, u32) = (0, 156, 0);
 const FULL_ACCESS: &str = "danger-full-access";
 const DEFAULT_SANDBOX: &str = FULL_ACCESS;
 const DEFAULT_APPROVAL: &str = "never";
+
+const RESUME_IN_CURRENT_DIR: &str = "tui.resume_cwd=\"current\"";
 
 pub(super) const HOOK_TRUST_REMEDY: &str = "start `codex` once in a trusted directory and \
     choose \"Trust all and continue\" (or set `[harness.codex] bypass_hook_trust = true`)";
@@ -117,6 +126,11 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>, cfg: &CodexConfig) -> String {
     if let Some(id) = model {
         parts.push("-m".to_string());
         parts.push(tmux::shell_quote(id));
+    }
+
+    if resume_session.is_some() {
+        parts.push("-c".to_string());
+        parts.push(tmux::shell_quote(RESUME_IN_CURRENT_DIR));
     }
 
     // Subcommands come after the global options.
@@ -374,7 +388,8 @@ mod tests {
         );
         assert_eq!(
             cmd,
-            "codex --no-daemon -a 'never' -s 'danger-full-access' resume abc 'go'"
+            "codex --no-daemon -a 'never' -s 'danger-full-access' \
+             -c 'tui.resume_cwd=\"current\"' resume abc 'go'"
         );
         let cmd = build_cmd(
             &SpawnSpec {
@@ -386,7 +401,8 @@ mod tests {
         );
         assert_eq!(
             cmd,
-            "codex --no-daemon -a 'never' -s 'danger-full-access' fork abc"
+            "codex --no-daemon -a 'never' -s 'danger-full-access' \
+             -c 'tui.resume_cwd=\"current\"' fork abc"
         );
         // A fork without a source is a plain spawn.
         let cmd = build_cmd(

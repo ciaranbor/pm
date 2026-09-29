@@ -5,7 +5,9 @@
 //! command line is built). Without it any server-needing command starts a
 //! shared `opencode serve --service` per `$HOME`, whose plugins see the
 //! environment of whichever client started it — a second agent is then
-//! driven under the first one's `PM_AGENT_NAME`.
+//! driven under the first one's `PM_AGENT_NAME`. The one exception is a
+//! session move, which needs a server that outlives the request and gets one
+//! of its own ([`sessions`]).
 //!
 //! opencode has no Stop hook. The never-idle loop is the bundled
 //! `pm-never-idle` plugin (`plugins/opencode/pm-never-idle/`), installed once
@@ -54,6 +56,7 @@
 //! own state dirs ahead of the row, which can still override them.
 
 mod providers;
+pub(super) mod sessions;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -186,11 +189,12 @@ fn binary(cfg: &OpenCodeConfig) -> &str {
     cfg.binary.as_deref().unwrap_or(DEFAULT_BINARY)
 }
 
-/// An opencode command line: the binary, the subcommand if any, then
-/// `--standalone` ahead of everything else.
-fn argv(cfg: &OpenCodeConfig, subcommand: Option<&str>, rest: &[&str]) -> Vec<String> {
+/// An opencode command line: the binary, the subcommand's words if any,
+/// then `--standalone` ahead of everything else. opencode takes the flag
+/// only after the last subcommand word (`session export --standalone`).
+fn argv(cfg: &OpenCodeConfig, subcommand: &[&str], rest: &[&str]) -> Vec<String> {
     let mut out = vec![binary(cfg).to_string()];
-    out.extend(subcommand.map(str::to_string));
+    out.extend(subcommand.iter().map(|s| s.to_string()));
     out.push("--standalone".to_string());
     out.extend(rest.iter().map(|s| s.to_string()));
     out
@@ -212,7 +216,7 @@ pub(super) fn build_cmd(_spec: &SpawnSpec<'_>, cfg: &OpenCodeConfig, pre: &PreLa
         words.extend(["-u".to_string(), key.clone()]);
     }
     words.extend(pre.env.iter().map(|(key, value)| format!("{key}={value}")));
-    words.extend(argv(cfg, None, &rest));
+    words.extend(argv(cfg, &[], &rest));
     words
         .iter()
         .map(|word| tmux::shell_quote(word))
@@ -380,12 +384,20 @@ fn session_id(response: &Value) -> Result<String> {
         .ok_or_else(|| PmError::Agent(format!("opencode returned no session id: {response}")))
 }
 
-/// `opencode api <args>`, with stdin closed because `api` otherwise waits on
-/// it.
-fn api_command(cfg: &OpenCodeConfig, args: &[&str]) -> Command {
-    let argv = argv(cfg, Some("api"), args);
-    let mut command = Command::new(&argv[0]);
-    command.args(&argv[1..]).stdin(Stdio::null());
+/// A non-interactive `opencode <subcommand> <args>`, with stdin closed
+/// because `api` otherwise waits on it.
+fn command(cfg: &OpenCodeConfig, subcommand: &[&str], args: &[&str]) -> Command {
+    let argv = argv(cfg, subcommand, args);
+    let mut command = detached(&argv[0]);
+    command.args(&argv[1..]);
+    command
+}
+
+/// `program` as pm runs opencode itself: stdin closed, and nothing of the
+/// calling agent's identity or opencode config in its environment.
+fn detached(program: &str) -> Command {
+    let mut command = Command::new(program);
+    command.stdin(Stdio::null());
     for key in SCRUBBED_ENV {
         command.env_remove(key);
     }
@@ -393,8 +405,13 @@ fn api_command(cfg: &OpenCodeConfig, args: &[&str]) -> Command {
 }
 
 fn api(cfg: &OpenCodeConfig, args: &[&str]) -> Result<Value> {
+    run_api(command(cfg, &["api"], args), args)
+}
+
+/// Run an `opencode api` command line for the operation `args` names and
+/// read its answer.
+fn run_api(mut command: Command, args: &[&str]) -> Result<Value> {
     let operation = args.first().copied().unwrap_or_default();
-    let mut command = api_command(cfg, args);
     let out = command.output().map_err(|e| {
         PmError::Agent(format!(
             "could not run `{}` for {operation}: {e}",
@@ -725,7 +742,7 @@ mod tests {
     fn a_spawn_never_runs_on_the_config_of_whoever_spawned_it() {
         // pm often runs inside an agent's shell, which carries that agent's
         // identity and opencode config.
-        let command = api_command(&cfg(), &["session.create"]);
+        let command = detached("opencode");
         let removed: Vec<&str> = command
             .get_envs()
             .filter(|(_, value)| value.is_none())
@@ -739,7 +756,7 @@ mod tests {
             CONFIG_ENV,
             CONFIG_CONTENT_ENV,
         ] {
-            assert!(removed.contains(&key), "{key} reaches the api call");
+            assert!(removed.contains(&key), "{key} reaches opencode");
         }
 
         // The agent's own file replaces an inherited `OPENCODE_CONFIG`, and
