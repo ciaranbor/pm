@@ -51,26 +51,16 @@ pub fn feat_merge(
         eprintln!("Feature '{name}' already merged — cleaning up");
 
         // Still guard against data loss if user edited after the first merge
-        if !keep && git::has_uncommitted_changes(&worktree_path)? {
-            return Err(PmError::SafetyCheck(format!(
-                "feature '{name}' has uncommitted changes — commit or stash before cleaning up"
-            )));
+        if !keep {
+            ensure_settled(&worktree_path, &format!("feature '{name}'"), "cleaning up")?;
         }
     } else {
-        // Block if the feature worktree has uncommitted changes
-        if git::has_uncommitted_changes(&worktree_path)? {
-            return Err(PmError::SafetyCheck(format!(
-                "feature '{name}' has uncommitted changes — commit or stash before merging"
-            )));
-        }
-
-        // Block if the base worktree has uncommitted changes
-        if git::has_uncommitted_changes(base_repo)? {
-            return Err(PmError::SafetyCheck(format!(
-                "{} worktree has uncommitted changes — commit or stash before merging",
-                checkout.scope
-            )));
-        }
+        ensure_settled(&worktree_path, &format!("feature '{name}'"), "merging")?;
+        ensure_settled(
+            base_repo,
+            &format!("{} worktree", checkout.scope),
+            "merging",
+        )?;
 
         // Check if the branch is already merged locally
         let check_start = Instant::now();
@@ -161,6 +151,25 @@ pub fn feat_merge(
     Ok(())
 }
 
+/// Refuse to merge into or out of a worktree whose work isn't settled:
+/// uncommitted changes, or a paused rebase, whose rebased commits sit on a
+/// detached HEAD the branch doesn't reach yet.
+fn ensure_settled(worktree: &Path, subject: &str, action: &str) -> Result<()> {
+    if git::has_uncommitted_changes(worktree)? {
+        return Err(PmError::SafetyCheck(format!(
+            "{subject} has uncommitted changes — commit or stash before {action}"
+        )));
+    }
+    if git::rebase_in_progress(worktree)? {
+        return Err(PmError::SafetyCheck(format!(
+            "{subject} has a rebase in progress in {}: finish it with \
+             `git rebase --continue` (or `git rebase --abort`) before {action}",
+            worktree.display()
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,6 +249,30 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("uncommitted changes")
+        );
+    }
+
+    #[test]
+    fn merge_refuses_a_feature_paused_mid_rebase_with_a_clean_tree() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let registry = TestServer::registry_dir(&project_path);
+        TestServer::add_feature_commit(&project_path, "login");
+        let worktree = project_path.join("login");
+        TestServer::pause_rebase(&worktree, "main");
+
+        for keep in [true, false] {
+            let err = feat_merge(&project_path, &registry, "login", keep, server.name())
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("rebase in progress"), "{err}");
+        }
+        assert!(worktree.exists());
+        assert!(
+            !paths::main_worktree(&project_path)
+                .join("feature.txt")
+                .exists()
         );
     }
 

@@ -742,6 +742,19 @@ impl TestServer {
         crate::git::stage_file(&worktree, "feature.txt").unwrap();
         crate::git::commit(&worktree, "feature work").unwrap();
     }
+
+    /// Leave a rebase paused in `worktree` with a clean tree: every replayed
+    /// commit is followed by a failing `--exec`.
+    pub fn pause_rebase(worktree: &std::path::Path, onto: &str) {
+        let status = std::process::Command::new("git")
+            .current_dir(worktree)
+            .args(["rebase", "--exec", "false", onto])
+            .output()
+            .unwrap()
+            .status;
+        assert!(!status.success());
+        assert!(crate::git::rebase_in_progress(worktree).unwrap());
+    }
 }
 
 impl Drop for TestServer {
