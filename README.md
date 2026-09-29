@@ -262,13 +262,13 @@ qa = "local/qwen"
 ```
 
 `pm feat new` and `pm feat adopt --workflow` first check that each member's
-harness can spawn it and wake it for messages, and refuse before creating
-anything, naming each failing member, its harness, and what is missing. Not
-checked: that an installed hook's command is exactly the one pm would write
-(an entry counts as pm's by the command it names), and, because only running
-the harness would tell, that codex's trust entry still matches the hook's
-current command text, that the harness is logged in, and that a model id
-resolves.
+harness can spawn it, find its definition, and wake it for messages, and
+refuse before creating anything, naming each failing member, its harness, and
+what is missing. Not checked: that an installed hook's command is exactly the
+one pm would write (an entry counts as pm's by the command it names), and,
+because only running the harness would tell, that codex's trust entry still
+matches the hook's current command text, that the harness is logged in, and
+that a model id resolves.
 
 `pm agent spawn` does not run this check; `pm doctor` reports the same
 problems for a project's existing agents.
@@ -345,11 +345,12 @@ harnesses; what differs:
   spawn. The files are pm's: an upgrade overwrites them, and opencode
   reloads the plugin in running agents when it does.
 - **The loop stops itself rather than run away.** If five turns in a row are
-  prompted for unread messages and read none — the model fails every turn,
-  or the agent cannot read its inbox — the plugin stops prompting, says so
-  in the session, and `pm doctor` reports the agent. After a failed turn it
-  waits 30 seconds before asking again. Fix the cause, then `pm agent
-  restart <name>`.
+  prompted for unread messages and read none — the model fails every turn, or
+  the agent cannot read its inbox — the plugin stops prompting, says so in the
+  session, and `pm doctor` reports the agent, with the error of the last turn
+  when it failed (`Model unavailable: …`, the endpoint's own refusal). After a
+  failed turn it waits 30 seconds before asking again. Fix the cause, then
+  `pm agent restart <name>`.
 - **Always `--standalone`.** pm launches `opencode --standalone --auto
   --session <id>`, with the session created beforehand. Without
   `--standalone` every opencode command shares one background server per
@@ -358,9 +359,11 @@ harnesses; what differs:
   pass `--standalone` too.
 - **An unknown agent name is silent.** opencode reads definitions from
   `~/.config/opencode/agents/` and `<worktree>/.opencode/agents/`, where pm
-  projects them, and runs its built-in prompt — no error — for a name it
-  finds in neither. `pm doctor` flags a definition with no projected copy;
-  `pm upgrade` projects it.
+  projects them, and runs its built-in prompt — no error — for a name it finds
+  in neither. So an opencode spawn, and `pm feat new`'s check, refuse a
+  definition with no projected copy, as `pm doctor` flags it. `pm upgrade`
+  projects it into main and the global dir; a feature worktree takes main's
+  copy from `pm harness pull <feature>`.
 - **Permissions.** `--auto` approves whatever no rule denies, because an
   approval prompt in an unwatched window stalls the agent. An
   `[agents.permissions]` row is opencode's own rule list as a JSON array;
@@ -418,11 +421,12 @@ harnesses; what differs:
 
   opencode resolves no model a provider does not list, so pm adds the row's
   model to its provider's `models`; a mistyped id therefore fails at the
-  endpoint, not before. A row may still name a provider pm config does not
-  define — one opencode ships (`anthropic/…`) or one from your own
-  `~/.config/opencode/opencode.json`: pm allows it and leaves its definition
-  alone. Once pm config defines the same id, pm's entry replaces that
-  file's whole.
+  endpoint, not before. When the entry declares `models` and the row's id is
+  not among them, the spawn line and `pm doctor` say so. A row may still name
+  a provider pm config does not define — one opencode ships (`anthropic/…`)
+  or one from your own `~/.config/opencode/opencode.json`: pm allows it and
+  leaves its definition alone. Once pm config defines the same id, pm's
+  entry replaces that file's whole.
 - **Keys are named, never stored.** Name the variable — `env = ["NAME"]`,
   or `{env:NAME}` inside a value — and set it in the environment agents
   start in. An `apiKey` that is not exactly `{env:NAME}`, or an
@@ -443,6 +447,11 @@ harnesses; what differs:
   file of its own named by `OPENCODE_CONFIG`. An agent never inherits
   `OPENCODE_CONFIG` or `OPENCODE_CONFIG_CONTENT` from the shell that spawned
   it.
+- **A session opencode no longer has** is not resumed: the respawn starts
+  a fresh one and the spawn line says so, as after a harness change.
+- **Every call pm makes to opencode is bounded** — a minute, five for a
+  session export or import — and one that runs over is stopped and named,
+  so a hung opencode fails the pm command instead of hanging it.
 - **Moved worktree.** opencode cannot resume a session whose directory is
   gone. pm's own moves carry sessions (see Features and worktrees); after any other,
   stop the agent and run `pm harness migrate --harness opencode --from <old

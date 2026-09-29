@@ -15,6 +15,7 @@ import {
   consumedMessage,
   drivesSession,
   hookDecision,
+  turnError,
   type HookResult,
 } from "./loop.ts"
 import { runPm } from "./pm.ts"
@@ -207,6 +208,37 @@ test("turns that drain nothing stop the loop, which says so", async () => {
 
   await loop.turnEnded("ses_1", SUCCEEDED)
   assert.equal(seen.asked, MAX_WASTED_TURNS + 1, "a stopped loop asked the hook again")
+})
+
+test("turns that fail stop the loop with the error of the last one", async () => {
+  const { loop, seen } = harness(Array(MAX_WASTED_TURNS + 1).fill(BLOCK))
+  await loop.arm("ses_1")
+  const unavailable = { type: "provider.no-route", message: "Model unavailable: local/nope" }
+  await loop.turnEnded("ses_1", TURN_FAILED, { type: "provider.invalid-request", message: "earlier", status: 404 })
+  for (let turn = 1; turn < MAX_WASTED_TURNS; turn++) await loop.turnEnded("ses_1", TURN_FAILED, unavailable)
+
+  assert.deepEqual(seen.reports, [
+    `${MAX_WASTED_TURNS} consecutive turns were prompted for unread messages and read none; ` +
+      "the last one failed: Model unavailable: local/nope (provider.no-route)",
+  ])
+})
+
+test("a failure is not carried past the turn it ended", async () => {
+  const { loop, seen } = harness(Array(MAX_WASTED_TURNS + 1).fill(BLOCK))
+  await loop.arm("ses_1")
+  await loop.turnEnded("ses_1", TURN_FAILED, { type: "provider.no-route", message: "Model unavailable: x" })
+  for (let turn = 1; turn < MAX_WASTED_TURNS; turn++) await loop.turnEnded("ses_1", SUCCEEDED)
+  assert.equal(seen.reports.length, 1)
+  assert.doesNotMatch(seen.reports[0], /Model unavailable/)
+})
+
+test("a turn's error reads as its message, kind and status", () => {
+  assert.equal(
+    turnError({ type: "provider.invalid-request", message: "The model `q` does not exist.", status: 404 }),
+    "The model `q` does not exist. (provider.invalid-request, HTTP 404)",
+  )
+  assert.equal(turnError({ type: "provider.no-route", message: "Model unavailable: local/x" }), "Model unavailable: local/x (provider.no-route)")
+  assert.equal(turnError(undefined), "no error reported")
 })
 
 test("a hook that fails is asked again after a wait, then the loop carries on", async () => {

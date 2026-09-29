@@ -51,6 +51,7 @@ export function consumedMessage(tool: unknown, command: unknown, result: unknown
 export class Breaker {
   private wasted = 0
   private consumed = false
+  private failure: string | null = null
   private reason: string | null = null
   private readonly max: number
 
@@ -66,6 +67,11 @@ export class Breaker {
     this.consumed = true
   }
 
+  /** The turn about to be closed failed with `error`. */
+  noteFailed(error: string): void {
+    this.failure = error
+  }
+
   /**
    * Record one answer of the hook, `waitedMs` after it was asked at the end
    * of a turn. Returns the trip reason once the limit is reached.
@@ -73,14 +79,30 @@ export class Breaker {
   turnClosed(waitedMs: number): string | null {
     const wasted = waitedMs < IMMEDIATE_MS && !this.consumed
     this.wasted = wasted ? this.wasted + 1 : 0
+    const failure = this.failure
     this.consumed = false
+    this.failure = null
     if (this.wasted >= this.max) {
-      this.reason =
-        `${this.wasted} consecutive turns were prompted for unread messages and read none ` +
-        `(the model may be failing, or \`pm msg read\` is not reaching this agent's inbox)`
+      const read = `${this.wasted} consecutive turns were prompted for unread messages and read none`
+      this.reason = failure
+        ? `${read}; the last one failed: ${failure}`
+        : `${read} (\`pm msg read\` may not be reaching this agent's inbox)`
     }
     return this.reason
   }
+}
+
+/**
+ * The error a failed turn's event carries (`{type, message, status?}`), as
+ * one line.
+ */
+export function turnError(error: unknown): string {
+  const { type, message, status } = (error ?? {}) as Record<string, unknown>
+  const detail = [type, status === undefined ? undefined : `HTTP ${status}`]
+    .filter((part) => part !== undefined && part !== "")
+    .join(", ")
+  const text = typeof message === "string" && message ? message : "no error reported"
+  return detail ? `${text} (${detail})` : text
 }
 
 /**
@@ -152,8 +174,9 @@ export class Loop {
     return this.pump(sessionID, null)
   }
 
-  turnEnded(sessionID: string, type: string): Promise<void> {
-    return this.pump(sessionID, type)
+  /** `error` is what a failed turn's event carried. */
+  turnEnded(sessionID: string, type: string, error?: unknown): Promise<void> {
+    return this.pump(sessionID, type, error)
   }
 
   toolRan(tool: unknown, command: unknown, result: unknown): void {
@@ -188,12 +211,15 @@ export class Loop {
   // One waiter per session: a turn ending while the hook is still blocked
   // (a prompt the user typed) must not start a second one. `turn` is the
   // event that ended a turn, or null when arming.
-  private async pump(sessionID: string, turn: string | null): Promise<void> {
+  private async pump(sessionID: string, turn: string | null, error?: unknown): Promise<void> {
     if (this.unloaded || this.stoppedFor || this.pumping.has(sessionID)) return
     this.pumping.add(sessionID)
     const now = this.deps.now ?? Date.now
     try {
-      if (turn === TURN_FAILED) await this.deps.sleep(FAILURE_BACKOFF_MS)
+      if (turn === TURN_FAILED) {
+        this.breaker.noteFailed(turnError(error))
+        await this.deps.sleep(FAILURE_BACKOFF_MS)
+      }
       for (;;) {
         if (this.unloaded) return
         const asked = now()

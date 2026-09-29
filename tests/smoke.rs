@@ -734,6 +734,78 @@ fn opencode_spawn_creates_the_session_then_opens_it_standalone() {
     }
 }
 
+/// Catches: an opencode call pm is waiting on outliving a Ctrl-C to pm. The
+/// call runs in a process group of its own, which the terminal's SIGINT
+/// does not reach, so pm must kill it — and whatever it started — itself.
+#[test]
+#[ignore]
+fn interrupting_pm_kills_the_opencode_call_it_is_waiting_on() {
+    use std::os::unix::process::ExitStatusExt;
+
+    let s = Smoke::new();
+    let login = s.init_with_feature();
+    s.set_agents_config("harness", "reviewer = \"opencode\"");
+    s.set_agents_config("models", "reviewer = \"local/qwen\"");
+    let (call_pid, child_pid) = (s.home().join("call.pid"), s.home().join("child.pid"));
+    let hang = s.home().join("hang");
+    std::fs::write(
+        &hang,
+        format!(
+            "#!/bin/sh\necho $$ > {}\nsleep 300 &\necho $! > {}\nwait\n",
+            shell_quote(&call_pid.to_string_lossy()),
+            shell_quote(&child_pid.to_string_lossy())
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&hang, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let config = s.proj().join(".pm/config.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(
+        &config,
+        text.replace(
+            "[harness.opencode]\n",
+            &format!(
+                "[harness.opencode]\nbinary = {:?}\n",
+                hang.to_string_lossy()
+            ),
+        ),
+    )
+    .unwrap();
+
+    // `scripts/sandbox run` execs, so the child is pm itself.
+    let mut pm = s
+        .run_cmd(&login, "pm")
+        .args(["agent", "spawn", "reviewer"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let start = Instant::now();
+    while !child_pid.exists() || std::fs::read_to_string(&child_pid).unwrap().is_empty() {
+        assert!(start.elapsed() < WAIT, "pm never called opencode");
+        std::thread::sleep(POLL);
+    }
+    // SAFETY: signals a process this test started.
+    unsafe {
+        libc::kill(pm.id() as libc::pid_t, libc::SIGINT);
+    }
+    assert_eq!(pm.wait().unwrap().signal(), Some(libc::SIGINT));
+
+    for file in [&call_pid, &child_pid] {
+        let pid: libc::pid_t = std::fs::read_to_string(file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let start = Instant::now();
+        // SAFETY: signal 0 only probes for the process.
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            assert!(start.elapsed() < WAIT, "{} outlived pm", file.display());
+            std::thread::sleep(POLL);
+        }
+    }
+}
+
 /// Catches: the binary probes resolving `claude` and `codex` through the
 /// real `PATH` (lib tests skip them), and the refusal coming before the
 /// worktree, branch and session rather than being rolled back after them.

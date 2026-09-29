@@ -571,7 +571,7 @@ pub fn agent_spawn_all(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::state::feature::{FeatureState, FeatureStatus};
     use crate::testing::TestServer;
@@ -1053,8 +1053,10 @@ mod tests {
     }
 
     /// Run `definition` on opencode, played by a stand-in that answers
-    /// every call with `answer` and keeps its record in `project_root`.
+    /// every call with `answer` and keeps its record in `project_root`, with
+    /// the definition projected into the `login` worktree.
     fn configure_opencode(project_root: &Path, definition: &str, answer: &str, exit: i32) {
+        project_opencode_definition(&project_root.join("login"), definition);
         configure_harness(project_root, definition, "opencode");
         let pm_dir = paths::pm_dir(project_root);
         let mut config = ProjectConfig::load(&pm_dir).unwrap();
@@ -1066,6 +1068,13 @@ mod tests {
             .entry(definition.to_string())
             .or_insert_with(|| "local/qwen".to_string());
         config.save(&pm_dir).unwrap();
+    }
+
+    /// `definition` as `pm upgrade` projects it for opencode into `worktree`.
+    pub(crate) fn project_opencode_definition(worktree: &Path, definition: &str) {
+        let agents = worktree.join(Harness::OpenCode.config_dir()).join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(agents.join(format!("{definition}.md")), "# stub").unwrap();
     }
 
     /// The config file the stand-in TUI was launched with.

@@ -32,7 +32,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
-use super::{CONFIG_ENV, ModelRef, command};
+use super::{CONFIG_ENV, ModelRef, bounded, command};
 use crate::error::{PmError, Result};
 use crate::state::project::OpenCodeConfig;
 
@@ -64,6 +64,25 @@ pub(super) fn render(
         out.insert(id.clone(), Value::Object(rendered));
     }
     Ok(out)
+}
+
+/// A remark when `model`'s provider is one pm config defines and declares
+/// models, and `model` is not among them. [`render`] lists it anyway, since
+/// an endpoint may serve more than the entry declares; a typo then fails
+/// every turn at the endpoint.
+pub(super) fn undeclared_model_note(providers: &Providers, model: &ModelRef<'_>) -> Option<String> {
+    let declared = providers.get(model.provider)?.get("models")?.as_table()?;
+    if declared.is_empty() || declared.contains_key(model.id) {
+        return None;
+    }
+    let names: Vec<&str> = declared.keys().map(String::as_str).collect();
+    Some(format!(
+        "model '{}' is not among those [harness.opencode.providers.{}] declares ({}); if it \
+         is a typo, every turn fails at the endpoint",
+        model.id,
+        model.provider,
+        names.join(", ")
+    ))
 }
 
 /// The providers an agent may use: the one its row names and every one pm
@@ -248,11 +267,18 @@ fn merged_config_issues(
     )]));
     std::fs::write(file.path(), config.to_string()).ok()?;
 
-    let out = command(cfg, &["api"], &["config.get"])
-        .env(CONFIG_ENV, file.path())
-        .current_dir(worktree)
-        .output()
-        .ok()?;
+    let mut command = command(cfg, &["api"], &["config.get"]);
+    command.env(CONFIG_ENV, file.path()).current_dir(worktree);
+    let out = match bounded::run(&mut command, bounded::CALL) {
+        Ok(out) => out,
+        Err(failure @ bounded::Failure::TimedOut { .. }) => {
+            return Some(vec![format!(
+                "{}, so pm could not check what opencode made of [harness.opencode]",
+                failure.describe("config.get")
+            )]);
+        }
+        Err(bounded::Failure::Unrunnable { .. }) => return None,
+    };
     let response: Value = serde_json::from_slice(&out.stdout).ok()?;
     let documents = response
         .get("data")

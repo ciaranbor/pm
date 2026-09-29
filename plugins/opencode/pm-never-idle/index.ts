@@ -101,7 +101,7 @@ export default {
             if (!TURN_END.has(event.type)) continue
             const parentOf = async (id: string) => (await ctx.session.get({ sessionID: id })).parentID
             if (await drivesSession(own, sessionID, parentOf)) {
-              void loop.turnEnded(sessionID, event.type)
+              void loop.turnEnded(sessionID, event.type, event.data?.error)
             }
           }
         } catch (e) {
