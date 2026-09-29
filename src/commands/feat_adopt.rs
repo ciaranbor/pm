@@ -614,7 +614,7 @@ mod tests {
         // Set up fake Claude session data keyed to some old path
         let claude_base = dir.path().join(".claude");
         let old_path = std::path::Path::new("/tmp/old-repo");
-        let old_key = crate::testing::claude_key(&old_path);
+        let old_key = crate::testing::claude_key(old_path);
         let old_session_dir = claude_base.join("projects").join(&old_key);
         std::fs::create_dir_all(&old_session_dir).unwrap();
         std::fs::write(
