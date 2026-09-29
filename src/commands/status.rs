@@ -67,9 +67,7 @@ pub fn status(
 
     // Doctor issues
     let doctor_lines = doctor::doctor(project_root, projects_dir, false, tmux_server)?;
-    let has_issues = !doctor_lines.is_empty()
-        && !doctor_lines[0].contains("No features")
-        && !doctor_lines[0].contains("all healthy");
+    let has_issues = !doctor_lines.is_empty() && !doctor_lines[0].contains("all healthy");
 
     if has_issues {
         lines.push(String::new());
