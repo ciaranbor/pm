@@ -7,10 +7,9 @@
 //! manual file editing; reading is via this seeding. Only non-empty boards are
 //! seeded, so the bloat hazard stays bounded.
 
-use std::hash::{Hash, Hasher};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use crate::error::{PmError, Result};
+use crate::error::Result;
 use crate::state::paths;
 
 const LEAD: &str = "The following are standing directives from the pm notice board; treat them as operating constraints.";
@@ -23,80 +22,22 @@ fn read_board(path: &Path) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-/// A per-user `0700` subdir of the temp dir to hold the files a spawn hands
-/// its harness. Isolating writes here closes the shared-`/tmp` symlink/pre-creation vector
-/// (CWE-377): on a multi-user host another user can't plant a symlink or seed
-/// attacker-controlled prompt text under a directory only we own. Refuses a
-/// pre-existing symlink in our place rather than following it.
-pub(crate) fn spawn_dir() -> Result<PathBuf> {
-    // SAFETY: getuid() is always safe — no args, can't fail.
-    let uid = unsafe { libc::getuid() };
-    // Under the test home, which is removed with the run.
-    #[cfg(test)]
-    let base = crate::testing::test_home().to_path_buf();
-    #[cfg(not(test))]
-    let base = std::env::temp_dir();
-    let dir = base.join(format!("pm-spawn-{uid}"));
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-        // `mode(0o700)` locks the dir on creation (no umask window). The
-        // symlink guard refuses a pre-planted link instead of following it,
-        // and the re-asserting `set_permissions` both relocks a dir we already
-        // own and trips `EPERM` on an attacker-owned one.
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&dir)?;
-        if std::fs::symlink_metadata(&dir)?.file_type().is_symlink() {
-            return Err(PmError::Io(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                format!("refusing symlinked prompt dir: {}", dir.display()),
-            )));
-        }
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
-    }
-    #[cfg(not(unix))]
-    std::fs::create_dir_all(&dir)?;
-    Ok(dir)
-}
-
-/// Deterministic filename for the composed prompt, keyed by project root and
-/// agent/window label so concurrent spawns don't truncate each other's file.
-/// Within one project root the content is a pure function of that root, so any
-/// two spawns colliding on this name produce identical bytes — overwrite is
-/// safe. (Distinct roots that hash-collide are vanishingly unlikely at 64 bits.)
-fn prompt_filename(project_root: &Path, label: &str) -> String {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    project_root.hash(&mut h);
-    let digest = h.finish();
-    let safe: String = label
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    format!("pm-spawn-prompt-{digest:x}-{safe}.md")
-}
-
 /// Compose the single `--append-system-prompt-file` argument for a spawn:
 /// the shared baseline plus any non-empty notice boards.
 ///
-/// `label` is the agent/window name, used only to key the temp filename.
-///
 /// When neither board has content, returns the baseline path unchanged (the
 /// common case — byte-for-byte identical to seeding the baseline alone), or
-/// `None` if the baseline is also absent. Otherwise writes a composed file to a
-/// deterministic temp path and returns that path.
-pub fn compose_spawn_prompt(project_root: &Path, label: &str) -> Result<Option<String>> {
+/// `None` if the baseline is also absent. Otherwise writes a composed file to
+/// the agent's runtime dir and returns that path.
+pub fn compose_spawn_prompt(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+) -> Result<Option<String>> {
     let baseline = crate::commands::skills::baseline_path(project_root);
     let global = paths::global_config_dir()?.join("notices.md");
     let project = paths::pm_dir(project_root).join("notices.md");
-    let out = spawn_dir()?.join(prompt_filename(project_root, label));
+    let out = crate::state::runtime::agent_dir(project_root, scope, agent)?.join("prompt.md");
     compose_from(&baseline, &global, &project, &out)
 }
 
@@ -176,6 +117,7 @@ fn compose_text(baseline: &Path, global: &Path, project: &Path) -> Result<Compos
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use tempfile::tempdir;
 
     fn paths_in(dir: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
@@ -215,7 +157,7 @@ mod tests {
         // bundled copies of its own still gets it applied.
         crate::commands::skills::install_global().unwrap();
         let dir = tempdir().unwrap();
-        let path = compose_spawn_prompt(dir.path(), "implementer")
+        let path = compose_spawn_prompt(dir.path(), "main", "implementer")
             .unwrap()
             .expect("baseline installed");
         assert_eq!(
@@ -315,45 +257,5 @@ mod tests {
         assert!(content.starts_with(LEAD));
         assert!(content.contains("# Notice board — global"));
         assert!(content.contains("global directive"));
-    }
-
-    #[test]
-    fn prompt_filename_stable_per_root_and_varies_by_label() {
-        let root = Path::new("/a/b/c");
-        // Deterministic for the same (root, label).
-        assert_eq!(
-            prompt_filename(root, "implementer"),
-            prompt_filename(root, "implementer")
-        );
-        // Label keys the filename, so concurrent same-root spawns don't collide.
-        assert_ne!(
-            prompt_filename(root, "implementer"),
-            prompt_filename(root, "reviewer")
-        );
-        // Path separators in the label can't escape the filename.
-        assert!(!prompt_filename(root, "a/b").contains('/'));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn spawn_dir_is_owner_only_and_writable() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = spawn_dir().unwrap();
-        assert!(dir.is_dir());
-        assert!(
-            !std::fs::symlink_metadata(&dir)
-                .unwrap()
-                .file_type()
-                .is_symlink()
-        );
-        // 0700: no group/other access to seeded prompt files.
-        let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
-        assert_eq!(
-            mode & 0o077,
-            0,
-            "prompt dir must not be group/other accessible"
-        );
-        // Idempotent across calls (spawns happen repeatedly).
-        assert_eq!(dir, spawn_dir().unwrap());
     }
 }

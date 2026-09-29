@@ -15,6 +15,20 @@ pub fn agent_wait(
     from: Option<&str>,
     poll_interval: Option<Duration>,
 ) -> Result<u32> {
+    let count = agent_wait_while(project_root, feature, agent, from, poll_interval, || true)?;
+    Ok(count.unwrap_or_default())
+}
+
+/// [`agent_wait`] that gives up, returning `None`, once `waiting` says the
+/// wait no longer has anyone to report to.
+pub fn agent_wait_while(
+    project_root: &Path,
+    feature: &str,
+    agent: &str,
+    from: Option<&str>,
+    poll_interval: Option<Duration>,
+    waiting: impl Fn() -> bool,
+) -> Result<Option<u32>> {
     let messages_dir = paths::messages_dir(project_root);
     let interval = poll_interval.unwrap_or(Duration::from_secs(2));
 
@@ -27,7 +41,10 @@ pub fn agent_wait(
             .sum();
 
         if total > 0 {
-            return Ok(total);
+            return Ok(Some(total));
+        }
+        if !waiting() {
+            return Ok(None);
         }
 
         std::thread::sleep(interval);

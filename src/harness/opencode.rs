@@ -473,16 +473,12 @@ fn api_error(stdout: &str, stderr: &str) -> String {
         })
 }
 
-/// A per-spawn file for one agent of one scope. Keyed by scope as well as
-/// name: unlike the composed prompt, the content differs between two
-/// features' agents of the same name.
+/// A per-spawn file in the agent's runtime dir.
 fn spawn_file(project_root: &Path, scope: &str, agent: &str, extension: &str) -> Result<PathBuf> {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    project_root.hash(&mut h);
-    scope.hash(&mut h);
-    let digest = h.finish();
-    Ok(crate::notice::spawn_dir()?.join(format!("pm-opencode-{digest:x}-{agent}.{extension}")))
+    Ok(
+        crate::state::runtime::agent_dir(project_root, scope, agent)?
+            .join(format!("opencode.{extension}")),
+    )
 }
 
 /// Where the plugin records why its loop stopped.
@@ -1108,7 +1104,8 @@ mod tests {
 
     #[test]
     fn two_features_agents_of_one_name_get_a_config_file_each() {
-        let root = Path::new("/proj");
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
         assert_ne!(
             spawn_file(root, "login", "reviewer", "json").unwrap(),
             spawn_file(root, "signup", "reviewer", "json").unwrap()

@@ -254,6 +254,9 @@ pub(crate) fn cleanup_feature_with_timing(
 
             let messages_dir = pm_dir.join("messages");
             messages::delete_feature(&messages_dir, params.name)?;
+            if let Some(project_root) = pm_dir.parent() {
+                crate::state::runtime::remove_scope(project_root, params.name)?;
+            }
         }
         Ok(())
     })?;
@@ -496,6 +499,7 @@ mod tests {
         let messages_dir = paths::messages_dir(&project_path);
         crate::messages::send(&messages_dir, "login", "reviewer", "implementer", "hello").unwrap();
         assert!(messages_dir.join("login").exists());
+        let runtime = crate::state::runtime::agent_dir(&project_path, "login", "reviewer").unwrap();
 
         let scoped_name = server.scope("myapp");
         assert!(
@@ -529,6 +533,7 @@ mod tests {
         assert!(!agents_dir.join("login.toml").exists());
         // Messages removed
         assert!(!messages_dir.join("login").exists());
+        assert!(!runtime.exists());
     }
 
     #[test]
