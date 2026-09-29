@@ -287,6 +287,32 @@ pub(super) fn config_issues(cfg: &OpenCodeConfig, worktree: &Path) -> Vec<String
     providers::config_issues(cfg, worktree)
 }
 
+/// An `[agents.permissions]` row: opencode's own rule list.
+fn parse_permission_rules(row: &str) -> Result<Vec<Value>> {
+    match serde_json::from_str::<Value>(row) {
+        Ok(Value::Array(rules)) => Ok(rules),
+        _ => Err(PmError::Agent(format!(
+            "[agents.permissions] row for an opencode agent must be a JSON array of \
+             opencode permission rules, e.g. \
+             '[{{\"action\":\"edit\",\"resource\":\"*\",\"effect\":\"deny\"}}]'; got: {row}"
+        ))),
+    }
+}
+
+/// What a spawn would refuse about an agent's rows.
+pub(super) fn row_issues(model: Option<&str>, permission_mode: Option<&str>) -> Vec<String> {
+    let model = model.and_then(|row| ModelRef::parse(row).err());
+    let permissions = permission_mode.and_then(|row| parse_permission_rules(row).err());
+    model
+        .into_iter()
+        .chain(permissions)
+        .map(|e| match e {
+            PmError::Agent(message) => message,
+            e => e.to_string(),
+        })
+        .collect()
+}
+
 /// The per-spawn config.
 fn render_config(
     spec: &SpawnSpec<'_>,
@@ -316,16 +342,7 @@ fn render_config(
         }
     }
     if let Some(row) = spec.permission_mode {
-        match serde_json::from_str::<Value>(row) {
-            Ok(Value::Array(own)) => rules.extend(own),
-            _ => {
-                return Err(PmError::Agent(format!(
-                    "[agents.permissions] row for an opencode agent must be a JSON array of \
-                     opencode permission rules, e.g. \
-                     '[{{\"action\":\"edit\",\"resource\":\"*\",\"effect\":\"deny\"}}]'; got: {row}"
-                )));
-            }
-        }
+        rules.extend(parse_permission_rules(row)?);
     }
     if !rules.is_empty() {
         config.insert("permissions".to_string(), Value::Array(rules));

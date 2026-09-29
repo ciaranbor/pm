@@ -59,10 +59,10 @@ Design decisions you can't recover by reading the tree. Preserve them.
 - An opencode agent never spawns without a model row and reaches only the
   providers pm config names; keys are named by env var, never stored.
 - Three context-delivery contracts: `feat new`/`feat adopt --workflow` spawn
-  the whole team and brief only `brief_agents` (a context with none to brief
-  is an error); `agent spawn --context` enqueues, then spawns or no-ops;
-  `msg send` never spawns a new agent, errors when the recipient isn't
-  active, and heals a dead window of an active one.
+  the whole team (refused up front if a member's harness can't run it) and
+  brief only `brief_agents` (none is an error); `agent spawn --context`
+  enqueues, then spawns or no-ops — ungated, being also the heal path;
+  `msg send` never spawns, errors on an inactive recipient, heals a dead window.
 
 ### Workflows vs agents
 

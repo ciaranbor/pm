@@ -94,6 +94,15 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>) -> String {
     parts.join(" ")
 }
 
+pub(super) fn unusable_reason() -> Option<String> {
+    let runs = std::process::Command::new("claude")
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .is_ok_and(|out| out.status.success());
+    (!runs).then(|| "`claude` could not be run; install Claude Code".to_string())
+}
+
 /// Whether `claude --help` text advertises `--append-system-prompt-file`,
 /// the flag pm relies on to apply the shared agent baseline. Split out as a
 /// pure function so it can be unit-tested without invoking `claude`.

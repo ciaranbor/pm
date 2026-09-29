@@ -433,6 +433,47 @@ mod tests {
     }
 
     #[test]
+    fn feat_adopt_refuses_a_team_whose_harness_cannot_run_it_and_creates_nothing() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
+        create_branch(&project_path, "login");
+        let pm_dir = paths::pm_dir(&project_path);
+        let mut config = ProjectConfig::load(&pm_dir).unwrap();
+        config
+            .agents
+            .harness
+            .insert("reviewer".to_string(), "aider".to_string());
+        config.save(&pm_dir).unwrap();
+
+        let err = feat_adopt(&FeatAdoptParams {
+            workflow: Some("implement-and-review"),
+            ..default_adopt_params(&project_path, &projects_dir, "login", server.name())
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("1 of 2 team member(s) cannot run on their harness"),
+            "{err}"
+        );
+        assert!(
+            err.contains("\n  reviewer: harness 'aider' is not supported yet"),
+            "{err}"
+        );
+
+        assert!(!FeatureState::exists(
+            &paths::features_dir(&project_path),
+            "login"
+        ));
+        assert!(!project_path.join("login").exists());
+        assert!(
+            !tmux::has_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap()
+        );
+        // The adopted branch is the user's.
+        assert!(git::branch_exists(&paths::main_worktree(&project_path), "login").unwrap());
+    }
+
+    #[test]
     fn feat_adopt_sets_timestamps() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();

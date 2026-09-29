@@ -9,7 +9,7 @@ use std::path::Path;
 
 use chrono::Utc;
 
-use crate::commands::{agent_spawn, feat_delete};
+use crate::commands::{agent_spawn, feat_delete, harness_check};
 use crate::error::{PmError, Result};
 use crate::messages;
 use crate::state::feature::{FeatureState, FeatureStatus};
@@ -173,13 +173,15 @@ pub fn spawn_team(
     Ok(())
 }
 
-/// Convenience: load a workflow def, validate its team agents exist and
-/// that `brief_agents` is a subset of the team, and return the loaded def.
-/// Errors propagate from both steps so callers can surface the workflow
-/// problem before any filesystem side effects.
+/// Convenience: load a workflow def, validate its team agents exist, that
+/// `brief_agents` is a subset of the team, and that each member's harness
+/// can run it, and return the loaded def. Errors propagate from every step
+/// so callers can surface the workflow problem before any filesystem side
+/// effects.
 pub fn load_and_validate_workflow(project_root: &Path, name: &str) -> Result<WorkflowDef> {
     let def = WorkflowDef::load(project_root, name)?;
     def.validate(project_root, name)?;
+    harness_check::check_team(project_root, name, def.effective_team())?;
     Ok(def)
 }
 

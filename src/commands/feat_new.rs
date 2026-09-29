@@ -1193,6 +1193,69 @@ mod tests {
     }
 
     #[test]
+    fn feat_new_refuses_a_team_whose_harnesses_cannot_run_it_and_creates_nothing() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
+        let pm_dir = paths::pm_dir(&project_path);
+        let mut config = ProjectConfig::load(&pm_dir).unwrap();
+        // No model row for the opencode member; the other names no harness
+        // pm can spawn.
+        for (definition, harness) in [("implementer", "opencode"), ("reviewer", "aider")] {
+            config
+                .agents
+                .harness
+                .insert(definition.to_string(), harness.to_string());
+        }
+        config.harness.opencode.binary = Some(crate::testing::fake_opencode(
+            dir.path(),
+            "opencode v2.0.18",
+            0,
+        ));
+        config.save(&pm_dir).unwrap();
+
+        let err = feat_new(&FeatNewParams {
+            context: Some("do X"),
+            workflow: Some("implement-and-review"),
+            ..FeatNewParams::with_defaults(&project_path, &projects_dir, "login", server.name())
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("2 of 2 team member(s) cannot run on their harness"),
+            "{err}"
+        );
+        assert!(
+            err.contains("\n  implementer (opencode): no [agents.models] row"),
+            "{err}"
+        );
+        assert!(
+            err.contains("\n  reviewer: harness 'aider' is not supported yet"),
+            "{err}"
+        );
+
+        assert!(!FeatureState::exists(
+            &paths::features_dir(&project_path),
+            "login"
+        ));
+        assert!(!project_path.join("login").exists());
+        assert!(!git::branch_exists(&paths::main_worktree(&project_path), "login").unwrap());
+        assert!(
+            !tmux::has_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap()
+        );
+        assert!(
+            crate::messages::list(
+                &paths::messages_dir(&project_path),
+                "login",
+                "implementer",
+                None
+            )
+            .unwrap()
+            .is_empty()
+        );
+    }
+
+    #[test]
     fn feat_new_nonexistent_workflow_errors() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();

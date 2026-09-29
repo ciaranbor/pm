@@ -152,7 +152,11 @@ pub fn install_dry_run(project_root: Option<&Path>) -> Result<Vec<String>> {
 /// [`install`] against an explicit `home`, for tests that must not share
 /// the per-binary test home. Returns one line per file changed (or, with
 /// `dry_run`, per file that would change).
-fn install_in(home: &Path, project_root: Option<&Path>, dry_run: bool) -> Result<Vec<String>> {
+pub(crate) fn install_in(
+    home: &Path,
+    project_root: Option<&Path>,
+    dry_run: bool,
+) -> Result<Vec<String>> {
     let mut lines = Vec::new();
     let verb = if dry_run {
         "Would install"

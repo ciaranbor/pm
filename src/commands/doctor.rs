@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::commands::feat_delete::{self, CleanupParams};
+use crate::commands::harness_check::{self, Problem, ProblemKind};
 use crate::commands::{agent_spawn, hooks_install, skills};
 use crate::error::Result;
 use crate::harness::Harness;
@@ -84,6 +85,9 @@ pub enum IssueKind {
     /// An agent runs on a harness that refuses to spawn it without an
     /// `[agents.models]` row, and has none.
     AgentModelMissing,
+    /// An agent has a model or permission row its harness refuses to spawn
+    /// with.
+    AgentRowInvalid,
     /// A harness in use reports a problem with its `[harness.<name>]`
     /// settings.
     HarnessConfigInvalid,
@@ -644,69 +648,38 @@ fn hook_issues(project_root: &Path) -> Result<Vec<Issue>> {
 /// [`hook_issues`] against an explicit `home`.
 fn hook_issues_in(project_root: &Path, home: &Path) -> Result<Vec<Issue>> {
     let worktree_harnesses = worktree_harnesses(project_root)?;
+    let (project, global) = agents_configs(project_root)?;
     let config = harness_config(Some(project_root));
     let mut issues = Vec::new();
     for harness in skills::harnesses_in_use(project_root)? {
-        if let Some(reason) = harness.unusable_reason(&config) {
-            issues.push(Issue {
-                kind: IssueKind::HarnessUnusable,
-                message: format!("agents configured for {harness} cannot run: {reason}"),
-                fix: Fix::None,
-            });
-        }
-        let shown = hooks_install::install_location(harness, home)
-            .map(|path| crate::path_utils::to_portable(&path))
-            .unwrap_or_default();
-        let has_hooks_file = harness.user_settings_file(home).is_some();
-        let mut installed = !has_hooks_file;
-        if !hooks_install::stale_plugin_files(harness, home).is_empty() {
-            issues.push(Issue {
-                kind: IssueKind::HooksNotInstalled,
-                message: format!(
-                    "pm plugin for {harness} missing or out of date in {shown} (run `pm \
-                     harness hooks install`)"
-                ),
-                fix: Fix::Auto(FixAction::InstallStopHook),
-            });
-        }
-        if let Some(root) = hooks_install::user_hooks_root(harness, home)? {
-            for event in harness.malformed_hook_events(&root) {
-                issues.push(Issue {
-                    kind: IssueKind::HooksMalformed,
-                    message: format!(
-                        "{shown} `hooks.{event}` holds a bare hook object; {harness} registers \
-                         nothing for it — wrap it as {{\"hooks\": [...]}}"
-                    ),
+        for Problem { kind, message } in harness_check::harness_problems(harness, &config, home)? {
+            // The default harness is in use whether or not an agent is on it.
+            if kind == ProblemKind::Unusable
+                && !harness_check::has_agents(harness, &project, &global)
+            {
+                continue;
+            }
+            issues.push(match kind {
+                ProblemKind::Unusable => Issue {
+                    kind: IssueKind::HarnessUnusable,
+                    message: format!("agents configured for {harness} cannot run: {message}"),
                     fix: Fix::None,
-                });
-            }
-            installed = true;
-            for &(event, markers) in hooks_install::PM_EVENTS {
-                let Some((entry, hook)) = hooks_install::pm_hook_position(&root, event, markers)
-                else {
-                    installed = false;
-                    continue;
-                };
-                if !harness.hook_trusted(home, event, entry, hook) {
-                    issues.push(Issue {
-                        kind: IssueKind::HookUntrusted,
-                        message: format!(
-                            "{harness} has not trusted pm's {event} hook, so it silently does \
-                             not run: {}",
-                            harness.hook_trust_remedy()
-                        ),
-                        fix: Fix::None,
-                    });
-                }
-            }
-        }
-        if !installed {
-            issues.push(Issue {
-                kind: IssueKind::HooksNotInstalled,
-                message: format!(
-                    "pm hooks not installed in {shown} (run `pm harness hooks install`)"
-                ),
-                fix: Fix::Auto(FixAction::InstallStopHook),
+                },
+                ProblemKind::LoopNotInstalled => Issue {
+                    kind: IssueKind::HooksNotInstalled,
+                    message,
+                    fix: Fix::Auto(FixAction::InstallStopHook),
+                },
+                ProblemKind::HooksMalformed => Issue {
+                    kind: IssueKind::HooksMalformed,
+                    message,
+                    fix: Fix::None,
+                },
+                ProblemKind::HookUntrusted => Issue {
+                    kind: IssueKind::HookUntrusted,
+                    message,
+                    fix: Fix::None,
+                },
             });
         }
         for (wt, needed) in &worktree_harnesses {
@@ -751,16 +724,21 @@ fn harness_config_issues(project_root: &Path) -> Result<Vec<Issue>> {
         let Ok(settings) = resolve_agent_settings(&project, &global, &definition) else {
             continue;
         };
-        if settings.harness.requires_model() && settings.model.is_none() {
-            let dropped: Vec<String> = settings.dropped_model.into_iter().collect();
+        if let Some(dropped) = harness_check::missing_model_row(&settings) {
             issues.push(Issue {
                 kind: IssueKind::AgentModelMissing,
                 message: format!(
                     "agent '{definition}' runs on {} and has no [agents.models] row, so it \
-                     will not spawn{}",
-                    settings.harness,
-                    agent_spawn::notes_suffix(&dropped)
+                     will not spawn{dropped}",
+                    settings.harness
                 ),
+                fix: Fix::None,
+            });
+        }
+        for issue in harness_check::row_issues(&settings) {
+            issues.push(Issue {
+                kind: IssueKind::AgentRowInvalid,
+                message: format!("agent '{definition}' will not spawn: {issue}"),
                 fix: Fix::None,
             });
         }
@@ -1421,6 +1399,30 @@ mod tests {
                 "agent 'reviewer' runs on opencode and has no [agents.models] row, so it will \
               not spawn (project [agents.models] row for '*' is bound to claude-code, not \
               opencode — not applied)"
+            ]
+        );
+    }
+
+    #[test]
+    fn opencode_rows_a_spawn_would_refuse_are_reported() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, _) = server.setup_project_no_tmux(dir.path());
+        use_opencode(&project_path, "reviewer", "opencode v2.0.18");
+        let pm_dir = paths::pm_dir(&project_path);
+        let mut config = ProjectConfig::load(&pm_dir).unwrap();
+        config
+            .agents
+            .models
+            .insert("reviewer".into(), "qwen".into());
+        config.save(&pm_dir).unwrap();
+
+        let issues = harness_config_issues(&project_path).unwrap();
+        assert_eq!(
+            messages(&issues, IssueKind::AgentRowInvalid),
+            [
+                "agent 'reviewer' will not spawn: [agents.models] row for an opencode agent \
+                 must be `<provider>/<model>[#variant]`; got: qwen"
             ]
         );
     }
