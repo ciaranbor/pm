@@ -25,6 +25,12 @@ Usage: scripts/sandbox [COMMAND] [OPTIONS] [-- CMD...]
                                 (relative to the sandbox HOME, exact paths —
                                 claude does not inherit trust from parents)
   down                          kill the server and delete the HOME
+  list                          every sandbox on this machine: windows (each
+                                holds a pty), age, creator, and why it is
+                                stale if it is
+  prune [--all]                 down every stale sandbox (see list); --all
+                                downs every sandbox. Never touches a running
+                                test binary's pid-named one
 
   -n NAME    sandbox name (default: "default", or $PM_SANDBOX)
   --real     real claude/codex/opencode instead of shims, with
@@ -53,12 +59,13 @@ die() { echo "sandbox: $*" >&2; exit 1; }
 
 here=$(cd "$(dirname "$0")/.." && pwd -P)
 name=${PM_SANDBOX:-default}
-real=0 pm_bin="" shell_bin="" cdir="" cmd="" session=""
+real=0 all=0 pm_bin="" shell_bin="" cdir="" cmd="" session=""
 dirs=()
 while [ $# -gt 0 ]; do
   case $1 in
     -n) name=$2; shift 2 ;;
     --real) real=1; shift ;;
+    --all) all=1; shift ;;
     --pm) pm_bin=$2; shift 2 ;;
     --shell) shell_bin=$2; shift 2 ;;
     -C) cdir=$2; shift 2 ;;
@@ -78,20 +85,26 @@ case $name in
 esac
 
 tmpbase=$(cd "${TMPDIR:-/tmp}" && pwd -P)
-home="$tmpbase/pm-test-home-$name"
-server="pm-test-$name"
-uid=$(id -u)
-socket="${TMUX_TMPDIR:-/tmp}/tmux-$uid/$server"
+sockdir="${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)"
+caller_path=$PATH caller_agent=${PM_AGENT_NAME:-}
 
-# The sandbox environment: everything the real machine could leak through
-# is unset, and the sandbox's own bin/ leads PATH.
-sandbox_env=(-u TMUX -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME
-  -u XDG_CACHE_HOME -u CODEX_HOME -u PM_AGENT_NAME -u PM_OPENCODE_SESSION
-  -u OPENCODE_CONFIG -u OPENCODE_CONFIG_CONTENT
-  -u GIT_CONFIG_GLOBAL -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL
-  -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL
-  HOME="$home" PM_TMUX_SERVER="$server" PM_SANDBOX="$name"
-  PATH="$home/bin:$PATH")
+# Point every helper at sandbox NAME. The sandbox environment: everything
+# the real machine could leak through is unset, and the sandbox's own bin/
+# leads PATH.
+select_sandbox() {
+  name=$1
+  home="$tmpbase/pm-test-home-$name"
+  server="pm-test-$name"
+  socket="$sockdir/$server"
+  sandbox_env=(-u TMUX -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME
+    -u XDG_CACHE_HOME -u CODEX_HOME -u PM_AGENT_NAME -u PM_OPENCODE_SESSION
+    -u OPENCODE_CONFIG -u OPENCODE_CONFIG_CONTENT
+    -u GIT_CONFIG_GLOBAL -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL
+    -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL
+    HOME="$home" PM_TMUX_SERVER="$server" PM_SANDBOX="$name"
+    PATH="$home/bin:$caller_path")
+}
+select_sandbox "$name"
 scrubbed() { env "${sandbox_env[@]}" "$@"; }
 stmux() { scrubbed tmux -L "$server" "$@"; }
 exists() { [ -d "$home" ]; }
@@ -104,6 +117,9 @@ up() {
     pm_bin=$here/target/debug/pm
   fi
   mkdir -p "$home/bin" "$home/log"
+  # Who made it, for `list` and `prune`.
+  printf 'created=%s\nworktree=%s\nagent=%s\n' "$(date +%s)" "$here" "$caller_agent" \
+    > "$home/.sandbox"
   printf '[user]\n\tname = Sandbox\n\temail = sandbox@example.com\n[init]\n\tdefaultBranch = main\n' \
     > "$home/.gitconfig"
   ln -s "$pm_bin" "$home/bin/pm"
@@ -129,6 +145,11 @@ up() {
   # path_helper) moves system dirs ahead of the sandbox's bin/.
   stmux set -g default-command "${shell_bin:-${SHELL:-/bin/sh}}"
   echo "sandbox '$name' up: HOME=$home  tmux -L $server"
+  local own=()
+  for n in $(sandbox_names); do
+    [ "$n" != "$name" ] && [ "$(meta "$n" worktree)" = "$here" ] && own+=("$n")
+  done
+  [ ${#own[@]} -eq 0 ] || echo "note: also up from this worktree: ${own[*]} (scripts/sandbox list)"
 }
 
 run() {
@@ -166,8 +187,6 @@ status() {
   done
 }
 
-# The server is killed even when the HOME is already gone (macOS prunes
-# idle $TMPDIR entries), so a sandbox can never leak its server.
 trust() {
   require
   [ $# -gt 0 ] || die "trust: no directory given"
@@ -186,15 +205,78 @@ trust() {
   done
 }
 
+# The server is killed even when the HOME is already gone (macOS prunes
+# idle $TMPDIR entries), so a sandbox can never leak its server.
 down() {
+  local had_socket=0
+  [ -e "$socket" ] && had_socket=1
   stmux kill-server 2>/dev/null || true
   rm -f "$socket"
   if exists; then
     rm -rf "$home"
     echo "sandbox '$name' down"
+  elif [ "$had_socket" = 1 ]; then
+    echo "sandbox '$name' down (server only, no HOME)"
   else
     echo "no sandbox '$name'"
   fi
+}
+
+# Every sandbox name with a HOME or a socket, except pid-named ones whose
+# pid is alive: those belong to a running test binary or smoke run.
+sandbox_names() {
+  local p n
+  for p in "$tmpbase"/pm-test-home-* "$sockdir"/pm-test-*; do
+    [ -e "$p" ] || continue
+    case $p in
+      "$tmpbase"/pm-test-home-*) n=${p#"$tmpbase"/pm-test-home-} ;;
+      *) n=${p#"$sockdir"/pm-test-} ;;
+    esac
+    case $n in *[!A-Za-z0-9_-]*|"") continue ;; esac
+    case $n in *[!0-9]*) ;; *) kill -0 "$n" 2>/dev/null && continue ;; esac
+    echo "$n"
+  done | sort -u
+}
+
+# Field KEY of sandbox NAME's creation record, empty when absent.
+meta() {
+  sed -n "s/^$2=//p" "$tmpbase/pm-test-home-$1/.sandbox" 2>/dev/null || true
+}
+
+# Why sandbox NAME is stale, or nothing if it is not.
+stale_reason() {
+  local wt
+  case $1 in *[!0-9]*) ;; *) echo "test run $1 exited"; return ;; esac
+  [ -d "$tmpbase/pm-test-home-$1" ] || { echo "no HOME"; return; }
+  tmux -L "pm-test-$1" has-session 2>/dev/null || { echo "server not running"; return; }
+  wt=$(meta "$1" worktree)
+  [ -z "$wt" ] || [ -d "$wt" ] || echo "worktree $wt gone"
+}
+
+list() {
+  local n windows created age reason now
+  now=$(date +%s)
+  printf '%-20s %7s %6s  %-40s %s\n' NAME WINDOWS AGE CREATOR STALE
+  for n in $(sandbox_names); do
+    windows=$(tmux -L "pm-test-$n" list-windows -a 2>/dev/null | wc -l | tr -d ' ')
+    created=$(meta "$n" created)
+    if [ -n "$created" ]; then age="$(( (now - created) / 3600 ))h"; else age="?"; fi
+    reason=$(stale_reason "$n")
+    printf '%-20s %7s %6s  %-40s %s\n' "$n" "$windows" "$age" \
+      "$(meta "$n" agent)@$(meta "$n" worktree)" "${reason:--}"
+  done
+}
+
+prune() {
+  local n pruned=0
+  for n in $(sandbox_names); do
+    if [ "$all" = 1 ] || [ -n "$(stale_reason "$n")" ]; then
+      select_sandbox "$n"
+      down
+      pruned=$((pruned + 1))
+    fi
+  done
+  [ "$pruned" -gt 0 ] || echo "nothing to prune"
 }
 
 case $cmd in
@@ -210,5 +292,7 @@ case $cmd in
   path) echo "$home" ;;
   trust) trust ${dirs[@]+"${dirs[@]}"} ;;
   down) down ;;
+  list) list ;;
+  prune) prune ;;
   *) usage >&2; die "unknown command: $cmd" ;;
 esac
