@@ -94,6 +94,9 @@ pub enum IssueKind {
     /// A harness in use reports a problem with its `[harness.<name>]`
     /// settings.
     HarnessConfigInvalid,
+    /// A feature worktree has a rebase paused, so its branch does not yet
+    /// hold the rebased commits and `pm feat merge` refuses it.
+    RebaseInProgress,
 }
 
 /// A single issue detected for a feature.
@@ -417,6 +420,16 @@ pub fn diagnose(
                 &worktree_path,
             )?);
         }
+
+        if dir_exists && git::rebase_in_progress(&worktree_path).unwrap_or(false) {
+            issues.push(Issue {
+                kind: IssueKind::RebaseInProgress,
+                message: "rebase in progress (finish with `git rebase --continue` or `--abort`)"
+                    .to_string(),
+                fix: Fix::None,
+            });
+        }
+
         issues.extend(legacy_vanilla_agent_issues(project_root, name));
         issues.extend(loop_stopped_issues(project_root, name));
 
@@ -489,16 +502,8 @@ pub fn doctor(
     let mut warnings = baseline_capability_warnings(project_root)?;
     warnings.extend(global_config_warning());
 
-    // Empty only when the project has no features and the main scope is
-    // clean; main-scope findings are reported even with no features.
     let findings = diagnose(project_root, projects_dir, tmux_server, true)?;
-    if findings.is_empty() {
-        // Status line first, warnings after — matches the ordering in the
-        // normal path below.
-        let mut lines = vec!["No features to check".to_string()];
-        lines.extend(warnings);
-        return Ok(lines);
-    }
+    let feature_count = FeatureState::list(&paths::features_dir(project_root))?.len();
 
     let pm_dir = paths::pm_dir(project_root);
     let config = ProjectConfig::load(&pm_dir)?;
@@ -563,21 +568,13 @@ pub fn doctor(
         }
     }
 
+    let checked = format!("Checked main and {feature_count} feature(s)");
     let summary = if total_issues == 0 {
-        format!("Checked {} feature(s): all healthy", findings.len())
+        format!("{checked}: all healthy")
     } else if fix && fixed_count > 0 {
-        format!(
-            "Checked {} feature(s): {} issue(s) found, {} fixed",
-            findings.len(),
-            total_issues,
-            fixed_count
-        )
+        format!("{checked}: {total_issues} issue(s) found, {fixed_count} fixed")
     } else {
-        format!(
-            "Checked {} feature(s): {} issue(s) found",
-            findings.len(),
-            total_issues
-        )
+        format!("{checked}: {total_issues} issue(s) found")
     };
     lines.insert(0, summary);
     lines.extend(warnings);
@@ -1231,13 +1228,13 @@ mod tests {
     }
 
     #[test]
-    fn no_features_reports_empty() {
+    fn no_features_reports_main_checked() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
         let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
-        assert_eq!(lines, vec!["No features to check"]);
+        assert_eq!(lines, vec!["Checked main and 0 feature(s): all healthy"]);
     }
 
     #[test]
@@ -1289,8 +1286,11 @@ mod tests {
             "{main_kinds:?}"
         );
         let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
-        assert_ne!(lines, vec!["No features to check"]);
-        assert!(lines[0].contains("issue(s) found"), "{lines:?}");
+        assert!(
+            lines[0].starts_with("Checked main and 0 feature(s): ")
+                && lines[0].contains("issue(s) found"),
+            "{lines:?}"
+        );
     }
 
     #[test]
@@ -2099,7 +2099,11 @@ mod tests {
         .unwrap();
 
         let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
-        assert!(lines[0].contains("2 feature(s)"), "got: {:?}", lines);
+        assert!(
+            lines[0].contains("main and 2 feature(s)"),
+            "got: {:?}",
+            lines
+        );
         assert!(lines.iter().any(|l| l.contains("alpha")));
         assert!(lines.iter().any(|l| l.contains("beta")));
     }

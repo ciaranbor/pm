@@ -58,7 +58,8 @@ fn is_open_recoverable(kind: IssueKind) -> bool {
         | IssueKind::AgentModelMissing
         | IssueKind::AgentRowInvalid
         | IssueKind::AgentModelUndeclared
-        | IssueKind::HarnessConfigInvalid => false,
+        | IssueKind::HarnessConfigInvalid
+        | IssueKind::RebaseInProgress => false,
     }
 }
 

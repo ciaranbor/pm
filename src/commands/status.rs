@@ -67,9 +67,7 @@ pub fn status(
 
     // Doctor issues
     let doctor_lines = doctor::doctor(project_root, projects_dir, false, tmux_server)?;
-    let has_issues = !doctor_lines.is_empty()
-        && !doctor_lines[0].contains("No features")
-        && !doctor_lines[0].contains("all healthy");
+    let has_issues = !doctor_lines.is_empty() && !doctor_lines[0].contains("all healthy");
 
     if has_issues {
         lines.push(String::new());
@@ -176,6 +174,30 @@ mod tests {
         let lines = status(&project_path, &projects_dir, server.name()).unwrap();
         assert!(lines.iter().any(|l| l.contains("Issues:")));
         assert!(lines.iter().any(|l| l.contains("tmux session")));
+    }
+
+    #[test]
+    fn status_reports_a_feature_paused_mid_rebase() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
+            &project_path,
+            &projects_dir,
+            "login",
+            server.name(),
+        ))
+        .unwrap();
+        TestServer::add_feature_commit(&project_path, "login");
+        TestServer::pause_rebase(&project_path.join("login"), "main");
+
+        let lines = status(&project_path, &projects_dir, server.name()).unwrap();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("login") && l.contains("rebase in progress")),
+            "{lines:?}"
+        );
     }
 
     #[test]

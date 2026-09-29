@@ -82,30 +82,43 @@ fn recorded_cwd(rollout: &Path) -> Result<Option<String>> {
     Ok(last_turn.or(created_in))
 }
 
-/// Copy the rollouts of the sessions last run in `dir` into `staging`,
-/// keeping their path below `sessions/`.
+/// For each `(dir, staging)` target, copy the rollouts of the sessions last
+/// run in `dir` into `staging`, keeping their path below `sessions/`. The
+/// store is read once for all targets.
 pub(in crate::harness) fn export(
     codex_home: &Path,
-    dir: &Path,
-    staging: &Path,
-) -> Result<Option<String>> {
+    targets: &[(&Path, &Path)],
+) -> Result<Vec<Option<String>>> {
     // Codex records the resolved cwd; pm's main worktree may be a symlink.
-    let mut wanted = vec![dir.to_string_lossy().into_owned()];
-    if let Ok(resolved) = dir.canonicalize() {
-        wanted.push(resolved.to_string_lossy().into_owned());
-    }
+    let wanted: Vec<Vec<String>> = targets
+        .iter()
+        .map(|(dir, _)| {
+            let mut forms = vec![dir.to_string_lossy().into_owned()];
+            if let Ok(resolved) = dir.canonicalize() {
+                forms.push(resolved.to_string_lossy().into_owned());
+            }
+            forms
+        })
+        .collect();
 
     let store = codex_home.join(SESSIONS_DIR);
-    let mut exported = 0;
+    let mut exported = vec![0; targets.len()];
     for rel in rollouts(&store)? {
         let source = store.join(&rel);
-        if !recorded_cwd(&source)?.is_some_and(|cwd| wanted.contains(&cwd)) {
+        let Some(cwd) = recorded_cwd(&source)? else {
             continue;
+        };
+        for (at, (_, staging)) in targets.iter().enumerate() {
+            if wanted[at].contains(&cwd) {
+                copy_into(&source, &staging.join(&rel))?;
+                exported[at] += 1;
+            }
         }
-        copy_into(&source, &staging.join(&rel))?;
-        exported += 1;
     }
-    Ok((exported > 0).then(|| format!("{exported} session(s)")))
+    Ok(exported
+        .into_iter()
+        .map(|n| (n > 0).then(|| format!("{n} session(s)")))
+        .collect())
 }
 
 /// Copy the rollouts in `staging` into the store, at the path they were
@@ -175,6 +188,44 @@ mod tests {
         lines.join("\n") + "\n"
     }
 
+    fn export_one(codex_home: &Path, dir: &Path, staging: &Path) -> Result<Option<String>> {
+        Ok(export(codex_home, &[(dir, staging)])?.remove(0))
+    }
+
+    #[test]
+    fn export_to_several_targets_gives_each_its_own_sessions() {
+        let home = tempfile::tempdir().unwrap();
+        let staging = tempfile::tempdir().unwrap();
+        store_rollout(home.path(), ID_A, &rollout(ID_A, "/a", &[]));
+        store_rollout(home.path(), ID_B, &rollout(ID_B, "/b", &[]));
+        let (out_a, out_b, out_c) = (
+            staging.path().join("a"),
+            staging.path().join("b"),
+            staging.path().join("c"),
+        );
+
+        let details = export(
+            home.path(),
+            &[
+                (Path::new("/a"), &out_a),
+                (Path::new("/b"), &out_b),
+                (Path::new("/c"), &out_c),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            details,
+            [
+                Some("1 session(s)".to_string()),
+                Some("1 session(s)".to_string()),
+                None
+            ]
+        );
+        assert_eq!(rollouts(&out_a).unwrap(), vec![rel(ID_A)]);
+        assert_eq!(rollouts(&out_b).unwrap(), vec![rel(ID_B)]);
+        assert!(!out_c.exists());
+    }
+
     fn store_rollout(codex_home: &Path, id: &str, content: &str) -> PathBuf {
         let path = codex_home.join(SESSIONS_DIR).join(rel(id));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -199,7 +250,7 @@ mod tests {
         std::fs::write(home.path().join(SESSIONS_DIR).join("notes.txt"), "x").unwrap();
 
         let out = staging.path().join("out");
-        let detail = export(home.path(), Path::new("/proj"), &out).unwrap();
+        let detail = export_one(home.path(), Path::new("/proj"), &out).unwrap();
         assert_eq!(detail.as_deref(), Some("2 session(s)"));
         assert_eq!(rollouts(&out).unwrap(), vec![rel(ID_C), rel(ID_A)]);
     }
@@ -220,7 +271,7 @@ mod tests {
         );
 
         let out = work.path().join("out");
-        assert!(export(home.path(), &link, &out).unwrap().is_some());
+        assert!(export_one(home.path(), &link, &out).unwrap().is_some());
         assert_eq!(rollouts(&out).unwrap(), vec![rel(ID_A)]);
     }
 
@@ -229,9 +280,15 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let staging = tempfile::tempdir().unwrap();
         let out = staging.path().join("out");
-        assert_eq!(export(home.path(), Path::new("/proj"), &out).unwrap(), None);
+        assert_eq!(
+            export_one(home.path(), Path::new("/proj"), &out).unwrap(),
+            None
+        );
         store_rollout(home.path(), ID_A, &rollout(ID_A, "/other", &[]));
-        assert_eq!(export(home.path(), Path::new("/proj"), &out).unwrap(), None);
+        assert_eq!(
+            export_one(home.path(), Path::new("/proj"), &out).unwrap(),
+            None
+        );
         assert!(!out.exists());
     }
 
@@ -243,7 +300,7 @@ mod tests {
         let content = rollout(ID_A, "/proj", &["/proj"]);
         store_rollout(source.path(), ID_A, &content);
 
-        export(source.path(), Path::new("/proj"), staging.path()).unwrap();
+        export_one(source.path(), Path::new("/proj"), staging.path()).unwrap();
         let outcome = import(target.path(), staging.path()).unwrap();
 
         assert_eq!(

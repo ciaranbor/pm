@@ -2,17 +2,18 @@
 //! would otherwise hang the pm command that made it — a rename, register or
 //! adopt whose own work is done — with nothing printed.
 //!
-//! The call runs in a process group of its own, killed whole at the limit,
-//! so nothing it started — a standalone server — outlives it. Being out of
-//! the terminal's foreground group, it would not see a Ctrl-C that kills
-//! pm, so pm's SIGINT, SIGTERM and SIGHUP kill every running call's group
-//! before taking their default action. Its output is read on threads never
-//! joined past the limit, since such a process can hold the pipes open
-//! after the call itself has exited.
+//! The call runs in a process group of its own, killed whole when it ends
+//! or at the limit, so nothing it started — a standalone server — outlives
+//! it. Being out of the terminal's foreground group, it would not see a
+//! Ctrl-C that kills pm, so pm's SIGINT, SIGTERM and SIGHUP kill every
+//! running call's group before taking their default action; a server pm
+//! keeps up across calls is guarded the same way. A call's output is read
+//! on threads never joined past the limit, since such a process can hold
+//! the pipes open after the call itself has exited.
 
 use std::io::Read;
 use std::os::unix::process::CommandExt;
-use std::process::{Command, ExitStatus, Output, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Once, mpsc};
 use std::time::{Duration, Instant};
@@ -61,30 +62,21 @@ pub(super) fn run(command: &mut Command, limit: Duration) -> std::result::Result
         program: program.clone(),
         error,
     };
-    install_signal_handlers();
-    let mut child = match command
-        .process_group(0)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(child) => child,
+    let mut call = match Guarded::spawn(command.stdout(Stdio::piped()).stderr(Stdio::piped())) {
+        Ok(call) => call,
         Err(error) => return Err(unrunnable(error)),
     };
-    let _running = Running::register(child.id() as libc::pid_t);
-    let stdout = read_to_end(child.stdout.take());
-    let stderr = read_to_end(child.stderr.take());
+    let stdout = read_to_end(call.child.stdout.take());
+    let stderr = read_to_end(call.child.stderr.take());
     let timed_out = Failure::TimedOut { limit };
 
     let status: ExitStatus = loop {
-        match child.try_wait() {
+        match call.child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {}
             Err(error) => return Err(unrunnable(error)),
         }
         if started.elapsed() >= limit {
-            kill_group(child.id());
-            let _ = child.wait();
             return Err(timed_out);
         }
         std::thread::sleep(POLL);
@@ -94,7 +86,6 @@ pub(super) fn run(command: &mut Command, limit: Duration) -> std::result::Result
         stdout.recv_timeout(remaining()),
         stderr.recv_timeout(remaining()),
     ) else {
-        kill_group(child.id());
         return Err(timed_out);
     };
     Ok(Output {
@@ -107,6 +98,30 @@ pub(super) fn run(command: &mut Command, limit: Duration) -> std::result::Result
 /// [`run`] for the opencode call `what`, its failure as pm's error.
 pub(super) fn output(command: &mut Command, what: &str, limit: Duration) -> Result<Output> {
     run(command, limit).map_err(|failure| PmError::Agent(failure.describe(what)))
+}
+
+/// A long-running opencode process pm talks to across several calls: in a
+/// process group of its own, killed whole when dropped and, like a call's,
+/// by pm's fatal signals.
+pub(super) struct Guarded {
+    pub(super) child: Child,
+    _running: Running,
+}
+
+impl Guarded {
+    pub(super) fn spawn(command: &mut Command) -> std::io::Result<Self> {
+        install_signal_handlers();
+        let child = command.process_group(0).spawn()?;
+        let _running = Running::register(child.id() as libc::pid_t);
+        Ok(Self { child, _running })
+    }
+}
+
+impl Drop for Guarded {
+    fn drop(&mut self) {
+        kill_group(self.child.id());
+        let _ = self.child.wait();
+    }
 }
 
 /// The process groups of the calls running now, 0 for a free slot: all a

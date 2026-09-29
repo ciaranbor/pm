@@ -262,31 +262,59 @@ pub fn kill_window(server: Option<&str>, target: &str) -> Result<()> {
     Ok(())
 }
 
-/// The processes running in a window's first pane: the pane's own and its
-/// descendants, which is where a harness started from the pane's shell is.
-pub fn pane_processes(server: Option<&str>, target: &str) -> Result<Vec<u32>> {
-    let panes = run_tmux(server, &["list-panes", "-t", target, "-F", "#{pane_pid}"])?;
-    let Some(root) = panes.lines().next().and_then(|pid| pid.trim().parse().ok()) else {
-        return Ok(Vec::new());
-    };
-    let table = std::process::Command::new("ps")
-        .args(["-A", "-o", "pid=,ppid="])
+/// A process as `ps` saw it. The start time tells a pid's process apart
+/// from a later one the pid was reused for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Process {
+    pub pid: u32,
+    started: String,
+}
+
+/// Every process on the machine, as `(process, parent pid)`.
+fn process_table() -> Result<Vec<(Process, u32)>> {
+    let table = Command::new("ps")
+        .args(["-A", "-o", "pid=,ppid=,lstart="])
         .output()?;
-    let parents: Vec<(u32, u32)> = String::from_utf8_lossy(&table.stdout)
+    Ok(String::from_utf8_lossy(&table.stdout)
         .lines()
         .filter_map(|line| {
-            let mut fields = line.split_whitespace();
-            Some((fields.next()?.parse().ok()?, fields.next()?.parse().ok()?))
+            let line = line.trim_start();
+            let (pid, rest) = line.split_once(char::is_whitespace)?;
+            let rest = rest.trim_start();
+            let (ppid, started) = rest.split_once(char::is_whitespace)?;
+            let process = Process {
+                pid: pid.parse().ok()?,
+                started: started.trim().to_string(),
+            };
+            Some((process, ppid.parse().ok()?))
         })
-        .collect();
+        .collect())
+}
 
-    let mut found = vec![root];
+/// The processes running in a window's first pane: the pane's own and its
+/// descendants, which is where a harness started from the pane's shell is.
+pub fn pane_processes(server: Option<&str>, target: &str) -> Result<Vec<Process>> {
+    let panes = run_tmux(server, &["list-panes", "-t", target, "-F", "#{pane_pid}"])?;
+    let Some(root) = panes
+        .lines()
+        .next()
+        .and_then(|pid| pid.trim().parse::<u32>().ok())
+    else {
+        return Ok(Vec::new());
+    };
+    let table = process_table()?;
+
+    let mut found: Vec<Process> = table
+        .iter()
+        .filter(|(process, _)| process.pid == root)
+        .map(|(process, _)| process.clone())
+        .collect();
     let mut at = 0;
     while at < found.len() {
-        let parent = found[at];
-        for (pid, ppid) in &parents {
-            if *ppid == parent && !found.contains(pid) {
-                found.push(*pid);
+        let parent = found[at].pid;
+        for (process, ppid) in &table {
+            if *ppid == parent && !found.contains(process) {
+                found.push(process.clone());
             }
         }
         at += 1;
@@ -294,21 +322,23 @@ pub fn pane_processes(server: Option<&str>, target: &str) -> Result<Vec<u32>> {
     Ok(found)
 }
 
-/// Wait until every one of `pids` has exited, for at most `limit`. Returns
-/// those still running.
-pub fn wait_for_exit(pids: &[u32], limit: std::time::Duration) -> Vec<u32> {
-    let running = |pid: &u32| {
-        // Safety: signal 0 delivers nothing; it only checks the pid.
-        let sent = unsafe { libc::kill(*pid as libc::pid_t, 0) };
-        sent == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
-    };
+/// Wait until every one of `processes` has exited, for at most `limit`.
+/// Returns those still running.
+pub fn wait_for_exit(processes: &[Process], limit: std::time::Duration) -> Vec<Process> {
     let started = std::time::Instant::now();
     loop {
-        let left: Vec<u32> = pids.iter().copied().filter(|pid| running(pid)).collect();
+        let Ok(table) = process_table() else {
+            return processes.to_vec();
+        };
+        let left: Vec<Process> = processes
+            .iter()
+            .filter(|process| table.iter().any(|(live, _)| live == *process))
+            .cloned()
+            .collect();
         if left.is_empty() || started.elapsed() >= limit {
             return left;
         }
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
 
@@ -541,20 +571,40 @@ mod tests {
             running
         });
         assert!(started, "sleep never started in {target}");
-        let pids = pane_processes(server.name(), &target).unwrap();
-        assert!(pids.len() > 1, "{pids:?}");
+        let processes = pane_processes(server.name(), &target).unwrap();
+        assert!(processes.len() > 1, "{processes:?}");
         assert_eq!(
-            wait_for_exit(&pids, std::time::Duration::from_millis(100)),
-            pids
+            wait_for_exit(&processes, std::time::Duration::from_millis(100)),
+            processes
         );
 
         kill_window(server.name(), &target).unwrap();
 
         assert_eq!(
-            wait_for_exit(&pids, std::time::Duration::from_secs(10)),
-            Vec::<u32>::new()
+            wait_for_exit(&processes, std::time::Duration::from_secs(10)),
+            Vec::<Process>::new()
         );
         kill_session(server.name(), &name).unwrap();
+    }
+
+    #[test]
+    fn a_reused_pid_does_not_count_as_the_process_still_running() {
+        let own = process_table()
+            .unwrap()
+            .into_iter()
+            .map(|(process, _)| process)
+            .find(|process| process.pid == std::process::id())
+            .unwrap();
+        let earlier = Process {
+            pid: own.pid,
+            started: "an earlier start".to_string(),
+        };
+
+        assert_eq!(
+            wait_for_exit(std::slice::from_ref(&own), std::time::Duration::ZERO),
+            [own]
+        );
+        assert_eq!(wait_for_exit(&[earlier], std::time::Duration::ZERO), []);
     }
 
     #[test]

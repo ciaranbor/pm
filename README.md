@@ -76,6 +76,8 @@ The lifecycle: `pm feat new` → work → optionally `pm feat pr create` /
 `pm feat ready` / `pm feat review` → `pm feat merge` (cleans up by default).
 Inspection and housekeeping subcommands (`list`, `info`, `switch`, `rename`,
 `rebase`, `delete`, `sync`) round out `pm feat` — see `pm feat --help`.
+`merge` refuses a feature or base worktree with uncommitted changes or a
+paused rebase; `feat info`, `pm status` and `pm doctor` show a paused rebase.
 
 `pm register`, `pm feat adopt --from` and `pm feat rename` carry agent
 sessions to the new path for every harness in use, and print what they did.
@@ -183,7 +185,9 @@ Manage agents with `pm agent spawn|list|stop|restart|delete|fork`. `spawn
 <name> --agent <def>` decouples the display/messaging identity from the agent
 definition, so you can run several agents off one definition (e.g.
 `frontend-dev` and `backend-dev` both `--agent implementer`). `fork` starts a
-new agent from a copy of another's history. See `pm agent --help`.
+new agent from a copy of another's history. `spawn`, `stop`, `restart` and
+`delete` act on the current scope, or on another with `--scope <feature|main>`.
+See `pm agent --help`.
 
 ### Configuration
 
@@ -704,7 +708,7 @@ These round out the tool; each has its full flag reference under `--help`:
 ```sh
 cargo build
 cargo test
-cargo clippy
+cargo clippy --all-targets
 cargo fmt
 ```
 

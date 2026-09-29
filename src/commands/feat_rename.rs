@@ -7,6 +7,9 @@
 //! An agent running through the rename was started at the old path, waits
 //! on the old scope's inbox and holds a session recorded there, so it is
 //! stopped before the sessions are carried and respawned, resumed, after.
+//! The one exception is the window the rename runs from: killing it ends
+//! the rename, so it is killed last, after the respawns, and its session is
+//! carried as it stands while it still runs.
 
 use std::path::{Path, PathBuf};
 
@@ -35,14 +38,32 @@ fn scoped_state(project_root: &Path, old_name: &str, new_name: &str) -> [(PathBu
     ]
 }
 
-/// Rename a feature. Returns what the user needs to know about its agents'
-/// sessions.
+/// A completed rename.
+#[derive(Debug)]
+pub struct Renamed {
+    /// What the user needs to know about the agents' sessions.
+    pub report: Vec<String>,
+    /// The agent window the rename ran from, left to [`Renamed::finish`].
+    caller_window: Option<String>,
+}
+
+impl Renamed {
+    /// Kill the agent window the rename ran from, if it ran from one. That
+    /// ends the calling process, so it comes after the report is printed.
+    pub fn finish(self, tmux_server: Option<&str>) {
+        if let Some(window) = self.caller_window {
+            let _ = tmux::kill_window(tmux_server, &window);
+        }
+    }
+}
+
+/// Rename a feature.
 pub fn feat_rename(
     project_root: &Path,
     old_name: &str,
     new_name: &str,
     tmux_server: Option<&str>,
-) -> Result<Vec<String>> {
+) -> Result<Renamed> {
     feat_rename_in(project_root, old_name, new_name, tmux_server, None)
 }
 
@@ -53,7 +74,7 @@ pub fn feat_rename_in(
     new_name: &str,
     tmux_server: Option<&str>,
     home: Option<&Path>,
-) -> Result<Vec<String>> {
+) -> Result<Renamed> {
     let features_dir = paths::features_dir(project_root);
     let pm_dir = paths::pm_dir(project_root);
 
@@ -171,25 +192,38 @@ pub fn feat_rename_in(
 
     if !new_worktree_path.exists() {
         let _ = crate::state::runtime::remove_scope(project_root, old_name);
-        return Ok(Vec::new());
+        return Ok(Renamed {
+            report: Vec::new(),
+            caller_window: None,
+        });
     }
     // A harness still writing its transcript while it is copied would be
     // resumed without what it wrote after.
     let running = running_in_scope(project_root, project_name, new_name, tmux_server);
     let mut stopped = Vec::new();
+    let mut own_window = None;
     for (agent, entry) in &running {
         if let Ok(Some(window)) = tmux::find_window(tmux_server, &new_session, &entry.window_name) {
             let processes = tmux::pane_processes(tmux_server, &window).unwrap_or_default();
+            if processes.iter().any(|p| p.pid == std::process::id()) {
+                let _ = tmux::rename_window(
+                    tmux_server,
+                    &window,
+                    &format!("{}-renaming", entry.window_name),
+                );
+                own_window = Some((entry.window_name.clone(), window));
+                continue;
+            }
             let _ = tmux::kill_window(tmux_server, &window);
             stopped.push((agent, processes));
         }
     }
-    let all: Vec<u32> = stopped.iter().flat_map(|(_, pids)| pids.clone()).collect();
+    let all: Vec<tmux::Process> = stopped.iter().flat_map(|(_, ps)| ps.clone()).collect();
     let left = tmux::wait_for_exit(&all, EXIT_WAIT);
     let _ = crate::state::runtime::remove_scope(project_root, old_name);
     let lingering: Vec<String> = stopped
         .iter()
-        .filter(|(_, pids)| pids.iter().any(|pid| left.contains(pid)))
+        .filter(|(_, ps)| ps.iter().any(|p| left.contains(p)))
         .map(|(agent, _)| {
             format!(
                 "Warning: agent '{agent}' had not exited after {}s; its session was carried \
@@ -206,10 +240,10 @@ pub fn feat_rename_in(
         tmux_server,
     });
     report.extend(lingering);
-    for (agent, _) in running {
+    for (agent, _) in &running {
         report.push(
-            match agent_spawn(project_root, new_name, &agent, None, None, tmux_server) {
-                Ok((outcome, _, notes)) => restarted_line(&agent, outcome, &notes),
+            match agent_spawn(project_root, new_name, agent, None, None, tmux_server) {
+                Ok((outcome, _, notes)) => restarted_line(agent, outcome, &notes),
                 Err(e) => format!(
                     "Warning: agent '{agent}' was stopped and could not be restarted: {e}; \
                      run `pm agent spawn {agent}` in {}",
@@ -218,7 +252,16 @@ pub fn feat_rename_in(
             },
         );
     }
-    Ok(report)
+    let caller_window = own_window.map(|(window_name, window)| {
+        if let Ok(Some(new_window)) = tmux::find_window(tmux_server, &new_session, &window_name) {
+            let _ = tmux::select_window(tmux_server, &new_window);
+        }
+        window
+    });
+    Ok(Renamed {
+        report,
+        caller_window,
+    })
 }
 
 #[cfg(test)]
@@ -512,7 +555,8 @@ mod tests {
             server.name(),
             Some(dir.path()),
         )
-        .unwrap();
+        .unwrap()
+        .report;
 
         assert_eq!(
             std::fs::read_to_string(claude_sessions(dir.path(), &new).join("running.jsonl"))
@@ -558,7 +602,8 @@ mod tests {
             server.name(),
             Some(dir.path()),
         )
-        .unwrap();
+        .unwrap()
+        .report;
 
         assert!(FeatureState::exists(
             &paths::features_dir(&project_path),
@@ -595,7 +640,8 @@ mod tests {
             server.name(),
             Some(dir.path()),
         )
-        .unwrap();
+        .unwrap()
+        .report;
 
         assert!(FeatureState::exists(
             &paths::features_dir(&project_path),

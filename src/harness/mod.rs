@@ -423,21 +423,40 @@ impl Harness {
         }
     }
 
-    /// Write the sessions recorded at `dir` into `staging`, which is created
-    /// when there are any. Returns what was written, for the report; `None`
-    /// when `dir` has no sessions.
+    /// Write the sessions recorded at each job's `dir` into its `staging`,
+    /// which is created when there are any. Returns, per job, what was
+    /// written, for the report; `None` when its `dir` has no sessions.
     pub fn export_sessions(
         self,
-        store: &SessionStore<'_>,
-        dir: &Path,
-        staging: &Path,
-    ) -> Result<Option<String>> {
+        home: &Path,
+        jobs: &[ExportJob<'_>],
+    ) -> Result<Vec<Option<String>>> {
         match self {
-            Harness::ClaudeCode => {
-                claude_code::sessions::export(&store.claude_base(), dir, staging)
+            Harness::ClaudeCode => jobs
+                .iter()
+                .map(|job| {
+                    claude_code::sessions::export(
+                        &SessionStore {
+                            home,
+                            config: job.config,
+                        }
+                        .claude_base(),
+                        job.dir,
+                        &job.staging,
+                    )
+                })
+                .collect(),
+            Harness::Codex => {
+                let targets: Vec<(&Path, &Path)> = jobs
+                    .iter()
+                    .map(|job| (job.dir, job.staging.as_path()))
+                    .collect();
+                codex::sessions::export(&codex::home_dir(home), &targets)
             }
-            Harness::Codex => codex::sessions::export(&codex::home_dir(store.home), dir, staging),
-            Harness::OpenCode => opencode::sessions::export(&store.config.opencode, dir, staging),
+            Harness::OpenCode => jobs
+                .iter()
+                .map(|job| opencode::sessions::export(&job.config.opencode, job.dir, &job.staging))
+                .collect(),
         }
     }
 
@@ -474,6 +493,16 @@ impl SessionStore<'_> {
     fn claude_base(&self) -> PathBuf {
         self.home.join(claude_code::CONFIG_DIR)
     }
+}
+
+/// One directory whose sessions [`Harness::export_sessions`] writes.
+pub struct ExportJob<'a> {
+    /// The `[harness.*]` settings in effect where the sessions belong.
+    pub config: &'a HarnessConfig,
+    /// The directory the sessions were recorded at.
+    pub dir: &'a Path,
+    /// Where they are written.
+    pub staging: PathBuf,
 }
 
 /// A session an agent is running on.

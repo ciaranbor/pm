@@ -21,7 +21,7 @@
 use std::hash::{BuildHasher, Hasher};
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::process::{Child, Stdio};
+use std::process::Stdio;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -130,10 +130,10 @@ fn session_command(cfg: &OpenCodeConfig, verb: &str, args: &[&str]) -> Result<(S
 }
 
 /// An opencode server of pm's own that stays up across a migration's
-/// moves; killed on drop.
+/// moves.
 struct MoveServer<'a> {
     cfg: &'a OpenCodeConfig,
-    child: Child,
+    _server: bounded::Guarded,
     url: String,
     password: String,
 }
@@ -153,7 +153,7 @@ impl<'a> MoveServer<'a> {
             .env(PASSWORD_ENV, &password)
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        let mut child = command.spawn().map_err(|e| {
+        let mut server = bounded::Guarded::spawn(&mut command).map_err(|e| {
             PmError::Agent(format!(
                 "could not run `{}` to move sessions: {e}",
                 binary(cfg)
@@ -161,7 +161,7 @@ impl<'a> MoveServer<'a> {
         })?;
 
         let (sender, announced) = mpsc::channel();
-        if let Some(stdout) = child.stdout.take() {
+        if let Some(stdout) = server.child.stdout.take() {
             std::thread::spawn(move || {
                 // Read to the end: a server writing to a closed pipe dies.
                 for line in BufReader::new(stdout).lines().map_while(|line| line.ok()) {
@@ -171,18 +171,17 @@ impl<'a> MoveServer<'a> {
                 }
             });
         }
-        let mut server = Self {
-            cfg,
-            child,
-            url: String::new(),
-            password,
-        };
-        server.url = announced.recv_timeout(SERVER_START).map_err(|_| {
+        let url = announced.recv_timeout(SERVER_START).map_err(|_| {
             PmError::Agent(
                 "opencode serve did not report an address to move sessions through".to_string(),
             )
         })?;
-        Ok(server)
+        Ok(Self {
+            cfg,
+            _server: server,
+            url,
+            password,
+        })
     }
 
     fn api(&self, args: &[&str]) -> Result<Value> {
@@ -219,13 +218,6 @@ impl<'a> MoveServer<'a> {
             }
             std::thread::sleep(POLL);
         }
-    }
-}
-
-impl Drop for MoveServer<'_> {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
     }
 }
 

@@ -237,7 +237,7 @@ impl Smoke {
             }
             if !self.target_alive(target) {
                 return Outcome {
-                    log: text,
+                    log: std::fs::read_to_string(&log).unwrap_or_default(),
                     exit: None,
                     alive: false,
                 };
@@ -350,6 +350,13 @@ impl Smoke {
         let header = format!("[agents.{table}]\n");
         assert!(text.contains(&header), "{text}");
         std::fs::write(&config, text.replace(&header, &format!("{header}{row}\n"))).unwrap();
+    }
+
+    /// Append `toml` to the project's config.
+    fn append_config(&self, toml: &str) {
+        let config = self.proj().join(".pm/config.toml");
+        let text = std::fs::read_to_string(&config).unwrap();
+        std::fs::write(&config, format!("{text}\n{toml}")).unwrap();
     }
 
     /// [`Self::init_with_feature`], then spawn `reviewer` in the feature
@@ -474,6 +481,24 @@ fn spawn_builds_the_command_through_the_real_shell() {
     assert_eq!(Path::new(&rec.cwd), login);
 }
 
+/// Catches: `agent spawn --scope` resolving the target from the caller's
+/// cwd instead of the flag, run from `main` as an orchestrator would.
+#[test]
+#[ignore]
+fn spawn_from_main_into_a_feature_with_scope() {
+    let s = Smoke::new();
+    let login = s.init_with_feature();
+    s.pm(&s.proj().join("main"))
+        .args(["agent", "spawn", "reviewer", "--scope", "login"])
+        .assert()
+        .success();
+
+    let records = s.argv_records("reviewer", 1);
+    assert_eq!(Path::new(&records[0].cwd), login);
+    assert!(s.find_window("proj/login", "reviewer").is_some());
+    assert!(s.find_window("proj/main", "reviewer").is_none());
+}
+
 /// Catches: the rename-then-kill ordering in `agent restart`, which only
 /// matters when the caller's own process lives in the window being replaced.
 #[test]
@@ -515,6 +540,58 @@ fn restart_from_inside_the_agents_own_window() {
         .assert()
         .success()
         .stdout(predicate::str::contains("reviewer (active"));
+}
+
+/// Catches: `feat rename` run from one of the feature's own agent windows
+/// killing that window, and so itself, before the other agents respawn.
+#[test]
+#[ignore]
+fn rename_from_inside_an_agents_own_window() {
+    let s = Smoke::new();
+    let login = s.init_with_spawned_reviewer();
+    s.pm(&login)
+        .args(["agent", "spawn", "helper", "--agent", "implementer"])
+        .assert()
+        .success();
+    s.argv_records("reviewer", 1);
+    s.argv_records("helper", 1);
+
+    let old = s
+        .find_window("proj/login", "reviewer")
+        .expect("reviewer window");
+    // The rename renames the session, so address the window by its id.
+    let old = s.tmux_ok(&["display", "-p", "-t", &old, "#{window_id}"]);
+    s.tmux_ok(&["send-keys", "-t", &old, "C-c", ""]);
+    s.wait_for_shell(&old);
+
+    let outcome = s.run_in(&old, "pm feat rename signup");
+    assert!(
+        outcome.log.contains("Renamed feature 'login' to 'signup'"),
+        "{}",
+        outcome.log
+    );
+    assert!(
+        !outcome.alive,
+        "old window survived the rename: {outcome:?}"
+    );
+    assert!(!outcome.log.contains("error:"), "{}", outcome.log);
+
+    let signup = s.proj().join("signup");
+    let mut names = s.window_names("proj/signup");
+    names.retain(|n| n != "hook");
+    assert!(
+        names.contains(&"reviewer".to_string()),
+        "windows: {names:?}"
+    );
+    assert!(names.contains(&"helper".to_string()), "windows: {names:?}");
+    assert!(
+        !names.iter().any(|n| n.ends_with("-renaming")),
+        "windows: {names:?}"
+    );
+    for agent in ["reviewer", "helper"] {
+        let records = s.argv_records(agent, 2);
+        assert_eq!(Path::new(&records[1].cwd), signup, "{agent}");
+    }
 }
 
 /// Catches: `pm delete --force` run from the project's own main session,
@@ -758,19 +835,10 @@ fn interrupting_pm_kills_the_opencode_call_it_is_waiting_on() {
     )
     .unwrap();
     std::fs::set_permissions(&hang, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    let config = s.proj().join(".pm/config.toml");
-    let text = std::fs::read_to_string(&config).unwrap();
-    std::fs::write(
-        &config,
-        text.replace(
-            "[harness.opencode]\n",
-            &format!(
-                "[harness.opencode]\nbinary = {:?}\n",
-                hang.to_string_lossy()
-            ),
-        ),
-    )
-    .unwrap();
+    s.append_config(&format!(
+        "[harness.opencode]\nbinary = {:?}\n",
+        hang.to_string_lossy()
+    ));
 
     // `scripts/sandbox run` execs, so the child is pm itself.
     let mut pm = s
@@ -806,6 +874,90 @@ fn interrupting_pm_kills_the_opencode_call_it_is_waiting_on() {
     }
 }
 
+/// Catches: the `opencode serve` a session migration runs its moves through
+/// outliving a Ctrl-C to pm that lands mid-move.
+#[test]
+#[ignore]
+fn interrupting_pm_mid_migration_kills_its_opencode_server() {
+    use std::os::unix::process::ExitStatusExt;
+
+    let s = Smoke::new();
+    s.pm(s.home())
+        .args(["init", &s.proj().to_string_lossy()])
+        .assert()
+        .success();
+    let (server_pid, child_pid, moving) = (
+        s.home().join("serve.pid"),
+        s.home().join("serve-child.pid"),
+        s.home().join("moving"),
+    );
+    let fake = s.home().join("fake-opencode");
+    std::fs::write(
+        &fake,
+        format!(
+            "#!/bin/sh\ncase \"$*\" in\n\
+             --version*) echo 2.0.18 ;;\n\
+             serve*) echo $$ > {server}; echo 'server listening on http://127.0.0.1:9'\n\
+             sleep 300 & echo $! > {child}; wait ;;\n\
+             *session.list*) echo '{{\"data\":[{{\"id\":\"ses_a\"}}],\"cursor\":{{}}}}' ;;\n\
+             *) touch {moving}; sleep 300 ;;\n\
+             esac\n",
+            server = shell_quote(&server_pid.to_string_lossy()),
+            child = shell_quote(&child_pid.to_string_lossy()),
+            moving = shell_quote(&moving.to_string_lossy()),
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    s.append_config(&format!(
+        "[harness.opencode]\nbinary = {:?}\n",
+        fake.to_string_lossy()
+    ));
+
+    let mut pm = s
+        .run_cmd(&s.proj().join("main"), "pm")
+        .args([
+            "harness",
+            "migrate",
+            "--harness",
+            "opencode",
+            "--from",
+            "/gone/old",
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let start = Instant::now();
+    let written = |file: &PathBuf| std::fs::read_to_string(file).is_ok_and(|t| !t.is_empty());
+    while !moving.exists() || !written(&server_pid) || !written(&child_pid) {
+        assert!(
+            start.elapsed() < WAIT,
+            "pm never asked opencode to move a session"
+        );
+        std::thread::sleep(POLL);
+    }
+    // SAFETY: signals a process this test started.
+    unsafe {
+        libc::kill(pm.id() as libc::pid_t, libc::SIGINT);
+    }
+    assert_eq!(pm.wait().unwrap().signal(), Some(libc::SIGINT));
+
+    for file in [&server_pid, &child_pid] {
+        let pid: libc::pid_t = std::fs::read_to_string(file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let start = Instant::now();
+        // SAFETY: signal 0 only probes for the process.
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            assert!(start.elapsed() < WAIT, "{} outlived pm", file.display());
+            std::thread::sleep(POLL);
+        }
+    }
+}
+
 /// Catches: the binary probes resolving `claude` and `codex` through the
 /// real `PATH` (lib tests skip them), and the refusal coming before the
 /// worktree, branch and session rather than being rolled back after them.
@@ -821,15 +973,7 @@ fn feat_new_refuses_a_mixed_team_whose_harness_binaries_cannot_run() {
         .success();
     let main = proj.join("main");
     s.set_agents_config("harness", "reviewer = \"codex\"");
-    let config = proj.join(".pm/config.toml");
-    let text = std::fs::read_to_string(&config).unwrap();
-    let header = "[harness.codex]\n";
-    assert!(text.contains(header), "{text}");
-    std::fs::write(
-        &config,
-        text.replace(header, &format!("{header}bypass_hook_trust = true\n")),
-    )
-    .unwrap();
+    s.append_config("[harness.codex]\nbypass_hook_trust = true\n");
 
     let shims: Vec<(PathBuf, Vec<u8>)> = ["claude", "codex"]
         .iter()
