@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
-use crate::harness::{Harness, SessionStore};
+use crate::harness::{ExportJob, Harness};
 use crate::state::paths;
 use crate::state::project::{HarnessConfig, ProjectConfig, ProjectEntry, harness_config_in};
 
@@ -103,22 +103,30 @@ pub fn export(params: &ExportParams<'_>) -> Result<(PathBuf, Vec<String>)> {
     let mut messages = Vec::new();
     let mut manifest = serde_json::Map::new();
     let mut exported = Vec::new();
-    for project in &projects {
-        let config = harness_config_in(Some(&project.root), params.global);
-        let store = SessionStore {
-            home: params.home,
-            config: &config,
-        };
-        let key = staging_key(&project.main);
+    let configs: Vec<HarnessConfig> = projects
+        .iter()
+        .map(|project| harness_config_in(Some(&project.root), params.global))
+        .collect();
+    let jobs: Vec<ExportJob<'_>> = projects
+        .iter()
+        .zip(&configs)
+        .map(|(project, config)| ExportJob {
+            config,
+            dir: &project.main,
+            staging: staging_projects.join(staging_key(&project.main)),
+        })
+        .collect();
+    let details = harness.export_sessions(params.home, &jobs)?;
+    for ((project, job), detail) in projects.iter().zip(&jobs).zip(details) {
         let name = &project.name;
-        match harness.export_sessions(&store, &project.main, &staging_projects.join(&key))? {
+        match detail {
             Some(detail) => {
                 messages.push(format!("Exported '{name}' ({detail})"));
                 manifest.insert(
                     name.clone(),
                     serde_json::json!({
                         "path": project.main.to_string_lossy(),
-                        "key": key,
+                        "key": staging_key(job.dir),
                         "harness": harness.as_str(),
                     }),
                 );
