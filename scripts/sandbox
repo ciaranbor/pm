@@ -45,7 +45,9 @@ Usage: scripts/sandbox [COMMAND] [OPTIONS] [-- CMD...]
 
 Inside the sandbox, `pm` is the built binary and `claude`/`codex`/`opencode`
 are shims that record their invocation under $HOME/log and hold the window
-open.
+open. `run` and `shell` unset TMUX (the caller's names the real server);
+windows on the sandbox server get their own TMUX from tmux, as in
+production.
 Example:
   scripts/sandbox up
   scripts/sandbox run -- pm init proj
