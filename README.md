@@ -361,9 +361,10 @@ harnesses; what differs:
   `~/.config/opencode/agents/` and `<worktree>/.opencode/agents/`, where pm
   projects them, and runs its built-in prompt — no error — for a name it finds
   in neither. So an opencode spawn, and `pm feat new`'s check, refuse a
-  definition with no projected copy, as `pm doctor` flags it. `pm upgrade`
-  projects it into main and the global dir; a feature worktree takes main's
-  copy from `pm harness pull <feature>`.
+  definition with no projected copy, as `pm doctor` flags it for main and
+  each feature worktree. `pm upgrade` projects it into main and the global
+  dir; a feature worktree takes main's copy from `pm harness pull <feature>`,
+  which `pm doctor --fix` runs.
 - **Permissions.** `--auto` approves whatever no rule denies, because an
   approval prompt in an unwatched window stalls the agent. An
   `[agents.permissions]` row is opencode's own rule list as a JSON array;
