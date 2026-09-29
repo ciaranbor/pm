@@ -1,4 +1,14 @@
-use std::path::Path;
+//! `pm feat rename`: the branch, worktree, tmux session and every piece of
+//! state keyed by the feature's name — the `base` of features stacked on it
+//! included — move together or not at all; the
+//! sessions recorded at the old worktree path are then carried to the new
+//! one, which can no longer undo the rename and so only reports.
+//!
+//! An agent running through the rename was started at the old path, waits
+//! on the old scope's inbox and holds a session recorded there, so it is
+//! stopped before the sessions are carried and respawned, resumed, after.
+
+use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
 use crate::state::feature::FeatureState;
@@ -6,13 +16,44 @@ use crate::state::paths;
 use crate::state::project::ProjectConfig;
 use crate::{git, tmux};
 
-/// Rename a feature: update branch, worktree, tmux session, and state file.
+use super::agent_restart::restarted_line;
+use super::agent_spawn::agent_spawn;
+use super::harness_migrate::{Carry, carry_sessions, running_in_scope};
+
+const EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// State keyed by the feature's name, as `(old, new)` paths.
+fn scoped_state(project_root: &Path, old_name: &str, new_name: &str) -> [(PathBuf, PathBuf); 2] {
+    let agents = paths::agents_dir(project_root);
+    let messages = paths::messages_dir(project_root);
+    [
+        (
+            agents.join(format!("{old_name}.toml")),
+            agents.join(format!("{new_name}.toml")),
+        ),
+        (messages.join(old_name), messages.join(new_name)),
+    ]
+}
+
+/// Rename a feature. Returns what the user needs to know about its agents'
+/// sessions.
 pub fn feat_rename(
     project_root: &Path,
     old_name: &str,
     new_name: &str,
     tmux_server: Option<&str>,
-) -> Result<()> {
+) -> Result<Vec<String>> {
+    feat_rename_in(project_root, old_name, new_name, tmux_server, None)
+}
+
+/// [`feat_rename`] with the home holding the session stores.
+pub fn feat_rename_in(
+    project_root: &Path,
+    old_name: &str,
+    new_name: &str,
+    tmux_server: Option<&str>,
+    home: Option<&Path>,
+) -> Result<Vec<String>> {
     let features_dir = paths::features_dir(project_root);
     let pm_dir = paths::pm_dir(project_root);
 
@@ -31,6 +72,19 @@ pub fn feat_rename(
             "branch '{new_name}' already exists"
         )));
     }
+
+    let scoped = scoped_state(project_root, old_name, new_name);
+    if let Some((_, taken)) = scoped.iter().find(|(_, new)| new.exists()) {
+        return Err(PmError::SafetyCheck(format!(
+            "{} is left over from an earlier feature '{new_name}'; remove it first",
+            taken.display()
+        )));
+    }
+
+    let stacked: Vec<(String, FeatureState)> = FeatureState::list(&features_dir)?
+        .into_iter()
+        .filter(|(name, child)| name != old_name && child.base == state.branch)
+        .collect();
 
     let config = ProjectConfig::load(&pm_dir)?;
     let project_name = &config.project.name;
@@ -62,7 +116,8 @@ pub fn feat_rename(
         return Err(e);
     }
 
-    // Step 4: Update state file (save new, delete old).
+    // Step 4: Move the state keyed by name, then the state file (save new,
+    // delete old).
     // Capture the original branch name before the struct-update moves the
     // rest of `state` out — we still need it for the rollback path.
     let original_branch = state.branch.clone();
@@ -71,11 +126,41 @@ pub fn feat_rename(
         worktree: new_name.to_string(),
         ..state
     };
-    if let Err(e) = updated.save(&features_dir, new_name) {
+    let mut moved = Vec::new();
+    let mut rebased = Vec::new();
+    let saved = scoped
+        .iter()
+        .filter(|(old, _)| old.exists())
+        .try_for_each(|(old, new)| {
+            std::fs::rename(old, new)?;
+            moved.push((old, new));
+            Ok(())
+        })
+        .and_then(|()| {
+            stacked.iter().try_for_each(|(name, child)| {
+                let child = FeatureState {
+                    base: new_name.to_string(),
+                    ..child.clone()
+                };
+                child.save(&features_dir, name)?;
+                rebased.push(name);
+                Ok(())
+            })
+        })
+        .and_then(|()| updated.save(&features_dir, new_name));
+    if let Err(e) = saved {
         // Rollback everything. Use `original_branch` (the original branch
         // name) — NOT `old_name` (the feature name). They can differ for
         // adopted features whose branch name was preserved via
         // --name-override (e.g. branch="ciaran/eval", feature="eval").
+        for (name, child) in &stacked {
+            if rebased.contains(&name) {
+                let _ = child.save(&features_dir, name);
+            }
+        }
+        for (old, new) in moved {
+            let _ = std::fs::rename(new, old);
+        }
         let _ = tmux::rename_session(tmux_server, &new_session, &old_session);
         let _ = git::move_worktree(&main_repo, &new_worktree_path, &old_worktree_path);
         let _ = git::rename_branch(&main_repo, new_name, &original_branch);
@@ -84,13 +169,61 @@ pub fn feat_rename(
     // Only delete old state after new one is safely written
     let _ = FeatureState::delete(&features_dir, old_name);
 
-    Ok(())
+    if !new_worktree_path.exists() {
+        return Ok(Vec::new());
+    }
+    // A harness still writing its transcript while it is copied would be
+    // resumed without what it wrote after.
+    let running = running_in_scope(project_root, project_name, new_name, tmux_server);
+    let mut stopped = Vec::new();
+    for (agent, entry) in &running {
+        if let Ok(Some(window)) = tmux::find_window(tmux_server, &new_session, &entry.window_name) {
+            let processes = tmux::pane_processes(tmux_server, &window).unwrap_or_default();
+            let _ = tmux::kill_window(tmux_server, &window);
+            stopped.push((agent, processes));
+        }
+    }
+    let all: Vec<u32> = stopped.iter().flat_map(|(_, pids)| pids.clone()).collect();
+    let left = tmux::wait_for_exit(&all, EXIT_WAIT);
+    let lingering: Vec<String> = stopped
+        .iter()
+        .filter(|(_, pids)| pids.iter().any(|pid| left.contains(pid)))
+        .map(|(agent, _)| {
+            format!(
+                "Warning: agent '{agent}' had not exited after {}s; its session was carried \
+                 as it stood then",
+                EXIT_WAIT.as_secs()
+            )
+        })
+        .collect();
+    let mut report = carry_sessions(&Carry {
+        from: &old_worktree_path,
+        to: &new_worktree_path,
+        project_root,
+        home,
+        tmux_server,
+    });
+    report.extend(lingering);
+    for (agent, _) in running {
+        report.push(
+            match agent_spawn(project_root, new_name, &agent, None, None, tmux_server) {
+                Ok((outcome, _, notes)) => restarted_line(&agent, outcome, &notes),
+                Err(e) => format!(
+                    "Warning: agent '{agent}' was stopped and could not be restarted: {e}; \
+                     run `pm agent spawn {agent}` in {}",
+                    new_worktree_path.display()
+                ),
+            },
+        );
+    }
+    Ok(report)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::commands::{feat_new, init};
+    use crate::state::agent::AgentRegistry;
     use crate::testing::TestServer;
     use tempfile::tempdir;
 
@@ -227,6 +360,267 @@ mod tests {
         assert!(git::branch_exists(&main_repo, "login").unwrap());
     }
 
+    fn use_opencode(project_path: &Path, binary: String) {
+        let pm_dir = paths::pm_dir(project_path);
+        let mut config = ProjectConfig::load(&pm_dir).unwrap();
+        config
+            .agents
+            .harness
+            .insert("qa".to_string(), "opencode".to_string());
+        config.harness.opencode.binary = Some(binary);
+        config.save(&pm_dir).unwrap();
+    }
+
+    fn claude_sessions(home: &Path, worktree: &Path) -> std::path::PathBuf {
+        home.join(".claude/projects")
+            .join(crate::testing::claude_key(worktree))
+    }
+
+    #[test]
+    fn rename_keeps_the_agents_and_their_messages() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let session = tmux::session_name(&project_name, "login");
+        server.spawn_fake_agent(&project_path, &session, "login", "reviewer");
+        let messages_dir = paths::messages_dir(&project_path);
+        crate::messages::send(&messages_dir, "login", "reviewer", "user", "look at this").unwrap();
+
+        feat_rename_in(
+            &project_path,
+            "login",
+            "auth",
+            server.name(),
+            Some(dir.path()),
+        )
+        .unwrap();
+
+        let agents_dir = paths::agents_dir(&project_path);
+        assert!(
+            AgentRegistry::load(&agents_dir, "auth")
+                .unwrap()
+                .get("reviewer")
+                .is_some()
+        );
+        assert!(
+            AgentRegistry::load(&agents_dir, "login")
+                .unwrap()
+                .agents
+                .is_empty()
+        );
+        let unread = crate::messages::check(&messages_dir, "auth", "reviewer").unwrap();
+        assert_eq!(unread.len(), 1);
+        assert!(!messages_dir.join("login").exists());
+    }
+
+    #[test]
+    fn rename_keeps_stacked_features_on_the_renamed_branch() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let features_dir = paths::features_dir(&project_path);
+        let registry = TestServer::registry_dir(&project_path);
+        for name in ["child", "sibling"] {
+            feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
+                &project_path,
+                &registry,
+                name,
+                server.name(),
+            ))
+            .unwrap();
+        }
+        let mut child = FeatureState::load(&features_dir, "child").unwrap();
+        child.base = "login".to_string();
+        child.save(&features_dir, "child").unwrap();
+        let sibling_base = FeatureState::load(&features_dir, "sibling").unwrap().base;
+
+        feat_rename(&project_path, "login", "auth", server.name()).unwrap();
+
+        let child = FeatureState::load(&features_dir, "child").unwrap();
+        assert_eq!(child.base, "auth");
+        let main_branch = crate::state::project::ProjectEntry::load(
+            &registry,
+            &ProjectConfig::load(&paths::pm_dir(&project_path))
+                .unwrap()
+                .project
+                .name,
+        )
+        .unwrap()
+        .main_branch;
+        assert_eq!(
+            crate::state::feature::base_checkout(&project_path, &main_branch, &child.base)
+                .unwrap()
+                .scope,
+            "auth"
+        );
+        assert_eq!(
+            FeatureState::load(&features_dir, "sibling").unwrap().base,
+            sibling_base
+        );
+    }
+
+    #[test]
+    fn rename_refuses_a_name_that_has_state_left_over() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let leftover = paths::messages_dir(&project_path).join("auth/reviewer");
+        std::fs::create_dir_all(&leftover).unwrap();
+
+        let err = feat_rename(&project_path, "login", "auth", server.name())
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("left over from an earlier feature 'auth'"),
+            "{err}"
+        );
+        assert!(leftover.exists());
+        assert!(project_path.join("login").exists());
+        assert!(git::branch_exists(&paths::main_worktree(&project_path), "login").unwrap());
+    }
+
+    #[test]
+    fn rename_restarts_a_running_agent_on_its_carried_session() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let project_path = project_path.canonicalize().unwrap();
+        let session = tmux::session_name(&project_name, "login");
+        server.spawn_fake_agent(&project_path, &session, "login", "reviewer");
+        let agents_dir = paths::agents_dir(&project_path);
+        let mut registry = AgentRegistry::load(&agents_dir, "login").unwrap();
+        registry.get_mut("reviewer").unwrap().session_id = "running".to_string();
+        registry.save(&agents_dir, "login").unwrap();
+
+        let old = project_path.join("login");
+        let new = project_path.join("auth");
+        let store = claude_sessions(dir.path(), &old);
+        std::fs::create_dir_all(&store).unwrap();
+        std::fs::write(
+            store.join("running.jsonl"),
+            format!("{{\"cwd\":\"{}\"}}\n", old.display()),
+        )
+        .unwrap();
+
+        let report = feat_rename_in(
+            &project_path,
+            "login",
+            "auth",
+            server.name(),
+            Some(dir.path()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(claude_sessions(dir.path(), &new).join("running.jsonl"))
+                .unwrap(),
+            format!("{{\"cwd\":\"{}\"}}\n", new.display())
+        );
+        assert_eq!(
+            report,
+            [
+                format!(
+                    "Copied 1 Claude session(s) from {} to {}",
+                    old.display(),
+                    new.display()
+                ),
+                "Restarted agent 'reviewer' (resumed session)".to_string(),
+            ]
+        );
+        // The window is a new one: the fake agent's was running `sleep`.
+        let window = tmux::find_window(
+            server.name(),
+            &tmux::session_name(&project_name, "auth"),
+            "reviewer",
+        )
+        .unwrap()
+        .unwrap();
+        assert_ne!(tmux::pane_command(server.name(), &window).unwrap(), "sleep");
+        let registry = AgentRegistry::load(&agents_dir, "auth").unwrap();
+        assert!(registry.get("reviewer").unwrap().active);
+    }
+
+    #[test]
+    fn rename_completes_without_a_harness_that_is_not_installed() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let missing = dir.path().join("no-such-opencode");
+        use_opencode(&project_path, missing.to_string_lossy().into_owned());
+
+        let report = feat_rename_in(
+            &project_path,
+            "login",
+            "auth",
+            server.name(),
+            Some(dir.path()),
+        )
+        .unwrap();
+
+        assert!(FeatureState::exists(
+            &paths::features_dir(&project_path),
+            "auth"
+        ));
+        assert!(
+            report.contains(&format!(
+                "Skipped opencode sessions: `{}` could not be run",
+                missing.display()
+            )),
+            "{report:?}"
+        );
+    }
+
+    #[test]
+    fn rename_completes_and_says_which_sessions_a_failed_move_left_behind() {
+        use crate::testing::fake_opencode_sequence;
+
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let fake = tempdir().unwrap();
+        let listing = r#"{"data":[{"id":"ses_a"}],"cursor":{"previous":null,"next":null}}"#;
+        // The server pm starts to move sessions through never comes up.
+        use_opencode(
+            &project_path,
+            fake_opencode_sequence(fake.path(), &["opencode v2.0.18", listing, "", ""], 0),
+        );
+
+        let report = feat_rename_in(
+            &project_path,
+            "login",
+            "auth",
+            server.name(),
+            Some(dir.path()),
+        )
+        .unwrap();
+
+        assert!(FeatureState::exists(
+            &paths::features_dir(&project_path),
+            "auth"
+        ));
+        assert!(project_path.join("auth").exists());
+        let old = project_path.join("login");
+        let new = project_path.join("auth");
+        let report = report.join("\n");
+        assert!(
+            report.contains(&format!(
+                "Warning: opencode sessions of {} were not all carried to {}",
+                old.display(),
+                new.display()
+            )),
+            "{report}"
+        );
+        assert!(
+            report.contains(&format!(
+                "run `pm harness migrate --harness opencode --from {}` in {}",
+                old.display(),
+                new.display()
+            )),
+            "{report}"
+        );
+    }
+
     // --- Rollback path tests ---
 
     #[test]
@@ -333,9 +727,39 @@ mod tests {
         let blocker = features_dir.join(".auth.toml.tmp");
         std::fs::create_dir(&blocker).unwrap();
         std::fs::write(blocker.join("blocker"), "x").unwrap();
+        let messages_dir = paths::messages_dir(&project_path);
+        crate::messages::send(&messages_dir, "login", "reviewer", "user", "hi").unwrap();
+        let session = tmux::session_name(&project_name, "login");
+        server.spawn_fake_agent(&project_path, &session, "login", "reviewer");
+
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "child",
+            server.name(),
+        ))
+        .unwrap();
+        let mut child = FeatureState::load(&features_dir, "child").unwrap();
+        child.base = "login".to_string();
+        child.save(&features_dir, "child").unwrap();
 
         let result = feat_rename(&project_path, "login", "auth", server.name());
         assert!(result.is_err(), "expected state save to fail");
+
+        assert_eq!(
+            FeatureState::load(&features_dir, "child").unwrap().base,
+            "login"
+        );
+        assert!(messages_dir.join("login").exists());
+        assert!(!messages_dir.join("auth").exists());
+        let agents_dir = paths::agents_dir(&project_path);
+        assert!(
+            AgentRegistry::load(&agents_dir, "login")
+                .unwrap()
+                .get("reviewer")
+                .is_some()
+        );
+        assert!(!agents_dir.join("auth.toml").exists());
 
         // Branch back to original name.
         let main_repo = paths::main_worktree(&project_path);

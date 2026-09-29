@@ -1,27 +1,40 @@
 //! Claude Code keeps a directory's sessions in
 //! `~/.claude/projects/<key>/`, the key being the directory's absolute path
-//! with `/` replaced by `-`, and records that path inside the transcripts.
-//! Moving sessions is therefore a copy to the new key plus a rewrite of the
-//! embedded paths; session ids are file names and survive it.
+//! with every character but ASCII letters and digits replaced by `-`, and
+//! records that path inside the transcripts. A session is `<id>.jsonl` plus,
+//! when it ran subagents, a directory `<id>/`.
+//!
+//! Moving sessions is a copy to the new key plus a rewrite of the embedded
+//! paths; session ids are file names and survive it. Only what the new key
+//! lacks is copied, and only what was copied is rewritten, so migrating
+//! again carries what an earlier run left behind and touches nothing twice.
+//! A running Claude Code keeps appending under the key it started with, so
+//! a session in use is left for a later run: a copy taken now would be
+//! resumed without the turns that follow it. The path Claude Code records
+//! is the resolved one, so a directory moved to a symlink of itself has
+//! nothing to carry.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::Result;
 use crate::fs_utils::copy_dir_recursive;
-use crate::harness::ImportOutcome;
+use crate::harness::{ImportOutcome, InUse};
 
-/// Convert an absolute path to a Claude Code path key.
-/// `/Users/foo/bar` becomes `-Users-foo-bar`.
+const INDEX_FILE: &str = "sessions-index.json";
+
+/// The store key of the directory at `path`: `/Users/foo/my_app` becomes
+/// `-Users-foo-my-app`.
 pub(crate) fn path_to_key(path: &Path) -> String {
     let s = path.to_string_lossy();
     let s = s.strip_suffix('/').unwrap_or(&s);
     if s.is_empty() {
         return "-".to_string();
     }
-    s.replace('/', "-")
+    s.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
 }
 
-/// Replace all occurrences of `old_path` with `new_path` in a JSONL file, line by line.
 fn update_jsonl_file(path: &Path, old_path: &str, new_path: &str) -> Result<()> {
     let content = std::fs::read_to_string(path)?;
     let updated = content.replace(old_path, new_path);
@@ -31,7 +44,6 @@ fn update_jsonl_file(path: &Path, old_path: &str, new_path: &str) -> Result<()> 
     Ok(())
 }
 
-/// Update `sessions-index.json`: parse as JSON, replace path strings in all string values.
 fn update_sessions_index(path: &Path, old_path: &str, new_path: &str) -> Result<()> {
     let content = std::fs::read_to_string(path)?;
     let mut value: serde_json::Value = serde_json::from_str(&content)
@@ -43,7 +55,6 @@ fn update_sessions_index(path: &Path, old_path: &str, new_path: &str) -> Result<
     Ok(())
 }
 
-/// Recursively replace `old` with `new` in all JSON string values.
 fn replace_json_strings(value: &mut serde_json::Value, old: &str, new: &str) {
     match value {
         serde_json::Value::String(s) if s.contains(old) => {
@@ -63,8 +74,8 @@ fn replace_json_strings(value: &mut serde_json::Value, old: &str, new: &str) {
     }
 }
 
-/// Update the global `history.jsonl` file, replacing old path in `project` field only.
-/// Uses JSON-aware replacement to avoid corrupting unrelated entries.
+/// Point the entries of the global `history.jsonl` whose `project` is
+/// exactly `old_path` at `new_path`.
 fn update_history(path: &Path, old_path: &str, new_path: &str) -> Result<()> {
     if !path.exists() {
         return Ok(());
@@ -87,7 +98,6 @@ fn update_history(path: &Path, old_path: &str, new_path: &str) -> Result<()> {
         .collect::<Vec<_>>()
         .join("\n");
     if changed {
-        // Preserve trailing newline if original had one
         let final_content = if content.ends_with('\n') && !updated.ends_with('\n') {
             updated + "\n"
         } else {
@@ -98,127 +108,168 @@ fn update_history(path: &Path, old_path: &str, new_path: &str) -> Result<()> {
     Ok(())
 }
 
-/// Migrate Claude Code session data from `old_path` to `new_path` in the
-/// store at `base` (`~/.claude`).
-///
-/// Copies the session directory (preserving the original) and updates all
-/// embedded path references. Returns human-readable status messages.
+/// Rewrite `old_path` to `new_path` in what was copied to `target`.
+fn rewrite_paths(target: &Path, old_path: &str, new_path: &str) -> Result<()> {
+    if target.is_dir() {
+        for entry in std::fs::read_dir(target)? {
+            rewrite_paths(&entry?.path(), old_path, new_path)?;
+        }
+    } else if target.file_name().is_some_and(|name| name == INDEX_FILE) {
+        update_sessions_index(target, old_path, new_path)?;
+    } else if target.extension().is_some_and(|ext| ext == "jsonl") {
+        update_jsonl_file(target, old_path, new_path)?;
+    }
+    Ok(())
+}
+
+/// `dir` as Claude Code records it: resolved. One that is gone resolves
+/// through its parent.
+fn recorded(dir: &Path) -> PathBuf {
+    dir.canonicalize()
+        .ok()
+        .or_else(|| Some(dir.parent()?.canonicalize().ok()?.join(dir.file_name()?)))
+        .unwrap_or_else(|| dir.to_path_buf())
+}
+
+/// Carry the sessions recorded at `old_path` over to `new_path` in the store
+/// at `base` (`~/.claude`), leaving the originals in place. Returns
+/// human-readable status messages.
 pub(crate) fn migrate_sessions(
     base: &Path,
     old_path: &Path,
     new_path: &Path,
+    in_use: &[InUse],
 ) -> Result<Vec<String>> {
-    let projects_dir = base.join("projects");
-
-    let old_key = path_to_key(old_path);
-    let new_key = path_to_key(new_path);
-    let old_dir = projects_dir.join(&old_key);
-    let new_dir = projects_dir.join(&new_key);
-
-    let mut messages = Vec::new();
-
-    if !old_dir.exists() {
-        messages.push(format!(
-            "No Claude sessions found for {}",
-            old_path.display()
-        ));
-        return Ok(messages);
+    let target = recorded(new_path);
+    let mut sources = vec![old_path.to_path_buf()];
+    if !sources.contains(&recorded(old_path)) {
+        sources.push(recorded(old_path));
+    }
+    // `new_path` reached through a symlink to `old_path`.
+    if sources.contains(&target) {
+        return Ok(vec![format!(
+            "Claude sessions of {} are recorded at the directory {} resolves to",
+            old_path.display(),
+            new_path.display()
+        )]);
     }
 
-    // Copy session directory if new one doesn't exist yet
-    if new_dir.exists() {
+    let projects_dir = base.join("projects");
+    let new_dir = projects_dir.join(path_to_key(&target));
+    let new_path_str = target.to_string_lossy();
+
+    let mut messages = Vec::new();
+    let mut left = Vec::new();
+    let mut found = false;
+    let mut copied = 0;
+    for source in &sources {
+        let old_dir = projects_dir.join(path_to_key(source));
+        if !old_dir.exists() || old_dir == new_dir {
+            continue;
+        }
+        found = true;
+        let old_path_str = source.to_string_lossy();
+
+        let mut names: Vec<_> = std::fs::read_dir(&old_dir)?
+            .map(|entry| entry.map(|e| e.file_name()))
+            .collect::<std::io::Result<_>>()?;
+        names.sort();
+        for name in names {
+            let text = name.to_string_lossy();
+            let transcript = text.strip_suffix(".jsonl");
+            let session = transcript.unwrap_or(&text);
+            if let Some(holder) = in_use.iter().find(|u| u.session_id == session) {
+                if !left.contains(&session.to_string()) {
+                    left.push(session.to_string());
+                    messages.push(format!(
+                        "Left session {session} at {}: agent {} is running on it; stop the \
+                         agent and migrate again",
+                        old_path.display(),
+                        holder.agent
+                    ));
+                }
+                continue;
+            }
+
+            let from = old_dir.join(&name);
+            let to = new_dir.join(&name);
+            if to.exists() {
+                continue;
+            }
+            if from.is_dir() {
+                copy_dir_recursive(&from, &to)?;
+            } else {
+                std::fs::create_dir_all(&new_dir)?;
+                std::fs::copy(&from, &to)?;
+            }
+            rewrite_paths(&to, &old_path_str, &new_path_str)?;
+            if transcript.is_some() {
+                copied += 1;
+            }
+        }
+        update_history(&base.join("history.jsonl"), &old_path_str, &new_path_str)?;
+    }
+
+    if !found {
+        return Ok(vec![format!(
+            "No Claude sessions found for {}",
+            old_path.display()
+        )]);
+    }
+    if copied > 0 {
         messages.push(format!(
-            "Claude session directory already exists for {}, updating path references",
+            "Copied {copied} Claude session(s) from {} to {}",
+            old_path.display(),
             new_path.display()
         ));
-    } else {
-        copy_dir_recursive(&old_dir, &new_dir)?;
+    } else if left.is_empty() {
         messages.push(format!(
-            "Copied Claude sessions from {} to {}",
+            "No Claude sessions of {} left to copy to {}",
             old_path.display(),
             new_path.display()
         ));
     }
-
-    // Update path references in all files under the new directory
-    let old_path_str = old_path.to_string_lossy();
-    let new_path_str = new_path.to_string_lossy();
-
-    // Update .jsonl session files (may be at top level or in subdirs)
-    update_jsonl_files_recursive(&new_dir, &old_path_str, &new_path_str)?;
-
-    // Update sessions-index.json
-    let index_path = new_dir.join("sessions-index.json");
-    if index_path.exists() {
-        update_sessions_index(&index_path, &old_path_str, &new_path_str)?;
-    }
-
-    // Update global history
-    let history_path = base.join("history.jsonl");
-    update_history(&history_path, &old_path_str, &new_path_str)?;
-
-    messages.push("Updated path references in session files".to_string());
     Ok(messages)
-}
-
-/// Walk a directory recursively and update all `.jsonl` files.
-fn update_jsonl_files_recursive(dir: &Path, old_path: &str, new_path: &str) -> Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            update_jsonl_files_recursive(&path, old_path, new_path)?;
-        } else if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
-            update_jsonl_file(&path, old_path, new_path)?;
-        }
-    }
-    Ok(())
 }
 
 /// Copy the sessions recorded at `dir` into `staging`. Returns the store key
 /// they were found under, or `None` when there are none.
 pub(crate) fn export(base: &Path, dir: &Path, staging: &Path) -> Result<Option<String>> {
-    let key = path_to_key(dir);
-    let src = base.join("projects").join(&key);
-    if !src.exists() {
+    let projects = base.join("projects");
+    let Some(key) = [recorded(dir), dir.to_path_buf()]
+        .iter()
+        .map(|form| path_to_key(form))
+        .find(|key| projects.join(key).exists())
+    else {
         return Ok(None);
-    }
+    };
+    let src = projects.join(&key);
     copy_dir_recursive(&src, staging)?;
     Ok(Some(key))
 }
 
 /// Install the sessions in `staging`, exported from `from`, as the sessions
-/// of `to`. A directory that already has sessions is left alone.
+/// of `to`. A directory that already has sessions is left alone. `from` is
+/// another machine's path: it is what the transcripts hold, and names
+/// nothing here.
 pub(crate) fn import(base: &Path, staging: &Path, from: &Path, to: &Path) -> Result<ImportOutcome> {
-    let projects = base.join("projects");
-    std::fs::create_dir_all(&projects)?;
-    if projects.join(path_to_key(to)).exists() {
+    let to = &recorded(to);
+    let target = base.join("projects").join(path_to_key(to));
+    if target.exists() {
         return Ok(ImportOutcome::Skipped(
             "Claude sessions already exist locally".to_string(),
         ));
     }
-    if from == to {
-        copy_dir_recursive(staging, &projects.join(path_to_key(to)))?;
-        return Ok(ImportOutcome::Imported {
-            detail: "same path".to_string(),
-            notes: Vec::new(),
-        });
-    }
-
-    // `migrate_sessions` reads from the store, so the export is placed under
-    // its old key for the duration unless this machine has that key too.
-    let old_key_dir = projects.join(path_to_key(from));
-    let placed = !old_key_dir.exists();
-    if placed {
-        copy_dir_recursive(staging, &old_key_dir)?;
-    }
-    let migrated = migrate_sessions(base, from, to);
-    if placed {
-        let _ = std::fs::remove_dir_all(&old_key_dir);
-    }
+    copy_dir_recursive(staging, &target)?;
+    let detail = if from == to {
+        "same path"
+    } else {
+        rewrite_paths(&target, &from.to_string_lossy(), &to.to_string_lossy())?;
+        "path rewritten"
+    };
     Ok(ImportOutcome::Imported {
-        detail: "path rewritten".to_string(),
-        notes: migrated?,
+        detail: detail.to_string(),
+        notes: Vec::new(),
     })
 }
 
@@ -227,10 +278,18 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    fn migrate(base: &Path) -> Vec<String> {
+        migrate_sessions(base, Path::new("/old/path"), Path::new("/new/path"), &[]).unwrap()
+    }
+
     #[test]
-    fn path_to_key_converts_slashes_to_dashes() {
-        let key = path_to_key(Path::new("/Users/foo/bar"));
-        assert_eq!(key, "-Users-foo-bar");
+    fn path_to_key_replaces_everything_but_letters_and_digits() {
+        assert_eq!(path_to_key(Path::new("/Users/foo/bar")), "-Users-foo-bar");
+        // As Claude Code keys `/var/folders/j_/x.y/my-app`.
+        assert_eq!(
+            path_to_key(Path::new("/var/folders/j_/x.y/my-app")),
+            "-var-folders-j--x-y-my-app"
+        );
     }
 
     #[test]
@@ -253,8 +312,7 @@ mod tests {
         std::fs::create_dir_all(&old_dir).unwrap();
         std::fs::write(old_dir.join("abc123.jsonl"), "{\"cwd\":\"/old/path\"}\n").unwrap();
 
-        let msgs =
-            migrate_sessions(base.path(), Path::new("/old/path"), Path::new("/new/path")).unwrap();
+        let msgs = migrate(base.path());
 
         let new_dir = projects.join("-new-path");
         assert!(new_dir.exists());
@@ -270,7 +328,7 @@ mod tests {
         std::fs::create_dir_all(&old_dir).unwrap();
         std::fs::write(old_dir.join("session.jsonl"), "{}").unwrap();
 
-        migrate_sessions(base.path(), Path::new("/old/path"), Path::new("/new/path")).unwrap();
+        migrate(base.path());
 
         assert!(old_dir.exists());
         assert!(old_dir.join("session.jsonl").exists());
@@ -289,7 +347,7 @@ mod tests {
         )
         .unwrap();
 
-        migrate_sessions(base.path(), Path::new("/old/path"), Path::new("/new/path")).unwrap();
+        migrate(base.path());
 
         let new_dir = projects.join("-new-path");
         let content = std::fs::read_to_string(new_dir.join("session.jsonl")).unwrap();
@@ -315,7 +373,7 @@ mod tests {
         )
         .unwrap();
 
-        migrate_sessions(base.path(), Path::new("/old/path"), Path::new("/new/path")).unwrap();
+        migrate(base.path());
 
         let new_dir = projects.join("-new-path");
         let content = std::fs::read_to_string(new_dir.join("sessions-index.json")).unwrap();
@@ -340,7 +398,7 @@ mod tests {
         )
         .unwrap();
 
-        migrate_sessions(base.path(), Path::new("/old/path"), Path::new("/new/path")).unwrap();
+        migrate(base.path());
 
         let content = std::fs::read_to_string(base.path().join("history.jsonl")).unwrap();
         assert!(content.contains("/new/path"));
@@ -357,6 +415,7 @@ mod tests {
             base.path(),
             Path::new("/nonexistent/path"),
             Path::new("/new/path"),
+            &[],
         )
         .unwrap();
 
@@ -365,27 +424,208 @@ mod tests {
     }
 
     #[test]
-    fn migrate_existing_new_dir_skips_copy_but_updates() {
+    fn migrate_adds_what_the_new_directory_lacks_and_rewrites_only_that() {
+        let base = tempdir().unwrap();
+        let projects = base.path().join("projects");
+        let old_dir = projects.join("-old-path");
+        let new_dir = projects.join("-old-path2");
+        std::fs::create_dir_all(&old_dir).unwrap();
+        std::fs::create_dir_all(&new_dir).unwrap();
+        std::fs::write(old_dir.join("carried.jsonl"), "{\"cwd\":\"/old/path\"}\n").unwrap();
+        std::fs::write(old_dir.join("both.jsonl"), "{\"cwd\":\"/old/path\"}\n").unwrap();
+        // Recorded at the new path, which contains the old one.
+        std::fs::write(new_dir.join("both.jsonl"), "{\"cwd\":\"/old/path2\"}\n").unwrap();
+
+        let run = || {
+            migrate_sessions(
+                base.path(),
+                Path::new("/old/path"),
+                Path::new("/old/path2"),
+                &[],
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            run(),
+            ["Copied 1 Claude session(s) from /old/path to /old/path2"]
+        );
+        assert_eq!(
+            run(),
+            ["No Claude sessions of /old/path left to copy to /old/path2"]
+        );
+
+        for file in ["carried.jsonl", "both.jsonl"] {
+            assert_eq!(
+                std::fs::read_to_string(new_dir.join(file)).unwrap(),
+                "{\"cwd\":\"/old/path2\"}\n",
+                "{file}"
+            );
+        }
+    }
+
+    #[test]
+    fn migrate_to_a_symlink_of_the_old_directory_changes_nothing() {
+        let base = tempdir().unwrap();
+        let work = tempdir().unwrap();
+        let repo = work.path().canonicalize().unwrap().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let link = work.path().join("main");
+        std::os::unix::fs::symlink(&repo, &link).unwrap();
+        let store = base.path().join("projects").join(path_to_key(&repo));
+        std::fs::create_dir_all(&store).unwrap();
+        std::fs::write(store.join("abc.jsonl"), "{}\n").unwrap();
+        let history = format!("{{\"project\":\"{}\"}}\n", repo.display());
+        std::fs::write(base.path().join("history.jsonl"), &history).unwrap();
+
+        let messages = migrate_sessions(base.path(), &repo, &link, &[]).unwrap();
+
+        assert!(
+            messages[0].contains("are recorded at the directory"),
+            "{messages:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(base.path().join("history.jsonl")).unwrap(),
+            history
+        );
+        assert_eq!(
+            std::fs::read_dir(base.path().join("projects"))
+                .unwrap()
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn migrate_keys_the_new_directory_by_its_resolved_path() {
+        let base = tempdir().unwrap();
+        let work = tempdir().unwrap();
+        let real = work.path().canonicalize().unwrap().join("real");
+        std::fs::create_dir_all(real.join("auth")).unwrap();
+        let link = work.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        // Recorded while the worktree was `login`, which is gone.
+        let store = base
+            .path()
+            .join("projects")
+            .join(path_to_key(&real.join("login")));
+        std::fs::create_dir_all(&store).unwrap();
+        std::fs::write(
+            store.join("abc.jsonl"),
+            format!("{{\"cwd\":\"{}\"}}\n", real.join("login").display()),
+        )
+        .unwrap();
+
+        migrate_sessions(base.path(), &link.join("login"), &link.join("auth"), &[]).unwrap();
+
+        let carried = base
+            .path()
+            .join("projects")
+            .join(path_to_key(&real.join("auth")));
+        assert_eq!(
+            std::fs::read_to_string(carried.join("abc.jsonl")).unwrap(),
+            format!("{{\"cwd\":\"{}\"}}\n", real.join("auth").display())
+        );
+    }
+
+    #[test]
+    fn import_treats_the_exported_path_as_text_even_when_it_exists_here() {
+        let base = tempdir().unwrap();
+        let work = tempdir().unwrap();
+        let work_dir = work.path().canonicalize().unwrap();
+        // The exported path is, on this machine, a symlink to a directory
+        // with sessions of its own.
+        let local = work_dir.join("local");
+        let to = work_dir.join("main");
+        for dir in [&local, &to] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let from = work_dir.join("exported");
+        std::os::unix::fs::symlink(&local, &from).unwrap();
+        let local_store = base.path().join("projects").join(path_to_key(&local));
+        std::fs::create_dir_all(&local_store).unwrap();
+        let local_transcript = format!("{{\"cwd\":\"{}\"}}\n", local.display());
+        std::fs::write(local_store.join("mine.jsonl"), &local_transcript).unwrap();
+
+        let staging = work_dir.join("staging");
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::write(
+            staging.join("theirs.jsonl"),
+            format!("{{\"cwd\":\"{}\"}}\n", from.display()),
+        )
+        .unwrap();
+
+        let outcome = import(base.path(), &staging, &from, &to).unwrap();
+
+        assert_eq!(
+            outcome,
+            ImportOutcome::Imported {
+                detail: "path rewritten".to_string(),
+                notes: Vec::new(),
+            }
+        );
+        let imported = base.path().join("projects").join(path_to_key(&to));
+        assert_eq!(
+            std::fs::read_to_string(imported.join("theirs.jsonl")).unwrap(),
+            format!("{{\"cwd\":\"{}\"}}\n", to.display())
+        );
+        assert!(!imported.join("mine.jsonl").exists());
+        assert_eq!(
+            std::fs::read_to_string(local_store.join("mine.jsonl")).unwrap(),
+            local_transcript
+        );
+        assert_eq!(std::fs::read_dir(&local_store).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn migrate_leaves_a_session_in_use_for_a_later_run() {
         let base = tempdir().unwrap();
         let projects = base.path().join("projects");
         let old_dir = projects.join("-old-path");
         let new_dir = projects.join("-new-path");
-        std::fs::create_dir_all(&old_dir).unwrap();
-        std::fs::create_dir_all(&new_dir).unwrap();
+        std::fs::create_dir_all(old_dir.join("running/subagents")).unwrap();
+        std::fs::write(old_dir.join("running.jsonl"), "{\"turn\":1}\n").unwrap();
+        std::fs::write(old_dir.join("running/subagents/a.jsonl"), "{}\n").unwrap();
+        std::fs::write(old_dir.join("idle.jsonl"), "{}\n").unwrap();
+        let in_use = [InUse {
+            session_id: "running".to_string(),
+            agent: "login/reviewer".to_string(),
+        }];
+        let run = |in_use: &[InUse]| {
+            migrate_sessions(
+                base.path(),
+                Path::new("/old/path"),
+                Path::new("/new/path"),
+                in_use,
+            )
+            .unwrap()
+        };
 
-        // Old has a file the new doesn't — it should NOT be copied
-        std::fs::write(old_dir.join("old-only.jsonl"), "{}").unwrap();
+        let messages = run(&in_use);
 
-        // New already has a session file with old paths that needs updating
-        std::fs::write(new_dir.join("session.jsonl"), "{\"cwd\":\"/old/path\"}\n").unwrap();
+        assert_eq!(
+            messages,
+            [
+                "Left session running at /old/path: agent login/reviewer is running on it; \
+                 stop the agent and migrate again",
+                "Copied 1 Claude session(s) from /old/path to /new/path",
+            ]
+        );
+        assert!(new_dir.join("idle.jsonl").exists());
+        assert!(!new_dir.join("running.jsonl").exists());
+        assert!(!new_dir.join("running").exists());
 
-        let msgs =
-            migrate_sessions(base.path(), Path::new("/old/path"), Path::new("/new/path")).unwrap();
-
-        assert!(msgs.iter().any(|m| m.contains("already exists")));
-        assert!(!new_dir.join("old-only.jsonl").exists());
-        let content = std::fs::read_to_string(new_dir.join("session.jsonl")).unwrap();
-        assert!(content.contains("/new/path"));
+        // The agent went on for another turn before it was stopped.
+        std::fs::write(
+            old_dir.join("running.jsonl"),
+            "{\"turn\":1}\n{\"turn\":2}\n",
+        )
+        .unwrap();
+        run(&[]);
+        assert_eq!(
+            std::fs::read_to_string(new_dir.join("running.jsonl")).unwrap(),
+            "{\"turn\":1}\n{\"turn\":2}\n"
+        );
+        assert!(new_dir.join("running/subagents/a.jsonl").exists());
     }
 
     #[test]
@@ -411,7 +651,7 @@ mod tests {
         std::fs::create_dir_all(&memory_dir).unwrap();
         std::fs::write(memory_dir.join("MEMORY.md"), "# Memory\n").unwrap();
 
-        migrate_sessions(base.path(), Path::new("/old/path"), Path::new("/new/path")).unwrap();
+        migrate(base.path());
 
         let new_dir = projects.join("-new-path");
         // Subagent files copied and updated
@@ -444,7 +684,12 @@ mod tests {
         std::fs::write(old_dir.join("session.jsonl"), "{}").unwrap();
 
         // No history.jsonl — should not error
-        let result = migrate_sessions(base.path(), Path::new("/old/path"), Path::new("/new/path"));
+        let result = migrate_sessions(
+            base.path(),
+            Path::new("/old/path"),
+            Path::new("/new/path"),
+            &[],
+        );
         assert!(result.is_ok());
     }
 
@@ -464,7 +709,7 @@ mod tests {
         )
         .unwrap();
 
-        migrate_sessions(base.path(), Path::new("/old/path"), Path::new("/new/path")).unwrap();
+        migrate(base.path());
 
         let content = std::fs::read_to_string(base.path().join("history.jsonl")).unwrap();
         // /old/path entry should be updated

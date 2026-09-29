@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use super::{api, api_error, binary, command, detached, run_api};
+use super::{api, api_error, binary, command, detached, installed_version, run_api};
 use crate::error::{PmError, Result};
 use crate::harness::{ImportOutcome, InUse, per_session_outcome};
 use crate::state::project::OpenCodeConfig;
@@ -234,12 +234,26 @@ impl Drop for MoveServer<'_> {
     }
 }
 
+pub(in crate::harness) fn unreachable(cfg: &OpenCodeConfig) -> Option<String> {
+    installed_version(cfg)
+        .is_none()
+        .then(|| format!("`{}` could not be run", binary(cfg)))
+}
+
 pub(in crate::harness) fn migrate(
     cfg: &OpenCodeConfig,
     from: &Path,
     to: &Path,
     in_use: &[InUse],
 ) -> Result<Vec<String>> {
+    // `to` reached through a symlink to `from`: the binding is already it.
+    if recorded_forms(from).contains(&binding(to)) {
+        return Ok(vec![format!(
+            "opencode sessions of {} are bound to the directory {} resolves to",
+            from.display(),
+            to.display()
+        )]);
+    }
     let sessions = list(cfg, from)?;
     if sessions.is_empty() {
         return Ok(vec![format!(
@@ -493,6 +507,24 @@ mod tests {
             "{messages:?}"
         );
         assert!(messages[1].starts_with("Moved 1 opencode session(s)"));
+    }
+
+    #[test]
+    fn migrate_to_a_symlink_of_the_old_directory_asks_opencode_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let link = dir.path().join("main");
+        std::os::unix::fs::symlink(&repo, &link).unwrap();
+        let cfg = cfg(fake_opencode(dir.path(), &page(&["ses_a"], None), 0));
+
+        let messages = migrate(&cfg, &repo.canonicalize().unwrap(), &link, &[]).unwrap();
+
+        assert!(
+            messages[0].contains("are bound to the directory"),
+            "{messages:?}"
+        );
+        assert!(fake_opencode_calls(dir.path()).is_empty());
     }
 
     #[test]

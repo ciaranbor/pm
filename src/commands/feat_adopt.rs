@@ -19,7 +19,7 @@ pub struct FeatAdoptParams<'a> {
     pub name: &'a str,
     pub name_override: Option<&'a str>,
     pub context: Option<&'a str>,
-    /// Path to an existing worktree to migrate Claude sessions from.
+    /// Path to an existing worktree to carry sessions from.
     pub from: Option<&'a Path>,
     /// Workflow to activate for this feature. When `None` and `context` is
     /// provided, defaults to `feat_common::DEFAULT_WORKFLOW` (a context
@@ -165,11 +165,18 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
         // Step 2.5: Seed harness assets and settings from main worktree
         super::seed::seed_feature_assets(params.project_root, &worktree_path)?;
 
-        // Step 2.6: Migrate Claude Code sessions from old path if provided.
-        // Always use the original --from path for migration since claude
-        // sessions are keyed by the original path, not the backup location.
+        // Step 2.6: Sessions are recorded at the `--from` path itself, not
+        // at the backup the old worktree was moved to.
         if let Some(old_path) = params.from {
-            super::harness_migrate::carry_sessions(old_path, &worktree_path, params.home);
+            for line in super::harness_migrate::carry_sessions(&super::harness_migrate::Carry {
+                from: old_path,
+                to: &worktree_path,
+                project_root: params.project_root,
+                home: params.home,
+                tmux_server: params.tmux_server,
+            }) {
+                eprintln!("{line}");
+            }
         }
 
         // Step 2.7: Enqueue the initial context as a message to each
@@ -566,7 +573,7 @@ mod tests {
         // Set up fake Claude session data keyed to some old path
         let claude_base = dir.path().join(".claude");
         let old_path = std::path::Path::new("/tmp/old-repo");
-        let old_key = old_path.to_string_lossy().replace('/', "-");
+        let old_key = crate::testing::claude_key(&old_path);
         let old_session_dir = claude_base.join("projects").join(&old_key);
         std::fs::create_dir_all(&old_session_dir).unwrap();
         std::fs::write(
@@ -583,8 +590,8 @@ mod tests {
         .unwrap();
 
         // New session dir should exist with updated path
-        let worktree_path = project_path.join("login");
-        let new_key = worktree_path.to_string_lossy().replace('/', "-");
+        let worktree_path = project_path.join("login").canonicalize().unwrap();
+        let new_key = crate::testing::claude_key(&worktree_path);
         let new_session_dir = claude_base.join("projects").join(&new_key);
         assert!(new_session_dir.exists());
         let content = std::fs::read_to_string(new_session_dir.join("session.jsonl")).unwrap();
@@ -658,14 +665,14 @@ mod tests {
         create_branch(&project_path, "login");
 
         // Create an existing worktree for the branch (simulating a pre-existing checkout)
-        let old_worktree = dir.path().join("old-checkout");
+        let old_worktree = dir.path().canonicalize().unwrap().join("old-checkout");
         let main_wt = paths::main_worktree(&project_path);
         git::add_worktree(&main_wt, &old_worktree, "login").unwrap();
         assert!(old_worktree.exists());
 
         // Set up fake Claude session data keyed to the old worktree path
         let claude_base = dir.path().join(".claude");
-        let old_key = old_worktree.to_string_lossy().replace('/', "-");
+        let old_key = crate::testing::claude_key(&old_worktree);
         let old_session_dir = claude_base.join("projects").join(&old_key);
         std::fs::create_dir_all(&old_session_dir).unwrap();
         std::fs::write(
@@ -700,7 +707,8 @@ mod tests {
         assert_eq!(backups.len(), 1, "expected exactly one timestamped backup");
 
         // Claude sessions should be migrated to the new path
-        let new_key = new_worktree.to_string_lossy().replace('/', "-");
+        let new_worktree = new_worktree.canonicalize().unwrap();
+        let new_key = crate::testing::claude_key(&new_worktree);
         let new_session_dir = claude_base.join("projects").join(&new_key);
         assert!(new_session_dir.exists());
         let content = std::fs::read_to_string(new_session_dir.join("session.jsonl")).unwrap();
@@ -720,7 +728,7 @@ mod tests {
         create_branch(&project_path, "login");
 
         // Create an existing worktree for the branch
-        let old_worktree = dir.path().join("old-checkout");
+        let old_worktree = dir.path().canonicalize().unwrap().join("old-checkout");
         let main_wt = paths::main_worktree(&project_path);
         git::add_worktree(&main_wt, &old_worktree, "login").unwrap();
 
@@ -752,7 +760,7 @@ mod tests {
         create_branch(&project_path, "login");
 
         // Pre-create an existing worktree for the branch (will be backed up).
-        let old_worktree = dir.path().join("old-checkout");
+        let old_worktree = dir.path().canonicalize().unwrap().join("old-checkout");
         let main_wt = paths::main_worktree(&project_path);
         git::add_worktree(&main_wt, &old_worktree, "login").unwrap();
         assert!(old_worktree.exists());

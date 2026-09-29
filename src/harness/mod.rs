@@ -341,9 +341,20 @@ impl Harness {
         }
     }
 
+    /// Why the harness's session store cannot be reached on this machine,
+    /// for a caller that carries sessions as a side effect and must not fail
+    /// over a harness that is configured but not installed. `None` for a
+    /// store pm reads as files.
+    pub fn sessions_unreachable(self, config: &HarnessConfig) -> Option<String> {
+        match self {
+            Harness::ClaudeCode | Harness::Codex => None,
+            Harness::OpenCode => opencode::sessions::unreachable(&config.opencode),
+        }
+    }
+
     /// Make the sessions recorded at `from` resumable at `to`, which must
     /// exist. Sessions named in `in_use` have an agent running on them and
-    /// are left alone by a harness that would rebind them in place.
+    /// are left where they are, each reported with its agent.
     pub fn migrate_sessions(
         self,
         store: &SessionStore<'_>,
@@ -353,7 +364,7 @@ impl Harness {
     ) -> Result<Vec<String>> {
         match self {
             Harness::ClaudeCode => {
-                claude_code::sessions::migrate_sessions(&store.claude_base(), from, to)
+                claude_code::sessions::migrate_sessions(&store.claude_base(), from, to, in_use)
             }
             Harness::Codex => Ok(vec![codex::sessions::MIGRATE_NOTE.to_string()]),
             Harness::OpenCode => {

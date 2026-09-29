@@ -73,14 +73,20 @@ pub fn agent_restart(
         let _ = tmux::kill_window(tmux_server, target);
     }
 
-    let mut msg = if outcome == SpawnOutcome::Resumed {
-        format!("Restarted agent '{agent_name}' (resumed session)")
-    } else {
-        format!("Restarted agent '{agent_name}'")
-    };
-    msg.push_str(&notes_suffix(&notes));
+    Ok(restarted_line(agent_name, outcome, &notes))
+}
 
-    Ok(msg)
+/// The report line for an agent that was stopped and respawned.
+pub(super) fn restarted_line(agent_name: &str, outcome: SpawnOutcome, notes: &[String]) -> String {
+    let resumed = if outcome == SpawnOutcome::Resumed {
+        " (resumed session)"
+    } else {
+        ""
+    };
+    format!(
+        "Restarted agent '{agent_name}'{resumed}{}",
+        notes_suffix(notes)
+    )
 }
 
 /// Restart multiple agents. Continues on error, returns all results.
