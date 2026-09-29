@@ -907,7 +907,9 @@ mod tests {
 
     #[test]
     fn spawn_on_codex_launches_codex_trusts_the_worktree_and_records_the_harness() {
-        let _guard = crate::testing::CODEX_CONFIG_LOCK.lock().unwrap();
+        let _guard = crate::testing::CODEX_CONFIG_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let server = TestServer::new();
         let dir = tempdir().unwrap();
         let (session_name, feature) = setup_project(dir.path(), &server);
@@ -935,7 +937,9 @@ mod tests {
     fn spawn_drops_global_row_bound_to_another_harness_and_reports_it() {
         // Through the chokepoint with an explicit global config, so the
         // shared test home is left untouched.
-        let _guard = crate::testing::CODEX_CONFIG_LOCK.lock().unwrap();
+        let _guard = crate::testing::CODEX_CONFIG_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let server = TestServer::new();
         let dir = tempdir().unwrap();
         let (session_name, feature) = setup_project(dir.path(), &server);
@@ -986,7 +990,9 @@ mod tests {
         // A session id only means something to the harness that produced
         // it: once config moves the definition to another harness, the dead
         // agent is respawned without `resume`, and the entry follows.
-        let _guard = crate::testing::CODEX_CONFIG_LOCK.lock().unwrap();
+        let _guard = crate::testing::CODEX_CONFIG_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let server = TestServer::new();
         let dir = tempdir().unwrap();
         let (session_name, feature) = setup_project(dir.path(), &server);
@@ -1276,13 +1282,13 @@ package = "second-pkg"
         // cannot resolve fails the turn instead of running on its default.
         set_model("nowhere/does-not-exist");
         agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
+        opencode_tui_argv(dir.path());
         let create = crate::testing::fake_opencode_calls(dir.path()).remove(0);
         let body: serde_json::Value = serde_json::from_str(create.last().unwrap()).unwrap();
         assert_eq!(
             body["model"],
             serde_json::json!({"providerID": "nowhere", "id": "does-not-exist"})
         );
-        opencode_tui_argv(dir.path());
         assert_eq!(
             opencode_config(dir.path())["enabled_providers"],
             serde_json::json!(["nowhere"])

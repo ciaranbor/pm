@@ -253,6 +253,9 @@ extern "C" fn atexit_kill_shared_server() {
 
 const TEST_HOME_PREFIX: &str = "pm-test-home-";
 
+/// The shell every window of the shared test server runs.
+const HERMETIC_SHELL: &str = "/bin/sh";
+
 /// Remove `pm-test-home-<pid>` dirs left by test binaries that died without
 /// running their atexit handler.
 fn reap_dead_test_homes() {
@@ -285,9 +288,11 @@ extern "C" fn atexit_remove_test_home() {
 
 /// The `$HOME` stand-in every global-tier path uses under `cfg(test)`: one
 /// `pm-test-home-<pid>` temp dir per test binary, shared by all its tests.
-/// `pm init` populates the global asset tier in it idempotently, so tests
-/// may read it freely; a test that needs to *mutate* the global tier must
-/// use the explicit-dir variants against its own tempdir instead.
+/// The global asset tier is installed in it before any test sees it: a
+/// first install writes temp files into directories a concurrent install is
+/// listing and copying, while a later one finds everything up to date and
+/// writes nothing. Tests may read the tier freely; a test that needs to
+/// *mutate* it must use the explicit-dir variants against its own tempdir.
 pub fn test_home() -> &'static std::path::Path {
     TEST_HOME.get_or_init(|| {
         reap_dead_test_homes();
@@ -300,6 +305,8 @@ pub fn test_home() -> &'static std::path::Path {
         unsafe {
             libc::atexit(atexit_remove_test_home);
         }
+        crate::commands::skills::install_global_in(&crate::commands::skills::GlobalStore::at(&dir))
+            .expect("install the global tier into the test home");
         dir
     })
 }
@@ -321,10 +328,32 @@ fn shared_server_name() -> &'static str {
         let _ = crate::tmux::kill_server(Some(&name));
         let _ = std::fs::remove_file(tmux_socket_dir().join(&name));
 
-        // Create a keepalive session so the server stays alive for the entire
-        // test run. Without this, the server shuts down each time a test cleans
-        // up its sessions (costing ~2s to cold-start per subsequent test).
-        let _ = crate::tmux::create_session(Some(&name), "keepalive", std::path::Path::new("/tmp"));
+        // Tests type commands into fresh windows and wait for them to run.
+        // Under the developer's tmux config and interactive shell, a window's
+        // rc files can take over 10s to load under a loaded suite, and can
+        // drop keys typed before the prompt; so the server reads no config
+        // and every window runs `sh` with no startup files. tmux starts a
+        // window as `$default-shell -c <default-command>`, and takes
+        // `default-shell` from `SHELL`, so both are set; with `ENV` unset
+        // the interactive `sh` reads nothing. The keepalive session keeps
+        // the server up for the whole run: without it the server shuts down
+        // each time a test cleans up its sessions.
+        let _ = std::process::Command::new("tmux")
+            .env("SHELL", HERMETIC_SHELL)
+            .env_remove("ENV")
+            .args(["-L", &name, "-f", "/dev/null"])
+            .args([
+                "new-session",
+                "-d",
+                "-s",
+                "keepalive",
+                "-c",
+                "/tmp",
+                HERMETIC_SHELL,
+            ])
+            .args([";", "set-option", "-g", "default-shell", HERMETIC_SHELL])
+            .args([";", "set-option", "-g", "default-command", HERMETIC_SHELL])
+            .output();
 
         // Register the atexit cleanup exactly once. Store the pid first
         // because the extern "C" fn cannot capture.
@@ -659,7 +688,10 @@ impl TestServer {
         }
         assert!(
             sleep_detected,
-            "spawn_fake_agent: timed out waiting for 'exec sleep 999' to take effect in window '{agent_name}'"
+            "spawn_fake_agent: timed out waiting for 'exec sleep 999' to take effect in window \
+             '{agent_name}' ({target}); running {:?}, pane:\n{:?}",
+            crate::tmux::pane_command(self.name(), &target),
+            crate::tmux::capture_pane(self.name(), &target),
         );
 
         // Register in agent registry
@@ -736,11 +768,12 @@ mod tests {
         // if pid gets reused immediately — acceptable.)
         assert!(!pid_is_alive(dead_pid), "pid {dead_pid} unexpectedly alive");
 
-        // Create a "leaked" tmux server under pm-test-<dead_pid>.
+        // Create a "leaked" tmux server under pm-test-<dead_pid>. Its socket
+        // is not checked for here: any concurrent reaper (a sibling test, or
+        // another test binary starting up) may already have removed it.
         let leaked_name = format!("pm-test-{dead_pid}");
         crate::tmux::create_session(Some(&leaked_name), "x", std::path::Path::new("/tmp")).unwrap();
         let socket = tmux_socket_dir().join(&leaked_name);
-        assert!(wait_for(&socket, true), "socket was never created");
 
         reap_dead_test_servers();
 

@@ -2001,13 +2001,13 @@ mod tests {
 
     #[test]
     fn codex_in_use_is_checked_for_hooks_trust_and_worktree_trust() {
-        let _guard = crate::testing::CODEX_CONFIG_LOCK.lock().unwrap();
+        let _guard = crate::testing::CODEX_CONFIG_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
         let projects_dir = TestServer::registry_dir(&project_path);
-        let home = paths::home_dir().unwrap();
-        let codex_hooks = home.join(".codex/hooks.json");
 
         // Trust is per worktree: main runs a registered agent whose
         // definition (not its key) is the reviewer, login's workflow team
@@ -2126,8 +2126,18 @@ mod tests {
         assert!(found[0].1.contains("pm's Stop hook"), "{found:?}");
         assert!(found[1].1.contains("pm's SessionStart hook"), "{found:?}");
 
-        // Trust recorded the way codex writes it, at pm's entries' positions.
-        let root = hooks_install::user_hooks_root(Harness::Codex, &home)
+        // Trust recorded the way codex writes it, at pm's entries' positions,
+        // in a home of the test's own: trust written to the shared test home
+        // would outlive this test and reach every other one.
+        let trusted_home = dir.path().join("trusted-home");
+        hooks_install::install_in(&trusted_home, None, false).unwrap();
+        for wt in ["main", "login"] {
+            Harness::Codex
+                .trust_worktree(&trusted_home, &project_path.join(wt))
+                .unwrap();
+        }
+        let codex_hooks = trusted_home.join(".codex/hooks.json");
+        let root = hooks_install::user_hooks_root(Harness::Codex, &trusted_home)
             .unwrap()
             .unwrap();
         let mut trust = String::new();
@@ -2143,13 +2153,11 @@ mod tests {
                 codex_hooks.display()
             ));
         }
-        let config_toml = home.join(".codex/config.toml");
+        let config_toml = trusted_home.join(".codex/config.toml");
         let existing = std::fs::read_to_string(&config_toml).unwrap();
         std::fs::write(&config_toml, format!("{existing}\n{trust}")).unwrap();
-        assert!(
-            kinds(&diagnose(&project_path, &projects_dir, server.name(), false).unwrap())
-                .is_empty()
-        );
+        let found = hook_kinds(hook_issues_in(&project_path, &trusted_home).unwrap().iter());
+        assert!(found.is_empty(), "{found:?}");
 
         // A flat hooks.json registers nothing in codex: flagged, not "installed".
         let flat = bare_home.join(".codex/hooks.json");
@@ -2431,7 +2439,9 @@ mod tests {
 
     #[test]
     fn fix_respawn_reports_spawn_notes() {
-        let _guard = crate::testing::CODEX_CONFIG_LOCK.lock().unwrap();
+        let _guard = crate::testing::CODEX_CONFIG_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");

@@ -645,7 +645,8 @@ mod tests {
             &hook_path,
             "#!/bin/sh\nprintf '%s\\n%s\\n%s\\n%s\\n%s\\n' \
              \"$PM_PROJECT_ROOT\" \"$PM_MAIN_WORKTREE\" \"$PM_WORKTREE\" \"$PM_SESSION\" \
-             \"$PM_FEATURE\" > \"$PM_WORKTREE/hook-env.txt\"\n",
+             \"$PM_FEATURE\" > \"$PM_WORKTREE/hook-env.tmp\" && \
+             mv \"$PM_WORKTREE/hook-env.tmp\" \"$PM_WORKTREE/hook-env.txt\"\n",
         )
         .unwrap();
 
@@ -666,7 +667,14 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        let content = content.expect("hook never wrote its environment");
+        let content = content.unwrap_or_else(|| {
+            let hook = format!("{}:hook", tmux::session_name(&project_name, "login"));
+            panic!(
+                "hook never wrote its environment; running {:?}, pane:\n{:?}",
+                tmux::pane_command(server.name(), &hook),
+                tmux::capture_pane(server.name(), &hook),
+            )
+        });
         let expected = format!(
             "{}\n{}\n{}\n{}\nlogin\n",
             project_path.display(),
@@ -1116,10 +1124,21 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
-        let wf = paths::global_workflows_dir()
-            .unwrap()
-            .join("global-custom-flow");
-        std::fs::create_dir_all(&wf).unwrap();
+        // The shared test home's global tier is every test's: remove the
+        // workflow however this test ends.
+        struct RemoveOnDrop(std::path::PathBuf);
+        impl Drop for RemoveOnDrop {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let guard = RemoveOnDrop(
+            paths::global_workflows_dir()
+                .unwrap()
+                .join("global-custom-flow"),
+        );
+        let wf = &guard.0;
+        std::fs::create_dir_all(wf).unwrap();
         std::fs::write(
             wf.join("config.toml"),
             "description = \"global custom\"\nagents = [\"implementer\"]\n\

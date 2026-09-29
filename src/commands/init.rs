@@ -124,7 +124,6 @@ pub fn init(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::harness::Harness;
     use crate::testing::TestServer;
     use tempfile::tempdir;
 
@@ -185,7 +184,7 @@ mod tests {
     }
 
     #[test]
-    fn init_installs_bundled_assets_globally_and_none_in_the_project() {
+    fn init_installs_no_bundled_assets_in_the_project() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let name = server.scope("myapp");
@@ -194,32 +193,12 @@ mod tests {
 
         init(&project_path, &projects_dir, None, server.name()).unwrap();
 
-        let home = paths::home_dir().unwrap();
-        for store in [".agents", ".claude"] {
-            let base = home.join(store);
-            assert!(
-                base.join("skills/pm/SKILL.md").exists(),
-                "{store}: pm skill"
-            );
-            assert!(
-                base.join("agents/reviewer.md").exists(),
-                "{store}: reviewer"
-            );
-        }
-        assert!(home.join(".agents/pm-baseline.md").exists());
-        let workflows = paths::global_workflows_dir().unwrap();
-        for wf in ["implement-and-review", "solo", "pr-review"] {
-            assert!(workflows.join(wf).join("config.toml").is_file(), "{wf}");
-            assert!(workflows.join(wf).join("workflow.md").is_file(), "{wf}");
-        }
-
         let main = paths::main_worktree(&project_path);
         assert!(!main.join(".agents").exists());
         assert!(!main.join(".claude/agents").exists());
         assert!(!main.join(".claude/skills").exists());
         // Hooks are user-level; a fresh project gets no settings file.
         assert!(!main.join(".claude/settings.json").exists());
-        assert!(hooks_install::is_installed_for(Harness::ClaudeCode).unwrap());
         assert!(!paths::workflows_dir(&project_path).exists());
         assert!(skills::is_migrated(&project_path));
     }
@@ -319,7 +298,9 @@ mod tests {
     #[test]
     fn init_with_git_url_clones_repo() {
         // Read side of CWD_LOCK (serialises against the CWD mutator) — see testing.rs.
-        let _cwd = crate::testing::CWD_LOCK.read().unwrap();
+        let _cwd = crate::testing::CWD_LOCK
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = tempdir().unwrap();
         let server = TestServer::new();
 
@@ -357,7 +338,9 @@ mod tests {
     #[test]
     fn init_with_git_url_cloned_repo_has_remote() {
         // Read side of CWD_LOCK (serialises against the CWD mutator) — see testing.rs.
-        let _cwd = crate::testing::CWD_LOCK.read().unwrap();
+        let _cwd = crate::testing::CWD_LOCK
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = tempdir().unwrap();
         let server = TestServer::new();
 
@@ -401,22 +384,29 @@ mod tests {
         // serialises this mutator against those readers without flattening
         // parallelism. If you add another CWD-mutating test, take this write
         // lock too.
-        let _guard = crate::testing::CWD_LOCK.write().unwrap();
+        let _guard = crate::testing::CWD_LOCK
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let name = server.scope("relapp");
         let projects_dir = dir.path().join("registry");
 
-        let prev_cwd = std::env::current_dir().unwrap();
+        // Restores CWD however the test ends, so no other test runs in it.
+        struct RestoreCwd(std::path::PathBuf);
+        impl Drop for RestoreCwd {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.0);
+            }
+        }
+        let restore = RestoreCwd(std::env::current_dir().unwrap());
         std::env::set_current_dir(dir.path()).unwrap();
 
         // Pass just the relative name — this is what reproduced the bug
         let relative_path = std::path::PathBuf::from(&name);
         let result = init(&relative_path, &projects_dir, None, server.name());
-
-        // Always restore CWD before asserting so a failure doesn't leak
-        std::env::set_current_dir(&prev_cwd).unwrap();
+        drop(restore);
         result.unwrap();
 
         let entry = ProjectEntry::load(&projects_dir, &name).unwrap();
@@ -432,7 +422,9 @@ mod tests {
     #[test]
     fn init_with_git_url_detects_default_branch() {
         // Read side of CWD_LOCK (serialises against the CWD mutator) — see testing.rs.
-        let _cwd = crate::testing::CWD_LOCK.read().unwrap();
+        let _cwd = crate::testing::CWD_LOCK
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = tempdir().unwrap();
         let server = TestServer::new();
 
