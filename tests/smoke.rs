@@ -237,7 +237,7 @@ impl Smoke {
             }
             if !self.target_alive(target) {
                 return Outcome {
-                    log: text,
+                    log: std::fs::read_to_string(&log).unwrap_or_default(),
                     exit: None,
                     alive: false,
                 };
@@ -533,6 +533,58 @@ fn restart_from_inside_the_agents_own_window() {
         .assert()
         .success()
         .stdout(predicate::str::contains("reviewer (active"));
+}
+
+/// Catches: `feat rename` run from one of the feature's own agent windows
+/// killing that window, and so itself, before the other agents respawn.
+#[test]
+#[ignore]
+fn rename_from_inside_an_agents_own_window() {
+    let s = Smoke::new();
+    let login = s.init_with_spawned_reviewer();
+    s.pm(&login)
+        .args(["agent", "spawn", "helper", "--agent", "implementer"])
+        .assert()
+        .success();
+    s.argv_records("reviewer", 1);
+    s.argv_records("helper", 1);
+
+    let old = s
+        .find_window("proj/login", "reviewer")
+        .expect("reviewer window");
+    // The rename renames the session, so address the window by its id.
+    let old = s.tmux_ok(&["display", "-p", "-t", &old, "#{window_id}"]);
+    s.tmux_ok(&["send-keys", "-t", &old, "C-c", ""]);
+    s.wait_for_shell(&old);
+
+    let outcome = s.run_in(&old, "pm feat rename signup");
+    assert!(
+        outcome.log.contains("Renamed feature 'login' to 'signup'"),
+        "{}",
+        outcome.log
+    );
+    assert!(
+        !outcome.alive,
+        "old window survived the rename: {outcome:?}"
+    );
+    assert!(!outcome.log.contains("error:"), "{}", outcome.log);
+
+    let signup = s.proj().join("signup");
+    let mut names = s.window_names("proj/signup");
+    names.retain(|n| n != "hook");
+    assert!(
+        names.contains(&"reviewer".to_string()),
+        "windows: {names:?}"
+    );
+    assert!(names.contains(&"helper".to_string()), "windows: {names:?}");
+    assert!(
+        !names.iter().any(|n| n.ends_with("-renaming")),
+        "windows: {names:?}"
+    );
+    for agent in ["reviewer", "helper"] {
+        let records = s.argv_records(agent, 2);
+        assert_eq!(Path::new(&records[1].cwd), signup, "{agent}");
+    }
 }
 
 /// Catches: `pm delete --force` run from the project's own main session,

@@ -614,16 +614,18 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                 }
                 FeatCommands::Rename { old_name, new_name } => {
                     let old_name = resolve_feature_name(old_name, &project_root)?;
-                    let report = commands::feat_rename::feat_rename(
+                    let renamed = commands::feat_rename::feat_rename(
                         &project_root,
                         &old_name,
                         &new_name,
                         server,
                     )?;
                     println!("Renamed feature '{old_name}' to '{new_name}'");
-                    for line in report {
+                    for line in &renamed.report {
                         println!("{line}");
                     }
+                    std::io::Write::flush(&mut std::io::stdout())?;
+                    renamed.finish(server);
                     Ok(())
                 }
                 FeatCommands::Review { pr } => {
