@@ -63,9 +63,9 @@ pub fn harness_problems(
             ),
         );
     }
-    let mut installed = harness.user_settings_file(home).is_none();
-    if let Some(root) = hooks_install::user_hooks_root(harness, home)? {
-        for event in harness.malformed_hook_events(&root) {
+    let root = hooks_install::user_hooks_root(harness, home)?;
+    if let Some(root) = &root {
+        for event in harness.malformed_hook_events(root) {
             push(
                 ProblemKind::HooksMalformed,
                 format!(
@@ -74,13 +74,10 @@ pub fn harness_problems(
                 ),
             );
         }
-        installed = true;
         for &(event, markers) in hooks_install::PM_EVENTS {
-            let Some((entry, hook)) = hooks_install::pm_hook_position(&root, event, markers) else {
-                installed = false;
-                continue;
-            };
-            if !harness.hook_trusted(config, home, event, entry, hook) {
+            if let Some((entry, hook)) = hooks_install::pm_hook_position(root, event, markers)
+                && !harness.hook_trusted(config, home, event, entry, hook)
+            {
                 push(
                     ProblemKind::HookUntrusted,
                     format!(
@@ -92,7 +89,7 @@ pub fn harness_problems(
             }
         }
     }
-    if !installed {
+    if !hooks_install::hooks_registered(harness, home, root.as_ref()) {
         push(
             ProblemKind::LoopNotInstalled,
             format!("pm hooks not installed in {shown} (run `pm harness hooks install`)"),
