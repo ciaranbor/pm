@@ -1,8 +1,16 @@
 //! `pm harness import`: install the sessions of a `pm harness export`
 //! tarball for every project in its manifest that is registered here, as
 //! sessions of that project's local main worktree.
+//!
+//! A tarball is untrusted input. `tar` keeps what it extracts inside the
+//! staging directory (it refuses `..` members, strips a leading `/`, and
+//! will not write through a link); what it does extract is refused unless
+//! it is plain files and directories, so nothing read from staging can be a
+//! link to a file of this machine. The manifest's strings are joined onto
+//! paths only once they are known to stay where they are joined.
 
-use std::path::{Path, PathBuf};
+use std::os::unix::fs::MetadataExt;
+use std::path::{Component, Path, PathBuf};
 
 use crate::error::{PmError, Result};
 use crate::harness::{Harness, ImportOutcome, SessionStore};
@@ -25,6 +33,31 @@ fn find_export(staging: &Path) -> Option<PathBuf> {
         .iter()
         .map(|harness| staging.join(export_root(*harness)))
         .find(|root| root.join(MANIFEST).exists())
+}
+
+/// Refuse an extracted tree holding anything but directories and files of
+/// their own: a symlink, a hard link, a device.
+fn refuse_links(staging: &Path, dir: &Path) -> Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        let meta = std::fs::symlink_metadata(&path)?;
+        if meta.is_dir() {
+            refuse_links(staging, &path)?;
+        } else if !meta.is_file() || meta.nlink() > 1 {
+            return Err(PmError::ExportImport(format!(
+                "invalid export: '{}' is a link or special file",
+                path.strip_prefix(staging).unwrap_or(&path).display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Whether `value` names one entry of a directory and nothing else.
+fn is_single_name(value: &str) -> bool {
+    let mut components = Path::new(value).components();
+    matches!(components.next(), Some(Component::Normal(name)) if name == value)
+        && components.next().is_none()
 }
 
 /// Import `harness`'s sessions from `tarball` into the store reached from
@@ -58,6 +91,8 @@ pub fn import(
         return Err(PmError::ExportImport("tar extraction failed".to_string()));
     }
 
+    refuse_links(staging.path(), staging.path())?;
+
     let export_root = find_export(staging.path()).ok_or_else(|| {
         PmError::ExportImport("invalid export: manifest.json not found".to_string())
     })?;
@@ -87,8 +122,23 @@ pub fn import(
                 PmError::ExportImport(format!("missing '{key}' for project '{name}'"))
             })
         };
-        let from = Path::new(field("path")?);
-        let sessions = export_root.join(PROJECTS_DIR).join(field("key")?);
+        let (path, key) = (field("path")?, field("key")?);
+        let refused = |what: &str| {
+            PmError::ExportImport(format!("invalid export: project '{name}' has {what}"))
+        };
+        if !is_single_name(name) {
+            return Err(refused("a name that is a path"));
+        }
+        if !is_single_name(key) {
+            return Err(refused(&format!(
+                "key '{key}', which is not a directory of the export"
+            )));
+        }
+        let from = Path::new(path);
+        if !from.is_absolute() {
+            return Err(refused(&format!("path '{path}', which is not absolute")));
+        }
+        let sessions = export_root.join(PROJECTS_DIR).join(key);
 
         let Ok(local) = ProjectEntry::load(projects_dir, name) else {
             messages.push(format!("Skipping '{name}': not registered locally"));
@@ -180,7 +230,7 @@ mod tests {
 
     fn claude_sessions_of(home: &Path, main: &Path) -> PathBuf {
         home.join(".claude/projects")
-            .join(main.to_string_lossy().replace('/', "-"))
+            .join(crate::testing::claude_key(main))
     }
 
     #[test]
@@ -363,6 +413,115 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("holds claude-code sessions"), "{err}");
+    }
+
+    /// A Claude Code export of `myapp` with this manifest entry, after
+    /// `prepare` has had its way with the export's root directory.
+    fn crafted_export(dir: &Path, entry: &str, prepare: impl Fn(&Path)) -> PathBuf {
+        let root = dir.join("pm-claude-export");
+        let sessions = root.join("projects/-old-myapp-main");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(sessions.join("session.jsonl"), "{}\n").unwrap();
+        std::fs::write(
+            root.join("manifest.json"),
+            format!(r#"{{"myapp": {entry}}}"#),
+        )
+        .unwrap();
+        prepare(&root);
+        let tarball = dir.join("crafted.tar.gz");
+        let status = std::process::Command::new("tar")
+            .args(["-czf", &tarball.to_string_lossy(), "-C"])
+            .arg(dir)
+            .arg("pm-claude-export")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        tarball
+    }
+
+    /// Import a crafted export on a machine that has `myapp` registered and
+    /// a file outside the export to reach for. Returns the error and whether
+    /// the session store was left untouched.
+    fn import_crafted(entry: &str, prepare: impl Fn(&Path, &Path)) -> (String, bool) {
+        let staging = tempdir().unwrap();
+        let home = tempdir().unwrap();
+        let project = tempdir().unwrap();
+        let registry = tempdir().unwrap();
+        setup_project(project.path(), "myapp", registry.path());
+        let outside = home.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.jsonl"), "secret\n").unwrap();
+
+        let entry = entry.replace("OUTSIDE", &outside.to_string_lossy());
+        let tarball = crafted_export(staging.path(), &entry, |root| prepare(root, &outside));
+        let err = run_import(Harness::ClaudeCode, &tarball, registry.path(), home.path())
+            .unwrap_err()
+            .to_string();
+        (err, !home.path().join(".claude").exists())
+    }
+
+    #[test]
+    fn import_refuses_a_key_that_leaves_the_export() {
+        for key in ["../../../outside", "OUTSIDE", "a/../b", ".", ""] {
+            let entry = format!(r#"{{"path": "/old/myapp/main", "key": "{key}"}}"#);
+            let (err, untouched) = import_crafted(&entry, |_, _| {});
+            assert!(
+                err.contains("project 'myapp' has key") && untouched,
+                "{key}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn import_refuses_a_recorded_path_that_is_not_absolute() {
+        let (err, untouched) =
+            import_crafted(r#"{"path": "..", "key": "-old-myapp-main"}"#, |_, _| {});
+        assert!(
+            err.contains("project 'myapp' has path '..'") && untouched,
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn import_refuses_an_export_holding_links() {
+        let entry = r#"{"path": "/old/myapp/main", "key": "-old-myapp-main"}"#;
+        let sessions = "projects/-old-myapp-main";
+
+        let (err, untouched) = import_crafted(entry, |root, outside| {
+            std::os::unix::fs::symlink(
+                outside.join("secret.jsonl"),
+                root.join(sessions).join("stolen.jsonl"),
+            )
+            .unwrap();
+        });
+        assert!(
+            err.ends_with(
+                "'pm-claude-export/projects/-old-myapp-main/stolen.jsonl' is a link or special file"
+            ) && untouched,
+            "{err}"
+        );
+
+        // The sessions directory itself, pointing out of the export.
+        let (err, untouched) = import_crafted(entry, |root, outside| {
+            std::fs::remove_dir_all(root.join(sessions)).unwrap();
+            std::os::unix::fs::symlink(outside, root.join(sessions)).unwrap();
+        });
+        assert!(
+            err.contains("is a link or special file") && untouched,
+            "{err}"
+        );
+
+        let (err, untouched) = import_crafted(entry, |root, _| {
+            std::fs::hard_link(
+                root.join(sessions).join("session.jsonl"),
+                root.join(sessions).join("twin.jsonl"),
+            )
+            .unwrap();
+        });
+        assert!(
+            err.contains("is a link or special file") && untouched,
+            "{err}"
+        );
     }
 
     #[test]

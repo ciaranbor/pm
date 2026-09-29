@@ -39,6 +39,14 @@ struct Project {
     main: PathBuf,
 }
 
+/// The main worktree of the project at `root`, resolved: the form every
+/// harness records a session's directory in, and so the one an import has
+/// to find in the transcripts.
+fn recorded_main(root: &Path) -> PathBuf {
+    let main = paths::main_worktree(root);
+    main.canonicalize().unwrap_or(main)
+}
+
 fn resolve_projects(
     project_root: Option<&Path>,
     projects_dir: &Path,
@@ -55,7 +63,7 @@ fn resolve_projects(
                 let root = entry.root_path();
                 Project {
                     name,
-                    main: paths::main_worktree(&root),
+                    main: recorded_main(&root),
                     root,
                 }
             })
@@ -65,7 +73,7 @@ fn resolve_projects(
         let config = ProjectConfig::load(&paths::pm_dir(root))?;
         Ok(vec![Project {
             name: config.project.name,
-            main: paths::main_worktree(root),
+            main: recorded_main(root),
             root: root.to_path_buf(),
         }])
     }
@@ -171,7 +179,7 @@ pub(super) mod tests {
     pub fn setup_claude_sessions(home: &Path, project_path: &Path) -> PathBuf {
         let dir = home
             .join(".claude/projects")
-            .join(project_path.to_string_lossy().replace('/', "-"));
+            .join(crate::testing::claude_key(project_path));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("session.jsonl"),
@@ -191,6 +199,7 @@ pub(super) mod tests {
 
     /// A registered project at `root`; returns its main worktree.
     pub fn setup_project(root: &Path, name: &str, projects_dir: &Path) -> PathBuf {
+        let root = &root.canonicalize().unwrap();
         let pm_dir = root.join(".pm");
         std::fs::create_dir_all(&pm_dir).unwrap();
         let config = ProjectConfig {

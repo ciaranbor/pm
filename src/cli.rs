@@ -546,7 +546,7 @@ pub enum FeatCommands {
         #[arg(long)]
         onto: Option<String>,
     },
-    /// Rename a feature (branch, worktree, tmux session, state)
+    /// Rename a feature (branch, worktree, tmux session, state, agent sessions)
     Rename {
         /// New feature name
         new_name: String,

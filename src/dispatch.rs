@@ -611,13 +611,16 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                 }
                 FeatCommands::Rename { old_name, new_name } => {
                     let old_name = resolve_feature_name(old_name, &project_root)?;
-                    commands::feat_rename::feat_rename(
+                    let report = commands::feat_rename::feat_rename(
                         &project_root,
                         &old_name,
                         &new_name,
                         server,
                     )?;
                     println!("Renamed feature '{old_name}' to '{new_name}'");
+                    for line in report {
+                        println!("{line}");
+                    }
                     Ok(())
                 }
                 FeatCommands::Review { pr } => {

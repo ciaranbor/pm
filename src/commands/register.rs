@@ -98,9 +98,16 @@ pub fn register(
         wrapper
     };
 
-    // Migrate Claude Code sessions from original repo path to new main path
     let new_main = paths::main_worktree(&wrapper_dir);
-    super::harness_migrate::carry_sessions(&repo_path, &new_main, home);
+    for line in super::harness_migrate::carry_sessions(&super::harness_migrate::Carry {
+        from: &repo_path,
+        to: &new_main,
+        project_root: &wrapper_dir,
+        home,
+        tmux_server,
+    }) {
+        eprintln!("{line}");
+    }
 
     // Create .pm/ structure
     let pm_dir = paths::pm_dir(&wrapper_dir);
@@ -465,7 +472,7 @@ mod tests {
     }
 
     #[test]
-    fn register_symlink_migrates_claude_sessions() {
+    fn register_symlink_leaves_claude_sessions_where_claude_reads_them() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let name = server.scope("myapp");
@@ -473,17 +480,16 @@ mod tests {
         create_git_repo(&repo_path);
         let projects_dir = dir.path().join("registry");
 
-        // Set up fake Claude session data keyed to the original repo path
         let claude_base = dir.path().join(".claude");
         let repo_canonical = repo_path.canonicalize().unwrap();
-        let old_key = repo_canonical.to_string_lossy().replace('/', "-");
-        let old_session_dir = claude_base.join("projects").join(&old_key);
-        std::fs::create_dir_all(&old_session_dir).unwrap();
-        std::fs::write(
-            old_session_dir.join("session.jsonl"),
-            format!("{{\"cwd\":\"{}\"}}\n", repo_canonical.display()),
-        )
-        .unwrap();
+        let sessions = claude_base
+            .join("projects")
+            .join(crate::testing::claude_key(&repo_canonical));
+        std::fs::create_dir_all(&sessions).unwrap();
+        let transcript = format!("{{\"cwd\":\"{}\"}}\n", repo_canonical.display());
+        std::fs::write(sessions.join("session.jsonl"), &transcript).unwrap();
+        let history = format!("{{\"project\":\"{}\"}}\n", repo_canonical.display());
+        std::fs::write(claude_base.join("history.jsonl"), &history).unwrap();
 
         register(
             &repo_path,
@@ -495,14 +501,21 @@ mod tests {
         )
         .unwrap();
 
-        // register canonicalizes repo_path, so wrapper_dir is built from canonical parent
-        let canonical_parent = repo_canonical.parent().unwrap();
-        let new_main = canonical_parent.join(format!("{name}-pm")).join("main");
-        let new_key = new_main.to_string_lossy().replace('/', "-");
-        let new_session_dir = claude_base.join("projects").join(&new_key);
-        assert!(new_session_dir.exists());
-        let content = std::fs::read_to_string(new_session_dir.join("session.jsonl")).unwrap();
-        assert!(content.contains(&new_main.to_string_lossy().to_string()));
+        // `main` is a symlink to the repo, which is the path Claude records.
+        assert_eq!(
+            std::fs::read_to_string(sessions.join("session.jsonl")).unwrap(),
+            transcript
+        );
+        assert_eq!(
+            std::fs::read_to_string(claude_base.join("history.jsonl")).unwrap(),
+            history
+        );
+        assert_eq!(
+            std::fs::read_dir(claude_base.join("projects"))
+                .unwrap()
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -517,7 +530,7 @@ mod tests {
         // Set up fake Claude session data keyed to the original repo path
         let claude_base = dir.path().join(".claude");
         let repo_canonical = repo_path.canonicalize().unwrap();
-        let old_key = repo_canonical.to_string_lossy().replace('/', "-");
+        let old_key = crate::testing::claude_key(&repo_canonical);
         let old_session_dir = claude_base.join("projects").join(&old_key);
         std::fs::create_dir_all(&old_session_dir).unwrap();
         std::fs::write(
@@ -539,7 +552,7 @@ mod tests {
         // With --move, wrapper is at canonical parent + scoped name, main inside it
         let canonical_parent = repo_canonical.parent().unwrap();
         let new_main = canonical_parent.join(&name).join("main");
-        let new_key = new_main.to_string_lossy().replace('/', "-");
+        let new_key = crate::testing::claude_key(&new_main);
         let new_session_dir = claude_base.join("projects").join(&new_key);
         assert!(new_session_dir.exists());
         let content = std::fs::read_to_string(new_session_dir.join("session.jsonl")).unwrap();

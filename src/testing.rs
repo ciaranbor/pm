@@ -24,6 +24,14 @@ pub static CWD_LOCK: RwLock<()> = RwLock::new(());
 /// tests could each drop the other's entry.
 pub static CODEX_CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// The directory name Claude Code keeps the sessions of `path` under.
+pub fn claude_key(path: &std::path::Path) -> String {
+    path.to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
 /// Write a stand-in `opencode` into `dir` and return its path, for
 /// `[harness.opencode] binary`. It records its arguments in `<dir>/argv`,
 /// one per line, and the opencode config its environment names in

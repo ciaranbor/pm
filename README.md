@@ -77,6 +77,10 @@ The lifecycle: `pm feat new` → work → optionally `pm feat pr create` /
 Inspection and housekeeping subcommands (`list`, `info`, `switch`, `rename`,
 `rebase`, `delete`, `sync`) round out `pm feat` — see `pm feat --help`.
 
+`pm register`, `pm feat adopt --from` and `pm feat rename` carry agent
+sessions to the new path for every harness in use, and print what they did.
+Rename restarts the feature's running agents, resumed on their sessions.
+
 ### Lifecycle hooks
 
 Each project is bootstrapped with **lifecycle hooks** under `.pm/hooks/`:
@@ -413,9 +417,10 @@ harnesses; what differs:
   file of its own named by `OPENCODE_CONFIG`. An agent never inherits
   `OPENCODE_CONFIG` or `OPENCODE_CONFIG_CONTENT` from the shell that spawned
   it.
-- **Moved worktree.** Stop the agent, then run `pm harness migrate --harness
-  opencode --from <old path>` in the new directory; opencode cannot resume
-  a session whose directory is gone.
+- **Moved worktree.** opencode cannot resume a session whose directory is
+  gone. pm's own moves carry sessions (see Features and worktrees); after any other,
+  stop the agent and run `pm harness migrate --harness opencode --from <old
+  path>` in the new directory.
 - `pm harness probe --harness opencode` checks the installed version. `pm
   harness settings` is Claude Code only.
 
