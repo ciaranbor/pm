@@ -70,16 +70,44 @@ fn sync_feature(
     for harness in &harnesses {
         for file in harness.seeded_files() {
             let rel = Path::new(harness.config_dir()).join(file);
-            let src = main.join(&rel);
-            if src.exists()
-                && tracked_under(feature_worktree, &rel)?.is_empty()
-                && sync_file(&src, &feature_worktree.join(&rel), dry_run)?
-            {
+            if seed_file(&main, feature_worktree, &rel, dry_run)? == Some(Seeded::Written) {
                 written.push(rel);
             }
         }
     }
     Ok(written)
+}
+
+/// What [`seed_file`] did with one file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Seeded {
+    /// Copied (or, with `dry_run`, would be).
+    Written,
+    /// Already matched main.
+    Unchanged,
+    /// Left alone: the worktree's branch tracks it.
+    Tracked,
+}
+
+/// Copy the file `rel` from `main` into `worktree` unless the worktree's
+/// branch tracks it. `None` when main has no such file.
+pub fn seed_file(
+    main: &Path,
+    worktree: &Path,
+    rel: &Path,
+    dry_run: bool,
+) -> Result<Option<Seeded>> {
+    let src = main.join(rel);
+    if !src.exists() {
+        return Ok(None);
+    }
+    Ok(Some(if !tracked_under(worktree, rel)?.is_empty() {
+        Seeded::Tracked
+    } else if sync_file(&src, &worktree.join(rel), dry_run)? {
+        Seeded::Written
+    } else {
+        Seeded::Unchanged
+    }))
 }
 
 /// Sync the directory `rel` from `main` into `worktree`, skipping files the

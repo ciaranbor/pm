@@ -903,8 +903,9 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
                 }
                 HarnessSettingsCommands::Pull { name } => {
                     let name = resolve_feature_name(name, &project_root)?;
-                    commands::claude_settings::pull(&project_root, &name)?;
-                    println!("Pulled settings from main into feature '{name}'");
+                    for line in commands::claude_settings::pull(&project_root, &name)? {
+                        println!("{line}");
+                    }
                     Ok(())
                 }
                 HarnessSettingsCommands::Diff { name } => {
