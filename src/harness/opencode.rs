@@ -293,8 +293,10 @@ pub(super) fn pre_launch(
     write_atomic(&path, format!("{config:#}\n").as_bytes())?;
     notes.extend(providers::undeclared_model_note(&cfg.providers, &model));
     // `pm doctor` covers the providers this agent's row does not name.
+    let own = cfg.providers.get_key_value(model.provider);
+    notes.extend(providers::split_model_id_notes(own));
     notes.extend(providers::unset_key_notes(
-        cfg.providers.get_key_value(model.provider),
+        own,
         providers::set_in_environment,
     ));
     env.push((CONFIG_ENV.to_string(), path.to_string_lossy().into_owned()));

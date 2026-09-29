@@ -12,7 +12,9 @@
 //!   an unset one is reported, but only as a remark: the agent's environment
 //!   is the tmux server's and its shell's, which pm's own only approximates.
 //! - **`models`.** opencode resolves no model a provider does not list, so
-//!   the model of the agent's row is added to its provider's list.
+//!   the model of the agent's row is added to its provider's list. A model
+//!   id is a TOML key, and an unquoted dotted one (`models.Qwen3.8-27B`)
+//!   parses as nested tables; [`split_model_id_notes`] reports it.
 //!
 //! An entry replaces, whole, a provider of the same id from opencode's own
 //! config files. So pm renders nothing for a provider pm config does not
@@ -71,8 +73,15 @@ pub(super) fn render(
 /// an endpoint may serve more than the entry declares; a typo then fails
 /// every turn at the endpoint.
 pub(super) fn undeclared_model_note(providers: &Providers, model: &ModelRef<'_>) -> Option<String> {
-    let declared = providers.get(model.provider)?.get("models")?.as_table()?;
+    let entry = providers.get(model.provider)?;
+    let declared = entry.get("models")?.as_table()?;
     if declared.is_empty() || declared.contains_key(model.id) {
+        return None;
+    }
+    if split_model_ids(entry)
+        .iter()
+        .any(|split| split.full == model.id)
+    {
         return None;
     }
     let names: Vec<&str> = declared.keys().map(String::as_str).collect();
@@ -83,6 +92,79 @@ pub(super) fn undeclared_model_note(providers: &Providers, model: &ModelRef<'_>)
         model.provider,
         names.join(", ")
     ))
+}
+
+/// A model id TOML split at its dots.
+#[derive(Debug, PartialEq, Eq)]
+struct SplitModelId {
+    /// The model the entry lists instead, e.g. `Qwen3`.
+    listed: String,
+    /// The id as written, e.g. `Qwen3.8-27B-4bit`.
+    full: String,
+}
+
+/// The unquoted dotted model ids under `entry`'s `models`. A model's own
+/// settings are named by identifiers, so a table under a key no identifier
+/// could be (`8-27B-4bit`) is the rest of an id, not a setting.
+fn split_model_ids(entry: &toml::Table) -> Vec<SplitModelId> {
+    fn id_rests(path: &str, node: &toml::Table, out: &mut Vec<String>) {
+        for (key, value) in node {
+            let Some(child) = value.as_table() else {
+                continue;
+            };
+            if is_identifier(key) {
+                continue;
+            }
+            let full = format!("{path}.{key}");
+            let before = out.len();
+            id_rests(&full, child, out);
+            if out.len() == before {
+                out.push(full);
+            }
+        }
+    }
+
+    let Some(models) = entry.get("models").and_then(toml::Value::as_table) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (listed, model) in models {
+        let Some(model) = model.as_table() else {
+            continue;
+        };
+        let mut full = Vec::new();
+        id_rests(listed, model, &mut full);
+        out.extend(full.into_iter().map(|full| SplitModelId {
+            listed: listed.clone(),
+            full,
+        }));
+    }
+    out
+}
+
+fn is_identifier(key: &str) -> bool {
+    key.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// One remark per model id in `providers` that TOML split at its dots, with
+/// the quoted form to write instead.
+pub(super) fn split_model_id_notes<'a>(
+    providers: impl IntoIterator<Item = (&'a String, &'a toml::Table)>,
+) -> Vec<String> {
+    let mut notes = Vec::new();
+    for (id, entry) in providers {
+        for split in split_model_ids(entry) {
+            notes.push(format!(
+                "[harness.opencode.providers.{id}] reads `models.{full}` as model '{listed}' \
+                 holding tables, which opencode drops; quote the id: \
+                 [harness.opencode.providers.{id}.models.\"{full}\"]",
+                full = split.full,
+                listed = split.listed,
+            ));
+        }
+    }
+    notes
 }
 
 /// The providers an agent may use: the one its row names and every one pm
@@ -243,6 +325,7 @@ pub(super) fn config_issues(cfg: &OpenCodeConfig, worktree: &Path) -> Vec<String
             Err(e) => issues.push(e.to_string()),
         }
     }
+    issues.extend(split_model_id_notes(&cfg.providers));
     issues.extend(merged_config_issues(cfg, worktree, rendered).unwrap_or_default());
     issues.extend(unset_key_notes(&cfg.providers, set_in_environment));
     issues
@@ -487,6 +570,43 @@ headers = { Authorization = "Bearer {env:HOSTED_TOKEN}", "X-Team" = "pm" }
                 .to_string();
             assert!(err.contains(problem), "{entry}: {err}");
         }
+    }
+
+    #[test]
+    fn an_unquoted_dotted_model_id_is_reported_with_its_quoted_form() {
+        let all = providers(
+            r#"
+[providers.local.models.Qwen3.8-27B-4bit]
+name = "Qwen"
+limit = { context = 32768 }
+
+[providers.local.models.gpt-4.1.2]
+name = "GPT"
+
+[providers.local.models.qwen]
+name = "Qwen"
+limit = { context = 32768 }
+settings = { temperature = 0.2 }
+headers = { "X-Team" = "pm" }
+"#,
+        );
+        assert_eq!(
+            split_model_id_notes(&all),
+            [
+                "[harness.opencode.providers.local] reads `models.Qwen3.8-27B-4bit` as model \
+                 'Qwen3' holding tables, which opencode drops; quote the id: \
+                 [harness.opencode.providers.local.models.\"Qwen3.8-27B-4bit\"]",
+                "[harness.opencode.providers.local] reads `models.gpt-4.1.2` as model 'gpt-4' \
+                 holding tables, which opencode drops; quote the id: \
+                 [harness.opencode.providers.local.models.\"gpt-4.1.2\"]",
+            ]
+        );
+        // The split explains the undeclared model; saying both is noise.
+        assert_eq!(
+            undeclared_model_note(&all, &model("local/Qwen3.8-27B-4bit")),
+            None
+        );
+        assert!(split_model_id_notes(&providers(LOCAL)).is_empty());
     }
 
     #[test]

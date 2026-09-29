@@ -423,7 +423,9 @@ harnesses; what differs:
   opencode resolves no model a provider does not list, so pm adds the row's
   model to its provider's `models`; a mistyped id therefore fails at the
   endpoint, not before. When the entry declares `models` and the row's id is
-  not among them, the spawn line and `pm doctor` say so. A row may still name
+  not among them, the spawn line and `pm doctor` say so. They also flag an
+  unquoted dotted id, which TOML splits into nested tables (`models.Qwen3.8-27B`
+  is model `Qwen3` holding a table `8-27B`). A row may still name
   a provider pm config does not define — one opencode ships (`anthropic/…`)
   or one from your own `~/.config/opencode/opencode.json`: pm allows it and
   leaves its definition alone. Once pm config defines the same id, pm's
