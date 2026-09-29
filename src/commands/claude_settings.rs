@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use super::seed::{Seeded, seed_file};
 use crate::error::{PmError, Result};
 use crate::harness::Harness;
 use crate::state::feature::FeatureState;
@@ -124,23 +125,33 @@ pub fn push(project_root: &Path, feature_name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Pull main's `.claude/` settings into a feature's `.claude/` directory.
-pub fn pull(project_root: &Path, feature_name: &str) -> Result<()> {
+/// Pull main's `.claude/` settings into a feature's `.claude/` directory,
+/// leaving alone a file the feature's branch tracks (its content reaches or
+/// leaves main by merge). Returns one line per file pulled or left alone.
+pub fn pull(project_root: &Path, feature_name: &str) -> Result<Vec<String>> {
     require_feature(project_root, feature_name)?;
 
-    let src = main_claude_dir(project_root);
-    if !src.exists() {
-        return Err(PmError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("no .claude/ directory in main at {}", src.display()),
-        )));
-    }
-
-    let feature_claude_dir = project_root.join(feature_name).join(".claude");
+    let main = paths::main_worktree(project_root);
+    let worktree = project_root.join(feature_name);
+    let mut lines = Vec::new();
     for filename in settings_files() {
-        copy_settings_file(&src, &feature_claude_dir, filename)?;
+        let rel = Path::new(".claude").join(filename);
+        let rel_str = rel.display();
+        match seed_file(&main, &worktree, &rel, false)? {
+            None => {}
+            Some(Seeded::Tracked) => lines.push(format!(
+                "Left {rel_str} alone: feature '{feature_name}' tracks it in git"
+            )),
+            Some(Seeded::Written) => {
+                lines.push(format!("Pulled {rel_str} into feature '{feature_name}'"))
+            }
+            Some(Seeded::Unchanged) => lines.push(format!("{rel_str} already matches main")),
+        }
     }
-    Ok(())
+    if lines.is_empty() {
+        lines.push("Main has no settings to pull".to_string());
+    }
+    Ok(lines)
 }
 
 // ANSI color helpers
@@ -655,15 +666,45 @@ mod tests {
     }
 
     #[test]
-    fn pull_fails_when_main_has_no_claude_dir() {
+    fn pull_leaves_a_settings_file_the_branch_tracks() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let feature = project.join("login");
+        write_json(
+            &feature.join(".claude"),
+            "settings.json",
+            r#"{"branch":true}"#,
+        );
+        crate::git::stage_file(&feature, ".claude/settings.json").unwrap();
+        crate::git::commit(&feature, "track settings").unwrap();
+        let main_claude = paths::main_worktree(&project).join(".claude");
+        write_json(&main_claude, "settings.json", r#"{"main":true}"#);
+
+        let lines = pull(&project, "login").unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(feature.join(".claude/settings.json")).unwrap(),
+            r#"{"branch":true}"#
+        );
+        assert_eq!(
+            lines,
+            ["Left .claude/settings.json alone: feature 'login' tracks it in git"]
+        );
+    }
+
+    #[test]
+    fn pull_without_main_settings_is_a_no_op() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
         // Strip the Stop-hook settings.json seeded by `pm init`.
         let _ = std::fs::remove_dir_all(paths::main_worktree(&project).join(".claude"));
 
-        let result = pull(&project, "login");
-        assert!(result.is_err());
+        assert_eq!(
+            pull(&project, "login").unwrap(),
+            ["Main has no settings to pull"]
+        );
     }
 
     // --- diff ---

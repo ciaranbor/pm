@@ -361,9 +361,10 @@ harnesses; what differs:
   `~/.config/opencode/agents/` and `<worktree>/.opencode/agents/`, where pm
   projects them, and runs its built-in prompt — no error — for a name it finds
   in neither. So an opencode spawn, and `pm feat new`'s check, refuse a
-  definition with no projected copy, as `pm doctor` flags it. `pm upgrade`
-  projects it into main and the global dir; a feature worktree takes main's
-  copy from `pm harness pull <feature>`.
+  definition with no projected copy, as `pm doctor` flags it for main and
+  each feature worktree. `pm upgrade` projects it into main and the global
+  dir; a feature worktree takes main's copy from `pm harness pull <feature>`,
+  which `pm doctor --fix` runs.
 - **Permissions.** `--auto` approves whatever no rule denies, because an
   approval prompt in an unwatched window stalls the agent. An
   `[agents.permissions]` row is opencode's own rule list as a JSON array;
@@ -422,7 +423,9 @@ harnesses; what differs:
   opencode resolves no model a provider does not list, so pm adds the row's
   model to its provider's `models`; a mistyped id therefore fails at the
   endpoint, not before. When the entry declares `models` and the row's id is
-  not among them, the spawn line and `pm doctor` say so. A row may still name
+  not among them, the spawn line and `pm doctor` say so. They also flag an
+  unquoted dotted id, which TOML splits into nested tables (`models.Qwen3.8-27B`
+  is model `Qwen3` holding a table `8-27B`). A row may still name
   a provider pm config does not define — one opencode ships (`anthropic/…`)
   or one from your own `~/.config/opencode/opencode.json`: pm allows it and
   leaves its definition alone. Once pm config defines the same id, pm's

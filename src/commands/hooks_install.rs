@@ -401,18 +401,22 @@ pub fn is_installed_for(harness: Harness) -> Result<bool> {
 
 /// [`is_installed_for`] against an explicit `home`.
 fn is_installed_in(harness: Harness, home: &Path) -> Result<bool> {
-    if !stale_plugin_files(harness, home).is_empty() {
-        return Ok(false);
-    }
+    Ok(stale_plugin_files(harness, home).is_empty()
+        && hooks_registered(harness, home, user_hooks_root(harness, home)?.as_ref()))
+}
+
+/// Whether every pm hook is registered in `root`, `harness`'s parsed user
+/// hooks file under `home` (see [`user_hooks_root`]). True for a harness
+/// with no hooks file: its loop is a plugin.
+pub fn hooks_registered(harness: Harness, home: &Path, root: Option<&Value>) -> bool {
     if harness.user_settings_file(home).is_none() {
-        return Ok(true);
+        return true;
     }
-    let Some(parsed) = user_hooks_root(harness, home)? else {
-        return Ok(false);
-    };
-    Ok(PM_EVENTS
-        .iter()
-        .all(|(event, markers)| pm_hook_position(&parsed, event, markers).is_some()))
+    root.is_some_and(|root| {
+        PM_EVENTS
+            .iter()
+            .all(|(event, markers)| pm_hook_position(root, event, markers).is_some())
+    })
 }
 
 /// The parsed user-level hooks file of `harness`; `None` when it has none,

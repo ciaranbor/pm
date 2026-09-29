@@ -161,6 +161,8 @@ enum FixAction {
     TrustWorktree { harness: Harness, path: PathBuf },
     /// Rewrite the registry entry's `main_branch`.
     RecordMainBranch { branch: String },
+    /// `pm harness pull` the feature.
+    PullFeatureAssets,
 }
 
 /// Diagnostic finding for a single scope (a feature or `main`).
@@ -233,7 +235,8 @@ pub fn diagnose(
         });
     }
     main_issues.extend(harness_config_issues(project_root)?);
-    main_issues.extend(asset_issues(project_root)?);
+    let projections = DefinitionProjections::load(project_root)?;
+    main_issues.extend(asset_issues(project_root, &projections)?);
     main_issues.extend(legacy_vanilla_agent_issues(project_root, "main"));
     main_issues.extend(loop_stopped_issues(project_root, "main"));
     let main_branch = ProjectEntry::load(projects_dir, project_name)
@@ -406,6 +409,14 @@ pub fn diagnose(
             });
         }
 
+        if dir_exists {
+            issues.extend(feature_projection_issues(
+                project_root,
+                &projections,
+                name,
+                &worktree_path,
+            )?);
+        }
         issues.extend(legacy_vanilla_agent_issues(project_root, name));
         issues.extend(loop_stopped_issues(project_root, name));
 
@@ -828,7 +839,7 @@ fn worktree_harnesses(project_root: &Path) -> Result<Vec<(PathBuf, Vec<Harness>)
 /// Main-scope findings about the two asset tiers: what the global tier is
 /// missing, pre-migration copies still shadowing it, definitions a harness
 /// can't see, and project skills its global namesake shadows.
-fn asset_issues(project_root: &Path) -> Result<Vec<Issue>> {
+fn asset_issues(project_root: &Path, projections: &DefinitionProjections) -> Result<Vec<Issue>> {
     let mut issues = Vec::new();
 
     let missing = skills::global_store_missing()?;
@@ -870,7 +881,7 @@ fn asset_issues(project_root: &Path) -> Result<Vec<Issue>> {
         }
     }
 
-    for (name, harness) in unprojected_definitions(project_root)? {
+    for (name, harness) in unprojected_definitions(projections)? {
         issues.push(Issue {
             kind: IssueKind::AssetNotProjected,
             message: format!(
@@ -894,30 +905,97 @@ fn asset_issues(project_root: &Path) -> Result<Vec<Issue>> {
     Ok(issues)
 }
 
+/// Which harnesses need projected definitions, and main's canonical
+/// (project-tier) definitions each lacks a projected copy of in main.
+struct DefinitionProjections {
+    harnesses: Vec<Harness>,
+    missing_in_main: Vec<(String, Harness)>,
+}
+
+impl DefinitionProjections {
+    fn load(project_root: &Path) -> Result<Self> {
+        let harnesses: Vec<Harness> = skills::harnesses_in_use(project_root)?
+            .into_iter()
+            .filter(|h| h.projects_definitions())
+            .collect();
+        let main = paths::main_worktree(project_root);
+        let missing_in_main = unprojected_project_definitions(&main, &main, &harnesses)?;
+        Ok(Self {
+            harnesses,
+            missing_in_main,
+        })
+    }
+}
+
 /// Agent definitions with no projected copy in a harness's own definition
 /// dir, in either tier. Such a definition passes `WorkflowDef::validate`
 /// but the harness can't find it at launch.
-fn unprojected_definitions(project_root: &Path) -> Result<Vec<(String, Harness)>> {
-    let main = paths::main_worktree(project_root);
+fn unprojected_definitions(projections: &DefinitionProjections) -> Result<Vec<(String, Harness)>> {
+    let mut out = skills::unprojected_global_definitions(&projections.harnesses)?;
+    out.extend(projections.missing_in_main.iter().cloned());
+    Ok(out)
+}
+
+/// Main's canonical (project-tier) definitions with no projected copy in
+/// `worktree`'s harness dirs.
+fn unprojected_project_definitions(
+    main: &Path,
+    worktree: &Path,
+    harnesses: &[Harness],
+) -> Result<Vec<(String, Harness)>> {
     let canonical = main.join(skills::CANONICAL_DIR).join("agents");
-    let harnesses: Vec<Harness> = skills::harnesses_in_use(project_root)?
-        .into_iter()
-        .filter(|h| h.projects_definitions())
-        .collect();
-    let mut out = skills::unprojected_global_definitions(&harnesses)?;
+    let mut out = Vec::new();
     for file in skills::definition_files(&canonical)? {
-        for harness in &harnesses {
-            if !main
+        for harness in harnesses {
+            let projected = worktree
                 .join(harness.config_dir())
                 .join("agents")
-                .join(&file)
-                .exists()
-            {
+                .join(&file);
+            if !projected.exists() {
                 out.push((file.trim_end_matches(".md").to_string(), *harness));
             }
         }
     }
     Ok(out)
+}
+
+/// Project-tier definitions a feature worktree lacks a projected copy of.
+/// `pm upgrade` projects into main only; the harness, started in the
+/// feature, never sees main's copy.
+fn feature_projection_issues(
+    project_root: &Path,
+    projections: &DefinitionProjections,
+    feature: &str,
+    worktree: &Path,
+) -> Result<Vec<Issue>> {
+    let main = paths::main_worktree(project_root);
+    let pull = format!("`pm harness pull {feature}`");
+    Ok(
+        unprojected_project_definitions(&main, worktree, &projections.harnesses)?
+            .into_iter()
+            .map(|(name, harness)| {
+                let main_lacks = projections
+                    .missing_in_main
+                    .contains(&(name.clone(), harness));
+                let (remedy, fix) = if main_lacks {
+                    (format!("run `pm upgrade`, then {pull}"), Fix::None)
+                } else {
+                    (
+                        format!("run {pull}"),
+                        Fix::Auto(FixAction::PullFeatureAssets),
+                    )
+                };
+                Issue {
+                    kind: IssueKind::AssetNotProjected,
+                    message: format!(
+                        "canonical agent '{name}' not projected into this worktree for \
+                         {harness} ({remedy})"
+                    ),
+                    fix,
+                }
+            })
+            .collect(),
+    )
 }
 
 /// How long after its spawn an agent may go without a recorded session id
@@ -1118,6 +1196,9 @@ fn apply_fix(
         FixAction::TrustWorktree { harness, path } => {
             harness.trust_worktree(&paths::home_dir()?, path)?;
         }
+        FixAction::PullFeatureAssets => {
+            crate::commands::seed::pull(project_root, name, false)?;
+        }
     }
     Ok(Vec::new())
 }
@@ -1128,6 +1209,10 @@ mod tests {
     use crate::commands::feat_new;
     use crate::testing::TestServer;
     use tempfile::tempdir;
+
+    fn unprojected(project_root: &Path) -> Result<Vec<(String, Harness)>> {
+        unprojected_definitions(&DefinitionProjections::load(project_root)?)
+    }
 
     #[test]
     fn healthy_feature_reports_ok() {
@@ -1233,7 +1318,7 @@ mod tests {
         std::fs::write(&planner, "# planner").unwrap();
 
         assert_eq!(
-            unprojected_definitions(&project_path).unwrap(),
+            unprojected(&project_path).unwrap(),
             vec![("planner".to_string(), Harness::ClaudeCode)]
         );
         let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
@@ -1244,8 +1329,27 @@ mod tests {
             "{lines:?}"
         );
 
+        // `pm upgrade` projects into main only; the feature needs a pull.
         crate::commands::skills::project_assets(&project_path, false).unwrap();
-        assert!(unprojected_definitions(&project_path).unwrap().is_empty());
+        assert!(unprojected(&project_path).unwrap().is_empty());
+        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|l| l.contains("not projected"))
+                .collect::<Vec<_>>(),
+            [
+                "  login — canonical agent 'planner' not projected into this worktree for \
+              claude-code (run `pm harness pull login`)"
+            ],
+        );
+
+        doctor(&project_path, &projects_dir, true, server.name()).unwrap();
+        assert!(
+            project_path
+                .join("login/.claude/agents/planner.md")
+                .is_file()
+        );
         let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
         assert!(
             !lines.iter().any(|l| l.contains("not projected")),
@@ -1482,11 +1586,15 @@ mod tests {
         std::fs::write(&planner, "# planner").unwrap();
 
         assert!(
-            unprojected_definitions(&project_path)
+            unprojected(&project_path)
                 .unwrap()
                 .contains(&("planner".to_string(), Harness::OpenCode))
         );
-        let issues = asset_issues(&project_path).unwrap();
+        let issues = asset_issues(
+            &project_path,
+            &DefinitionProjections::load(&project_path).unwrap(),
+        )
+        .unwrap();
         assert!(
             messages(&issues, IssueKind::AssetNotProjected).contains(
                 &"canonical agent 'planner' not projected for opencode (run `pm upgrade`)"
@@ -1505,7 +1613,7 @@ mod tests {
             "# planner"
         );
         assert!(
-            !unprojected_definitions(&project_path)
+            !unprojected(&project_path)
                 .unwrap()
                 .iter()
                 .any(|(name, _)| name == "planner")
