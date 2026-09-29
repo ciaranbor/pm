@@ -33,7 +33,7 @@ pub struct ProjectConfig {
     pub github: GithubConfig,
     #[serde(default)]
     pub agents: AgentsConfig,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_default")]
     pub harness: HarnessConfig,
 }
 
@@ -41,10 +41,14 @@ pub struct ProjectConfig {
 /// config tiers; see `resolve_harness_config`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct HarnessConfig {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_default")]
     pub codex: CodexConfig,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_default")]
     pub opencode: OpenCodeConfig,
+}
+
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
 }
 
 /// `[harness.opencode]`: settings every opencode agent shares.
@@ -128,7 +132,7 @@ pub struct GlobalConfig {
     pub project: GlobalProjectConfig,
     #[serde(default)]
     pub agents: AgentsConfig,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_default")]
     pub harness: HarnessConfig,
 }
 
@@ -1071,6 +1075,22 @@ name = "myapp"
         );
         // Other agents are unaffected by a bad row they don't use.
         resolve_agent_settings(&AgentsConfig::default(), &global, "reviewer").unwrap();
+    }
+
+    #[test]
+    fn saved_config_writes_only_the_harness_tables_that_are_set() {
+        let dir = tempdir().unwrap();
+        let mut config: ProjectConfig = toml::from_str("[project]\nname = \"x\"\n").unwrap();
+        config.save(dir.path()).unwrap();
+        let text = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        assert!(!text.contains("[harness"), "{text}");
+
+        config.harness.codex.sandbox = Some("workspace-write".to_string());
+        config.save(dir.path()).unwrap();
+        let text = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        assert!(text.contains("[harness.codex]"), "{text}");
+        assert!(!text.contains("[harness.opencode]"), "{text}");
+        assert_eq!(ProjectConfig::load(dir.path()).unwrap(), config);
     }
 
     #[test]

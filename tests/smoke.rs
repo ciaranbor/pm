@@ -352,6 +352,13 @@ impl Smoke {
         std::fs::write(&config, text.replace(&header, &format!("{header}{row}\n"))).unwrap();
     }
 
+    /// Append `toml` to the project's config.
+    fn append_config(&self, toml: &str) {
+        let config = self.proj().join(".pm/config.toml");
+        let text = std::fs::read_to_string(&config).unwrap();
+        std::fs::write(&config, format!("{text}\n{toml}")).unwrap();
+    }
+
     /// [`Self::init_with_feature`], then spawn `reviewer` in the feature
     /// with a globbable model id configured for it.
     fn init_with_spawned_reviewer(&self) -> PathBuf {
@@ -828,19 +835,10 @@ fn interrupting_pm_kills_the_opencode_call_it_is_waiting_on() {
     )
     .unwrap();
     std::fs::set_permissions(&hang, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    let config = s.proj().join(".pm/config.toml");
-    let text = std::fs::read_to_string(&config).unwrap();
-    std::fs::write(
-        &config,
-        text.replace(
-            "[harness.opencode]\n",
-            &format!(
-                "[harness.opencode]\nbinary = {:?}\n",
-                hang.to_string_lossy()
-            ),
-        ),
-    )
-    .unwrap();
+    s.append_config(&format!(
+        "[harness.opencode]\nbinary = {:?}\n",
+        hang.to_string_lossy()
+    ));
 
     // `scripts/sandbox run` execs, so the child is pm itself.
     let mut pm = s
@@ -891,15 +889,7 @@ fn feat_new_refuses_a_mixed_team_whose_harness_binaries_cannot_run() {
         .success();
     let main = proj.join("main");
     s.set_agents_config("harness", "reviewer = \"codex\"");
-    let config = proj.join(".pm/config.toml");
-    let text = std::fs::read_to_string(&config).unwrap();
-    let header = "[harness.codex]\n";
-    assert!(text.contains(header), "{text}");
-    std::fs::write(
-        &config,
-        text.replace(header, &format!("{header}bypass_hook_trust = true\n")),
-    )
-    .unwrap();
+    s.append_config("[harness.codex]\nbypass_hook_trust = true\n");
 
     let shims: Vec<(PathBuf, Vec<u8>)> = ["claude", "codex"]
         .iter()
