@@ -11,7 +11,11 @@ description: Exercise a pm build by hand or end to end without touching the real
   `run [-C DIR] -- pm …` (`DIR` is relative to the sandbox `$HOME`),
   `status`, `down`.
 - Name your sandbox (`-n <feature>` or `PM_SANDBOX`): the default name is
-  shared, so two agents using it collide. Always `down` when finished.
+  shared, so two agents using it collide. Always `down` when finished: a
+  sandbox left up keeps its tmux server and ptys until someone removes it.
+- `list` shows every sandbox on the machine with its creator and whether it
+  is stale; `prune` downs the stale ones. `prune --all` also downs other
+  agents' live sandboxes, so run it only when the user asks.
 - `up` builds the working tree, and inside the sandbox `pm` is that build.
   Outside it, `pm` is the installed release and `cargo run --` the local
   build; both act on the real environment, so neither belongs in a QA run.
