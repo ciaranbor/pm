@@ -9,6 +9,18 @@
 //! neither field and codex has no second wake source (a finished background
 //! terminal does not wake the session), so `parse_busy` is false there and
 //! codex agents block every turn.
+//!
+//! The wait ends without a decision once the harness that ran the hook is
+//! gone, since a hook blocked in its wait outlives a harness that dies
+//! without killing it: codex never kills it, and Claude Code kills the
+//! hook's process group on a clean exit but not when it is SIGKILLed.
+//! Two signals, either sufficient: our parent pid changes (codex runs the
+//! hook as its direct child, so its death reparents us), or the peer of our
+//! stdout closes (Claude Code runs it under an intermediate `/bin/sh`, which
+//! is orphaned instead, so the parent never changes; codex and the opencode
+//! plugin read stdout through a pipe, Claude Code through a socketpair, and
+//! `poll` reports a closed peer of either as `POLLHUP`/`POLLERR`). Neither
+//! fires while the harness is alive, so a live agent's hook keeps blocking.
 
 use std::io::Read;
 use std::time::Duration;
@@ -34,10 +46,11 @@ fn reason(senders: &[String]) -> String {
 /// Non-pm sessions (unresolvable agent/scope) let the turn end, staying invisible.
 pub fn stop() -> i32 {
     match stop_inner() {
-        Ok(json) => {
+        Ok(Some(json)) => {
             print!("{json}");
             0
         }
+        Ok(None) => 0,
         Err(_) => {
             print!("{}", allow_decision());
             0
@@ -45,7 +58,9 @@ pub fn stop() -> i32 {
     }
 }
 
-fn stop_inner() -> crate::error::Result<String> {
+/// `None` when the harness went away while the hook waited.
+fn stop_inner() -> crate::error::Result<Option<String>> {
+    let caller = Caller::current();
     // Resolve identity before reading stdin: non-pm sessions bail here, and
     // tests calling `stop_inner` without piped stdin must not block.
     let agent = std::env::var("PM_AGENT_NAME")
@@ -57,28 +72,77 @@ fn stop_inner() -> crate::error::Result<String> {
     let project_root = paths::find_project_root(&cwd)?;
     let feature = paths::resolve_scope_from(&project_root, &cwd)?;
 
-    wait_and_decide(busy, &project_root, &feature, &agent, None)
+    wait_and_decide(busy, &project_root, &feature, &agent, None, || {
+        caller.alive()
+    })
+}
+
+/// The harness process that ran this hook, as it was when the hook started.
+struct Caller {
+    parent: libc::pid_t,
+}
+
+impl Caller {
+    fn current() -> Self {
+        // SAFETY: getppid() takes no arguments and cannot fail.
+        Self {
+            parent: unsafe { libc::getppid() },
+        }
+    }
+
+    /// See the module docs for why both checks are needed.
+    fn alive(&self) -> bool {
+        // SAFETY: as above.
+        let parent = unsafe { libc::getppid() };
+        parent == self.parent && !peer_closed(libc::STDOUT_FILENO)
+    }
+}
+
+/// Whether the reading end of `fd` — a pipe or socket — has been closed.
+/// False for anything `poll` reports no hang-up on (a tty, a file,
+/// `/dev/null`) and for a closed `fd`, so a hook run by hand keeps waiting.
+fn peer_closed(fd: libc::c_int) -> bool {
+    let mut pfd = libc::pollfd {
+        fd,
+        events: libc::POLLOUT,
+        revents: 0,
+    };
+    // SAFETY: one valid pollfd, count 1, zero timeout.
+    let ready = unsafe { libc::poll(&mut pfd, 1, 0) };
+    ready > 0 && pfd.revents & (libc::POLLHUP | libc::POLLERR) != 0
 }
 
 /// Decide the Stop outcome. Testable seam: takes an explicit `busy` flag
-/// instead of reading stdin. Messages take priority over `busy`.
+/// instead of reading stdin. Messages take priority over `busy`. `None`
+/// once `caller_alive` turns false while waiting.
 fn wait_and_decide(
     busy: bool,
     project_root: &std::path::Path,
     feature: &str,
     agent: &str,
     poll_interval: Option<Duration>,
-) -> crate::error::Result<String> {
+    caller_alive: impl Fn() -> bool,
+) -> crate::error::Result<Option<String>> {
     let senders = unread_senders(project_root, feature, agent)?;
     if !senders.is_empty() {
-        return Ok(block_decision(&senders));
+        return Ok(Some(block_decision(&senders)));
     }
     if busy {
-        return Ok(allow_decision());
+        return Ok(Some(allow_decision()));
     }
-    agent_wait::agent_wait(project_root, feature, agent, None, poll_interval)?;
+    let waited = agent_wait::agent_wait_while(
+        project_root,
+        feature,
+        agent,
+        None,
+        poll_interval,
+        caller_alive,
+    )?;
+    if waited.is_none() {
+        return Ok(None);
+    }
     let senders = unread_senders(project_root, feature, agent)?;
-    Ok(block_decision(&senders))
+    Ok(Some(block_decision(&senders)))
 }
 
 /// Senders with unread messages, oldest first — the order bare `pm msg read`
@@ -189,7 +253,9 @@ mod tests {
             "login",
             "reviewer",
             Some(Duration::from_millis(50)),
+            || true,
         )
+        .unwrap()
         .unwrap();
 
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -213,7 +279,9 @@ mod tests {
             "login",
             "reviewer",
             Some(Duration::from_millis(50)),
+            || true,
         )
+        .unwrap()
         .unwrap();
 
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -238,7 +306,9 @@ mod tests {
             "reviewer",
             // Long interval surfaces any accidental blocking.
             Some(Duration::from_secs(30)),
+            || true,
         )
+        .unwrap()
         .unwrap();
         let elapsed = start.elapsed();
 
@@ -263,7 +333,9 @@ mod tests {
                 "login",
                 "reviewer",
                 Some(Duration::from_millis(50)),
+                || true,
             )
+            .unwrap()
             .unwrap()
         });
 
@@ -296,7 +368,9 @@ mod tests {
             "login",
             "reviewer",
             Some(Duration::from_millis(50)),
+            || true,
         )
+        .unwrap()
         .unwrap();
 
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -304,6 +378,38 @@ mod tests {
             parsed["reason"],
             "You have new messages from zed, amy. Run `pm msg read` to read them."
         );
+    }
+
+    #[test]
+    fn idle_wait_ends_without_a_decision_once_the_caller_is_gone() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        let polls = std::sync::atomic::AtomicU32::new(0);
+
+        let result = wait_and_decide(
+            false,
+            &root,
+            "login",
+            "reviewer",
+            Some(Duration::from_millis(10)),
+            || polls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 3,
+        )
+        .unwrap();
+
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn peer_closed_tracks_the_reading_end() {
+        let mut fds = [0; 2];
+        // SAFETY: fds has room for the two descriptors pipe() writes.
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let [read, write] = fds;
+        assert!(!peer_closed(write));
+        // SAFETY: closing descriptors this test owns.
+        unsafe { libc::close(read) };
+        assert!(peer_closed(write));
+        unsafe { libc::close(write) };
     }
 
     #[test]

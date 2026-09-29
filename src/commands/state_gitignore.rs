@@ -26,9 +26,8 @@ use crate::state::paths;
 
 use super::skills::bundled_workflow_names;
 
-/// Lines every registry `.gitignore` starts from. The project-level `.pm/`
-/// needs no `.gitignore` because pm controls every file there; the registry
-/// may accumulate machine-specific ephemera.
+/// Lines every registry `.gitignore` starts from: the registry may
+/// accumulate machine-specific ephemera.
 const BASE: &str = "\
 # Ephemeral / machine-specific state
 *.lock

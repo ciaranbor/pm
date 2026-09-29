@@ -56,8 +56,7 @@ export default {
       },
     })
 
-    // The file may sit in a temp dir the system prunes under a long-lived
-    // agent, so the last text read stands in for a file that is gone.
+    // The last text read stands in for a file deleted under a live agent.
     if (appendFile) {
       let appended = ""
       const read = () => {

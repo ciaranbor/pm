@@ -215,7 +215,8 @@ fn spawn_session_with_config(
     // any non-empty notice boards. When no board has content this returns the
     // baseline path unchanged (or None when the baseline is also absent), so
     // older projects keep spawning exactly as before.
-    let append_file = crate::notice::compose_spawn_prompt(params.project_root, window_name)?;
+    let append_file =
+        crate::notice::compose_spawn_prompt(params.project_root, params.feature, window_name)?;
     let harness_config = resolve_harness_config(&config.harness, &global.harness);
     let dirs = writable_dirs(params.project_root, &harness_config);
     // A harness with a directory-trust gate would otherwise stop at an

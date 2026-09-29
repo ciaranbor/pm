@@ -35,7 +35,8 @@ pub fn claude_key(path: &std::path::Path) -> String {
 /// Write a stand-in `opencode` into `dir` and return its path, for
 /// `[harness.opencode] binary`. It records its arguments in `<dir>/argv`,
 /// one per line, and the opencode config its environment names in
-/// `<dir>/env`, keeping earlier invocations as `argv.1`, `argv.2`, …; then
+/// `<dir>/env` (written first, so a new `argv` implies its `env`), keeping
+/// earlier invocations as `argv.1`, `argv.2`, …; then
 /// it prints `answer` and exits with `exit` — enough to play `opencode
 /// api`, `opencode --version`, and the TUI a window launches.
 pub fn fake_opencode(dir: &std::path::Path, answer: &str, exit: i32) -> String {
@@ -62,9 +63,9 @@ pub fn fake_opencode_sequence(dir: &std::path::Path, answers: &[&str], exit: i32
     let script = format!(
         "#!/bin/sh\nn=1; while [ -e '{log}'.$n ]; do n=$((n+1)); done\n\
          k=$n; [ -e '{log}' ] && mv '{log}' '{log}'.$n && k=$((n+1))\n\
-         printf '%s\\n' \"$@\" > '{log}.tmp' && mv '{log}.tmp' '{log}'\n\
          printf 'OPENCODE_CONFIG=%s\\nOPENCODE_CONFIG_CONTENT=%s\\n' \\\n\
-         \"$OPENCODE_CONFIG\" \"$OPENCODE_CONFIG_CONTENT\" > '{env}'\n\
+         \"$OPENCODE_CONFIG\" \"$OPENCODE_CONFIG_CONTENT\" > '{env}.tmp' && mv '{env}.tmp' '{env}'\n\
+         printf '%s\\n' \"$@\" > '{log}.tmp' && mv '{log}.tmp' '{log}'\n\
          a='{answer}'.$k; [ -e \"$a\" ] || a='{answer}'.last\n\
          cat \"$a\"\nexit {exit}\n",
         log = dir.join("argv").display(),

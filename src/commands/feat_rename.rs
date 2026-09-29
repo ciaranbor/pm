@@ -170,6 +170,7 @@ pub fn feat_rename_in(
     let _ = FeatureState::delete(&features_dir, old_name);
 
     if !new_worktree_path.exists() {
+        let _ = crate::state::runtime::remove_scope(project_root, old_name);
         return Ok(Vec::new());
     }
     // A harness still writing its transcript while it is copied would be
@@ -185,6 +186,7 @@ pub fn feat_rename_in(
     }
     let all: Vec<u32> = stopped.iter().flat_map(|(_, pids)| pids.clone()).collect();
     let left = tmux::wait_for_exit(&all, EXIT_WAIT);
+    let _ = crate::state::runtime::remove_scope(project_root, old_name);
     let lingering: Vec<String> = stopped
         .iter()
         .filter(|(_, pids)| pids.iter().any(|pid| left.contains(pid)))

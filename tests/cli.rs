@@ -283,3 +283,40 @@ fn stop_hook_outside_a_project_lets_the_session_stop() {
         .success()
         .stdout("{}");
 }
+
+#[test]
+fn stop_hook_waiting_on_an_empty_inbox_exits_when_its_harness_goes() {
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    let dir = tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".pm")).unwrap();
+    std::fs::create_dir_all(dir.path().join("main")).unwrap();
+    let mut hook = std::process::Command::new(assert_cmd::cargo::cargo_bin("pm"))
+        .env("HOME", dir.path())
+        .env("PM_AGENT_NAME", "implementer")
+        .current_dir(dir.path().join("main"))
+        .args(["harness", "hooks", "stop"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        hook.try_wait().unwrap().is_none(),
+        "a hook whose harness is alive must keep waiting"
+    );
+
+    drop(hook.stdout.take());
+    let start = Instant::now();
+    while hook.try_wait().unwrap().is_none() {
+        if start.elapsed() > Duration::from_secs(10) {
+            hook.kill().unwrap();
+            panic!("hook still waiting after its stdout reader closed");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(hook.wait().unwrap().success());
+}

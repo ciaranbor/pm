@@ -44,6 +44,7 @@ pub fn agent_delete(
     // Wipe the agent's inbox so a future agent of the same name doesn't
     // inherit queued messages, cursors, or last-read metadata.
     crate::messages::delete_inbox(&messages_dir, feature, agent_name)?;
+    crate::state::runtime::remove_agent(project_root, feature, agent_name)?;
 
     // Kill the tmux window if it exists (idempotent, must be last so
     // that on-disk state is fully consistent first).
@@ -228,10 +229,12 @@ mod tests {
 
         let inbox = messages_dir.join(&feature).join("reviewer");
         assert!(inbox.exists(), "inbox should exist before delete");
+        let runtime = crate::state::runtime::agent_dir(dir.path(), &feature, "reviewer").unwrap();
 
         agent_delete(dir.path(), &feature, "reviewer", server.name()).unwrap();
 
         assert!(!inbox.exists(), "inbox should be wiped after delete");
+        assert!(!runtime.exists(), "runtime files should go with the agent");
         // Feature messages directory itself is preserved
         assert!(messages_dir.join(&feature).exists());
     }
