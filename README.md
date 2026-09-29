@@ -247,6 +247,32 @@ Keys are the `--agent` definition, not the display name: an agent spawned as
 `default` agent is an ordinary key; `"*"` is the only row that reaches every
 agent.
 
+### Mixed-harness teams
+
+A workflow's team can run on several harnesses at once: each member takes
+the harness its `[agents.harness]` row names.
+
+```toml
+[agents.harness]             # implementer has no row: claude-code
+reviewer = "codex"
+qa = "opencode"
+
+[agents.models]
+qa = "local/qwen"
+```
+
+`pm feat new` and `pm feat adopt --workflow` first check that each member's
+harness can spawn it and wake it for messages, and refuse before creating
+anything, naming each failing member, its harness, and what is missing. Not
+checked: that an installed hook's command is exactly the one pm would write
+(an entry counts as pm's by the command it names), and, because only running
+the harness would tell, that codex's trust entry still matches the hook's
+current command text, that the harness is logged in, and that a model id
+resolves.
+
+`pm agent spawn` does not run this check; `pm doctor` reports the same
+problems for a project's existing agents.
+
 ### Codex agents
 
 Set `[agents.harness] <def> = "codex"` and pm spawns that agent in the

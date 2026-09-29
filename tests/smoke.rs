@@ -733,3 +733,99 @@ fn opencode_spawn_creates_the_session_then_opens_it_standalone() {
         assert!(plugin.join(file).is_file(), "{file}");
     }
 }
+
+/// Catches: the binary probes resolving `claude` and `codex` through the
+/// real `PATH` (lib tests skip them), and the refusal coming before the
+/// worktree, branch and session rather than being rolled back after them.
+#[test]
+#[ignore]
+fn feat_new_refuses_a_mixed_team_whose_harness_binaries_cannot_run() {
+    use std::os::unix::fs::PermissionsExt;
+    let s = Smoke::new();
+    let proj = s.proj();
+    s.pm(s.home())
+        .args(["init", &proj.to_string_lossy()])
+        .assert()
+        .success();
+    let main = proj.join("main");
+    s.set_agents_config("harness", "reviewer = \"codex\"");
+    let config = proj.join(".pm/config.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    let header = "[harness.codex]\n";
+    assert!(text.contains(header), "{text}");
+    std::fs::write(
+        &config,
+        text.replace(header, &format!("{header}bypass_hook_trust = true\n")),
+    )
+    .unwrap();
+
+    let shims: Vec<(PathBuf, Vec<u8>)> = ["claude", "codex"]
+        .iter()
+        .map(|name| s.home().join("bin").join(name))
+        .map(|path| {
+            let shim = std::fs::read(&path).unwrap();
+            std::fs::write(&path, "#!/bin/sh\nexit 127\n").unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            (path, shim)
+        })
+        .collect();
+
+    s.pm(&main)
+        .args(["feat", "new", "login", "--workflow", "implement-and-review"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "2 of 2 team member(s) cannot run on their harness",
+        ))
+        .stderr(predicate::str::contains(
+            "implementer (claude-code): `claude` could not be run; install Claude Code",
+        ))
+        .stderr(predicate::str::contains(
+            "reviewer (codex): `codex` could not be run; install codex",
+        ));
+    assert!(!proj.join("login").exists());
+    assert!(!proj.join(".pm/features/login.toml").exists());
+    assert!(!s.sessions().iter().any(|n| n == "proj/login"));
+
+    for (path, shim) in shims {
+        std::fs::write(path, shim).unwrap();
+    }
+    s.pm(&main)
+        .args(["feat", "new", "login", "--workflow", "implement-and-review"])
+        .assert()
+        .success();
+    assert_eq!(s.argv_records("reviewer", 1).len(), 1);
+}
+
+/// Catches: `pm doctor` probing the `claude` binary through the real `PATH`
+/// only when an agent would launch on claude-code.
+#[test]
+#[ignore]
+fn doctor_reports_an_unrunnable_claude_only_when_an_agent_is_on_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let s = Smoke::new();
+    let proj = s.proj();
+    s.pm(s.home())
+        .args(["init", &proj.to_string_lossy()])
+        .assert()
+        .success();
+    let main = proj.join("main");
+    let claude = s.home().join("bin/claude");
+    std::fs::write(&claude, "#!/bin/sh\nexit 127\n").unwrap();
+    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let finding = "agents configured for claude-code cannot run: `claude` could not be run";
+
+    s.pm(&main)
+        .arg("doctor")
+        .assert()
+        .stdout(predicate::str::contains(finding));
+
+    s.set_agents_config("harness", "\"*\" = \"codex\"");
+    s.pm(&main)
+        .arg("doctor")
+        .assert()
+        .stdout(predicate::str::contains(finding).not())
+        .stdout(predicate::str::contains(
+            "codex has not trusted pm's Stop hook",
+        ));
+}

@@ -27,6 +27,7 @@ pub mod feat_rename;
 pub mod feat_review;
 pub mod feat_switch;
 pub mod feat_sync;
+pub mod harness_check;
 pub mod harness_export;
 pub mod harness_import;
 pub mod harness_migrate;

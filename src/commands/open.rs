@@ -56,6 +56,7 @@ fn is_open_recoverable(kind: IssueKind) -> bool {
         | IssueKind::HarnessUnusable
         | IssueKind::LoopStopped
         | IssueKind::AgentModelMissing
+        | IssueKind::AgentRowInvalid
         | IssueKind::HarnessConfigInvalid => false,
     }
 }

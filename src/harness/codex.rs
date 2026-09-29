@@ -221,7 +221,9 @@ fn table_at<'a>(doc: &'a DocumentMut, keys: &[&str]) -> Option<&'a dyn toml_edit
     Some(cur)
 }
 
-/// Whether codex already trusts `hooks.state.<key>`.
+/// Whether codex has a trust entry for `hooks.state.<key>`. The entry's hash
+/// is codex's own, so whether it still matches the hook's command text is
+/// not checked.
 pub(super) fn hook_trusted(codex_home: &Path, key: &str) -> bool {
     let Ok(doc) = load_config(codex_home) else {
         return false;
@@ -295,6 +297,7 @@ fn parse_version(output: &str) -> Option<(u32, u32, u32)> {
 pub(super) fn installed_version() -> Option<String> {
     let out = std::process::Command::new("codex")
         .arg("--version")
+        .stdin(std::process::Stdio::null())
         .output()
         .ok()?;
     if !out.status.success() {
@@ -307,6 +310,26 @@ pub(super) fn installed_version() -> Option<String> {
 /// can't be probed.
 pub(super) fn version_supported() -> Option<bool> {
     Some(parse_version(&installed_version()?)? >= MIN_VERSION)
+}
+
+pub(super) fn unusable_reason() -> Option<String> {
+    version_problem(installed_version().as_deref())
+}
+
+/// What is wrong with `found`, the installed version's raw string (`None`
+/// when codex can't be run).
+fn version_problem(found: Option<&str>) -> Option<String> {
+    let Some(found) = found else {
+        return Some("`codex` could not be run; install codex".to_string());
+    };
+    match parse_version(found) {
+        Some(version) if version >= MIN_VERSION => None,
+        _ => Some(format!(
+            "installed codex is `{found}`; pm launches it with --no-daemon, which needs {} or \
+             later",
+            min_version_string()
+        )),
+    }
 }
 
 pub(super) fn min_version_string() -> String {
@@ -535,6 +558,20 @@ mod tests {
         // A header per project, as codex itself writes it — not a dotted
         // inline table.
         assert!(written.starts_with("[projects.\""), "{written}");
+    }
+
+    #[test]
+    fn version_problem_names_a_missing_or_old_binary() {
+        assert_eq!(
+            version_problem(None).unwrap(),
+            "`codex` could not be run; install codex"
+        );
+        assert_eq!(
+            version_problem(Some("codex-cli 0.155.9")).unwrap(),
+            "installed codex is `codex-cli 0.155.9`; pm launches it with --no-daemon, which \
+             needs 0.156.0 or later"
+        );
+        assert_eq!(version_problem(Some("codex-cli 0.156.0")), None);
     }
 
     #[test]
