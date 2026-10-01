@@ -355,6 +355,9 @@ pub enum AgentCommands {
         /// Only show active agents
         #[arg(long)]
         active: bool,
+        /// Target scope (feature name or "main"; defaults to current scope)
+        #[arg(long)]
+        scope: Option<String>,
     },
     /// Stop one or more running agents (kill window, mark inactive)
     Stop {
@@ -389,6 +392,9 @@ pub enum AgentCommands {
         source: String,
         /// New agent name
         name: String,
+        /// Target scope (feature name or "main"; defaults to current scope)
+        #[arg(long)]
+        scope: Option<String>,
     },
 }
 

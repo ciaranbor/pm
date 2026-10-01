@@ -24,7 +24,9 @@ Usage: scripts/sandbox [COMMAND] [OPTIONS] [-- CMD...]
                                 run it before `pm feat new`/`pm agent spawn`
                                 (relative to the sandbox HOME, exact paths —
                                 claude does not inherit trust from parents)
-  down                          kill the server and delete the HOME
+  down [--force]                kill the server and delete the HOME; a
+                                running test binary's pid-named sandbox
+                                only with --force
   list                          every sandbox on this machine: windows (each
                                 holds a pty), age, creator, and why it is
                                 stale if it is
@@ -61,13 +63,14 @@ die() { echo "sandbox: $*" >&2; exit 1; }
 
 here=$(cd "$(dirname "$0")/.." && pwd -P)
 name=${PM_SANDBOX:-default}
-real=0 all=0 pm_bin="" shell_bin="" cdir="" cmd="" session=""
+real=0 all=0 force=0 pm_bin="" shell_bin="" cdir="" cmd="" session=""
 dirs=()
 while [ $# -gt 0 ]; do
   case $1 in
     -n) name=$2; shift 2 ;;
     --real) real=1; shift ;;
     --all) all=1; shift ;;
+    --force) force=1; shift ;;
     --pm) pm_bin=$2; shift 2 ;;
     --shell) shell_bin=$2; shift 2 ;;
     -C) cdir=$2; shift 2 ;;
@@ -211,6 +214,9 @@ trust() {
 # idle $TMPDIR entries), so a sandbox can never leak its server.
 down() {
   local had_socket=0
+  if [ "$force" = 0 ] && live_pid "$name"; then
+    die "sandbox '$name' belongs to running process $name (--force to down it anyway)"
+  fi
   [ -e "$socket" ] && had_socket=1
   stmux kill-server 2>/dev/null || true
   rm -f "$socket"
@@ -224,8 +230,14 @@ down() {
   fi
 }
 
-# Every sandbox name with a HOME or a socket, except pid-named ones whose
-# pid is alive: those belong to a running test binary or smoke run.
+# Whether NAME is the pid of a live process: its sandbox belongs to a
+# running test binary or smoke run.
+live_pid() {
+  case $1 in *[!0-9]*) return 1 ;; esac
+  kill -0 "$1" 2>/dev/null
+}
+
+# Every sandbox name with a HOME or a socket, except a live pid's.
 sandbox_names() {
   local p n
   for p in "$tmpbase"/pm-test-home-* "$sockdir"/pm-test-*; do
@@ -235,7 +247,7 @@ sandbox_names() {
       *) n=${p#"$sockdir"/pm-test-} ;;
     esac
     case $n in *[!A-Za-z0-9_-]*|"") continue ;; esac
-    case $n in *[!0-9]*) ;; *) kill -0 "$n" 2>/dev/null && continue ;; esac
+    live_pid "$n" && continue
     echo "$n"
   done | sort -u
 }
@@ -285,7 +297,7 @@ case $cmd in
   "") created=0
       if ! exists; then up; created=1; fi
       shell
-      if [ "$created" = 1 ]; then down; fi ;;
+      if [ "$created" = 1 ]; then force=1 down; fi ;;
   up) up ;;
   run) run "$@" ;;
   shell) shell ;;

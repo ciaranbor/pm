@@ -12,12 +12,16 @@ use crate::tmux;
 /// `session_id`, its harness resumes that session on respawn. If the entry
 /// records an explicit `agent_definition`, the definition is preserved
 /// across the restart (relayed via `agent_spawn` reading the registry).
-pub fn agent_restart(
+///
+/// When `keep_old` is set the old window is renamed but left running and
+/// returned, for a caller whose own process lives in it.
+fn restart_one(
     project_root: &Path,
     feature: &str,
     agent_name: &str,
     tmux_server: Option<&str>,
-) -> Result<String> {
+    keep_old: bool,
+) -> Result<(String, Option<String>)> {
     crate::messages::validate_name(agent_name, "agent")?;
 
     let pm_dir = paths::pm_dir(project_root);
@@ -33,20 +37,16 @@ pub fn agent_restart(
         ))
     })?;
 
-    // Rename the old window (if it exists) so agent_spawn sees "no window"
-    // and creates a fresh one. We kill the old window AFTER spawning so that
-    // `pm agent restart` works when called from within the agent's own window
-    // (killing the window would terminate this process before the spawn).
+    // Renamed rather than killed first, so agent_spawn sees no window and
+    // creates a fresh one.
     let old_window = tmux::find_window(tmux_server, &session_name, agent_name)?;
     if let Some(ref target) = old_window {
         let temp_name = format!("{agent_name}-restarting");
         let _ = tmux::rename_window(tmux_server, target, &temp_name);
     }
 
-    // Respawn via agent_spawn (which will see the registry entry, find no
-    // window with the agent's name, and respawn). Passing `None` for
-    // `agent_definition` lets `agent_spawn` re-read the stored definition
-    // from the registry, so aliased agents keep their `--agent <def>` flag.
+    // `None` for the definition makes agent_spawn re-read the stored one,
+    // so an aliased agent keeps its definition.
     let (outcome, _spawn_msg, notes) = super::agent_spawn::agent_spawn(
         project_root,
         feature,
@@ -56,24 +56,21 @@ pub fn agent_restart(
         tmux_server,
     )?;
 
-    // Land the client on the freshly spawned window BEFORE killing the old
-    // one. When `pm agent restart` is invoked from within the agent's own
-    // window, killing that window terminates this very process — so anything
-    // that must happen has to happen first. Selecting now also means the old
-    // window is no longer active, so killing it won't make tmux auto-jump to
-    // an arbitrary neighbour.
+    // Selected before the old window is killed, so tmux doesn't jump to an
+    // arbitrary neighbour.
     if let Some(new_target) = tmux::find_window(tmux_server, &session_name, agent_name)? {
         let _ = tmux::select_window(tmux_server, &new_target);
     }
 
-    // Now kill the old (renamed) window. If we're running inside it, this
-    // kills our process — but the spawn and window switch are already done.
-    if let Some(ref target) = old_window {
-        // The target still refers to the same window (by index), just renamed.
-        let _ = tmux::kill_window(tmux_server, target);
-    }
-
-    Ok(restarted_line(agent_name, outcome, &notes))
+    let kept = match old_window {
+        Some(target) if keep_old => Some(target),
+        Some(target) => {
+            let _ = tmux::kill_window(tmux_server, &target);
+            None
+        }
+        None => None,
+    };
+    Ok((restarted_line(agent_name, outcome, &notes), kept))
 }
 
 /// The report line for an agent that was stopped and respawned.
@@ -89,17 +86,77 @@ pub(super) fn restarted_line(agent_name: &str, outcome: SpawnOutcome, notes: &[S
     )
 }
 
-/// Restart multiple agents. Continues on error, returns all results.
+/// Completed restarts, in the order they ran.
+#[derive(Debug)]
+pub struct Restarted {
+    pub results: Vec<Result<String>>,
+    /// The old window of the agent the restart ran from, left to
+    /// [`Restarted::finish`].
+    caller_window: Option<String>,
+}
+
+impl Restarted {
+    /// Kill the old window the restart ran from, if it ran from one. That
+    /// ends the calling process, so it comes after the results are printed.
+    pub fn finish(self, tmux_server: Option<&str>) {
+        if let Some(window) = self.caller_window {
+            let _ = tmux::kill_window(tmux_server, &window);
+        }
+    }
+}
+
+/// Restart multiple agents. Continues on error. An agent whose window holds
+/// this process is restarted last and its old window left to
+/// [`Restarted::finish`]: killing it ends the restart.
 pub fn agent_restart_many(
     project_root: &Path,
     feature: &str,
     names: &[String],
     tmux_server: Option<&str>,
-) -> Vec<Result<String>> {
-    names
+) -> Restarted {
+    let caller = callers_agent(project_root, feature, names, tmux_server);
+    let mut results: Vec<Result<String>> = names
         .iter()
-        .map(|name| agent_restart(project_root, feature, name, tmux_server))
-        .collect()
+        .filter(|n| Some(*n) != caller)
+        .map(|name| {
+            restart_one(project_root, feature, name, tmux_server, false).map(|(line, _)| line)
+        })
+        .collect();
+    let mut caller_window = None;
+    if let Some(name) = caller {
+        match restart_one(project_root, feature, name, tmux_server, true) {
+            Ok((line, kept)) => {
+                caller_window = kept;
+                results.push(Ok(line));
+            }
+            Err(e) => results.push(Err(e)),
+        }
+    }
+    Restarted {
+        results,
+        caller_window,
+    }
+}
+
+/// The one of `names` whose window this process runs in.
+fn callers_agent<'a>(
+    project_root: &Path,
+    feature: &str,
+    names: &'a [String],
+    tmux_server: Option<&str>,
+) -> Option<&'a String> {
+    let config = ProjectConfig::load(&paths::pm_dir(project_root)).ok()?;
+    let session_name = tmux::session_name(&config.project.name, feature);
+    let pid = std::process::id();
+    names.iter().find(|name| {
+        let Ok(Some(window)) = tmux::find_window(tmux_server, &session_name, name) else {
+            return false;
+        };
+        tmux::pane_processes(tmux_server, &window)
+            .unwrap_or_default()
+            .iter()
+            .any(|p| p.pid == pid)
+    })
 }
 
 #[cfg(test)]
@@ -112,6 +169,15 @@ mod tests {
     use crate::testing::TestServer;
     use chrono::Utc;
     use tempfile::tempdir;
+
+    fn restart(
+        project_root: &Path,
+        feature: &str,
+        agent_name: &str,
+        tmux_server: Option<&str>,
+    ) -> Result<String> {
+        restart_one(project_root, feature, agent_name, tmux_server, false).map(|(line, _)| line)
+    }
 
     fn setup_project(dir: &Path, server: &TestServer) -> (String, String) {
         let root = dir.to_path_buf();
@@ -183,7 +249,7 @@ mod tests {
         );
 
         // Restart
-        let msg = agent_restart(dir.path(), &feature, "reviewer", server.name()).unwrap();
+        let msg = restart(dir.path(), &feature, "reviewer", server.name()).unwrap();
         assert!(msg.contains("Restarted agent 'reviewer'"));
 
         // Window should still exist (new one)
@@ -224,7 +290,7 @@ mod tests {
             Some("other".to_string())
         );
 
-        agent_restart(dir.path(), &feature, "reviewer", server.name()).unwrap();
+        restart(dir.path(), &feature, "reviewer", server.name()).unwrap();
 
         // After restart, the client should be focused on the reviewer window.
         assert_eq!(
@@ -248,7 +314,7 @@ mod tests {
         registry.get_mut("reviewer").unwrap().session_id = "sess-abc".to_string();
         registry.save(&agents_dir, &feature).unwrap();
 
-        let msg = agent_restart(dir.path(), &feature, "reviewer", server.name()).unwrap();
+        let msg = restart(dir.path(), &feature, "reviewer", server.name()).unwrap();
         assert!(msg.contains("resumed session"));
 
         // Window should exist
@@ -283,7 +349,7 @@ mod tests {
             .insert("reviewer".to_string(), "codex".to_string());
         config.save(&pm_dir).unwrap();
 
-        let msg = agent_restart(dir.path(), &feature, "reviewer", server.name()).unwrap();
+        let msg = restart(dir.path(), &feature, "reviewer", server.name()).unwrap();
         assert_eq!(
             msg,
             "Restarted agent 'reviewer' (harness changed claude-code → codex; previous session \
@@ -323,7 +389,7 @@ mod tests {
         );
         registry.save(&agents_dir, &feature).unwrap();
 
-        let msg = agent_restart(dir.path(), &feature, "reviewer", server.name()).unwrap();
+        let msg = restart(dir.path(), &feature, "reviewer", server.name()).unwrap();
         assert!(msg.contains("Restarted agent 'reviewer'"));
     }
 
@@ -346,7 +412,7 @@ mod tests {
         )
         .unwrap();
 
-        let msg = agent_restart(dir.path(), &feature, "frontend-dev", server.name()).unwrap();
+        let msg = restart(dir.path(), &feature, "frontend-dev", server.name()).unwrap();
         assert!(msg.contains("Restarted agent 'frontend-dev'"));
 
         // Window still exists under display name
@@ -369,7 +435,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let (_session_name, feature) = setup_project(dir.path(), &server);
 
-        let result = agent_restart(dir.path(), &feature, "nonexistent", server.name());
+        let result = restart(dir.path(), &feature, "nonexistent", server.name());
         assert!(result.is_err());
     }
 
@@ -401,7 +467,8 @@ mod tests {
             &feature,
             &["reviewer".to_string(), "nonexistent".to_string()],
             server.name(),
-        );
+        )
+        .results;
         assert_eq!(results.len(), 2);
         assert!(results[0].is_ok());
         assert!(results[1].is_err());

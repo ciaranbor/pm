@@ -416,12 +416,14 @@ fn command_matches(hook: &Value, markers: &[&str]) -> bool {
 
 /// Whether `harness`'s never-idle loop is installed: every pm entry in its
 /// user-level file, or its plugin files current.
-pub fn is_installed_for(harness: Harness) -> Result<bool> {
+#[cfg(test)]
+pub(crate) fn is_installed_for(harness: Harness) -> Result<bool> {
     is_installed_in(harness, &paths::home_dir()?)
 }
 
 /// [`is_installed_for`] against an explicit `home`.
-fn is_installed_in(harness: Harness, home: &Path) -> Result<bool> {
+#[cfg(test)]
+pub(crate) fn is_installed_in(harness: Harness, home: &Path) -> Result<bool> {
     Ok(stale_plugin_files(harness, home).is_empty()
         && hooks_registered(harness, home, user_hooks_root(harness, home)?.as_ref()))
 }

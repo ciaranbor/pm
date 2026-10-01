@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::commands::hooks_install;
-use crate::commands::skills;
+use crate::commands::skills::{self, GlobalStore};
 use crate::error::{PmError, Result};
 use crate::git;
 use crate::hooks;
@@ -22,10 +22,29 @@ use crate::tmux;
 /// - `<pm config dir>/projects/<name>.toml` — global registry entry
 /// - `<name>/main` tmux session pointing at the main worktree
 ///
+/// It also installs the global asset tier and the pm hooks.
+///
 /// The `tmux_server` parameter allows tests to use an isolated tmux server.
 pub fn init(
     path: &Path,
     projects_dir: &Path,
+    git_url: Option<&str>,
+    tmux_server: Option<&str>,
+) -> Result<()> {
+    init_in(
+        path,
+        projects_dir,
+        &GlobalStore::resolve()?,
+        git_url,
+        tmux_server,
+    )
+}
+
+/// [`init`] installing into an explicit global tier.
+pub fn init_in(
+    path: &Path,
+    projects_dir: &Path,
+    global: &GlobalStore,
     git_url: Option<&str>,
     tmux_server: Option<&str>,
 ) -> Result<()> {
@@ -97,12 +116,12 @@ pub fn init(
     // Install the pm hooks into the harness's user-level settings so every
     // agent spawned on this machine runs as a never-idle message processor
     // (see `commands::hooks_install`).
-    hooks_install::install(Some(path))?;
+    hooks_install::install_in(&global.home, Some(path), false)?;
 
     // Bundled skills, agent definitions, workflows, and the baseline live in
     // the global tier (see `commands::skills`); a fresh project holds no
     // bundled copies and is born migrated.
-    skills::install_global()?;
+    skills::install_global_in(global)?;
     skills::write_migration_marker(path)?;
 
     // Register in global registry
@@ -201,6 +220,36 @@ mod tests {
         assert!(!main.join(".claude/settings.json").exists());
         assert!(!paths::workflows_dir(&project_path).exists());
         assert!(skills::is_migrated(&project_path));
+    }
+
+    #[test]
+    fn init_installs_the_global_tier_and_every_harness_hook_into_its_home() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let home = dir.path().join("home");
+        std::fs::create_dir(&home).unwrap();
+        let global = GlobalStore::at(&home);
+        let project_path = dir.path().join(server.scope("myapp"));
+
+        init_in(
+            &project_path,
+            &dir.path().join("registry"),
+            &global,
+            None,
+            server.name(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            skills::global_store_missing_in(&global),
+            Vec::<String>::new()
+        );
+        for &harness in crate::harness::Harness::SUPPORTED {
+            assert!(
+                hooks_install::is_installed_in(harness, &home).unwrap(),
+                "{harness}"
+            );
+        }
     }
 
     #[test]

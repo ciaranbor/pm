@@ -88,7 +88,8 @@ base and PR — and `pm feat list --all` covers every registered project.
 Inspection and housekeeping subcommands (`list`, `info`, `switch`, `rename`,
 `rebase`, `delete`, `sync`) round out `pm feat` — see `pm feat --help`.
 `merge` refuses a feature or base worktree with uncommitted changes or a
-paused rebase; `feat info`, `pm status` and `pm doctor` show a paused rebase.
+paused rebase; `feat info` shows a feature's paused rebase, and `pm status` and
+`pm doctor` show one in any worktree, main's included.
 
 `pm register`, `pm feat adopt --from` and `pm feat rename` carry agent
 sessions to the new path for every harness in use, and print what they did.
@@ -199,8 +200,8 @@ Manage agents with `pm agent spawn|list|stop|restart|delete|fork`. `spawn
 <name> --agent <def>` decouples the display/messaging identity from the agent
 definition, so you can run several agents off one definition (e.g.
 `frontend-dev` and `backend-dev` both `--agent implementer`). `fork` starts a
-new agent from a copy of another's history. `spawn`, `stop`, `restart` and
-`delete` act on the current scope, or on another with `--scope <feature|main>`.
+new agent from a copy of another's history. Each acts on the current scope, or
+on another with `--scope <feature|main>`.
 See `pm agent --help`.
 
 ### Configuration
@@ -747,7 +748,9 @@ Tests spawn real tmux sessions on a private server; `AGENTS.md` (Development)
 has the pty budget and how to clean up leaked test servers.
 
 Setting `PM_TMUX_SERVER=<name>` makes every `pm` command target that tmux
-server (`tmux -L <name>`) instead of the default one. `scripts/sandbox` uses
+server (`tmux -L <name>`) instead of the default one; `pm open` run from a
+pane of another server attaches a nested client rather than switching that
+server's. `scripts/sandbox` uses
 it to give you a throwaway pm environment for trying changes by hand (see
 `AGENTS.md`).
 

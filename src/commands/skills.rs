@@ -1736,4 +1736,35 @@ mod tests {
         assert!(is_bundled_workflow("solo"));
         assert!(!is_bundled_workflow("my-solo"));
     }
+
+    #[test]
+    fn pms_own_gitignore_lists_every_bundled_project_copy() {
+        let gitignore = include_str!("../../.gitignore");
+        let mut listed: Vec<String> = gitignore
+            .split("# Copies of pm's own bundled assets")
+            .nth(1)
+            .expect("bundled-copies block")
+            .lines()
+            .skip(1)
+            .take_while(|l| !l.trim().is_empty())
+            .map(str::to_string)
+            .collect();
+        listed.sort();
+
+        let mut expected = vec![format!("/{CANONICAL_DIR}/{BASELINE_FILE}")];
+        for item in items_of_kind(BundledKind::Agent) {
+            expected.extend(
+                item.files
+                    .iter()
+                    .map(|(file, _)| format!("/{CANONICAL_DIR}/agents/{file}")),
+            );
+        }
+        expected.extend(
+            items_of_kind(BundledKind::Skill)
+                .map(|item| format!("/{CANONICAL_DIR}/skills/{}/", item.name)),
+        );
+        expected.sort();
+
+        assert_eq!(listed, expected);
+    }
 }

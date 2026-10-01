@@ -94,8 +94,8 @@ pub enum IssueKind {
     /// A harness in use reports a problem with its `[harness.<name>]`
     /// settings.
     HarnessConfigInvalid,
-    /// A feature worktree has a rebase paused, so its branch does not yet
-    /// hold the rebased commits and `pm feat merge` refuses it.
+    /// A feature's or main's worktree has a rebase paused, so its branch
+    /// does not yet hold the rebased commits and `pm feat merge` refuses it.
     RebaseInProgress,
 }
 
@@ -240,6 +240,7 @@ pub fn diagnose(
     main_issues.extend(harness_config_issues(project_root)?);
     let projections = DefinitionProjections::load(project_root)?;
     main_issues.extend(asset_issues(project_root, &projections)?);
+    main_issues.extend(rebase_issue(&main_repo));
     main_issues.extend(legacy_vanilla_agent_issues(project_root, "main"));
     main_issues.extend(loop_stopped_issues(project_root, "main"));
     let main_branch = ProjectEntry::load(projects_dir, project_name)
@@ -421,13 +422,8 @@ pub fn diagnose(
             )?);
         }
 
-        if dir_exists && git::rebase_in_progress(&worktree_path).unwrap_or(false) {
-            issues.push(Issue {
-                kind: IssueKind::RebaseInProgress,
-                message: "rebase in progress (finish with `git rebase --continue` or `--abort`)"
-                    .to_string(),
-                fix: Fix::None,
-            });
+        if dir_exists {
+            issues.extend(rebase_issue(&worktree_path));
         }
 
         issues.extend(legacy_vanilla_agent_issues(project_root, name));
@@ -484,21 +480,76 @@ pub fn diagnose(
     Ok(findings)
 }
 
+/// One line of a [`Report`], for one scope.
+struct Entry {
+    /// Whether the line reports an issue rather than a healthy scope.
+    issue: bool,
+    line: String,
+}
+
+/// The outcome of a [`doctor`] run.
+pub struct Report {
+    feature_count: usize,
+    entries: Vec<Entry>,
+    fixed_count: usize,
+    fix: bool,
+    warnings: Vec<String>,
+}
+
+impl Report {
+    /// Issues found, fixed ones included.
+    pub fn issue_count(&self) -> usize {
+        self.entries.iter().filter(|e| e.issue).count()
+    }
+
+    /// One line per issue found, naming its scope and, under `--fix`, what
+    /// became of it.
+    pub fn issue_lines(&self) -> impl Iterator<Item = &str> {
+        self.entries
+            .iter()
+            .filter(|e| e.issue)
+            .map(|e| e.line.as_str())
+    }
+
+    /// Project-independent warnings.
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
+    }
+
+    /// The full report: a summary line, a line per scope or issue, then the
+    /// warnings.
+    pub fn lines(&self) -> Vec<String> {
+        let checked = format!("Checked main and {} feature(s)", self.feature_count);
+        let total = self.issue_count();
+        let summary = if total == 0 {
+            format!("{checked}: all healthy")
+        } else if self.fix && self.fixed_count > 0 {
+            format!(
+                "{checked}: {total} issue(s) found, {} fixed",
+                self.fixed_count
+            )
+        } else {
+            format!("{checked}: {total} issue(s) found")
+        };
+        std::iter::once(summary)
+            .chain(self.entries.iter().map(|e| e.line.clone()))
+            .chain(self.warnings.iter().cloned())
+            .collect()
+    }
+}
+
 /// Run a health check on all features in the project.
 ///
-/// Wraps [`diagnose`] with formatting and (optionally) auto-fix logic.
+/// Wraps [`diagnose`] with reporting and (optionally) auto-fix logic.
 /// Always passes `check_pr_state = true`, so PR drift is reported here.
 ///
 /// With `fix == true`, auto-resolves clear-cut issues and skips ambiguous ones.
-///
-/// Returns formatted diagnostic lines.
 pub fn doctor(
     project_root: &Path,
     projects_dir: &Path,
     fix: bool,
     tmux_server: Option<&str>,
-) -> Result<Vec<String>> {
-    // Project-independent warnings, appended after the status lines.
+) -> Result<Report> {
     let mut warnings = baseline_capability_warnings(project_root)?;
     warnings.extend(global_config_warning());
 
@@ -509,77 +560,59 @@ pub fn doctor(
     let config = ProjectConfig::load(&pm_dir)?;
     let project_name = &config.project.name;
 
-    let mut lines = Vec::new();
-    let mut total_issues = 0;
+    let mut entries = Vec::new();
     let mut fixed_count = 0;
 
     for finding in &findings {
         if finding.issues.is_empty() {
-            lines.push(format!("  {} — ok", finding.feature));
+            entries.push(Entry {
+                issue: false,
+                line: format!("  {} — ok", finding.feature),
+            });
             continue;
         }
 
-        total_issues += finding.issues.len();
-
-        if fix {
-            for issue in &finding.issues {
-                match &issue.fix {
-                    Fix::Auto(action) => {
-                        match apply_fix(
-                            action,
-                            project_root,
-                            projects_dir,
-                            &finding.feature,
-                            project_name,
-                            tmux_server,
-                        ) {
-                            Ok(notes) => {
-                                lines.push(format!(
-                                    "  {} — fixed: {}{}",
-                                    finding.feature,
-                                    issue.message,
-                                    agent_spawn::notes_suffix(&notes)
-                                ));
-                                fixed_count += 1;
-                            }
-                            Err(e) => {
-                                lines.push(format!(
-                                    "  {} — fix failed ({}): {}",
-                                    finding.feature, e, issue.message
-                                ));
-                            }
-                        }
+        for issue in &finding.issues {
+            let line = match &issue.fix {
+                Fix::Auto(action) if fix => match apply_fix(
+                    action,
+                    project_root,
+                    projects_dir,
+                    &finding.feature,
+                    project_name,
+                    tmux_server,
+                ) {
+                    Ok(notes) => {
+                        fixed_count += 1;
+                        format!(
+                            "  {} — fixed: {}{}",
+                            finding.feature,
+                            issue.message,
+                            agent_spawn::notes_suffix(&notes)
+                        )
                     }
-                    Fix::Skip => {
-                        lines.push(format!(
-                            "  {} — skipped (ambiguous): {}",
-                            finding.feature, issue.message
-                        ));
-                    }
-                    Fix::None => {
-                        lines.push(format!("  {} — {}", finding.feature, issue.message));
-                    }
-                }
-            }
-        } else {
-            for issue in &finding.issues {
-                lines.push(format!("  {} — {}", finding.feature, issue.message));
-            }
+                    Err(e) => format!(
+                        "  {} — fix failed ({}): {}",
+                        finding.feature, e, issue.message
+                    ),
+                },
+                Fix::Skip if fix => format!(
+                    "  {} — skipped (ambiguous): {}",
+                    finding.feature, issue.message
+                ),
+                _ => format!("  {} — {}", finding.feature, issue.message),
+            };
+            entries.push(Entry { issue: true, line });
         }
     }
 
-    let checked = format!("Checked main and {feature_count} feature(s)");
-    let summary = if total_issues == 0 {
-        format!("{checked}: all healthy")
-    } else if fix && fixed_count > 0 {
-        format!("{checked}: {total_issues} issue(s) found, {fixed_count} fixed")
-    } else {
-        format!("{checked}: {total_issues} issue(s) found")
-    };
-    lines.insert(0, summary);
-    lines.extend(warnings);
-
-    Ok(lines)
+    Ok(Report {
+        feature_count,
+        entries,
+        fixed_count,
+        fix,
+        warnings,
+    })
 }
 
 /// Warn when the global `config.toml` exists but doesn't parse. Every reader
@@ -1098,6 +1131,18 @@ fn legacy_vanilla_agent_issues(project_root: &Path, scope: &str) -> Vec<Issue> {
         .collect()
 }
 
+/// A rebase paused in `worktree`.
+fn rebase_issue(worktree: &Path) -> Option<Issue> {
+    git::rebase_in_progress(worktree)
+        .unwrap_or(false)
+        .then(|| Issue {
+            kind: IssueKind::RebaseInProgress,
+            message: "rebase in progress (finish with `git rebase --continue` or `--abort`)"
+                .to_string(),
+            fix: Fix::None,
+        })
+}
+
 /// Flag a `recorded` registry main branch the repository has no branch for.
 fn main_branch_issue(main_repo: &Path, recorded: &str) -> Option<Issue> {
     if git::branch_exists(main_repo, recorded).unwrap_or(true) {
@@ -1219,7 +1264,9 @@ mod tests {
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
         let projects_dir = TestServer::registry_dir(&project_path);
 
-        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
         assert!(lines[0].contains("all healthy"), "got: {:?}", lines);
         assert!(
             lines
@@ -1229,12 +1276,35 @@ mod tests {
     }
 
     #[test]
+    fn a_rebase_paused_in_main_is_reported_for_main() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
+        let main = paths::main_worktree(&project_path);
+        std::fs::write(main.join("work.txt"), "work").unwrap();
+        git::stage_file(&main, "work.txt").unwrap();
+        git::commit(&main, "work").unwrap();
+        TestServer::pause_rebase(&main, "HEAD~1");
+
+        let findings = diagnose(&project_path, &projects_dir, server.name(), false).unwrap();
+        let main_finding = findings.iter().find(|f| f.feature() == "main").unwrap();
+        assert!(
+            main_finding
+                .issues()
+                .iter()
+                .any(|i| i.kind() == IssueKind::RebaseInProgress)
+        );
+    }
+
+    #[test]
     fn no_features_reports_main_checked() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
-        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
         assert_eq!(lines, vec!["Checked main and 0 feature(s): all healthy"]);
     }
 
@@ -1286,7 +1356,9 @@ mod tests {
             )),
             "{main_kinds:?}"
         );
-        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
         assert!(
             lines[0].starts_with("Checked main and 0 feature(s): ")
                 && lines[0].contains("issue(s) found"),
@@ -1322,7 +1394,9 @@ mod tests {
             unprojected(&project_path).unwrap(),
             vec![("planner".to_string(), Harness::ClaudeCode)]
         );
-        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
         assert!(
             lines
                 .iter()
@@ -1333,7 +1407,9 @@ mod tests {
         // `pm upgrade` projects into main only; the feature needs a pull.
         crate::commands::skills::project_assets(&project_path, false).unwrap();
         assert!(unprojected(&project_path).unwrap().is_empty());
-        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
         assert_eq!(
             lines
                 .iter()
@@ -1351,7 +1427,9 @@ mod tests {
                 .join("login/.claude/agents/planner.md")
                 .is_file()
         );
-        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
         assert!(
             !lines.iter().any(|l| l.contains("not projected")),
             "{lines:?}"
@@ -1708,7 +1786,9 @@ mod tests {
         std::fs::write(claude_agents.join("reviewer.md"), bundled_reviewer).unwrap();
         std::fs::remove_file(paths::migrations_dir(&project_path).join("global-assets")).unwrap();
 
-        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
         assert!(
             lines
                 .iter()
@@ -1717,7 +1797,9 @@ mod tests {
         );
 
         crate::commands::skills::migrate_project_to_global(&project_path, false).unwrap();
-        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
         assert!(
             !lines.iter().any(|l| l.contains("pre-migration")),
             "{lines:?}"
@@ -1729,7 +1811,9 @@ mod tests {
         std::fs::create_dir_all(&canonical).unwrap();
         std::fs::write(canonical.join("reviewer.md"), bundled_reviewer).unwrap();
         crate::commands::skills::project_assets(&project_path, false).unwrap();
-        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
         assert!(
             lines
                 .iter()
@@ -1739,7 +1823,9 @@ mod tests {
 
         std::fs::write(canonical.join("reviewer.md"), "my reviewer").unwrap();
         crate::commands::skills::project_assets(&project_path, false).unwrap();
-        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
         assert!(
             !lines.iter().any(|l| l.contains("identical to the bundled")),
             "{lines:?}"
@@ -1780,7 +1866,9 @@ mod tests {
         );
         registry.save(&agents_dir, "login").unwrap();
 
-        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
         assert!(
             lines.iter().any(|l| l.contains("login")
                 && l.contains("agent 'claude' uses removed vanilla agent name")),
@@ -1793,7 +1881,9 @@ mod tests {
 
         registry.get_mut("claude").unwrap().active = false;
         registry.save(&agents_dir, "login").unwrap();
-        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
         assert!(
             !lines.iter().any(|l| l.contains("uses removed")),
             "{lines:?}"
@@ -1847,7 +1937,9 @@ mod tests {
                 .collect::<Vec<_>>()
         );
 
-        let lines = doctor(&project_path, &projects_dir, true, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, true, server.name())
+            .unwrap()
+            .lines();
         assert!(
             lines
                 .iter()
@@ -1890,7 +1982,9 @@ mod tests {
         // Remove directory on disk without telling git — simulates real drift
         std::fs::remove_dir_all(project_path.join("login")).unwrap();
 
-        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
         assert!(
             lines
                 .iter()
@@ -1918,7 +2012,9 @@ mod tests {
         git::remove_worktree_force(&main_repo, &project_path.join("login")).unwrap();
         std::fs::create_dir_all(project_path.join("login")).unwrap();
 
-        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
         assert!(
             lines
                 .iter()
@@ -1941,7 +2037,9 @@ mod tests {
         // Re-create the directory so the only issue is the missing branch
         std::fs::create_dir_all(project_path.join("login")).unwrap();
 
-        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
         assert!(
             lines.iter().any(|l| l.contains("branch 'login' not found")),
             "got: {lines:?}"
@@ -1965,7 +2063,9 @@ mod tests {
         // Kill the feature's tmux session
         tmux::kill_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
 
-        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
         assert!(
             lines
                 .iter()
@@ -1987,7 +2087,9 @@ mod tests {
         state.status = FeatureStatus::Initializing;
         state.save(&features_dir, "login").unwrap();
 
-        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
         assert!(
             lines.iter().any(|l| l.contains("stuck on 'initializing'")),
             "got: {lines:?}"
@@ -2043,7 +2145,9 @@ mod tests {
         state.workflow = Some("ghost-workflow".to_string());
         state.save(&features_dir, "login").unwrap();
 
-        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
         assert!(
             lines.iter().any(|l| l.contains("login")
                 && l.contains("workflow 'ghost-workflow'")
@@ -2068,7 +2172,9 @@ mod tests {
         state.workflow = Some("real-workflow".to_string());
         state.save(&features_dir, "login").unwrap();
 
-        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
         assert!(
             !lines.iter().any(|l| l.contains("workflow")),
             "got: {lines:?}"
@@ -2099,7 +2205,9 @@ mod tests {
         ))
         .unwrap();
 
-        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
         assert!(
             lines[0].contains("main and 2 feature(s)"),
             "got: {:?}",
@@ -2122,7 +2230,9 @@ mod tests {
         git::delete_branch(&main_repo, "login").unwrap();
         tmux::kill_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
 
-        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
         // Orphan is reported as a single consolidated issue
         assert!(
             lines.iter().any(|l| l.contains("orphaned state file")),
@@ -2141,7 +2251,9 @@ mod tests {
         std::fs::remove_dir_all(project_path.join("login")).unwrap();
         tmux::kill_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
 
-        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
         let issue_lines: Vec<_> = lines
             .iter()
             .filter(|l| l.contains("login") && !l.contains("ok"))
@@ -2264,7 +2376,9 @@ mod tests {
 
         // --fix installs the hooks and trusts both worktrees; hook trust is
         // codex's alone to grant, so it remains.
-        let lines = doctor(&project_path, &projects_dir, true, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, true, server.name())
+            .unwrap()
+            .lines();
         assert!(
             lines
                 .iter()
@@ -2378,7 +2492,9 @@ mod tests {
                 .any(|i| i.kind() == IssueKind::HooksNotInstalled)
         );
 
-        let lines = doctor(&project_path, &projects_dir, true, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, true, server.name())
+            .unwrap()
+            .lines();
         assert!(
             lines
                 .iter()
@@ -2412,7 +2528,9 @@ mod tests {
         tmux::kill_session(server.name(), &session_name).unwrap();
         assert!(!tmux::has_session(server.name(), &session_name).unwrap());
 
-        let lines = doctor(&project_path, &projects_dir, true, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, true, server.name())
+            .unwrap()
+            .lines();
         assert!(
             lines
                 .iter()
@@ -2434,7 +2552,9 @@ mod tests {
         state.status = FeatureStatus::Initializing;
         state.save(&features_dir, "login").unwrap();
 
-        let lines = doctor(&project_path, &projects_dir, true, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, true, server.name())
+            .unwrap()
+            .lines();
         assert!(
             lines
                 .iter()
@@ -2470,7 +2590,9 @@ mod tests {
         let features_dir = paths::features_dir(&project_path);
         assert!(FeatureState::exists(&features_dir, "login"));
 
-        let lines = doctor(&project_path, &projects_dir, true, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, true, server.name())
+            .unwrap()
+            .lines();
         assert!(
             lines
                 .iter()
@@ -2492,7 +2614,9 @@ mod tests {
         git::remove_worktree_force(&main_repo, &project_path.join("login")).unwrap();
         assert!(!project_path.join("login").exists());
 
-        let lines = doctor(&project_path, &projects_dir, true, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, true, server.name())
+            .unwrap()
+            .lines();
         assert!(
             lines
                 .iter()
@@ -2512,7 +2636,9 @@ mod tests {
 
         tmux::kill_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
 
-        let lines = doctor(&project_path, &projects_dir, true, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, true, server.name())
+            .unwrap()
+            .lines();
         assert!(
             lines[0].contains("fixed"),
             "summary should mention fixed count, got: {:?}",
@@ -2544,7 +2670,9 @@ mod tests {
         );
         registry.save(&agents_dir, "login").unwrap();
 
-        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
         assert!(
             lines
                 .iter()
@@ -2577,7 +2705,9 @@ mod tests {
         );
         registry.save(&agents_dir, "login").unwrap();
 
-        let lines = doctor(&project_path, &projects_dir, true, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, true, server.name())
+            .unwrap()
+            .lines();
         assert!(
             lines
                 .iter()
@@ -2631,7 +2761,9 @@ mod tests {
             .insert("reviewer".to_string(), "codex".to_string());
         config.save(&pm_dir).unwrap();
 
-        let lines = doctor(&project_path, &projects_dir, true, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, true, server.name())
+            .unwrap()
+            .lines();
         assert!(
             lines.iter().any(|l| l.contains(
                 "login — fixed: agent 'reviewer' registered as active but window missing \
@@ -2652,7 +2784,9 @@ mod tests {
         let session_name = tmux::session_name(&project_name, "login");
         server.spawn_fake_agent(&project_path, &session_name, "login", "reviewer");
 
-        let lines = doctor(&project_path, &projects_dir, false, server.name()).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
         assert!(lines[0].contains("all healthy"), "got: {lines:?}");
     }
 

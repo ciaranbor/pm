@@ -320,3 +320,29 @@ fn stop_hook_waiting_on_an_empty_inbox_exits_when_its_harness_goes() {
     }
     assert!(hook.wait().unwrap().success());
 }
+
+#[test]
+fn agent_list_and_fork_take_their_scope_from_the_flag() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join(".pm/agents")).unwrap();
+    std::fs::write(
+        root.join(".pm/agents/main.toml"),
+        "[agents.reviewer]\ntype = \"agent\"\nsession_id = \"\"\nwindow_name = \"reviewer\"\n\
+         active = false\nharness = \"claude-code\"\n",
+    )
+    .unwrap();
+
+    pm().current_dir(root)
+        .args(["agent", "list", "--scope", "main"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Agents in 'main'"))
+        .stdout(predicate::str::contains("reviewer (inactive"));
+    pm().current_dir(root)
+        .args(["agent", "fork", "reviewer", "copy", "--scope", "nope"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("nope"))
+        .stderr(predicate::str::contains("Not in a feature").not());
+}

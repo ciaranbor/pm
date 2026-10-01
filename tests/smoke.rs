@@ -61,7 +61,7 @@ impl Smoke {
         let pid = std::process::id();
         let name = pid.to_string();
         // A previous scenario's sandbox, or a dead run's under a reused pid.
-        sandbox_ok(&name, &["down"]);
+        sandbox_ok(&name, &["down", "--force"]);
         sandbox_ok(
             &name,
             &["up", "--pm", env!("CARGO_BIN_EXE_pm"), "--shell", "/bin/sh"],
@@ -374,7 +374,7 @@ impl Smoke {
 
 impl Drop for Smoke {
     fn drop(&mut self) {
-        sandbox_ok(&self.name, &["down"]);
+        sandbox_ok(&self.name, &["down", "--force"]);
     }
 }
 
@@ -500,42 +500,57 @@ fn spawn_from_main_into_a_feature_with_scope() {
     assert!(s.find_window("proj/main", "reviewer").is_none());
 }
 
-/// Catches: the rename-then-kill ordering in `agent restart`, which only
-/// matters when the caller's own process lives in the window being replaced.
+/// Catches: `agent restart` run from one of the restarted agents' own
+/// windows killing that window, and so itself, before the other agents
+/// restart or anything is printed.
 #[test]
 #[ignore]
-fn restart_from_inside_the_agents_own_window() {
+fn restart_from_inside_an_agents_own_window() {
     let s = Smoke::new();
     let login = s.init_with_spawned_reviewer();
+    s.pm(&login)
+        .args(["agent", "spawn", "helper", "--agent", "implementer"])
+        .assert()
+        .success();
     s.argv_records("reviewer", 1);
+    s.argv_records("helper", 1);
 
     let old = s
         .find_window("proj/login", "reviewer")
         .expect("reviewer window");
+    let old = s.tmux_ok(&["display", "-p", "-t", &old, "#{window_id}"]);
     // Stop the shim so the window's shell (which still exports
     // PM_AGENT_NAME) takes commands again.
     s.tmux_ok(&["send-keys", "-t", &old, "C-c", ""]);
     s.wait_for_shell(&old);
 
-    let outcome = s.run_in(&old, "pm agent restart reviewer");
+    let outcome = s.run_in(&old, "pm agent restart reviewer helper");
     assert!(
         !outcome.alive,
         "old window survived the restart: {outcome:?}"
     );
+    for agent in ["reviewer", "helper"] {
+        assert!(
+            outcome.log.contains(&format!("Restarted agent '{agent}'")),
+            "{}",
+            outcome.log
+        );
+        assert_eq!(s.argv_records(agent, 2).len(), 2, "{agent}");
+    }
     assert!(!outcome.log.contains("error:"), "{}", outcome.log);
 
     let names = s.window_names("proj/login");
-    assert_eq!(
-        names.iter().filter(|n| *n == "reviewer").count(),
-        1,
-        "windows: {names:?}"
-    );
+    for agent in ["reviewer", "helper"] {
+        assert_eq!(
+            names.iter().filter(|n| *n == agent).count(),
+            1,
+            "windows: {names:?}"
+        );
+    }
     assert!(
-        !names.iter().any(|n| n == "reviewer-restarting"),
+        !names.iter().any(|n| n.ends_with("-restarting")),
         "windows: {names:?}"
     );
-    let records = s.argv_records("reviewer", 2);
-    assert_eq!(records.len(), 2);
     s.pm(&login)
         .args(["agent", "list"])
         .assert()

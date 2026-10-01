@@ -183,11 +183,10 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     result.sessions_restored, result.agents_respawned
                 );
             }
-            // Attach (or switch, if already inside tmux) to the project's main
-            // session so `pm open` leaves the user in the project rather than
-            // detached.
-            let inside_tmux = std::env::var("TMUX").is_ok();
-            if let Err(e) = tmux::connect_session(server, &result.main_session, inside_tmux) {
+            // Leaves the user in the project rather than detached.
+            let tmux_env = std::env::var("TMUX").ok();
+            if let Err(e) = tmux::connect_session(server, &result.main_session, tmux_env.as_deref())
+            {
                 eprintln!("warning: could not connect to {}: {e}", result.main_session);
             }
             Ok(())
@@ -275,24 +274,32 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                 }
                 AgentCommands::Restart { names, scope } => {
                     let target_scope = resolve_scope_with_flag(&project_root, scope)?;
-                    let results = commands::agent_restart::agent_restart_many(
+                    let mut restarted = commands::agent_restart::agent_restart_many(
                         &project_root,
                         &target_scope,
                         &names,
                         server,
                     );
-                    report_agent_op_results(results, "restart")
+                    let reported =
+                        report_agent_op_results(std::mem::take(&mut restarted.results), "restart");
+                    std::io::Write::flush(&mut std::io::stdout())?;
+                    restarted.finish(server);
+                    reported
                 }
-                AgentCommands::List { active } => {
-                    let feature = resolve_scope(&project_root)?;
+                AgentCommands::List { active, scope } => {
+                    let feature = resolve_scope_with_flag(&project_root, scope)?;
                     let lines = commands::agent_list::agent_list(&project_root, &feature, active)?;
                     for line in lines {
                         println!("{line}");
                     }
                     Ok(())
                 }
-                AgentCommands::Fork { source, name } => {
-                    let feature = resolve_scope(&project_root)?;
+                AgentCommands::Fork {
+                    source,
+                    name,
+                    scope,
+                } => {
+                    let feature = resolve_scope_with_flag(&project_root, scope)?;
                     let msg = commands::agent_fork::agent_fork(
                         &project_root,
                         &feature,
@@ -767,7 +774,8 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             } else {
                 paths::find_project_root(&std::env::current_dir()?)?
             };
-            let lines = commands::doctor::doctor(&project_root, &projects_dir, fix, server)?;
+            let lines =
+                commands::doctor::doctor(&project_root, &projects_dir, fix, server)?.lines();
             for line in lines {
                 println!("{line}");
             }
