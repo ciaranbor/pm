@@ -58,13 +58,7 @@ pub fn feat_status(
 /// always carries the feature's scope, which is how cleanup recognises it
 /// as still unread.
 fn notify_ready(project_root: &Path, name: &str, agent: Option<&str>) -> Result<()> {
-    let mut body = format!(
-        "Feature '{name}' is ready: its work is done and waits on the user to merge or delete it. \
-         Triage its summary at .pm/summaries/{name}.md."
-    );
-    if agent.is_some() {
-        body.push_str(" The team is still running; reply here with any follow-up questions.");
-    }
+    let body = ready_body(name, agent.is_some());
     let sender = agent.map_or_else(messages::default_user_name, str::to_string);
     messages::send_with_scope(
         &paths::messages_dir(project_root),
@@ -75,6 +69,18 @@ fn notify_ready(project_root: &Path, name: &str, agent: Option<&str>) -> Result<
         Some(name),
     )?;
     Ok(())
+}
+
+/// The ready message for `name`; `repliable` when an agent sent it.
+pub(crate) fn ready_body(name: &str, repliable: bool) -> String {
+    let mut body = format!(
+        "Feature '{name}' is ready: its work is done and waits on the user to merge or delete it. \
+         Triage its summary at .pm/summaries/{name}.md."
+    );
+    if repliable {
+        body.push_str(" The team is still running; reply here with any follow-up questions.");
+    }
+    body
 }
 
 #[cfg(test)]

@@ -10,10 +10,16 @@
 //! The one exception is the window the rename runs from: killing it ends
 //! the rename, so it is killed last, after the respawns, and its session is
 //! carried as it stands while it still runs.
+//!
+//! `main`'s unread messages from the old scope are rewritten in place to the
+//! new one, not re-sent: a ready message must still be unread under the new
+//! name for cleanup to keep the summary, and a stale copy would name a
+//! summary path that no longer exists.
 
 use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
+use crate::messages;
 use crate::state::feature::FeatureState;
 use crate::state::paths;
 use crate::state::project::ProjectConfig;
@@ -21,6 +27,7 @@ use crate::{git, tmux};
 
 use super::agent_restart::restarted_line;
 use super::agent_spawn::agent_spawn;
+use super::feat_status::ready_body;
 use super::harness_migrate::{Carry, carry_sessions, running_in_scope};
 
 const EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -193,11 +200,12 @@ pub fn feat_rename_in(
     }
     // Only delete old state after new one is safely written
     let _ = FeatureState::delete(&features_dir, old_name);
+    let mut report = carry_main_inbox(project_root, old_name, new_name);
 
     if !new_worktree_path.exists() {
         let _ = crate::state::runtime::remove_scope(project_root, old_name);
         return Ok(Renamed {
-            report: Vec::new(),
+            report,
             caller_window: None,
         });
     }
@@ -236,13 +244,13 @@ pub fn feat_rename_in(
             )
         })
         .collect();
-    let mut report = carry_sessions(&Carry {
+    report.extend(carry_sessions(&Carry {
         from: &old_worktree_path,
         to: &new_worktree_path,
         project_root,
         home,
         tmux_server,
-    });
+    }));
     report.extend(lingering);
     for (agent, _) in &running {
         report.push(
@@ -268,11 +276,38 @@ pub fn feat_rename_in(
     })
 }
 
+/// Runs after the rename is committed, so a failure is only reported.
+fn carry_main_inbox(project_root: &Path, old_name: &str, new_name: &str) -> Vec<String> {
+    let body = |b: &str| {
+        [true, false]
+            .into_iter()
+            .find(|&repliable| b == ready_body(old_name, repliable))
+            .map_or_else(
+                || b.to_string(),
+                |repliable| ready_body(new_name, repliable),
+            )
+    };
+    match messages::rescope_unread(
+        &paths::messages_dir(project_root),
+        "main",
+        "main",
+        old_name,
+        new_name,
+        body,
+    ) {
+        Ok(()) => Vec::new(),
+        Err(e) => vec![format!(
+            "Warning: main's unread messages from '{old_name}' still name it: {e}"
+        )],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::commands::{feat_new, init};
     use crate::state::agent::AgentRegistry;
+    use crate::state::feature::Progress;
     use crate::testing::TestServer;
     use tempfile::tempdir;
 
@@ -355,7 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn rename_moves_summary() {
+    fn rename_of_a_ready_feature_keeps_its_untriaged_summary() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
@@ -364,12 +399,40 @@ mod tests {
             "notes",
         )
         .unwrap();
+        crate::commands::feat_status::feat_status(
+            &project_path,
+            "login",
+            Progress::Ready,
+            Some("implementer"),
+        )
+        .unwrap();
 
         feat_rename(&project_path, "login", "auth", server.name()).unwrap();
 
-        assert!(!paths::summary_path(&project_path, "login").exists());
+        let features_dir = paths::features_dir(&project_path);
         assert_eq!(
-            crate::commands::feat_summary::show(&project_path, "auth").unwrap(),
+            FeatureState::load(&features_dir, "auth").unwrap().progress,
+            Progress::Ready
+        );
+        assert!(!paths::summary_path(&project_path, "login").exists());
+        let messages_dir = paths::messages_dir(&project_path);
+        let msg = messages::read_at(&messages_dir, "main", "main", "implementer", 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(msg.meta.sender_scope.as_deref(), Some("auth"));
+        assert_eq!(msg.body, ready_body("auth", true));
+
+        crate::commands::feat_delete::feat_delete(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "auth",
+            false,
+            server.name(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(paths::summary_path(&project_path, "auth")).unwrap(),
             "notes"
         );
     }
