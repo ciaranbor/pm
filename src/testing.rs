@@ -678,9 +678,9 @@ impl TestServer {
     }
 
     /// Create a tmux window running `sleep 999` (a non-shell process) to
-    /// simulate an active agent. Registers the agent in the registry and waits
-    /// until `pane_command` reports "sleep" so callers can immediately query
-    /// liveness. Returns the tmux window target.
+    /// simulate an agent mid-turn. Registers the agent in the registry and
+    /// waits until `pane_command` reports "sleep" so callers can immediately
+    /// query liveness. Returns the tmux window target.
     pub fn spawn_fake_agent(
         &self,
         project_root: &std::path::Path,
@@ -688,13 +688,7 @@ impl TestServer {
         feature: &str,
         agent_name: &str,
     ) -> String {
-        use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
-        use crate::state::paths;
-
-        let worktree = project_root.join(feature);
-        let target =
-            crate::tmux::new_window(self.name(), session_name, &worktree, Some(agent_name), true)
-                .unwrap();
+        let target = self.fake_agent_window(project_root, session_name, feature, agent_name);
         crate::tmux::send_keys(self.name(), &target, "exec sleep 999").unwrap();
 
         // Wait for sleep to take effect. Under heavy load (parallel tests)
@@ -716,8 +710,71 @@ impl TestServer {
             crate::tmux::pane_command(self.name(), &target),
             crate::tmux::capture_pane(self.name(), &target),
         );
+        self.register_fake_agent(project_root, feature, agent_name);
+        target
+    }
 
-        // Register in agent registry
+    /// [`Self::spawn_fake_agent`] for an agent between turns: its pane runs
+    /// a process whose command line carries pm's Stop hook.
+    pub fn spawn_idle_fake_agent(
+        &self,
+        project_root: &std::path::Path,
+        session_name: &str,
+        feature: &str,
+        agent_name: &str,
+    ) -> String {
+        let target = self.fake_agent_window(project_root, session_name, feature, agent_name);
+        // The `; :` keeps `sh` from exec'ing `sleep` in its own place.
+        crate::tmux::send_keys(
+            self.name(),
+            &target,
+            &format!(
+                "exec sh -c 'sleep 999; :' {}",
+                crate::commands::hooks_install::PM_HOOK_MARKER
+            ),
+        )
+        .unwrap();
+        let mut waiting = false;
+        for _ in 0..500 {
+            if let Ok(processes) = crate::tmux::pane_processes(self.name(), &target)
+                && crate::commands::running_agents::is_idle(&processes)
+            {
+                waiting = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            waiting,
+            "spawn_idle_fake_agent: timed out waiting in window '{agent_name}' ({target}); \
+             pane:\n{:?}",
+            crate::tmux::capture_pane(self.name(), &target),
+        );
+        self.register_fake_agent(project_root, feature, agent_name);
+        target
+    }
+
+    fn fake_agent_window(
+        &self,
+        project_root: &std::path::Path,
+        session_name: &str,
+        feature: &str,
+        agent_name: &str,
+    ) -> String {
+        crate::tmux::new_window(
+            self.name(),
+            session_name,
+            &project_root.join(feature),
+            Some(agent_name),
+            true,
+        )
+        .unwrap()
+    }
+
+    fn register_fake_agent(&self, project_root: &std::path::Path, feature: &str, agent_name: &str) {
+        use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
+        use crate::state::paths;
+
         let agents_dir = paths::agents_dir(project_root);
         let mut registry = AgentRegistry::load(&agents_dir, feature).unwrap();
         registry.register(
@@ -733,8 +790,6 @@ impl TestServer {
             },
         );
         registry.save(&agents_dir, feature).unwrap();
-
-        target
     }
 
     /// Add a commit to a feature worktree.

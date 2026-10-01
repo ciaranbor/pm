@@ -1,8 +1,9 @@
 #!/bin/sh
 # Stand-in for `claude`/`codex`/`opencode` inside a pm sandbox: answers pm's
 # capability probes and pre-launch calls, otherwise records how it was
-# invoked and holds the window open like a running agent would. One record
-# per invocation (pid suffix) so a respawn leaves a second one.
+# invoked and holds the window open like an agent between turns would: with
+# `pm harness hooks stop`, pm's Stop hook, on a command line in its pane. One
+# record per invocation (pid suffix) so a respawn leaves a second one.
 name=$(basename "$0")
 case $1 in
   --help) echo "  --append-system-prompt-file <file>"; exit 0 ;;
@@ -41,4 +42,5 @@ fi
       "$OPENCODE_CONFIG" "$OPENCODE_CONFIG_CONTENT"
   fi
 } > "$HOME/log/$name-${PM_AGENT_NAME:-default}-$$.argv"
-exec sleep 600
+# The `; :` keeps `sh` from exec'ing `sleep` in its own place.
+exec sh -c 'sleep 600; :' pm harness hooks stop

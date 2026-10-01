@@ -11,9 +11,19 @@
 //! the rename, so it is killed last, after the respawns, and its session is
 //! carried as it stands while it still runs.
 //!
-//! `main`'s unread messages from the old scope are rewritten in place to the
-//! new one, not re-sent: `main` replies to a message's scope, and a stale
-//! copy would name a summary path that no longer exists.
+//! Stopping an agent mid-turn loses its in-flight tool call, so the rename
+//! refuses, before changing anything, while any other agent is busy
+//! ([`super::running_agents`]). `--force` stops busy agents anyway and
+//! queues each a message to resume, from a sender it cannot reply to; the
+//! agent the rename runs from, mid-turn by definition, always gets one. An
+//! agent idle at the check can still start a turn before it is stopped;
+//! that window is accepted.
+//!
+//! Every inbox in the project is rewritten in place for the new scope, not
+//! re-sent: unread messages from the old scope, since a reply goes to a
+//! message's scope and a stale copy of `main`'s ready message would name a
+//! summary path that no longer exists, and `.last_read`, so that `pm msg
+//! reply` follows the rename.
 
 use std::path::{Path, PathBuf};
 
@@ -27,9 +37,29 @@ use crate::{git, tmux};
 use super::agent_restart::restarted_line;
 use super::agent_spawn::agent_spawn;
 use super::feat_status::ready_body;
-use super::harness_migrate::{Carry, carry_sessions, running_in_scope};
+use super::harness_migrate::{Carry, carry_sessions};
+use super::running_agents::{RunningAgent, busy_in_scope, running_in_scope, runs_this_process};
 
 const EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The sender of the message that tells an interrupted agent to resume;
+/// no agent has this name, so it cannot be replied to.
+const RESUME_SENDER: &str = "no-reply-rename";
+
+/// What an agent stopped mid-turn is told: `caller` for the one that ran
+/// the rename, whose last tool call is the rename itself.
+fn resume_body(old_name: &str, new_name: &str, new_worktree: &Path, caller: bool) -> String {
+    let last_call = if caller {
+        "That rename completed."
+    } else {
+        "Your last tool call may not have completed: check its effect."
+    };
+    format!(
+        "`pm feat rename {old_name} {new_name}` restarted you mid-turn; your worktree is now \
+         {}. {last_call} Then resume the task you were working on.",
+        new_worktree.display()
+    )
+}
 
 /// State keyed by the feature's name, as `(old, new)` paths.
 fn scoped_state(project_root: &Path, old_name: &str, new_name: &str) -> [(PathBuf, PathBuf); 3] {
@@ -67,14 +97,16 @@ impl Renamed {
     }
 }
 
-/// Rename a feature.
+/// Rename a feature. `force` stops agents that are mid-turn instead of
+/// refusing.
 pub fn feat_rename(
     project_root: &Path,
     old_name: &str,
     new_name: &str,
+    force: bool,
     tmux_server: Option<&str>,
 ) -> Result<Renamed> {
-    feat_rename_in(project_root, old_name, new_name, tmux_server, None)
+    feat_rename_in(project_root, old_name, new_name, force, tmux_server, None)
 }
 
 /// [`feat_rename`] with the home holding the session stores.
@@ -82,6 +114,7 @@ pub fn feat_rename_in(
     project_root: &Path,
     old_name: &str,
     new_name: &str,
+    force: bool,
     tmux_server: Option<&str>,
     home: Option<&Path>,
 ) -> Result<Renamed> {
@@ -104,6 +137,7 @@ pub fn feat_rename_in(
         )));
     }
 
+    super::feat_summary::ensure_no_untriaged(project_root, new_name)?;
     let scoped = scoped_state(project_root, old_name, new_name);
     if let Some((_, taken)) = scoped.iter().find(|(_, new)| new.exists()) {
         return Err(PmError::SafetyCheck(format!(
@@ -122,6 +156,18 @@ pub fn feat_rename_in(
 
     let old_worktree_path = project_root.join(&state.worktree);
     let new_worktree_path = project_root.join(new_name);
+
+    let busy = busy_in_scope(project_root, project_name, old_name, tmux_server);
+    if !busy.is_empty() && !force {
+        return Err(PmError::SafetyCheck(format!(
+            "agent(s) {} are mid-turn, or not running a harness, and the rename restarts them; \
+             wait until they are idle, or pass --force to interrupt them and have them resume",
+            busy.iter()
+                .map(|a| format!("'{a}'"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
+    }
 
     // Step 1: Rename git branch
     git::rename_branch(&main_repo, &state.branch, new_name)?;
@@ -199,7 +245,7 @@ pub fn feat_rename_in(
     }
     // Only delete old state after new one is safely written
     let _ = FeatureState::delete(&features_dir, old_name);
-    let mut report = carry_main_inbox(project_root, old_name, new_name);
+    let mut report = rescope_inboxes(project_root, old_name, new_name);
 
     if !new_worktree_path.exists() {
         let _ = crate::state::runtime::remove_scope(project_root, old_name);
@@ -213,21 +259,19 @@ pub fn feat_rename_in(
     let running = running_in_scope(project_root, project_name, new_name, tmux_server);
     let mut stopped = Vec::new();
     let mut own_window = None;
-    for (agent, entry) in &running {
-        if let Ok(Some(window)) = tmux::find_window(tmux_server, &new_session, &entry.window_name) {
-            let processes = tmux::pane_processes(tmux_server, &window).unwrap_or_default();
-            if processes.iter().any(|p| p.pid == std::process::id()) {
-                let _ = tmux::rename_window(
-                    tmux_server,
-                    &window,
-                    &format!("{}-renaming", entry.window_name),
-                );
-                own_window = Some((entry.window_name.clone(), window));
-                continue;
-            }
-            let _ = tmux::kill_window(tmux_server, &window);
-            stopped.push((agent, processes));
+    for agent in &running {
+        let processes = tmux::pane_processes(tmux_server, &agent.window).unwrap_or_default();
+        if runs_this_process(&processes) {
+            let _ = tmux::rename_window(
+                tmux_server,
+                &agent.window,
+                &format!("{}-renaming", agent.entry.window_name),
+            );
+            own_window = Some(agent);
+            continue;
         }
+        let _ = tmux::kill_window(tmux_server, &agent.window);
+        stopped.push((&agent.name, processes));
     }
     let all: Vec<tmux::Process> = stopped.iter().flat_map(|(_, ps)| ps.clone()).collect();
     let left = tmux::wait_for_exit(&all, EXIT_WAIT);
@@ -251,7 +295,28 @@ pub fn feat_rename_in(
         tmux_server,
     }));
     report.extend(lingering);
-    for (agent, _) in &running {
+    let messages_dir = paths::messages_dir(project_root);
+    for RunningAgent { name: agent, .. } in &running {
+        let caller = own_window.is_some_and(|own| own.name == *agent);
+        if caller || busy.contains(agent) {
+            let sent = messages::send(
+                &messages_dir,
+                new_name,
+                agent,
+                RESUME_SENDER,
+                &resume_body(old_name, new_name, &new_worktree_path, caller),
+            );
+            match sent {
+                Ok(_) if caller => {}
+                Ok(_) => report.push(format!(
+                    "Interrupted agent '{agent}' mid-turn; it is told to resume"
+                )),
+                Err(e) => report.push(format!(
+                    "Warning: agent '{agent}' was interrupted mid-turn and could not be told \
+                     to resume: {e}"
+                )),
+            }
+        }
         report.push(
             match agent_spawn(project_root, new_name, agent, None, None, tmux_server) {
                 Ok((outcome, _, notes)) => restarted_line(agent, outcome, &notes),
@@ -263,11 +328,13 @@ pub fn feat_rename_in(
             },
         );
     }
-    let caller_window = own_window.map(|(window_name, window)| {
-        if let Ok(Some(new_window)) = tmux::find_window(tmux_server, &new_session, &window_name) {
+    let caller_window = own_window.map(|own| {
+        if let Ok(Some(new_window)) =
+            tmux::find_window(tmux_server, &new_session, &own.entry.window_name)
+        {
             let _ = tmux::select_window(tmux_server, &new_window);
         }
-        window
+        own.window.clone()
     });
     Ok(Renamed {
         report,
@@ -276,7 +343,7 @@ pub fn feat_rename_in(
 }
 
 /// Runs after the rename is committed, so a failure is only reported.
-fn carry_main_inbox(project_root: &Path, old_name: &str, new_name: &str) -> Vec<String> {
+fn rescope_inboxes(project_root: &Path, old_name: &str, new_name: &str) -> Vec<String> {
     let body = |b: &str| {
         [true, false]
             .into_iter()
@@ -286,24 +353,34 @@ fn carry_main_inbox(project_root: &Path, old_name: &str, new_name: &str) -> Vec<
                 |repliable| ready_body(project_root, new_name, repliable),
             )
     };
-    match messages::rescope_unread(
-        &paths::messages_dir(project_root),
-        "main",
-        "main",
-        old_name,
-        new_name,
-        body,
-    ) {
-        Ok(()) => Vec::new(),
-        Err(e) => vec![format!(
-            "Warning: main's unread messages from '{old_name}' still name it: {e}"
-        )],
-    }
+    let messages_dir = paths::messages_dir(project_root);
+    let inboxes = match messages::inboxes(&messages_dir) {
+        Ok(inboxes) => inboxes,
+        Err(e) => {
+            return vec![format!(
+                "Warning: messages from '{old_name}' still name it: {e}"
+            )];
+        }
+    };
+    inboxes
+        .iter()
+        .filter_map(|(scope, agent)| {
+            messages::rescope(&messages_dir, scope, agent, old_name, new_name, body)
+                .err()
+                .map(|e| {
+                    format!(
+                        "Warning: messages from '{old_name}' in {scope}/{agent}'s inbox still \
+                         name it: {e}"
+                    )
+                })
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::running_agents::is_idle;
     use crate::commands::{feat_new, init};
     use crate::state::agent::AgentRegistry;
     use crate::state::feature::Progress;
@@ -316,7 +393,7 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        feat_rename(&project_path, "login", "auth", server.name()).unwrap();
+        feat_rename(&project_path, "login", "auth", false, server.name()).unwrap();
 
         let features_dir = paths::features_dir(&project_path);
         assert!(!FeatureState::exists(&features_dir, "login"));
@@ -333,7 +410,7 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        feat_rename(&project_path, "login", "auth", server.name()).unwrap();
+        feat_rename(&project_path, "login", "auth", false, server.name()).unwrap();
 
         let main_repo = paths::main_worktree(&project_path);
         assert!(!git::branch_exists(&main_repo, "login").unwrap());
@@ -346,7 +423,7 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
 
-        feat_rename(&project_path, "login", "auth", server.name()).unwrap();
+        feat_rename(&project_path, "login", "auth", false, server.name()).unwrap();
 
         assert!(!project_path.join("login").exists());
         assert!(project_path.join("auth").exists());
@@ -359,7 +436,7 @@ mod tests {
         let server = TestServer::new();
         let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
 
-        feat_rename(&project_path, "login", "auth", server.name()).unwrap();
+        feat_rename(&project_path, "login", "auth", false, server.name()).unwrap();
 
         assert!(
             !tmux::has_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap()
@@ -378,7 +455,7 @@ mod tests {
         let features_dir = paths::features_dir(&project_path);
         let original = FeatureState::load(&features_dir, "login").unwrap();
 
-        feat_rename(&project_path, "login", "auth", server.name()).unwrap();
+        feat_rename(&project_path, "login", "auth", false, server.name()).unwrap();
 
         let renamed = FeatureState::load(&features_dir, "auth").unwrap();
         assert_eq!(renamed.status, original.status);
@@ -407,7 +484,7 @@ mod tests {
         )
         .unwrap();
 
-        feat_rename(&project_path, "login", "auth", server.name()).unwrap();
+        feat_rename(&project_path, "login", "auth", false, server.name()).unwrap();
 
         let features_dir = paths::features_dir(&project_path);
         assert_eq!(
@@ -435,7 +512,13 @@ mod tests {
         let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
-        let result = feat_rename(&project_path, "nonexistent", "new-name", server.name());
+        let result = feat_rename(
+            &project_path,
+            "nonexistent",
+            "new-name",
+            false,
+            server.name(),
+        );
         assert!(matches!(result.unwrap_err(), PmError::FeatureNotFound(_)));
     }
 
@@ -452,7 +535,7 @@ mod tests {
         ))
         .unwrap();
 
-        let result = feat_rename(&project_path, "login", "signup", server.name());
+        let result = feat_rename(&project_path, "login", "signup", false, server.name());
         assert!(matches!(
             result.unwrap_err(),
             PmError::FeatureAlreadyExists(_)
@@ -473,7 +556,7 @@ mod tests {
         let main_repo = paths::main_worktree(&project_path);
         git::create_branch(&main_repo, "taken-branch").unwrap();
 
-        let result = feat_rename(&project_path, "login", "taken-branch", server.name());
+        let result = feat_rename(&project_path, "login", "taken-branch", false, server.name());
         assert!(result.is_err());
 
         // Original feature should be untouched
@@ -504,7 +587,7 @@ mod tests {
         let server = TestServer::new();
         let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
-        server.spawn_fake_agent(&project_path, &session, "login", "reviewer");
+        server.spawn_idle_fake_agent(&project_path, &session, "login", "reviewer");
         let messages_dir = paths::messages_dir(&project_path);
         crate::messages::send(&messages_dir, "login", "reviewer", "user", "look at this").unwrap();
 
@@ -512,6 +595,7 @@ mod tests {
             &project_path,
             "login",
             "auth",
+            false,
             server.name(),
             Some(dir.path()),
         )
@@ -556,7 +640,7 @@ mod tests {
         child.save(&features_dir, "child").unwrap();
         let sibling_base = FeatureState::load(&features_dir, "sibling").unwrap().base;
 
-        feat_rename(&project_path, "login", "auth", server.name()).unwrap();
+        feat_rename(&project_path, "login", "auth", false, server.name()).unwrap();
 
         let child = FeatureState::load(&features_dir, "child").unwrap();
         assert_eq!(child.base, "auth");
@@ -589,7 +673,7 @@ mod tests {
         let leftover = paths::messages_dir(&project_path).join("auth/reviewer");
         std::fs::create_dir_all(&leftover).unwrap();
 
-        let err = feat_rename(&project_path, "login", "auth", server.name())
+        let err = feat_rename(&project_path, "login", "auth", false, server.name())
             .unwrap_err()
             .to_string();
 
@@ -609,7 +693,7 @@ mod tests {
         let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let project_path = project_path.canonicalize().unwrap();
         let session = tmux::session_name(&project_name, "login");
-        server.spawn_fake_agent(&project_path, &session, "login", "reviewer");
+        server.spawn_idle_fake_agent(&project_path, &session, "login", "reviewer");
         let agents_dir = paths::agents_dir(&project_path);
         let mut registry = AgentRegistry::load(&agents_dir, "login").unwrap();
         registry.get_mut("reviewer").unwrap().session_id = "running".to_string();
@@ -629,6 +713,7 @@ mod tests {
             &project_path,
             "login",
             "auth",
+            false,
             server.name(),
             Some(dir.path()),
         )
@@ -651,7 +736,7 @@ mod tests {
                 "Restarted agent 'reviewer' (resumed session)".to_string(),
             ]
         );
-        // The window is a new one: the fake agent's was running `sleep`.
+        // The window is a new one: the fake agent's was waiting in the hook.
         let window = tmux::find_window(
             server.name(),
             &tmux::session_name(&project_name, "auth"),
@@ -659,9 +744,163 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        assert_ne!(tmux::pane_command(server.name(), &window).unwrap(), "sleep");
+        assert!(!is_idle(
+            &tmux::pane_processes(server.name(), &window).unwrap()
+        ));
         let registry = AgentRegistry::load(&agents_dir, "auth").unwrap();
         assert!(registry.get("reviewer").unwrap().active);
+        let messages_dir = paths::messages_dir(&project_path);
+        assert!(
+            messages::check(&messages_dir, "auth", "reviewer")
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn rename_refuses_while_an_agent_is_mid_turn_unless_forced() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let session = tmux::session_name(&project_name, "login");
+        server.spawn_fake_agent(&project_path, &session, "login", "reviewer");
+
+        let err = feat_rename_in(
+            &project_path,
+            "login",
+            "auth",
+            false,
+            server.name(),
+            Some(dir.path()),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("'reviewer' are mid-turn"), "{err}");
+        assert!(err.contains("--force"), "{err}");
+        let main_repo = paths::main_worktree(&project_path);
+        assert!(git::branch_exists(&main_repo, "login").unwrap());
+        assert!(project_path.join("login").exists());
+        assert!(tmux::has_session(server.name(), &session).unwrap());
+        assert!(FeatureState::exists(
+            &paths::features_dir(&project_path),
+            "login"
+        ));
+
+        let report = feat_rename_in(
+            &project_path,
+            "login",
+            "auth",
+            true,
+            server.name(),
+            Some(dir.path()),
+        )
+        .unwrap()
+        .report;
+
+        assert!(
+            report.contains(
+                &"Interrupted agent 'reviewer' mid-turn; it is told to resume".to_string()
+            ),
+            "{report:?}"
+        );
+        let messages_dir = paths::messages_dir(&project_path);
+        let msg = messages::read_at(&messages_dir, "auth", "reviewer", RESUME_SENDER, 1)
+            .unwrap()
+            .unwrap();
+        assert!(
+            msg.body
+                .contains(&project_path.join("auth").display().to_string()),
+            "{}",
+            msg.body
+        );
+        assert_eq!(msg.meta.sender_scope, None);
+    }
+
+    #[test]
+    fn rename_refuses_a_name_whose_summary_waits_for_main() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let summary = paths::summary_path(&project_path, "auth");
+        std::fs::create_dir_all(summary.parent().unwrap()).unwrap();
+        std::fs::write(&summary, "earlier").unwrap();
+
+        let err = feat_rename(&project_path, "login", "auth", false, server.name()).unwrap_err();
+
+        assert!(matches!(err, PmError::Summary(_)), "{err}");
+        assert!(git::branch_exists(&paths::main_worktree(&project_path), "login").unwrap());
+        assert_eq!(std::fs::read_to_string(&summary).unwrap(), "earlier");
+    }
+
+    #[test]
+    fn a_reply_from_main_after_a_rename_reaches_the_renamed_feature() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let session = tmux::session_name(&project_name, "login");
+        server.spawn_idle_fake_agent(&project_path, &session, "login", "dev");
+        let messages_dir = paths::messages_dir(&project_path);
+        messages::send_with_scope(&messages_dir, "main", "main", "dev", "done", Some("login"))
+            .unwrap();
+        crate::commands::agent_read::agent_read(&project_path, "main", "main", None, None).unwrap();
+
+        feat_rename_in(
+            &project_path,
+            "login",
+            "auth",
+            false,
+            server.name(),
+            Some(dir.path()),
+        )
+        .unwrap();
+        crate::commands::msg_reply::msg_reply(
+            &project_path,
+            "main",
+            "main",
+            "thanks",
+            server.name(),
+        )
+        .unwrap();
+
+        let unread = messages::check(&messages_dir, "auth", "dev").unwrap();
+        assert_eq!(unread.len(), 1);
+        assert_eq!(unread[0].sender, "main");
+    }
+
+    #[test]
+    fn rename_readdresses_other_features_inboxes() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let messages_dir = paths::messages_dir(&project_path);
+        let send = |body| {
+            messages::send_with_scope(&messages_dir, "signup", "qa", "dev", body, Some("login"))
+                .unwrap()
+        };
+        send("read");
+        crate::commands::agent_read::agent_read(&project_path, "signup", "qa", None, None).unwrap();
+        send("unread");
+
+        feat_rename(&project_path, "login", "auth", false, server.name()).unwrap();
+
+        let scope_of = |index| {
+            messages::read_at(&messages_dir, "signup", "qa", "dev", index)
+                .unwrap()
+                .unwrap()
+                .meta
+                .sender_scope
+        };
+        assert_eq!(scope_of(1).as_deref(), Some("login"));
+        assert_eq!(scope_of(2).as_deref(), Some("auth"));
+        assert_eq!(
+            messages::load_last_read(&messages_dir, "signup", "qa")
+                .unwrap()
+                .unwrap()
+                .sender_scope
+                .as_deref(),
+            Some("auth")
+        );
     }
 
     #[test]
@@ -676,6 +915,7 @@ mod tests {
             &project_path,
             "login",
             "auth",
+            false,
             server.name(),
             Some(dir.path()),
         )
@@ -714,6 +954,7 @@ mod tests {
             &project_path,
             "login",
             "auth",
+            false,
             server.name(),
             Some(dir.path()),
         )
@@ -765,7 +1006,7 @@ mod tests {
         let dest = project_path.join("auth");
         std::fs::write(&dest, "blocker").unwrap();
 
-        let result = feat_rename(&project_path, "login", "auth", server.name());
+        let result = feat_rename(&project_path, "login", "auth", false, server.name());
         assert!(result.is_err(), "expected worktree move to fail");
 
         // Branch rename rolled back: original branch exists, new doesn't.
@@ -805,7 +1046,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = feat_rename(&project_path, "login", "auth", server.name());
+        let result = feat_rename(&project_path, "login", "auth", false, server.name());
         assert!(result.is_err(), "expected tmux rename to fail");
 
         // Branch and worktree should be restored to original locations.
@@ -855,7 +1096,7 @@ mod tests {
         let messages_dir = paths::messages_dir(&project_path);
         crate::messages::send(&messages_dir, "login", "reviewer", "user", "hi").unwrap();
         let session = tmux::session_name(&project_name, "login");
-        server.spawn_fake_agent(&project_path, &session, "login", "reviewer");
+        server.spawn_idle_fake_agent(&project_path, &session, "login", "reviewer");
 
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
@@ -868,7 +1109,7 @@ mod tests {
         child.base = "login".to_string();
         child.save(&features_dir, "child").unwrap();
 
-        let result = feat_rename(&project_path, "login", "auth", server.name());
+        let result = feat_rename(&project_path, "login", "auth", false, server.name());
         assert!(result.is_err(), "expected state save to fail");
 
         assert_eq!(
@@ -953,7 +1194,7 @@ mod tests {
         std::fs::create_dir(&blocker).unwrap();
         std::fs::write(blocker.join("blocker"), "x").unwrap();
 
-        let result = feat_rename(&project_path, "eval", "auth", server.name());
+        let result = feat_rename(&project_path, "eval", "auth", false, server.name());
         assert!(result.is_err(), "expected state save to fail");
 
         // The original slash-bearing branch must be restored — NOT a flat

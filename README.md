@@ -94,8 +94,13 @@ paused rebase; `feat info` shows a feature's paused rebase, and `pm status` and
 `pm register`, `pm feat adopt --from` and `pm feat rename` carry agent
 sessions to the new path for every harness in use, and print what they did.
 Rename restarts the feature's running agents, resumed on their sessions,
-and keeps the feature's status and summary; messages `main` has yet to read
-from it are re-addressed to the new name.
+and keeps the feature's status and summary; the project's unread messages
+from the feature, and the replies `pm msg reply` would send to it, are
+re-addressed to the new name. Rename refuses while any of the feature's
+agents is not waiting for messages — mid-turn, or its window runs no
+harness — since restarting it would cut off its work: wait until they are
+idle, or pass `--force` to interrupt them. Each interrupted agent, and the
+agent that ran the rename, is told to resume.
 
 ### Lifecycle hooks
 

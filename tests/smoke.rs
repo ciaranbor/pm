@@ -608,6 +608,28 @@ fn rename_from_inside_an_agents_own_window() {
         let records = s.argv_records(agent, 2);
         assert_eq!(Path::new(&records[1].cwd), signup, "{agent}");
     }
+    let msg = |args: &[&str]| {
+        let out = s
+            .pm(&signup)
+            .args(["msg"])
+            .args(args)
+            .args(["--scope", "signup"])
+            .assert()
+            .success();
+        String::from_utf8_lossy(&out.get_output().stdout).into_owned()
+    };
+    let resume = msg(&[
+        "read",
+        "--as-agent",
+        "reviewer",
+        "--from",
+        "no-reply-rename",
+        "--index",
+        "1",
+    ]);
+    assert!(resume.contains("That rename completed"), "{resume}");
+    let idle = msg(&["list", "--as-agent", "helper"]);
+    assert!(!idle.contains("no-reply-rename"), "{idle}");
 }
 
 /// Catches: `pm delete --force` run from the project's own main session,

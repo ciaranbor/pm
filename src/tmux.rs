@@ -277,29 +277,46 @@ pub fn kill_window(server: Option<&str>, target: &str) -> Result<()> {
 
 /// A process as `ps` saw it. The start time tells a pid's process apart
 /// from a later one the pid was reused for.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Process {
     pub pid: u32,
     started: String,
+    /// The command line, its arguments separated by single spaces.
+    pub command: String,
 }
+
+/// A process can rewrite its own command line, so it is not part of what
+/// makes two sightings the same process.
+impl PartialEq for Process {
+    fn eq(&self, other: &Self) -> bool {
+        self.pid == other.pid && self.started == other.started
+    }
+}
+
+impl Eq for Process {}
 
 /// Every process on the machine, as `(process, parent pid)`.
 fn process_table() -> Result<Vec<(Process, u32)>> {
     let table = Command::new("ps")
-        .args(["-A", "-o", "pid=,ppid=,lstart="])
+        .args(["-A", "-o", "pid=,ppid=,lstart=,command="])
         .output()?;
     Ok(String::from_utf8_lossy(&table.stdout)
         .lines()
         .filter_map(|line| {
-            let line = line.trim_start();
-            let (pid, rest) = line.split_once(char::is_whitespace)?;
-            let rest = rest.trim_start();
-            let (ppid, started) = rest.split_once(char::is_whitespace)?;
+            let mut fields = line.split_whitespace();
+            let pid = fields.next()?.parse().ok()?;
+            let ppid = fields.next()?.parse().ok()?;
+            // `lstart` is always five fields: `Wed Oct  1 16:47:56 2026`.
+            let started: Vec<&str> = fields.by_ref().take(5).collect();
+            if started.len() < 5 {
+                return None;
+            }
             let process = Process {
-                pid: pid.parse().ok()?,
-                started: started.trim().to_string(),
+                pid,
+                started: started.join(" "),
+                command: fields.collect::<Vec<_>>().join(" "),
             };
-            Some((process, ppid.parse().ok()?))
+            Some((process, ppid))
         })
         .collect())
 }
@@ -611,6 +628,7 @@ mod tests {
         let earlier = Process {
             pid: own.pid,
             started: "an earlier start".to_string(),
+            command: own.command.clone(),
         };
 
         assert_eq!(
