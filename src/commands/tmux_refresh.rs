@@ -2,13 +2,14 @@
 //! on the tmux server as `@pm_*` user options for status lines and tree
 //! formats to read (README, "tmux options", has the contract).
 //!
-//! It runs every few seconds ([`tmux_watch`](super::tmux_watch)), so it
-//! costs the snapshot's own reads, one `tmux` call that takes what is
-//! published now along with the attached clients, and, only when something
-//! changed, one more that writes the difference. What it last published is
-//! also the previous state a transition alert is judged against; pm keeps
-//! no other record of it, so refreshes of one server take turns on a lock
-//! keyed by the server's socket, which names it however it was reached.
+//! It runs on every watcher tick ([`tmux_watch`](super::tmux_watch)) and
+//! every push ([`tmux_push`](super::tmux_push)), so it costs the snapshot's
+//! own reads, one `tmux` call that takes what is published now along with the
+//! attached clients, and, only when something changed, one more that writes
+//! the difference. What it last published is also the previous state a
+//! transition alert is judged against; pm keeps no other record of it, so
+//! refreshes of one server take turns on a lock keyed by the server's socket,
+//! which names it however it was reached.
 //!
 //! A scope's agents, main's included, are found through the registry, never
 //! by window, and only their windows carry options. A main session carries
@@ -40,7 +41,7 @@ const AGENT: &str = "@pm_agent";
 const AGENT_STATE: &str = "@pm_agent_state";
 const UNREAD: &str = "@pm_unread";
 const AGENT_BADGE: &str = "@pm_agent_badge";
-const WINDOW_OPTIONS: &[&str] = &[AGENT, AGENT_STATE, UNREAD, AGENT_BADGE];
+pub(super) const WINDOW_OPTIONS: &[&str] = &[AGENT, AGENT_STATE, UNREAD, AGENT_BADGE];
 
 const SUMMARY: &str = "@pm_summary";
 const COUNT: &str = "@pm_count";
@@ -260,7 +261,7 @@ fn main_values(project: &str) -> Vec<(&'static str, Option<String>)> {
         .collect()
 }
 
-fn window_values(agent: &AgentSnapshot) -> Vec<(&'static str, Option<String>)> {
+pub(super) fn window_values(agent: &AgentSnapshot) -> Vec<(&'static str, Option<String>)> {
     let mut badge = styled(agent_style(agent.state), agent_glyph(agent.state));
     if agent.unread > 0 {
         badge.push_str(&styled("fg=yellow", &format!("+{}", agent.unread)));

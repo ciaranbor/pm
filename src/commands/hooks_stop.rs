@@ -28,6 +28,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::commands::agent_wait;
+use crate::commands::attention::AgentState;
 use crate::messages;
 use crate::state::paths;
 
@@ -44,8 +45,10 @@ fn reason(senders: &[String]) -> String {
 
 /// Run the Stop hook. Prints the decision JSON and returns the exit code.
 /// Non-pm sessions (unresolvable agent/scope) let the turn end, staying invisible.
-pub fn stop() -> i32 {
-    match stop_inner() {
+/// `on_turn` is told the agent's state and unread count as it enters its
+/// wait (idle) and as it returns `block` (busy); it must not block.
+pub fn stop(on_turn: &mut dyn FnMut(AgentState, u32)) -> i32 {
+    match stop_inner(on_turn) {
         Ok(Some(json)) => {
             print!("{json}");
             0
@@ -59,7 +62,7 @@ pub fn stop() -> i32 {
 }
 
 /// `None` when the harness went away while the hook waited.
-fn stop_inner() -> crate::error::Result<Option<String>> {
+fn stop_inner(on_turn: &mut dyn FnMut(AgentState, u32)) -> crate::error::Result<Option<String>> {
     let caller = Caller::current();
     // Resolve identity before reading stdin: non-pm sessions bail here, and
     // tests calling `stop_inner` without piped stdin must not block.
@@ -72,7 +75,7 @@ fn stop_inner() -> crate::error::Result<Option<String>> {
     let project_root = paths::find_project_root(&cwd)?;
     let feature = paths::resolve_scope_from(&project_root, &cwd)?;
 
-    wait_and_decide(busy, &project_root, &feature, &agent, None, || {
+    wait_and_decide(busy, &project_root, &feature, &agent, None, on_turn, || {
         caller.alive()
     })
 }
@@ -121,15 +124,22 @@ fn wait_and_decide(
     feature: &str,
     agent: &str,
     poll_interval: Option<Duration>,
+    on_turn: &mut dyn FnMut(AgentState, u32),
     caller_alive: impl Fn() -> bool,
 ) -> crate::error::Result<Option<String>> {
+    let block = |on_turn: &mut dyn FnMut(AgentState, u32), senders: &[String]| {
+        let unread = messages::unread_count(&paths::messages_dir(project_root), feature, agent);
+        on_turn(AgentState::Busy, unread);
+        Some(block_decision(senders))
+    };
     let senders = unread_senders(project_root, feature, agent)?;
     if !senders.is_empty() {
-        return Ok(Some(block_decision(&senders)));
+        return Ok(block(on_turn, &senders));
     }
     if busy {
         return Ok(Some(allow_decision()));
     }
+    on_turn(AgentState::Idle, 0);
     let waited = agent_wait::agent_wait_while(
         project_root,
         feature,
@@ -142,7 +152,7 @@ fn wait_and_decide(
         return Ok(None);
     }
     let senders = unread_senders(project_root, feature, agent)?;
-    Ok(Some(block_decision(&senders)))
+    Ok(block(on_turn, &senders))
 }
 
 /// Senders with unread messages, oldest first — the order bare `pm msg read`
@@ -246,17 +256,22 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
         send(&root);
+        send(&root);
 
+        let mut turns = Vec::new();
         let result = wait_and_decide(
             false,
             &root,
             "login",
             "reviewer",
             Some(Duration::from_millis(50)),
+            &mut |state, unread| turns.push((state, unread)),
             || true,
         )
         .unwrap()
         .unwrap();
+
+        assert_eq!(turns, [(AgentState::Busy, 2)], "no wait, so never idle");
 
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["decision"], "block");
@@ -279,6 +294,7 @@ mod tests {
             "login",
             "reviewer",
             Some(Duration::from_millis(50)),
+            &mut |_, _| {},
             || true,
         )
         .unwrap()
@@ -306,6 +322,7 @@ mod tests {
             "reviewer",
             // Long interval surfaces any accidental blocking.
             Some(Duration::from_secs(30)),
+            &mut |_, _| {},
             || true,
         )
         .unwrap()
@@ -327,23 +344,27 @@ mod tests {
 
         let root_clone = Arc::clone(&root);
         let handle = std::thread::spawn(move || {
-            wait_and_decide(
+            let mut turns = Vec::new();
+            let decision = wait_and_decide(
                 false,
                 &root_clone,
                 "login",
                 "reviewer",
                 Some(Duration::from_millis(50)),
+                &mut |state, unread| turns.push((state, unread)),
                 || true,
             )
             .unwrap()
-            .unwrap()
+            .unwrap();
+            (decision, turns)
         });
 
         // Small delay then send a message.
         std::thread::sleep(Duration::from_millis(150));
         send(&root);
 
-        let result = handle.join().unwrap();
+        let (result, turns) = handle.join().unwrap();
+        assert_eq!(turns, [(AgentState::Idle, 0), (AgentState::Busy, 1)]);
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["decision"], "block");
         assert_eq!(
@@ -368,6 +389,7 @@ mod tests {
             "login",
             "reviewer",
             Some(Duration::from_millis(50)),
+            &mut |_, _| {},
             || true,
         )
         .unwrap()
@@ -392,6 +414,7 @@ mod tests {
             "login",
             "reviewer",
             Some(Duration::from_millis(10)),
+            &mut |_, _| {},
             || polls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 3,
         )
         .unwrap();
@@ -418,7 +441,7 @@ mod tests {
         // SAFETY: Only stop_inner reads PM_AGENT_NAME in this binary. Fragile
         // if another test starts reading it concurrently — revisit if that happens.
         unsafe { std::env::remove_var("PM_AGENT_NAME") };
-        assert!(stop_inner().is_err());
+        assert!(stop_inner(&mut |_, _| {}).is_err());
     }
 
     // --- busy parsing ----------------------------------------------------

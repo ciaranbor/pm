@@ -364,9 +364,7 @@ impl ScopeReader<'_> {
                 AgentSnapshot {
                     name: agent.clone(),
                     state,
-                    unread: messages::check(&messages_dir, scope, agent)
-                        .map(|senders| senders.iter().map(|s| s.count).sum())
-                        .unwrap_or(0),
+                    unread: messages::unread_count(&messages_dir, scope, agent),
                     window: pane.map(|p| p.window.clone()),
                 }
             })

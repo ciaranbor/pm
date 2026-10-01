@@ -1,9 +1,14 @@
+use std::os::unix::process::CommandExt;
+use std::process::Stdio;
+
 use clap::CommandFactory;
 
 use crate::cli::*;
 use pm::commands;
+use pm::commands::attention::AgentState;
 use pm::commands::harness_export::ExportParams;
 use pm::commands::harness_migrate::MigrateParams;
+use pm::commands::tmux_push::AgentWindow;
 use pm::error::PmError;
 use pm::harness::Harness;
 use pm::state::paths;
@@ -131,6 +136,27 @@ fn tmux_server_from_env() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// Bring pm's tmux options up to date with a change this command made, in
+/// a background `pm tmux push` the command neither waits for nor fails on.
+fn push() {
+    let Ok(pm) = std::env::current_exe() else {
+        return;
+    };
+    let _ = std::process::Command::new(pm)
+        .args(["tmux", "push"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn();
+}
+
+/// The window of `agent`, run in the pane this command runs in.
+fn agent_window(server: Option<&str>, agent: &str) -> Option<AgentWindow> {
+    let pane = std::env::var("TMUX_PANE").ok().filter(|p| !p.is_empty())?;
+    Some(AgentWindow::new(server, &pane, agent))
+}
+
 /// Hook handlers hand back a process exit code; a non-zero one is the
 /// handler's whole answer to the harness and must reach it verbatim.
 fn exit_unless_ok(code: i32) -> pm::error::Result<()> {
@@ -206,6 +232,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     if killed == 1 { "" } else { "s" }
                 );
             }
+            push();
             Ok(())
         }
         Commands::Agent(agent_cmd) => {
@@ -260,6 +287,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         &names,
                         server,
                     );
+                    push();
                     report_agent_op_results(results, "stop")
                 }
                 AgentCommands::Delete { names, scope } => {
@@ -270,6 +298,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         &names,
                         server,
                     );
+                    push();
                     report_agent_op_results(results, "delete")
                 }
                 AgentCommands::Restart { names, scope } => {
@@ -386,6 +415,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         )?;
                         println!("{line}");
                     }
+                    push();
                     Ok(())
                 }
                 MsgCommands::Read {
@@ -409,6 +439,18 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     )?;
                     for line in lines {
                         println!("{line}");
+                    }
+                    // The agent reading its own inbox is mid-turn.
+                    if target_scope == feature
+                        && running_agent().as_deref() == Some(agent.as_str())
+                        && let Some(mut window) = agent_window(server, &agent)
+                    {
+                        let unread = pm::messages::unread_count(
+                            &paths::messages_dir(&project_root),
+                            &target_scope,
+                            &agent,
+                        );
+                        window.publish(AgentState::Busy, unread);
                     }
                     Ok(())
                 }
@@ -441,6 +483,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         server,
                     )?;
                     println!("{line}");
+                    push();
                     Ok(())
                 }
                 MsgCommands::Wait {
@@ -508,6 +551,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                             tmux_server: server,
                         })?;
                     println!("Created feature '{feat_name}'");
+                    push();
                     Ok(())
                 }
                 FeatCommands::Adopt {
@@ -530,6 +574,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                             home: None,
                         })?;
                     println!("Adopted feature '{feat_name}'");
+                    push();
                     Ok(())
                 }
                 // `--all` is dispatched before a project is resolved.
@@ -583,6 +628,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         server,
                     )?;
                     println!("Deleted feature '{name}'");
+                    push();
                     Ok(())
                 }
                 FeatCommands::Merge { name, keep } => {
@@ -599,6 +645,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     } else {
                         println!("Merged and deleted feature '{name}'");
                     }
+                    push();
                     Ok(())
                 }
                 FeatCommands::Rebase { name, onto } => {
@@ -706,6 +753,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         running_agent().as_deref(),
                     )?;
                     println!("Feature '{name}' is {status}");
+                    push();
                     Ok(())
                 }
                 FeatCommands::Summary(cmd) => match cmd {
@@ -741,12 +789,14 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     }
                     std::io::Write::flush(&mut std::io::stdout())?;
                     renamed.finish(server);
+                    push();
                     Ok(())
                 }
                 FeatCommands::Review { pr } => {
                     let feature_name =
                         commands::feat_review::feat_review(&project_root, &pr, server)?;
                     println!("Created review feature '{feature_name}'");
+                    push();
                     Ok(())
                 }
                 FeatCommands::Sync { name } => {
@@ -760,6 +810,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     for msg in messages {
                         println!("{msg}");
                     }
+                    push();
                     Ok(())
                 }
             }
@@ -779,6 +830,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             let project_name =
                 commands::delete::delete(&project_root, &projects_dir, force, yes, server)?;
             println!("Deleted project '{project_name}'");
+            push();
             Ok(())
         }
         Commands::Status { project } => {
@@ -822,6 +874,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             for msg in messages {
                 println!("{msg}");
             }
+            push();
             Ok(())
         }
         Commands::SelfUpdate => {
@@ -906,6 +959,9 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
         Commands::Tmux(TmuxCommands::Init) => commands::tmux_init::init(server),
         Commands::Tmux(TmuxCommands::Jump { client, target }) => {
             commands::tmux_jump::jump(&paths::global_projects_dir()?, server, &client, &target)
+        }
+        Commands::Tmux(TmuxCommands::Push) => {
+            commands::tmux_push::push(&paths::global_projects_dir()?, server)
         }
         Commands::Tmux(TmuxCommands::Watch) => {
             commands::tmux_watch::watch(&paths::global_projects_dir()?, server)
@@ -1109,12 +1165,29 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
                 println!("{msg}");
                 Ok(())
             }
-            HarnessHooksCommands::Stop => exit_unless_ok(commands::hooks_stop::stop()),
+            HarnessHooksCommands::Stop => {
+                let mut window = running_agent()
+                    .and_then(|agent| agent_window(tmux_server_from_env().as_deref(), &agent));
+                exit_unless_ok(commands::hooks_stop::stop(&mut |state, unread| {
+                    if let Some(window) = window.as_mut() {
+                        window.publish(state, unread);
+                    }
+                    if state == AgentState::Idle {
+                        push();
+                    }
+                }))
+            }
             HarnessHooksCommands::SessionStart => {
-                exit_unless_ok(commands::hooks_session_start::session_start())
+                let code = commands::hooks_session_start::session_start();
+                // The harness is running now, so its window no longer reads
+                // as dead.
+                if running_agent().is_some() {
+                    push();
+                }
+                exit_unless_ok(code)
             }
             HarnessHooksCommands::UserPrompt => {
-                exit_unless_ok(commands::hooks_user_prompt::user_prompt())
+                exit_unless_ok(commands::hooks_user_prompt::user_prompt(push))
             }
         },
         HarnessCommands::Pull { name, dry_run } => {

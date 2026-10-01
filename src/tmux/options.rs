@@ -7,8 +7,10 @@
 //! as a style, or a shell command, wherever the value is displayed.
 
 use std::collections::BTreeMap;
+use std::os::unix::process::CommandExt;
+use std::process::{Child, Stdio};
 
-use super::{no_server, run_tmux, run_tmux_untrimmed};
+use super::{no_server, run_tmux, run_tmux_untrimmed, tmux_command};
 use crate::error::{PmError, Result};
 
 /// One tmux command and its arguments.
@@ -155,6 +157,8 @@ pub enum Scope<'a> {
     Session(&'a str),
     /// A window, by target (`session:index`).
     Window(&'a str),
+    /// The window of a pane, by pane id (`%N`).
+    PaneWindow(&'a str),
 }
 
 /// Set `name` in `scope`, or unset it when `value` is `None`. A target that
@@ -167,6 +171,7 @@ pub fn set(scope: Scope, name: &str, value: Option<&str>) -> Command {
         // `:` makes the target a session rather than a window or pane.
         Scope::Session(session) => command.extend(["-t".into(), format!("={session}:")]),
         Scope::Window(window) => command.extend(["-w".into(), "-t".into(), format!("={window}")]),
+        Scope::PaneWindow(pane) => command.extend(["-w".into(), "-t".into(), pane.into()]),
     }
     match value {
         Some(value) => command.extend([name.to_string(), value.to_string()]),
@@ -230,6 +235,30 @@ pub fn refresh_status(client: &str) -> Command {
 /// Run `commands` in one `tmux` invocation, in order. A failing command
 /// skips the rest.
 pub fn run(server: Option<&str>, commands: &[Command]) -> Result<()> {
+    let args = joined(commands);
+    if args.is_empty() {
+        return Ok(());
+    }
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_tmux(server, &args).map(|_| ())
+}
+
+/// Start [`run`]'s `tmux` invocation without waiting for it. It reads and
+/// writes nothing of the caller's and leaves the caller's process group, so
+/// it neither holds a pipe the caller's reader waits on nor dies with the
+/// group.
+pub fn spawn(server: Option<&str>, commands: &[Command]) -> Result<Child> {
+    Ok(tmux_command(server)
+        .args(joined(commands))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()?)
+}
+
+/// `commands` as one `tmux` argument list.
+fn joined(commands: &[Command]) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
     for command in commands {
         if !args.is_empty() {
@@ -237,11 +266,7 @@ pub fn run(server: Option<&str>, commands: &[Command]) -> Result<()> {
         }
         args.extend(command.iter().map(|arg| separator_safe(arg)));
     }
-    if args.is_empty() {
-        return Ok(());
-    }
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    run_tmux(server, &args).map(|_| ())
+    args
 }
 
 /// `arg` as it must be passed for tmux not to read a trailing `;` as the end

@@ -179,6 +179,10 @@ pub enum TmuxCommands {
     /// (started by `pm tmux init`; one per server)
     #[command(hide = true)]
     Watch,
+    /// Refresh while a watcher runs on the server (started by pm commands
+    /// that change what the options show)
+    #[command(hide = true)]
+    Push,
 }
 
 #[derive(Subcommand)]
