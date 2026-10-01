@@ -26,8 +26,10 @@ Installs the `pm` binary to `~/.cargo/bin/` (ensure it's on your `PATH`).
 
 ### tmux plugin
 
-Add one line to your tmux config, after any options below and any `bind s`
-or `bind w` of yours, since init reads them as they stand when it runs:
+The plugin's badges need a [Nerd Font](https://www.nerdfonts.com) (v3) as
+your terminal font. Add one line to your tmux config, after any options
+below and any `bind s` or `bind w` of yours, since init reads them as they
+stand when it runs:
 
 ```tmux
 run-shell 'pm tmux init'
@@ -37,7 +39,7 @@ The plugin is part of the binary, so it always matches the installed pm.
 tmux runs it with the server's environment, not your shell's, so
 `pm` must be on the `PATH` the server started with; set `@pm-bin` to its
 full path otherwise. Init only adds to your config: it sets pm's own
-`@pm_*` options, appends to formats rather than replacing them, makes your
+`@pm_*` options, adds to formats rather than replacing them, makes your
 session and window trees pm's tree (below), and is safe to re-run on a
 config reload.
 
@@ -46,13 +48,16 @@ config reload.
 | `@pm-bin` | `pm` | the pm binary tmux runs |
 | `@pm-auto-refresh` | on | keep pm's options current: one background `pm tmux refresh` loop per server; `off` stops it |
 | `@pm-refresh-interval` | `30` | seconds between refreshes; pm pushes its own changes at once, so the poll only catches what happens outside pm (below) |
-| `@pm-window-status` | on | append each agent window's badge to `window-status-format` and `window-status-current-format` (skipped for a format that already shows `@pm_agent_badge`); `off` removes it |
+| `@pm-window-status` | on | put each agent window's badge at the start of `window-status-format` and `window-status-current-format`, before your theme's segments (skipped for a format where you placed `@pm_agent_badge` yourself); `off` removes it |
 | `@pm-bind-tree` | on | when prefix `s` or `w` runs a `choose-tree` with no format or template of yours (tmux's default does), add pm's format and Enter action, keeping its flags and note, and sort by name (`-O name`, grouping each project's sessions) if it sets no order: tmux's defaults become `choose-tree -Zs -O name` and `choose-tree -Zw -O name` plus pm's; `off` takes pm's additions off again |
 | `@pm-attention-key` | unset | a prefix key opening pm's tree with only the sessions needing attention — when none does, tmux shows them all |
 
-The window badge is a glyph for the agent's state — `●` busy (green), `○`
-idle (grey), `×` dead (red), `■` stopped (grey) — then `+N` (yellow) for N
-unread messages, e.g. `○+2`.
+The window badge is a glyph for the agent's state, then a yellow envelope
+if it has unread messages (`pm feat status` has the count):
+
+| busy (green) | idle (grey) | dead (red) | stopped (grey) | unread (yellow) |
+|---|---|---|---|---|
+| `nf-fa-gear` | `nf-fa-hourglass_half` | `nf-md-skull` | `nf-fa-stop` | `nf-fa-envelope` |
 
 The attention summary (`2 blocked · 1 ready`) goes where you put it; init
 leaves `status-right` alone, as it is your theme's and its length limit
@@ -62,9 +67,10 @@ would cut your own content short:
 set -g status-right '#{E:@pm_summary} %H:%M'
 ```
 
-pm's tree is tmux's own tree with each feature's attention and reason and
-each agent's badge. Choosing a feature's session goes to the agent it is
-waiting on (`pm tmux jump`). With `@pm-bind-tree off`, or on another key:
+pm's tree is tmux's own tree, less pane titles, with each feature's
+attention and reason and each agent's badge. Choosing a feature's session
+goes to the agent it is waiting on (`pm tmux jump`). With
+`@pm-bind-tree off`, or on another key:
 
 ```tmux
 bind T choose-tree -Zs -O name -F '#{E:@pm_tree_format}' "run-shell \"pm tmux jump --client '#{client_name}' '%%'\""
@@ -230,7 +236,7 @@ killed outside pm, state files edited by hand.
 | agent window | `@pm_agent` | the agent's name |
 | | `@pm_agent_state` | `idle`, `busy`, `dead` or `stopped` |
 | | `@pm_unread` | unread message count |
-| | `@pm_agent_badge` | a glyph for the state, then `+N` unread, styled (below) |
+| | `@pm_agent_badge` | a glyph for the state, then an envelope if any message is unread, styled (below) |
 | global | `@pm_summary` | e.g. `2 blocked · 1 ready`, styled; unset when nothing needs attention |
 | | `@pm_count` | features needing attention |
 | | `@pm_tree_format` | pm's `choose-tree` line format, set by `pm tmux init` |
@@ -243,8 +249,9 @@ scope only, so tmux's fallback from window to session to global never
 yields another scope's value.
 
 `@pm_agent_badge` (glyphs under Install) is sized for
-`window-status-format`, next to the window name, and resets its style
-after itself.
+`window-status-format` and resets to the window's default style after
+itself, so it suits the start of a format, before any `#[…]` of the
+theme's.
 
 When a feature with an open session becomes `blocked` or `ready`, every
 attached client is shown it once. The previous attention is the published
