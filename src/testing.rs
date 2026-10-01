@@ -232,7 +232,8 @@ fn reap_dead_test_servers(dir: &std::path::Path) {
             Some(s) => s,
             None => continue,
         };
-        let pid: u32 = match pid_str.parse() {
+        // `pm-test-<pid>`, or `pm-test-<pid>-<suffix>` for a test's own server.
+        let pid: u32 = match pid_str.split('-').next().unwrap_or_default().parse() {
             Ok(p) => p,
             Err(_) => continue,
         };
@@ -346,6 +347,72 @@ pub fn test_home() -> &'static std::path::Path {
     })
 }
 
+/// Start a tmux server on socket `name` for tests to type commands into.
+///
+/// Under the developer's tmux config and interactive shell, a window's rc
+/// files can take over 10s to load under a loaded suite, and can drop keys
+/// typed before the prompt; so the server reads no config and every window
+/// runs `sh` with no startup files. tmux starts a window as
+/// `$default-shell -c <default-command>`, and takes `default-shell` from
+/// `SHELL`, so both are set; with `ENV` unset the interactive `sh` reads
+/// nothing. The keepalive session keeps the server up: without it the
+/// server shuts down each time a test cleans up its sessions.
+fn start_hermetic_server(name: &str) -> bool {
+    // A socket left under `name` by a dead run whose pid ours reuses would
+    // stop tmux from starting a server on it.
+    let _ = crate::tmux::kill_server(Some(name));
+    let _ = std::fs::remove_file(tmux_socket_dir().join(name));
+    std::process::Command::new("tmux")
+        .env("SHELL", HERMETIC_SHELL)
+        .env_remove("ENV")
+        .args(["-L", name, "-f", "/dev/null"])
+        .args([
+            "new-session",
+            "-d",
+            "-s",
+            "keepalive",
+            "-c",
+            "/tmp",
+            HERMETIC_SHELL,
+        ])
+        .args([";", "set-option", "-g", "default-shell", HERMETIC_SHELL])
+        .args([";", "set-option", "-g", "default-command", HERMETIC_SHELL])
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+/// A tmux server of one test's own, `pm-test-<pid>-<suffix>`, killed on
+/// drop (and reaped with the shared server's if the run dies). For a test
+/// that attaches a client: on the shared server it would be the client
+/// other tests' `switch-client` and `#{client_session}` find.
+pub struct OwnServer(String);
+
+impl OwnServer {
+    pub fn start(suffix: &str) -> Self {
+        if let Err(msg) = enforce_system_pty_cap() {
+            panic!("{msg}");
+        }
+        let name = format!("pm-test-{}-{suffix}", std::process::id());
+        assert!(start_hermetic_server(&name), "start tmux server {name}");
+        Self(name)
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        Some(&self.0)
+    }
+}
+
+impl Drop for OwnServer {
+    fn drop(&mut self) {
+        let _ = crate::tmux::kill_server(self.name());
+    }
+}
+
+/// Whether a server listens, or once listened, on socket `name`.
+pub fn server_socket_exists(name: &str) -> bool {
+    tmux_socket_dir().join(name).exists()
+}
+
 fn shared_server_name() -> &'static str {
     SHARED_SERVER_NAME.get_or_init(|| {
         // Reap any `pm-test-<pid>` servers left behind by dead test binaries
@@ -355,40 +422,7 @@ fn shared_server_name() -> &'static str {
         let pid = std::process::id();
         let name = format!("pm-test-{pid}");
 
-        // Pid-reuse edge case: a previous test binary may have exited
-        // leaving a `pm-test-<pid>` socket on disk, and this fresh process
-        // happens to be assigned the same pid. Unlink any stale socket
-        // under our own name before creating the real one, otherwise tmux
-        // would try to connect to the old socket and fail.
-        let _ = crate::tmux::kill_server(Some(&name));
-        let _ = std::fs::remove_file(tmux_socket_dir().join(&name));
-
-        // Tests type commands into fresh windows and wait for them to run.
-        // Under the developer's tmux config and interactive shell, a window's
-        // rc files can take over 10s to load under a loaded suite, and can
-        // drop keys typed before the prompt; so the server reads no config
-        // and every window runs `sh` with no startup files. tmux starts a
-        // window as `$default-shell -c <default-command>`, and takes
-        // `default-shell` from `SHELL`, so both are set; with `ENV` unset
-        // the interactive `sh` reads nothing. The keepalive session keeps
-        // the server up for the whole run: without it the server shuts down
-        // each time a test cleans up its sessions.
-        let _ = std::process::Command::new("tmux")
-            .env("SHELL", HERMETIC_SHELL)
-            .env_remove("ENV")
-            .args(["-L", &name, "-f", "/dev/null"])
-            .args([
-                "new-session",
-                "-d",
-                "-s",
-                "keepalive",
-                "-c",
-                "/tmp",
-                HERMETIC_SHELL,
-            ])
-            .args([";", "set-option", "-g", "default-shell", HERMETIC_SHELL])
-            .args([";", "set-option", "-g", "default-command", HERMETIC_SHELL])
-            .output();
+        start_hermetic_server(&name);
 
         // Register the atexit cleanup exactly once. Store the pid first
         // because the extern "C" fn cannot capture.

@@ -1,0 +1,700 @@
+//! `pm tmux refresh`: the [`attention`] snapshot of every project, published
+//! on the tmux server as `@pm_*` user options for status lines and tree
+//! formats to read (README, "tmux options", has the contract).
+//!
+//! It runs on every status-line tick, so it costs the snapshot's own reads,
+//! one `tmux` call that takes what is published now along with the attached
+//! clients, and, only when something changed, one more that writes the
+//! difference. What it last published is also the previous state a
+//! transition alert is judged against; pm keeps no other record of it.
+//!
+//! A feature's agents are found through the registry, never by window, and
+//! only their windows carry options. Options are cleared only on
+//! sessions of projects the snapshot read: a project whose state couldn't be
+//! read keeps what it last published.
+
+use std::collections::HashSet;
+use std::path::Path;
+
+use crate::error::{PmError, Result};
+use crate::tmux::options::{self, Command, Holder, Options, Scope, format_text};
+
+use super::attention::{self, AgentSnapshot, AgentState, AttentionKind, FeatureSnapshot, Snapshot};
+
+const PROJECT: &str = "@pm_project";
+const FEATURE: &str = "@pm_feature";
+const PROGRESS: &str = "@pm_progress";
+const REASON: &str = "@pm_reason";
+const ATTENTION: &str = "@pm_attention";
+const BADGE: &str = "@pm_badge";
+const SESSION_OPTIONS: &[&str] = &[PROJECT, FEATURE, PROGRESS, REASON, ATTENTION, BADGE];
+
+const AGENT: &str = "@pm_agent";
+const AGENT_STATE: &str = "@pm_agent_state";
+const UNREAD: &str = "@pm_unread";
+const AGENT_BADGE: &str = "@pm_agent_badge";
+const WINDOW_OPTIONS: &[&str] = &[AGENT, AGENT_STATE, UNREAD, AGENT_BADGE];
+
+const SUMMARY: &str = "@pm_summary";
+const COUNT: &str = "@pm_count";
+const GLOBAL_OPTIONS: &[&str] = &[SUMMARY, COUNT];
+
+/// Publish the snapshot of every project registered in `projects_dir`. No
+/// server running publishes nothing.
+pub fn refresh(projects_dir: &Path, tmux_server: Option<&str>) -> Result<()> {
+    let Some(published) =
+        options::read(tmux_server, SESSION_OPTIONS, WINDOW_OPTIONS, GLOBAL_OPTIONS)?
+    else {
+        return Ok(());
+    };
+    let snapshot = attention::all(projects_dir, tmux_server)?;
+    write(tmux_server, &commands(&snapshot, &published))
+}
+
+/// Run `commands`, the client tail last. A client that detached since the
+/// read cuts that tail short, but the options are written by then.
+fn write(tmux_server: Option<&str>, commands: &[Command]) -> Result<()> {
+    match options::run(tmux_server, commands) {
+        Err(PmError::Tmux(msg)) if msg.contains("can't find client") => Ok(()),
+        result => result,
+    }
+}
+
+/// What turns `published` into `snapshot`: the changed options, then an
+/// alert and a redraw for each client.
+fn commands(snapshot: &Snapshot, published: &Options) -> Vec<Command> {
+    let mut writes = Vec::new();
+    let mut alerts = Vec::new();
+    let mut sessions: HashSet<&str> = HashSet::new();
+    let mut windows: HashSet<&str> = HashSet::new();
+    for feature in &snapshot.features {
+        // A session made since the read is published next time.
+        let Some(held) = published
+            .sessions
+            .iter()
+            .find(|s| s.target == feature.session)
+        else {
+            continue;
+        };
+        sessions.insert(&feature.session);
+        let scope = Scope::Session(&feature.session);
+        diff(&mut writes, scope, held, &session_values(feature));
+        let kind = feature.attention.kind;
+        if matches!(kind, AttentionKind::Blocked | AttentionKind::Ready)
+            && held.get(ATTENTION) != kind.to_string()
+        {
+            alerts.push(alert(feature));
+        }
+        for agent in &feature.agents {
+            let Some(window) = agent.window.as_deref() else {
+                continue;
+            };
+            let Some(held) = published.windows.iter().find(|w| w.target == window) else {
+                continue;
+            };
+            windows.insert(window);
+            diff(
+                &mut writes,
+                Scope::Window(window),
+                held,
+                &window_values(agent),
+            );
+        }
+    }
+
+    let read: HashSet<&str> = snapshot
+        .projects
+        .iter()
+        .filter(|p| p.skipped.is_none())
+        .map(|p| p.name.as_str())
+        .collect();
+    let ours = |session: &str| {
+        published
+            .sessions
+            .iter()
+            .any(|s| s.target == session && read.contains(s.get(PROJECT)))
+    };
+    for held in &published.sessions {
+        if ours(&held.target) && !sessions.contains(held.target.as_str()) {
+            clear(
+                &mut writes,
+                Scope::Session(&held.target),
+                held,
+                SESSION_OPTIONS,
+            );
+        }
+    }
+    for held in &published.windows {
+        if !held.get(AGENT).is_empty()
+            && ours(&held.session)
+            && !windows.contains(held.target.as_str())
+        {
+            clear(
+                &mut writes,
+                Scope::Window(&held.target),
+                held,
+                WINDOW_OPTIONS,
+            );
+        }
+    }
+
+    diff(
+        &mut writes,
+        Scope::Global,
+        &published.global,
+        &global_values(snapshot),
+    );
+
+    if !alerts.is_empty() {
+        let text = format!("pm: {}", alerts.join(" · "));
+        writes.extend(published.clients.iter().map(|c| options::display(c, &text)));
+    }
+    if !writes.is_empty() {
+        writes.extend(published.clients.iter().map(|c| options::refresh_status(c)));
+    }
+    writes
+}
+
+/// Set each of `values` that differs from what `held` has; a `None` value
+/// is unset.
+fn diff(writes: &mut Vec<Command>, scope: Scope, held: &Holder, values: &[(&str, Option<String>)]) {
+    for (name, value) in values {
+        let now = held.get(name);
+        let want = value.as_deref().unwrap_or_default();
+        if now != want {
+            writes.push(options::set(scope, name, value.as_deref()));
+        }
+    }
+}
+
+fn clear(writes: &mut Vec<Command>, scope: Scope, held: &Holder, names: &[&str]) {
+    for name in names.iter().filter(|n| !held.get(n).is_empty()) {
+        writes.push(options::set(scope, name, None));
+    }
+}
+
+fn session_values(feature: &FeatureSnapshot) -> Vec<(&'static str, Option<String>)> {
+    let kind = feature.attention.kind;
+    let needs = (kind != AttentionKind::None).then_some(kind);
+    vec![
+        (PROJECT, Some(format_text(&feature.project))),
+        (FEATURE, Some(format_text(&feature.name))),
+        (PROGRESS, Some(feature.progress.to_string())),
+        (
+            REASON,
+            feature
+                .attention
+                .detail
+                .as_deref()
+                .map(format_text)
+                .filter(|r| !r.is_empty()),
+        ),
+        (ATTENTION, needs.map(|k| k.to_string())),
+        (
+            BADGE,
+            needs.map(|k| styled(attention_style(k), &k.to_string())),
+        ),
+    ]
+}
+
+fn window_values(agent: &AgentSnapshot) -> Vec<(&'static str, Option<String>)> {
+    let mut badge = styled(agent_style(agent.state), agent_glyph(agent.state));
+    if agent.unread > 0 {
+        badge.push_str(&styled("fg=yellow", &format!("+{}", agent.unread)));
+    }
+    vec![
+        (AGENT, Some(format_text(&agent.name))),
+        (AGENT_STATE, Some(agent.state.to_string())),
+        (UNREAD, Some(agent.unread.to_string())),
+        (AGENT_BADGE, Some(badge)),
+    ]
+}
+
+fn global_values(snapshot: &Snapshot) -> Vec<(&'static str, Option<String>)> {
+    let kinds: Vec<AttentionKind> = snapshot
+        .features
+        .iter()
+        .map(|f| f.attention.kind)
+        .filter(|k| *k != AttentionKind::None)
+        .collect();
+    // `features` is sorted most urgent first, so equal kinds are adjacent.
+    let summary: Vec<String> = kinds
+        .chunk_by(|a, b| a == b)
+        .map(|run| {
+            styled(
+                attention_style(run[0]),
+                &format!("{} {}", run.len(), run[0]),
+            )
+        })
+        .collect();
+    vec![
+        (SUMMARY, Some(summary.join(" · ")).filter(|s| !s.is_empty())),
+        (COUNT, Some(kinds.len().to_string())),
+    ]
+}
+
+/// `text` in `style`, then back to the surrounding style. Named and
+/// 256-palette colours only, which every tmux release draws.
+fn styled(style: &str, text: &str) -> String {
+    format!("#[{style}]{text}#[default]")
+}
+
+fn attention_style(kind: AttentionKind) -> &'static str {
+    match kind {
+        AttentionKind::Blocked => "fg=red,bold",
+        AttentionKind::Cleanup => "fg=magenta",
+        AttentionKind::Ready => "fg=green,bold",
+        AttentionKind::Dead => "fg=red",
+        AttentionKind::Stalled => "fg=yellow",
+        AttentionKind::None => "default",
+    }
+}
+
+fn agent_style(state: AgentState) -> &'static str {
+    match state {
+        AgentState::Busy => "fg=green",
+        AgentState::Dead => "fg=red",
+        AgentState::Idle | AgentState::Stopped | AgentState::Closed => "fg=colour245",
+    }
+}
+
+/// One glyph wide in common terminal fonts, for a window-list entry.
+fn agent_glyph(state: AgentState) -> &'static str {
+    match state {
+        AgentState::Busy => "●",
+        AgentState::Idle => "○",
+        AgentState::Dead => "×",
+        AgentState::Stopped | AgentState::Closed => "■",
+    }
+}
+
+fn alert(feature: &FeatureSnapshot) -> String {
+    let what = format!("{} {}", feature.session, feature.attention.kind);
+    match &feature.attention.detail {
+        Some(detail) => format!("{what}: {detail}"),
+        None => what,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::{feat_delete::feat_delete, feat_status::feat_status};
+    use crate::messages;
+    use crate::state::agent::AgentRegistry;
+    use crate::state::feature::{FeatureState, FeatureStatus, Progress};
+    use crate::state::paths;
+    use crate::testing::{OwnServer, TestServer, server_socket_exists};
+    use crate::tmux;
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Child, ChildStdin, Stdio};
+    use std::sync::{Arc, Mutex, MutexGuard};
+    use tempfile::tempdir;
+
+    /// A refresh writes server-wide options and alerts every client, so
+    /// these tests take turns on the shared server.
+    fn serial() -> MutexGuard<'static, ()> {
+        static SERIAL: Mutex<()> = Mutex::new(());
+        SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn published(server: &TestServer) -> Options {
+        options::read(
+            server.name(),
+            SESSION_OPTIONS,
+            WINDOW_OPTIONS,
+            GLOBAL_OPTIONS,
+        )
+        .unwrap()
+        .unwrap()
+    }
+
+    fn values<'a>(holders: &'a [Holder], target: &str, names: &[&str]) -> Vec<&'a str> {
+        let holder = holders.iter().find(|h| h.target == target).unwrap();
+        names.iter().map(|n| holder.get(n)).collect()
+    }
+
+    fn tmux_out(server: &TestServer, args: &[&str]) -> String {
+        let out = std::process::Command::new("tmux")
+            .args(["-L", server.name().unwrap()])
+            .args(args)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    /// A control-mode client attached to a session, recording what tmux
+    /// sends it.
+    struct ControlClient {
+        child: Child,
+        stdin: ChildStdin,
+        output: Arc<Mutex<Vec<String>>>,
+        syncs: u32,
+    }
+
+    impl ControlClient {
+        fn attach(server: Option<&str>, session: &str) -> Self {
+            let mut child = std::process::Command::new("tmux")
+                .args(["-L", server.unwrap(), "-C", "attach", "-t"])
+                .arg(format!("={session}"))
+                .env_remove("TMUX")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            let stdin = child.stdin.take().unwrap();
+            let stdout = child.stdout.take().unwrap();
+            let output = Arc::new(Mutex::new(Vec::new()));
+            let lines = Arc::clone(&output);
+            std::thread::spawn(move || {
+                for line in BufReader::new(stdout).lines().map_while(|l| l.ok()) {
+                    lines.lock().unwrap().push(line);
+                }
+            });
+            let mut client = Self {
+                child,
+                stdin,
+                output,
+                syncs: 0,
+            };
+            client.sync();
+            client
+        }
+
+        /// Wait until tmux has answered a command sent now, so whatever it
+        /// sent before has arrived.
+        fn sync(&mut self) {
+            self.syncs += 1;
+            let marker = format!("sync-{}", self.syncs);
+            writeln!(self.stdin, "display-message {marker}").unwrap();
+            for _ in 0..500 {
+                if self.messages_raw().contains(&marker) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            panic!(
+                "control client never saw {marker}: {:?}",
+                self.output.lock().unwrap()
+            );
+        }
+
+        fn messages_raw(&self) -> Vec<String> {
+            self.output
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|l| l.strip_prefix("%message "))
+                .map(str::to_string)
+                .collect()
+        }
+
+        /// The status-line messages tmux has shown the client.
+        fn messages(&mut self) -> Vec<String> {
+            self.sync();
+            self.messages_raw()
+                .into_iter()
+                .filter(|m| !m.starts_with("sync-"))
+                .collect()
+        }
+    }
+
+    impl Drop for ControlClient {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    #[test]
+    fn options_are_published_and_cleared_once_their_value_goes_away() {
+        let _serial = serial();
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project);
+        let session = tmux::session_name(&project_name, "login");
+        let implementer = server.spawn_idle_fake_agent(&project, &session, "login", "implementer");
+        let reviewer = server.spawn_fake_agent(&project, &session, "login", "reviewer");
+        messages::send(
+            &paths::messages_dir(&project),
+            "login",
+            "reviewer",
+            "user",
+            "hi",
+        )
+        .unwrap();
+        let shell =
+            tmux::new_window(server.name(), &session, &project, Some("shell"), true).unwrap();
+        let mine = server.scope("mine");
+        tmux::create_session(server.name(), &mine, dir.path()).unwrap();
+        options::run(
+            server.name(),
+            &[
+                options::set(Scope::Session(&mine), BADGE, Some("mine")),
+                options::set(Scope::Window(&shell), AGENT_BADGE, Some("mine")),
+            ],
+        )
+        .unwrap();
+        feat_status(
+            &project,
+            "login",
+            Progress::Blocked,
+            Some("which #[fg=red]DB?"),
+            Some("implementer"),
+        )
+        .unwrap();
+
+        refresh(&projects_dir, server.name()).unwrap();
+
+        let now = published(&server);
+        assert_eq!(
+            values(&now.sessions, &session, SESSION_OPTIONS),
+            [
+                project_name.as_str(),
+                "login",
+                "blocked",
+                "which ##[fg=red]DB?",
+                "blocked",
+                "#[fg=red,bold]blocked#[default]",
+            ]
+        );
+        assert_eq!(
+            values(&now.windows, &implementer, WINDOW_OPTIONS),
+            ["implementer", "idle", "0", "#[fg=colour245]○#[default]"]
+        );
+        assert_eq!(
+            values(&now.windows, &reviewer, WINDOW_OPTIONS),
+            [
+                "reviewer",
+                "busy",
+                "1",
+                "#[fg=green]●#[default]#[fg=yellow]+1#[default]"
+            ]
+        );
+        assert_eq!(
+            values(&now.windows, &shell, WINDOW_OPTIONS),
+            ["", "", "", "mine"],
+            "a window that is no agent's"
+        );
+        assert_eq!(
+            [now.global.get(COUNT), now.global.get(SUMMARY)],
+            ["1", "#[fg=red,bold]1 blocked#[default]"]
+        );
+
+        feat_status(&project, "login", Progress::Wip, None, None).unwrap();
+        let agents_dir = paths::agents_dir(&project);
+        let mut registry = AgentRegistry::load(&agents_dir, "login").unwrap();
+        registry.get_mut("implementer").unwrap().active = false;
+        registry.agents.remove("reviewer");
+        registry.save(&agents_dir, "login").unwrap();
+
+        refresh(&projects_dir, server.name()).unwrap();
+
+        let now = published(&server);
+        assert_eq!(
+            values(&now.sessions, &session, SESSION_OPTIONS),
+            [project_name.as_str(), "login", "wip", "", "", ""]
+        );
+        assert_eq!(
+            values(&now.windows, &implementer, WINDOW_OPTIONS),
+            ["implementer", "stopped", "0", "#[fg=colour245]■#[default]"]
+        );
+        assert_eq!(
+            values(&now.windows, &reviewer, WINDOW_OPTIONS),
+            ["", "", "", ""],
+            "a window whose agent is gone from the registry"
+        );
+        assert_eq!([now.global.get(COUNT), now.global.get(SUMMARY)], ["0", ""]);
+        assert_eq!(values(&now.windows, &shell, &[AGENT_BADGE]), ["mine"]);
+        assert_eq!(
+            values(&now.sessions, &mine, &[PROJECT, BADGE]),
+            ["", "mine"],
+            "a session that is no feature's"
+        );
+    }
+
+    #[test]
+    fn a_feature_that_goes_takes_its_session_options_with_it() {
+        let _serial = serial();
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project);
+        crate::commands::feat_new::feat_new(
+            &crate::commands::feat_new::FeatNewParams::with_defaults(
+                &project,
+                &projects_dir,
+                "search",
+                server.name(),
+            ),
+        )
+        .unwrap();
+        let features_dir = paths::features_dir(&project);
+        let mut search = FeatureState::load(&features_dir, "search").unwrap();
+        search.status = FeatureStatus::Merged;
+        search.save(&features_dir, "search").unwrap();
+        let login = tmux::session_name(&project_name, "login");
+        let search = tmux::session_name(&project_name, "search");
+
+        refresh(&projects_dir, server.name()).unwrap();
+        let now = published(&server);
+        assert_eq!(values(&now.sessions, &search, &[ATTENTION]), ["cleanup"]);
+        assert_eq!(
+            [now.global.get(COUNT), now.global.get(SUMMARY)],
+            ["1", "#[fg=magenta]1 cleanup#[default]"]
+        );
+
+        feat_delete(&project, &projects_dir, "search", true, server.name()).unwrap();
+        // State gone, session left open.
+        std::fs::remove_file(features_dir.join("login.toml")).unwrap();
+        refresh(&projects_dir, server.name()).unwrap();
+
+        let now = published(&server);
+        assert!(!now.sessions.iter().any(|s| s.target == search));
+        assert_eq!(
+            values(&now.sessions, &login, SESSION_OPTIONS),
+            ["", "", "", "", "", ""]
+        );
+        assert_eq!([now.global.get(COUNT), now.global.get(SUMMARY)], ["0", ""]);
+    }
+
+    #[test]
+    fn clients_are_alerted_once_when_a_feature_becomes_blocked_or_ready() {
+        let dir = tempdir().unwrap();
+        let server = OwnServer::start("alerts");
+        let project = dir.path().join("app");
+        let projects_dir = dir.path().join("registry");
+        crate::commands::init::init(&project, &projects_dir, None, server.name()).unwrap();
+        crate::commands::feat_new::feat_new(
+            &crate::commands::feat_new::FeatNewParams::with_defaults(
+                &project,
+                &projects_dir,
+                "login",
+                server.name(),
+            ),
+        )
+        .unwrap();
+        let session = tmux::session_name("app", "login");
+        let mut client = ControlClient::attach(server.name(), &session);
+
+        refresh(&projects_dir, server.name()).unwrap();
+        feat_status(
+            &project,
+            "login",
+            Progress::Blocked,
+            Some("which DB?"),
+            None,
+        )
+        .unwrap();
+        refresh(&projects_dir, server.name()).unwrap();
+        refresh(&projects_dir, server.name()).unwrap();
+        let summary = paths::summary_path(&project, "login");
+        std::fs::create_dir_all(summary.parent().unwrap()).unwrap();
+        std::fs::write(&summary, "Adds login\n").unwrap();
+        feat_status(&project, "login", Progress::Ready, None, None).unwrap();
+        refresh(&projects_dir, server.name()).unwrap();
+        refresh(&projects_dir, server.name()).unwrap();
+
+        assert_eq!(
+            client.messages(),
+            [
+                format!("pm: {session} blocked: which DB?"),
+                format!("pm: {session} ready: Adds login"),
+            ]
+        );
+    }
+
+    #[test]
+    fn changes_are_written_in_one_tmux_call_and_a_repeat_writes_nothing() {
+        let _serial = serial();
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project);
+        let session = tmux::session_name(&project_name, "login");
+        server.spawn_idle_fake_agent(&project, &session, "login", "implementer");
+        tmux_out(&server, &["set-option", "-s", "message-limit", "100000"]);
+        // The server logs each command it runs with the client that sent it.
+        let writers = || -> Vec<String> {
+            tmux_out(&server, &["show-messages"])
+                .lines()
+                .filter(|l| l.contains("command: set-option") && l.contains(&session))
+                .filter_map(|l| l.split(' ').nth(1).map(str::to_string))
+                .collect()
+        };
+
+        refresh(&projects_dir, server.name()).unwrap();
+        let first = writers();
+        refresh(&projects_dir, server.name()).unwrap();
+
+        assert!(first.len() > 1, "{first:?}");
+        assert!(first.iter().all(|c| *c == first[0]), "{first:?}");
+        assert_eq!(writers(), first);
+    }
+
+    #[test]
+    fn no_server_publishes_nothing() {
+        let dir = tempdir().unwrap();
+        let never = format!("pm-test-{}-never", std::process::id());
+        refresh(dir.path(), Some(&never)).unwrap();
+        assert!(!server_socket_exists(&never), "a refresh started a server");
+    }
+
+    #[test]
+    fn a_project_whose_state_cannot_be_read_keeps_what_it_published() {
+        let _serial = serial();
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project);
+        let session = tmux::session_name(&project_name, "login");
+        feat_status(
+            &project,
+            "login",
+            Progress::Blocked,
+            Some("which DB?"),
+            None,
+        )
+        .unwrap();
+        refresh(&projects_dir, server.name()).unwrap();
+
+        std::fs::write(paths::pm_dir(&project).join("config.toml"), "not = [toml").unwrap();
+        refresh(&projects_dir, server.name()).unwrap();
+
+        let now = published(&server);
+        assert_eq!(
+            values(&now.sessions, &session, &[PROJECT, ATTENTION, REASON]),
+            [project_name.as_str(), "blocked", "which DB?"]
+        );
+        assert_eq!(now.global.get(COUNT), "0");
+    }
+
+    #[test]
+    fn a_client_gone_since_the_read_fails_no_refresh() {
+        let _serial = serial();
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project);
+        let session = tmux::session_name(&project_name, "login");
+        refresh(&projects_dir, server.name()).unwrap();
+        feat_status(
+            &project,
+            "login",
+            Progress::Blocked,
+            Some("which DB?"),
+            None,
+        )
+        .unwrap();
+
+        let mut before = published(&server);
+        before.clients.push("client-gone".into());
+        let snapshot = attention::all(&projects_dir, server.name()).unwrap();
+        write(server.name(), &commands(&snapshot, &before)).unwrap();
+
+        let now = published(&server);
+        assert_eq!(values(&now.sessions, &session, &[ATTENTION]), ["blocked"]);
+    }
+}

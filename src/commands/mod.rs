@@ -53,5 +53,6 @@ pub mod skills;
 pub mod state_cmd;
 pub mod state_gitignore;
 pub mod status;
+pub mod tmux_refresh;
 pub mod upgrade;
 pub mod workflow;

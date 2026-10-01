@@ -106,6 +106,9 @@ pub enum Commands {
     /// Per-feature workflow management
     #[command(subcommand)]
     Workflow(WorkflowCommands),
+    /// tmux integration: pm state published on the tmux server
+    #[command(subcommand)]
+    Tmux(TmuxCommands),
     /// Generate shell completion scripts
     #[command(hide = true)]
     Completions {
@@ -153,6 +156,13 @@ pub enum StateCommands {
     },
     /// Backfill repo_url and state_remote in global registry from existing projects
     Backfill,
+}
+
+#[derive(Subcommand)]
+pub enum TmuxCommands {
+    /// Publish every project's attention snapshot as `@pm_*` tmux options,
+    /// alerting attached clients when a feature becomes blocked or ready
+    Refresh,
 }
 
 #[derive(Subcommand)]
