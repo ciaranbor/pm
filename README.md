@@ -352,8 +352,7 @@ unattended:
   turn. `pm doctor` reports a running agent that has recorded no session
   id after a grace period; restart it with `pm agent restart <name>`.
 - `pm harness probe --harness codex` checks the installed version (0.156.0
-  or newer, the first with `--no-daemon`). `pm harness settings` is Claude
-  Code only.
+  or newer, the first with `--no-daemon`).
 
 ### opencode agents
 
@@ -488,8 +487,7 @@ harnesses; what differs:
   gone. pm's own moves carry sessions (see Features and worktrees); after any other,
   stop the agent and run `pm harness migrate --harness opencode --from <old
   path>` in the new directory.
-- `pm harness probe --harness opencode` checks the installed version. `pm
-  harness settings` is Claude Code only.
+- `pm harness probe --harness opencode` checks the installed version.
 
 ### Agents as never-idle message processors
 
@@ -644,10 +642,11 @@ pm harness pull [feature] --dry-run   # list what would be written
 
 Both the creation-time copy and the pull take main's working copy, and
 neither writes over a file the feature's branch tracks, so an edit committed
-on a feature branch survives. A codex agent in that feature reads the edited
-file directly. A Claude Code agent does not until the edit is merged and
-projected from main: it loads the feature's `.claude/skills/`, which is
-copied from main's projection.
+on a feature branch survives. A feature's skills are its own: the feature's
+`.agents/skills/` is projected for its harnesses, so an agent there sees a
+skill edited on the branch once the feature is seeded or pulled — run
+`pm harness pull` after editing one mid-feature. Agent definitions stay
+main's until merged, because pm resolves them from main.
 
 Upgrading an existing project removes the per-project copies of bundled
 assets that earlier releases installed — your own files are never touched.
@@ -707,6 +706,12 @@ pm state init --global --remote <global-registry-url>
 pm restore                       # clone repos, pull state, recreate worktrees + sessions
 ```
 
+Agent conversations live in each harness's own store, not in `.pm/`. Carry
+them with `pm harness export [--all]` on the old machine and `pm harness
+import <tarball>` on the new one, after `pm restore`: an export holds the
+sessions of main and every feature worktree, and an import skips a feature
+that has no worktree here yet.
+
 The global registry repo syncs your global custom workflows but never the
 bundled ones: its `.gitignore` carries a block pm regenerates from the
 bundle, so `pm upgrade` rewriting them never dirties the repo. If an earlier
@@ -728,13 +733,14 @@ These round out the tool; each has its full flag reference under `--help`:
   between pm state and git/tmux/GitHub reality.
 - `pm harness` — the agent harness: `hooks`, bundled `skills`/`agents`
   (installed to `~/.agents/`, projected per harness), per-feature `settings`
-  (`settings.json` only — Claude Code keeps `settings.local.json` at the main
-  checkout for every worktree, so pm neither seeds nor syncs it), `pull`
-  of main's customs into a feature (see Asset tiers), and
-  `migrate|export|import` of session data across
-  worktrees and machines (`--harness`, default `claude-code`); `list` the
-  supported harnesses and `probe` the installed binary. `pm claude …`
-  remains as a hidden alias for one release.
+  for a harness that has such files (Claude Code's `settings.json` only —
+  Claude Code keeps `settings.local.json` at the main checkout for every
+  worktree, so pm neither seeds nor syncs it), `pull` of main's customs into
+  a feature, re-projecting its own skills (see Asset tiers), and
+  `migrate|export|import` of session data across worktrees and machines
+  (`--harness`, default `claude-code`); `list` the supported harnesses and
+  `probe` the installed binary. `pm claude …` remains as a hidden alias for
+  one release.
 - `pm upgrade` / `pm self-update` — update bundled assets and the binary.
 - `pm completions <shell>` — generate shell completion scripts.
 - `pm list` — list registered projects.

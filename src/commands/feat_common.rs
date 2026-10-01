@@ -1,4 +1,4 @@
-//! Shared helpers for feature-creation commands (feat_new, feat_adopt, feat_review).
+//! Shared feature helpers, mostly for the creation commands (feat_new, feat_adopt, feat_review).
 //!
 //! Each creation flow is a linear recipe with small but meaningful divergences,
 //! so we expose plain helper functions rather than a builder or trait. Each
@@ -171,6 +171,14 @@ pub fn spawn_team(
         for note in &spawned.notes {
             eprintln!("note: {agent}: {note}");
         }
+    }
+    Ok(())
+}
+
+/// Error unless `feature_name` is a registered feature of the project.
+pub fn require_feature(project_root: &Path, feature_name: &str) -> Result<()> {
+    if !FeatureState::exists(&paths::features_dir(project_root), feature_name) {
+        return Err(PmError::FeatureNotFound(feature_name.to_string()));
     }
     Ok(())
 }

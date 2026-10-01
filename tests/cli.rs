@@ -167,7 +167,7 @@ fn settings_are_refused_for_the_other_harnesses() {
             .assert()
             .failure()
             .stderr(predicate::str::contains(format!(
-                "per-feature settings files are not supported for {harness}"
+                "{harness} has no per-feature settings files"
             )));
     }
 }

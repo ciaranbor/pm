@@ -14,13 +14,15 @@
 //! private to the migration, on loopback, behind a one-off password — and
 //! each is confirmed by reading the session back before it is reported.
 //!
-//! A subagent's session is a session of its own with a `parentID`, and an
-//! import needs the parent present first; only top-level sessions are
-//! exported. A move covers both.
+//! A subagent's session is a session of its own with a `parentID`, and
+//! opencode refuses to import one whose parent it lacks (`Not Found`). So
+//! an export leaves out a child whose parent is bound to another directory,
+//! and an import goes parent before child. A move covers both.
 
+use std::collections::HashSet;
 use std::hash::{BuildHasher, Hasher};
 use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -43,7 +45,7 @@ const POLL: Duration = Duration::from_millis(200);
 
 struct Session {
     id: String,
-    top_level: bool,
+    parent: Option<String>,
 }
 
 /// `dir` as given and, when it resolves to something else, as opencode
@@ -97,7 +99,10 @@ fn list(cfg: &OpenCodeConfig, dir: &Path) -> Result<Vec<Session>> {
                 if sessions.iter().all(|s| s.id != id) {
                     sessions.push(Session {
                         id: id.to_string(),
-                        top_level: item.get("parentID").is_none_or(Value::is_null),
+                        parent: item
+                            .get("parentID")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
                     });
                 }
             }
@@ -299,25 +304,73 @@ pub(in crate::harness) fn export(
     dir: &Path,
     staging: &Path,
 ) -> Result<Option<String>> {
-    let sessions = list(cfg, dir)?;
-    let (top_level, nested): (Vec<_>, Vec<_>) = sessions.iter().partition(|s| s.top_level);
-    if top_level.is_empty() {
+    let mut sessions = list(cfg, dir)?;
+    // A child whose parent is not exported with it could not be imported;
+    // repeat until no session's parent is missing, for deeper nesting.
+    let listed = sessions.len();
+    loop {
+        let before = sessions.len();
+        let ids: HashSet<String> = sessions.iter().map(|s| s.id.clone()).collect();
+        sessions.retain(|s| s.parent.as_ref().is_none_or(|p| ids.contains(p)));
+        if sessions.len() == before {
+            break;
+        }
+    }
+    if sessions.is_empty() {
         return Ok(None);
     }
 
     std::fs::create_dir_all(staging)?;
-    for session in &top_level {
+    for session in &sessions {
         let (exported, _) = session_command(cfg, "export", &[&session.id])?;
         std::fs::write(staging.join(format!("{}.json", session.id)), exported)?;
     }
-    let mut detail = format!("{} session(s)", top_level.len());
-    if !nested.is_empty() {
+    let mut detail = format!("{} session(s)", sessions.len());
+    let orphans = listed - sessions.len();
+    if orphans > 0 {
         detail.push_str(&format!(
-            "; {} subagent session(s) not exported",
-            nested.len()
+            "; {orphans} subagent session(s) not exported: parent bound elsewhere"
         ));
     }
     Ok(Some(detail))
+}
+
+/// `files` (exported sessions) ordered parent before child. A file whose
+/// session can't be read goes where it is, for opencode to refuse.
+fn parents_first(files: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
+    let mut pending = Vec::new();
+    for file in files {
+        let info = serde_json::from_slice::<Value>(&std::fs::read(&file)?)
+            .ok()
+            .and_then(|v| v.get("info").cloned());
+        let field = |key: &str| {
+            info.as_ref()
+                .and_then(|i| i.get(key))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        };
+        pending.push((file, field("id"), field("parentID")));
+    }
+    let staged: HashSet<String> = pending.iter().filter_map(|(_, id, _)| id.clone()).collect();
+    let mut done: HashSet<String> = HashSet::new();
+    let mut ordered = Vec::new();
+    while !pending.is_empty() {
+        let (ready, waiting): (Vec<_>, Vec<_>) = pending.into_iter().partition(|(_, _, parent)| {
+            parent
+                .as_ref()
+                .is_none_or(|p| !staged.contains(p) || done.contains(p))
+        });
+        if ready.is_empty() {
+            ordered.extend(waiting.into_iter().map(|(file, _, _)| file));
+            break;
+        }
+        for (file, id, _) in ready {
+            done.extend(id);
+            ordered.push(file);
+        }
+        pending = waiting;
+    }
+    Ok(ordered)
 }
 
 pub(in crate::harness) fn import(
@@ -330,6 +383,7 @@ pub(in crate::harness) fn import(
         .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
         .collect();
     files.sort();
+    let files = parents_first(files)?;
 
     let directory = binding(to);
     let mut imported = 0;
@@ -548,13 +602,14 @@ mod tests {
     }
 
     #[test]
-    fn export_writes_one_file_per_top_level_session() {
+    fn export_carries_subagent_sessions_whose_parent_it_carries() {
         let dir = tempfile::tempdir().unwrap();
         let listing = json!({
             "data": [
-                {"id": "ses_a"},
-                {"id": "ses_child", "parentID": "ses_a"},
+                {"id": "ses_a", "parentID": "ses_b"},
                 {"id": "ses_b", "parentID": null},
+                {"id": "ses_orphan", "parentID": "ses_elsewhere"},
+                {"id": "ses_orphans_child", "parentID": "ses_orphan"},
             ],
             "cursor": {"previous": null, "next": null},
         })
@@ -570,7 +625,7 @@ mod tests {
 
         assert_eq!(
             detail.as_deref(),
-            Some("2 session(s); 1 subagent session(s) not exported")
+            Some("2 session(s); 2 subagent session(s) not exported: parent bound elsewhere")
         );
         let calls = fake_opencode_calls(dir.path());
         assert_eq!(
@@ -587,7 +642,9 @@ mod tests {
                 json!({"info": {"id": "ses_x"}, "messages": []})
             );
         }
-        assert!(!staging.join("ses_child.json").exists());
+        for id in ["ses_orphan", "ses_orphans_child"] {
+            assert!(!staging.join(format!("{id}.json")).exists(), "{id}");
+        }
     }
 
     #[test]
@@ -642,6 +699,32 @@ mod tests {
                 ]
             );
         }
+    }
+
+    #[test]
+    fn import_puts_each_parent_session_before_its_children() {
+        let dir = tempfile::tempdir().unwrap();
+        let staging = dir.path().join("staging");
+        let local = dir.path().join("main");
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::create_dir_all(&local).unwrap();
+        for (id, parent) in [
+            ("ses_a", Some("ses_b")),
+            ("ses_b", Some("ses_c")),
+            ("ses_c", None),
+        ] {
+            let info = json!({"info": {"id": id, "parentID": parent}, "messages": []});
+            std::fs::write(staging.join(format!("{id}.json")), info.to_string()).unwrap();
+        }
+        let cfg = cfg(fake_opencode(dir.path(), "", 0));
+
+        import(&cfg, &staging, &local).unwrap();
+
+        let order: Vec<String> = fake_opencode_calls(dir.path())
+            .iter()
+            .map(|call| call.last().unwrap().rsplit('/').next().unwrap().to_string())
+            .collect();
+        assert_eq!(order, ["ses_c.json", "ses_b.json", "ses_a.json"]);
     }
 
     #[test]

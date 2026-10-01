@@ -82,7 +82,7 @@ use serde_json::{Value, json};
 
 use crate::error::{PmError, Result};
 use crate::fs_utils::write_atomic;
-use crate::harness::{LaunchContext, PreLaunch, Projection, SpawnSpec};
+use crate::harness::{LaunchContext, PreLaunch, Projection, ProjectionScope, SpawnSpec};
 use crate::state::project::OpenCodeConfig;
 use crate::state::workflow::VANILLA_AGENT;
 use crate::tmux;
@@ -191,9 +191,10 @@ pub(super) fn global_dir(home: &Path) -> PathBuf {
 pub(super) fn project_assets(
     canonical_root: &Path,
     target_root: &Path,
+    scope: &ProjectionScope<'_>,
     dry_run: bool,
 ) -> Result<Projection> {
-    super::project_by_copy(canonical_root, target_root, PROJECTED_DIRS, dry_run)
+    super::project_by_copy(canonical_root, target_root, PROJECTED_DIRS, scope, dry_run)
 }
 
 /// The plugin's files under `home` with their bundled content.
