@@ -423,7 +423,7 @@ pub(crate) fn is_installed_for(harness: Harness) -> Result<bool> {
 
 /// [`is_installed_for`] against an explicit `home`.
 #[cfg(test)]
-fn is_installed_in(harness: Harness, home: &Path) -> Result<bool> {
+pub(crate) fn is_installed_in(harness: Harness, home: &Path) -> Result<bool> {
     Ok(stale_plugin_files(harness, home).is_empty()
         && hooks_registered(harness, home, user_hooks_root(harness, home)?.as_ref()))
 }
