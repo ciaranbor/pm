@@ -634,6 +634,7 @@ impl TestServer {
             workflow: None,
             created: now,
             last_active: now,
+            progress: Default::default(),
         };
         state.save(&features_dir, feature_name).unwrap();
 

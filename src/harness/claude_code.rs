@@ -49,6 +49,7 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>) -> String {
         permission_mode,
         model,
         writable_dirs: _,
+        edit_dirs,
     } = *spec;
 
     let mut parts = vec!["claude".to_string()];
@@ -74,6 +75,15 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>) -> String {
     if let Some(mode) = permission_mode {
         parts.push("--permission-mode".to_string());
         parts.push(tmux::shell_quote(mode));
+    }
+
+    // `--add-dir` is variadic: given as a separate argument, it would also
+    // take the positional prompt that follows. The `=` form takes one value.
+    for dir in edit_dirs {
+        parts.push(format!(
+            "--add-dir={}",
+            tmux::shell_quote(&dir.to_string_lossy())
+        ));
     }
 
     if let Some(session_id) = resume_session {
@@ -148,6 +158,17 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(cmd, "claude --agent reviewer");
+    }
+
+    #[test]
+    fn build_cmd_edit_dir_leaves_the_prompt_positional() {
+        let dirs = [std::path::PathBuf::from("/proj/.pm/summaries")];
+        let cmd = build_cmd(&SpawnSpec {
+            prompt: Some("Stand by."),
+            edit_dirs: &dirs,
+            ..Default::default()
+        });
+        assert_eq!(cmd, "claude --add-dir='/proj/.pm/summaries' 'Stand by.'");
     }
 
     #[test]

@@ -1,8 +1,8 @@
 //! `pm workflow show` and `pm workflow list`.
 //!
 //! - `show` prints the feature's active `workflow.md` plus the appended
-//!   `## summary.md` content guidance (so the summary owner sees it
-//!   through the command they actually run). Used by the bundled
+//!   `## Status and summary` guidance (so agents see it through the command
+//!   they actually run). Used by the bundled
 //!   `pm-workflow` skill so agents can discover their per-feature routing
 //!   at the start of every turn.
 //! - `list` enumerates installed workflows across both tiers with one-line
@@ -15,18 +15,22 @@ use crate::state::feature::FeatureState;
 use crate::state::paths;
 use crate::state::workflow::{self, WorkflowDef};
 
-/// Appended to every `pm workflow show` so the `summary.md` content
-/// guidance reaches the summary owner through the channel they actually
-/// use. Lives here (not in each `workflow.md`) to keep a single source of
-/// truth rather than duplicating the rule across every bundled workflow.
+/// Appended to every `pm workflow show` so the status and summary guidance
+/// reaches the agents through the channel they actually use. Lives here
+/// (not in each `workflow.md`) to keep a single source of truth rather than
+/// duplicating the rule across every bundled workflow.
 const SUMMARY_GUIDANCE: &str = "\
-## summary.md
+## Status and summary
 
-If the active workflow names you the summary owner, write `summary.md` in
-the worktree root for an orchestrator who never saw the feature and reads it
-after the branch is gone. If git history, the code, or the merge already
-records something, leave it out; if it would be lost with the branch, write
-it down. Not a running log: write it when you know what the work leaves
+When you wait on the user, run `pm feat status blocked`; once they answer,
+run `pm feat status wip`.
+
+If the active workflow names you the summary owner, write the summary at the
+path `pm feat summary path` prints, editing it like any other file. It is
+kept in pm state, never in the worktree, for an orchestrator who never saw
+the feature and reads it after the branch is gone. If git history, the code, or the merge
+already records something, leave it out; if it would be lost with the branch,
+write it down. Not a running log: write it when you know what the work leaves
 behind, and add to it if more emerges. Cover, in order of value:
 
 - out-of-scope bugs, gaps, and ideas you did not fix — self-contained
@@ -39,8 +43,14 @@ behind, and add to it if more emerges. Cover, in order of value:
 
 Leave out review rounds and approvals, status lines, test counts or tool
 output, file-by-file change lists, smoke-test walkthroughs, and narration of
-how the work went (the baseline's `## Comments and docs` rule). Collected on
-merge or delete.
+how the work went (the baseline's `## Comments and docs` rule).
+
+Once the work is done and reviewed, the summary owner runs
+`pm feat status ready`. It needs the summary and tells the orchestrator, which
+triages it while the team is still running: expect and answer its follow-up
+messages. After changing the summary while ready, run `pm feat status ready`
+again so the orchestrator sees the change. If more work follows, run
+`pm feat status wip`, and mark it ready again when done.
 ";
 
 /// Resolve the active workflow for the current scope and return its
@@ -69,7 +79,7 @@ pub fn show(project_root: &Path, scope: &str) -> Result<Option<String>> {
         None => return Err(PmError::WorkflowNotFound(workflow_name.to_string())),
     };
     let mut body = std::fs::read_to_string(&md_path)?;
-    // Append the summary.md guidance so it reaches whoever runs the
+    // Append the status and summary guidance so it reaches whoever runs the
     // command. A single blank line separates it from the workflow's
     // own prose regardless of how `workflow.md` ends.
     if !body.ends_with('\n') {
@@ -203,6 +213,7 @@ mod tests {
             workflow: workflow.map(|s| s.to_string()),
             created: now,
             last_active: now,
+            progress: Default::default(),
         };
         state.save(features_dir, name).unwrap();
     }
@@ -217,7 +228,7 @@ mod tests {
         // The workflow.md content comes first, with the summary guidance
         // appended after a blank-line separator.
         assert!(body.starts_with("# demo\nbody\n\n"));
-        assert!(body.contains("## summary.md"));
+        assert!(body.contains("## Status and summary"));
     }
 
     #[test]
@@ -229,8 +240,8 @@ mod tests {
         write_feature_state(&paths::features_dir(&root), "feat", Some("demo"));
 
         let body = show(&root, "feat").unwrap().unwrap();
-        assert!(body.starts_with("# demo\n\n## summary.md\n"));
-        assert_eq!(body.matches("## summary.md").count(), 1);
+        assert!(body.starts_with("# demo\n\n## Status and summary\n"));
+        assert_eq!(body.matches("## Status and summary").count(), 1);
     }
 
     #[test]
@@ -243,8 +254,8 @@ mod tests {
         write_feature_state(&paths::features_dir(&root), "feat", Some("demo"));
 
         let body = show(&root, "feat").unwrap().unwrap();
-        assert!(body.starts_with("# demo\n\n## summary.md\n"));
-        assert_eq!(body.matches("## summary.md").count(), 1);
+        assert!(body.starts_with("# demo\n\n## Status and summary\n"));
+        assert_eq!(body.matches("## Status and summary").count(), 1);
     }
 
     #[test]

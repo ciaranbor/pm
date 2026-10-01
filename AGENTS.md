@@ -113,9 +113,13 @@ Design decisions you can't recover by reading the tree. Preserve them.
 
 - `main` is a dispatcher, not a relay: it starts features, then steps back.
 - Feature agents report to the user in their own session, not to `main`.
-- `summary.md` is the standing feature→project channel, triaged by the
-  orchestrator on cleanup. Completion is the user's merge; there is no
-  agent-driven "done" status.
+- The summary (`.pm/summaries/`, edited in place) is the standing
+  feature→project channel. Agent-set `ready` ("waiting on the user's merge
+  or delete") is the single triage trigger, re-set to send a revised
+  summary; `blocked` never messages `main`.
+- Team status and the PR-derived `status` are separate: sync can't clobber it.
+- Each `workflow.md` names the single summary owner; content guidance is
+  single-sourced in `pm workflow show`, never in defs, workflows, or skills.
 - The `feat new` brief is non-repliable: the agent has no `main` reply target.
 
 ### Lifecycle hooks
@@ -123,12 +127,6 @@ Design decisions you can't recover by reading the tree. Preserve them.
 - The `PM_*` contract is per invocation, never session-scoped.
 - A new variable must be meaningful (or documented empty) for all three hooks
   before it is added, and goes in README's table.
-
-### Feature summary
-
-- Each `workflow.md` names the single agent who owns `summary.md`.
-- Content guidance is single-sourced in `pm workflow show`; never duplicate
-  it into agent defs, workflow files, or the skill.
 
 ## Development
 

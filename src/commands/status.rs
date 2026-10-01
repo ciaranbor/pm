@@ -1,10 +1,11 @@
 use std::path::Path;
 
+use crate::commands::{doctor, feat_list::lifecycle_token};
 use crate::error::Result;
+use crate::gh;
 use crate::state::feature::FeatureState;
 use crate::state::paths;
 use crate::state::project::ProjectConfig;
-use crate::{commands::doctor, gh};
 
 /// Show a project dashboard: name, root, features with statuses, PR info, and doctor issues.
 pub fn status(
@@ -29,23 +30,24 @@ pub fn status(
     if !features.is_empty() {
         lines.push(String::new());
 
-        // Calculate column widths
         let max_name = features.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
-        let max_status = features
+        let max_progress = features
             .iter()
-            .map(|(_, s)| s.status.to_string().len())
+            .map(|(_, s)| s.progress.to_string().len())
             .max()
             .unwrap_or(0);
 
         for (name, state) in &features {
-            let status_str = state.status.to_string();
             let mut line = format!(
-                "  {:<width_n$}  {:<width_s$}",
+                "  {:<width_n$}  {:<width_p$}",
                 name,
-                status_str,
+                state.progress.to_string(),
                 width_n = max_name,
-                width_s = max_status
+                width_p = max_progress
             );
+            if let Some(lifecycle) = lifecycle_token(state.status) {
+                line.push_str(&format!("  {lifecycle}"));
+            }
 
             // PR info
             if !state.pr.is_empty() {
@@ -61,7 +63,7 @@ pub fn status(
                 }
             }
 
-            lines.push(line);
+            lines.push(line.trim_end().to_string());
         }
     }
 
@@ -123,18 +125,23 @@ mod tests {
         ))
         .unwrap();
 
+        let features_dir = paths::features_dir(&project_path);
+        let mut beta = FeatureState::load(&features_dir, "beta").unwrap();
+        beta.progress = crate::state::feature::Progress::Ready;
+        beta.status = FeatureStatus::Review;
+        beta.save(&features_dir, "beta").unwrap();
+
         let lines = status(&project_path, &projects_dir, server.name()).unwrap();
         assert!(lines[2].contains("Features: 2"));
-        assert!(
-            lines
+        let row = |name: &str| -> Vec<String> {
+            let line = lines
                 .iter()
-                .any(|l| l.contains("alpha") && l.contains("wip"))
-        );
-        assert!(
-            lines
-                .iter()
-                .any(|l| l.contains("beta") && l.contains("wip"))
-        );
+                .find(|l| l.trim_start().starts_with(name))
+                .unwrap();
+            line.split_whitespace().map(str::to_string).collect()
+        };
+        assert_eq!(row("alpha"), ["alpha", "wip"]);
+        assert_eq!(row("beta"), ["beta", "ready", "lifecycle:review"]);
     }
 
     #[test]

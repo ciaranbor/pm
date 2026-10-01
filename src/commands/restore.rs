@@ -503,6 +503,7 @@ mod tests {
             workflow: None,
             created: now,
             last_active: now,
+            progress: Default::default(),
         };
         feat_state.save(&features_dir, "login").unwrap();
 
@@ -552,6 +553,7 @@ mod tests {
             workflow: None,
             created: now,
             last_active: now,
+            progress: Default::default(),
         };
         feat_state.save(&features_dir, "old-feat").unwrap();
 
@@ -593,6 +595,7 @@ mod tests {
             workflow: None,
             created: now,
             last_active: now,
+            progress: Default::default(),
         };
         feat_state.save(&features_dir, "ghost-feat").unwrap();
 

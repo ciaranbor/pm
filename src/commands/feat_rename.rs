@@ -26,7 +26,7 @@ use super::harness_migrate::{Carry, carry_sessions, running_in_scope};
 const EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// State keyed by the feature's name, as `(old, new)` paths.
-fn scoped_state(project_root: &Path, old_name: &str, new_name: &str) -> [(PathBuf, PathBuf); 2] {
+fn scoped_state(project_root: &Path, old_name: &str, new_name: &str) -> [(PathBuf, PathBuf); 3] {
     let agents = paths::agents_dir(project_root);
     let messages = paths::messages_dir(project_root);
     [
@@ -35,6 +35,10 @@ fn scoped_state(project_root: &Path, old_name: &str, new_name: &str) -> [(PathBu
             agents.join(format!("{new_name}.toml")),
         ),
         (messages.join(old_name), messages.join(new_name)),
+        (
+            paths::summary_path(project_root, old_name),
+            paths::summary_path(project_root, new_name),
+        ),
     ]
 }
 
@@ -348,6 +352,26 @@ mod tests {
         assert_eq!(renamed.created, original.created);
         assert_eq!(renamed.pr, original.pr);
         assert_eq!(renamed.base, original.base);
+    }
+
+    #[test]
+    fn rename_moves_summary() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        std::fs::write(
+            crate::commands::feat_summary::path(&project_path, "login").unwrap(),
+            "notes",
+        )
+        .unwrap();
+
+        feat_rename(&project_path, "login", "auth", server.name()).unwrap();
+
+        assert!(!paths::summary_path(&project_path, "login").exists());
+        assert_eq!(
+            crate::commands::feat_summary::show(&project_path, "auth").unwrap(),
+            "notes"
+        );
     }
 
     #[test]

@@ -1400,6 +1400,7 @@ default = "implementer"
                 workflow: None,
                 created: chrono::Utc::now(),
                 last_active: chrono::Utc::now(),
+                progress: Default::default(),
             };
             state.save(&features_dir, &format!("feat-{i}")).unwrap();
         }
@@ -1439,6 +1440,7 @@ default = "implementer"
                 workflow: None,
                 created: chrono::Utc::now(),
                 last_active: chrono::Utc::now(),
+                progress: Default::default(),
             };
             state.save(&features_dir, &format!("feat-{i}")).unwrap();
         }
@@ -1482,6 +1484,7 @@ default = "implementer"
                 workflow: None,
                 created: chrono::Utc::now(),
                 last_active: chrono::Utc::now(),
+                progress: Default::default(),
             };
             state.save(&features_dir, &format!("feat-{i}")).unwrap();
         }
@@ -1520,6 +1523,7 @@ default = "implementer"
             workflow: None,
             created: chrono::Utc::now(),
             last_active: chrono::Utc::now(),
+            progress: Default::default(),
         };
         state.save(&features_dir, "old-feat").unwrap();
 
@@ -1557,6 +1561,7 @@ default = "implementer"
             workflow: None,
             created: chrono::Utc::now(),
             last_active: chrono::Utc::now(),
+            progress: Default::default(),
         };
         state.save(&features_dir, "stale-feat").unwrap();
 
@@ -1596,6 +1601,7 @@ default = "implementer"
                 workflow: None,
                 created: chrono::Utc::now(),
                 last_active: chrono::Utc::now(),
+                progress: Default::default(),
             };
             state.save(&features_dir, &format!("feat-{i}")).unwrap();
         }

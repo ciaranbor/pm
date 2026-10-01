@@ -93,6 +93,7 @@ pub fn write_initializing_state(
         workflow: fields.workflow.map(|s| s.to_string()),
         created: now,
         last_active: now,
+        progress: Default::default(),
     };
     state.save(features_dir, name)?;
     Ok(state)
@@ -105,7 +106,7 @@ pub fn write_initializing_state(
 ///
 /// The brief is sent with no sender scope and a `no-reply-brief` sender, so
 /// `pm msg read` shows no reply hint and the agent has no `main` reply
-/// target — the feature→project channel is `summary.md`, not a reply.
+/// target — the feature→project channel is the summary, not a reply.
 pub fn enqueue_initial_context(
     project_root: &Path,
     feature_name: &str,

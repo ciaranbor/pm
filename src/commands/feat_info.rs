@@ -42,7 +42,17 @@ pub fn feat_info(project_root: &Path, projects_dir: &Path, name: &str) -> Result
 
     let mut lines = Vec::new();
     lines.push(format!("name:        {name}"));
-    lines.push(format!("status:      {}", state.status));
+    lines.push(format!("status:      {}", state.progress));
+    lines.push(format!("lifecycle:   {}", state.status));
+    let summary = paths::summary_path(project_root, name);
+    lines.push(format!(
+        "summary:     {}",
+        if summary.exists() {
+            summary.display().to_string()
+        } else {
+            "none".to_string()
+        }
+    ));
     lines.push(format!("branch:      {}", state.branch));
     lines.push(format!("worktree:    {}", state.worktree));
     if git::rebase_in_progress(&project_root.join(&state.worktree)).unwrap_or(false) {
@@ -137,6 +147,7 @@ mod tests {
         let output = lines.join("\n");
         assert!(output.contains("name:        alpha"));
         assert!(output.contains("status:      wip"));
+        assert!(output.contains("summary:     none"));
         assert!(output.contains("branch:      alpha"));
         assert!(output.contains("worktree:    alpha"));
         assert!(output.contains("remote:      None"));
@@ -146,6 +157,15 @@ mod tests {
         assert!(output.contains("context:     fix the widget"));
         assert!(output.contains("created:"));
         assert!(output.contains("last_active:"));
+
+        std::fs::write(
+            crate::commands::feat_summary::path(&project_path, "alpha").unwrap(),
+            "notes",
+        )
+        .unwrap();
+        let lines = feat_info(&project_path, &projects_dir, "alpha").unwrap();
+        let summary = paths::summary_path(&project_path, "alpha");
+        assert!(lines.contains(&format!("summary:     {}", summary.display())));
     }
 
     #[test]

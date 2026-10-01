@@ -65,6 +65,7 @@ mod tests {
             workflow: None,
             created: now,
             last_active: now,
+            progress: Default::default(),
         }
     }
 

@@ -193,16 +193,20 @@ pub(crate) fn cleanup_feature_with_timing(
         }};
     }
 
-    // Step 0: Move summary.md from worktree to .pm/summaries/<feature>.md
+    // Step 0: Settle the summary while the worktree and feature state that
+    // decide its fate still exist.
+    let mut notify_main = false;
     run!(tlog, "collect-summary", params.best_effort, {
-        let summary_src = params.worktree_path.join("summary.md");
-        if summary_src.exists()
-            && let Some(pm_dir) = params.features_dir.parent()
-        {
-            let summaries_dir = pm_dir.join("summaries");
-            std::fs::create_dir_all(&summaries_dir)?;
-            let dst = summaries_dir.join(format!("{}.md", params.name));
-            std::fs::rename(&summary_src, &dst)?;
+        if let Some(project_root) = params.features_dir.parent().and_then(Path::parent) {
+            let progress = FeatureState::load(params.features_dir, params.name)
+                .map(|s| s.progress)
+                .unwrap_or_default();
+            notify_main = super::feat_summary::collect(
+                project_root,
+                params.worktree_path,
+                params.name,
+                progress,
+            )?;
         }
         Ok(())
     })?;
@@ -261,13 +265,15 @@ pub(crate) fn cleanup_feature_with_timing(
         Ok(())
     })?;
 
-    // Step 4.5: Notify main agent before killing the session (the session
-    // kill terminates this process if run from within the feature session)
+    // Step 4.5: Hand main a summary it has not triaged, before killing the
+    // session (the session kill terminates this process if run from within
+    // the feature session)
     run!(tlog, "notify-main", params.best_effort, {
-        if let Some(pm_dir) = params.features_dir.parent() {
+        if notify_main && let Some(pm_dir) = params.features_dir.parent() {
             let messages_dir = pm_dir.join("messages");
             let body = format!(
-                "Feature '{}' was cleaned up. Check .pm/summaries/{}.md for the summary if one exists.",
+                "Feature '{}' was cleaned up without being marked ready. Triage its summary at \
+                 .pm/summaries/{}.md, then delete the file.",
                 params.name, params.name
             );
             messages::send_with_scope(
@@ -536,16 +542,22 @@ mod tests {
         assert!(!runtime.exists());
     }
 
+    fn main_unread(project: &Path) -> u32 {
+        messages::check(&paths::messages_dir(project), "main", "main")
+            .unwrap()
+            .iter()
+            .map(|s| s.count)
+            .sum()
+    }
+
     #[test]
-    fn delete_collects_summary_md() {
+    fn delete_collects_a_legacy_summary_md_for_main() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-
-        let worktree = project_path.join("login");
+        let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
         std::fs::write(
-            worktree.join("summary.md"),
-            "# Summary\n\nFeature notes here.\n",
+            project_path.join("login/summary.md"),
+            "Feature notes here.\n",
         )
         .unwrap();
 
@@ -558,12 +570,115 @@ mod tests {
         )
         .unwrap();
 
-        let collected = project_path.join(".pm/summaries/login.md");
-        assert!(collected.exists());
         assert_eq!(
-            std::fs::read_to_string(collected).unwrap(),
-            "# Summary\n\nFeature notes here.\n"
+            std::fs::read_to_string(paths::summary_path(&project_path, "login")).unwrap(),
+            "Feature notes here.\n"
         );
+        assert_eq!(main_unread(&project_path), 1);
+    }
+
+    fn ready_feature(server: &TestServer, dir: &Path) -> std::path::PathBuf {
+        let (project_path, _) = server.setup_project_with_feature_no_tmux(dir, "login");
+        std::fs::write(
+            crate::commands::feat_summary::path(&project_path, "login").unwrap(),
+            "notes",
+        )
+        .unwrap();
+        crate::commands::feat_status::feat_status(
+            &project_path,
+            "login",
+            crate::state::feature::Progress::Ready,
+            Some("implementer"),
+        )
+        .unwrap();
+        project_path
+    }
+
+    #[test]
+    fn delete_of_a_ready_feature_drops_its_triaged_summary_silently() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let project_path = ready_feature(&server, dir.path());
+        messages::next(
+            &paths::messages_dir(&project_path),
+            "main",
+            "main",
+            "implementer",
+        )
+        .unwrap();
+
+        feat_delete(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            false,
+            server.name(),
+        )
+        .unwrap();
+
+        assert!(!paths::summary_path(&project_path, "login").exists());
+        assert_eq!(main_unread(&project_path), 0);
+    }
+
+    #[test]
+    fn delete_of_a_ready_feature_keeps_the_summary_main_has_not_read_about() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let project_path = ready_feature(&server, dir.path());
+
+        feat_delete(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            false,
+            server.name(),
+        )
+        .unwrap();
+
+        assert!(paths::summary_path(&project_path, "login").exists());
+        assert_eq!(main_unread(&project_path), 1);
+    }
+
+    #[test]
+    fn delete_of_an_unready_feature_hands_main_its_summary() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        std::fs::write(
+            crate::commands::feat_summary::path(&project_path, "login").unwrap(),
+            "notes",
+        )
+        .unwrap();
+
+        feat_delete(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            false,
+            server.name(),
+        )
+        .unwrap();
+
+        assert!(paths::summary_path(&project_path, "login").exists());
+        assert_eq!(main_unread(&project_path), 1);
+    }
+
+    #[test]
+    fn delete_without_a_summary_does_not_notify_main() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+
+        feat_delete(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            false,
+            server.name(),
+        )
+        .unwrap();
+
+        assert_eq!(main_unread(&project_path), 0);
     }
 
     #[test]

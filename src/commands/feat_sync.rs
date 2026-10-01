@@ -124,6 +124,7 @@ mod tests {
             workflow: None,
             created: Utc::now(),
             last_active: Utc::now(),
+            progress: Default::default(),
         }
     }
 

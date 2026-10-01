@@ -219,6 +219,13 @@ fn spawn_session_with_config(
         crate::notice::compose_spawn_prompt(params.project_root, params.feature, window_name)?;
     let harness_config = resolve_harness_config(&config.harness, &global.harness);
     let dirs = writable_dirs(params.project_root, &harness_config);
+    let edit_dirs = if params.feature == "main" {
+        Vec::new()
+    } else {
+        let summaries = paths::summaries_dir(params.project_root);
+        std::fs::create_dir_all(&summaries)?;
+        vec![summaries]
+    };
     // A harness with a directory-trust gate would otherwise stop at an
     // interactive prompt nobody is watching.
     settings
@@ -233,6 +240,7 @@ fn spawn_session_with_config(
         permission_mode: settings.permission_mode.as_deref(),
         model: settings.model.as_deref(),
         writable_dirs: &dirs,
+        edit_dirs: &edit_dirs,
     };
     let pre = settings
         .harness
@@ -623,6 +631,7 @@ pub(crate) mod tests {
             workflow: None,
             created: now,
             last_active: now,
+            progress: Default::default(),
         };
         state.save(&pm_dir.join("features"), feature_name).unwrap();
 
@@ -1735,6 +1744,25 @@ package = "second-pkg"
         server.wait_for_pane_text(&target, &format!("PM_AGENT_NAME={alias} && claude"));
         let text = tmux::capture_pane(server.name(), &target).unwrap();
         assert!(!text.contains("--agent"), "{alias}: {text}");
+    }
+
+    #[test]
+    fn feature_agent_can_edit_the_summary_outside_its_worktree() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+
+        agent_spawn(dir.path(), &feature, "default", None, None, server.name()).unwrap();
+
+        let summaries = paths::summaries_dir(dir.path());
+        assert!(summaries.is_dir());
+        let target = tmux::find_window(server.name(), &session_name, "default")
+            .unwrap()
+            .expect("window");
+        server.wait_for_pane_text(
+            &target,
+            &format!("--add-dir='{}' 'Stand by.'", summaries.display()),
+        );
     }
 
     #[test]

@@ -7,7 +7,7 @@ use crate::commands::feat_delete::{
 use crate::error::{PmError, Result};
 use crate::git;
 use crate::hooks;
-use crate::state::feature::{FeatureState, FeatureStatus, base_checkout};
+use crate::state::feature::{FeatureState, FeatureStatus, Progress, base_checkout};
 use crate::state::paths;
 use crate::state::project::{ProjectConfig, ProjectEntry};
 
@@ -46,6 +46,12 @@ pub fn feat_merge(
     let merge_start = Instant::now();
     let mut tlog: Option<TimingLog> = Some(TimingLog::new(&pm_dir, "merge", name));
     let already_status_merged = state.status == FeatureStatus::Merged;
+    if state.progress != Progress::Ready {
+        eprintln!(
+            "warning: feature '{name}' is not marked ready (status: {})",
+            state.progress
+        );
+    }
 
     if already_status_merged {
         eprintln!("Feature '{name}' already merged — cleaning up");

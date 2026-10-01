@@ -18,6 +18,13 @@ fn resolve_feature_name(
         .ok_or(PmError::NotInFeatureWorktree)
 }
 
+/// The agent this command runs in, if any.
+fn running_agent() -> Option<String> {
+    std::env::var("PM_AGENT_NAME")
+        .ok()
+        .filter(|a| !a.is_empty())
+}
+
 /// Resolve the current scope: feature name if in a feature worktree,
 /// "main" if in the main worktree, error otherwise.
 fn resolve_scope(project_root: &std::path::Path) -> pm::error::Result<String> {
@@ -605,13 +612,38 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         )?;
                         Ok(())
                     }
+                    PrCommands::Ready { name } => {
+                        let name = resolve_feature_name(name, &project_root)?;
+                        commands::feat_pr_ready::feat_pr_ready(&project_root, &name)?;
+                        println!("PR marked ready for feature '{name}'");
+                        Ok(())
+                    }
                 },
-                FeatCommands::Ready { name } => {
+                FeatCommands::Status { status, name } => {
                     let name = resolve_feature_name(name, &project_root)?;
-                    commands::feat_ready::feat_ready(&project_root, &name)?;
-                    println!("PR marked ready for feature '{name}'");
+                    commands::feat_status::feat_status(
+                        &project_root,
+                        &name,
+                        status,
+                        running_agent().as_deref(),
+                    )?;
+                    println!("Feature '{name}' is {status}");
                     Ok(())
                 }
+                FeatCommands::Summary(cmd) => match cmd {
+                    SummaryCommands::Path { name } => {
+                        let name = resolve_feature_name(name, &project_root)?;
+                        let path = commands::feat_summary::path(&project_root, &name)?;
+                        println!("{}", path.display());
+                        Ok(())
+                    }
+                    SummaryCommands::Show { name } => {
+                        let name = resolve_feature_name(name, &project_root)?;
+                        let summary = commands::feat_summary::show(&project_root, &name)?;
+                        println!("{}", summary.trim_end_matches('\n'));
+                        Ok(())
+                    }
+                },
                 FeatCommands::Rename { old_name, new_name } => {
                     let old_name = resolve_feature_name(old_name, &project_root)?;
                     let renamed = commands::feat_rename::feat_rename(
