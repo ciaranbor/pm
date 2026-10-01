@@ -775,7 +775,8 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             } else {
                 paths::find_project_root(&std::env::current_dir()?)?
             };
-            let lines = commands::doctor::doctor(&project_root, &projects_dir, fix, server)?;
+            let lines =
+                commands::doctor::doctor(&project_root, &projects_dir, fix, server)?.lines();
             for line in lines {
                 println!("{line}");
             }

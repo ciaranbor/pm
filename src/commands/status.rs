@@ -67,19 +67,12 @@ pub fn status(
         }
     }
 
-    // Doctor issues
-    let doctor_lines = doctor::doctor(project_root, projects_dir, false, tmux_server)?;
-    let has_issues = !doctor_lines.is_empty() && !doctor_lines[0].contains("all healthy");
-
-    if has_issues {
+    let report = doctor::doctor(project_root, projects_dir, false, tmux_server)?;
+    if report.issue_count() > 0 {
         lines.push(String::new());
         lines.push("Issues:".to_string());
-        // Skip the summary line (first), include per-feature issue lines
-        for dl in &doctor_lines[1..] {
-            if !dl.contains("— ok") {
-                lines.push(dl.clone());
-            }
-        }
+        lines.extend(report.issue_lines().map(str::to_string));
+        lines.extend(report.warnings().iter().cloned());
     }
 
     Ok(lines)
