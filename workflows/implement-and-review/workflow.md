@@ -5,7 +5,7 @@ until the reviewer approves, then the implementer finalises.
 
 ## implementer
 
-You own `summary.md`. When ready for review, hand off
+You own the summary. When ready for review, hand off
 to the reviewer. When the reviewer approves, finalise and report in your
 own session — not by messaging `main`.
 

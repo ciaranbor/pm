@@ -85,6 +85,16 @@ pub fn docs_dir(project_root: &Path) -> PathBuf {
     pm_dir(project_root).join("docs")
 }
 
+/// Feature summaries for the orchestrator: `<project>/.pm/summaries/`.
+pub fn summaries_dir(project_root: &Path) -> PathBuf {
+    pm_dir(project_root).join("summaries")
+}
+
+/// A feature's summary: `<project>/.pm/summaries/<feature>.md`.
+pub fn summary_path(project_root: &Path, feature: &str) -> PathBuf {
+    summaries_dir(project_root).join(format!("{feature}.md"))
+}
+
 /// The project workflow tier: `<project>/.pm/workflows/`.
 pub fn workflows_dir(project_root: &Path) -> PathBuf {
     pm_dir(project_root).join(WORKFLOWS_DIR_NAME)

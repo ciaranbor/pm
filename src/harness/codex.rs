@@ -94,6 +94,7 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>, cfg: &CodexConfig) -> String {
         permission_mode,
         model,
         writable_dirs,
+        edit_dirs: _,
     } = *spec;
 
     let approval = cfg.approval.as_deref().unwrap_or(DEFAULT_APPROVAL);

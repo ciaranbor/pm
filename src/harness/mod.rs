@@ -651,6 +651,10 @@ pub struct SpawnSpec<'a> {
     /// Directories outside the worktree the agent must be able to write
     /// (pm's state, the shared `.git`) — what a sandboxing harness opens up.
     pub writable_dirs: &'a [PathBuf],
+    /// Directories outside the worktree the agent edits with its own file
+    /// tools (the feature summary's), for a harness that gates those edits
+    /// by directory. Each lies within a `writable_dirs` entry.
+    pub edit_dirs: &'a [PathBuf],
 }
 
 /// Where a spawn happens, for [`Harness::pre_launch`].
@@ -742,6 +746,7 @@ mod tests {
     fn claude_code_build_cmd_full_spec() {
         // Every field set at once, pinning flag order through the seam.
         let dirs = vec![PathBuf::from("/proj/.pm")];
+        let edit = vec![PathBuf::from("/proj/.pm/summaries")];
         let cmd = Harness::ClaudeCode.build_cmd(
             &SpawnSpec {
                 definition: Some("reviewer"),
@@ -752,6 +757,7 @@ mod tests {
                 permission_mode: Some("acceptEdits"),
                 model: Some("opus"),
                 writable_dirs: &dirs,
+                edit_dirs: &edit,
             },
             &HarnessConfig::default(),
             &PreLaunch::default(),
@@ -760,7 +766,8 @@ mod tests {
             cmd,
             "claude --agent reviewer --model 'opus' \
              --append-system-prompt-file '/proj/main/.agents/pm-baseline.md' \
-             --permission-mode 'acceptEdits' --resume abc123 --fork-session 'Stand by.'"
+             --permission-mode 'acceptEdits' --add-dir='/proj/.pm/summaries' \
+             --resume abc123 --fork-session 'Stand by.'"
         );
     }
 

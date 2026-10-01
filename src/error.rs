@@ -124,6 +124,9 @@ pub enum PmError {
     #[error("{0}")]
     Messaging(String),
 
+    #[error("{0}")]
+    Summary(String),
+
     #[error("Export/import error: {0}")]
     ExportImport(String),
 

@@ -73,7 +73,11 @@ main). If the parent is merged or deleted first, the child's base is gone:
 `delete` refuse and tell you how to rebase it onto a live branch.
 
 The lifecycle: `pm feat new` → work → optionally `pm feat pr create` /
-`pm feat ready` / `pm feat review` → `pm feat merge` (cleans up by default).
+`pm feat pr ready` / `pm feat review` → `pm feat merge` (cleans up by default).
+While it runs, the agents record where it stands with `pm feat status
+wip|blocked|ready` — `blocked` when waiting on you, `ready` when done and
+waiting on your merge or delete — and `pm feat list` / `pm status` show it
+(`merge` warns about a feature not marked ready).
 Inspection and housekeeping subcommands (`list`, `info`, `switch`, `rename`,
 `rebase`, `delete`, `sync`) round out `pm feat` — see `pm feat --help`.
 `merge` refuses a feature or base worktree with uncommitted changes or a
@@ -166,7 +170,7 @@ Each workflow directory holds a `config.toml` (`description`, optional
 `when_to_use` hint, `agents` = the full team spawned at `feat new` time,
 `brief_agents` = the subset that receives the `--context` brief) and a
 `workflow.md` (free-form routing prose, with `## <agent>` sections; names the
-`summary.md` owner). The bundled workflow names are pm-owned: like agents,
+summary owner). The bundled workflow names are pm-owned: like agents,
 skills, and the baseline they are **overwritten** by `pm upgrade`. Directories
 under `.pm/workflows/` with other names are yours and are never touched;
 `pm workflow list` tags each entry `[bundled]` or `[user]`.
@@ -174,7 +178,7 @@ under `.pm/workflows/` with other names are yours and are never touched;
 "Reports to the user" means **in the agent's own tmux session**, where you read
 it live — not by messaging the `main` orchestrator. `main` is a dispatcher, not
 a relay: it spins up features and steps back, re-engaging only to triage a
-feature's `summary.md` on cleanup. Intra-feature handoffs (reviewer ↔
+feature's summary. Intra-feature handoffs (reviewer ↔
 implementer, researcher → implementer) are what use messaging.
 
 Agent defs carry no `tools:` allowlist — each inherits the harness's full
@@ -543,10 +547,14 @@ record), with durable learnings migrated into `findings.md` first.
 This is distinct from messaging: the store is a database for durable knowledge,
 the queue is for cross-agent/cross-scope communication. Don't conflate them.
 
-On `pm feat delete`/`merge`, a feature's `summary.md` — the hand-off its
-workflow's summary owner writes for the orchestrator (`pm workflow show` says
-what belongs in it) — is collected to `.pm/summaries/<feature>.md` so the
-orchestrator can triage it into the store.
+A feature's summary is the hand-off its workflow's summary owner writes for
+the orchestrator (`pm workflow show` says what belongs in it), kept at
+`.pm/summaries/<feature>.md` (`pm feat summary path`), never on the branch;
+agents edit it like any other file (Claude Code agents are spawned with
+`--add-dir` on that directory). `pm feat status ready` requires it and
+messages `main` to triage it; cleanup hands `main` any summary it was not
+told about. A worktree `summary.md` from an older feature is still collected
+on cleanup; to mark such a feature ready, move it to that path first.
 
 ### Asset tiers
 

@@ -282,6 +282,7 @@ mod tests {
             workflow: None,
             created: now,
             last_active: now,
+            progress: Default::default(),
         };
         state.save(&pm_dir.join("features"), feature_name).unwrap();
 
@@ -323,6 +324,7 @@ mod tests {
             workflow: None,
             created: now,
             last_active: now,
+            progress: Default::default(),
         };
         state.save(&root.join(".pm/features"), name).unwrap();
     }
@@ -696,6 +698,7 @@ mod tests {
             workflow: None,
             created: now,
             last_active: now,
+            progress: Default::default(),
         };
         main_state.save(&pm_dir.join("features"), "main").unwrap();
 
@@ -773,6 +776,7 @@ mod tests {
             workflow: None,
             created: now,
             last_active: now,
+            progress: Default::default(),
         };
         main_state.save(&pm_dir.join("features"), "main").unwrap();
         create_agent_definition(&root, "implementer");
@@ -825,6 +829,7 @@ mod tests {
             workflow: None,
             created: now,
             last_active: now,
+            progress: Default::default(),
         };
         main_state.save(&pm_dir.join("features"), "main").unwrap();
         create_agent_definition(&root, "implementer");

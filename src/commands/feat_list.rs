@@ -1,8 +1,14 @@
 use std::path::Path;
 
 use crate::error::Result;
-use crate::state::feature::FeatureState;
+use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
+
+/// The PR-derived lifecycle status as a listing token, omitted while it is
+/// the unremarkable `wip`.
+pub(crate) fn lifecycle_token(status: FeatureStatus) -> Option<String> {
+    (status != FeatureStatus::Wip).then(|| format!("lifecycle:{status}"))
+}
 
 /// List all features for the project at the given root.
 /// Returns formatted lines for display.
@@ -14,19 +20,20 @@ pub fn feat_list(project_root: &Path) -> Result<Vec<String>> {
         return Ok(Vec::new());
     }
 
-    // Calculate column widths
     let name_w = features.iter().map(|(n, _)| n.len()).max().unwrap().max(4);
-    let status_w = features
+    let progress_w = features
         .iter()
-        .map(|(_, s)| s.status.to_string().len())
+        .map(|(_, s)| s.progress.to_string().len())
         .max()
-        .unwrap()
-        .max(6);
+        .unwrap();
 
     let mut lines = Vec::new();
 
     for (name, state) in &features {
-        let mut line = format!("{:<name_w$}  {:<status_w$}", name, state.status);
+        let mut line = format!("{:<name_w$}  {:<progress_w$}", name, state.progress);
+        if let Some(lifecycle) = lifecycle_token(state.status) {
+            line.push_str(&format!("  {lifecycle}"));
+        }
         if !state.branch.is_empty() && state.branch != *name {
             line.push_str(&format!("  branch:{}", state.branch));
         }
@@ -36,7 +43,7 @@ pub fn feat_list(project_root: &Path) -> Result<Vec<String>> {
         if !state.pr.is_empty() {
             line.push_str(&format!("  pr:{}", state.pr));
         }
-        lines.push(line);
+        lines.push(line.trim_end().to_string());
     }
 
     Ok(lines)
@@ -84,13 +91,14 @@ mod tests {
             workflow: None,
             created: Utc::now(),
             last_active: Utc::now(),
+            progress: crate::state::feature::Progress::Blocked,
         };
         state.save(&features_dir, "login").unwrap();
 
         let lines = feat_list(&project_path).unwrap();
         assert_eq!(lines.len(), 1);
-        assert!(lines[0].contains("login"));
-        assert!(lines[0].contains("review"));
+        let columns: Vec<&str> = lines[0].split_whitespace().collect();
+        assert_eq!(columns[..3], ["login", "blocked", "lifecycle:review"]);
         assert!(lines[0].contains("branch:feature/login-v2"));
         assert!(lines[0].contains("base:develop"));
         assert!(lines[0].contains("pr:https://github.com/org/repo/pull/42"));
@@ -139,9 +147,7 @@ mod tests {
 
         let lines = feat_list(&project_path).unwrap();
         assert_eq!(lines.len(), 2);
-        assert!(lines[0].contains("alpha"));
-        assert!(lines[0].contains("wip"));
-        assert!(lines[1].contains("beta"));
-        assert!(lines[1].contains("wip"));
+        assert_eq!(lines[0], "alpha  wip  base:main");
+        assert_eq!(lines[1], "beta   wip  base:main");
     }
 }

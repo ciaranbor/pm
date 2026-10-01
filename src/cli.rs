@@ -3,6 +3,7 @@ use clap_complete::Shell;
 use std::path::PathBuf;
 
 use pm::harness::Harness;
+use pm::state::feature::Progress;
 
 #[derive(Parser)]
 #[command(
@@ -533,14 +534,19 @@ pub enum FeatCommands {
         #[arg(long)]
         keep: bool,
     },
-    /// GitHub PR management (create, edit)
+    /// GitHub PR management (create, edit, ready)
     #[command(subcommand)]
     Pr(PrCommands),
-    /// Mark a feature's PR as ready for review
-    Ready {
+    /// Set where the feature's work stands: wip, blocked (waiting on the
+    /// user), or ready (done; notifies the orchestrator, needs a summary)
+    Status {
+        status: Progress,
         /// Feature name (detected from CWD if omitted)
         name: Option<String>,
     },
+    /// The feature's summary for the orchestrator (kept in pm state, not the branch)
+    #[command(subcommand)]
+    Summary(SummaryCommands),
     /// Rebase a feature onto a branch and record it as the feature's base
     Rebase {
         /// Feature name (detected from CWD if omitted)
@@ -570,6 +576,20 @@ pub enum FeatCommands {
 }
 
 #[derive(Subcommand)]
+pub enum SummaryCommands {
+    /// Print the summary file's path, to edit like any other file
+    Path {
+        /// Feature name (detected from CWD if omitted)
+        name: Option<String>,
+    },
+    /// Print the feature's summary
+    Show {
+        /// Feature name (detected from CWD if omitted)
+        name: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum PrCommands {
     /// Create or link a GitHub PR for a feature
     Create {
@@ -594,5 +614,10 @@ pub enum PrCommands {
         /// New PR body (literal text, path to a file, or `-` to read from stdin)
         #[arg(long)]
         body: Option<String>,
+    },
+    /// Mark a feature's draft PR as ready for review
+    Ready {
+        /// Feature name (detected from CWD if omitted)
+        name: Option<String>,
     },
 }

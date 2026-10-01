@@ -11,7 +11,7 @@ complete after the hand-off.
 
 ## implementer
 
-Wait for the researcher's brief before acting. You own `summary.md`.
+Wait for the researcher's brief before acting. You own the summary.
 When ready for review, hand off
 to the reviewer. When the reviewer approves, finalise and report in your
 own session — not by messaging `main`.

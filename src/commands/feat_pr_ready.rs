@@ -11,14 +11,14 @@ use crate::state::paths;
 /// - Pushes the branch to origin (to include latest commits)
 /// - Calls `gh pr ready` to remove draft status
 /// - Sets feature status to Review
-pub fn feat_ready(project_root: &Path, name: &str) -> Result<()> {
+pub fn feat_pr_ready(project_root: &Path, name: &str) -> Result<()> {
     let features_dir = paths::features_dir(project_root);
     let mut state = FeatureState::load(&features_dir, name)?;
     let worktree_path = project_root.join(&state.worktree);
 
     if state.pr.is_empty() {
         return Err(PmError::Gh(format!(
-            "feature '{name}' has no PR — run `pm feat pr` first"
+            "feature '{name}' has no PR — run `pm feat pr create` first"
         )));
     }
 
@@ -43,19 +43,19 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn feat_ready_fails_for_nonexistent_feature() {
+    fn pr_ready_fails_for_nonexistent_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let project_path = dir.path().join(server.scope("myapp"));
         let projects_dir = dir.path().join("registry");
         init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
-        let result = feat_ready(&project_path, "nonexistent");
+        let result = feat_pr_ready(&project_path, "nonexistent");
         assert!(result.is_err());
     }
 
     #[test]
-    fn feat_ready_fails_when_no_pr_linked() {
+    fn pr_ready_fails_when_no_pr_linked() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let project_path = dir.path().join(server.scope("myapp"));
@@ -72,7 +72,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = feat_ready(&project_path, "login");
+        let result = feat_pr_ready(&project_path, "login");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("no PR"));
     }

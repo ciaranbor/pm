@@ -7,7 +7,7 @@ reviewer has approved the final tree.
 
 ## implementer
 
-You own `summary.md`. When the change is ready, hand off to qa, and leave
+You own the summary. When the change is ready, hand off to qa, and leave
 the worktree unchanged while qa runs. Fix what qa reports and hand back
 until qa passes, then hand off to the reviewer.
 
@@ -23,7 +23,7 @@ needs no re-check. After any fix for a qa finding, send the code through
 review again. Finalise when both hold, and report in your own session —
 not by messaging `main`.
 
-Record the testing gaps qa reports in `summary.md`.
+Record the testing gaps qa reports in the summary.
 
 ## qa
 

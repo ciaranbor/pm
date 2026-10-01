@@ -255,6 +255,7 @@ mod tests {
             workflow: None,
             created: chrono::Utc::now(),
             last_active: chrono::Utc::now(),
+            progress: Default::default(),
         };
         wip.save(&features_dir, "feat-a").unwrap();
 
@@ -269,6 +270,7 @@ mod tests {
             workflow: None,
             created: chrono::Utc::now(),
             last_active: chrono::Utc::now(),
+            progress: Default::default(),
         };
         merged.save(&features_dir, "feat-b").unwrap();
 

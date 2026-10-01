@@ -36,9 +36,35 @@ impl std::fmt::Display for FeatureStatus {
     }
 }
 
+/// Where the team's work stands, set by the agents with `pm feat status`.
+/// Independent of [`FeatureStatus`], which `pm feat sync` derives from the PR.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum Progress {
+    /// The team is working.
+    #[default]
+    Wip,
+    /// An agent is waiting on the user.
+    Blocked,
+    /// The work is done and summarised; waiting on the user to merge or delete.
+    Ready,
+}
+
+impl std::fmt::Display for Progress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Wip => write!(f, "wip"),
+            Self::Blocked => write!(f, "blocked"),
+            Self::Ready => write!(f, "ready"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FeatureState {
     pub status: FeatureStatus,
+    #[serde(default)]
+    pub progress: Progress,
     pub branch: String,
     pub worktree: String,
     #[serde(default)]
@@ -233,7 +259,30 @@ mod tests {
             workflow: None,
             created: Utc::now(),
             last_active: Utc::now(),
+            progress: Default::default(),
         }
+    }
+
+    #[test]
+    fn progress_defaults_to_wip_and_round_trips() {
+        let dir = tempdir().unwrap();
+        let features_dir = dir.path().join("features");
+        std::fs::create_dir_all(&features_dir).unwrap();
+        std::fs::write(
+            features_dir.join("old.toml"),
+            "status = \"review\"\nbranch = \"old\"\nworktree = \"old\"\n\
+             created = \"2025-01-01T00:00:00Z\"\nlast_active = \"2025-01-01T00:00:00Z\"\n",
+        )
+        .unwrap();
+        let old = FeatureState::load(&features_dir, "old").unwrap();
+        assert_eq!(old.progress, Progress::Wip);
+        assert_eq!(old.status, FeatureStatus::Review);
+
+        let mut state = make_feature(FeatureStatus::Wip);
+        state.progress = Progress::Blocked;
+        state.save(&features_dir, "login").unwrap();
+        let loaded = FeatureState::load(&features_dir, "login").unwrap();
+        assert_eq!(loaded.progress, Progress::Blocked);
     }
 
     #[derive(Debug, PartialEq, Serialize, Deserialize)]
