@@ -1114,3 +1114,56 @@ fn the_tmux_plugin_runs_from_the_servers_own_environment() {
         "which DB?"
     );
 }
+
+/// Catches: a push missing the server the command runs against —
+/// `PM_TMUX_SERVER` for the background refresh the Stop hook and `pm feat
+/// status` start from an agent's pane, that and `$TMUX_PANE` for the hook's
+/// own-window write — with no poll tick to hide it.
+#[test]
+#[ignore]
+fn changes_made_from_an_agents_pane_reach_tmux_without_a_poll() {
+    let s = Smoke::new();
+    s.init_with_spawned_reviewer();
+    s.argv_records("reviewer", 1);
+    let window = s
+        .find_window("proj/login", "reviewer")
+        .expect("reviewer window");
+    s.tmux_ok(&["send-keys", "-t", &window, "C-c", ""]);
+    s.wait_for_shell(&window);
+    s.tmux_ok(&["set", "-g", "@pm-refresh-interval", "3600"]);
+    s.tmux_ok(&["run-shell", "pm tmux init"]);
+    let until = |what: &str, done: &dyn Fn() -> bool| {
+        let start = Instant::now();
+        while !done() {
+            assert!(start.elapsed() < WAIT, "{what}\n{}", s.capture_all());
+            std::thread::sleep(POLL);
+        }
+    };
+    let state = || s.tmux_ok(&["show", "-wqv", "-t", &window, "@pm_agent_state"]);
+    let session = |name: &str| s.tmux_ok(&["show", "-qv", "-t", "=proj/login:", name]);
+    until("the watcher's first refresh", &|| state() == "dead");
+    assert_eq!(session("@pm_attention"), "dead");
+
+    s.tmux_ok(&[
+        "send-keys",
+        "-t",
+        &window,
+        "PM_AGENT_NAME=reviewer pm harness hooks stop </dev/null >/dev/null 2>&1",
+        "Enter",
+    ]);
+    until("the Stop hook's idle write", &|| state() == "idle");
+    until("the Stop hook's push", &|| {
+        session("@pm_attention") == "stalled"
+    });
+    s.tmux_ok(&["send-keys", "-t", &window, "C-c", ""]);
+    s.wait_for_shell(&window);
+
+    let outcome = s.run_in(
+        &window,
+        "PM_AGENT_NAME=reviewer pm feat status blocked -m 'which DB?'",
+    );
+    assert_eq!(outcome.exit, Some(0), "{}", outcome.log);
+    until("the push from feat status", &|| {
+        session("@pm_reason") == "which DB?"
+    });
+}

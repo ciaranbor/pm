@@ -16,12 +16,18 @@ fn run_tmux(server: Option<&str>, args: &[&str]) -> Result<String> {
     run_tmux_untrimmed(server, args).map(|out| out.trim().to_string())
 }
 
-/// [`run_tmux`]'s output as tmux printed it.
-fn run_tmux_untrimmed(server: Option<&str>, args: &[&str]) -> Result<String> {
+/// `tmux`, aimed at `server`.
+fn tmux_command(server: Option<&str>) -> Command {
     let mut cmd = Command::new("tmux");
     if let Some(s) = server {
         cmd.args(["-L", s]);
     }
+    cmd
+}
+
+/// [`run_tmux`]'s output as tmux printed it.
+fn run_tmux_untrimmed(server: Option<&str>, args: &[&str]) -> Result<String> {
+    let mut cmd = tmux_command(server);
     cmd.args(args);
 
     let output = cmd.output()?;

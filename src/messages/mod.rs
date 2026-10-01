@@ -262,6 +262,14 @@ pub fn rescope(
     Ok(())
 }
 
+/// The number of unread messages in an agent's inbox; 0 when it cannot be
+/// read.
+pub fn unread_count(messages_dir: &Path, feature: &str, agent: &str) -> u32 {
+    check(messages_dir, feature, agent)
+        .map(|senders| senders.iter().map(|s| s.count).sum())
+        .unwrap_or(0)
+}
+
 /// Check for unread messages in an agent's inbox. Returns unread counts per sender.
 pub fn check(messages_dir: &Path, feature: &str, agent: &str) -> Result<Vec<UnreadSummary>> {
     let inbox = inbox_dir(messages_dir, feature, agent);

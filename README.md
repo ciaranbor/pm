@@ -45,7 +45,7 @@ config reload.
 |---|---|---|
 | `@pm-bin` | `pm` | the pm binary tmux runs |
 | `@pm-auto-refresh` | on | keep pm's options current: one background `pm tmux refresh` loop per server; `off` stops it |
-| `@pm-refresh-interval` | `5` | seconds between refreshes |
+| `@pm-refresh-interval` | `30` | seconds between refreshes; pm pushes its own changes at once, so the poll only catches what happens outside pm (below) |
 | `@pm-window-status` | on | append each agent window's badge to `window-status-format` and `window-status-current-format` (skipped for a format that already shows `@pm_agent_badge`); `off` removes it |
 | `@pm-bind-tree` | on | when prefix `s` or `w` runs a `choose-tree` with no format or template of yours (tmux's default does), add pm's format and Enter action, keeping its flags and note, and sort by name (`-O name`, grouping each project's sessions) if it sets no order: tmux's defaults become `choose-tree -Zs -O name` and `choose-tree -Zw -O name` plus pm's; `off` takes pm's additions off again |
 | `@pm-attention-key` | unset | a prefix key opening pm's tree with only the sessions needing attention — when none does, tmux shows them all |
@@ -209,10 +209,16 @@ interrupted agent, and the agent that ran the rename, is told to resume.
 
 `pm tmux refresh` publishes the attention snapshot of every project on the
 tmux server (`PM_TMUX_SERVER`, else the default) as user options, for
-status lines and `choose-tree` formats to read; the tmux plugin (Install)
-runs it every few seconds. It writes only what changed, in one `tmux`
-call, then redraws attached clients' status lines, which rebuilds an open
-tree mode. With no server running it does nothing.
+status lines and `choose-tree` formats to read. It writes only what
+changed, in one `tmux` call, then redraws attached clients' status lines,
+which rebuilds an open tree mode. With no server running it does nothing.
+
+While the plugin's watcher runs (Install), pm keeps the options current
+itself: a pm command that changes what they show refreshes them in the
+background as it finishes, and each agent's Stop hook writes its own
+window's state as it goes idle and as it resumes. The watcher's poll
+catches the rest: a harness that exits or is killed, sessions or windows
+killed outside pm, state files edited by hand.
 
 | Scope | Option | Value |
 |---|---|---|

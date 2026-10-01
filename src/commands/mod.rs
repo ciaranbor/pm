@@ -55,6 +55,7 @@ pub mod state_gitignore;
 pub mod status;
 pub mod tmux_init;
 pub mod tmux_jump;
+pub mod tmux_push;
 pub mod tmux_refresh;
 pub mod tmux_watch;
 pub mod upgrade;

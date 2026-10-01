@@ -9,6 +9,14 @@
 //! [`refresh`] also takes turns on the server's refresh lock, so a manual
 //! refresh racing the watcher reads what the other wrote.
 //!
+//! pm pushes the changes it makes itself ([`tmux_push`](super::tmux_push)),
+//! so the poll is the backstop for what pm cannot see happen: a harness
+//! exiting, a session or window killed outside pm, a state file edited by
+//! hand, a push that failed. Those are rare and none is urgent to the
+//! second, so the default interval is 30 s rather than tmux's own 15 s
+//! status interval: each tick reads every project's state and the whole
+//! process table.
+//!
 //! A watcher exits when its server does or `@pm-auto-refresh` is `off`, and
 //! executes its binary afresh when that is replaced, so an upgrade reaches
 //! it.
@@ -25,7 +33,7 @@ use super::tmux_refresh::{lock_file, refresh};
 
 pub const AUTO_REFRESH: &str = "@pm-auto-refresh";
 const INTERVAL: &str = "@pm-refresh-interval";
-const DEFAULT_INTERVAL: u64 = 5;
+const DEFAULT_INTERVAL: u64 = 30;
 
 /// Refresh every `@pm-refresh-interval` seconds until the server goes or
 /// auto-refresh is turned off. Returns at once while another watcher has
@@ -34,7 +42,7 @@ pub fn watch(projects_dir: &Path, tmux_server: Option<&str>) -> Result<()> {
     let Some(socket) = tmux::socket_path(tmux_server)? else {
         return Ok(());
     };
-    let Some(_lock) = try_lock(&socket, "watch")? else {
+    let Some(_lock) = take_watch(&socket)? else {
         return Ok(());
     };
     let binary = Binary::current();
@@ -59,7 +67,20 @@ pub fn watch(projects_dir: &Path, tmux_server: Option<&str>) -> Result<()> {
     }
 }
 
-fn try_lock(socket: &str, kind: &str) -> Result<Option<File>> {
+/// The server's watch lock, unless another watcher holds it. A push
+/// ([`tmux_push`](super::tmux_push)) takes it for an instant to see whether
+/// a watcher runs, so a watcher starting just then retries briefly.
+fn take_watch(socket: &str) -> Result<Option<File>> {
+    for _ in 0..5 {
+        if let Some(lock) = try_lock(socket, "watch")? {
+            return Ok(Some(lock));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Ok(None)
+}
+
+pub(super) fn try_lock(socket: &str, kind: &str) -> Result<Option<File>> {
     let file = lock_file(socket, kind)?;
     match file.try_lock() {
         Ok(()) => Ok(Some(file)),

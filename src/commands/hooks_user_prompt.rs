@@ -19,15 +19,18 @@ use crate::error::Result;
 use crate::state::feature::{FeatureState, Progress};
 use crate::state::paths;
 
-/// Run the hook. Always exit code 0, whatever happened.
-pub fn user_prompt() -> i32 {
-    let _ = user_prompt_inner();
+/// Run the hook. Always exit code 0, whatever happened. `on_unblock` runs
+/// once the feature is set back to `wip`.
+pub fn user_prompt(on_unblock: impl FnOnce()) -> i32 {
+    if user_prompt_inner().unwrap_or(false) {
+        on_unblock();
+    }
     0
 }
 
-fn user_prompt_inner() -> Result<()> {
+fn user_prompt_inner() -> Result<bool> {
     if std::env::var("PM_AGENT_NAME").map_or(true, |a| a.is_empty()) {
-        return Ok(());
+        return Ok(false);
     }
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input)?;
@@ -35,13 +38,12 @@ fn user_prompt_inner() -> Result<()> {
         .ok()
         .and_then(|v| v.get("prompt")?.as_str().map(str::to_string))
     else {
-        return Ok(());
+        return Ok(false);
     };
     let cwd = std::env::current_dir()?;
     let project_root = paths::find_project_root(&cwd)?;
     let scope = paths::resolve_scope_from(&project_root, &cwd)?;
-    on_user_prompt(&project_root, &scope, &prompt)?;
-    Ok(())
+    on_user_prompt(&project_root, &scope, &prompt)
 }
 
 /// Set `scope` back to `wip` if it is a blocked feature and `prompt` is the

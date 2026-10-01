@@ -19,7 +19,20 @@ fn completions_generates_bash_output() {
 }
 
 fn pm() -> Command {
-    Command::cargo_bin("pm").unwrap()
+    let mut pm = Command::cargo_bin("pm").unwrap();
+    pm.envs(no_tmux())
+        .env_remove("TMUX")
+        .env_remove("TMUX_PANE");
+    pm
+}
+
+/// A tmux server no test starts, so the binary under test never writes to
+/// the default server or the one the run is inside.
+fn no_tmux() -> [(&'static str, String); 1] {
+    [(
+        "PM_TMUX_SERVER",
+        format!("pm-test-{}-cli-none", std::process::id()),
+    )]
 }
 
 #[test]
@@ -293,6 +306,9 @@ fn stop_hook_waiting_on_an_empty_inbox_exits_when_its_harness_goes() {
     std::fs::create_dir_all(dir.path().join(".pm")).unwrap();
     std::fs::create_dir_all(dir.path().join("main")).unwrap();
     let mut hook = std::process::Command::new(assert_cmd::cargo::cargo_bin("pm"))
+        .envs(no_tmux())
+        .env_remove("TMUX")
+        .env_remove("TMUX_PANE")
         .env("HOME", dir.path())
         .env("PM_AGENT_NAME", "implementer")
         .current_dir(dir.path().join("main"))
