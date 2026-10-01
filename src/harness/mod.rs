@@ -227,6 +227,31 @@ impl Harness {
         }
     }
 
+    /// Whether this agent's never-idle loop has loaded since its spawn.
+    /// `None` for a harness whose loop is a native hook, which a running
+    /// session cannot have failed to load.
+    pub fn loop_loaded(self, project_root: &Path, scope: &str, agent: &str) -> Option<bool> {
+        match self {
+            Harness::ClaudeCode | Harness::Codex => None,
+            Harness::OpenCode => Some(
+                opencode::loaded_file(project_root, scope, agent).is_ok_and(|file| file.exists()),
+            ),
+        }
+    }
+
+    /// The error of this agent's last turn, if it failed and no turn has
+    /// succeeded since. Only a harness whose loop pm emulates reports one.
+    pub fn last_turn_error(self, project_root: &Path, scope: &str, agent: &str) -> Option<String> {
+        match self {
+            Harness::ClaudeCode | Harness::Codex => None,
+            Harness::OpenCode => {
+                let file = opencode::turn_error_file(project_root, scope, agent).ok()?;
+                let error = std::fs::read_to_string(file).ok()?;
+                Some(error.trim().to_string()).filter(|e| !e.is_empty())
+            }
+        }
+    }
+
     /// Whether this harness would resolve its *global* copy of skill `name`
     /// over a project one, so a project custom of that name never applies.
     /// Claude Code ranks personal skills above project skills.

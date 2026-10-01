@@ -55,6 +55,8 @@ fn is_open_recoverable(kind: IssueKind) -> bool {
         | IssueKind::MainBranchMissing
         | IssueKind::HarnessUnusable
         | IssueKind::LoopStopped
+        | IssueKind::LoopNotLoaded
+        | IssueKind::TurnFailed
         | IssueKind::AgentModelMissing
         | IssueKind::AgentRowInvalid
         | IssueKind::AgentModelUndeclared

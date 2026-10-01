@@ -28,7 +28,13 @@ const BLOCK: HookResult = { code: 0, out: '{"decision":"block","reason":"You hav
 
 /** A loop over scripted hook answers, recording what it did. */
 function harness(answers: HookResult[] | (() => Promise<HookResult>)) {
-  const seen = { prompts: [] as string[], sleeps: [] as number[], reports: [] as string[], asked: 0 }
+  const seen = {
+    prompts: [] as string[],
+    sleeps: [] as number[],
+    reports: [] as string[],
+    lastTurn: [] as (string | null)[],
+    asked: 0,
+  }
   const queue = Array.isArray(answers) ? [...answers] : null
   const loop = new Loop({
     agent: "reviewer",
@@ -46,6 +52,7 @@ function harness(answers: HookResult[] | (() => Promise<HookResult>)) {
       seen.sleeps.push(ms)
     },
     report: (reason) => seen.reports.push(reason),
+    lastTurn: (error) => seen.lastTurn.push(error),
     now: () => 0,
   })
   return { loop, seen }
@@ -243,6 +250,33 @@ test("a failure is not carried past the turn it ended", async () => {
   assert.doesNotMatch(seen.reports[0], /Model unavailable/)
 })
 
+test("a failed turn's error is recorded as it ends, and cleared by a turn that succeeds", async () => {
+  const { loop, seen } = harness([BLOCK, BLOCK, BLOCK, BLOCK])
+  await loop.turnEnded("ses_1", TURN_FAILED, { type: "provider.no-route", message: "Model unavailable: x" })
+  assert.deepEqual(seen.lastTurn, ["Model unavailable: x (provider.no-route)"])
+  // An interrupted turn neither failed nor succeeded.
+  await loop.turnEnded("ses_1", "session.execution.interrupted")
+  assert.deepEqual(seen.lastTurn, ["Model unavailable: x (provider.no-route)"])
+  await loop.turnEnded("ses_1", SUCCEEDED)
+  assert.deepEqual(seen.lastTurn, ["Model unavailable: x (provider.no-route)", null])
+})
+
+test("a failed turn's error is recorded before the back-off, not after it", async () => {
+  const recorded: (string | null)[] = []
+  let release = () => {}
+  const waiting = new Loop({
+    agent: "reviewer",
+    hook: async () => BLOCK,
+    prompt: async () => {},
+    sleep: () => new Promise<void>((resolve) => (release = resolve)),
+    report: () => {},
+    lastTurn: (error) => recorded.push(error),
+  }).turnEnded("ses_1", TURN_FAILED, { message: "down" })
+  assert.deepEqual(recorded, ["down"])
+  release()
+  await waiting
+})
+
 test("a turn's error reads as its message, kind and status", () => {
   assert.equal(
     turnError({ type: "provider.invalid-request", message: "The model `q` does not exist.", status: 404 }),
@@ -323,5 +357,5 @@ test("an unloaded loop neither asks nor prompts", async () => {
   await loop.arm("ses_1")
   await loop.turnEnded("ses_1", SUCCEEDED)
   assert.equal(await loop.subscriptionEnded("ses_1", "aborted"), false)
-  assert.deepEqual(seen, { prompts: [], sleeps: [], reports: [], asked: 0 })
+  assert.deepEqual(seen, { prompts: [], sleeps: [], reports: [], lastTurn: [], asked: 0 })
 })

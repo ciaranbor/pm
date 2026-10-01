@@ -363,14 +363,18 @@ harnesses; what differs:
   does, then prompts the session; it also resets a blocked feature when
   you type into the session. It does nothing in a session pm didn't
   spawn. The files are pm's: an upgrade overwrites them, and opencode
-  reloads the plugin in running agents when it does.
-- **The loop stops itself rather than run away.** If five turns in a row are
+  reloads the plugin in running agents when it does. A plugin opencode
+  cannot load leaves the agent idle; `pm doctor` reports a running agent
+  whose plugin has not loaded a minute after its spawn, and `/plugins` in
+  its window says why.
+- **The loop stops itself rather than run away.** `pm doctor` reports a
+  failed turn's error (`Model unavailable: …`, the endpoint's own refusal)
+  as soon as the turn ends, until a later one succeeds. After a failed turn
+  the plugin waits 30 seconds before asking again. If five turns in a row are
   prompted for unread messages and read none — the model fails every turn, or
   the agent cannot read its inbox — the plugin stops prompting, says so in the
-  session, and `pm doctor` reports the agent, with the error of the last turn
-  when it failed (`Model unavailable: …`, the endpoint's own refusal). After a
-  failed turn it waits 30 seconds before asking again. Fix the cause, then
-  `pm agent restart <name>`.
+  session, and `pm doctor` reports the loop stopped, with the error of the
+  last turn when it failed. Fix the cause, then `pm agent restart <name>`.
 - **Always `--standalone`.** pm launches `opencode --standalone --auto
   --session <id>`, with the session created beforehand. Without
   `--standalone` every opencode command shares one background server per
