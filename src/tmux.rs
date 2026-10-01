@@ -12,6 +12,11 @@ pub fn session_name(project_name: &str, scope: &str) -> String {
 }
 
 fn run_tmux(server: Option<&str>, args: &[&str]) -> Result<String> {
+    run_tmux_untrimmed(server, args).map(|out| out.trim().to_string())
+}
+
+/// [`run_tmux`]'s output as tmux printed it.
+fn run_tmux_untrimmed(server: Option<&str>, args: &[&str]) -> Result<String> {
     let mut cmd = Command::new("tmux");
     if let Some(s) = server {
         cmd.args(["-L", s]);
@@ -21,7 +26,7 @@ fn run_tmux(server: Option<&str>, args: &[&str]) -> Result<String> {
     let output = cmd.output()?;
 
     if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         // "no server running" or "session not found" are not hard errors for has_session
@@ -87,6 +92,22 @@ pub fn list_sessions(server: Option<&str>) -> Result<Vec<String>> {
 pub fn switch_client(server: Option<&str>, name: &str) -> Result<()> {
     run_tmux(server, &["switch-client", "-t", name])?;
     Ok(())
+}
+
+/// Switch `client` to `target`, keeping its window zoom.
+pub fn switch_client_of(server: Option<&str>, client: &str, target: &str) -> Result<()> {
+    run_tmux(server, &["switch-client", "-c", client, "-Z", "-t", target])?;
+    Ok(())
+}
+
+/// The server's socket, which names it whatever way it was reached; `None`
+/// when no server is running.
+pub fn socket_path(server: Option<&str>) -> Result<Option<String>> {
+    match run_tmux(server, &["display-message", "-p", "#{socket_path}"]) {
+        Ok(path) => Ok(Some(path)),
+        Err(PmError::Tmux(msg)) if no_server(&msg) => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 /// Attach the current terminal to a tmux session. Inherits stdio so tmux takes

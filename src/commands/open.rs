@@ -295,6 +295,13 @@ pub fn open(
         )?;
     }
 
+    // Session options die with their session.
+    if sessions_restored > 0
+        && let Err(e) = super::tmux_refresh::refresh(projects_dir, tmux_server)
+    {
+        eprintln!("warning: could not publish pm's tmux options: {e}");
+    }
+
     Ok(OpenResult {
         sessions_restored,
         agents_respawned,

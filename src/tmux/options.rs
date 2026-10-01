@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 
-use super::{no_server, run_tmux};
+use super::{no_server, run_tmux, run_tmux_untrimmed};
 use crate::error::{PmError, Result};
 
 /// One tmux command and its arguments.
@@ -118,6 +118,35 @@ pub fn read(
     Ok(Some(options))
 }
 
+/// The global values of `names`; `None` when no server is running.
+pub fn read_global(server: Option<&str>, names: &[&str]) -> Result<Option<Holder>> {
+    // A unit separator, which no option value holds.
+    const SEPARATOR: char = '\x1f';
+    let format: Vec<String> = names.iter().map(|n| format!("#{{{n}}}")).collect();
+    let format = format.join(&SEPARATOR.to_string());
+    let output = match run_tmux_untrimmed(server, &["display-message", "-p", &format]) {
+        Ok(output) => output,
+        Err(PmError::Tmux(msg)) if no_server(&msg) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let line = output.strip_suffix('\n').unwrap_or(&output);
+    Ok(Some(Holder {
+        values: names
+            .iter()
+            .zip(line.split(SEPARATOR))
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect(),
+        ..Holder::default()
+    }))
+}
+
+/// The global value of the server or window option `name`, exactly; an
+/// unset user option is empty.
+pub fn show(server: Option<&str>, name: &str) -> Result<String> {
+    let output = run_tmux_untrimmed(server, &["show-options", "-gqv", name])?;
+    Ok(output.strip_suffix('\n').unwrap_or(&output).to_string())
+}
+
 /// Where an option is set.
 #[derive(Debug, Clone, Copy)]
 pub enum Scope<'a> {
@@ -144,6 +173,37 @@ pub fn set(scope: Scope, name: &str, value: Option<&str>) -> Command {
         None => command.extend(["-u".to_string(), name.to_string()]),
     }
     command
+}
+
+/// Append `value` to the global server, session or window option `name`.
+pub fn append_global(name: &str, value: &str) -> Command {
+    ["set-option", "-ga", name, value].map(String::from).into()
+}
+
+/// Bind `key` in the prefix table to `command`.
+pub fn bind_key(key: &str, command: Command) -> Command {
+    let mut bind = vec!["bind-key".to_string(), key.to_string()];
+    bind.extend(command);
+    bind
+}
+
+/// Open tree mode with sessions collapsed and sorted by name, each line in
+/// `format`, showing only items `filter` matches, and run `template` (with
+/// `%%` the chosen item's target) on the chosen one.
+pub fn choose_tree(format: &str, filter: Option<&str>, template: &str) -> Command {
+    let mut command: Command = ["choose-tree", "-Zs", "-O", "name", "-F", format]
+        .map(String::from)
+        .into();
+    if let Some(filter) = filter {
+        command.extend(["-f".into(), filter.into()]);
+    }
+    command.push(template.into());
+    command
+}
+
+/// Run `shell_command` in the background as a server job.
+pub fn run_shell_background(shell_command: &str) -> Command {
+    ["run-shell", "-b", shell_command].map(String::from).into()
 }
 
 /// Show `text` on `client`'s status line.

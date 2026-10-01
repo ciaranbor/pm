@@ -24,6 +24,51 @@ cargo install --path .
 
 Installs the `pm` binary to `~/.cargo/bin/` (ensure it's on your `PATH`).
 
+### tmux plugin
+
+Add one line to your tmux config:
+
+```tmux
+run-shell 'pm tmux init'
+```
+
+The plugin is part of the binary, so it always matches the installed pm.
+tmux runs it with the server's environment, not your shell's, so
+`pm` must be on the `PATH` the server started with; set `@pm-bin` to its
+full path otherwise. Set any options below *before* the line. Init only
+adds to your config: it sets pm's own `@pm_*` options, appends to formats
+rather than replacing them, binds only keys you name, and is safe to re-run
+on a config reload.
+
+| Option | Default | Effect |
+|---|---|---|
+| `@pm-bin` | `pm` | the pm binary tmux runs |
+| `@pm-auto-refresh` | on | keep pm's options current: one background `pm tmux refresh` loop per server; `off` stops it |
+| `@pm-refresh-interval` | `5` | seconds between refreshes |
+| `@pm-window-status` | on | append each agent window's badge to `window-status-format` and `window-status-current-format` (skipped for a format that already shows `@pm_agent_badge`); `off` removes it |
+| `@pm-tree-key` | unset | a prefix key opening pm's tree (below) |
+| `@pm-attention-key` | unset | a prefix key opening pm's tree with only the sessions needing attention — when none does, tmux shows them all |
+
+The window badge is a glyph for the agent's state — `●` busy (green), `○`
+idle (grey), `×` dead (red), `■` stopped (grey) — then `+N` (yellow) for N
+unread messages, e.g. `○+2`.
+
+The attention summary (`2 blocked · 1 ready`) goes where you put it; init
+leaves `status-right` alone, as it is your theme's and its length limit
+would cut your own content short:
+
+```tmux
+set -g status-right '#{E:@pm_summary} %H:%M'
+```
+
+pm's tree is tmux's own tree with each feature's attention and reason and
+each agent's badge. Choosing a feature's session goes to the agent it is
+waiting on (`pm tmux jump`). To make your `s` key use it:
+
+```tmux
+bind s choose-tree -Zs -O name -F '#{E:@pm_tree_format}' "run-shell \"pm tmux jump --client '#{client_name}' '%%'\""
+```
+
 ## Quick start
 
 Create a project — three ways, pick one:
@@ -119,7 +164,12 @@ meaning or goes away:
 ```json
 {
   "version": 1,
-  "projects": [{ "name": "app", "root": "/src/app", "skipped": null }],
+  "projects": [{
+    "name": "app",
+    "root": "/src/app",
+    "skipped": null,
+    "main": { "session": "app/main", "session_exists": true, "agents": [] }
+  }],
   "features": [{
     "project": "app",
     "name": "login",
@@ -138,7 +188,8 @@ meaning or goes away:
 ```
 
 `features` is sorted like the rows. `attention.kind` is one of the table's
-kinds or `none`; `skipped` says why a project's features are missing;
+kinds or `none`; `skipped` says why a project's features are missing, and
+`main` (its session and agents, shaped like a feature's) is then `null`;
 `summary` is the summary's first line whatever the status; `window` is the
 agent's tmux target, `null` while it has none.
 
@@ -157,14 +208,14 @@ interrupted agent, and the agent that ran the rename, is told to resume.
 
 `pm tmux refresh` publishes the attention snapshot of every project on the
 tmux server (`PM_TMUX_SERVER`, else the default) as user options, for
-status lines and `choose-tree` formats to read. It is cheap enough to run
-on every `status-interval` tick: it writes only what changed, in one `tmux`
+status lines and `choose-tree` formats to read; the tmux plugin (Install)
+runs it every few seconds. It writes only what changed, in one `tmux`
 call, then redraws attached clients' status lines, which rebuilds an open
 tree mode. With no server running it does nothing.
 
 | Scope | Option | Value |
 |---|---|---|
-| feature session | `@pm_project`, `@pm_feature` | names |
+| feature session | `@pm_project`, `@pm_feature` | names; a `main` session carries only `@pm_project` |
 | | `@pm_progress` | `wip`, `blocked` or `ready` |
 | | `@pm_attention` | the attention kind; unset for `none` |
 | | `@pm_reason` | the attention detail; unset without one |
@@ -175,18 +226,18 @@ tree mode. With no server running it does nothing.
 | | `@pm_agent_badge` | a glyph for the state, then `+N` unread, styled (below) |
 | global | `@pm_summary` | e.g. `2 blocked · 1 ready`, styled; unset when nothing needs attention |
 | | `@pm_count` | features needing attention |
+| | `@pm_tree_format` | pm's `choose-tree` line format, set by `pm tmux init` |
 
-Only the registry's agents' windows carry options; other windows, the
-`main` session and its agents carry none. An option whose value goes away
+Only the registry's agents' windows carry window options, `main`'s
+included. An option whose value goes away
 is unset, so it never outlives its cause; a session's go with the session.
 Text is escaped for formats (`#` doubled). Each name is set at one
 scope only, so tmux's fallback from window to session to global never
 yields another scope's value.
 
-`@pm_agent_badge` is sized for `window-status-format`, next to the window
-name, and resets its style after itself: `●` busy (green), `○` idle (grey),
-`×` dead (red), `■` stopped (grey), then `+N` (yellow) with N unread
-messages, e.g. `○+2`.
+`@pm_agent_badge` (glyphs under Install) is sized for
+`window-status-format`, next to the window name, and resets its style
+after itself.
 
 When a feature with an open session becomes `blocked` or `ready`, every
 attached client is shown it once. The previous attention is the published
@@ -835,6 +886,8 @@ These round out the tool; each has its full flag reference under `--help`:
   one release.
 - `pm tmux refresh` — publish the attention snapshot as tmux options (see
   tmux options).
+- `pm tmux init` — install the tmux plugin on the running server (see
+  Install); `pm tmux jump` — the Enter action of pm's tree.
 - `pm upgrade` / `pm self-update` — update bundled assets and the binary.
 - `pm completions <shell>` — generate shell completion scripts.
 - `pm list` — list registered projects.

@@ -1083,3 +1083,34 @@ fn doctor_reports_an_unrunnable_claude_only_when_an_agent_is_on_it() {
             "codex has not trusted pm's Stop hook",
         ));
 }
+
+/// Catches: the plugin line in a tmux config, `run-shell 'pm tmux init'`,
+/// finding `pm` through the tmux server's own `PATH` and environment rather
+/// than a shell's, for both init and the watcher it starts.
+#[test]
+#[ignore]
+fn the_tmux_plugin_runs_from_the_servers_own_environment() {
+    let s = Smoke::new();
+    s.init_with_feature();
+    s.pm(&s.proj().join("login"))
+        .args(["feat", "status", "blocked", "-m", "which DB?"])
+        .assert()
+        .success();
+    s.tmux_ok(&["set", "-g", "@pm-refresh-interval", "1"]);
+
+    s.tmux_ok(&["run-shell", "pm tmux init"]);
+
+    assert!(
+        s.tmux_ok(&["show", "-gv", "window-status-format"])
+            .contains("@pm_agent_badge")
+    );
+    let start = Instant::now();
+    while s.tmux_ok(&["show", "-gqv", "@pm_count"]) != "1" {
+        assert!(start.elapsed() < WAIT, "the watcher never refreshed");
+        std::thread::sleep(POLL);
+    }
+    assert_eq!(
+        s.tmux_ok(&["show", "-qv", "-t", "=proj/login:", "@pm_reason"]),
+        "which DB?"
+    );
+}
