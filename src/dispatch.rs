@@ -287,16 +287,20 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     restarted.finish(server);
                     reported
                 }
-                AgentCommands::List { active } => {
-                    let feature = resolve_scope(&project_root)?;
+                AgentCommands::List { active, scope } => {
+                    let feature = resolve_scope_with_flag(&project_root, scope)?;
                     let lines = commands::agent_list::agent_list(&project_root, &feature, active)?;
                     for line in lines {
                         println!("{line}");
                     }
                     Ok(())
                 }
-                AgentCommands::Fork { source, name } => {
-                    let feature = resolve_scope(&project_root)?;
+                AgentCommands::Fork {
+                    source,
+                    name,
+                    scope,
+                } => {
+                    let feature = resolve_scope_with_flag(&project_root, scope)?;
                     let msg = commands::agent_fork::agent_fork(
                         &project_root,
                         &feature,

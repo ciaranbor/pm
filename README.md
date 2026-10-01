@@ -199,8 +199,8 @@ Manage agents with `pm agent spawn|list|stop|restart|delete|fork`. `spawn
 <name> --agent <def>` decouples the display/messaging identity from the agent
 definition, so you can run several agents off one definition (e.g.
 `frontend-dev` and `backend-dev` both `--agent implementer`). `fork` starts a
-new agent from a copy of another's history. `spawn`, `stop`, `restart` and
-`delete` act on the current scope, or on another with `--scope <feature|main>`.
+new agent from a copy of another's history. Each acts on the current scope, or
+on another with `--scope <feature|main>`.
 See `pm agent --help`.
 
 ### Configuration
