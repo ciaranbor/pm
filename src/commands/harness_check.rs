@@ -26,8 +26,11 @@ pub enum ProblemKind {
     LoopNotInstalled,
     /// A hooks entry in a shape the harness registers nothing for.
     HooksMalformed,
-    /// The harness has no trust entry for a pm hook.
+    /// The harness has no trust entry for a pm hook of the never-idle loop.
     HookUntrusted,
+    /// The harness has no trust entry for pm's blocked-reset hook. The agent
+    /// still runs, so this alone never refuses a team.
+    ResetHookUntrusted,
 }
 
 /// One reason agents on a harness would not start, or would start and never
@@ -79,7 +82,11 @@ pub fn harness_problems(
                 && !harness.hook_trusted(config, home, event, entry, hook)
             {
                 push(
-                    ProblemKind::HookUntrusted,
+                    if event == hooks_install::USER_PROMPT_EVENT {
+                        ProblemKind::ResetHookUntrusted
+                    } else {
+                        ProblemKind::HookUntrusted
+                    },
                     format!(
                         "{harness} has not trusted pm's {event} hook, so it silently does not \
                          run: {}",
@@ -191,7 +198,11 @@ fn team_problems(
                         by_harness.len() - 1
                     }
                 };
-                for problem in &by_harness[cached].1 {
+                for problem in by_harness[cached]
+                    .1
+                    .iter()
+                    .filter(|p| p.kind != ProblemKind::ResetHookUntrusted)
+                {
                     out.lines
                         .push(format!("{member} ({harness}): {}", problem.message));
                 }

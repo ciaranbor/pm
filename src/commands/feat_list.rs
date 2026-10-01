@@ -3,6 +3,7 @@ use std::path::Path;
 use crate::error::Result;
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
+use crate::state::project::ProjectEntry;
 
 /// The PR-derived lifecycle status as a listing token, omitted while it is
 /// the unremarkable `wip`.
@@ -49,6 +50,30 @@ pub fn feat_list(project_root: &Path) -> Result<Vec<String>> {
     Ok(lines)
 }
 
+/// [`feat_list`] for every registered project, each project's rows under a
+/// header. A project whose state can't be read gets a one-line note
+/// instead, so one broken entry doesn't hide the rest.
+pub fn feat_list_all(projects_dir: &Path) -> Result<Vec<String>> {
+    let mut lines = Vec::new();
+    for (name, entry) in ProjectEntry::list(projects_dir)? {
+        let root = entry.root_path();
+        let listed = if paths::pm_dir(&root).is_dir() {
+            feat_list(&root).map_err(|e| e.to_string())
+        } else {
+            Err(format!("no pm project at {}", root.display()))
+        };
+        match listed {
+            Ok(rows) if rows.is_empty() => lines.push(format!("{name}: no features")),
+            Ok(rows) => {
+                lines.push(format!("{name}:"));
+                lines.extend(rows.into_iter().map(|r| format!("  {r}")));
+            }
+            Err(e) => lines.push(format!("{name}: skipped ({e})")),
+        }
+    }
+    Ok(lines)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,6 +117,7 @@ mod tests {
             created: Utc::now(),
             last_active: Utc::now(),
             progress: crate::state::feature::Progress::Blocked,
+            blocked_reason: None,
         };
         state.save(&features_dir, "login").unwrap();
 
@@ -149,5 +175,45 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0], "alpha  wip  base:main");
         assert_eq!(lines[1], "beta   wip  base:main");
+    }
+
+    #[test]
+    fn feat_list_all_groups_features_by_project_and_skips_a_missing_one() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let projects_dir = dir.path().join("registry");
+        let mut roots = Vec::new();
+        for (project, feature) in [("alpha", "login"), ("beta", "search")] {
+            let root = dir.path().join(server.scope(project));
+            init::init(&root, &projects_dir, None, server.name()).unwrap();
+            feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
+                &root,
+                &projects_dir,
+                feature,
+                server.name(),
+            ))
+            .unwrap();
+            roots.push(root);
+        }
+        let gone = dir.path().join(server.scope("gone"));
+        init::init(&gone, &projects_dir, None, server.name()).unwrap();
+        std::fs::remove_dir_all(&gone).unwrap();
+
+        let lines = feat_list_all(&projects_dir).unwrap();
+
+        assert_eq!(
+            lines,
+            vec![
+                format!("{}:", server.scope("alpha")),
+                "  login  wip  base:main".to_string(),
+                format!("{}:", server.scope("beta")),
+                "  search  wip  base:main".to_string(),
+                format!(
+                    "{}: skipped (no pm project at {})",
+                    server.scope("gone"),
+                    gone.display()
+                ),
+            ]
+        );
     }
 }

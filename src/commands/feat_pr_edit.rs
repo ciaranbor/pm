@@ -66,6 +66,7 @@ mod tests {
             created: now,
             last_active: now,
             progress: Default::default(),
+            blocked_reason: None,
         }
     }
 

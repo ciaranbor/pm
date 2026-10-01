@@ -45,7 +45,8 @@ Creates a feature from a branch that already exists. Does not create a new branc
 ## Checking status
 
 ```sh
-pm feat list          # each feature: wip, blocked (on the user), or ready (to merge)
+pm feat status        # from main: each feature's status, why it is blocked, what a ready one says
+pm feat list          # each feature's status, lifecycle, branch, base and PR (--all: every project)
 pm feat info <name>   # full details for a feature
 pm status             # project dashboard
 ```
@@ -57,6 +58,6 @@ For messaging commands (`pm msg send`, `pm msg read`, `pm msg list`, `pm msg wai
 ## What NOT to do
 
 - Do not run `pm feat merge`, `pm feat delete`, `pm delete`, or `pm doctor --fix`
-- Do not run `pm feat pr` or `pm feat status`, or edit a feature's summary — the feature's team owns those
+- Do not run `pm feat pr`, set a feature's status, or edit a feature's summary — the feature's team owns those
 - Do not run `pm agent spawn` — only the user spawns agents
 - These are user-initiated operations — only create features and inspect status

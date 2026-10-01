@@ -53,9 +53,9 @@ pub enum Progress {
 impl std::fmt::Display for Progress {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Wip => write!(f, "wip"),
-            Self::Blocked => write!(f, "blocked"),
-            Self::Ready => write!(f, "ready"),
+            Self::Wip => f.pad("wip"),
+            Self::Blocked => f.pad("blocked"),
+            Self::Ready => f.pad("ready"),
         }
     }
 }
@@ -65,6 +65,9 @@ pub struct FeatureState {
     pub status: FeatureStatus,
     #[serde(default)]
     pub progress: Progress,
+    /// What a blocked team is waiting on the user for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_reason: Option<String>,
     pub branch: String,
     pub worktree: String,
     #[serde(default)]
@@ -260,6 +263,7 @@ mod tests {
             created: Utc::now(),
             last_active: Utc::now(),
             progress: Default::default(),
+            blocked_reason: None,
         }
     }
 

@@ -3,7 +3,6 @@ use clap_complete::Shell;
 use std::path::PathBuf;
 
 use pm::harness::Harness;
-use pm::state::feature::Progress;
 
 #[derive(Parser)]
 #[command(
@@ -320,12 +319,14 @@ pub enum HarnessSkillsCommands {
 
 #[derive(Subcommand)]
 pub enum HarnessHooksCommands {
-    /// Install pm hooks (Stop + SessionStart) into each harness's user-level hooks file, moving any out of project files
+    /// Install pm hooks (Stop, SessionStart, UserPromptSubmit) into each harness's user-level hooks file, moving any out of project files
     Install,
     /// Stop hook handler — called by the harness on every Stop event (not for direct use)
     Stop,
     /// SessionStart hook handler — called by the harness on session start (not for direct use)
     SessionStart,
+    /// UserPromptSubmit hook handler — unblocks a feature on the user's input (not for direct use)
+    UserPrompt,
 }
 
 #[derive(Subcommand)]
@@ -506,8 +507,12 @@ pub enum FeatCommands {
         #[arg(long)]
         workflow: Option<String>,
     },
-    /// List all features with their status
-    List,
+    /// List all features with their status, lifecycle, branch, base and PR
+    List {
+        /// List the features of every registered project
+        #[arg(long)]
+        all: bool,
+    },
     /// Show detailed info for a feature
     Info {
         /// Feature name (detected from CWD if omitted)
@@ -538,11 +543,18 @@ pub enum FeatCommands {
     #[command(subcommand)]
     Pr(PrCommands),
     /// Set where the feature's work stands: wip, blocked (waiting on the
-    /// user), or ready (done; notifies the orchestrator, needs a summary)
+    /// user), or ready (done; notifies the orchestrator, needs a summary).
+    /// Without a status, show what needs attention: this feature, or every
+    /// feature when run from main
     Status {
-        status: Progress,
+        /// wip, blocked or ready; omit to view. Alone, a value that is not
+        /// a status is taken as the feature name to view
+        status: Option<String>,
         /// Feature name (detected from CWD if omitted)
         name: Option<String>,
+        /// What the user is to answer (only with `blocked`)
+        #[arg(short = 'm', long)]
+        reason: Option<String>,
     },
     /// The feature's summary for the orchestrator (kept in pm state, not the branch)
     #[command(subcommand)]

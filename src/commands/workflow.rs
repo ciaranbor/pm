@@ -22,8 +22,9 @@ use crate::state::workflow::{self, WorkflowDef};
 const SUMMARY_GUIDANCE: &str = "\
 ## Status and summary
 
-When you wait on the user, run `pm feat status blocked`; once they answer,
-run `pm feat status wip`.
+When you wait on the user, run `pm feat status blocked -m \"<what you need>\"`.
+Their reply sets it back to wip on its own; if it is still blocked once
+they have answered (`pm feat status` shows it), run `pm feat status wip`.
 
 If the active workflow names you the summary owner, write the summary at the
 path `pm feat summary path` prints, editing it like any other file. It is
@@ -214,6 +215,7 @@ mod tests {
             created: now,
             last_active: now,
             progress: Default::default(),
+            blocked_reason: None,
         };
         state.save(features_dir, name).unwrap();
     }

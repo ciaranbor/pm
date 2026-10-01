@@ -1,4 +1,5 @@
-//! Install pm hooks (Stop + SessionStart) into the user-level hooks file of
+//! Install pm hooks (Stop, SessionStart, UserPromptSubmit) into the
+//! user-level hooks file of
 //! every supported harness (`~/.claude/settings.json`, `$CODEX_HOME/hooks.json`
 //! — both take the same nested `hooks` shape) — once per machine — and strip
 //! the entries earlier releases wrote into `main/.claude/settings.json` and
@@ -40,6 +41,9 @@
 //! registry so dead agents can be resumed, and on codex also prints the
 //! agent's composed prompt as `additionalContext`.
 //!
+//! The UserPromptSubmit hook is `pm harness hooks user-prompt`, which sets a
+//! blocked feature back to `wip` (see [`super::hooks_user_prompt`]).
+//!
 //! Entries written by older releases (`pm claude hooks …`, or the unguarded
 //! `pm harness hooks …`) are recognised as pm-owned: rewritten in place in
 //! the user file, removed from project files.
@@ -78,11 +82,20 @@ const LEGACY_SESSION_START_MARKER: &str = "pm claude hooks session-start";
 const STOP_MARKERS: &[&str] = &[PM_HOOK_MARKER, LEGACY_HOOK_MARKER];
 const SESSION_START_MARKERS: &[&str] = &[PM_SESSION_START_MARKER, LEGACY_SESSION_START_MARKER];
 
+/// The event of pm's hook that resets a blocked feature. Not part of the
+/// never-idle loop: without it an agent still runs and wakes.
+pub const USER_PROMPT_EVENT: &str = "UserPromptSubmit";
+
+/// Marker string for pm-owned UserPromptSubmit hook entries.
+pub const PM_USER_PROMPT_MARKER: &str = "pm harness hooks user-prompt";
+const USER_PROMPT_MARKERS: &[&str] = &[PM_USER_PROMPT_MARKER];
+
 /// The hook events pm installs, with the command markers that identify
 /// pm's entry under each.
 pub const PM_EVENTS: &[(&str, &[&str])] = &[
     ("Stop", STOP_MARKERS),
     ("SessionStart", SESSION_START_MARKERS),
+    (USER_PROMPT_EVENT, USER_PROMPT_MARKERS),
 ];
 
 /// Shell prefix that makes a hook exit 0 outside pm agent sessions. `||`
@@ -99,6 +112,11 @@ pub fn stop_hook_command() -> String {
 /// The shell command registered as the SessionStart hook.
 pub fn session_start_hook_command() -> String {
     format!("{GUARD}{PM_SESSION_START_MARKER}")
+}
+
+/// The shell command registered as the UserPromptSubmit hook.
+pub fn user_prompt_hook_command() -> String {
+    format!("{GUARD}{PM_USER_PROMPT_MARKER}")
 }
 
 /// Where `harness`'s never-idle loop is installed, for messages: its hooks
@@ -187,14 +205,34 @@ pub(crate) fn install_in(
     Ok(lines)
 }
 
-/// Upsert both pm entries into the user-level file. Returns whether the
+/// Upsert every pm entry into the user-level file. Returns whether the
 /// file changed (or would).
 fn install_global(user_file: &Path, dry_run: bool) -> Result<bool> {
     let mut root =
         load_settings(user_file)?.unwrap_or_else(|| Value::Object(serde_json::Map::new()));
-    let stop_changed = upsert_stop_hook(&mut root)?;
-    let session_start_changed = upsert_session_start_hook(&mut root)?;
-    if !(stop_changed || session_start_changed) {
+    let stop_changed = upsert_hook(
+        &mut root,
+        "Stop",
+        STOP_MARKERS,
+        json!({
+            "type": "command",
+            "command": stop_hook_command(),
+            "timeout": STOP_HOOK_TIMEOUT_SECS,
+        }),
+    )?;
+    let session_start_changed = upsert_hook(
+        &mut root,
+        "SessionStart",
+        SESSION_START_MARKERS,
+        json!({"type": "command", "command": session_start_hook_command()}),
+    )?;
+    let user_prompt_changed = upsert_hook(
+        &mut root,
+        USER_PROMPT_EVENT,
+        USER_PROMPT_MARKERS,
+        json!({"type": "command", "command": user_prompt_hook_command()}),
+    )?;
+    if !(stop_changed || session_start_changed || user_prompt_changed) {
         return Ok(false);
     }
     if !dry_run {
@@ -333,24 +371,7 @@ fn upsert_hook(root: &mut Value, event: &str, markers: &[&str], pm_hook: Value) 
     Ok(true)
 }
 
-fn upsert_stop_hook(root: &mut Value) -> Result<bool> {
-    let hook = json!({
-        "type": "command",
-        "command": stop_hook_command(),
-        "timeout": STOP_HOOK_TIMEOUT_SECS,
-    });
-    upsert_hook(root, "Stop", STOP_MARKERS, hook)
-}
-
-fn upsert_session_start_hook(root: &mut Value) -> Result<bool> {
-    let hook = json!({
-        "type": "command",
-        "command": session_start_hook_command(),
-    });
-    upsert_hook(root, "SessionStart", SESSION_START_MARKERS, hook)
-}
-
-/// Remove every pm-owned hook from `hooks.Stop`/`hooks.SessionStart`,
+/// Remove every pm-owned hook from the [`PM_EVENTS`] arrays,
 /// pruning an emptied entry, event array and `hooks` object. Only the pm
 /// inner hook is removed, so a foreign hook bundled into the same entry
 /// survives. Returns `true` when the value changed.
@@ -393,7 +414,7 @@ fn command_matches(hook: &Value, markers: &[&str]) -> bool {
         .is_some_and(|cmd| markers.iter().any(|m| cmd.contains(m)))
 }
 
-/// Whether `harness`'s never-idle loop is installed: both pm entries in its
+/// Whether `harness`'s never-idle loop is installed: every pm entry in its
 /// user-level file, or its plugin files current.
 pub fn is_installed_for(harness: Harness) -> Result<bool> {
     is_installed_in(harness, &paths::home_dir()?)
@@ -535,6 +556,10 @@ mod tests {
             command_at(&parsed, "/hooks/SessionStart/0/hooks/0/command"),
             session_start_hook_command()
         );
+        assert_eq!(
+            command_at(&parsed, "/hooks/UserPromptSubmit/0/hooks/0/command"),
+            user_prompt_hook_command()
+        );
         assert!(is_installed_in(&home).unwrap());
         // Every supported harness, whether or not it is installed or
         // configured anywhere: a project may name it later.
@@ -607,7 +632,10 @@ mod tests {
         let codex_hooks = codex_file(&home);
         write_json(
             &codex_hooks,
-            &json!({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "say done"}]}]}}),
+            &json!({"hooks": {
+                "Stop": [{"hooks": [{"type": "command", "command": "say done"}]}],
+                "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "log prompt"}]}]
+            }}),
         );
 
         let lines = install_in(&home, Some(&root), false).unwrap();
@@ -633,6 +661,10 @@ mod tests {
         assert_eq!(
             pm_hook_position(&parsed, "SessionStart", SESSION_START_MARKERS),
             Some((0, 0))
+        );
+        assert_eq!(
+            pm_hook_position(&parsed, "UserPromptSubmit", USER_PROMPT_MARKERS),
+            Some((1, 0))
         );
         assert_eq!(
             command_at(&parsed, "/hooks/Stop/1/hooks/0/command"),
@@ -733,7 +765,8 @@ mod tests {
                 &user_file(&home),
                 &json!({"hooks": {
                     "Stop": [{"hooks": [{"type": "command", "command": old}]}],
-                    "SessionStart": [{"hooks": [{"type": "command", "command": old.replace("stop", "session-start")}]}]
+                    "SessionStart": [{"hooks": [{"type": "command", "command": old.replace("stop", "session-start")}]}],
+                    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": user_prompt_hook_command()}]}]
                 }}),
             );
             assert!(is_installed_in(&home).unwrap(), "{old}");
@@ -939,7 +972,11 @@ mod tests {
         // The real installed strings, run the way Claude Code runs them:
         // without PM_AGENT_NAME they exit 0 with no output and never reach
         // `pm` (PATH is emptied so a resolution attempt would fail).
-        for command in [stop_hook_command(), session_start_hook_command()] {
+        for command in [
+            stop_hook_command(),
+            session_start_hook_command(),
+            user_prompt_hook_command(),
+        ] {
             let out = std::process::Command::new("/bin/sh")
                 .args(["-c", &command])
                 .env_remove("PM_AGENT_NAME")
@@ -966,6 +1003,7 @@ mod tests {
         for (command, args) in [
             (stop_hook_command(), "harness hooks stop"),
             (session_start_hook_command(), "harness hooks session-start"),
+            (user_prompt_hook_command(), "harness hooks user-prompt"),
         ] {
             let out = std::process::Command::new("/bin/sh")
                 .args(["-c", &command])

@@ -1,5 +1,10 @@
 //! Claude Code: `claude --agent <def> …`, reading definitions and skills
 //! from `.claude/{agents,skills}` (never from `.agents/`).
+//!
+//! UserPromptSubmit fires for every submitted prompt, the positional launch
+//! prompt included, but not for a Stop hook's `block` continuation (verified
+//! on 2.1.286). Its stdout on exit 0 is added to the model's context, and
+//! exit 2 refuses the prompt.
 
 pub(super) mod sessions;
 

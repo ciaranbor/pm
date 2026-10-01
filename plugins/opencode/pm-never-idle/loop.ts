@@ -105,6 +105,22 @@ export function turnError(error: unknown): string {
   return detail ? `${text} (${detail})` : text
 }
 
+export const INBOX_ENQUEUED = "session.inbox.enqueued"
+
+/** Metadata on every prompt the plugin sends, so it is not taken for the user's. */
+export const PM_PROMPT = { pm: "continuation" }
+
+/**
+ * The text of an enqueued inbox item (`session.inbox.enqueued`'s `item`) if
+ * the user typed it: a `user` item the plugin did not send. Null otherwise.
+ */
+export function userInput(item: unknown): string | null {
+  const { type, payload } = (item ?? {}) as { type?: unknown; payload?: any }
+  if (type !== "user" || typeof payload?.text !== "string") return null
+  if (payload.metadata?.pm === PM_PROMPT.pm) return null
+  return payload.text
+}
+
 /**
  * Whether a turn end belongs to the session the loop drives. Turn ends fire
  * for subagent sessions too, and a finished subagent wakes its parent

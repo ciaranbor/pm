@@ -14,7 +14,7 @@
 import type { ChildProcess } from "node:child_process"
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
-import { Loop, TURN_END, drivesSession } from "./loop.ts"
+import { INBOX_ENQUEUED, Loop, PM_PROMPT, TURN_END, drivesSession, userInput } from "./loop.ts"
 import { runPm } from "./pm.ts"
 
 export default {
@@ -38,7 +38,7 @@ export default {
       // Always `{}`: the plugin never holds a turn open, so the hook has no
       // running background work to yield to.
       hook: () => pm(["harness", "hooks", "stop"], "{}"),
-      prompt: (sessionID, text) => ctx.session.prompt({ sessionID, text }),
+      prompt: (sessionID, text) => ctx.session.prompt({ sessionID, text, metadata: PM_PROMPT }),
       sleep: (ms) =>
         new Promise((resolve) => {
           const timer = setTimeout(resolve, ms)
@@ -98,8 +98,16 @@ export default {
             if (event.type === "session.created" && !own && !event.data?.parentID) {
               await pm(["harness", "hooks", "session-start"], JSON.stringify({ session_id: sessionID }))
             }
-            if (!TURN_END.has(event.type)) continue
             const parentOf = async (id: string) => (await ctx.session.get({ sessionID: id })).parentID
+            if (event.type === INBOX_ENQUEUED) {
+              // opencode has no UserPromptSubmit hook; this stands in for it.
+              const text = userInput(event.data?.item)
+              if (text !== null && (await drivesSession(own, sessionID, parentOf))) {
+                void pm(["harness", "hooks", "user-prompt"], JSON.stringify({ prompt: text }))
+              }
+              continue
+            }
+            if (!TURN_END.has(event.type)) continue
             if (await drivesSession(own, sessionID, parentOf)) {
               void loop.turnEnded(sessionID, event.type, event.data?.error)
             }

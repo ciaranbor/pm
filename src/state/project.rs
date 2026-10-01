@@ -1401,6 +1401,7 @@ default = "implementer"
                 created: chrono::Utc::now(),
                 last_active: chrono::Utc::now(),
                 progress: Default::default(),
+                blocked_reason: None,
             };
             state.save(&features_dir, &format!("feat-{i}")).unwrap();
         }
@@ -1441,6 +1442,7 @@ default = "implementer"
                 created: chrono::Utc::now(),
                 last_active: chrono::Utc::now(),
                 progress: Default::default(),
+                blocked_reason: None,
             };
             state.save(&features_dir, &format!("feat-{i}")).unwrap();
         }
@@ -1485,6 +1487,7 @@ default = "implementer"
                 created: chrono::Utc::now(),
                 last_active: chrono::Utc::now(),
                 progress: Default::default(),
+                blocked_reason: None,
             };
             state.save(&features_dir, &format!("feat-{i}")).unwrap();
         }
@@ -1524,6 +1527,7 @@ default = "implementer"
             created: chrono::Utc::now(),
             last_active: chrono::Utc::now(),
             progress: Default::default(),
+            blocked_reason: None,
         };
         state.save(&features_dir, "old-feat").unwrap();
 
@@ -1562,6 +1566,7 @@ default = "implementer"
             created: chrono::Utc::now(),
             last_active: chrono::Utc::now(),
             progress: Default::default(),
+            blocked_reason: None,
         };
         state.save(&features_dir, "stale-feat").unwrap();
 
@@ -1602,6 +1607,7 @@ default = "implementer"
                 created: chrono::Utc::now(),
                 last_active: chrono::Utc::now(),
                 progress: Default::default(),
+                blocked_reason: None,
             };
             state.save(&features_dir, &format!("feat-{i}")).unwrap();
         }

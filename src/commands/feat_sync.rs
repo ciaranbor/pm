@@ -125,6 +125,7 @@ mod tests {
             created: Utc::now(),
             last_active: Utc::now(),
             progress: Default::default(),
+            blocked_reason: None,
         }
     }
 

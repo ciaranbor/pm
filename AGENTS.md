@@ -116,7 +116,7 @@ Design decisions you can't recover by reading the tree. Preserve them.
 - The summary (`.pm/summaries/`, edited in place) is the standing
   feature→project channel. Agent-set `ready` ("waiting on the user's merge
   or delete") is the single triage trigger, re-set to send a revised
-  summary; `blocked` never messages `main`.
+  summary; `blocked` never messages `main`, and nothing pm sends resets it.
 - Team status and the PR-derived `status` are separate: sync can't clobber it.
 - Each `workflow.md` names the single summary owner; content guidance is
   single-sourced in `pm workflow show`, never in defs, workflows, or skills.

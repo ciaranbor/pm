@@ -635,6 +635,7 @@ impl TestServer {
             created: now,
             last_active: now,
             progress: Default::default(),
+            blocked_reason: None,
         };
         state.save(&features_dir, feature_name).unwrap();
 

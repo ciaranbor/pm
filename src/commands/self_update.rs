@@ -256,6 +256,7 @@ mod tests {
             created: chrono::Utc::now(),
             last_active: chrono::Utc::now(),
             progress: Default::default(),
+            blocked_reason: None,
         };
         wip.save(&features_dir, "feat-a").unwrap();
 
@@ -271,6 +272,7 @@ mod tests {
             created: chrono::Utc::now(),
             last_active: chrono::Utc::now(),
             progress: Default::default(),
+            blocked_reason: None,
         };
         merged.save(&features_dir, "feat-b").unwrap();
 
