@@ -10,12 +10,14 @@ import {
   Loop,
   MAX_FAILURES,
   MAX_WASTED_TURNS,
+  PM_PROMPT,
   RETRY_MS,
   TURN_FAILED,
   consumedMessage,
   drivesSession,
   hookDecision,
   turnError,
+  userInput,
   type HookResult,
 } from "./loop.ts"
 import { runPm } from "./pm.ts"
@@ -146,6 +148,15 @@ test("without one it drives top-level sessions and skips subagent sessions", asy
   const parentOf = async (id: string) => parents[id]
   assert.equal(await drivesSession(undefined, "ses_top", parentOf), true)
   assert.equal(await drivesSession(undefined, "ses_child", parentOf), false)
+})
+
+test("only text the user typed counts as their input, not the plugin's own prompts", () => {
+  const user = (payload: object) => userInput({ type: "user", payload, delivery: "steer" })
+  assert.equal(user({ text: "use postgres" }), "use postgres")
+  assert.equal(user({ text: "use postgres", metadata: { source: "tui" } }), "use postgres")
+  assert.equal(user({ text: "You have new messages", metadata: PM_PROMPT }), null)
+  assert.equal(userInput({ type: "synthetic", payload: { text: "compacted" } }), null)
+  assert.equal(userInput(undefined), null)
 })
 
 test("only a block from a hook that exited cleanly is a decision", () => {

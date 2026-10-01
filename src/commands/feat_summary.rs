@@ -36,6 +36,20 @@ pub fn show(project_root: &Path, name: &str) -> Result<String> {
     Ok(std::fs::read_to_string(path)?)
 }
 
+/// Refuse to reuse `name` while an earlier feature's summary under that
+/// name waits for `main`: the new feature would take it over.
+pub(crate) fn ensure_no_untriaged(project_root: &Path, name: &str) -> Result<()> {
+    let summary = paths::summary_path(project_root, name);
+    if summary.exists() {
+        return Err(PmError::Summary(format!(
+            "a summary from an earlier feature '{name}' at {} is waiting for main to triage; \
+             triage then delete it, or pick another name",
+            summary.display()
+        )));
+    }
+    Ok(())
+}
+
 /// Settle a feature's summary before its worktree and state go. Returns
 /// whether a summary is left for `main` to triage.
 pub(crate) fn collect(

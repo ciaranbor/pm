@@ -686,7 +686,7 @@ fn hook_issues_in(project_root: &Path, home: &Path) -> Result<Vec<Issue>> {
                     message,
                     fix: Fix::None,
                 },
-                ProblemKind::HookUntrusted => Issue {
+                ProblemKind::HookUntrusted | ProblemKind::ResetHookUntrusted => Issue {
                     kind: IssueKind::HookUntrusted,
                     message,
                     fix: Fix::None,
@@ -2274,11 +2274,15 @@ mod tests {
         let found = kinds(&diagnose(&project_path, &projects_dir, server.name(), false).unwrap());
         assert_eq!(
             found.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
-            vec![IssueKind::HookUntrusted, IssueKind::HookUntrusted],
+            vec![IssueKind::HookUntrusted; 3],
             "{found:?}"
         );
         assert!(found[0].1.contains("pm's Stop hook"), "{found:?}");
         assert!(found[1].1.contains("pm's SessionStart hook"), "{found:?}");
+        assert!(
+            found[2].1.contains("pm's UserPromptSubmit hook"),
+            "{found:?}"
+        );
 
         // Trust recorded the way codex writes it, at pm's entries' positions,
         // in a home of the test's own: trust written to the shared test home
@@ -2297,10 +2301,11 @@ mod tests {
         let mut trust = String::new();
         for &(event, markers) in hooks_install::PM_EVENTS {
             let (i, j) = hooks_install::pm_hook_position(&root, event, markers).unwrap();
-            let snake = if event == "Stop" {
-                "stop"
-            } else {
-                "session_start"
+            let snake = match event {
+                "Stop" => "stop",
+                "SessionStart" => "session_start",
+                "UserPromptSubmit" => "user_prompt_submit",
+                other => panic!("no codex trust key for {other}"),
             };
             trust.push_str(&format!(
                 "[hooks.state.\"{}:{snake}:{i}:{j}\"]\ntrusted_hash = \"sha256:t\"\n",

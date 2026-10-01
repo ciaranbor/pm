@@ -152,6 +152,7 @@ pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
     if FeatureState::exists(&features_dir, &feature_name) {
         return Err(PmError::FeatureAlreadyExists(feature_name));
     }
+    super::feat_summary::ensure_no_untriaged(params.project_root, &feature_name)?;
 
     // Load project config for name
     let config = ProjectConfig::load(&pm_dir)?;
@@ -379,6 +380,36 @@ mod tests {
         assert!(
             tmux::has_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap()
         );
+    }
+
+    #[test]
+    fn feat_new_refuses_a_name_with_an_untriaged_summary() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, projects_dir, _) = server.setup_project_no_tmux(dir.path());
+        let summary = paths::summary_path(&project_path, "login");
+        std::fs::create_dir_all(summary.parent().unwrap()).unwrap();
+        std::fs::write(&summary, "earlier notes").unwrap();
+
+        let err = feat_new(&FeatNewParams::with_defaults(
+            &project_path,
+            &projects_dir,
+            "login",
+            server.name(),
+        ))
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("earlier feature 'login'"), "{err}");
+        assert!(err.contains(&summary.display().to_string()), "{err}");
+        let main_wt = paths::main_worktree(&project_path);
+        assert!(!crate::git::branch_exists(&main_wt, "login").unwrap());
+        assert!(!project_path.join("login").exists());
+        assert!(!FeatureState::exists(
+            &paths::features_dir(&project_path),
+            "login"
+        ));
+        assert_eq!(std::fs::read_to_string(&summary).unwrap(), "earlier notes");
     }
 
     #[test]

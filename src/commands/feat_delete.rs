@@ -588,6 +588,7 @@ mod tests {
             &project_path,
             "login",
             crate::state::feature::Progress::Ready,
+            None,
             Some("implementer"),
         )
         .unwrap();

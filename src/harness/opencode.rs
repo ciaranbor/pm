@@ -16,6 +16,11 @@
 //! also appends pm's composed prompt to the system prompt of every model
 //! request, which is how the baseline and notice boards arrive.
 //!
+//! opencode has no UserPromptSubmit hook either. The plugin watches
+//! `session.inbox.enqueued` for `user` items instead and runs `pm harness
+//! hooks user-prompt` for each. Its own prompts are `user` items too, so it
+//! marks them with `metadata`, which `session.prompt` copies onto the item.
+//!
 //! A turn end is the only event the plugin can arm on, and neither a new nor
 //! a resumed session emits one, so [`pre_launch`] settles the session id
 //! before the TUI starts — created, resumed, or forked through `opencode

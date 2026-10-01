@@ -94,6 +94,7 @@ pub fn write_initializing_state(
         created: now,
         last_active: now,
         progress: Default::default(),
+        blocked_reason: None,
     };
     state.save(features_dir, name)?;
     Ok(state)

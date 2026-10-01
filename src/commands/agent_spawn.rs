@@ -115,6 +115,11 @@ fn definition_flag(effective_definition: Option<&str>) -> Option<&str> {
     effective_definition.filter(|d| !workflow::is_vanilla(d))
 }
 
+/// The prompt a named agent is launched with when none is given, so its
+/// first turn ends at once and the Stop hook takes over. It is not the
+/// user's input (see [`super::hooks_user_prompt`]).
+pub const SPAWN_PROMPT: &str = "Stand by.";
+
 /// Parameters for spawning an agent session in a tmux window.
 pub struct SpawnParams<'a> {
     pub project_root: &'a Path,
@@ -205,7 +210,7 @@ fn spawn_session_with_config(
     // they're interactive by design.
     let effective_prompt = match (params.prompt, params.agent_name) {
         (Some(p), _) => Some(p),
-        (None, Some(_)) => Some("Stand by."),
+        (None, Some(_)) => Some(SPAWN_PROMPT),
         (None, None) => None,
     };
 
@@ -632,6 +637,7 @@ pub(crate) mod tests {
             created: now,
             last_active: now,
             progress: Default::default(),
+            blocked_reason: None,
         };
         state.save(&pm_dir.join("features"), feature_name).unwrap();
 

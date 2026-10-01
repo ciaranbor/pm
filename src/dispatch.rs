@@ -455,6 +455,16 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                 }
             }
         }
+        Commands::Feat(FeatCommands::List { all: true }) => {
+            let lines = commands::feat_list::feat_list_all(&paths::global_projects_dir()?)?;
+            if lines.is_empty() {
+                println!("No projects");
+            }
+            for line in lines {
+                println!("{line}");
+            }
+            Ok(())
+        }
         Commands::Feat(feat_cmd) => {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
             let projects_dir = paths::global_projects_dir()?;
@@ -502,7 +512,8 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     println!("Adopted feature '{feat_name}'");
                     Ok(())
                 }
-                FeatCommands::List => {
+                // `--all` is dispatched before a project is resolved.
+                FeatCommands::List { .. } => {
                     let lines = commands::feat_list::feat_list(&project_root)?;
                     if lines.is_empty() {
                         println!("No features");
@@ -619,12 +630,48 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         Ok(())
                     }
                 },
-                FeatCommands::Status { status, name } => {
+                FeatCommands::Status {
+                    status,
+                    name,
+                    reason,
+                } => {
+                    use commands::feat_status::Request;
+                    let request = commands::feat_status::request(
+                        &project_root,
+                        status,
+                        name,
+                        reason.is_some(),
+                    )?;
+                    let (status, name) = match request {
+                        Request::Set { progress, name } => (progress, name),
+                        Request::View { name } => {
+                            let lines = match name {
+                                Some(name) => {
+                                    commands::feat_status_view::feature(&project_root, &name)?
+                                }
+                                None if resolve_scope(&project_root)? == "main" => {
+                                    commands::feat_status_view::project(&project_root)?
+                                }
+                                None => commands::feat_status_view::feature(
+                                    &project_root,
+                                    &resolve_feature_name(None, &project_root)?,
+                                )?,
+                            };
+                            if lines.is_empty() {
+                                println!("No features");
+                            }
+                            for line in lines {
+                                println!("{line}");
+                            }
+                            return Ok(());
+                        }
+                    };
                     let name = resolve_feature_name(name, &project_root)?;
                     commands::feat_status::feat_status(
                         &project_root,
                         &name,
                         status,
+                        reason.as_deref(),
                         running_agent().as_deref(),
                     )?;
                     println!("Feature '{name}' is {status}");
@@ -1027,6 +1074,9 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
             HarnessHooksCommands::Stop => exit_unless_ok(commands::hooks_stop::stop()),
             HarnessHooksCommands::SessionStart => {
                 exit_unless_ok(commands::hooks_session_start::session_start())
+            }
+            HarnessHooksCommands::UserPrompt => {
+                exit_unless_ok(commands::hooks_user_prompt::user_prompt())
             }
         },
         HarnessCommands::Pull { name, dry_run } => {

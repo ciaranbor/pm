@@ -14,8 +14,8 @@ instruction, then step back — usually your involvement ends at creation.
 Feature agents own the feature and report to the user in their own
 session, not back to you. Don't expect or solicit progress/completion
 reports; you re-engage only to triage a feature's summary (see
-"Reconcile feature outcomes" below). `pm feat list` shows where each
-feature stands (wip, blocked on the user, or ready).
+"Reconcile feature outcomes" below). `pm feat status` shows where each
+feature stands (wip, blocked on the user and why, or ready).
 
 ## Project layout
 

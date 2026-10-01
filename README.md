@@ -75,9 +75,16 @@ main). If the parent is merged or deleted first, the child's base is gone:
 The lifecycle: `pm feat new` → work → optionally `pm feat pr create` /
 `pm feat pr ready` / `pm feat review` → `pm feat merge` (cleans up by default).
 While it runs, the agents record where it stands with `pm feat status
-wip|blocked|ready` — `blocked` when waiting on you, `ready` when done and
-waiting on your merge or delete — and `pm feat list` / `pm status` show it
-(`merge` warns about a feature not marked ready).
+wip|blocked|ready` — `blocked` when waiting on you (`-m "<question>"` says
+what for), `ready` when done and waiting on your merge or delete (`merge`
+warns about a feature not marked ready). Typing into a blocked feature's
+agent sets it back to `wip`.
+
+Bare `pm feat status` shows what needs your attention: in a feature, its
+status, blocked reason, last activity and the head of its summary; in main,
+one row per feature with the blocked reason or the ready summary's first
+line. `pm feat list` is the inventory instead — status, lifecycle, branch,
+base and PR — and `pm feat list --all` covers every registered project.
 Inspection and housekeeping subcommands (`list`, `info`, `switch`, `rename`,
 `rebase`, `delete`, `sync`) round out `pm feat` — see `pm feat --help`.
 `merge` refuses a feature or base worktree with uncommitted changes or a
@@ -351,7 +358,8 @@ harnesses; what differs:
   init`/`pm upgrade` install `pm-never-idle` under
   `~/.config/opencode/plugins/` (or `$XDG_CONFIG_HOME/opencode/plugins/`).
   When the agent's turn ends it waits for a message exactly as the Stop hook
-  does, then prompts the session. It does nothing in a session pm didn't
+  does, then prompts the session; it also resets a blocked feature when
+  you type into the session. It does nothing in a session pm didn't
   spawn. The files are pm's: an upgrade overwrites them, and opencode
   reloads the plugin in running agents when it does.
 - **The loop stops itself rather than run away.** If five turns in a row are
@@ -488,7 +496,14 @@ again. This turns every pm-managed agent into a never-idle processor:
 `--context` at feature creation just queues the first message, delivered
 exactly like any later peer message.
 
-The hook applies to every session of that harness on the machine, so its
+A second hook, on UserPromptSubmit, sets a blocked feature back to `wip`
+when you type into one of its agents; pm's messages arrive as continuations,
+which never fire it. Codex asks you to trust each new hook once: after
+upgrading, accept the trust prompt again (`pm doctor` reports a hook codex
+has not trusted). Until then the reset does not happen on codex, but agents
+run normally.
+
+The hooks apply to every session of that harness on the machine, so each
 command is guarded on `PM_AGENT_NAME`: a session pm didn't spawn exits it
 immediately, without needing `pm` on its `PATH`.
 
@@ -555,8 +570,10 @@ the orchestrator (`pm workflow show` says what belongs in it), kept at
 agents edit it like any other file (Claude Code agents are spawned with
 `--add-dir` on that directory). `pm feat status ready` requires it and
 messages `main` to triage it; cleanup hands `main` any summary it was not
-told about. A worktree `summary.md` from an older feature is still collected
-on cleanup; to mark such a feature ready, move it to that path first.
+told about. Until `main` has triaged and deleted it, `pm feat new` and
+`pm feat adopt` refuse that feature name. A worktree `summary.md` from an
+older feature is still collected on cleanup; to mark such a feature ready,
+move it to that path first.
 
 ### Asset tiers
 

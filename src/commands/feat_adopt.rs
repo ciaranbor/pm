@@ -52,6 +52,7 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
     if FeatureState::exists(&features_dir, &feature_name) {
         return Err(PmError::FeatureAlreadyExists(feature_name));
     }
+    super::feat_summary::ensure_no_untriaged(params.project_root, &feature_name)?;
 
     // Verify branch exists
     let main_worktree = paths::main_worktree(params.project_root);
@@ -369,6 +370,34 @@ mod tests {
 
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), PmError::BranchNotFound(_)));
+    }
+
+    #[test]
+    fn feat_adopt_refuses_a_name_with_an_untriaged_summary() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, projects_dir, _) = server.setup_project_no_tmux(dir.path());
+        create_branch(&project_path, "login");
+        let summary = paths::summary_path(&project_path, "login");
+        std::fs::create_dir_all(summary.parent().unwrap()).unwrap();
+        std::fs::write(&summary, "earlier notes").unwrap();
+
+        let err = feat_adopt(&default_adopt_params(
+            &project_path,
+            &projects_dir,
+            "login",
+            server.name(),
+        ))
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("earlier feature 'login'"), "{err}");
+        assert!(!project_path.join("login").exists());
+        assert!(!FeatureState::exists(
+            &paths::features_dir(&project_path),
+            "login"
+        ));
+        assert_eq!(std::fs::read_to_string(&summary).unwrap(), "earlier notes");
     }
 
     #[test]

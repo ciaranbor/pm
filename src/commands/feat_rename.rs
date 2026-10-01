@@ -403,6 +403,7 @@ mod tests {
             &project_path,
             "login",
             Progress::Ready,
+            None,
             Some("implementer"),
         )
         .unwrap();

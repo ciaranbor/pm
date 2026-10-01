@@ -19,6 +19,11 @@
 //! flat shape parses and registers nothing). Codex reads skills from the
 //! canonical `.agents/skills/` directly, so nothing is projected for it.
 //!
+//! UserPromptSubmit, like Claude Code's, runs for submitted input and not
+//! for a Stop `block` continuation (from the 0.157 source: the continuation
+//! is recorded without passing through `inspect_pending_input`; not
+//! verified live). Its stdout becomes developer context.
+//!
 //! Two trust gates in `$CODEX_HOME/config.toml` stand between a spawn and a
 //! working agent: `[projects."<dir>"] trust_level = "trusted"`, which pm writes
 //! per worktree before launching, and `[hooks.state."<hooks.json>:<event>:<i>:<j>"]
