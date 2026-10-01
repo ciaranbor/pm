@@ -3,16 +3,23 @@
 //! (README, "tmux plugin", has the user-facing options).
 //!
 //! The user's config is theirs: init sets only the `@pm_*` options pm owns,
-//! appends to a format rather than replacing it, and binds only the keys the
-//! user named. A config reload runs it again, so every step is idempotent:
-//! the window-list badge is appended only to a format that doesn't mention
-//! it yet, and a second watcher exits at once
-//! ([`tmux_watch`](super::tmux_watch)).
+//! appends to a format rather than replacing it, and changes a key the user
+//! didn't name only by adding pm's format and Enter action to a plain
+//! `choose-tree` on `s` or `w`, keeping its flags, note and repeat flag, and
+//! sorting it by name if it sets no order. It reads those bindings as they
+//! stand when it runs, so it must run after the config binds them.
+//!
+//! A config reload runs it again, so every step is idempotent: the
+//! window-list badge is appended only to a format that doesn't mention it
+//! yet, pm's tree binding is recognised and rebuilt from the flags under it
+//! (which also picks up a changed `@pm-bin`), and a second watcher exits at
+//! once ([`tmux_watch`](super::tmux_watch)).
 //!
 //! It runs as a `run-shell` job, often while the config is still loading
 //! and no session exists yet, so it reads global options only.
 
 use crate::error::{PmError, Result};
+use crate::tmux::keys::{self, Binding};
 use crate::tmux::options::{self, Command, Scope};
 use crate::tmux::shell_quote;
 
@@ -20,7 +27,7 @@ use super::tmux_watch::AUTO_REFRESH;
 
 const BIN: &str = "@pm-bin";
 const WINDOW_STATUS: &str = "@pm-window-status";
-const TREE_KEY: &str = "@pm-tree-key";
+const BIND_TREE: &str = "@pm-bind-tree";
 const ATTENTION_KEY: &str = "@pm-attention-key";
 
 pub const TREE_FORMAT_OPTION: &str = "@pm_tree_format";
@@ -47,6 +54,10 @@ pub const TREE_FORMAT: &str = concat!(
     "}}",
 );
 
+/// The keys whose `choose-tree` init gives pm's format and Enter action:
+/// tmux's session and window trees.
+const TREE_KEYS: &[&str] = &["s", "w"];
+
 /// What init appends to each window-list format.
 const BADGE: &str = "#{?@pm_agent_badge, #{@pm_agent_badge},}";
 const WINDOW_FORMATS: &[&str] = &["window-status-format", "window-status-current-format"];
@@ -54,7 +65,7 @@ const WINDOW_FORMATS: &[&str] = &["window-status-format", "window-status-current
 pub fn init(tmux_server: Option<&str>) -> Result<()> {
     let settings = options::read_global(
         tmux_server,
-        &[BIN, AUTO_REFRESH, WINDOW_STATUS, TREE_KEY, ATTENTION_KEY],
+        &[BIN, AUTO_REFRESH, WINDOW_STATUS, BIND_TREE, ATTENTION_KEY],
     )?
     .ok_or_else(|| PmError::Tmux("no tmux server running".into()))?;
     let bin = match settings.get(BIN) {
@@ -72,11 +83,20 @@ pub fn init(tmux_server: Option<&str>) -> Result<()> {
         let format = options::show(tmux_server, name)?;
         commands.extend(window_status(name, &format, badges));
     }
-    for (option, filter) in [(TREE_KEY, None), (ATTENTION_KEY, Some("#{@pm_attention}"))] {
-        let key = settings.get(option);
-        if !key.is_empty() {
-            commands.push(tree_binding(key, filter, &bin));
+    let template = jump_template(&bin);
+    let bind_tree = settings.get(BIND_TREE) != "off";
+    let table = keys::prefix_table(tmux_server)?;
+    for key in TREE_KEYS {
+        if let Some(bound) = table.get(*key) {
+            commands.extend(tree_key(key, bound, bind_tree, &template));
         }
+    }
+    let attention_key = settings.get(ATTENTION_KEY);
+    if !attention_key.is_empty() {
+        commands.push(options::bind_key(
+            attention_key,
+            options::choose_tree(&tree_format(), Some("#{@pm_attention}"), &template),
+        ));
     }
     if settings.get(AUTO_REFRESH) != "off" {
         commands.push(options::run_shell_background(&format!("{bin} tmux watch")));
@@ -98,16 +118,72 @@ fn window_status(name: &str, format: &str, badges: bool) -> Option<Command> {
     Some(options::set(Scope::Global, name, Some(original)))
 }
 
-/// Bind `key` to pm's tree, showing only the sessions `filter` matches.
-fn tree_binding(key: &str, filter: Option<&str>, bin: &str) -> Command {
-    options::bind_key(
-        key,
-        options::choose_tree(
-            &format!("#{{E:{TREE_FORMAT_OPTION}}}"),
-            filter,
-            &format!("run-shell \"{bin} tmux jump --client '#{{client_name}}' '%%'\""),
-        ),
-    )
+fn tree_format() -> String {
+    format!("#{{E:{TREE_FORMAT_OPTION}}}")
+}
+
+/// What choosing an item in pm's tree runs: `pm tmux jump` to its target.
+fn jump_template(bin: &str) -> String {
+    format!("run-shell \"{bin} tmux jump --client '#{{client_name}}' '%%'\"")
+}
+
+/// The rebinding of `key`, now `bound`: with `on`, a `choose-tree` with
+/// neither a format nor a template of the user's own gets pm's format and
+/// `template`, and sorts by name unless it sets an order, so each project's
+/// `{project}/{scope}` sessions sit together. Turned off, pm's format and
+/// template come off again and so does `-O name`: a binding still pm's after
+/// the config has run is one the config no longer sets, so its name order is
+/// taken to be pm's default rather than the user's.
+fn tree_key(key: &str, bound: &Binding, on: bool, template: &str) -> Option<Command> {
+    let (command, args) = bound.command.as_ref()?.split_first()?;
+    if command != "choose-tree" {
+        return None;
+    }
+    let mut flags = Vec::new();
+    let mut sort = None;
+    let mut format = None;
+    let mut user_template = None;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if user_template.is_some() {
+            return None;
+        }
+        match arg.as_str() {
+            "-F" => format = Some(args.next()?.clone()),
+            "-O" => sort = Some(args.next()?.clone()),
+            "-f" | "-K" | "-t" => flags.extend([arg.clone(), args.next()?.clone()]),
+            a if a.len() > 1
+                && a.starts_with('-')
+                && a[1..].chars().all(|c| "GNrswyZ".contains(c)) =>
+            {
+                flags.push(arg.clone())
+            }
+            _ => user_template = Some(arg.clone()),
+        }
+    }
+    let pms = format.as_deref() == Some(tree_format().as_str())
+        && user_template
+            .as_deref()
+            .is_some_and(|t| t.contains(" tmux jump "));
+    if pms {
+        format = None;
+        user_template = None;
+    }
+    let mut command = vec!["choose-tree".to_string()];
+    command.extend(flags);
+    if on {
+        if format.is_some() || user_template.is_some() {
+            return None;
+        }
+        let sort = sort.unwrap_or_else(|| "name".to_string());
+        command.extend(["-O".to_string(), sort, "-F".to_string(), tree_format()]);
+        command.push(template.to_string());
+    } else if !pms {
+        return None;
+    } else if let Some(sort) = sort.filter(|s| s != "name") {
+        command.extend(["-O".to_string(), sort]);
+    }
+    Some(bound.rebind(key, command))
 }
 
 #[cfg(test)]
@@ -128,12 +204,15 @@ mod tests {
         String::from_utf8_lossy(&out.stdout).into_owned()
     }
 
-    fn binding(server: &OwnServer, key: &str) -> String {
-        tmux(server, &["list-keys", "-T", "prefix"])
-            .lines()
-            .find(|l| l.split_whitespace().nth(3) == Some(key))
-            .unwrap_or_default()
-            .to_string()
+    fn binding(server: &OwnServer, key: &str) -> Command {
+        keys::prefix_table(server.name()).unwrap()[key]
+            .command
+            .clone()
+            .unwrap()
+    }
+
+    fn args(args: &[&str]) -> Command {
+        args.iter().map(|a| a.to_string()).collect()
     }
 
     /// A stand-in for pm that records each invocation's arguments.
@@ -162,12 +241,12 @@ mod tests {
             &server,
             &["setw", "-g", "window-status-current-format", "#I*#W "],
         );
-        tmux(&server, &["bind", "s", "choose-tree", "-Zs", "-O", "name"]);
-        let users_s = binding(&server, "s");
-        assert!(users_s.contains("choose-tree"), "{users_s}");
-        tmux(&server, &["set", "-g", TREE_KEY, "T"]);
+        tmux(&server, &["bind", "s", "choose-tree", "-Zs", "-O", "index"]);
+        let users_w = ["choose-tree", "-Zw", "-F", "#{window_name}"];
+        tmux(&server, &[&["bind", "w"], &users_w[..]].concat());
 
         init(server.name()).unwrap();
+        let first = binding(&server, "s");
         init(server.name()).unwrap();
 
         assert_eq!(
@@ -182,21 +261,33 @@ mod tests {
             options::show(server.name(), "status-right").unwrap(),
             "mine %H:%M"
         );
-        assert_eq!(binding(&server, "s"), users_s);
+        let template = jump_template(&shell_quote(&bin));
+        assert_eq!(
+            binding(&server, "s"),
+            args(&[
+                "choose-tree",
+                "-Zs",
+                "-F",
+                &tree_format(),
+                "-O",
+                "index",
+                &template
+            ]),
+            "the user's flags kept, in tmux's order"
+        );
+        assert_eq!(binding(&server, "s"), first, "nothing stacked by a rerun");
+        assert_eq!(
+            binding(&server, "w"),
+            args(&users_w),
+            "the user's own format"
+        );
         assert_eq!(
             options::show(server.name(), TREE_FORMAT_OPTION).unwrap(),
             TREE_FORMAT
         );
-        // What choosing a session in the tree runs: the template as tmux
-        // printed it, unquoted, with the item's target for `%%`.
-        let tree = binding(&server, "T");
-        let template = tree[tree.find("\"run-shell").unwrap()..]
-            .trim_end()
-            .strip_prefix('"')
-            .and_then(|t| t.strip_suffix('"'))
-            .unwrap()
-            .replace("\\\"", "\"")
-            .replace("%%", "=app/login:");
+        // What choosing a session in the tree runs, as tmux stored it, with
+        // the item's target for `%%`.
+        let template = first.last().unwrap().replace("%%", "=app/login:");
         let chosen = dir.path().join("chosen.conf");
         std::fs::write(&chosen, template).unwrap();
         tmux(&server, &["source-file", chosen.to_str().unwrap()]);
@@ -246,15 +337,39 @@ mod tests {
                 "#I #{@pm_agent_badge} #W",
             ],
         );
+        let users_w = ["choose-tree", "-Zw", "switch-client -t '%%'"];
+        tmux(&server, &[&["bind", "w"], &users_w[..]].concat());
         init(server.name()).unwrap();
         assert_eq!(
             options::show(server.name(), "window-status-current-format").unwrap(),
             "#I #{@pm_agent_badge} #W",
             "the user placed the badge"
         );
+        assert_eq!(
+            binding(&server, "s"),
+            args(&[
+                "choose-tree",
+                "-Zs",
+                "-F",
+                &tree_format(),
+                "-O",
+                "name",
+                &jump_template("pm")
+            ]),
+            "tmux's own binding, sorted by name"
+        );
+        assert_eq!(
+            binding(&server, "w"),
+            args(&users_w),
+            "the user's own template"
+        );
 
         tmux(&server, &["set", "-g", WINDOW_STATUS, "off"]);
+        tmux(&server, &["set", "-g", BIND_TREE, "off"]);
         init(server.name()).unwrap();
+
+        assert_eq!(binding(&server, "s"), args(&["choose-tree", "-Zs"]));
+        assert_eq!(binding(&server, "w"), args(&users_w));
 
         for name in WINDOW_FORMATS {
             assert_eq!(
@@ -266,5 +381,41 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn the_default_trees_follow_a_changed_bin_and_keep_their_notes() {
+        let server = OwnServer::start("init-bin");
+        tmux(&server, &["set", "-g", AUTO_REFRESH, "off"]);
+        let tree = |flags: &str, bin: &str| {
+            args(&[
+                "choose-tree",
+                flags,
+                "-F",
+                &tree_format(),
+                "-O",
+                "name",
+                &jump_template(bin),
+            ])
+        };
+
+        init(server.name()).unwrap();
+        assert_eq!(binding(&server, "s"), tree("-Zs", "pm"));
+        assert_eq!(binding(&server, "w"), tree("-Zw", "pm"));
+
+        tmux(&server, &["set", "-g", BIN, "/new/pm"]);
+        init(server.name()).unwrap();
+
+        let table = keys::prefix_table(server.name()).unwrap();
+        assert_eq!(table["s"].command, Some(tree("-Zs", "'/new/pm'")));
+        assert_eq!(table["w"].command, Some(tree("-Zw", "'/new/pm'")));
+        assert_eq!(
+            table["s"].note.as_deref(),
+            Some("Choose a session from a list")
+        );
+        assert_eq!(
+            table["w"].note.as_deref(),
+            Some("Choose a window from a list")
+        );
     }
 }

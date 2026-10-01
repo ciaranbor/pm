@@ -26,7 +26,8 @@ Installs the `pm` binary to `~/.cargo/bin/` (ensure it's on your `PATH`).
 
 ### tmux plugin
 
-Add one line to your tmux config:
+Add one line to your tmux config, after any options below and any `bind s`
+or `bind w` of yours, since init reads them as they stand when it runs:
 
 ```tmux
 run-shell 'pm tmux init'
@@ -35,10 +36,10 @@ run-shell 'pm tmux init'
 The plugin is part of the binary, so it always matches the installed pm.
 tmux runs it with the server's environment, not your shell's, so
 `pm` must be on the `PATH` the server started with; set `@pm-bin` to its
-full path otherwise. Set any options below *before* the line. Init only
-adds to your config: it sets pm's own `@pm_*` options, appends to formats
-rather than replacing them, binds only keys you name, and is safe to re-run
-on a config reload.
+full path otherwise. Init only adds to your config: it sets pm's own
+`@pm_*` options, appends to formats rather than replacing them, makes your
+session and window trees pm's tree (below), and is safe to re-run on a
+config reload.
 
 | Option | Default | Effect |
 |---|---|---|
@@ -46,7 +47,7 @@ on a config reload.
 | `@pm-auto-refresh` | on | keep pm's options current: one background `pm tmux refresh` loop per server; `off` stops it |
 | `@pm-refresh-interval` | `5` | seconds between refreshes |
 | `@pm-window-status` | on | append each agent window's badge to `window-status-format` and `window-status-current-format` (skipped for a format that already shows `@pm_agent_badge`); `off` removes it |
-| `@pm-tree-key` | unset | a prefix key opening pm's tree (below) |
+| `@pm-bind-tree` | on | when prefix `s` or `w` runs a `choose-tree` with no format or template of yours (tmux's default does), add pm's format and Enter action, keeping its flags and note, and sort by name (`-O name`, grouping each project's sessions) if it sets no order: tmux's defaults become `choose-tree -Zs -O name` and `choose-tree -Zw -O name` plus pm's; `off` takes pm's additions off again |
 | `@pm-attention-key` | unset | a prefix key opening pm's tree with only the sessions needing attention — when none does, tmux shows them all |
 
 The window badge is a glyph for the agent's state — `●` busy (green), `○`
@@ -63,10 +64,10 @@ set -g status-right '#{E:@pm_summary} %H:%M'
 
 pm's tree is tmux's own tree with each feature's attention and reason and
 each agent's badge. Choosing a feature's session goes to the agent it is
-waiting on (`pm tmux jump`). To make your `s` key use it:
+waiting on (`pm tmux jump`). With `@pm-bind-tree off`, or on another key:
 
 ```tmux
-bind s choose-tree -Zs -O name -F '#{E:@pm_tree_format}' "run-shell \"pm tmux jump --client '#{client_name}' '%%'\""
+bind T choose-tree -Zs -O name -F '#{E:@pm_tree_format}' "run-shell \"pm tmux jump --client '#{client_name}' '%%'\""
 ```
 
 ## Quick start

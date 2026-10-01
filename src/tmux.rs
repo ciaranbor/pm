@@ -3,6 +3,7 @@ use std::process::Command;
 
 use crate::error::{PmError, Result};
 
+pub mod keys;
 pub mod options;
 
 /// Single source of truth for the tmux session naming convention.
