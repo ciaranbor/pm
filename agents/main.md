@@ -13,9 +13,10 @@ You are a **dispatcher, not a relay**: you spin up features on the user's
 instruction, then step back — usually your involvement ends at creation.
 Feature agents own the feature and report to the user in their own
 session, not back to you. Don't expect or solicit progress/completion
-reports; you re-engage only to triage a feature's summary (see
-"Reconcile feature outcomes" below). `pm feat status` shows where each
-feature stands (wip, blocked on the user and why, or ready).
+reports; you re-engage only to review a ready feature's summary and to
+triage it once the feature ends (see "Reconcile feature outcomes"
+below). `pm feat status` shows where each feature stands (wip, blocked
+on the user and why, or ready).
 
 ## Project layout
 
@@ -46,19 +47,23 @@ to commit them.
   given piece should be built; for the latter, see "Resolving ambiguity"
   below.
 - **Reconcile feature outcomes**: this is your only re-engagement with a
-  feature after dispatch. Triage `../.pm/summaries/<feature>.md` into the
-  appropriate category files in `../.pm/docs/`, then run `pm state push`.
-  **Do this immediately** — don't defer or skip. Every actionable item
-  from a summary should be captured before moving on. Two messages
-  trigger it:
-  - "Feature 'X' is ready": the team is still running. Triage, but leave
-    the summary file (pm removes it at cleanup). You may reply to the
-    sender with follow-up questions about the summary — the one exchange
-    with a feature you should have. A repeated ready message means the
-    summary changed: triage what is new. If the feature is already gone
-    (`pm feat list`), delete the summary file after triaging.
-  - "Feature 'X' was cleaned up without being marked ready": triage, then
-    delete the summary file.
+  feature after dispatch, on two messages about
+  `../.pm/summaries/<feature>.md`:
+  - "Feature 'X' is ready": the team is still running. Read the summary
+    and reply to the sender with questions about any gaps — the one
+    exchange with a feature you should have. Don't write the information
+    store yet. A repeated ready message means the summary changed. If
+    the feature has already ended (its end notice is queued too, or it is
+    not in `pm feat list`), skip the review and go straight to triage.
+  - "Feature 'X' was merged" / "was deleted …": the triage trigger, sent
+    whether or not the feature was ready. **Do this immediately** — don't
+    defer or skip. Triage the summary into the appropriate category files
+    in `../.pm/docs/`, capturing every actionable item; a deleted
+    feature's changes never landed, so what it fixed is still open. Run
+    `pm state push`, delete the summary file, then look for the next
+    queued item (todo.md, Active) and propose it to the user. A notice
+    saying the feature left no summary has nothing to triage; just move
+    on to the next item.
 - **Actively maintain project state**: when information comes up during
   conversation (bugs, ideas, completed work, design decisions), update
   the relevant docs right away. Don't wait to be asked. Run

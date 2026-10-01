@@ -1,11 +1,11 @@
 //! `pm feat status`: the team's own account of where a feature stands.
 //!
-//! `ready` is the orchestrator's single triage trigger: it requires a
-//! non-empty summary and messages `main` each time it is set, so re-marking
-//! a feature ready is how a revised summary reaches `main`. The message
-//! carries the sender's feature scope, so `main` can reply to the agent with
-//! follow-up questions while the team is still running. `blocked` and `wip`
-//! message no one.
+//! `ready` requires a non-empty summary and messages `main` each time it is
+//! set, so re-marking a feature ready is how a revised summary reaches
+//! `main`. `main` reviews it for gaps; triage waits for the merge or delete
+//! notice (see [`super::feat_delete`]). The message carries the sender's
+//! feature scope, so `main` can reply to the agent with follow-up questions
+//! while the team is still running. `blocked` and `wip` message no one.
 //!
 //! A blocked feature may carry a reason, the question the user is to
 //! answer. Any later status change drops it.
@@ -69,10 +69,9 @@ pub fn feat_status(
 }
 
 /// Tell `main` that `name` is ready and where its summary is. The message
-/// always carries the feature's scope, which is how cleanup recognises it
-/// as still unread.
+/// always carries the feature's scope, which `pm feat rename` rewrites.
 fn notify_ready(project_root: &Path, name: &str, agent: Option<&str>) -> Result<()> {
-    let body = ready_body(name, agent.is_some());
+    let body = ready_body(project_root, name, agent.is_some());
     let sender = agent.map_or_else(messages::default_user_name, str::to_string);
     messages::send_with_scope(
         &paths::messages_dir(project_root),
@@ -86,10 +85,11 @@ fn notify_ready(project_root: &Path, name: &str, agent: Option<&str>) -> Result<
 }
 
 /// The ready message for `name`; `repliable` when an agent sent it.
-pub(crate) fn ready_body(name: &str, repliable: bool) -> String {
+pub(crate) fn ready_body(project_root: &Path, name: &str, repliable: bool) -> String {
     let mut body = format!(
         "Feature '{name}' is ready: its work is done and waits on the user to merge or delete it. \
-         Triage its summary at .pm/summaries/{name}.md."
+         Review its summary at {} for gaps; triage happens at merge or delete.",
+        paths::summary_path(project_root, name).display()
     );
     if repliable {
         body.push_str(" The team is still running; reply here with any follow-up questions.");
@@ -242,7 +242,12 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(msg.meta.sender_scope.as_deref(), Some("login"));
-        assert!(msg.body.contains(".pm/summaries/login.md"), "{}", msg.body);
+        assert!(
+            msg.body
+                .contains(&paths::summary_path(&project, "login").display().to_string()),
+            "{}",
+            msg.body
+        );
     }
 
     #[test]

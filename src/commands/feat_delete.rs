@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use crate::error::{PmError, Result};
 use crate::state::agent::AgentRegistry;
-use crate::state::feature::{BaseCheckout, FeatureState, base_checkout};
+use crate::state::feature::{BaseCheckout, FeatureState, FeatureStatus, base_checkout};
 use crate::state::paths;
 use crate::state::project::{ProjectConfig, ProjectEntry};
 use crate::{gh, git, hooks, messages, tmux};
@@ -86,6 +86,38 @@ pub struct CleanupParams<'a> {
     /// The scope whose session the client is switched to when it was
     /// attached to the one being killed.
     pub base_scope: &'a str,
+    /// How the feature ended, for `main`'s notice; `None` tells no one and
+    /// leaves the summary alone (a rollback, or the project going too).
+    pub ending: Option<Ending>,
+}
+
+/// How a feature ended. `main` triages its summary differently: a deleted
+/// feature's changes never landed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ending {
+    Merged,
+    Deleted,
+    /// Deleted with no commits of its own, which git alone would call
+    /// merged. A branch fast-forwarded onto an advanced base has moved, so
+    /// it still reads as `Merged`.
+    DeletedEmpty,
+}
+
+/// `main`'s notice that `name` ended, its triage trigger.
+fn ending_body(name: &str, ending: Ending, summary: Option<&Path>) -> String {
+    let what = match ending {
+        Ending::Merged => "was merged",
+        Ending::Deleted => "was deleted without being merged: its changes never landed",
+        Ending::DeletedEmpty => "was deleted with no commits of its own",
+    };
+    let next = match summary {
+        Some(path) => format!(
+            "Triage its summary at {}, then delete the file.",
+            path.display()
+        ),
+        None => "It left no summary.".to_string(),
+    };
+    format!("Feature '{name}' {what}. {next}")
 }
 
 /// The scope to land in after a feature's session is killed: that of its
@@ -193,20 +225,15 @@ pub(crate) fn cleanup_feature_with_timing(
         }};
     }
 
-    // Step 0: Settle the summary while the worktree and feature state that
-    // decide its fate still exist.
-    let mut notify_main = false;
+    // Step 0: Keep the summary while the worktree that may hold a legacy one
+    // still exists.
+    let mut summary = None;
     run!(tlog, "collect-summary", params.best_effort, {
-        if let Some(project_root) = params.features_dir.parent().and_then(Path::parent) {
-            let progress = FeatureState::load(params.features_dir, params.name)
-                .map(|s| s.progress)
-                .unwrap_or_default();
-            notify_main = super::feat_summary::collect(
-                project_root,
-                params.worktree_path,
-                params.name,
-                progress,
-            )?;
+        if params.ending.is_some()
+            && let Some(project_root) = params.features_dir.parent().and_then(Path::parent)
+        {
+            summary =
+                super::feat_summary::collect(project_root, params.worktree_path, params.name)?;
         }
         Ok(())
     })?;
@@ -265,23 +292,19 @@ pub(crate) fn cleanup_feature_with_timing(
         Ok(())
     })?;
 
-    // Step 4.5: Hand main a summary it has not triaged, before killing the
-    // session (the session kill terminates this process if run from within
-    // the feature session)
+    // Step 4.5: Tell main how the feature ended, before killing the session
+    // (the session kill terminates this process if run from within the
+    // feature session)
     run!(tlog, "notify-main", params.best_effort, {
-        if notify_main && let Some(pm_dir) = params.features_dir.parent() {
-            let messages_dir = pm_dir.join("messages");
-            let body = format!(
-                "Feature '{}' was cleaned up without being marked ready. Triage its summary at \
-                 .pm/summaries/{}.md, then delete the file.",
-                params.name, params.name
-            );
+        if let Some(ending) = params.ending
+            && let Some(pm_dir) = params.features_dir.parent()
+        {
             messages::send_with_scope(
-                &messages_dir,
+                &pm_dir.join("messages"),
                 "main",
                 "main",
                 params.name,
-                &body,
+                &ending_body(params.name, ending, summary.as_deref()),
                 Some(params.name),
             )?;
         }
@@ -420,9 +443,11 @@ pub fn feat_delete(
     let pr_merged = !state.pr.is_empty() && gh::pr_is_merged(base_repo, &state.pr).unwrap_or(false);
 
     // Run safety checks unless --force
+    let git_merged;
     let has_untracked = if !force {
         let report = check_safety(&worktree_path, base_repo, &state.branch, base)?;
         evaluate_safety(&report, pr_merged, name)?;
+        git_merged = report.is_merged;
 
         if report.has_warnings() {
             eprintln!(
@@ -435,7 +460,18 @@ pub fn feat_delete(
         }
         !report.untracked_files.is_empty()
     } else {
+        git_merged = git::branch_merged_into(base_repo, &state.branch, base).unwrap_or(false);
         false
+    };
+
+    let ending = if pr_merged || state.status == FeatureStatus::Merged {
+        Ending::Merged
+    } else if !git_merged {
+        Ending::Deleted
+    } else if git::branch_commits_pointed_at(base_repo, &state.branch)? == 1 {
+        Ending::DeletedEmpty
+    } else {
+        Ending::Merged
     };
 
     // Force-remove worktree if --force was passed or if there are untracked files
@@ -455,6 +491,7 @@ pub fn feat_delete(
         delete_branch: true,
         best_effort: false,
         base_scope: &checkout.scope,
+        ending: Some(ending),
     })?;
 
     // Trigger post-merge hook when deleting a feature whose PR was merged
@@ -542,12 +579,31 @@ mod tests {
         assert!(!runtime.exists());
     }
 
-    fn main_unread(project: &Path) -> u32 {
-        messages::check(&paths::messages_dir(project), "main", "main")
+    /// `main`'s unread messages, oldest first.
+    fn main_inbox(project: &Path) -> Vec<String> {
+        let dir = paths::messages_dir(project);
+        messages::list(&dir, "main", "main", None)
             .unwrap()
-            .iter()
-            .map(|s| s.count)
-            .sum()
+            .into_iter()
+            .filter(|m| m.status != messages::MessageStatus::Read)
+            .map(|m| {
+                messages::read_at(&dir, "main", "main", &m.sender, m.index)
+                    .unwrap()
+                    .unwrap()
+                    .body
+            })
+            .collect()
+    }
+
+    fn delete(server: &TestServer, project_path: &Path, force: bool) {
+        feat_delete(
+            project_path,
+            &TestServer::registry_dir(project_path),
+            "login",
+            force,
+            server.name(),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -561,24 +617,35 @@ mod tests {
         )
         .unwrap();
 
-        feat_delete(
-            &project_path,
-            &TestServer::registry_dir(&project_path),
-            "login",
-            false,
-            server.name(),
-        )
-        .unwrap();
+        delete(&server, &project_path, false);
 
         assert_eq!(
             std::fs::read_to_string(paths::summary_path(&project_path, "login")).unwrap(),
             "Feature notes here.\n"
         );
-        assert_eq!(main_unread(&project_path), 1);
+        let inbox = main_inbox(&project_path);
+        assert_eq!(inbox.len(), 1);
+        assert!(
+            inbox[0].contains(
+                &paths::summary_path(&project_path, "login")
+                    .display()
+                    .to_string()
+            ),
+            "{inbox:?}"
+        );
     }
 
-    fn ready_feature(server: &TestServer, dir: &Path) -> std::path::PathBuf {
-        let (project_path, _) = server.setup_project_with_feature_no_tmux(dir, "login");
+    #[test]
+    fn delete_of_a_merged_ready_feature_main_has_read_keeps_its_summary_and_notifies_main() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        TestServer::add_feature_commit(&project_path, "login");
+        git::run_git(
+            &paths::main_worktree(&project_path),
+            &["merge", "--no-edit", "login"],
+        )
+        .unwrap();
         std::fs::write(
             crate::commands::feat_summary::path(&project_path, "login").unwrap(),
             "notes",
@@ -592,14 +659,6 @@ mod tests {
             Some("implementer"),
         )
         .unwrap();
-        project_path
-    }
-
-    #[test]
-    fn delete_of_a_ready_feature_drops_its_triaged_summary_silently() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let project_path = ready_feature(&server, dir.path());
         messages::next(
             &paths::messages_dir(&project_path),
             "main",
@@ -608,78 +667,105 @@ mod tests {
         )
         .unwrap();
 
+        delete(&server, &project_path, false);
+
+        assert!(paths::summary_path(&project_path, "login").exists());
+        let inbox = main_inbox(&project_path);
+        assert_eq!(inbox.len(), 1, "{inbox:?}");
+        assert!(inbox[0].contains("'login' was merged"), "{inbox:?}");
+        assert!(
+            inbox[0].contains(
+                &paths::summary_path(&project_path, "login")
+                    .display()
+                    .to_string()
+            ),
+            "{inbox:?}"
+        );
+    }
+
+    #[test]
+    fn force_delete_of_unmerged_work_tells_main_it_never_landed() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        TestServer::add_feature_commit(&project_path, "login");
+
+        delete(&server, &project_path, true);
+
+        let inbox = main_inbox(&project_path);
+        assert_eq!(inbox.len(), 1, "{inbox:?}");
+        assert!(inbox[0].contains("never landed"), "{inbox:?}");
+        assert!(!inbox[0].contains("was merged"), "{inbox:?}");
+    }
+
+    #[test]
+    fn delete_after_merge_keep_tells_main_it_merged_despite_later_commits() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let features_dir = paths::features_dir(&project_path);
+        let mut state = FeatureState::load(&features_dir, "login").unwrap();
+        state.status = FeatureStatus::Merged;
+        state.save(&features_dir, "login").unwrap();
+        TestServer::add_feature_commit(&project_path, "login");
+
+        delete(&server, &project_path, true);
+
+        let inbox = main_inbox(&project_path);
+        assert_eq!(inbox.len(), 1, "{inbox:?}");
+        assert!(inbox[0].contains("'login' was merged"), "{inbox:?}");
+    }
+
+    #[test]
+    fn delete_of_a_feature_without_commits_is_not_reported_merged() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+
+        delete(&server, &project_path, false);
+
+        let inbox = main_inbox(&project_path);
+        assert_eq!(inbox.len(), 1, "{inbox:?}");
+        assert!(inbox[0].contains("no commits of its own"), "{inbox:?}");
+    }
+
+    #[test]
+    fn delete_of_a_renamed_feature_without_commits_is_not_reported_merged() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "auth");
+        git::rename_branch(&paths::main_worktree(&project_path), "auth", "login").unwrap();
+        let features_dir = paths::features_dir(&project_path);
+        let mut state = FeatureState::load(&features_dir, "auth").unwrap();
+        state.branch = "login".to_string();
+        state.save(&features_dir, "auth").unwrap();
+
         feat_delete(
             &project_path,
             &TestServer::registry_dir(&project_path),
-            "login",
+            "auth",
             false,
             server.name(),
         )
         .unwrap();
 
+        let inbox = main_inbox(&project_path);
+        assert_eq!(inbox.len(), 1, "{inbox:?}");
+        assert!(inbox[0].contains("no commits of its own"), "{inbox:?}");
+    }
+
+    #[test]
+    fn delete_without_a_summary_still_tells_main_the_feature_ended() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+
+        delete(&server, &project_path, false);
+
+        let inbox = main_inbox(&project_path);
+        assert_eq!(inbox.len(), 1, "{inbox:?}");
+        assert!(inbox[0].contains("no summary"), "{inbox:?}");
         assert!(!paths::summary_path(&project_path, "login").exists());
-        assert_eq!(main_unread(&project_path), 0);
-    }
-
-    #[test]
-    fn delete_of_a_ready_feature_keeps_the_summary_main_has_not_read_about() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let project_path = ready_feature(&server, dir.path());
-
-        feat_delete(
-            &project_path,
-            &TestServer::registry_dir(&project_path),
-            "login",
-            false,
-            server.name(),
-        )
-        .unwrap();
-
-        assert!(paths::summary_path(&project_path, "login").exists());
-        assert_eq!(main_unread(&project_path), 1);
-    }
-
-    #[test]
-    fn delete_of_an_unready_feature_hands_main_its_summary() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
-        std::fs::write(
-            crate::commands::feat_summary::path(&project_path, "login").unwrap(),
-            "notes",
-        )
-        .unwrap();
-
-        feat_delete(
-            &project_path,
-            &TestServer::registry_dir(&project_path),
-            "login",
-            false,
-            server.name(),
-        )
-        .unwrap();
-
-        assert!(paths::summary_path(&project_path, "login").exists());
-        assert_eq!(main_unread(&project_path), 1);
-    }
-
-    #[test]
-    fn delete_without_a_summary_does_not_notify_main() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
-
-        feat_delete(
-            &project_path,
-            &TestServer::registry_dir(&project_path),
-            "login",
-            false,
-            server.name(),
-        )
-        .unwrap();
-
-        assert_eq!(main_unread(&project_path), 0);
     }
 
     #[test]

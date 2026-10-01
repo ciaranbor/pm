@@ -2,7 +2,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use crate::commands::feat_delete::{
-    CleanupParams, MissingBase, TimingLog, cleanup_feature_with_timing,
+    CleanupParams, Ending, MissingBase, TimingLog, cleanup_feature_with_timing,
 };
 use crate::error::{PmError, Result};
 use crate::git;
@@ -149,6 +149,7 @@ pub fn feat_merge(
                 delete_branch: true,
                 best_effort: false,
                 base_scope: &checkout.scope,
+                ending: Some(Ending::Merged),
             },
             &mut tlog,
         )?;
@@ -205,6 +206,49 @@ mod tests {
         // Verify the feature file is now in main
         let main_repo = paths::main_worktree(&project_path);
         assert!(main_repo.join("feature.txt").exists());
+    }
+
+    #[test]
+    fn merge_tells_main_the_feature_merged_and_keeps_its_summary() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        TestServer::add_feature_commit(&project_path, "login");
+        std::fs::write(
+            crate::commands::feat_summary::path(&project_path, "login").unwrap(),
+            "notes",
+        )
+        .unwrap();
+
+        feat_merge(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            false,
+            server.name(),
+        )
+        .unwrap();
+
+        assert!(paths::summary_path(&project_path, "login").exists());
+        let msg = crate::messages::read_at(
+            &paths::messages_dir(&project_path),
+            "main",
+            "main",
+            "login",
+            1,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(msg.body.contains("'login' was merged"), "{}", msg.body);
+        assert!(
+            msg.body.contains(
+                &paths::summary_path(&project_path, "login")
+                    .display()
+                    .to_string()
+            ),
+            "{}",
+            msg.body
+        );
     }
 
     #[test]
