@@ -13,8 +13,17 @@
 // No `@opencode/plugin` import: it does not resolve for a local plugin.
 import type { ChildProcess } from "node:child_process"
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
-import { dirname } from "node:path"
-import { INBOX_ENQUEUED, Loop, PM_PROMPT, TURN_END, drivesSession, userInput } from "./loop.ts"
+import { dirname, join } from "node:path"
+import {
+  INBOX_ENQUEUED,
+  LOADED_FILE,
+  Loop,
+  PM_PROMPT,
+  TURN_END,
+  TURN_ERROR_FILE,
+  drivesSession,
+  userInput,
+} from "./loop.ts"
 import { runPm } from "./pm.ts"
 
 export default {
@@ -31,7 +40,21 @@ export default {
     const pm = (args: string[], stdin: string) =>
       runPm(args, stdin, { cwd: ctx.location.directory, env: process.env, children })
 
-    if (tripFile) rmSync(tripFile, { force: true })
+    const stateFile = (name: string) => (tripFile ? join(dirname(tripFile), name) : undefined)
+    const record = (file: string | undefined, text: string | null) => {
+      if (!file) return
+      try {
+        if (text === null) return rmSync(file, { force: true })
+        mkdirSync(dirname(file), { recursive: true })
+        writeFileSync(file, text + "\n")
+      } catch {}
+    }
+    const loadedFile = stateFile(LOADED_FILE)
+    const turnErrorFile = stateFile(TURN_ERROR_FILE)
+    // A restart's new TUI may write its marker before this one's cleanup runs.
+    const loadedMark = `${process.pid} ${new Date().toISOString()}`
+
+    record(tripFile, null)
 
     const loop = new Loop({
       agent,
@@ -47,13 +70,8 @@ export default {
             resolve()
           })
         }),
-      report: (reason) => {
-        if (!tripFile) return
-        try {
-          mkdirSync(dirname(tripFile), { recursive: true })
-          writeFileSync(tripFile, reason + "\n")
-        } catch {}
-      },
+      report: (reason) => record(tripFile, reason),
+      lastTurn: (error) => record(turnErrorFile, error),
     })
 
     // The last text read stands in for a file deleted under a live agent.
@@ -119,7 +137,13 @@ export default {
       }
     })()
 
+    // Last, so a setup that throws leaves no proof of having loaded.
+    record(loadedFile, loadedMark)
+
     return () => {
+      try {
+        if (loadedFile && readFileSync(loadedFile, "utf8").trim() === loadedMark) record(loadedFile, null)
+      } catch {}
       loop.unload()
       controller.abort()
       for (const child of children) child.kill("SIGTERM")

@@ -54,6 +54,13 @@
 //! before any request is made; the plugin then stops the loop and reports
 //! the turn's error.
 //!
+//! The plugin reports to `pm doctor` through files in the agent's runtime
+//! dir, which a spawn clears: why its loop stopped, the error of a failed
+//! turn until a later one succeeds, and that its setup ran at all. Without
+//! that last one a TUI that never loads the plugin is indistinguishable
+//! from an agent waiting for mail, since the session id is recorded before
+//! the TUI starts.
+//!
 //! A resumed session opencode no longer holds is refused by the pin
 //! (`SessionNotFoundError`), and the spawn starts a fresh one instead.
 //!
@@ -284,6 +291,7 @@ pub(super) fn pre_launch(
         None => create_session(cfg, ctx, spec.definition, &model)?,
     };
 
+    clear_status_files(ctx.project_root, ctx.feature, ctx.agent)?;
     let mut env = vec![(SESSION_ENV.to_string(), session_id.clone())];
     if let Some(file) = spec.append_prompt_file {
         env.push((PROMPT_ENV.to_string(), file.to_string()));
@@ -563,9 +571,36 @@ fn spawn_file(project_root: &Path, scope: &str, agent: &str, extension: &str) ->
     )
 }
 
-/// Where the plugin records why its loop stopped.
+/// Where the plugin records why its loop stopped. The plugin writes the
+/// other status files beside it under the names below.
 pub(super) fn trip_file(project_root: &Path, scope: &str, agent: &str) -> Result<PathBuf> {
     spawn_file(project_root, scope, agent, "tripped")
+}
+
+/// Written by the plugin once its setup has run in this spawn's TUI.
+pub(super) fn loaded_file(project_root: &Path, scope: &str, agent: &str) -> Result<PathBuf> {
+    spawn_file(project_root, scope, agent, "loaded")
+}
+
+/// The error of the agent's last turn, while that turn is the last to have
+/// failed or succeeded.
+pub(super) fn turn_error_file(project_root: &Path, scope: &str, agent: &str) -> Result<PathBuf> {
+    spawn_file(project_root, scope, agent, "turn-error")
+}
+
+/// Remove what the plugin reported about an earlier spawn of the agent.
+fn clear_status_files(project_root: &Path, scope: &str, agent: &str) -> Result<()> {
+    for file in [
+        trip_file(project_root, scope, agent)?,
+        loaded_file(project_root, scope, agent)?,
+        turn_error_file(project_root, scope, agent)?,
+    ] {
+        match std::fs::remove_file(&file) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// `(major, minor, patch)` from `opencode --version` output (`opencode v2.0.18`).

@@ -82,6 +82,11 @@ pub enum IssueKind {
     /// An agent's emulated never-idle loop stopped itself, so the agent no
     /// longer wakes for messages.
     LoopStopped,
+    /// An agent's window is up, but its emulated never-idle loop has not
+    /// loaded since its spawn, so it never wakes for messages.
+    LoopNotLoaded,
+    /// An agent's last turn failed, and its loop is still retrying.
+    TurnFailed,
     /// An agent runs on a harness that refuses to spawn it without an
     /// `[agents.models]` row, and has none.
     AgentModelMissing,
@@ -242,7 +247,7 @@ pub fn diagnose(
     main_issues.extend(asset_issues(project_root, &projections)?);
     main_issues.extend(rebase_issue(&main_repo));
     main_issues.extend(legacy_vanilla_agent_issues(project_root, "main"));
-    main_issues.extend(loop_stopped_issues(project_root, "main"));
+    main_issues.extend(loop_issues(project_root, "main"));
     let main_branch = ProjectEntry::load(projects_dir, project_name)
         .ok()
         .map(|e| e.main_branch);
@@ -427,7 +432,7 @@ pub fn diagnose(
         }
 
         issues.extend(legacy_vanilla_agent_issues(project_root, name));
-        issues.extend(loop_stopped_issues(project_root, name));
+        issues.extend(loop_issues(project_root, name));
 
         // Check 7: PR status drift (skipped when `check_pr_state` is false to
         // avoid network round-trips on latency-sensitive callers like
@@ -1028,9 +1033,9 @@ fn feature_projection_issues(
     )
 }
 
-/// How long after its spawn an agent may go without a recorded session id
-/// before that is reported.
-const SESSION_START_GRACE: Duration = Duration::from_secs(60);
+/// How long after its spawn an agent may go without a recorded session id,
+/// or a loaded never-idle loop, before that is reported.
+const START_GRACE: Duration = Duration::from_secs(60);
 
 /// Findings about `scope`'s active agents, given its tmux session exists.
 fn agent_issues(
@@ -1051,7 +1056,7 @@ fn agent_issues(
             .map(SystemTime::from)
             .or(registry_written)
             .and_then(|since| since.elapsed().ok())
-            .is_some_and(|age| age > SESSION_START_GRACE)
+            .is_some_and(|age| age > START_GRACE)
     };
     let mut issues = Vec::new();
     for (agent_name, entry) in &registry.agents {
@@ -1066,25 +1071,39 @@ fn agent_issues(
                     agent_name: agent_name.clone(),
                 }),
             });
-        } else if entry.session_id.is_empty() && past_grace(entry) {
-            issues.push(Issue {
-                kind: IssueKind::AgentSessionNotStarted,
-                message: format!(
-                    "agent '{agent_name}' is running but its {} session has recorded no \
-                     session id (run `pm agent restart {agent_name} --scope {scope}`)",
-                    entry.harness
-                ),
-                fix: Fix::None,
-            });
+        } else if past_grace(entry) {
+            if entry.session_id.is_empty() {
+                issues.push(Issue {
+                    kind: IssueKind::AgentSessionNotStarted,
+                    message: format!(
+                        "agent '{agent_name}' is running but its {} session has recorded no \
+                         session id (run `pm agent restart {agent_name} --scope {scope}`)",
+                        entry.harness
+                    ),
+                    fix: Fix::None,
+                });
+            } else if entry.harness.loop_loaded(project_root, scope, agent_name) == Some(false) {
+                issues.push(Issue {
+                    kind: IssueKind::LoopNotLoaded,
+                    message: format!(
+                        "agent '{agent_name}' is running but {} has not loaded pm's never-idle \
+                         plugin, so it never wakes for messages (`/plugins` in its window shows \
+                         why; then `pm agent restart {agent_name} --scope {scope}`)",
+                        entry.harness
+                    ),
+                    fix: Fix::None,
+                });
+            }
         }
     }
     Ok(issues)
 }
 
-/// Agents of `scope` whose never-idle loop stopped itself. Not fixable
-/// here: a restart re-arms the loop, but whatever stopped it (a model that
-/// fails every turn, an inbox the agent cannot read) would stop it again.
-fn loop_stopped_issues(project_root: &Path, scope: &str) -> Vec<Issue> {
+/// Agents of `scope` whose never-idle loop stopped itself, or whose last
+/// turn failed while the loop still retries. Not fixable here: a restart
+/// re-arms the loop, but whatever stopped it (a model that fails every turn,
+/// an inbox the agent cannot read) would stop it again.
+fn loop_issues(project_root: &Path, scope: &str) -> Vec<Issue> {
     let Ok(registry) = AgentRegistry::load(&paths::agents_dir(project_root), scope) else {
         return Vec::new();
     };
@@ -1093,12 +1112,23 @@ fn loop_stopped_issues(project_root: &Path, scope: &str) -> Vec<Issue> {
         .iter()
         .filter(|(_, entry)| entry.agent_type == AgentType::Agent && entry.active)
         .filter_map(|(name, entry)| {
-            let reason = entry.harness.loop_stopped(project_root, scope, name)?;
+            // A stopped loop's reason already carries the last turn's error.
+            if let Some(reason) = entry.harness.loop_stopped(project_root, scope, name) {
+                return Some(Issue {
+                    kind: IssueKind::LoopStopped,
+                    message: format!(
+                        "agent '{name}' no longer wakes for messages — its never-idle loop \
+                         stopped: {reason}. Fix the cause, then `pm agent restart {name}`"
+                    ),
+                    fix: Fix::None,
+                });
+            }
+            let error = entry.harness.last_turn_error(project_root, scope, name)?;
             Some(Issue {
-                kind: IssueKind::LoopStopped,
+                kind: IssueKind::TurnFailed,
                 message: format!(
-                    "agent '{name}' no longer wakes for messages — its never-idle loop \
-                     stopped: {reason}. Fix the cause, then `pm agent restart {name}`"
+                    "agent '{name}' failed its last turn: {error}. Its loop retries, and \
+                     stops if turns keep failing"
                 ),
                 fix: Fix::None,
             })
@@ -1700,7 +1730,7 @@ mod tests {
     }
 
     #[test]
-    fn stopped_loop_is_reported_for_the_agent_it_stopped() {
+    fn stopped_loop_and_failed_turn_are_reported_until_the_agent_respawns() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project_no_tmux(dir.path());
@@ -1723,43 +1753,63 @@ mod tests {
         native.register("reviewer", entry(Harness::ClaudeCode));
         native.save(&agents_dir, "main").unwrap();
 
-        assert!(loop_stopped_issues(&project_path, "login").is_empty());
+        assert!(loop_issues(&project_path, "login").is_empty());
 
         // Written where the spawn told the plugin to write it.
-        let pre = Harness::OpenCode
-            .pre_launch(
-                &crate::harness::LaunchContext {
-                    project_root: &project_path,
-                    feature: "login",
-                    worktree: &project_path,
-                    agent: "reviewer",
-                },
-                &crate::harness::SpawnSpec {
-                    resume_session: Some("ses_1"),
-                    model: Some("local/qwen"),
-                    ..Default::default()
-                },
-                &HarnessConfig {
-                    opencode: crate::state::project::OpenCodeConfig {
-                        binary: Some(crate::testing::fake_opencode(
-                            dir.path(),
-                            r#"{"data":{"id":"ses_1"}}"#,
-                            0,
-                        )),
+        let spawn = || {
+            Harness::OpenCode
+                .pre_launch(
+                    &crate::harness::LaunchContext {
+                        project_root: &project_path,
+                        feature: "login",
+                        worktree: &project_path,
+                        agent: "reviewer",
+                    },
+                    &crate::harness::SpawnSpec {
+                        resume_session: Some("ses_1"),
+                        model: Some("local/qwen"),
                         ..Default::default()
                     },
-                    ..Default::default()
-                },
-            )
-            .unwrap();
+                    &HarnessConfig {
+                        opencode: crate::state::project::OpenCodeConfig {
+                            binary: Some(crate::testing::fake_opencode(
+                                dir.path(),
+                                r#"{"data":{"id":"ses_1"}}"#,
+                                0,
+                            )),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                )
+                .unwrap()
+        };
+        let pre = spawn();
         let (_, trip_file) = pre
             .env
             .iter()
             .find(|(key, _)| key == "PM_OPENCODE_TRIP_FILE")
             .expect("the spawn names a trip file");
-        std::fs::write(trip_file, "5 consecutive turns read none\n").unwrap();
+        // The plugin writes the turn error beside the trip file.
+        let turn_error_file = Path::new(trip_file).with_file_name("opencode.turn-error");
 
-        let issues = loop_stopped_issues(&project_path, "login");
+        std::fs::write(
+            &turn_error_file,
+            "Model unavailable: local/qwen (provider.no-route)\n",
+        )
+        .unwrap();
+        let issues = loop_issues(&project_path, "login");
+        assert_eq!(
+            messages(&issues, IssueKind::TurnFailed),
+            vec![
+                "agent 'reviewer' failed its last turn: Model unavailable: local/qwen \
+                 (provider.no-route). Its loop retries, and stops if turns keep failing"
+            ]
+        );
+
+        // The trip reason already names the last turn's error.
+        std::fs::write(trip_file, "5 consecutive turns read none\n").unwrap();
+        let issues = loop_issues(&project_path, "login");
         assert_eq!(
             messages(&issues, IssueKind::LoopStopped),
             vec![
@@ -1767,9 +1817,12 @@ mod tests {
                  consecutive turns read none. Fix the cause, then `pm agent restart reviewer`"
             ]
         );
-        assert!(loop_stopped_issues(&project_path, "signup").is_empty());
-        assert!(loop_stopped_issues(&project_path, "main").is_empty());
-        std::fs::remove_file(trip_file).unwrap();
+        assert!(messages(&issues, IssueKind::TurnFailed).is_empty());
+        assert!(loop_issues(&project_path, "signup").is_empty());
+        assert!(loop_issues(&project_path, "main").is_empty());
+
+        spawn();
+        assert!(loop_issues(&project_path, "login").is_empty());
     }
 
     #[test]
@@ -2791,6 +2844,63 @@ mod tests {
     }
 
     #[test]
+    fn running_opencode_agent_whose_plugin_never_loaded_is_flagged_once_past_grace() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
+        let session_name = tmux::session_name(&project_name, "login");
+        server.spawn_fake_agent(&project_path, &session_name, "login", "reviewer");
+
+        let agents_dir = paths::agents_dir(&project_path);
+        let save = |edit: &dyn Fn(&mut AgentEntry)| {
+            let mut registry = AgentRegistry::load(&agents_dir, "login").unwrap();
+            edit(registry.get_mut("reviewer").unwrap());
+            registry.save(&agents_dir, "login").unwrap();
+        };
+        let login_issues = || -> Vec<(IssueKind, String)> {
+            diagnose(&project_path, &projects_dir, server.name(), false)
+                .unwrap()
+                .iter()
+                .filter(|f| f.feature() == "login")
+                .flat_map(|f| f.issues())
+                .map(|i| (i.kind(), i.message().to_string()))
+                .collect()
+        };
+
+        // The session id is recorded before the TUI starts, so only the
+        // plugin's own marker shows it loaded.
+        save(&|e| {
+            e.harness = Harness::OpenCode;
+            e.session_id = "ses_1".to_string();
+            e.spawned_at = Some(chrono::Utc::now());
+        });
+        assert_eq!(login_issues(), vec![]);
+
+        save(&|e| e.spawned_at = Some(chrono::Utc::now() - 2 * START_GRACE));
+        assert_eq!(
+            login_issues(),
+            vec![(
+                IssueKind::LoopNotLoaded,
+                "agent 'reviewer' is running but opencode has not loaded pm's never-idle plugin, \
+                 so it never wakes for messages (`/plugins` in its window shows why; then `pm \
+                 agent restart reviewer --scope login`)"
+                    .to_string()
+            )]
+        );
+
+        // Where the plugin writes it.
+        let runtime = crate::state::runtime::agent_dir(&project_path, "login", "reviewer").unwrap();
+        std::fs::write(runtime.join("opencode.loaded"), "2026-10-01T00:00:00Z\n").unwrap();
+        assert_eq!(login_issues(), vec![]);
+
+        // A native hook has nothing to load.
+        std::fs::remove_file(runtime.join("opencode.loaded")).unwrap();
+        save(&|e| e.harness = Harness::ClaudeCode);
+        assert_eq!(login_issues(), vec![]);
+    }
+
+    #[test]
     fn running_agent_with_no_session_id_is_flagged_once_past_its_own_grace_period() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
@@ -2801,7 +2911,7 @@ mod tests {
         server.spawn_fake_agent(&project_path, &session_name, "login", "implementer");
 
         let agents_dir = paths::agents_dir(&project_path);
-        let long_ago = chrono::Utc::now() - 2 * SESSION_START_GRACE;
+        let long_ago = chrono::Utc::now() - 2 * START_GRACE;
         let save = |edit: &dyn Fn(&mut AgentEntry)| {
             let mut registry = AgentRegistry::load(&agents_dir, "login").unwrap();
             edit(registry.get_mut("reviewer").unwrap());

@@ -1,10 +1,17 @@
 // The never-idle loop, free of the opencode runtime: what it waits on and
 // what it does with the answer are handed in.
 
+// Status files in the agent's runtime dir, beside the trip file pm names.
+// pm reads them under these names.
+export const LOADED_FILE = "opencode.loaded"
+export const TURN_ERROR_FILE = "opencode.turn-error"
+
 export const TURN_FAILED = "session.execution.failed"
 
+export const TURN_SUCCEEDED = "session.execution.succeeded"
+
 export const TURN_END = new Set([
-  "session.execution.succeeded",
+  TURN_SUCCEEDED,
   TURN_FAILED,
   "session.execution.interrupted",
 ])
@@ -165,6 +172,11 @@ export type LoopDeps = {
   sleep(ms: number): Promise<void>
   /** Record why the loop stopped where `pm doctor` finds it. */
   report(reason: string): void
+  /**
+   * Record where `pm doctor` finds it the error of a failed turn, or clear
+   * it (null) after one that succeeded.
+   */
+  lastTurn(error: string | null): void
   now?(): number
 }
 
@@ -192,7 +204,9 @@ export class Loop {
 
   /** `error` is what a failed turn's event carried. */
   turnEnded(sessionID: string, type: string, error?: unknown): Promise<void> {
-    return this.pump(sessionID, type, error)
+    const failure = type === TURN_FAILED ? turnError(error) : null
+    if (!this.unloaded && (failure !== null || type === TURN_SUCCEEDED)) this.deps.lastTurn(failure)
+    return this.pump(sessionID, type, failure)
   }
 
   toolRan(tool: unknown, command: unknown, result: unknown): void {
@@ -226,14 +240,14 @@ export class Loop {
 
   // One waiter per session: a turn ending while the hook is still blocked
   // (a prompt the user typed) must not start a second one. `turn` is the
-  // event that ended a turn, or null when arming.
-  private async pump(sessionID: string, turn: string | null, error?: unknown): Promise<void> {
+  // event that ended a turn, or null when arming; `failure` is its error.
+  private async pump(sessionID: string, turn: string | null, failure: string | null = null): Promise<void> {
     if (this.unloaded || this.stoppedFor || this.pumping.has(sessionID)) return
     this.pumping.add(sessionID)
     const now = this.deps.now ?? Date.now
     try {
-      if (turn === TURN_FAILED) {
-        this.breaker.noteFailed(turnError(error))
+      if (failure !== null) {
+        this.breaker.noteFailed(failure)
         await this.deps.sleep(FAILURE_BACKOFF_MS)
       }
       for (;;) {
