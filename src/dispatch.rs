@@ -953,20 +953,10 @@ fn optional_project_root() -> pm::error::Result<Option<std::path::PathBuf>> {
     }
 }
 
-/// Per-feature settings files only exist for Claude Code.
-fn claude_code_only(harness: Harness, what: &str) -> pm::error::Result<()> {
-    match harness {
-        Harness::ClaudeCode => Ok(()),
-        Harness::Codex | Harness::OpenCode => Err(pm::error::PmError::Agent(format!(
-            "{what} are not supported for {harness}; only claude-code has them"
-        ))),
-    }
-}
-
 fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
     match cmd {
         HarnessCommands::Settings { harness, command } => {
-            claude_code_only(harness, "per-feature settings files")?;
+            commands::harness_settings::settings_files(harness)?;
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
             match command {
                 HarnessSettingsCommands::List { name } => {
@@ -977,10 +967,11 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
                     let (label, lines) = if scope == "main" {
                         (
                             "main".to_string(),
-                            commands::claude_settings::list_main(&project_root)?,
+                            commands::harness_settings::list_main(&project_root, harness)?,
                         )
                     } else {
-                        let lines = commands::claude_settings::list(&project_root, &scope)?;
+                        let lines =
+                            commands::harness_settings::list(&project_root, &scope, harness)?;
                         (scope, lines)
                     };
                     if lines.is_empty() {
@@ -994,20 +985,20 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
                 }
                 HarnessSettingsCommands::Push { name } => {
                     let name = resolve_feature_name(name, &project_root)?;
-                    commands::claude_settings::push(&project_root, &name)?;
+                    commands::harness_settings::push(&project_root, &name, harness)?;
                     println!("Pushed settings from feature '{name}' to main");
                     Ok(())
                 }
                 HarnessSettingsCommands::Pull { name } => {
                     let name = resolve_feature_name(name, &project_root)?;
-                    for line in commands::claude_settings::pull(&project_root, &name)? {
+                    for line in commands::harness_settings::pull(&project_root, &name, harness)? {
                         println!("{line}");
                     }
                     Ok(())
                 }
                 HarnessSettingsCommands::Diff { name } => {
                     let name = resolve_feature_name(name, &project_root)?;
-                    let lines = commands::claude_settings::diff(&project_root, &name)?;
+                    let lines = commands::harness_settings::diff(&project_root, &name, harness)?;
                     if lines.is_empty() {
                         println!("No differences");
                     } else {
@@ -1019,7 +1010,7 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
                 }
                 HarnessSettingsCommands::Merge { name, ours } => {
                     let name = resolve_feature_name(name, &project_root)?;
-                    commands::claude_settings::merge(&project_root, &name, ours)?;
+                    commands::harness_settings::merge(&project_root, &name, ours, harness)?;
                     println!("Merged settings from feature '{name}' into main");
                     Ok(())
                 }

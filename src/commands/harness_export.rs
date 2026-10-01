@@ -1,9 +1,11 @@
 //! `pm harness export`: a tarball of the sessions recorded at each
-//! project's main worktree,
+//! project's main and feature worktrees,
 //! `pm-<harness>-export/{manifest.json, projects/<key>/…}`. The manifest maps
-//! a project name to the path its sessions were recorded at, the directory
-//! holding them in the tarball, and the harness; what that directory
-//! contains is the harness's own ([`Harness::export_sessions`]).
+//! a project name to the harness, the path main's sessions were recorded at
+//! with the directory holding them in the tarball (`key`, absent when main
+//! has none), and `features`: per feature with sessions, its own `path` and
+//! `key`. What a key's directory contains is the harness's own
+//! ([`Harness::export_sessions`]).
 
 use std::path::{Path, PathBuf};
 
@@ -32,19 +34,44 @@ pub(super) fn export_root(harness: Harness) -> String {
     format!("pm-{}-export", harness.export_tag())
 }
 
-/// A project to export: its name, root, and main worktree.
+/// A project to export: its name, root, and the worktrees on disk whose
+/// sessions it carries.
 struct Project {
     name: String,
     root: PathBuf,
-    main: PathBuf,
+    worktrees: Vec<Worktree>,
 }
 
-/// The main worktree of the project at `root`, resolved: the form every
-/// harness records a session's directory in, and so the one an import has
-/// to find in the transcripts.
-fn recorded_main(root: &Path) -> PathBuf {
-    let main = paths::main_worktree(root);
-    main.canonicalize().unwrap_or(main)
+/// One worktree of a project: `None` for main, else the feature's name.
+struct Worktree {
+    feature: Option<String>,
+    /// Resolved: the form every harness records a session's directory in,
+    /// and so the one an import has to find in the transcripts.
+    recorded: PathBuf,
+}
+
+fn resolved(path: PathBuf) -> PathBuf {
+    path.canonicalize().unwrap_or(path)
+}
+
+fn project(name: String, root: PathBuf) -> Result<Project> {
+    let mut worktrees = vec![Worktree {
+        feature: None,
+        recorded: resolved(paths::main_worktree(&root)),
+    }];
+    for (scope, path) in super::skills::scoped_worktrees_on_disk(&root)? {
+        if scope != "main" {
+            worktrees.push(Worktree {
+                feature: Some(scope),
+                recorded: resolved(path),
+            });
+        }
+    }
+    Ok(Project {
+        name,
+        root,
+        worktrees,
+    })
 }
 
 fn resolve_projects(
@@ -57,25 +84,14 @@ fn resolve_projects(
         if entries.is_empty() {
             return Err(PmError::ExportImport("no projects registered".to_string()));
         }
-        Ok(entries
+        entries
             .into_iter()
-            .map(|(name, entry)| {
-                let root = entry.root_path();
-                Project {
-                    name,
-                    main: recorded_main(&root),
-                    root,
-                }
-            })
-            .collect())
+            .map(|(name, entry)| project(name, entry.root_path()))
+            .collect()
     } else {
         let root = project_root.ok_or(PmError::NotInProject)?;
         let config = ProjectConfig::load(&paths::pm_dir(root))?;
-        Ok(vec![Project {
-            name: config.project.name,
-            main: recorded_main(root),
-            root: root.to_path_buf(),
-        }])
+        Ok(vec![project(config.project.name, root.to_path_buf())?])
     }
 }
 
@@ -110,30 +126,53 @@ pub fn export(params: &ExportParams<'_>) -> Result<(PathBuf, Vec<String>)> {
     let jobs: Vec<ExportJob<'_>> = projects
         .iter()
         .zip(&configs)
-        .map(|(project, config)| ExportJob {
-            config,
-            dir: &project.main,
-            staging: staging_projects.join(staging_key(&project.main)),
+        .flat_map(|(project, config)| {
+            project.worktrees.iter().map(|wt| ExportJob {
+                config,
+                dir: &wt.recorded,
+                staging: staging_projects.join(staging_key(&wt.recorded)),
+            })
         })
         .collect();
-    let details = harness.export_sessions(params.home, &jobs)?;
-    for ((project, job), detail) in projects.iter().zip(&jobs).zip(details) {
+    let mut details = harness.export_sessions(params.home, &jobs)?.into_iter();
+    for project in &projects {
         let name = &project.name;
-        match detail {
-            Some(detail) => {
-                messages.push(format!("Exported '{name}' ({detail})"));
-                manifest.insert(
-                    name.clone(),
-                    serde_json::json!({
-                        "path": project.main.to_string_lossy(),
-                        "key": staging_key(job.dir),
-                        "harness": harness.as_str(),
-                    }),
-                );
-                exported.push(name.as_str());
+        let mut entry = serde_json::json!({
+            "path": project.worktrees[0].recorded.to_string_lossy(),
+            "harness": harness.as_str(),
+        });
+        let mut features = serde_json::Map::new();
+        for wt in &project.worktrees {
+            let Some(detail) = details.next().flatten() else {
+                continue;
+            };
+            let key = staging_key(&wt.recorded);
+            match &wt.feature {
+                None => {
+                    messages.push(format!("Exported '{name}' ({detail})"));
+                    entry["key"] = key.into();
+                }
+                Some(feature) => {
+                    messages.push(format!("Exported '{name}/{feature}' ({detail})"));
+                    features.insert(
+                        feature.clone(),
+                        serde_json::json!({
+                            "path": wt.recorded.to_string_lossy(),
+                            "key": key,
+                        }),
+                    );
+                }
             }
-            None => messages.push(format!("Skipping '{name}': no {harness} sessions found")),
         }
+        if entry.get("key").is_none() && features.is_empty() {
+            messages.push(format!("Skipping '{name}': no {harness} sessions found"));
+            continue;
+        }
+        if !features.is_empty() {
+            entry["features"] = features.into();
+        }
+        manifest.insert(name.clone(), entry);
+        exported.push(name.as_str());
     }
 
     if exported.is_empty() {
@@ -225,6 +264,30 @@ pub(super) mod tests {
         std::fs::create_dir_all(&main_path).unwrap();
         register(root, name, projects_dir);
         main_path
+    }
+
+    /// A registered feature of the project at `root` with its worktree;
+    /// returns the worktree.
+    pub fn add_feature(root: &Path, name: &str) -> PathBuf {
+        let now = chrono::Utc::now();
+        crate::state::feature::FeatureState {
+            status: crate::state::feature::FeatureStatus::Wip,
+            progress: Default::default(),
+            blocked_reason: None,
+            branch: name.to_string(),
+            worktree: name.to_string(),
+            base: String::new(),
+            pr: String::new(),
+            context: String::new(),
+            workflow: None,
+            created: now,
+            last_active: now,
+        }
+        .save(&paths::features_dir(root), name)
+        .unwrap();
+        let worktree = root.join(name);
+        std::fs::create_dir_all(&worktree).unwrap();
+        worktree
     }
 
     pub fn register(root: &Path, name: &str, projects_dir: &Path) {

@@ -199,7 +199,7 @@ pub enum HarnessCommands {
         command: HarnessSettingsCommands,
     },
     /// Pull main's custom skills, agent definitions and settings into a feature
-    /// (never overwrites a file the feature's branch tracks)
+    /// and project its own skills (never overwrites a file the feature's branch tracks)
     Pull {
         /// Feature name (detected from CWD if omitted)
         name: Option<String>,
@@ -216,7 +216,7 @@ pub enum HarnessCommands {
         #[arg(long, default_value = "claude-code")]
         harness: Harness,
     },
-    /// Export the sessions of a project's main worktree for transfer to another machine
+    /// Export the sessions of a project's main and feature worktrees for transfer to another machine
     Export {
         /// Export sessions for all registered projects (default: current project only)
         #[arg(long)]
@@ -229,7 +229,7 @@ pub enum HarnessCommands {
         #[arg(long, default_value = "claude-code")]
         harness: Harness,
     },
-    /// Import harness sessions from an exported tarball
+    /// Import harness sessions from an exported tarball (after `pm restore`, so feature worktrees exist)
     Import {
         /// Path to the tarball created by `pm harness export`
         tarball: PathBuf,

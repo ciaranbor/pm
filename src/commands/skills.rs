@@ -9,14 +9,15 @@
 //! `.agents/agents/`, so each tier's store is *projected* into the harness's
 //! own layout (`~/.claude/` and `main/.claude/` for claude-code) via
 //! [`Harness::project_assets`]; the canonical copy always wins over a
-//! same-named projected file, and projection never deletes.
+//! same-named projected file, and projection never deletes. A feature
+//! worktree's projection is [`seed`](super::seed)'s.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
 use crate::fs_utils::{copy_dir_recursive, write_atomic};
-use crate::harness::{self, Harness};
+use crate::harness::{self, Harness, ProjectionScope};
 use crate::state::paths;
 use crate::state::project::{GlobalConfig, ProjectConfig};
 
@@ -390,7 +391,7 @@ fn project_into(
     if !canonical.is_dir() {
         return Ok(None);
     }
-    let projection = h.project_assets(canonical, target, dry_run)?;
+    let projection = h.project_assets(canonical, target, &ProjectionScope::default(), dry_run)?;
     if projection.is_empty() {
         return Ok(None);
     }

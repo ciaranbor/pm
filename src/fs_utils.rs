@@ -48,8 +48,8 @@ pub fn sync_tree(src: &Path, dst: &Path, dry_run: bool) -> Result<Vec<(PathBuf, 
     sync_tree_except(src, dst, &HashSet::new(), dry_run)
 }
 
-/// [`sync_tree`], leaving alone every file in `keep` (paths relative to
-/// `dst`).
+/// [`sync_tree`], leaving alone every path in `keep` (relative to `dst`):
+/// a file is not written, and a directory's whole subtree is skipped.
 pub fn sync_tree_except(
     src: &Path,
     dst: &Path,
@@ -81,11 +81,11 @@ fn sync_tree_into(
         let rel_path = rel.join(entry.file_name());
         let src_path = src.join(&rel_path);
         let dst_path = dst.join(&rel_path);
-        if src_path.is_dir() {
-            absent_if_vanished(sync_tree_into(src, dst, &rel_path, keep, dry_run, out))?;
+        if keep.contains(&rel_path) {
             continue;
         }
-        if keep.contains(&rel_path) {
+        if src_path.is_dir() {
+            absent_if_vanished(sync_tree_into(src, dst, &rel_path, keep, dry_run, out))?;
             continue;
         }
         let existed = dst_path.exists();

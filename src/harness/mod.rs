@@ -14,6 +14,7 @@ mod claude_code;
 mod codex;
 mod opencode;
 
+use std::collections::HashSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -308,21 +309,25 @@ impl Harness {
     }
 
     /// Project the canonical asset store (`<canonical_root>/{agents,skills}`)
-    /// into this harness's own layout under `target_root`. Copies over
-    /// same-named files and never deletes anything in the target. In
-    /// `dry_run` nothing is written; the report still says what would be.
+    /// into this harness's own layout under `target_root`, limited to
+    /// `scope`. Copies over same-named files and never deletes anything in
+    /// the target. In `dry_run` nothing is written; the report still says
+    /// what would be.
     pub fn project_assets(
         self,
         canonical_root: &Path,
         target_root: &Path,
+        scope: &ProjectionScope<'_>,
         dry_run: bool,
     ) -> Result<Projection> {
         match self {
             Harness::ClaudeCode => {
-                claude_code::project_assets(canonical_root, target_root, dry_run)
+                claude_code::project_assets(canonical_root, target_root, scope, dry_run)
             }
             Harness::Codex => Ok(Projection::default()),
-            Harness::OpenCode => opencode::project_assets(canonical_root, target_root, dry_run),
+            Harness::OpenCode => {
+                opencode::project_assets(canonical_root, target_root, scope, dry_run)
+            }
         }
     }
 
@@ -585,23 +590,42 @@ impl Projection {
     }
 }
 
+/// Which part of a projection [`Harness::project_assets`] writes.
+#[derive(Debug, Default)]
+pub struct ProjectionScope<'a> {
+    /// The projected subdirs to write; `None` for all of the harness's.
+    pub subdirs: Option<&'a [&'a str]>,
+    /// Target paths, relative to the target root, never written (a
+    /// directory: its whole subtree).
+    pub keep: HashSet<PathBuf>,
+}
+
 /// Copy `<canonical_root>/<subdir>` over `<target_root>/<subdir>` for each
-/// `subdirs` entry, recording what changed. Shared by every harness whose
-/// projection is a plain copy.
+/// `subdirs` entry within `scope`, recording what changed. Shared by every
+/// harness whose projection is a plain copy.
 pub(crate) fn project_by_copy(
     canonical_root: &Path,
     target_root: &Path,
     subdirs: &[&str],
+    scope: &ProjectionScope<'_>,
     dry_run: bool,
 ) -> Result<Projection> {
     let mut out = Projection::default();
     for sub in subdirs {
+        if scope.subdirs.is_some_and(|only| !only.contains(sub)) {
+            continue;
+        }
         let src = canonical_root.join(sub);
         if !src.is_dir() {
             continue;
         }
         let dst = target_root.join(sub);
-        for (rel, replaced) in fs_utils::sync_tree(&src, &dst, dry_run)? {
+        let keep: HashSet<PathBuf> = scope
+            .keep
+            .iter()
+            .filter_map(|p| p.strip_prefix(sub).ok().map(Path::to_path_buf))
+            .collect();
+        for (rel, replaced) in fs_utils::sync_tree_except(&src, &dst, &keep, dry_run)? {
             let rel = Path::new(sub).join(rel);
             if replaced {
                 out.replaced.push(rel.clone());
@@ -811,7 +835,7 @@ mod tests {
 
         // Dry run: reports, writes nothing.
         let dry = Harness::ClaudeCode
-            .project_assets(&canonical, &target, true)
+            .project_assets(&canonical, &target, &ProjectionScope::default(), true)
             .unwrap();
         assert_eq!(dry.written.len(), 2);
         assert_eq!(dry.replaced, vec![PathBuf::from("agents/reviewer.md")]);
@@ -822,7 +846,7 @@ mod tests {
         assert!(!target.join("skills").exists());
 
         let real = Harness::ClaudeCode
-            .project_assets(&canonical, &target, false)
+            .project_assets(&canonical, &target, &ProjectionScope::default(), false)
             .unwrap();
         assert_eq!(real, dry);
         assert_eq!(
@@ -840,7 +864,7 @@ mod tests {
 
         // In sync: nothing to do.
         let again = Harness::ClaudeCode
-            .project_assets(&canonical, &target, true)
+            .project_assets(&canonical, &target, &ProjectionScope::default(), true)
             .unwrap();
         assert!(again.is_empty());
     }
@@ -930,7 +954,7 @@ mod tests {
         let target = tmp.path().join(".codex");
         assert!(
             Harness::Codex
-                .project_assets(&canonical, &target, false)
+                .project_assets(&canonical, &target, &ProjectionScope::default(), false)
                 .unwrap()
                 .is_empty()
         );

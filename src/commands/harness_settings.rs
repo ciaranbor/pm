@@ -1,13 +1,33 @@
-use std::path::Path;
+//! `pm harness settings`: compare and move a harness's per-worktree
+//! settings files ([`Harness::seeded_files`]) between main and a feature. A
+//! harness with none is refused. Diff and merge read the files as JSON —
+//! true of every seeded file today; anything else diffs as "content
+//! differs" and merges winner-takes-all.
 
+use std::path::{Path, PathBuf};
+
+use super::feat_common::require_feature;
 use super::seed::{Seeded, seed_file};
 use crate::error::{PmError, Result};
 use crate::harness::Harness;
-use crate::state::feature::FeatureState;
 use crate::state::paths;
 
-fn settings_files() -> &'static [&'static str] {
-    Harness::ClaudeCode.seeded_files()
+/// The harness's settings files, or why it has none to manage.
+pub fn settings_files(harness: Harness) -> Result<&'static [&'static str]> {
+    match harness.seeded_files() {
+        [] => Err(PmError::Agent(format!(
+            "{harness} has no per-feature settings files"
+        ))),
+        files => Ok(files),
+    }
+}
+
+fn main_dir(project_root: &Path, harness: Harness) -> PathBuf {
+    paths::main_worktree(project_root).join(harness.config_dir())
+}
+
+fn feature_dir(project_root: &Path, feature_name: &str, harness: Harness) -> PathBuf {
+    project_root.join(feature_name).join(harness.config_dir())
 }
 
 /// Copy a single settings file from src_dir to dst_dir if it exists in src_dir.
@@ -20,10 +40,6 @@ fn copy_settings_file(src_dir: &Path, dst_dir: &Path, filename: &str) -> Result<
     Ok(())
 }
 
-fn main_claude_dir(project_root: &Path) -> std::path::PathBuf {
-    paths::main_worktree(project_root).join(".claude")
-}
-
 /// A pair of optional file contents (main, feature) for a single settings file.
 struct FilePair {
     filename: &'static str,
@@ -32,62 +48,51 @@ struct FilePair {
 }
 
 /// Load both sides (main + feature) for each settings file.
-fn load_file_pairs(project_root: &Path, feature_name: &str) -> Result<Vec<FilePair>> {
-    let main_dir = main_claude_dir(project_root);
-    let feature_dir = project_root.join(feature_name).join(".claude");
-
-    let mut pairs = Vec::new();
-    for &filename in settings_files() {
-        let main_path = main_dir.join(filename);
-        let feature_path = feature_dir.join(filename);
-
-        let main_content = if main_path.exists() {
-            Some(std::fs::read_to_string(&main_path)?)
+fn load_file_pairs(
+    project_root: &Path,
+    feature_name: &str,
+    files: &[&'static str],
+    harness: Harness,
+) -> Result<Vec<FilePair>> {
+    let main_dir = main_dir(project_root, harness);
+    let feature_dir = feature_dir(project_root, feature_name, harness);
+    let read = |path: PathBuf| -> Result<Option<String>> {
+        Ok(if path.exists() {
+            Some(std::fs::read_to_string(&path)?)
         } else {
             None
-        };
-        let feature_content = if feature_path.exists() {
-            Some(std::fs::read_to_string(&feature_path)?)
-        } else {
-            None
-        };
-
-        pairs.push(FilePair {
-            filename,
-            main: main_content,
-            feature: feature_content,
-        });
-    }
-    Ok(pairs)
+        })
+    };
+    files
+        .iter()
+        .map(|&filename| {
+            Ok(FilePair {
+                filename,
+                main: read(main_dir.join(filename))?,
+                feature: read(feature_dir.join(filename))?,
+            })
+        })
+        .collect()
 }
 
-pub fn require_feature(project_root: &Path, feature_name: &str) -> Result<()> {
-    let features_dir = paths::features_dir(project_root);
-    if !FeatureState::exists(&features_dir, feature_name) {
-        return Err(PmError::FeatureNotFound(feature_name.to_string()));
-    }
-    Ok(())
+/// List the main worktree's settings.
+pub fn list_main(project_root: &Path, harness: Harness) -> Result<Vec<String>> {
+    let files = settings_files(harness)?;
+    list_settings_dir(&main_dir(project_root, harness), files)
 }
 
-/// List main worktree's Claude Code settings.
-pub fn list_main(project_root: &Path) -> Result<Vec<String>> {
-    let claude_dir = main_claude_dir(project_root);
-    list_settings_dir(&claude_dir)
-}
-
-/// List a feature's Claude Code settings by displaying the contents of its `.claude/` settings files.
-pub fn list(project_root: &Path, feature_name: &str) -> Result<Vec<String>> {
+/// List a feature's settings by displaying the contents of its settings files.
+pub fn list(project_root: &Path, feature_name: &str, harness: Harness) -> Result<Vec<String>> {
+    let files = settings_files(harness)?;
     require_feature(project_root, feature_name)?;
-
-    let feature_claude_dir = project_root.join(feature_name).join(".claude");
-    list_settings_dir(&feature_claude_dir)
+    list_settings_dir(&feature_dir(project_root, feature_name, harness), files)
 }
 
-fn list_settings_dir(claude_dir: &Path) -> Result<Vec<String>> {
+fn list_settings_dir(dir: &Path, files: &[&str]) -> Result<Vec<String>> {
     let mut lines = Vec::new();
 
-    for &filename in settings_files() {
-        let path = claude_dir.join(filename);
+    for &filename in files {
+        let path = dir.join(filename);
         if path.exists() {
             let content = std::fs::read_to_string(&path)?;
             if !lines.is_empty() {
@@ -103,39 +108,42 @@ fn list_settings_dir(claude_dir: &Path) -> Result<Vec<String>> {
     Ok(lines)
 }
 
-/// Push a feature's `.claude/` settings to main's `.claude/`.
-pub fn push(project_root: &Path, feature_name: &str) -> Result<()> {
+/// Push a feature's settings to main.
+pub fn push(project_root: &Path, feature_name: &str, harness: Harness) -> Result<()> {
+    let files = settings_files(harness)?;
     require_feature(project_root, feature_name)?;
 
-    let feature_claude_dir = project_root.join(feature_name).join(".claude");
-    if !feature_claude_dir.exists() {
+    let src = feature_dir(project_root, feature_name, harness);
+    if !src.exists() {
         return Err(PmError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!(
-                "no .claude/ directory in feature '{feature_name}' at {}",
-                feature_claude_dir.display()
+                "no {}/ directory in feature '{feature_name}' at {}",
+                harness.config_dir(),
+                src.display()
             ),
         )));
     }
 
-    let dst = main_claude_dir(project_root);
-    for filename in settings_files() {
-        copy_settings_file(&feature_claude_dir, &dst, filename)?;
+    let dst = main_dir(project_root, harness);
+    for filename in files {
+        copy_settings_file(&src, &dst, filename)?;
     }
     Ok(())
 }
 
-/// Pull main's `.claude/` settings into a feature's `.claude/` directory,
-/// leaving alone a file the feature's branch tracks (its content reaches or
-/// leaves main by merge). Returns one line per file pulled or left alone.
-pub fn pull(project_root: &Path, feature_name: &str) -> Result<Vec<String>> {
+/// Pull main's settings into a feature, leaving alone a file the feature's
+/// branch tracks (its content reaches or leaves main by merge). Returns one
+/// line per file pulled or left alone.
+pub fn pull(project_root: &Path, feature_name: &str, harness: Harness) -> Result<Vec<String>> {
+    let files = settings_files(harness)?;
     require_feature(project_root, feature_name)?;
 
     let main = paths::main_worktree(project_root);
     let worktree = project_root.join(feature_name);
     let mut lines = Vec::new();
-    for filename in settings_files() {
-        let rel = Path::new(".claude").join(filename);
+    for filename in files {
+        let rel = Path::new(harness.config_dir()).join(filename);
         let rel_str = rel.display();
         match seed_file(&main, &worktree, &rel, false)? {
             None => {}
@@ -164,11 +172,12 @@ const RESET: &str = "\x1b[0m";
 
 /// Diff main's settings against a feature's settings.
 /// Returns a list of human-readable diff lines with ANSI colors. Empty vec means no differences.
-pub fn diff(project_root: &Path, feature_name: &str) -> Result<Vec<String>> {
+pub fn diff(project_root: &Path, feature_name: &str, harness: Harness) -> Result<Vec<String>> {
+    let files = settings_files(harness)?;
     require_feature(project_root, feature_name)?;
 
     let mut lines = Vec::new();
-    for pair in load_file_pairs(project_root, feature_name)? {
+    for pair in load_file_pairs(project_root, feature_name, files, harness)? {
         match (&pair.main, &pair.feature) {
             (None, None) => {}
             (Some(_), None) => {
@@ -194,15 +203,16 @@ pub fn diff(project_root: &Path, feature_name: &str) -> Result<Vec<String>> {
     Ok(lines)
 }
 
-/// Merge main and feature settings with union semantics, writing result to main's `.claude/`.
+/// Merge main and feature settings with union semantics, writing the result to main.
 /// When `ours` is true, the feature (ours) wins on scalar conflicts; otherwise main (theirs)
 /// wins. Default should be theirs (main wins).
-pub fn merge(project_root: &Path, feature_name: &str, ours: bool) -> Result<()> {
+pub fn merge(project_root: &Path, feature_name: &str, ours: bool, harness: Harness) -> Result<()> {
+    let files = settings_files(harness)?;
     require_feature(project_root, feature_name)?;
 
-    let dst = main_claude_dir(project_root);
+    let dst = main_dir(project_root, harness);
 
-    for pair in load_file_pairs(project_root, feature_name)? {
+    for pair in load_file_pairs(project_root, feature_name, files, harness)? {
         let merged = match (pair.main, pair.feature) {
             (None, None) => continue,
             (Some(m), None) => m,
@@ -395,6 +405,8 @@ mod tests {
     use crate::testing::TestServer;
     use tempfile::tempdir;
 
+    const CC: Harness = Harness::ClaudeCode;
+
     fn write_json(dir: &Path, filename: &str, content: &str) {
         std::fs::create_dir_all(dir).unwrap();
         std::fs::write(dir.join(filename), content).unwrap();
@@ -421,7 +433,7 @@ mod tests {
             "{\n  \"permissions\": true\n}",
         );
 
-        let lines = list_main(&project).unwrap();
+        let lines = list_main(&project, CC).unwrap();
         let output = strip_ansi(&lines.join("\n"));
         assert!(output.contains("settings.json"));
         assert!(output.contains("\"permissions\": true"));
@@ -437,7 +449,7 @@ mod tests {
         write_json(&main_claude, "settings.json", r#"{"a":1}"#);
         write_json(&main_claude, "settings.local.json", r#"{"b":2}"#);
 
-        let lines = list_main(&project).unwrap();
+        let lines = list_main(&project, CC).unwrap();
         let output = strip_ansi(&lines.join("\n"));
         assert!(output.contains("settings.json"));
         assert!(!output.contains("settings.local.json"));
@@ -453,7 +465,7 @@ mod tests {
         // strip it to exercise the "no .claude/ dir" branch.
         let _ = std::fs::remove_dir_all(paths::main_worktree(&project).join(".claude"));
 
-        let lines = list_main(&project).unwrap();
+        let lines = list_main(&project, CC).unwrap();
         assert!(lines.is_empty());
     }
 
@@ -472,7 +484,7 @@ mod tests {
             "{\n  \"permissions\": true\n}",
         );
 
-        let lines = list(&project, "login").unwrap();
+        let lines = list(&project, "login", CC).unwrap();
         let output = strip_ansi(&lines.join("\n"));
         assert!(output.contains("settings.json"));
         assert!(output.contains("\"permissions\": true"));
@@ -488,7 +500,7 @@ mod tests {
         write_json(&feat_claude, "settings.json", r#"{"a":1}"#);
         write_json(&feat_claude, "settings.local.json", r#"{"b":2}"#);
 
-        let lines = list(&project, "login").unwrap();
+        let lines = list(&project, "login", CC).unwrap();
         let output = strip_ansi(&lines.join("\n"));
         assert!(output.contains("settings.json"));
         assert!(!output.contains("settings.local.json"));
@@ -507,7 +519,7 @@ mod tests {
             std::fs::remove_dir_all(&feat_claude).unwrap();
         }
 
-        let lines = list(&project, "login").unwrap();
+        let lines = list(&project, "login", CC).unwrap();
         assert!(lines.is_empty());
     }
 
@@ -517,7 +529,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _, _) = server.setup_project_no_tmux(dir.path());
 
-        let result = list(&project, "nonexistent");
+        let result = list(&project, "nonexistent", CC);
         assert!(matches!(result.unwrap_err(), PmError::FeatureNotFound(_)));
     }
 
@@ -564,7 +576,7 @@ mod tests {
             r#"{"approvals":"main"}"#,
         );
 
-        pull(&project, "login").unwrap();
+        pull(&project, "login", CC).unwrap();
 
         let feat_claude = project.join("login").join(".claude");
         assert_eq!(
@@ -597,7 +609,7 @@ mod tests {
             r#"{"approvals":"stale"}"#,
         );
 
-        push(&project, "login").unwrap();
+        push(&project, "login", CC).unwrap();
 
         assert_eq!(
             std::fs::read_to_string(main_claude.join("settings.json")).unwrap(),
@@ -615,7 +627,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _, _) = server.setup_project_no_tmux(dir.path());
 
-        let result = push(&project, "nonexistent");
+        let result = push(&project, "nonexistent", CC);
         assert!(matches!(result.unwrap_err(), PmError::FeatureNotFound(_)));
     }
 
@@ -631,7 +643,7 @@ mod tests {
             std::fs::remove_dir_all(&feat_claude).unwrap();
         }
 
-        let result = push(&project, "login");
+        let result = push(&project, "login", CC);
         assert!(result.is_err());
     }
 
@@ -646,7 +658,7 @@ mod tests {
         let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"pulled":true}"#);
 
-        pull(&project, "login").unwrap();
+        pull(&project, "login", CC).unwrap();
 
         let feat_claude = project.join("login").join(".claude");
         assert_eq!(
@@ -661,7 +673,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _, _) = server.setup_project_no_tmux(dir.path());
 
-        let result = pull(&project, "nonexistent");
+        let result = pull(&project, "nonexistent", CC);
         assert!(matches!(result.unwrap_err(), PmError::FeatureNotFound(_)));
     }
 
@@ -681,7 +693,7 @@ mod tests {
         let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"main":true}"#);
 
-        let lines = pull(&project, "login").unwrap();
+        let lines = pull(&project, "login", CC).unwrap();
 
         assert_eq!(
             std::fs::read_to_string(feature.join(".claude/settings.json")).unwrap(),
@@ -702,7 +714,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(paths::main_worktree(&project).join(".claude"));
 
         assert_eq!(
-            pull(&project, "login").unwrap(),
+            pull(&project, "login", CC).unwrap(),
             ["Main has no settings to pull"]
         );
     }
@@ -711,7 +723,7 @@ mod tests {
 
     /// Join diff output into a single string for assertions (strips ANSI codes).
     fn diff_output(project: &Path, feature: &str) -> String {
-        let lines = diff(project, feature).unwrap();
+        let lines = diff(project, feature, CC).unwrap();
         let joined = lines.join("\n");
         // Strip ANSI escape sequences for easier assertions
         let re = regex::Regex::new(r"\x1b\[[0-9;]*m").unwrap();
@@ -729,7 +741,7 @@ mod tests {
         write_json(&main_claude, "settings.json", r#"{"same":true}"#);
         write_json(&feat_claude, "settings.json", r#"{"same":true}"#);
 
-        let result = diff(&project, "login").unwrap();
+        let result = diff(&project, "login", CC).unwrap();
         assert!(result.is_empty());
     }
 
@@ -813,7 +825,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
-        let result = diff(&project, "login").unwrap();
+        let result = diff(&project, "login", CC).unwrap();
         assert!(result.is_empty());
     }
 
@@ -823,7 +835,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _, _) = server.setup_project_no_tmux(dir.path());
 
-        let result = diff(&project, "nonexistent");
+        let result = diff(&project, "nonexistent", CC);
         assert!(matches!(result.unwrap_err(), PmError::FeatureNotFound(_)));
     }
 
@@ -846,7 +858,7 @@ mod tests {
         write_json(&main_claude, "settings.json", r#"{"a":1}"#);
         write_json(&feat_claude, "settings.json", r#"{"b":2}"#);
 
-        merge(&project, "login", true).unwrap();
+        merge(&project, "login", true, CC).unwrap();
 
         let result = read_merged(&project, "settings.json");
         assert_eq!(result["a"], 1);
@@ -872,7 +884,7 @@ mod tests {
             r#"{"perms":["write","exec"]}"#,
         );
 
-        merge(&project, "login", true).unwrap();
+        merge(&project, "login", true, CC).unwrap();
 
         let result = read_merged(&project, "settings.json");
         let perms: Vec<&str> = result["perms"]
@@ -896,7 +908,7 @@ mod tests {
         write_json(&feat_claude, "settings.json", r#"{"mode":"relaxed"}"#);
 
         // ours=false is the default (theirs/main wins)
-        merge(&project, "login", false).unwrap();
+        merge(&project, "login", false, CC).unwrap();
 
         let result = read_merged(&project, "settings.json");
         assert_eq!(result["mode"], "strict");
@@ -913,7 +925,7 @@ mod tests {
         write_json(&main_claude, "settings.json", r#"{"mode":"strict"}"#);
         write_json(&feat_claude, "settings.json", r#"{"mode":"relaxed"}"#);
 
-        merge(&project, "login", true).unwrap();
+        merge(&project, "login", true, CC).unwrap();
 
         let result = read_merged(&project, "settings.json");
         assert_eq!(result["mode"], "relaxed");
@@ -928,7 +940,7 @@ mod tests {
         let feat_claude = project.join("login").join(".claude");
         write_json(&feat_claude, "settings.json", r#"{"new":true}"#);
 
-        merge(&project, "login", false).unwrap();
+        merge(&project, "login", false, CC).unwrap();
 
         let result = read_merged(&project, "settings.json");
         assert_eq!(result["new"], true);
@@ -943,7 +955,7 @@ mod tests {
         let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"existing":true}"#);
 
-        merge(&project, "login", false).unwrap();
+        merge(&project, "login", false, CC).unwrap();
 
         let result = read_merged(&project, "settings.json");
         assert_eq!(result["existing"], true);
@@ -959,7 +971,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(paths::main_worktree(&project).join(".claude"));
         let _ = std::fs::remove_dir_all(project.join("login").join(".claude"));
 
-        merge(&project, "login", false).unwrap();
+        merge(&project, "login", false, CC).unwrap();
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         assert!(!main_claude.join("settings.json").exists());
@@ -981,7 +993,7 @@ mod tests {
             .modified()
             .unwrap();
 
-        merge(&project, "login", false).unwrap();
+        merge(&project, "login", false, CC).unwrap();
 
         let after = std::fs::metadata(main_claude.join("settings.json"))
             .unwrap()
@@ -1009,7 +1021,7 @@ mod tests {
             r#"{"outer":{"f_key":"f_val"}}"#,
         );
 
-        merge(&project, "login", false).unwrap();
+        merge(&project, "login", false, CC).unwrap();
 
         let result = read_merged(&project, "settings.json");
         assert_eq!(result["outer"]["m_key"], "m_val");
@@ -1022,7 +1034,7 @@ mod tests {
         let server = TestServer::new();
         let (project, _, _) = server.setup_project_no_tmux(dir.path());
 
-        let result = merge(&project, "nonexistent", false);
+        let result = merge(&project, "nonexistent", false, CC);
         assert!(matches!(result.unwrap_err(), PmError::FeatureNotFound(_)));
     }
 
@@ -1038,12 +1050,12 @@ mod tests {
         write_json(&feat_claude, "settings.json", r#"{"valid":true}"#);
 
         // Default (ours=false) → main wins
-        merge(&project, "login", false).unwrap();
+        merge(&project, "login", false, CC).unwrap();
         let content = std::fs::read_to_string(main_claude.join("settings.json")).unwrap();
         assert_eq!(content, "not json");
 
         // ours=true → feature wins
-        merge(&project, "login", true).unwrap();
+        merge(&project, "login", true, CC).unwrap();
         let content = std::fs::read_to_string(main_claude.join("settings.json")).unwrap();
         assert_eq!(content, r#"{"valid":true}"#);
     }
@@ -1061,7 +1073,7 @@ mod tests {
         write_json(&main_claude, "settings.local.json", r#"{"env":"prod"}"#);
         write_json(&feat_claude, "settings.local.json", r#"{"env":"dev"}"#);
 
-        assert!(diff(&project, "login").unwrap().is_empty());
+        assert!(diff(&project, "login", CC).unwrap().is_empty());
     }
 
     #[test]
@@ -1075,7 +1087,7 @@ mod tests {
         write_json(&main_claude, "settings.local.json", r#"{"a":1}"#);
         write_json(&feat_claude, "settings.local.json", r#"{"b":2}"#);
 
-        merge(&project, "login", false).unwrap();
+        merge(&project, "login", false, CC).unwrap();
 
         assert_eq!(
             std::fs::read_to_string(main_claude.join("settings.local.json")).unwrap(),
@@ -1097,7 +1109,7 @@ mod tests {
         let feat_claude = project.join("login").join(".claude");
         write_json(&feat_claude, "settings.json", r#"{"new":true}"#);
 
-        push(&project, "login").unwrap();
+        push(&project, "login", CC).unwrap();
 
         let content = std::fs::read_to_string(main_claude.join("settings.json")).unwrap();
         assert_eq!(content, r#"{"new":true}"#);
@@ -1117,7 +1129,7 @@ mod tests {
         let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"canonical":true}"#);
 
-        pull(&project, "login").unwrap();
+        pull(&project, "login", CC).unwrap();
 
         let content = std::fs::read_to_string(feat_claude.join("settings.json")).unwrap();
         assert_eq!(content, r#"{"canonical":true}"#);

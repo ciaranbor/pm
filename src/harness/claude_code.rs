@@ -11,7 +11,7 @@ pub(super) mod sessions;
 use std::path::Path;
 
 use crate::error::Result;
-use crate::harness::{Projection, SpawnSpec};
+use crate::harness::{Projection, ProjectionScope, SpawnSpec};
 use crate::tmux;
 
 pub(super) const CONFIG_DIR: &str = ".claude";
@@ -39,9 +39,10 @@ pub(super) fn personal_skill_exists(home: &Path, name: &str) -> bool {
 pub(super) fn project_assets(
     canonical_root: &Path,
     target_root: &Path,
+    scope: &ProjectionScope<'_>,
     dry_run: bool,
 ) -> Result<Projection> {
-    super::project_by_copy(canonical_root, target_root, PROJECTED_DIRS, dry_run)
+    super::project_by_copy(canonical_root, target_root, PROJECTED_DIRS, scope, dry_run)
 }
 
 pub(super) fn build_cmd(spec: &SpawnSpec<'_>) -> String {

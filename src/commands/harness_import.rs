@@ -1,6 +1,9 @@
 //! `pm harness import`: install the sessions of a `pm harness export`
 //! tarball for every project in its manifest that is registered here, as
-//! sessions of that project's local main worktree.
+//! sessions of that project's local main worktree and of each exported
+//! feature's local worktree. A feature that is not registered here or has
+//! no worktree is skipped: `pm restore` recreates feature worktrees, so it
+//! runs first.
 //!
 //! A tarball is untrusted input. `tar` keeps what it extracts inside the
 //! staging directory (it refuses `..` members, strips a leading `/`, and
@@ -14,6 +17,7 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::error::{PmError, Result};
 use crate::harness::{Harness, ImportOutcome, SessionStore};
+use crate::state::feature::FeatureState;
 use crate::state::paths;
 use crate::state::project::{HarnessConfig, ProjectEntry, harness_config_in};
 
@@ -115,53 +119,54 @@ pub fn import(
         )));
     }
 
-    let mut messages = Vec::new();
-    for (name, info) in manifest {
-        let field = |key: &str| {
-            info[key].as_str().ok_or_else(|| {
-                PmError::ExportImport(format!("missing '{key}' for project '{name}'"))
-            })
-        };
-        let (path, key) = (field("path")?, field("key")?);
-        let refused = |what: &str| {
-            PmError::ExportImport(format!("invalid export: project '{name}' has {what}"))
-        };
-        if !is_single_name(name) {
-            return Err(refused("a name that is a path"));
-        }
-        if !is_single_name(key) {
-            return Err(refused(&format!(
-                "key '{key}', which is not a directory of the export"
-            )));
-        }
-        let from = Path::new(path);
-        if !from.is_absolute() {
-            return Err(refused(&format!("path '{path}', which is not absolute")));
-        }
-        let sessions = export_root.join(PROJECTS_DIR).join(key);
+    // Every entry is checked before anything is imported, so a refused
+    // export leaves the store untouched.
+    let projects = manifest
+        .iter()
+        .map(|(name, info)| Ok((name.as_str(), worktrees(&export_root, name, info)?)))
+        .collect::<Result<Vec<_>>>()?;
 
+    let mut messages = Vec::new();
+    for (name, worktrees) in projects {
         let Ok(local) = ProjectEntry::load(projects_dir, name) else {
             messages.push(format!("Skipping '{name}': not registered locally"));
             continue;
         };
-        if !sessions.exists() {
-            messages.push(format!(
-                "Skipping '{name}': session data not found in tarball"
-            ));
-            continue;
-        }
-
         let root = local.root_path();
         let config = harness_config_in(Some(&root), global);
         let store = SessionStore {
             home,
             config: &config,
         };
-        match harness.import_sessions(&store, &sessions, from, &paths::main_worktree(&root))? {
-            ImportOutcome::Skipped(why) => messages.push(format!("Skipping '{name}': {why}")),
-            ImportOutcome::Imported { detail, notes } => {
-                messages.extend(notes.iter().map(|note| format!("  {name}: {note}")));
-                messages.push(format!("Imported '{name}' ({detail})"));
+        for wt in worktrees {
+            let (label, to) = match wt.feature {
+                None => (name.to_string(), paths::main_worktree(&root)),
+                Some(feature) => {
+                    let label = format!("{name}/{feature}");
+                    if !FeatureState::exists(&paths::features_dir(&root), feature) {
+                        messages.push(format!("Skipping '{label}': not a feature here"));
+                        continue;
+                    }
+                    let to = root.join(feature);
+                    if !to.is_dir() {
+                        messages.push(format!("Skipping '{label}': no worktree here"));
+                        continue;
+                    }
+                    (label, to)
+                }
+            };
+            if !wt.sessions.exists() {
+                messages.push(format!(
+                    "Skipping '{label}': session data not found in tarball"
+                ));
+                continue;
+            }
+            match harness.import_sessions(&store, &wt.sessions, wt.from, &to)? {
+                ImportOutcome::Skipped(why) => messages.push(format!("Skipping '{label}': {why}")),
+                ImportOutcome::Imported { detail, notes } => {
+                    messages.extend(notes.iter().map(|note| format!("  {label}: {note}")));
+                    messages.push(format!("Imported '{label}' ({detail})"));
+                }
             }
         }
     }
@@ -169,11 +174,81 @@ pub fn import(
     Ok(messages)
 }
 
+/// One worktree's sessions in an export.
+struct Worktree<'a> {
+    /// `None` for main.
+    feature: Option<&'a str>,
+    /// Where the sessions were recorded.
+    from: &'a Path,
+    /// Their directory in the extracted export.
+    sessions: PathBuf,
+}
+
+/// The worktrees project `name`'s manifest entry `info` carries, refusing
+/// an entry with none and any string that would not stay where it is
+/// joined. Main is absent when only features had sessions.
+fn worktrees<'a>(
+    export_root: &Path,
+    name: &'a str,
+    info: &'a serde_json::Value,
+) -> Result<Vec<Worktree<'a>>> {
+    let refused = |what: String| {
+        PmError::ExportImport(format!("invalid export: project '{name}' has {what}"))
+    };
+    if !is_single_name(name) {
+        return Err(refused("a name that is a path".to_string()));
+    }
+    let worktree = |feature: Option<&'a str>, entry: &'a serde_json::Value| {
+        let of = feature
+            .map(|f| format!(" for feature '{f}'"))
+            .unwrap_or_default();
+        let field = |key: &str| {
+            entry[key].as_str().ok_or_else(|| {
+                PmError::ExportImport(format!("missing '{key}' for project '{name}'{of}"))
+            })
+        };
+        let (path, key) = (field("path")?, field("key")?);
+        if !is_single_name(key) {
+            return Err(refused(format!(
+                "key '{key}'{of}, which is not a directory of the export"
+            )));
+        }
+        let from = Path::new(path);
+        if !from.is_absolute() {
+            return Err(refused(format!("path '{path}'{of}, which is not absolute")));
+        }
+        Ok(Worktree {
+            feature,
+            from,
+            sessions: export_root.join(PROJECTS_DIR).join(key),
+        })
+    };
+    let mut out = Vec::new();
+    if info.get("key").is_some() {
+        out.push(worktree(None, info)?);
+    }
+    if let Some(features) = info.get("features") {
+        let features = features
+            .as_object()
+            .ok_or_else(|| refused("'features' that is not an object".to_string()))?;
+        for (feature, entry) in features {
+            if !is_single_name(feature) {
+                return Err(refused(format!("feature '{feature}', which is a path")));
+            }
+            out.push(worktree(Some(feature), entry)?);
+        }
+    }
+    if out.is_empty() {
+        return Err(refused("no sessions".to_string()));
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::commands::harness_export::tests::{
-        register, run_export, setup_claude_sessions, setup_project,
+        add_feature, register, run_export, setup_claude_sessions, setup_project,
     };
     use tempfile::tempdir;
 
@@ -328,6 +403,91 @@ mod tests {
     }
 
     #[test]
+    fn feature_worktree_sessions_travel_with_their_project() {
+        let source_home = tempdir().unwrap();
+        let source_project = tempdir().unwrap();
+        let source_registry = tempdir().unwrap();
+        let out = tempdir().unwrap();
+        let source_root = source_project.path().canonicalize().unwrap();
+        let source_main = setup_project(&source_root, "myapp", source_registry.path());
+        setup_claude_sessions(source_home.path(), &source_main);
+        for feature in ["login", "gone", "unknown"] {
+            let wt = add_feature(&source_root, feature);
+            setup_claude_sessions(source_home.path(), &wt);
+        }
+        add_feature(&source_root, "idle");
+        let (tarball, msgs) = run_export(
+            Harness::ClaudeCode,
+            Some(&source_root),
+            source_registry.path(),
+            &out.path().join("export.tar.gz"),
+            source_home.path(),
+        )
+        .unwrap();
+        for exported in ["myapp", "myapp/login", "myapp/gone", "myapp/unknown"] {
+            let line = format!("Exported '{exported}' (");
+            assert!(msgs.iter().any(|m| m.starts_with(&line)), "{msgs:?}");
+        }
+
+        // Restored elsewhere: `gone` is registered but has no worktree, and
+        // `unknown` was never a feature here.
+        let home = tempdir().unwrap();
+        let project = tempdir().unwrap();
+        let registry = tempdir().unwrap();
+        let root = project.path().canonicalize().unwrap();
+        let local_main = setup_project(&root, "myapp", registry.path());
+        let local_login = add_feature(&root, "login");
+        add_feature(&root, "gone");
+        std::fs::remove_dir(root.join("gone")).unwrap();
+
+        let mut msgs =
+            run_import(Harness::ClaudeCode, &tarball, registry.path(), home.path()).unwrap();
+        msgs.sort();
+        assert_eq!(
+            msgs,
+            [
+                "Imported 'myapp' (path rewritten)",
+                "Imported 'myapp/login' (path rewritten)",
+                "Skipping 'myapp/gone': no worktree here",
+                "Skipping 'myapp/unknown': not a feature here",
+            ]
+        );
+        for local in [&local_main, &local_login] {
+            let content = std::fs::read_to_string(
+                claude_sessions_of(home.path(), local).join("session.jsonl"),
+            )
+            .unwrap();
+            assert!(content.contains(&*local.to_string_lossy()), "{content}");
+        }
+    }
+
+    #[test]
+    fn a_project_whose_only_sessions_are_a_features_is_exported() {
+        let source_home = tempdir().unwrap();
+        let source_project = tempdir().unwrap();
+        let source_registry = tempdir().unwrap();
+        let out = tempdir().unwrap();
+        let source_root = source_project.path().canonicalize().unwrap();
+        setup_project(&source_root, "myapp", source_registry.path());
+        let wt = add_feature(&source_root, "login");
+        setup_claude_sessions(source_home.path(), &wt);
+        let (tarball, _) = run_export(
+            Harness::ClaudeCode,
+            Some(&source_root),
+            source_registry.path(),
+            &out.path().join("export.tar.gz"),
+            source_home.path(),
+        )
+        .unwrap();
+
+        let home = tempdir().unwrap();
+        let registry = tempdir().unwrap();
+        register(&source_root, "myapp", registry.path());
+        let msgs = run_import(Harness::ClaudeCode, &tarball, registry.path(), home.path()).unwrap();
+        assert_eq!(msgs, ["Imported 'myapp/login' (same path)"]);
+    }
+
+    #[test]
     fn import_nonexistent_tarball_errors() {
         let registry = tempdir().unwrap();
         let home = tempdir().unwrap();
@@ -468,6 +628,43 @@ mod tests {
             assert!(
                 err.contains("project 'myapp' has key") && untouched,
                 "{key}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn import_refuses_a_feature_name_or_key_that_leaves_the_export() {
+        let main = r#""path": "/old/myapp/main", "key": "-old-myapp-main""#;
+        for (feature, key, refusal) in [
+            (
+                "../login",
+                "-old-myapp-login",
+                "feature '../login', which is a path",
+            ),
+            (
+                "login",
+                "../outside",
+                "key '../outside' for feature 'login'",
+            ),
+        ] {
+            let entry = format!(
+                r#"{{{main}, "features": {{"{feature}": {{"path": "/old/myapp/{feature}", "key": "{key}"}}}}}}"#
+            );
+            let (err, untouched) = import_crafted(&entry, |_, _| {});
+            assert!(err.contains(refusal) && untouched, "{err}");
+        }
+    }
+
+    #[test]
+    fn import_refuses_a_project_entry_without_sessions() {
+        for entry in [
+            r#"{"path": "/old/myapp/main"}"#,
+            r#"{"path": "/old/myapp/main", "features": {}}"#,
+        ] {
+            let (err, untouched) = import_crafted(entry, |_, _| {});
+            assert!(
+                err.ends_with("project 'myapp' has no sessions") && untouched,
+                "{err}"
             );
         }
     }
