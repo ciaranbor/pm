@@ -275,13 +275,17 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                 }
                 AgentCommands::Restart { names, scope } => {
                     let target_scope = resolve_scope_with_flag(&project_root, scope)?;
-                    let results = commands::agent_restart::agent_restart_many(
+                    let mut restarted = commands::agent_restart::agent_restart_many(
                         &project_root,
                         &target_scope,
                         &names,
                         server,
                     );
-                    report_agent_op_results(results, "restart")
+                    let reported =
+                        report_agent_op_results(std::mem::take(&mut restarted.results), "restart");
+                    std::io::Write::flush(&mut std::io::stdout())?;
+                    restarted.finish(server);
+                    reported
                 }
                 AgentCommands::List { active } => {
                     let feature = resolve_scope(&project_root)?;
