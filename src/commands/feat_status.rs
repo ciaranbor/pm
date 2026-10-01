@@ -8,7 +8,8 @@
 //! while the team is still running. `blocked` and `wip` message no one.
 //!
 //! A blocked feature may carry a reason, the question the user is to
-//! answer. Any later status change drops it.
+//! answer, and records the agent that set it. Any later status change drops
+//! both.
 
 use std::path::Path;
 
@@ -18,8 +19,9 @@ use crate::state::feature::{FeatureState, Progress};
 use crate::state::paths;
 
 /// Set a feature's progress, with `reason` only for `blocked`. `agent` is
-/// the agent running the command, if any: `main` can reply to it about a
-/// `ready` message.
+/// the agent running the command, if any: recorded as the one a `blocked`
+/// feature waits in, and the one `main` can reply to about a `ready`
+/// message.
 pub fn feat_status(
     project_root: &Path,
     name: &str,
@@ -58,6 +60,9 @@ pub fn feat_status(
     state.blocked_reason = reason
         .map(str::trim)
         .filter(|r| !r.is_empty())
+        .map(str::to_string);
+    state.blocked_by = agent
+        .filter(|_| progress == Progress::Blocked)
         .map(str::to_string);
     state.last_active = chrono::Utc::now();
     state.save(&features_dir, name)?;
@@ -296,14 +301,13 @@ mod tests {
     }
 
     #[test]
-    fn a_blocked_reason_is_kept_until_the_status_changes() {
+    fn a_blocked_reason_and_its_agent_are_kept_until_the_status_changes() {
         let dir = tempdir().unwrap();
         let (project, _) =
             TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
-        let reason = |project: &Path| {
-            FeatureState::load(&paths::features_dir(project), "login")
-                .unwrap()
-                .blocked_reason
+        let blocked = |project: &Path| {
+            let state = FeatureState::load(&paths::features_dir(project), "login").unwrap();
+            (state.blocked_reason, state.blocked_by)
         };
 
         feat_status(
@@ -311,13 +315,16 @@ mod tests {
             "login",
             Progress::Blocked,
             Some("which DB?"),
-            None,
+            Some("implementer"),
         )
         .unwrap();
-        assert_eq!(reason(&project).as_deref(), Some("which DB?"));
+        assert_eq!(
+            blocked(&project),
+            (Some("which DB?".into()), Some("implementer".into()))
+        );
 
-        feat_status(&project, "login", Progress::Wip, None, None).unwrap();
-        assert_eq!(reason(&project), None);
+        feat_status(&project, "login", Progress::Wip, None, Some("implementer")).unwrap();
+        assert_eq!(blocked(&project), (None, None));
     }
 
     #[test]

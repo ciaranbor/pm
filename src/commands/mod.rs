@@ -7,6 +7,7 @@ pub mod agent_send;
 pub mod agent_spawn;
 pub mod agent_stop;
 pub mod agent_wait;
+pub mod attention;
 pub mod close;
 pub mod delete;
 pub mod docs;

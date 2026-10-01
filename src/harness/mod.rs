@@ -412,6 +412,18 @@ impl Harness {
         }
     }
 
+    /// Whether `command`, a process's command line, is the harness itself:
+    /// an agent's window whose pane runs no such process has a harness that
+    /// exited.
+    pub fn runs_as(self, command: &str, config: &HarnessConfig) -> bool {
+        let binary = match self {
+            Harness::ClaudeCode => claude_code::BINARY,
+            Harness::Codex => codex::BINARY,
+            Harness::OpenCode => opencode::binary(&config.opencode),
+        };
+        launched_as(command, binary)
+    }
+
     /// The harness's name in an export's file and root directory names.
     pub fn export_tag(self) -> &'static str {
         match self {
@@ -741,6 +753,17 @@ pub fn resumable_session(session_id: &str, stored: Harness, resolved: Harness) -
         return None;
     }
     Some(session_id.to_string())
+}
+
+/// Whether `command` runs `binary`, by file name: as the program, or as
+/// the script an interpreter runs (`node …/codex`).
+fn launched_as(command: &str, binary: &str) -> bool {
+    let name = Path::new(binary).file_name();
+    name.is_some()
+        && command
+            .split(' ')
+            .take(2)
+            .any(|word| Path::new(word).file_name() == name)
 }
 
 #[cfg(test)]

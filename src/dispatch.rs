@@ -462,6 +462,19 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                 }
             }
         }
+        Commands::Feat(FeatCommands::Status {
+            all: true, json, ..
+        }) => {
+            let lines =
+                commands::feat_status_view::all(&paths::global_projects_dir()?, json, server)?;
+            if lines.is_empty() {
+                println!("No features");
+            }
+            for line in lines {
+                println!("{line}");
+            }
+            Ok(())
+        }
         Commands::Feat(FeatCommands::List { all: true }) => {
             let lines = commands::feat_list::feat_list_all(&paths::global_projects_dir()?)?;
             if lines.is_empty() {
@@ -641,6 +654,8 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     status,
                     name,
                     reason,
+                    all: _,
+                    json,
                 } => {
                     use commands::feat_status::Request;
                     let request = commands::feat_status::request(
@@ -650,18 +665,27 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         reason.is_some(),
                     )?;
                     let (status, name) = match request {
+                        Request::Set { .. } if json => {
+                            return Err(pm::error::PmError::SafetyCheck(
+                                "--json is for viewing; it takes no status".into(),
+                            ));
+                        }
                         Request::Set { progress, name } => (progress, name),
                         Request::View { name } => {
+                            let name = match name {
+                                Some(name) => Some(name),
+                                None if resolve_scope(&project_root)? == "main" => None,
+                                None => Some(resolve_feature_name(None, &project_root)?),
+                            };
                             let lines = match name {
-                                Some(name) => {
+                                Some(name) if !json => {
                                     commands::feat_status_view::feature(&project_root, &name)?
                                 }
-                                None if resolve_scope(&project_root)? == "main" => {
-                                    commands::feat_status_view::project(&project_root)?
-                                }
-                                None => commands::feat_status_view::feature(
+                                name => commands::feat_status_view::project(
                                     &project_root,
-                                    &resolve_feature_name(None, &project_root)?,
+                                    name.as_deref(),
+                                    json,
+                                    server,
                                 )?,
                             };
                             if lines.is_empty() {

@@ -309,6 +309,12 @@ pub fn harness_config_in(project_root: Option<&Path>, global: &HarnessConfig) ->
     resolve_harness_config(&project, global)
 }
 
+/// [`harness_config_in`] over the global config as it stands. Advisory, so
+/// an unreadable project config yields the global settings.
+pub fn harness_config(project_root: Option<&Path>) -> HarnessConfig {
+    harness_config_in(project_root, &GlobalConfig::load_or_default().harness)
+}
+
 fn layered_opt(project: &Option<String>, global: &Option<String>) -> Option<String> {
     project
         .as_ref()
@@ -1402,6 +1408,7 @@ default = "implementer"
                 last_active: chrono::Utc::now(),
                 progress: Default::default(),
                 blocked_reason: None,
+                blocked_by: None,
             };
             state.save(&features_dir, &format!("feat-{i}")).unwrap();
         }
@@ -1443,6 +1450,7 @@ default = "implementer"
                 last_active: chrono::Utc::now(),
                 progress: Default::default(),
                 blocked_reason: None,
+                blocked_by: None,
             };
             state.save(&features_dir, &format!("feat-{i}")).unwrap();
         }
@@ -1488,6 +1496,7 @@ default = "implementer"
                 last_active: chrono::Utc::now(),
                 progress: Default::default(),
                 blocked_reason: None,
+                blocked_by: None,
             };
             state.save(&features_dir, &format!("feat-{i}")).unwrap();
         }
@@ -1528,6 +1537,7 @@ default = "implementer"
             last_active: chrono::Utc::now(),
             progress: Default::default(),
             blocked_reason: None,
+            blocked_by: None,
         };
         state.save(&features_dir, "old-feat").unwrap();
 
@@ -1567,6 +1577,7 @@ default = "implementer"
             last_active: chrono::Utc::now(),
             progress: Default::default(),
             blocked_reason: None,
+            blocked_by: None,
         };
         state.save(&features_dir, "stale-feat").unwrap();
 
@@ -1608,6 +1619,7 @@ default = "implementer"
                 last_active: chrono::Utc::now(),
                 progress: Default::default(),
                 blocked_reason: None,
+                blocked_by: None,
             };
             state.save(&features_dir, &format!("feat-{i}")).unwrap();
         }

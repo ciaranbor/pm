@@ -68,6 +68,9 @@ pub struct FeatureState {
     /// What a blocked team is waiting on the user for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocked_reason: Option<String>,
+    /// The agent that marked the feature blocked: the one to answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_by: Option<String>,
     pub branch: String,
     pub worktree: String,
     #[serde(default)]
@@ -264,6 +267,7 @@ mod tests {
             last_active: Utc::now(),
             progress: Default::default(),
             blocked_reason: None,
+            blocked_by: None,
         }
     }
 

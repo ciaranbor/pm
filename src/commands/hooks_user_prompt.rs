@@ -75,14 +75,14 @@ mod tests {
             "login",
             Progress::Blocked,
             Some("which DB?"),
-            None,
+            Some("implementer"),
         )
         .unwrap();
         project
     }
 
     #[test]
-    fn the_users_prompt_unblocks_the_feature_and_drops_the_reason() {
+    fn the_users_prompt_unblocks_the_feature_and_drops_the_reason_and_agent() {
         let dir = tempdir().unwrap();
         let project = blocked_feature(dir.path());
 
@@ -91,6 +91,7 @@ mod tests {
         let state = state(&project);
         assert_eq!(state.progress, Progress::Wip);
         assert_eq!(state.blocked_reason, None);
+        assert_eq!(state.blocked_by, None);
     }
 
     #[test]

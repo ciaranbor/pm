@@ -56,6 +56,9 @@ use crate::state::project::CodexConfig;
 use crate::tmux;
 
 pub(super) const CONFIG_DIR: &str = ".codex";
+
+/// The program an agent's window runs.
+pub(super) const BINARY: &str = "codex";
 pub(super) const HOOKS_FILE: &str = "hooks.json";
 const CONFIG_FILE: &str = "config.toml";
 
@@ -110,7 +113,7 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>, cfg: &CodexConfig) -> String {
         .unwrap_or(DEFAULT_SANDBOX);
 
     let mut parts = vec![
-        "codex".to_string(),
+        BINARY.to_string(),
         "--no-daemon".to_string(),
         "-a".to_string(),
         tmux::shell_quote(approval),
@@ -301,7 +304,7 @@ fn parse_version(output: &str) -> Option<(u32, u32, u32)> {
 
 /// The installed version's raw string, or `None` when `codex` can't be run.
 pub(super) fn installed_version() -> Option<String> {
-    let out = std::process::Command::new("codex")
+    let out = std::process::Command::new(BINARY)
         .arg("--version")
         .stdin(std::process::Stdio::null())
         .output()

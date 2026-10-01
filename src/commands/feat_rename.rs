@@ -13,7 +13,8 @@
 //!
 //! Stopping an agent mid-turn loses its in-flight tool call, so the rename
 //! refuses, before changing anything, while any other agent is busy
-//! ([`super::running_agents`]). `--force` stops busy agents anyway and
+//! ([`super::running_agents`]); a dead agent has no turn to lose, so it is
+//! respawned like an idle one. `--force` stops busy agents anyway and
 //! queues each a message to resume, from a sender it cannot reply to; the
 //! agent the rename runs from, mid-turn by definition, always gets one. An
 //! agent idle at the check can still start a turn before it is stopped;
@@ -160,7 +161,7 @@ pub fn feat_rename_in(
     let busy = busy_in_scope(project_root, project_name, old_name, tmux_server);
     if !busy.is_empty() && !force {
         return Err(PmError::SafetyCheck(format!(
-            "agent(s) {} are mid-turn, or not running a harness, and the rename restarts them; \
+            "agent(s) {} are mid-turn, and the rename restarts them; \
              wait until they are idle, or pass --force to interrupt them and have them resume",
             busy.iter()
                 .map(|a| format!("'{a}'"))
@@ -815,6 +816,38 @@ mod tests {
             msg.body
         );
         assert_eq!(msg.meta.sender_scope, None);
+    }
+
+    #[test]
+    fn rename_restarts_an_agent_whose_harness_exited_without_force() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let session = tmux::session_name(&project_name, "login");
+        server.spawn_dead_fake_agent(&project_path, &session, "login", "reviewer");
+
+        let report = feat_rename_in(
+            &project_path,
+            "login",
+            "auth",
+            false,
+            server.name(),
+            Some(dir.path()),
+        )
+        .unwrap()
+        .report;
+
+        assert!(
+            report
+                .iter()
+                .any(|l| l.starts_with("Restarted agent 'reviewer'")),
+            "{report:?}"
+        );
+        assert!(
+            messages::check(&paths::messages_dir(&project_path), "auth", "reviewer")
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

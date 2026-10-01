@@ -126,6 +126,7 @@ mod tests {
             last_active: Utc::now(),
             progress: Default::default(),
             blocked_reason: None,
+            blocked_by: None,
         }
     }
 

@@ -505,6 +505,7 @@ mod tests {
             last_active: now,
             progress: Default::default(),
             blocked_reason: None,
+            blocked_by: None,
         };
         feat_state.save(&features_dir, "login").unwrap();
 
@@ -556,6 +557,7 @@ mod tests {
             last_active: now,
             progress: Default::default(),
             blocked_reason: None,
+            blocked_by: None,
         };
         feat_state.save(&features_dir, "old-feat").unwrap();
 
@@ -599,6 +601,7 @@ mod tests {
             last_active: now,
             progress: Default::default(),
             blocked_reason: None,
+            blocked_by: None,
         };
         feat_state.save(&features_dir, "ghost-feat").unwrap();
 

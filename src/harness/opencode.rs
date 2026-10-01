@@ -206,7 +206,7 @@ pub(super) fn plugin_files(home: &Path) -> Vec<(PathBuf, &'static str)> {
         .collect()
 }
 
-fn binary(cfg: &OpenCodeConfig) -> &str {
+pub(super) fn binary(cfg: &OpenCodeConfig) -> &str {
     cfg.binary.as_deref().unwrap_or(DEFAULT_BINARY)
 }
 
