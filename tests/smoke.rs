@@ -61,7 +61,7 @@ impl Smoke {
         let pid = std::process::id();
         let name = pid.to_string();
         // A previous scenario's sandbox, or a dead run's under a reused pid.
-        sandbox_ok(&name, &["down"]);
+        sandbox_ok(&name, &["down", "--force"]);
         sandbox_ok(
             &name,
             &["up", "--pm", env!("CARGO_BIN_EXE_pm"), "--shell", "/bin/sh"],
@@ -374,7 +374,7 @@ impl Smoke {
 
 impl Drop for Smoke {
     fn drop(&mut self) {
-        sandbox_ok(&self.name, &["down"]);
+        sandbox_ok(&self.name, &["down", "--force"]);
     }
 }
 
