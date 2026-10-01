@@ -48,7 +48,7 @@ config reload.
 | `@pm-bin` | `pm` | the pm binary tmux runs |
 | `@pm-auto-refresh` | on | keep pm's options current: one background `pm tmux refresh` loop per server; `off` stops it |
 | `@pm-refresh-interval` | `30` | seconds between refreshes; pm pushes its own changes at once, so the poll only catches what happens outside pm (below) |
-| `@pm-window-status` | on | put each agent window's badge at the start of `window-status-format` and `window-status-current-format`, before your theme's segments (skipped for a format where you placed `@pm_agent_badge` yourself); `off` removes it |
+| `@pm-window-status` | on | put each agent window's badge just before the window name (`#W` or `#{window_name}`) in `window-status-format` and `window-status-current-format`, so the bar reads `3 ⚙ main`; the name keeps your theme's style (below). With no name outside a `#{…}`, the badge goes first. Skipped for a format where you placed `@pm_agent_badge` yourself; a badge an earlier pm placed elsewhere is moved; `off` removes it |
 | `@pm-bind-tree` | on | when prefix `s` or `w` runs a `choose-tree` with no format or template of yours (tmux's default does), add pm's format and Enter action, keeping its flags and note, and sort by name (`-O name`, grouping each project's sessions) if it sets no order: tmux's defaults become `choose-tree -Zs -O name` and `choose-tree -Zw -O name` plus pm's; `off` takes pm's additions off again |
 | `@pm-attention-key` | unset | a prefix key opening pm's tree with only the sessions needing attention — when none does, tmux shows them all |
 
@@ -249,9 +249,11 @@ scope only, so tmux's fallback from window to session to global never
 yields another scope's value.
 
 `@pm_agent_badge` (glyphs under Install) is sized for
-`window-status-format` and resets to the window's default style after
-itself, so it suits the start of a format, before any `#[…]` of the
-theme's.
+`window-status-format`. It sets only the foreground, then resets to the
+window's default style with `#[default]`. Where init places it, it is
+followed by every `#[…]` that comes before the name outside a `#{…}`,
+which rebuilds your theme's style for the name. If you place it yourself
+anywhere but the start of a format, follow it with your theme's style.
 
 When a feature with an open session becomes `blocked` or `ready`, every
 attached client is shown it once. The previous attention is the published

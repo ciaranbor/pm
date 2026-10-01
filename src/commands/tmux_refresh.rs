@@ -270,13 +270,15 @@ pub(super) fn window_values(agent: &AgentSnapshot) -> Vec<(&'static str, Option<
     ]
 }
 
+/// Colours only the foreground, so the glyphs sit on the surrounding
+/// background, then resets to the window's base style once at the end.
 fn agent_badge(state: AgentState, unread: u32) -> String {
-    let mut badge = styled(agent_style(state), agent_glyph(state));
+    let mut badge = format!("#[{}]{}", agent_style(state), agent_glyph(state));
     if unread > 0 {
         // nf-fa-envelope
-        badge.push_str(&styled("fg=yellow", "\u{f0e0}"));
+        badge.push_str("#[fg=yellow]\u{f0e0}");
     }
-    badge
+    badge + "#[default]"
 }
 
 fn global_values(snapshot: &Snapshot) -> Vec<(&'static str, Option<String>)> {
@@ -545,7 +547,7 @@ mod tests {
                 "reviewer",
                 "busy",
                 "1",
-                "#[fg=green]\u{f013}#[default]#[fg=yellow]\u{f0e0}#[default]"
+                "#[fg=green]\u{f013}#[fg=yellow]\u{f0e0}#[default]"
             ]
         );
         assert_eq!(
@@ -615,7 +617,7 @@ mod tests {
                 "main",
                 "idle",
                 "1",
-                "#[fg=colour245]\u{f252}#[default]#[fg=yellow]\u{f0e0}#[default]"
+                "#[fg=colour245]\u{f252}#[fg=yellow]\u{f0e0}#[default]"
             ]
         );
         assert_eq!(
