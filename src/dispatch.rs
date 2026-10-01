@@ -903,6 +903,13 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
         Commands::Tmux(TmuxCommands::Refresh) => {
             commands::tmux_refresh::refresh(&paths::global_projects_dir()?, server)
         }
+        Commands::Tmux(TmuxCommands::Init) => commands::tmux_init::init(server),
+        Commands::Tmux(TmuxCommands::Jump { client, target }) => {
+            commands::tmux_jump::jump(&paths::global_projects_dir()?, server, &client, &target)
+        }
+        Commands::Tmux(TmuxCommands::Watch) => {
+            commands::tmux_watch::watch(&paths::global_projects_dir()?, server)
+        }
         Commands::Workflow(workflow_cmd) => {
             // `install`/`uninstall`/`list` act on the global tier, so they
             // work outside a project too; `show` needs the feature's scope.

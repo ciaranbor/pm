@@ -2,21 +2,28 @@
 //! on the tmux server as `@pm_*` user options for status lines and tree
 //! formats to read (README, "tmux options", has the contract).
 //!
-//! It runs on every status-line tick, so it costs the snapshot's own reads,
-//! one `tmux` call that takes what is published now along with the attached
-//! clients, and, only when something changed, one more that writes the
-//! difference. What it last published is also the previous state a
-//! transition alert is judged against; pm keeps no other record of it.
+//! It runs every few seconds ([`tmux_watch`](super::tmux_watch)), so it
+//! costs the snapshot's own reads, one `tmux` call that takes what is
+//! published now along with the attached clients, and, only when something
+//! changed, one more that writes the difference. What it last published is
+//! also the previous state a transition alert is judged against; pm keeps
+//! no other record of it, so refreshes of one server take turns on a lock
+//! keyed by the server's socket, which names it however it was reached.
 //!
-//! A feature's agents are found through the registry, never by window, and
-//! only their windows carry options. Options are cleared only on
-//! sessions of projects the snapshot read: a project whose state couldn't be
-//! read keeps what it last published.
+//! A scope's agents, main's included, are found through the registry, never
+//! by window, and only their windows carry options. A main session carries
+//! `@pm_project` so its windows count as the project's when they are
+//! cleared. Options are cleared only on sessions of projects the snapshot
+//! read: a project whose state couldn't be read keeps what it last
+//! published.
 
 use std::collections::HashSet;
+use std::fs::{File, OpenOptions};
 use std::path::Path;
 
 use crate::error::{PmError, Result};
+use crate::state::paths;
+use crate::tmux;
 use crate::tmux::options::{self, Command, Holder, Options, Scope, format_text};
 
 use super::attention::{self, AgentSnapshot, AgentState, AttentionKind, FeatureSnapshot, Snapshot};
@@ -42,6 +49,11 @@ const GLOBAL_OPTIONS: &[&str] = &[SUMMARY, COUNT];
 /// Publish the snapshot of every project registered in `projects_dir`. No
 /// server running publishes nothing.
 pub fn refresh(projects_dir: &Path, tmux_server: Option<&str>) -> Result<()> {
+    let Some(socket) = tmux::socket_path(tmux_server)? else {
+        return Ok(());
+    };
+    let lock = lock_file(&socket, "refresh")?;
+    lock.lock()?;
     let Some(published) =
         options::read(tmux_server, SESSION_OPTIONS, WINDOW_OPTIONS, GLOBAL_OPTIONS)?
     else {
@@ -49,6 +61,27 @@ pub fn refresh(projects_dir: &Path, tmux_server: Option<&str>) -> Result<()> {
     };
     let snapshot = attention::all(projects_dir, tmux_server)?;
     write(tmux_server, &commands(&snapshot, &published))
+}
+
+/// The file whose lock of `kind` stands for the server at `socket`.
+pub(super) fn lock_file(socket: &str, kind: &str) -> Result<File> {
+    let dir = paths::global_config_dir()?.join("tmux");
+    std::fs::create_dir_all(&dir)?;
+    let name: String = socket
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "._-".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    Ok(OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(format!("{name}.{kind}.lock")))?)
 }
 
 /// Run `commands`, the client tail last. A client that detached since the
@@ -85,21 +118,23 @@ fn commands(snapshot: &Snapshot, published: &Options) -> Vec<Command> {
         {
             alerts.push(alert(feature));
         }
-        for agent in &feature.agents {
-            let Some(window) = agent.window.as_deref() else {
-                continue;
-            };
-            let Some(held) = published.windows.iter().find(|w| w.target == window) else {
-                continue;
-            };
-            windows.insert(window);
-            diff(
-                &mut writes,
-                Scope::Window(window),
-                held,
-                &window_values(agent),
-            );
-        }
+        agent_windows(&mut writes, &mut windows, published, &feature.agents);
+    }
+    for project in &snapshot.projects {
+        let Some(main) = &project.main else {
+            continue;
+        };
+        let Some(held) = published.sessions.iter().find(|s| s.target == main.session) else {
+            continue;
+        };
+        sessions.insert(&main.session);
+        diff(
+            &mut writes,
+            Scope::Session(&main.session),
+            held,
+            &main_values(&project.name),
+        );
+        agent_windows(&mut writes, &mut windows, published, &main.agents);
     }
 
     let read: HashSet<&str> = snapshot
@@ -155,6 +190,25 @@ fn commands(snapshot: &Snapshot, published: &Options) -> Vec<Command> {
     writes
 }
 
+/// Publish each of `agents`' windows, adding them to `windows`.
+fn agent_windows<'a>(
+    writes: &mut Vec<Command>,
+    windows: &mut HashSet<&'a str>,
+    published: &Options,
+    agents: &'a [AgentSnapshot],
+) {
+    for agent in agents {
+        let Some(window) = agent.window.as_deref() else {
+            continue;
+        };
+        let Some(held) = published.windows.iter().find(|w| w.target == window) else {
+            continue;
+        };
+        windows.insert(window);
+        diff(writes, Scope::Window(window), held, &window_values(agent));
+    }
+}
+
 /// Set each of `values` that differs from what `held` has; a `None` value
 /// is unset.
 fn diff(writes: &mut Vec<Command>, scope: Scope, held: &Holder, values: &[(&str, Option<String>)]) {
@@ -195,6 +249,15 @@ fn session_values(feature: &FeatureSnapshot) -> Vec<(&'static str, Option<String
             needs.map(|k| styled(attention_style(k), &k.to_string())),
         ),
     ]
+}
+
+/// A main session carries only its project: it has no progress or
+/// attention.
+fn main_values(project: &str) -> Vec<(&'static str, Option<String>)> {
+    SESSION_OPTIONS
+        .iter()
+        .map(|name| (*name, (*name == PROJECT).then(|| format_text(project))))
+        .collect()
 }
 
 fn window_values(agent: &AgentSnapshot) -> Vec<(&'static str, Option<String>)> {
@@ -512,6 +575,47 @@ mod tests {
             values(&now.sessions, &mine, &[PROJECT, BADGE]),
             ["", "mine"],
             "a session that is no feature's"
+        );
+    }
+
+    #[test]
+    fn main_agents_get_badges_and_main_carries_only_its_project() {
+        let _serial = serial();
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project);
+        let main = tmux::session_name(&project_name, "main");
+        let orchestrator = server.spawn_idle_fake_agent(&project, &main, "main", "main");
+        messages::send(&paths::messages_dir(&project), "main", "main", "user", "hi").unwrap();
+
+        refresh(&projects_dir, server.name()).unwrap();
+
+        let now = published(&server);
+        assert_eq!(
+            values(&now.windows, &orchestrator, WINDOW_OPTIONS),
+            [
+                "main",
+                "idle",
+                "1",
+                "#[fg=colour245]○#[default]#[fg=yellow]+1#[default]"
+            ]
+        );
+        assert_eq!(
+            values(&now.sessions, &main, SESSION_OPTIONS),
+            [project_name.as_str(), "", "", "", "", ""]
+        );
+
+        let agents_dir = paths::agents_dir(&project);
+        let mut registry = AgentRegistry::load(&agents_dir, "main").unwrap();
+        registry.agents.remove("main");
+        registry.save(&agents_dir, "main").unwrap();
+        refresh(&projects_dir, server.name()).unwrap();
+
+        let now = published(&server);
+        assert_eq!(
+            values(&now.windows, &orchestrator, WINDOW_OPTIONS),
+            ["", "", "", ""]
         );
     }
 

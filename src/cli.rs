@@ -163,6 +163,22 @@ pub enum TmuxCommands {
     /// Publish every project's attention snapshot as `@pm_*` tmux options,
     /// alerting attached clients when a feature becomes blocked or ready
     Refresh,
+    /// Install pm's tmux plugin on the running server; put
+    /// `run-shell 'pm tmux init'` in your tmux config
+    Init,
+    /// Switch a client to a tree item, or to the agent a feature is waiting
+    /// on (the Enter action of pm's tree)
+    Jump {
+        /// The client to switch (`#{client_name}`)
+        #[arg(long)]
+        client: String,
+        /// The chosen item's target, as `choose-tree` gives `%%`
+        target: String,
+    },
+    /// Refresh every `@pm-refresh-interval` seconds while the server runs
+    /// (started by `pm tmux init`; one per server)
+    #[command(hide = true)]
+    Watch,
 }
 
 #[derive(Subcommand)]

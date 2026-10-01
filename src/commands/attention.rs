@@ -39,6 +39,17 @@ pub struct ProjectSnapshot {
     pub root: String,
     /// Why the project's features are missing from the snapshot.
     pub skipped: Option<String>,
+    /// The project's main scope; `None` when the project was skipped.
+    pub main: Option<ScopeSnapshot>,
+}
+
+/// A scope's session and agents: all the main scope has, with no progress
+/// or attention of its own.
+#[derive(Debug, Clone, Serialize)]
+pub struct ScopeSnapshot {
+    pub session: String,
+    pub session_exists: bool,
+    pub agents: Vec<AgentSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -204,24 +215,23 @@ pub fn all(projects_dir: &Path, tmux_server: Option<&str>) -> Result<Snapshot> {
     };
     for (name, entry) in ProjectEntry::list(projects_dir)? {
         let root = entry.root_path();
-        let features = if paths::pm_dir(&root).is_dir() {
-            project_features(&root, &windows, &global)
-                .map(|(_, features)| features)
-                .map_err(|e| e.to_string())
+        let read = if paths::pm_dir(&root).is_dir() {
+            project_features(&root, &windows, &global).map_err(|e| e.to_string())
         } else {
             Err(format!("no pm project at {}", root.display()))
         };
-        let skipped = match features {
-            Ok(features) => {
-                snapshot.features.extend(features);
-                None
+        let (skipped, main) = match read {
+            Ok(read) => {
+                snapshot.features.extend(read.features);
+                (None, Some(read.main))
             }
-            Err(e) => Some(e),
+            Err(e) => (Some(e), None),
         };
         snapshot.projects.push(ProjectSnapshot {
             name,
             root: root.display().to_string(),
             skipped,
+            main,
         });
     }
     sort(&mut snapshot.features);
@@ -232,7 +242,11 @@ pub fn all(projects_dir: &Path, tmux_server: Option<&str>) -> Result<Snapshot> {
 pub fn project(project_root: &Path, tmux_server: Option<&str>) -> Result<Snapshot> {
     let windows = Windows::read(tmux_server)?;
     let global = GlobalConfig::load_or_default().harness;
-    let (name, mut features) = project_features(project_root, &windows, &global)?;
+    let ProjectRead {
+        name,
+        mut features,
+        main,
+    } = project_features(project_root, &windows, &global)?;
     sort(&mut features);
     Ok(Snapshot {
         version: VERSION,
@@ -240,6 +254,7 @@ pub fn project(project_root: &Path, tmux_server: Option<&str>) -> Result<Snapsho
             name,
             root: project_root.display().to_string(),
             skipped: None,
+            main: Some(main),
         }],
         features,
     })
@@ -251,52 +266,35 @@ fn sort(features: &mut [FeatureSnapshot]) {
     });
 }
 
-/// The project's name, as its sessions are prefixed, and its features.
+struct ProjectRead {
+    /// The project's name, as its sessions are prefixed.
+    name: String,
+    features: Vec<FeatureSnapshot>,
+    main: ScopeSnapshot,
+}
+
 fn project_features(
     project_root: &Path,
     windows: &Windows,
     global: &HarnessConfig,
-) -> Result<(String, Vec<FeatureSnapshot>)> {
+) -> Result<ProjectRead> {
     let project_config = ProjectConfig::load(&paths::pm_dir(project_root))?;
     let config = resolve_harness_config(&project_config.harness, global);
     let project = project_config.project.name;
-    let messages_dir = paths::messages_dir(project_root);
-    let agents_dir = paths::agents_dir(project_root);
+    let reader = ScopeReader {
+        project_root,
+        project: &project,
+        windows,
+        config: &config,
+    };
     let features = FeatureState::list(&paths::features_dir(project_root))?
         .into_iter()
         .map(|(name, state)| {
-            let session = tmux::session_name(&project, &name);
-            let session_exists = windows.has_session(&session);
-            let registry = AgentRegistry::load(&agents_dir, &name)?;
-            let agents = registry
-                .agents
-                .iter()
-                .map(|(agent, entry)| {
-                    let pane = windows.find(&session, &entry.window_name);
-                    let state = match pane {
-                        _ if !entry.active => AgentState::Stopped,
-                        _ if !session_exists => AgentState::Closed,
-                        None => AgentState::Dead,
-                        Some(pane) => match liveness(
-                            windows.processes(pane).as_deref(),
-                            entry.harness,
-                            &config,
-                        ) {
-                            Liveness::Idle => AgentState::Idle,
-                            Liveness::Busy => AgentState::Busy,
-                            Liveness::Dead => AgentState::Dead,
-                        },
-                    };
-                    AgentSnapshot {
-                        name: agent.clone(),
-                        state,
-                        unread: messages::check(&messages_dir, &name, agent)
-                            .map(|senders| senders.iter().map(|s| s.count).sum())
-                            .unwrap_or(0),
-                        window: pane.map(|p| p.window.clone()),
-                    }
-                })
-                .collect();
+            let ScopeSnapshot {
+                session,
+                session_exists,
+                agents,
+            } = reader.read(&name)?;
             let mut feature = FeatureSnapshot {
                 project: project.clone(),
                 attention: Attention {
@@ -323,7 +321,62 @@ fn project_features(
             Ok(feature)
         })
         .collect::<Result<_>>()?;
-    Ok((project, features))
+    Ok(ProjectRead {
+        main: reader.read("main")?,
+        name: project,
+        features,
+    })
+}
+
+/// What a project's scopes are read against.
+struct ScopeReader<'a> {
+    project_root: &'a Path,
+    project: &'a str,
+    windows: &'a Windows,
+    config: &'a HarnessConfig,
+}
+
+impl ScopeReader<'_> {
+    fn read(&self, scope: &str) -> Result<ScopeSnapshot> {
+        let session = tmux::session_name(self.project, scope);
+        let session_exists = self.windows.has_session(&session);
+        let registry = AgentRegistry::load(&paths::agents_dir(self.project_root), scope)?;
+        let messages_dir = paths::messages_dir(self.project_root);
+        let agents = registry
+            .agents
+            .iter()
+            .map(|(agent, entry)| {
+                let pane = self.windows.find(&session, &entry.window_name);
+                let state = match pane {
+                    _ if !entry.active => AgentState::Stopped,
+                    _ if !session_exists => AgentState::Closed,
+                    None => AgentState::Dead,
+                    Some(pane) => match liveness(
+                        self.windows.processes(pane).as_deref(),
+                        entry.harness,
+                        self.config,
+                    ) {
+                        Liveness::Idle => AgentState::Idle,
+                        Liveness::Busy => AgentState::Busy,
+                        Liveness::Dead => AgentState::Dead,
+                    },
+                };
+                AgentSnapshot {
+                    name: agent.clone(),
+                    state,
+                    unread: messages::check(&messages_dir, scope, agent)
+                        .map(|senders| senders.iter().map(|s| s.count).sum())
+                        .unwrap_or(0),
+                    window: pane.map(|p| p.window.clone()),
+                }
+            })
+            .collect();
+        Ok(ScopeSnapshot {
+            session,
+            session_exists,
+            agents,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -449,6 +502,14 @@ mod tests {
                 name: "app".into(),
                 root: "/src/app".into(),
                 skipped: None,
+                main: Some(ScopeSnapshot {
+                    session: "app/main".into(),
+                    session_exists: true,
+                    agents: vec![AgentSnapshot {
+                        window: Some("app/main:1".into()),
+                        ..agent("main", AgentState::Busy, 2)
+                    }],
+                }),
             }],
             features: vec![f],
         };
@@ -457,7 +518,21 @@ mod tests {
             serde_json::to_value(&snapshot).unwrap(),
             serde_json::json!({
                 "version": 1,
-                "projects": [{ "name": "app", "root": "/src/app", "skipped": null }],
+                "projects": [{
+                    "name": "app",
+                    "root": "/src/app",
+                    "skipped": null,
+                    "main": {
+                        "session": "app/main",
+                        "session_exists": true,
+                        "agents": [{
+                            "name": "main",
+                            "state": "busy",
+                            "unread": 2,
+                            "window": "app/main:1"
+                        }]
+                    }
+                }],
                 "features": [{
                     "project": "app",
                     "name": "login",
