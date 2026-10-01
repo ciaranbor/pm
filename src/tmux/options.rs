@@ -180,11 +180,6 @@ pub fn set(scope: Scope, name: &str, value: Option<&str>) -> Command {
     command
 }
 
-/// Append `value` to the global server, session or window option `name`.
-pub fn append_global(name: &str, value: &str) -> Command {
-    ["set-option", "-ga", name, value].map(String::from).into()
-}
-
 /// Bind `key` in the prefix table to `command`.
 pub fn bind_key(key: &str, command: Command) -> Command {
     let mut bind = vec!["bind-key".to_string(), key.to_string()];

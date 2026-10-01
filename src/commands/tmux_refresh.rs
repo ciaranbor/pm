@@ -262,16 +262,21 @@ fn main_values(project: &str) -> Vec<(&'static str, Option<String>)> {
 }
 
 pub(super) fn window_values(agent: &AgentSnapshot) -> Vec<(&'static str, Option<String>)> {
-    let mut badge = styled(agent_style(agent.state), agent_glyph(agent.state));
-    if agent.unread > 0 {
-        badge.push_str(&styled("fg=yellow", &format!("+{}", agent.unread)));
-    }
     vec![
         (AGENT, Some(format_text(&agent.name))),
         (AGENT_STATE, Some(agent.state.to_string())),
         (UNREAD, Some(agent.unread.to_string())),
-        (AGENT_BADGE, Some(badge)),
+        (AGENT_BADGE, Some(agent_badge(agent.state, agent.unread))),
     ]
+}
+
+fn agent_badge(state: AgentState, unread: u32) -> String {
+    let mut badge = styled(agent_style(state), agent_glyph(state));
+    if unread > 0 {
+        // nf-fa-envelope
+        badge.push_str(&styled("fg=yellow", "\u{f0e0}"));
+    }
+    badge
 }
 
 fn global_values(snapshot: &Snapshot) -> Vec<(&'static str, Option<String>)> {
@@ -322,13 +327,14 @@ fn agent_style(state: AgentState) -> &'static str {
     }
 }
 
-/// One glyph wide in common terminal fonts, for a window-list entry.
+/// Nerd Font (v3) glyphs, one cell wide: nf-fa-gear, nf-fa-hourglass_half,
+/// nf-md-skull, nf-fa-stop.
 fn agent_glyph(state: AgentState) -> &'static str {
     match state {
-        AgentState::Busy => "●",
-        AgentState::Idle => "○",
-        AgentState::Dead => "×",
-        AgentState::Stopped | AgentState::Closed => "■",
+        AgentState::Busy => "\u{f013}",
+        AgentState::Idle => "\u{f252}",
+        AgentState::Dead => "\u{f068c}",
+        AgentState::Stopped | AgentState::Closed => "\u{f04d}",
     }
 }
 
@@ -526,7 +532,12 @@ mod tests {
         );
         assert_eq!(
             values(&now.windows, &implementer, WINDOW_OPTIONS),
-            ["implementer", "idle", "0", "#[fg=colour245]○#[default]"]
+            [
+                "implementer",
+                "idle",
+                "0",
+                "#[fg=colour245]\u{f252}#[default]"
+            ]
         );
         assert_eq!(
             values(&now.windows, &reviewer, WINDOW_OPTIONS),
@@ -534,7 +545,7 @@ mod tests {
                 "reviewer",
                 "busy",
                 "1",
-                "#[fg=green]●#[default]#[fg=yellow]+1#[default]"
+                "#[fg=green]\u{f013}#[default]#[fg=yellow]\u{f0e0}#[default]"
             ]
         );
         assert_eq!(
@@ -563,7 +574,12 @@ mod tests {
         );
         assert_eq!(
             values(&now.windows, &implementer, WINDOW_OPTIONS),
-            ["implementer", "stopped", "0", "#[fg=colour245]■#[default]"]
+            [
+                "implementer",
+                "stopped",
+                "0",
+                "#[fg=colour245]\u{f04d}#[default]"
+            ]
         );
         assert_eq!(
             values(&now.windows, &reviewer, WINDOW_OPTIONS),
@@ -599,7 +615,7 @@ mod tests {
                 "main",
                 "idle",
                 "1",
-                "#[fg=colour245]○#[default]#[fg=yellow]+1#[default]"
+                "#[fg=colour245]\u{f252}#[default]#[fg=yellow]\u{f0e0}#[default]"
             ]
         );
         assert_eq!(

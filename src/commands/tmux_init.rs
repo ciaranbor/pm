@@ -3,17 +3,17 @@
 //! (README, "tmux plugin", has the user-facing options).
 //!
 //! The user's config is theirs: init sets only the `@pm_*` options pm owns,
-//! appends to a format rather than replacing it, and changes a key the user
+//! adds to a format rather than replacing it, and changes a key the user
 //! didn't name only by adding pm's format and Enter action to a plain
 //! `choose-tree` on `s` or `w`, keeping its flags, note and repeat flag, and
 //! sorting it by name if it sets no order. It reads those bindings as they
 //! stand when it runs, so it must run after the config binds them.
 //!
 //! A config reload runs it again, so every step is idempotent: the
-//! window-list badge is appended only to a format that doesn't mention it
-//! yet, pm's tree binding is recognised and rebuilt from the flags under it
-//! (which also picks up a changed `@pm-bin`), and a second watcher exits at
-//! once ([`tmux_watch`](super::tmux_watch)).
+//! window-list badge goes in once, and a badge an earlier pm appended is
+//! moved; pm's tree binding is recognised and rebuilt from the flags under
+//! it (which also picks up a changed `@pm-bin`); and a second watcher exits
+//! at once ([`tmux_watch`](super::tmux_watch)).
 //!
 //! It runs as a `run-shell` job, often while the config is still loading
 //! and no session exists yet, so it reads global options only.
@@ -33,19 +33,17 @@ const ATTENTION_KEY: &str = "@pm-attention-key";
 pub const TREE_FORMAT_OPTION: &str = "@pm_tree_format";
 
 /// tmux's own tree format with pm's badges added: a session's attention and
-/// its reason, a window's agent badge. Theme colours (tmux 3.8) are left out
-/// so every release draws it.
+/// its reason, a window's agent badge. Pane titles, usually a path, and
+/// theme colours (tmux 3.8) are left out.
 pub const TREE_FORMAT: &str = concat!(
     "#{?pane_format,",
     "#{?pane_marked,#[reverse],}",
     "#{pane_current_command}#{?pane_active,*,}#{?pane_marked,M,}",
-    "#{?#{&&:#{pane_title},#{!=:#{pane_title},#{host_short}}},: \"#{pane_title}\",}",
     ",",
     "#{?window_format,",
     "#{?window_marked_flag,#[reverse],}",
     "#{window_name}#{window_flags}",
     "#{?@pm_agent_badge, #{@pm_agent_badge},}",
-    "#{?#{&&:#{==:#{window_panes},1},#{&&:#{pane_title},#{!=:#{pane_title},#{host_short}}}},: \"#{pane_title}\",}",
     ",",
     "#{session_windows} windows",
     "#{?session_grouped, (group #{session_group}: #{session_group_list}),}",
@@ -58,8 +56,13 @@ pub const TREE_FORMAT: &str = concat!(
 /// tmux's session and window trees.
 const TREE_KEYS: &[&str] = &["s", "w"];
 
-/// What init appends to each window-list format.
-const BADGE: &str = "#{?@pm_agent_badge, #{@pm_agent_badge},}";
+/// What init puts at the start of each window-list format. The badge
+/// resets to the window's default style after itself, which is the style
+/// in effect at the start of a format, so a theme's first segment draws as
+/// it would without it.
+const BADGE: &str = "#{?@pm_agent_badge,#{@pm_agent_badge} ,}";
+/// What earlier pm versions appended to each window-list format instead.
+const APPENDED_BADGE: &str = "#{?@pm_agent_badge, #{@pm_agent_badge},}";
 const WINDOW_FORMATS: &[&str] = &["window-status-format", "window-status-current-format"];
 
 pub fn init(tmux_server: Option<&str>) -> Result<()> {
@@ -104,18 +107,19 @@ pub fn init(tmux_server: Option<&str>) -> Result<()> {
     options::run(tmux_server, &commands)
 }
 
-/// The change to the window-list format `name`, now `format`: the badge
-/// appended unless the format already shows it, or, turned off, the badge
-/// init appended taken off again.
+/// The change to the window-list format `name`, now `format`: pm's badge
+/// at the start, unless the user placed `@pm_agent_badge` themselves, or,
+/// turned off, pm's badge taken off again. A badge an earlier pm appended
+/// comes off either way.
 fn window_status(name: &str, format: &str, badges: bool) -> Option<Command> {
-    if badges {
-        if format.contains("@pm_agent_badge") {
-            return None;
-        }
-        return Some(options::append_global(name, BADGE));
-    }
-    let original = format.strip_suffix(BADGE)?;
-    Some(options::set(Scope::Global, name, Some(original)))
+    let base = format.strip_prefix(BADGE).unwrap_or(format);
+    let base = base.strip_suffix(APPENDED_BADGE).unwrap_or(base);
+    let wanted = if !badges || base.contains("@pm_agent_badge") {
+        base.to_string()
+    } else {
+        format!("{BADGE}{base}")
+    };
+    (wanted != format).then(|| options::set(Scope::Global, name, Some(&wanted)))
 }
 
 fn tree_format() -> String {
@@ -236,10 +240,12 @@ mod tests {
         let (bin, calls) = recording_bin(dir.path());
         tmux(&server, &["set", "-g", BIN, &bin]);
         tmux(&server, &["set", "-g", "status-right", "mine %H:%M"]);
-        tmux(&server, &["setw", "-g", "window-status-format", "#I #W"]);
+        let theme = "#[fg=#928374,bg=#32302f] #I #[fg=#928374,bg=#32302f] #W ";
+        tmux(&server, &["setw", "-g", "window-status-format", theme]);
+        let appended = format!("#I*#W {APPENDED_BADGE}");
         tmux(
             &server,
-            &["setw", "-g", "window-status-current-format", "#I*#W "],
+            &["setw", "-g", "window-status-current-format", &appended],
         );
         tmux(&server, &["bind", "s", "choose-tree", "-Zs", "-O", "index"]);
         let users_w = ["choose-tree", "-Zw", "-F", "#{window_name}"];
@@ -251,11 +257,13 @@ mod tests {
 
         assert_eq!(
             options::show(server.name(), "window-status-format").unwrap(),
-            format!("#I #W{BADGE}")
+            format!("{BADGE}{theme}"),
+            "before the theme's own segments"
         );
         assert_eq!(
             options::show(server.name(), "window-status-current-format").unwrap(),
-            format!("#I*#W {BADGE}")
+            format!("{BADGE}#I*#W "),
+            "a badge an earlier pm appended moved to the start"
         );
         assert_eq!(
             options::show(server.name(), "status-right").unwrap(),
@@ -324,10 +332,37 @@ mod tests {
     }
 
     #[test]
+    fn pms_badges_come_off_and_the_users_stays() {
+        let off = |format: &str| window_status("window-status-format", format, false);
+        let set = |value: &str| {
+            Some(options::set(
+                Scope::Global,
+                "window-status-format",
+                Some(value),
+            ))
+        };
+        assert_eq!(off(&format!("#I #W{APPENDED_BADGE}")), set("#I #W"));
+        assert_eq!(
+            off(&format!("{BADGE}#I #{{@pm_agent_badge}} #W")),
+            set("#I #{@pm_agent_badge} #W")
+        );
+        assert_eq!(off("#I #W"), None);
+        assert_eq!(
+            window_status(
+                "window-status-format",
+                &format!("{BADGE}#I #{{@pm_agent_badge}}"),
+                true
+            ),
+            set("#I #{@pm_agent_badge}"),
+            "the user's own badge wins with badges on too"
+        );
+    }
+
+    #[test]
     fn opting_out_takes_off_only_what_init_added() {
         let server = OwnServer::start("init-off");
         tmux(&server, &["set", "-g", AUTO_REFRESH, "off"]);
-        tmux(&server, &["setw", "-g", "window-status-format", "#I #W"]);
+        tmux(&server, &["setw", "-g", "window-status-format", "#I #W "]);
         tmux(
             &server,
             &[
@@ -340,6 +375,10 @@ mod tests {
         let users_w = ["choose-tree", "-Zw", "switch-client -t '%%'"];
         tmux(&server, &[&["bind", "w"], &users_w[..]].concat());
         init(server.name()).unwrap();
+        assert_eq!(
+            options::show(server.name(), "window-status-format").unwrap(),
+            format!("{BADGE}#I #W ")
+        );
         assert_eq!(
             options::show(server.name(), "window-status-current-format").unwrap(),
             "#I #{@pm_agent_badge} #W",
@@ -375,7 +414,7 @@ mod tests {
             assert_eq!(
                 options::show(server.name(), name).unwrap(),
                 if *name == "window-status-format" {
-                    "#I #W"
+                    "#I #W "
                 } else {
                     "#I #{@pm_agent_badge} #W"
                 }
