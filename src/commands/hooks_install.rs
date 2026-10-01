@@ -82,6 +82,12 @@ const LEGACY_SESSION_START_MARKER: &str = "pm claude hooks session-start";
 const STOP_MARKERS: &[&str] = &[PM_HOOK_MARKER, LEGACY_HOOK_MARKER];
 const SESSION_START_MARKERS: &[&str] = &[PM_SESSION_START_MARKER, LEGACY_SESSION_START_MARKER];
 
+/// Whether a process command line runs pm's Stop hook, of either
+/// generation.
+pub fn runs_stop_hook(command: &str) -> bool {
+    STOP_MARKERS.iter().any(|marker| command.contains(marker))
+}
+
 /// The event of pm's hook that resets a blocked feature. Not part of the
 /// never-idle loop: without it an agent still runs and wakes.
 pub const USER_PROMPT_EVENT: &str = "UserPromptSubmit";

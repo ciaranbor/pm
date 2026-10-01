@@ -45,6 +45,7 @@ pub mod msg_reply;
 pub mod open;
 pub mod register;
 pub mod restore;
+pub mod running_agents;
 pub mod seed;
 pub mod self_update;
 pub mod skills;

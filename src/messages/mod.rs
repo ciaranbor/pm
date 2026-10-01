@@ -188,11 +188,37 @@ fn write_whole(dir: &Path, name: &str, content: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Rewrite, in place, each unread message in an agent's inbox that was sent
-/// from `from_scope` of this project: it is recorded as sent from
-/// `to_scope`, and its body is passed through `body`. Indices are kept, so
-/// the cursor and read order are unaffected.
-pub fn rescope_unread(
+/// Every agent inbox in the project, as `(scope, agent)`.
+pub fn inboxes(messages_dir: &Path) -> Result<Vec<(String, String)>> {
+    let mut out = Vec::new();
+    if !messages_dir.exists() {
+        return Ok(out);
+    }
+    for scope in std::fs::read_dir(messages_dir)? {
+        let scope = scope?;
+        let scope_name = scope.file_name().to_string_lossy().into_owned();
+        if scope_name.starts_with('.') || !scope.path().is_dir() {
+            continue;
+        }
+        for agent in std::fs::read_dir(scope.path())? {
+            let agent = agent?;
+            let agent_name = agent.file_name().to_string_lossy().into_owned();
+            if agent_name.starts_with('.') || !agent.path().is_dir() {
+                continue;
+            }
+            out.push((scope_name.clone(), agent_name));
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// Re-address an agent's inbox after this project's `from_scope` is renamed
+/// to `to_scope`: each unread message sent from `from_scope` is recorded as
+/// sent from `to_scope`, its body passed through `body`, and so is
+/// `.last_read`, which `pm msg reply` replies to. Indices are kept, so the
+/// cursor and read order are unaffected.
+pub fn rescope(
     messages_dir: &Path,
     feature: &str,
     agent: &str,
@@ -200,13 +226,12 @@ pub fn rescope_unread(
     to_scope: &str,
     body: impl Fn(&str) -> String,
 ) -> Result<()> {
+    let from_old = |project: &Option<String>, scope: &Option<String>| {
+        project.is_none() && scope.as_deref() == Some(from_scope)
+    };
     let pending: Vec<MessageSummary> = list(messages_dir, feature, agent, None)?
         .into_iter()
-        .filter(|m| {
-            m.status != MessageStatus::Read
-                && m.sender_project.is_none()
-                && m.sender_scope.as_deref() == Some(from_scope)
-        })
+        .filter(|m| m.status != MessageStatus::Read && from_old(&m.sender_project, &m.sender_scope))
         .collect();
     for m in &pending {
         let Some(mut msg) = read_at(messages_dir, feature, agent, &m.sender, m.index)? else {
@@ -227,6 +252,12 @@ pub fn rescope_unread(
                 rewritten.as_bytes(),
             )?;
         }
+    }
+    if let Some(mut last) = load_last_read(messages_dir, feature, agent)?
+        && from_old(&last.sender_project, &last.sender_scope)
+    {
+        last.sender_scope = Some(to_scope.to_string());
+        save_last_read(messages_dir, feature, agent, &last)?;
     }
     Ok(())
 }
@@ -1260,5 +1291,52 @@ mod tests {
         // Next index should still be 4 (based on max existing)
         let i4 = send(&mdir, "login", "reviewer", "implementer", "msg 4").unwrap();
         assert_eq!(i4, 4);
+    }
+
+    #[test]
+    fn rescope_leaves_read_messages_and_other_projects_alone() {
+        let dir = tempdir().unwrap();
+        let mdir = dir.path();
+        let scope_of = |sender: &str, index: u32| {
+            read_at(mdir, "main", "main", sender, index)
+                .unwrap()
+                .unwrap()
+                .meta
+                .sender_scope
+        };
+        send_full(mdir, "main", "main", "dev", "read", Some("login"), None).unwrap();
+        next(mdir, "main", "main", "dev").unwrap();
+        send_full(mdir, "main", "main", "dev", "unread", Some("login"), None).unwrap();
+        send_full(
+            mdir,
+            "main",
+            "main",
+            "ext",
+            "x",
+            Some("login"),
+            Some("other"),
+        )
+        .unwrap();
+        let elsewhere = LastRead {
+            sender: "ext".to_string(),
+            sender_scope: Some("login".to_string()),
+            sender_project: Some("other".to_string()),
+            index: 1,
+        };
+        save_last_read(mdir, "main", "main", &elsewhere).unwrap();
+
+        rescope(mdir, "main", "main", "login", "auth", str::to_string).unwrap();
+
+        assert_eq!(scope_of("dev", 1).as_deref(), Some("login"));
+        assert_eq!(scope_of("dev", 2).as_deref(), Some("auth"));
+        assert_eq!(scope_of("ext", 1).as_deref(), Some("login"));
+        assert_eq!(
+            load_last_read(mdir, "main", "main")
+                .unwrap()
+                .unwrap()
+                .sender_scope
+                .as_deref(),
+            Some("login")
+        );
     }
 }

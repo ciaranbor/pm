@@ -7,10 +7,10 @@ use std::path::Path;
 
 use crate::error::Result;
 use crate::harness::{Harness, InUse, SessionStore};
-use crate::state::agent::{AgentEntry, AgentRegistry};
 use crate::state::paths;
 use crate::state::project::{GlobalConfig, HarnessConfig, ProjectConfig, harness_config_in};
-use crate::tmux;
+
+use super::running_agents::running_in_scope;
 
 pub struct MigrateParams<'a> {
     pub harness: Harness,
@@ -104,31 +104,6 @@ pub(super) fn carry_sessions(carry: &Carry<'_>) -> Vec<String> {
     report
 }
 
-/// The agents of `scope` that are running: active, with a window.
-/// Advisory — state that cannot be read names no agent.
-pub(super) fn running_in_scope(
-    project_root: &Path,
-    project_name: &str,
-    scope: &str,
-    tmux_server: Option<&str>,
-) -> Vec<(String, AgentEntry)> {
-    let Ok(registry) = AgentRegistry::load(&paths::agents_dir(project_root), scope) else {
-        return Vec::new();
-    };
-    let session = tmux::session_name(project_name, scope);
-    registry
-        .agents
-        .into_iter()
-        .filter(|(_, entry)| entry.active)
-        .filter(|(_, entry)| {
-            matches!(
-                tmux::find_window(tmux_server, &session, &entry.window_name),
-                Ok(Some(_))
-            )
-        })
-        .collect()
-}
-
 /// The sessions of the project's agents that are running on `harness`.
 fn sessions_in_use(project_root: &Path, harness: Harness, tmux_server: Option<&str>) -> Vec<InUse> {
     let Ok(config) = ProjectConfig::load(&paths::pm_dir(project_root)) else {
@@ -150,10 +125,12 @@ fn sessions_in_use(project_root: &Path, harness: Harness, tmux_server: Option<&s
         .flat_map(|scope| {
             running_in_scope(project_root, &config.project.name, scope, tmux_server)
                 .into_iter()
-                .filter(|(_, entry)| entry.harness == harness && !entry.session_id.is_empty())
-                .map(move |(name, entry)| InUse {
-                    session_id: entry.session_id,
-                    agent: format!("{scope}/{name}"),
+                .filter(|agent| {
+                    agent.entry.harness == harness && !agent.entry.session_id.is_empty()
+                })
+                .map(move |agent| InUse {
+                    session_id: agent.entry.session_id,
+                    agent: format!("{scope}/{}", agent.name),
                 })
         })
         .collect()
@@ -162,9 +139,10 @@ fn sessions_in_use(project_root: &Path, harness: Harness, tmux_server: Option<&s
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::agent::AgentType;
+    use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
     use crate::state::project::OpenCodeConfig;
     use crate::testing::{TestServer, fake_opencode_calls, fake_opencode_sequence};
+    use crate::tmux;
     use tempfile::tempdir;
 
     fn opencode_agent(session_id: &str, window: &str, active: bool) -> AgentEntry {

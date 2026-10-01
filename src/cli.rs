@@ -580,6 +580,9 @@ pub enum FeatCommands {
         /// Current feature name (detected from CWD if omitted)
         #[arg(long)]
         old_name: Option<String>,
+        /// Interrupt agents that are mid-turn, and tell them to resume
+        #[arg(long)]
+        force: bool,
     },
     /// Check out a PR for review (fetch branch + worktree + tmux session)
     Review {
