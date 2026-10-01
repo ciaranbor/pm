@@ -274,6 +274,7 @@ pub(super) mod tests {
             status: crate::state::feature::FeatureStatus::Wip,
             progress: Default::default(),
             blocked_reason: None,
+            blocked_by: None,
             branch: name.to_string(),
             worktree: name.to_string(),
             base: String::new(),

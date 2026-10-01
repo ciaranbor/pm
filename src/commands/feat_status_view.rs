@@ -1,7 +1,7 @@
 //! Bare `pm feat status`: what needs the user's attention, for one feature
-//! or, from `main`, for every feature in the project — why a blocked team
-//! is waiting and what a ready one's summary says. `pm feat list` is the
-//! inventory (branch, base, PR); this view omits those.
+//! or, from `main`, the [`super::attention`] snapshot of every feature in
+//! the project (all projects with `--all`). `pm feat list` is the inventory
+//! (branch, base, PR); this view omits those.
 
 use std::path::Path;
 
@@ -10,6 +10,8 @@ use chrono::{DateTime, Utc};
 use crate::error::Result;
 use crate::state::feature::{FeatureState, Progress};
 use crate::state::paths;
+
+use super::attention::{self, AttentionKind, FeatureSnapshot};
 
 /// Summary lines shown in a single feature's view.
 const SUMMARY_HEAD_LINES: usize = 10;
@@ -23,7 +25,10 @@ pub fn feature(project_root: &Path, name: &str) -> Result<Vec<String>> {
         age(state.last_active, Utc::now())
     )];
     if let Some(reason) = reason(&state) {
-        lines.push(format!("blocked on: {reason}"));
+        match &state.blocked_by {
+            Some(agent) => lines.push(format!("blocked on: {reason} ({agent})")),
+            None => lines.push(format!("blocked on: {reason}")),
+        }
     }
     let path = paths::summary_path(project_root, name);
     match std::fs::read_to_string(&path) {
@@ -47,29 +52,97 @@ pub fn feature(project_root: &Path, name: &str) -> Result<Vec<String>> {
     Ok(lines)
 }
 
-/// Every feature in the project, one row each: name, progress, and the
-/// blocked reason or the ready summary's first line.
-pub fn project(project_root: &Path) -> Result<Vec<String>> {
-    let features = FeatureState::list(&paths::features_dir(project_root))?;
-    let name_w = features.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
-    let progress_w = "blocked".len();
-    Ok(features
+/// Every feature of the project at `project_root`, or only `name`: rows,
+/// or the snapshot as JSON.
+pub fn project(
+    project_root: &Path,
+    name: Option<&str>,
+    json: bool,
+    tmux_server: Option<&str>,
+) -> Result<Vec<String>> {
+    let mut snapshot = attention::project(project_root, tmux_server)?;
+    if let Some(name) = name {
+        snapshot.features.retain(|f| f.name == name);
+    }
+    if json {
+        return Ok(vec![serde_json::to_string_pretty(&snapshot)?]);
+    }
+    Ok(rows(&snapshot.features, false))
+}
+
+/// Every feature of every registered project, with a line for each project
+/// skipped: rows, or the snapshot as JSON.
+pub fn all(projects_dir: &Path, json: bool, tmux_server: Option<&str>) -> Result<Vec<String>> {
+    let snapshot = attention::all(projects_dir, tmux_server)?;
+    if json {
+        return Ok(vec![serde_json::to_string_pretty(&snapshot)?]);
+    }
+    let mut lines = rows(&snapshot.features, true);
+    lines.extend(snapshot.projects.iter().filter_map(|p| {
+        p.skipped
+            .as_ref()
+            .map(|why| format!("{}: skipped ({why})", p.name))
+    }));
+    Ok(lines)
+}
+
+/// One row per feature, in the snapshot's order: name (with its project
+/// when `with_project`), what it needs (its progress when nothing), its
+/// agents, and the detail.
+pub fn rows(features: &[FeatureSnapshot], with_project: bool) -> Vec<String> {
+    let name = |f: &FeatureSnapshot| {
+        if with_project {
+            format!("{}/{}", f.project, f.name)
+        } else {
+            f.name.clone()
+        }
+    };
+    let label = |f: &FeatureSnapshot| match f.attention.kind {
+        AttentionKind::None => f.progress.to_string(),
+        kind => kind.to_string(),
+    };
+    let rendered: Vec<[String; 4]> = features
         .iter()
-        .map(|(name, state)| {
-            let note = match state.progress {
-                Progress::Blocked => reason(state).map(str::to_string),
-                Progress::Ready => first_line(project_root, name),
-                Progress::Wip => None,
-            };
-            format!(
-                "{name:<name_w$}  {:<progress_w$}  {}",
-                state.progress,
-                note.unwrap_or_default()
-            )
-            .trim_end()
-            .to_string()
+        .map(|f| [name(f), label(f), agents(f), detail(f)])
+        .collect();
+    let width = |col: usize| rendered.iter().map(|r| r[col].len()).max().unwrap_or(0);
+    let (name_w, label_w, agents_w) = (width(0), width(1), width(2));
+    rendered
+        .iter()
+        .map(|[name, label, agents, detail]| {
+            format!("{name:<name_w$}  {label:<label_w$}  {agents:<agents_w$}  {detail}")
+                .trim_end()
+                .to_string()
         })
-        .collect())
+        .collect()
+}
+
+/// `agent:state` for each agent, `+N` for its unread messages; `no session`
+/// when the feature's session is closed.
+fn agents(feature: &FeatureSnapshot) -> String {
+    if !feature.session_exists {
+        return "no session".to_string();
+    }
+    feature
+        .agents
+        .iter()
+        .map(|a| match a.unread {
+            0 => format!("{}:{}", a.name, a.state),
+            n => format!("{}:{}+{n}", a.name, a.state),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn detail(feature: &FeatureSnapshot) -> String {
+    let attention = &feature.attention;
+    match (attention.kind, &attention.agent, &attention.detail) {
+        (AttentionKind::Blocked, Some(agent), Some(reason)) => format!("{agent}: {reason}"),
+        (AttentionKind::Blocked, Some(agent), None) => format!("{agent}: (no reason given)"),
+        (AttentionKind::Stalled, _, _) => "every agent idle, no unread messages".to_string(),
+        (_, _, Some(detail)) => detail.clone(),
+        _ => String::new(),
+    }
 }
 
 fn reason(state: &FeatureState) -> Option<&str> {
@@ -80,7 +153,7 @@ fn reason(state: &FeatureState) -> Option<&str> {
 
 /// The summary's first line of text: summaries open with a title heading
 /// that only repeats the feature name.
-fn first_line(project_root: &Path, name: &str) -> Option<String> {
+pub(crate) fn first_line(project_root: &Path, name: &str) -> Option<String> {
     let summary = std::fs::read_to_string(paths::summary_path(project_root, name)).ok()?;
     summary
         .lines()
@@ -119,10 +192,10 @@ mod tests {
     }
 
     #[test]
-    fn project_view_shows_the_blocked_reason_and_the_ready_summary() {
+    fn project_view_puts_the_most_urgent_first_with_who_is_blocked() {
         let dir = tempdir().unwrap();
-        let (project, _) =
-            TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
+        let server = TestServer::new();
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
         add_feature(&project, "auth");
         add_feature(&project, "search");
         feat_status(
@@ -130,20 +203,20 @@ mod tests {
             "login",
             Progress::Blocked,
             Some("which DB?"),
-            None,
+            Some("implementer"),
         )
         .unwrap();
         write_summary(&project, "auth", "# auth\n\nAdds OAuth login\n\n## More\n");
         feat_status(&project, "auth", Progress::Ready, None, None).unwrap();
 
-        let lines = super::project(&project).unwrap();
+        let lines = super::project(&project, None, false, server.name()).unwrap();
 
         assert_eq!(
             lines,
             vec![
-                "auth    ready    Adds OAuth login",
-                "login   blocked  which DB?",
-                "search  wip",
+                "login   blocked  no session  implementer: which DB?",
+                "auth    ready    no session  Adds OAuth login",
+                "search  wip      no session",
             ]
         );
     }
@@ -158,7 +231,7 @@ mod tests {
             "login",
             Progress::Blocked,
             Some("which DB?"),
-            None,
+            Some("implementer"),
         )
         .unwrap();
         assert_eq!(feature(&project, "login").unwrap()[2], "no summary");
@@ -171,7 +244,7 @@ mod tests {
             lines[0].starts_with("login  blocked  (last active "),
             "{lines:?}"
         );
-        assert_eq!(lines[1], "blocked on: which DB?");
+        assert_eq!(lines[1], "blocked on: which DB? (implementer)");
         assert_eq!(lines[3], "  line 1");
         assert_eq!(lines[12], "  line 10");
         assert!(lines[13].starts_with("  … 2 more lines"), "{lines:?}");

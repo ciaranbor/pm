@@ -10,8 +10,8 @@ use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
 use crate::state::project::{
-    AgentsConfig, GlobalConfig, HarnessConfig, ProjectConfig, ProjectEntry, WILDCARD_AGENT,
-    harness_config_in, resolve_agent_settings,
+    AgentsConfig, GlobalConfig, ProjectConfig, ProjectEntry, WILDCARD_AGENT, harness_config,
+    resolve_agent_settings,
 };
 use crate::state::workflow;
 use crate::{gh, git, tmux};
@@ -555,10 +555,30 @@ pub fn doctor(
     fix: bool,
     tmux_server: Option<&str>,
 ) -> Result<Report> {
+    run(project_root, projects_dir, fix, tmux_server, true)
+}
+
+/// [`doctor`] without fixes or the PR drift checks, which call `gh` once
+/// per feature with a PR.
+pub fn offline(
+    project_root: &Path,
+    projects_dir: &Path,
+    tmux_server: Option<&str>,
+) -> Result<Report> {
+    run(project_root, projects_dir, false, tmux_server, false)
+}
+
+fn run(
+    project_root: &Path,
+    projects_dir: &Path,
+    fix: bool,
+    tmux_server: Option<&str>,
+    check_pr_state: bool,
+) -> Result<Report> {
     let mut warnings = baseline_capability_warnings(project_root)?;
     warnings.extend(global_config_warning());
 
-    let findings = diagnose(project_root, projects_dir, tmux_server, true)?;
+    let findings = diagnose(project_root, projects_dir, tmux_server, check_pr_state)?;
     let feature_count = FeatureState::list(&paths::features_dir(project_root))?.len();
 
     let pm_dir = paths::pm_dir(project_root);
@@ -653,11 +673,6 @@ fn baseline_capability_warnings(project_root: &Path) -> Result<Vec<String>> {
         .filter(|h| h.supports_prompt_delivery(&config) == Some(false))
         .map(|h| format!("baseline — {}", prompt_delivery_unsupported(h)))
         .collect())
-}
-
-/// Advisory, so an unreadable project config yields the global settings.
-fn harness_config(project_root: Option<&Path>) -> HarnessConfig {
-    harness_config_in(project_root, &GlobalConfig::load_or_default().harness)
 }
 
 fn prompt_delivery_unsupported(harness: Harness) -> String {
@@ -1280,6 +1295,7 @@ fn apply_fix(
 mod tests {
     use super::*;
     use crate::commands::feat_new;
+    use crate::state::project::HarnessConfig;
     use crate::testing::TestServer;
     use tempfile::tempdir;
 

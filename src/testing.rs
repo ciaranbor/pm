@@ -115,6 +115,20 @@ fn read_lines(path: &std::path::Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// A `claude` that is `sleep` under another name, in the test home: a
+/// window running it has a Claude Code harness as far as pm can tell.
+fn fake_claude() -> std::path::PathBuf {
+    static FAKE: OnceLock<std::path::PathBuf> = OnceLock::new();
+    FAKE.get_or_init(|| {
+        let dir = test_home().join("fake-bin");
+        std::fs::create_dir_all(&dir).expect("create fake-bin");
+        let bin = dir.join("claude");
+        let _ = std::os::unix::fs::symlink("/bin/sleep", &bin);
+        bin
+    })
+    .clone()
+}
+
 static TMUX_SERVER_COUNTER: AtomicU32 = AtomicU32::new(0);
 static SHARED_SERVER_NAME: OnceLock<String> = OnceLock::new();
 static TEST_HOME: OnceLock<std::path::PathBuf> = OnceLock::new();
@@ -636,6 +650,7 @@ impl TestServer {
             last_active: now,
             progress: Default::default(),
             blocked_reason: None,
+            blocked_by: None,
         };
         state.save(&features_dir, feature_name).unwrap();
 
@@ -677,9 +692,9 @@ impl TestServer {
         );
     }
 
-    /// Create a tmux window running `sleep 999` (a non-shell process) to
-    /// simulate an agent mid-turn. Registers the agent in the registry and
-    /// waits until `pane_command` reports "sleep" so callers can immediately
+    /// Create a tmux window running a stand-in `claude` (a renamed `sleep`)
+    /// to simulate an agent mid-turn. Registers the agent in the registry
+    /// and waits until the window reads as busy so callers can immediately
     /// query liveness. Returns the tmux window target.
     pub fn spawn_fake_agent(
         &self,
@@ -689,29 +704,59 @@ impl TestServer {
         agent_name: &str,
     ) -> String {
         let target = self.fake_agent_window(project_root, session_name, feature, agent_name);
-        crate::tmux::send_keys(self.name(), &target, "exec sleep 999").unwrap();
-
-        // Wait for sleep to take effect. Under heavy load (parallel tests)
-        // this can take longer than usual, so we poll generously.
-        let mut sleep_detected = false;
-        for _ in 0..500 {
-            if let Ok(cmd) = crate::tmux::pane_command(self.name(), &target)
-                && cmd == "sleep"
-            {
-                sleep_detected = true;
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        assert!(
-            sleep_detected,
-            "spawn_fake_agent: timed out waiting for 'exec sleep 999' to take effect in window \
-             '{agent_name}' ({target}); running {:?}, pane:\n{:?}",
-            crate::tmux::pane_command(self.name(), &target),
-            crate::tmux::capture_pane(self.name(), &target),
+        crate::tmux::send_keys(
+            self.name(),
+            &target,
+            &format!("exec {} 999", fake_claude().display()),
+        )
+        .unwrap();
+        self.await_liveness(
+            &target,
+            agent_name,
+            crate::commands::running_agents::Liveness::Busy,
         );
         self.register_fake_agent(project_root, feature, agent_name);
         target
+    }
+
+    /// [`Self::spawn_fake_agent`] for an agent whose harness has exited: its
+    /// window runs only the shell.
+    pub fn spawn_dead_fake_agent(
+        &self,
+        project_root: &std::path::Path,
+        session_name: &str,
+        feature: &str,
+        agent_name: &str,
+    ) -> String {
+        let target = self.fake_agent_window(project_root, session_name, feature, agent_name);
+        self.register_fake_agent(project_root, feature, agent_name);
+        target
+    }
+
+    fn await_liveness(
+        &self,
+        target: &str,
+        agent_name: &str,
+        want: crate::commands::running_agents::Liveness,
+    ) {
+        use crate::commands::running_agents::liveness;
+        let config = crate::state::project::HarnessConfig::default();
+        let harness = crate::harness::Harness::ClaudeCode;
+        // Under heavy load (parallel tests) this can take longer than
+        // usual, so we poll generously.
+        for _ in 0..500 {
+            if let Ok(processes) = crate::tmux::pane_processes(self.name(), target)
+                && liveness(Some(&processes), harness, &config) == want
+            {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!(
+            "timed out waiting for window '{agent_name}' ({target}) to read as {want:?}; \
+             pane:\n{:?}",
+            crate::tmux::capture_pane(self.name(), target),
+        );
     }
 
     /// [`Self::spawn_fake_agent`] for an agent between turns: its pane runs
@@ -734,21 +779,10 @@ impl TestServer {
             ),
         )
         .unwrap();
-        let mut waiting = false;
-        for _ in 0..500 {
-            if let Ok(processes) = crate::tmux::pane_processes(self.name(), &target)
-                && crate::commands::running_agents::is_idle(&processes)
-            {
-                waiting = true;
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        assert!(
-            waiting,
-            "spawn_idle_fake_agent: timed out waiting in window '{agent_name}' ({target}); \
-             pane:\n{:?}",
-            crate::tmux::capture_pane(self.name(), &target),
+        self.await_liveness(
+            &target,
+            agent_name,
+            crate::commands::running_agents::Liveness::Idle,
         );
         self.register_fake_agent(project_root, feature, agent_name);
         target

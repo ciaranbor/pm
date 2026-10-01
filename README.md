@@ -81,15 +81,66 @@ warns about a feature not marked ready). Typing into a blocked feature's
 agent sets it back to `wip`.
 
 Bare `pm feat status` shows what needs your attention: in a feature, its
-status, blocked reason, last activity and the head of its summary; in main,
-one row per feature with the blocked reason or the ready summary's first
-line. `pm feat list` is the inventory instead — status, lifecycle, branch,
-base and PR — and `pm feat list --all` covers every registered project.
+status, blocked reason and the agent that set it, last activity and the
+head of its summary; in main, the attention view (below) of every feature,
+and with `--all` of every registered project. `pm feat list` is the
+inventory instead — status, lifecycle, branch, base and PR — and `pm feat
+list --all` covers every registered project.
 Inspection and housekeeping subcommands (`list`, `info`, `switch`, `rename`,
 `rebase`, `delete`, `sync`) round out `pm feat` — see `pm feat --help`.
 `merge` refuses a feature or base worktree with uncommitted changes or a
 paused rebase; `feat info` shows a feature's paused rebase, and `pm status` and
 `pm doctor` show one in any worktree, main's included.
+
+### Attention view
+
+One row per feature, most urgent first: what it needs, each agent's state
+(`name:state`, `+N` for unread messages; `no session` when its session is
+closed) and a detail. A feature gets the first of these that applies:
+
+| Attention | When | Detail |
+|---|---|---|
+| `blocked` | status `blocked` | `<agent>: <question>`, the agent that set it (in JSON, `agent` and `detail`) |
+| `cleanup` | lifecycle `merged` or `stale`: delete it | `PR merged` or `stale` |
+| `ready` | status `ready`, or PR `approved` | the summary's first line, or `PR approved` |
+| `dead` | an agent's window is gone from an open session, or its harness exited | `<agent>: window missing` or `<agent>: harness exited` |
+| `stalled` | status `wip`, agents running, all idle with no unread messages: the team stopped without saying why | `every agent idle, no unread messages` (`null` in JSON) |
+
+Anything else shows its status. An agent is `idle` (waiting for a message),
+`busy` (mid-turn or running background work), `dead`, `stopped` (`pm agent
+stop`), or `closed` (its feature's session is closed; `pm open` respawns
+it). PR state is what `pm feat sync` last recorded: the view never calls
+GitHub, so it is cheap to poll.
+
+`pm feat status --json` (with `--all`, or a feature name) prints the same
+snapshot for tools to build on. `version` changes only when a field changes
+meaning or goes away:
+
+```json
+{
+  "version": 1,
+  "projects": [{ "name": "app", "root": "/src/app", "skipped": null }],
+  "features": [{
+    "project": "app",
+    "name": "login",
+    "attention": { "kind": "blocked", "detail": "which DB?", "agent": "implementer" },
+    "progress": "blocked",
+    "blocked_reason": "which DB?",
+    "blocked_by": "implementer",
+    "summary": null,
+    "lifecycle": "wip",
+    "pr": null,
+    "session": "app/login",
+    "session_exists": true,
+    "agents": [{ "name": "implementer", "state": "idle", "unread": 0, "window": "app/login:1" }]
+  }]
+}
+```
+
+`features` is sorted like the rows. `attention.kind` is one of the table's
+kinds or `none`; `skipped` says why a project's features are missing;
+`summary` is the summary's first line whatever the status; `window` is the
+agent's tmux target, `null` while it has none.
 
 `pm register`, `pm feat adopt --from` and `pm feat rename` carry agent
 sessions to the new path for every harness in use, and print what they did.
@@ -97,10 +148,10 @@ Rename restarts the feature's running agents, resumed on their sessions,
 and keeps the feature's status and summary; the project's unread messages
 from the feature, and the replies `pm msg reply` would send to it, are
 re-addressed to the new name. Rename refuses while any of the feature's
-agents is not waiting for messages — mid-turn, or its window runs no
-harness — since restarting it would cut off its work: wait until they are
-idle, or pass `--force` to interrupt them. Each interrupted agent, and the
-agent that ran the rename, is told to resume.
+agents is mid-turn, since restarting it would cut off its work: wait until
+they are idle, or pass `--force` to interrupt them. An agent whose harness
+exited has no work to cut off and is restarted like an idle one. Each
+interrupted agent, and the agent that ran the rename, is told to resume.
 
 ### Lifecycle hooks
 
@@ -729,8 +780,9 @@ These round out the tool; each has its full flag reference under `--help`:
 - `pm open` / `pm close` — recreate or tear down a project's tmux sessions
   without touching state (e.g. after a reboot). `pm open` also runs `pm
   doctor`'s checks and warns about unfixable drift.
-- `pm status` / `pm doctor` — project dashboard; audit and auto-fix drift
-  between pm state and git/tmux/GitHub reality.
+- `pm status` / `pm doctor` — project dashboard (the attention view, then
+  doctor's issues short of PR drift, so it never calls GitHub); audit and
+  auto-fix drift between pm state and git/tmux/GitHub reality.
 - `pm harness` — the agent harness: `hooks`, bundled `skills`/`agents`
   (installed to `~/.agents/`, projected per harness), per-feature `settings`
   for a harness that has such files (Claude Code's `settings.json` only —

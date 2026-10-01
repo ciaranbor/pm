@@ -72,7 +72,7 @@ pub enum Commands {
         #[arg(short, long)]
         yes: bool,
     },
-    /// Show project dashboard (features, PR status, health)
+    /// Show project dashboard (what each feature needs, health)
     Status {
         /// Project name (defaults to current project from CWD)
         #[arg(long)]
@@ -551,7 +551,7 @@ pub enum FeatCommands {
     /// Set where the feature's work stands: wip, blocked (waiting on the
     /// user), or ready (done; notifies the orchestrator, needs a summary).
     /// Without a status, show what needs attention: this feature, or every
-    /// feature when run from main
+    /// feature, most urgent first, when run from main or with --all
     Status {
         /// wip, blocked or ready; omit to view. Alone, a value that is not
         /// a status is taken as the feature name to view
@@ -561,6 +561,12 @@ pub enum FeatCommands {
         /// What the user is to answer (only with `blocked`)
         #[arg(short = 'm', long)]
         reason: Option<String>,
+        /// View every feature of every registered project
+        #[arg(long, conflicts_with_all = ["status", "name", "reason"])]
+        all: bool,
+        /// View as JSON (the attention snapshot; see README)
+        #[arg(long)]
+        json: bool,
     },
     /// The feature's summary for the orchestrator (kept in pm state, not the branch)
     #[command(subcommand)]

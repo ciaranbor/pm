@@ -118,6 +118,7 @@ mod tests {
             last_active: Utc::now(),
             progress: crate::state::feature::Progress::Blocked,
             blocked_reason: None,
+            blocked_by: None,
         };
         state.save(&features_dir, "login").unwrap();
 

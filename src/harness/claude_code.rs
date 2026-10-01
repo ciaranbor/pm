@@ -16,6 +16,9 @@ use crate::tmux;
 
 pub(super) const CONFIG_DIR: &str = ".claude";
 
+/// The program an agent's window runs.
+pub(super) const BINARY: &str = "claude";
+
 /// Claude Code reads the project settings (permissions etc.) per worktree,
 /// so a feature needs main's copy. `settings.local.json` is not seeded:
 /// Claude Code saves approvals granted in a linked worktree to the main
@@ -58,7 +61,7 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>) -> String {
         edit_dirs,
     } = *spec;
 
-    let mut parts = vec!["claude".to_string()];
+    let mut parts = vec![BINARY.to_string()];
 
     if let Some(name) = definition {
         parts.push("--agent".to_string());
@@ -111,7 +114,7 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>) -> String {
 }
 
 pub(super) fn unusable_reason() -> Option<String> {
-    let runs = std::process::Command::new("claude")
+    let runs = std::process::Command::new(BINARY)
         .arg("--version")
         .stdin(std::process::Stdio::null())
         .output()
@@ -140,7 +143,7 @@ fn help_lists_append_file(help: &str) -> bool {
 /// - `None`        — `claude` not found or `--help` failed; nothing to spawn
 ///   against anyway, so callers treat this as "can't tell, don't warn".
 pub(super) fn supports_append_file() -> Option<bool> {
-    let out = std::process::Command::new("claude")
+    let out = std::process::Command::new(BINARY)
         .arg("--help")
         .output()
         .ok()?;

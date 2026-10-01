@@ -76,12 +76,7 @@ pub fn list_sessions(server: Option<&str>) -> Result<Vec<String>> {
                 Ok(output.lines().map(|s| s.to_string()).collect())
             }
         }
-        // No server running = no sessions (message varies by platform)
-        Err(PmError::Tmux(msg))
-            if msg.contains("no server running") || msg.contains("error connecting") =>
-        {
-            Ok(Vec::new())
-        }
+        Err(PmError::Tmux(msg)) if no_server(&msg) => Ok(Vec::new()),
         Err(e) => Err(e),
     }
 }
@@ -295,30 +290,73 @@ impl PartialEq for Process {
 
 impl Eq for Process {}
 
-/// Every process on the machine, as `(process, parent pid)`.
-fn process_table() -> Result<Vec<(Process, u32)>> {
-    let table = Command::new("ps")
-        .args(["-A", "-o", "pid=,ppid=,lstart=,command="])
-        .output()?;
-    Ok(String::from_utf8_lossy(&table.stdout)
-        .lines()
-        .filter_map(|line| {
-            let mut fields = line.split_whitespace();
-            let pid = fields.next()?.parse().ok()?;
-            let ppid = fields.next()?.parse().ok()?;
-            // `lstart` is always five fields: `Wed Oct  1 16:47:56 2026`.
-            let started: Vec<&str> = fields.by_ref().take(5).collect();
-            if started.len() < 5 {
-                return None;
+#[cfg(test)]
+impl Process {
+    pub fn new_for_test(pid: u32, command: &str) -> Self {
+        Self {
+            pid,
+            started: String::new(),
+            command: command.to_string(),
+        }
+    }
+}
+
+/// Every process on the machine, read once so that several panes can be
+/// walked against one `ps` run.
+pub struct ProcessTable(Vec<(Process, u32)>);
+
+impl ProcessTable {
+    pub fn read() -> Result<Self> {
+        let table = Command::new("ps")
+            .args(["-A", "-o", "pid=,ppid=,lstart=,command="])
+            .output()?;
+        Ok(Self(
+            String::from_utf8_lossy(&table.stdout)
+                .lines()
+                .filter_map(|line| {
+                    let mut fields = line.split_whitespace();
+                    let pid = fields.next()?.parse().ok()?;
+                    let ppid = fields.next()?.parse().ok()?;
+                    // `lstart` is always five fields: `Wed Oct  1 16:47:56 2026`.
+                    let started: Vec<&str> = fields.by_ref().take(5).collect();
+                    if started.len() < 5 {
+                        return None;
+                    }
+                    let process = Process {
+                        pid,
+                        started: started.join(" "),
+                        command: fields.collect::<Vec<_>>().join(" "),
+                    };
+                    Some((process, ppid))
+                })
+                .collect(),
+        ))
+    }
+
+    /// The process `root` and its descendants.
+    pub fn tree(&self, root: u32) -> Vec<Process> {
+        let mut found: Vec<Process> = self
+            .0
+            .iter()
+            .filter(|(process, _)| process.pid == root)
+            .map(|(process, _)| process.clone())
+            .collect();
+        let mut at = 0;
+        while at < found.len() {
+            let parent = found[at].pid;
+            for (process, ppid) in &self.0 {
+                if *ppid == parent && !found.contains(process) {
+                    found.push(process.clone());
+                }
             }
-            let process = Process {
-                pid,
-                started: started.join(" "),
-                command: fields.collect::<Vec<_>>().join(" "),
-            };
-            Some((process, ppid))
-        })
-        .collect())
+            at += 1;
+        }
+        found
+    }
+
+    fn contains(&self, process: &Process) -> bool {
+        self.0.iter().any(|(live, _)| live == process)
+    }
 }
 
 /// The processes running in a window's first pane: the pane's own and its
@@ -332,24 +370,61 @@ pub fn pane_processes(server: Option<&str>, target: &str) -> Result<Vec<Process>
     else {
         return Ok(Vec::new());
     };
-    let table = process_table()?;
+    Ok(ProcessTable::read()?.tree(root))
+}
 
-    let mut found: Vec<Process> = table
-        .iter()
-        .filter(|(process, _)| process.pid == root)
-        .map(|(process, _)| process.clone())
-        .collect();
-    let mut at = 0;
-    while at < found.len() {
-        let parent = found[at].pid;
-        for (process, ppid) in &table {
-            if *ppid == parent && !found.contains(process) {
-                found.push(process.clone());
-            }
+/// A window's first pane, as [`first_panes`] lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pane {
+    pub session: String,
+    pub window_name: String,
+    /// The window's target, `session:index`.
+    pub window: String,
+    pub pid: u32,
+}
+
+/// The first pane of every window on the server, from one `list-panes -a`.
+/// No server running lists none.
+pub fn first_panes(server: Option<&str>) -> Result<Vec<Pane>> {
+    let output = match run_tmux(
+        server,
+        &[
+            "list-panes",
+            "-a",
+            "-F",
+            "#{session_name}\t#{window_name}\t#{session_name}:#{window_index}\t#{pane_pid}",
+        ],
+    ) {
+        Ok(output) => output,
+        Err(PmError::Tmux(msg)) if no_server(&msg) => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
+    let mut panes: Vec<Pane> = Vec::new();
+    for line in output.lines() {
+        let mut fields = line.split('\t');
+        let (Some(session), Some(window_name), Some(window), Some(pid)) =
+            (fields.next(), fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        let Ok(pid) = pid.parse() else { continue };
+        if panes.iter().any(|p| p.window == window) {
+            continue;
         }
-        at += 1;
+        panes.push(Pane {
+            session: session.to_string(),
+            window_name: window_name.to_string(),
+            window: window.to_string(),
+            pid,
+        });
     }
-    Ok(found)
+    Ok(panes)
+}
+
+/// Whether a tmux error says there is no server to talk to (the message
+/// varies by platform).
+fn no_server(msg: &str) -> bool {
+    msg.contains("no server running") || msg.contains("error connecting")
 }
 
 /// Wait until every one of `processes` has exited, for at most `limit`.
@@ -357,12 +432,12 @@ pub fn pane_processes(server: Option<&str>, target: &str) -> Result<Vec<Process>
 pub fn wait_for_exit(processes: &[Process], limit: std::time::Duration) -> Vec<Process> {
     let started = std::time::Instant::now();
     loop {
-        let Ok(table) = process_table() else {
+        let Ok(table) = ProcessTable::read() else {
             return processes.to_vec();
         };
         let left: Vec<Process> = processes
             .iter()
-            .filter(|process| table.iter().any(|(live, _)| live == *process))
+            .filter(|process| table.contains(process))
             .cloned()
             .collect();
         if left.is_empty() || started.elapsed() >= limit {
@@ -619,8 +694,9 @@ mod tests {
 
     #[test]
     fn a_reused_pid_does_not_count_as_the_process_still_running() {
-        let own = process_table()
+        let own = ProcessTable::read()
             .unwrap()
+            .0
             .into_iter()
             .map(|(process, _)| process)
             .find(|process| process.pid == std::process::id())
