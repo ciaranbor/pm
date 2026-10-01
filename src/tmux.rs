@@ -87,20 +87,20 @@ pub fn list_sessions(server: Option<&str>) -> Result<Vec<String>> {
 }
 
 /// Switch the current tmux client to a session.
-/// Returns the command args for tmux switch-client (for use in display-menu or direct execution).
 pub fn switch_client(server: Option<&str>, name: &str) -> Result<()> {
     run_tmux(server, &["switch-client", "-t", name])?;
     Ok(())
 }
 
 /// Attach the current terminal to a tmux session. Inherits stdio so tmux takes
-/// over the controlling terminal; returns when the user detaches.
+/// over the controlling terminal; returns when the user detaches. From a pane
+/// of another server the client nests in that pane.
 pub fn attach_session(server: Option<&str>, name: &str) -> Result<()> {
     let mut cmd = Command::new("tmux");
     if let Some(s) = server {
         cmd.args(["-L", s]);
     }
-    cmd.args(["attach-session", "-t", name]);
+    cmd.args(["attach-session", "-t", name]).env_remove("TMUX");
     let status = cmd.status()?;
     if status.success() {
         Ok(())
@@ -109,15 +109,28 @@ pub fn attach_session(server: Option<&str>, name: &str) -> Result<()> {
     }
 }
 
-/// Connect the current terminal to `session`: switch the client when already
-/// inside tmux (`inside_tmux`, normally `std::env::var("TMUX").is_ok()`),
-/// otherwise attach a fresh client.
-pub fn connect_session(server: Option<&str>, session: &str, inside_tmux: bool) -> Result<()> {
-    if inside_tmux {
-        switch_client(server, session)
-    } else {
-        attach_session(server, session)
+/// Connect the current terminal to `session`. `tmux_env` is the caller's
+/// `$TMUX`: a client of `server` is switched to it; anything else, a pane of
+/// another server included, attaches a fresh client.
+pub fn connect_session(server: Option<&str>, session: &str, tmux_env: Option<&str>) -> Result<()> {
+    match tmux_env {
+        Some(env) if is_client_of(server, session, env) => switch_client(server, session),
+        _ => attach_session(server, session),
     }
+}
+
+/// Whether `tmux_env` (a `$TMUX` value: `socket,pid,session`) names the
+/// socket of the server holding `session`.
+fn is_client_of(server: Option<&str>, session: &str, tmux_env: &str) -> bool {
+    let ours = tmux_env.split(',').next().unwrap_or_default();
+    let Ok(theirs) = run_tmux(
+        server,
+        &["display-message", "-p", "-t", session, "#{socket_path}"],
+    ) else {
+        return false;
+    };
+    let canonical = |p: &str| std::fs::canonicalize(p).unwrap_or_else(|_| p.into());
+    canonical(ours) == canonical(&theirs)
 }
 
 /// Create a new window in an existing tmux session. Returns the new window's target
@@ -642,17 +655,24 @@ mod tests {
     }
 
     #[test]
-    fn connect_session_switch_path_without_client_errors() {
-        // Inside-tmux path uses switch-client, which fails harmlessly when no
-        // client is attached (as in the test harness).
+    fn a_client_is_of_the_server_whose_socket_its_tmux_env_names() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let name = server.scope("connect-switch");
+        let name = server.scope("client-of");
         create_session(server.name(), &name, dir.path()).unwrap();
+        let socket = run_tmux(
+            server.name(),
+            &["display-message", "-p", "-t", &name, "#{socket_path}"],
+        )
+        .unwrap();
 
-        let result = connect_session(server.name(), &name, true);
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), PmError::Tmux(_)));
+        assert!(is_client_of(server.name(), &name, &format!("{socket},1,0")));
+        let other = std::path::Path::new(&socket).with_file_name("pm-elsewhere");
+        assert!(!is_client_of(
+            server.name(),
+            &name,
+            &format!("{},1,0", other.display())
+        ));
     }
 
     #[test]

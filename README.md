@@ -748,7 +748,9 @@ Tests spawn real tmux sessions on a private server; `AGENTS.md` (Development)
 has the pty budget and how to clean up leaked test servers.
 
 Setting `PM_TMUX_SERVER=<name>` makes every `pm` command target that tmux
-server (`tmux -L <name>`) instead of the default one. `scripts/sandbox` uses
+server (`tmux -L <name>`) instead of the default one; `pm open` run from a
+pane of another server attaches a nested client rather than switching that
+server's. `scripts/sandbox` uses
 it to give you a throwaway pm environment for trying changes by hand (see
 `AGENTS.md`).
 
