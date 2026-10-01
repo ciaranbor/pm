@@ -3,6 +3,8 @@ use std::process::Command;
 
 use crate::error::{PmError, Result};
 
+pub mod options;
+
 /// Single source of truth for the tmux session naming convention.
 /// Returns `"{project_name}/{scope}"`.
 pub fn session_name(project_name: &str, scope: &str) -> String {

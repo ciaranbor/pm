@@ -900,6 +900,9 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             clap_complete::generate(shell, &mut cmd, "pm", &mut std::io::stdout());
             Ok(())
         }
+        Commands::Tmux(TmuxCommands::Refresh) => {
+            commands::tmux_refresh::refresh(&paths::global_projects_dir()?, server)
+        }
         Commands::Workflow(workflow_cmd) => {
             // `install`/`uninstall`/`list` act on the global tier, so they
             // work outside a project too; `show` needs the feature's scope.

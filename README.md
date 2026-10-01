@@ -153,6 +153,46 @@ they are idle, or pass `--force` to interrupt them. An agent whose harness
 exited has no work to cut off and is restarted like an idle one. Each
 interrupted agent, and the agent that ran the rename, is told to resume.
 
+### tmux options
+
+`pm tmux refresh` publishes the attention snapshot of every project on the
+tmux server (`PM_TMUX_SERVER`, else the default) as user options, for
+status lines and `choose-tree` formats to read. It is cheap enough to run
+on every `status-interval` tick: it writes only what changed, in one `tmux`
+call, then redraws attached clients' status lines, which rebuilds an open
+tree mode. With no server running it does nothing.
+
+| Scope | Option | Value |
+|---|---|---|
+| feature session | `@pm_project`, `@pm_feature` | names |
+| | `@pm_progress` | `wip`, `blocked` or `ready` |
+| | `@pm_attention` | the attention kind; unset for `none` |
+| | `@pm_reason` | the attention detail; unset without one |
+| | `@pm_badge` | the kind, styled (`#[fg=red,bold]blocked#[default]`); unset for `none` |
+| agent window | `@pm_agent` | the agent's name |
+| | `@pm_agent_state` | `idle`, `busy`, `dead` or `stopped` |
+| | `@pm_unread` | unread message count |
+| | `@pm_agent_badge` | a glyph for the state, then `+N` unread, styled (below) |
+| global | `@pm_summary` | e.g. `2 blocked · 1 ready`, styled; unset when nothing needs attention |
+| | `@pm_count` | features needing attention |
+
+Only the registry's agents' windows carry options; other windows, the
+`main` session and its agents carry none. An option whose value goes away
+is unset, so it never outlives its cause; a session's go with the session.
+Text is escaped for formats (`#` doubled). Each name is set at one
+scope only, so tmux's fallback from window to session to global never
+yields another scope's value.
+
+`@pm_agent_badge` is sized for `window-status-format`, next to the window
+name, and resets its style after itself: `●` busy (green), `○` idle (grey),
+`×` dead (red), `■` stopped (grey), then `+N` (yellow) with N unread
+messages, e.g. `○+2`.
+
+When a feature with an open session becomes `blocked` or `ready`, every
+attached client is shown it once. The previous attention is the published
+`@pm_attention`, so the first refresh after a session opens alerts on a
+feature already in that state.
+
 ### Lifecycle hooks
 
 Each project is bootstrapped with **lifecycle hooks** under `.pm/hooks/`:
@@ -793,6 +833,8 @@ These round out the tool; each has its full flag reference under `--help`:
   (`--harness`, default `claude-code`); `list` the supported harnesses and
   `probe` the installed binary. `pm claude …` remains as a hidden alias for
   one release.
+- `pm tmux refresh` — publish the attention snapshot as tmux options (see
+  tmux options).
 - `pm upgrade` / `pm self-update` — update bundled assets and the binary.
 - `pm completions <shell>` — generate shell completion scripts.
 - `pm list` — list registered projects.
