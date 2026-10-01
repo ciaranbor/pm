@@ -88,7 +88,8 @@ base and PR — and `pm feat list --all` covers every registered project.
 Inspection and housekeeping subcommands (`list`, `info`, `switch`, `rename`,
 `rebase`, `delete`, `sync`) round out `pm feat` — see `pm feat --help`.
 `merge` refuses a feature or base worktree with uncommitted changes or a
-paused rebase; `feat info`, `pm status` and `pm doctor` show a paused rebase.
+paused rebase; `feat info` shows a feature's paused rebase, and `pm status` and
+`pm doctor` show one in any worktree, main's included.
 
 `pm register`, `pm feat adopt --from` and `pm feat rename` carry agent
 sessions to the new path for every harness in use, and print what they did.

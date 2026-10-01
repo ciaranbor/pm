@@ -94,8 +94,8 @@ pub enum IssueKind {
     /// A harness in use reports a problem with its `[harness.<name>]`
     /// settings.
     HarnessConfigInvalid,
-    /// A feature worktree has a rebase paused, so its branch does not yet
-    /// hold the rebased commits and `pm feat merge` refuses it.
+    /// A feature's or main's worktree has a rebase paused, so its branch
+    /// does not yet hold the rebased commits and `pm feat merge` refuses it.
     RebaseInProgress,
 }
 
@@ -240,6 +240,7 @@ pub fn diagnose(
     main_issues.extend(harness_config_issues(project_root)?);
     let projections = DefinitionProjections::load(project_root)?;
     main_issues.extend(asset_issues(project_root, &projections)?);
+    main_issues.extend(rebase_issue(&main_repo));
     main_issues.extend(legacy_vanilla_agent_issues(project_root, "main"));
     main_issues.extend(loop_stopped_issues(project_root, "main"));
     let main_branch = ProjectEntry::load(projects_dir, project_name)
@@ -421,13 +422,8 @@ pub fn diagnose(
             )?);
         }
 
-        if dir_exists && git::rebase_in_progress(&worktree_path).unwrap_or(false) {
-            issues.push(Issue {
-                kind: IssueKind::RebaseInProgress,
-                message: "rebase in progress (finish with `git rebase --continue` or `--abort`)"
-                    .to_string(),
-                fix: Fix::None,
-            });
+        if dir_exists {
+            issues.extend(rebase_issue(&worktree_path));
         }
 
         issues.extend(legacy_vanilla_agent_issues(project_root, name));
@@ -1098,6 +1094,18 @@ fn legacy_vanilla_agent_issues(project_root: &Path, scope: &str) -> Vec<Issue> {
         .collect()
 }
 
+/// A rebase paused in `worktree`.
+fn rebase_issue(worktree: &Path) -> Option<Issue> {
+    git::rebase_in_progress(worktree)
+        .unwrap_or(false)
+        .then(|| Issue {
+            kind: IssueKind::RebaseInProgress,
+            message: "rebase in progress (finish with `git rebase --continue` or `--abort`)"
+                .to_string(),
+            fix: Fix::None,
+        })
+}
+
 /// Flag a `recorded` registry main branch the repository has no branch for.
 fn main_branch_issue(main_repo: &Path, recorded: &str) -> Option<Issue> {
     if git::branch_exists(main_repo, recorded).unwrap_or(true) {
@@ -1225,6 +1233,27 @@ mod tests {
             lines
                 .iter()
                 .any(|l| l.contains("login") && l.contains("ok"))
+        );
+    }
+
+    #[test]
+    fn a_rebase_paused_in_main_is_reported_for_main() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
+        let main = paths::main_worktree(&project_path);
+        std::fs::write(main.join("work.txt"), "work").unwrap();
+        git::stage_file(&main, "work.txt").unwrap();
+        git::commit(&main, "work").unwrap();
+        TestServer::pause_rebase(&main, "HEAD~1");
+
+        let findings = diagnose(&project_path, &projects_dir, server.name(), false).unwrap();
+        let main_finding = findings.iter().find(|f| f.feature() == "main").unwrap();
+        assert!(
+            main_finding
+                .issues()
+                .iter()
+                .any(|i| i.kind() == IssueKind::RebaseInProgress)
         );
     }
 
