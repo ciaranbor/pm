@@ -169,20 +169,66 @@ pub fn send_full(
     let lock = std::fs::File::create(mdir.join(".lock"))?;
     lock.lock()?;
     let index = max_index(&sdir)? + 1;
-    let write = |dir: &Path, name: String, content: &[u8]| -> Result<()> {
-        let mut file = tempfile::NamedTempFile::new_in(dir)?;
-        std::io::Write::write_all(&mut file, content)?;
-        file.persist(dir.join(name)).map_err(|e| e.error)?;
-        Ok(())
-    };
-    write(
+    write_whole(
         &mdir,
-        format!("{index:03}.json"),
+        &format!("{index:03}.json"),
         serde_json::to_string_pretty(&meta)?.as_bytes(),
     )?;
-    write(&sdir, format!("{index:03}.md"), body.as_bytes())?;
+    write_whole(&sdir, &format!("{index:03}.md"), body.as_bytes())?;
 
     Ok(index)
+}
+
+/// Replace `dir/name` in one rename, so a reader sees the old or the new
+/// content, never a partial write.
+fn write_whole(dir: &Path, name: &str, content: &[u8]) -> Result<()> {
+    let mut file = tempfile::NamedTempFile::new_in(dir)?;
+    std::io::Write::write_all(&mut file, content)?;
+    file.persist(dir.join(name)).map_err(|e| e.error)?;
+    Ok(())
+}
+
+/// Rewrite, in place, each unread message in an agent's inbox that was sent
+/// from `from_scope` of this project: it is recorded as sent from
+/// `to_scope`, and its body is passed through `body`. Indices are kept, so
+/// the cursor and read order are unaffected.
+pub fn rescope_unread(
+    messages_dir: &Path,
+    feature: &str,
+    agent: &str,
+    from_scope: &str,
+    to_scope: &str,
+    body: impl Fn(&str) -> String,
+) -> Result<()> {
+    let pending: Vec<MessageSummary> = list(messages_dir, feature, agent, None)?
+        .into_iter()
+        .filter(|m| {
+            m.status != MessageStatus::Read
+                && m.sender_project.is_none()
+                && m.sender_scope.as_deref() == Some(from_scope)
+        })
+        .collect();
+    for m in &pending {
+        let Some(mut msg) = read_at(messages_dir, feature, agent, &m.sender, m.index)? else {
+            continue;
+        };
+        msg.meta.sender_scope = Some(to_scope.to_string());
+        let name = format!("{:03}", m.index);
+        write_whole(
+            &meta_dir(messages_dir, feature, agent, &m.sender),
+            &format!("{name}.json"),
+            serde_json::to_string_pretty(&msg.meta)?.as_bytes(),
+        )?;
+        let rewritten = body(&msg.body);
+        if rewritten != msg.body {
+            write_whole(
+                &sender_dir(messages_dir, feature, agent, &m.sender),
+                &format!("{name}.md"),
+                rewritten.as_bytes(),
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// Check for unread messages in an agent's inbox. Returns unread counts per sender.
