@@ -223,6 +223,7 @@ pub fn rollback_creation(params: &RollbackParams<'_>) {
         delete_branch: params.delete_branch,
         best_effort: true,
         base_scope: params.base_scope,
+        ending: None,
     });
 }
 

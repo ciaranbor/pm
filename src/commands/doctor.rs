@@ -1155,6 +1155,7 @@ fn apply_fix(
                 delete_branch: true,
                 best_effort: false,
                 base_scope,
+                ending: None,
             })?;
         }
         FixAction::RecreateTmuxSession {

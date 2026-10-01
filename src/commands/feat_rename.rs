@@ -12,9 +12,8 @@
 //! carried as it stands while it still runs.
 //!
 //! `main`'s unread messages from the old scope are rewritten in place to the
-//! new one, not re-sent: a ready message must still be unread under the new
-//! name for cleanup to keep the summary, and a stale copy would name a
-//! summary path that no longer exists.
+//! new one, not re-sent: `main` replies to a message's scope, and a stale
+//! copy would name a summary path that no longer exists.
 
 use std::path::{Path, PathBuf};
 
@@ -281,10 +280,10 @@ fn carry_main_inbox(project_root: &Path, old_name: &str, new_name: &str) -> Vec<
     let body = |b: &str| {
         [true, false]
             .into_iter()
-            .find(|&repliable| b == ready_body(old_name, repliable))
+            .find(|&repliable| b == ready_body(project_root, old_name, repliable))
             .map_or_else(
                 || b.to_string(),
-                |repliable| ready_body(new_name, repliable),
+                |repliable| ready_body(project_root, new_name, repliable),
             )
     };
     match messages::rescope_unread(
@@ -390,7 +389,7 @@ mod tests {
     }
 
     #[test]
-    fn rename_of_a_ready_feature_keeps_its_untriaged_summary() {
+    fn rename_of_a_ready_feature_carries_its_summary_and_ready_message() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
@@ -421,17 +420,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(msg.meta.sender_scope.as_deref(), Some("auth"));
-        assert_eq!(msg.body, ready_body("auth", true));
-
-        crate::commands::feat_delete::feat_delete(
-            &project_path,
-            &TestServer::registry_dir(&project_path),
-            "auth",
-            false,
-            server.name(),
-        )
-        .unwrap();
-
+        assert_eq!(msg.body, ready_body(&project_path, "auth", true));
         assert_eq!(
             std::fs::read_to_string(paths::summary_path(&project_path, "auth")).unwrap(),
             "notes"

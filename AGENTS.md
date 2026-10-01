@@ -113,10 +113,10 @@ Design decisions you can't recover by reading the tree. Preserve them.
 
 - `main` is a dispatcher, not a relay: it starts features, then steps back.
 - Feature agents report to the user in their own session, not to `main`.
-- The summary (`.pm/summaries/`, edited in place) is the standing
-  feature→project channel. Agent-set `ready` ("waiting on the user's merge
-  or delete") is the single triage trigger, re-set to send a revised
-  summary; `blocked` never messages `main`, and nothing pm sends resets it.
+- The summary (`.pm/summaries/`, edited in place) is the feature→project
+  channel, kept until `main` deletes it. `ready` asks `main` to review it
+  for gaps; the always-sent merge/delete notice, naming which, is the sole
+  triage trigger. `blocked` never messages `main`; nothing pm sends resets it.
 - Team status and the PR-derived `status` are separate: sync can't clobber it.
 - Each `workflow.md` names the single summary owner; content guidance is
   single-sourced in `pm workflow show`, never in defs, workflows, or skills.

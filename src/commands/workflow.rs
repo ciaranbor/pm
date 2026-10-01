@@ -48,9 +48,9 @@ how the work went (the baseline's `## Comments and docs` rule).
 
 Once the work is done and reviewed, the summary owner runs
 `pm feat status ready`. It needs the summary and tells the orchestrator, which
-triages it while the team is still running: expect and answer its follow-up
-messages. After changing the summary while ready, run `pm feat status ready`
-again so the orchestrator sees the change. If more work follows, run
+reviews it for gaps while the team is still running: expect and answer its
+follow-up messages. After changing the summary while ready, run
+`pm feat status ready` again so the orchestrator sees the change. If more work follows, run
 `pm feat status wip`, and mark it ready again when done.
 ";
 

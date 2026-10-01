@@ -186,9 +186,10 @@ under `.pm/workflows/` with other names are yours and are never touched;
 
 "Reports to the user" means **in the agent's own tmux session**, where you read
 it live — not by messaging the `main` orchestrator. `main` is a dispatcher, not
-a relay: it spins up features and steps back, re-engaging only to triage a
-feature's summary. Intra-feature handoffs (reviewer ↔
-implementer, researcher → implementer) are what use messaging.
+a relay: it spins up features and steps back, re-engaging only to review a
+ready feature's summary and to triage it once the feature is merged or
+deleted. Intra-feature handoffs (reviewer ↔ implementer, researcher →
+implementer) are what use messaging.
 
 Agent defs carry no `tools:` allowlist — each inherits the harness's full
 tool set (including skills). Real guardrails belong in the permissions layer
@@ -569,9 +570,12 @@ the orchestrator (`pm workflow show` says what belongs in it), kept at
 `.pm/summaries/<feature>.md` (`pm feat summary path`), never on the branch;
 agents edit it like any other file (Claude Code agents are spawned with
 `--add-dir` on that directory). `pm feat status ready` requires it and
-messages `main` to triage it; cleanup hands `main` any summary it was not
-told about. Until `main` has triaged and deleted it, `pm feat new` and
-`pm feat adopt` refuse that feature name. A worktree `summary.md` from an
+messages `main` to review it for gaps while the team can still answer.
+Triage waits for the end: merging or deleting a feature always tells `main`
+which of the two happened (a deleted feature's changes never landed), with or
+without a summary, and keeps the summary until `main` has triaged and
+deleted it. Until then, `pm feat new` and `pm feat adopt` refuse that
+feature name. A worktree `summary.md` from an
 older feature is still collected on cleanup; to mark such a feature ready,
 move it to that path first.
 

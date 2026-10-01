@@ -70,6 +70,22 @@ pub fn branch_merged_into(repo: &Path, branch: &str, target: &str) -> Result<boo
     }
 }
 
+/// How many distinct commits `branch` has pointed at, by its reflog: 1 when
+/// it never moved from where it was created (a rename doesn't move it), 0
+/// when it has no reflog.
+pub fn branch_commits_pointed_at(repo: &Path, branch: &str) -> Result<usize> {
+    let refname = format!("refs/heads/{branch}");
+    match run_git(repo, &["reflog", "show", "--format=%H", &refname, "--"]) {
+        Ok(out) => Ok(out
+            .lines()
+            .filter(|l| !l.is_empty())
+            .collect::<std::collections::HashSet<_>>()
+            .len()),
+        Err(PmError::Git(_)) => Ok(0),
+        Err(e) => Err(e),
+    }
+}
+
 /// Get the remote tracking branch for a local branch (e.g. "origin/main").
 /// Returns None if no upstream is configured.
 pub fn tracking_branch(repo: &Path, branch: &str) -> Result<Option<String>> {
