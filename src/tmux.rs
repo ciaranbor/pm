@@ -453,10 +453,17 @@ fn agent_panes_in(output: &str) -> Vec<Pane> {
     panes
 }
 
-/// Whether a tmux error says there is no server to talk to (the message
-/// varies by platform).
+/// Whether a tmux error says there is no server to talk to: none was
+/// running (the message varies by platform), or it exited mid-command.
 fn no_server(msg: &str) -> bool {
-    msg.contains("no server running") || msg.contains("error connecting")
+    [
+        "no server running",
+        "error connecting",
+        "server exited unexpectedly",
+        "lost server",
+    ]
+    .iter()
+    .any(|m| msg.contains(m))
 }
 
 /// Get the current command running in the first pane of a window.
