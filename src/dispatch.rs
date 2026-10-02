@@ -598,26 +598,6 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     }
                     Ok(())
                 }
-                FeatCommands::Switch { name } => {
-                    let name = name.or_else(|| {
-                        paths::detect_feature_from_cwd(
-                            &project_root,
-                            &std::env::current_dir().ok()?,
-                        )
-                    });
-                    if let Some(name) = name {
-                        commands::feat_switch::feat_switch(&project_root, &name, server)
-                    } else {
-                        let items = commands::feat_switch::feat_switch_menu(&project_root)?;
-                        let pm_dir = paths::pm_dir(&project_root);
-                        let config = pm::state::project::ProjectConfig::load(&pm_dir)?;
-                        tmux::display_menu(
-                            server,
-                            &format!("{} features", config.project.name),
-                            &items,
-                        )
-                    }
-                }
                 FeatCommands::Delete { name, force } => {
                     let name = resolve_feature_name(name, &project_root)?;
                     commands::feat_delete::feat_delete(

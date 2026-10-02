@@ -26,7 +26,6 @@ pub mod feat_review;
 pub mod feat_status;
 pub mod feat_status_view;
 pub mod feat_summary;
-pub mod feat_switch;
 pub mod feat_sync;
 pub mod harness_check;
 pub mod harness_export;

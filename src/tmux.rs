@@ -248,40 +248,6 @@ pub fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-/// Show a tmux display-menu for selecting from a list of items.
-/// Each item is a (label, session_name) pair. Selecting an item switches to that session.
-pub fn display_menu(server: Option<&str>, title: &str, items: &[(String, String)]) -> Result<()> {
-    let args = build_display_menu_args(title, items);
-    let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    // display-menu fails silently outside tmux — that's acceptable
-    let _ = run_tmux(server, &args_refs);
-    Ok(())
-}
-
-/// Build tmux display-menu arguments for a list of items.
-/// Each item gets a shortcut key (1-9, a-z).
-fn build_display_menu_args(
-    title: &str,
-    items: &[(String, String)], // (label, session_name)
-) -> Vec<String> {
-    let mut args = vec![
-        "display-menu".to_string(),
-        "-T".to_string(),
-        title.to_string(),
-    ];
-
-    let shortcuts: Vec<char> = "123456789abcdefghijklmnopqrstuvwxyz".chars().collect();
-
-    for (i, (label, session_name)) in items.iter().enumerate() {
-        let key = shortcuts.get(i).map(|c| c.to_string()).unwrap_or_default();
-        args.push(label.clone());
-        args.push(key);
-        args.push(format!("switch-client -t '{session_name}'"));
-    }
-
-    args
-}
-
 /// Rename a window in a tmux session.
 pub fn rename_window(server: Option<&str>, target: &str, new_name: &str) -> Result<()> {
     run_tmux(server, &["rename-window", "-t", target, new_name])?;
@@ -579,50 +545,6 @@ mod tests {
     }
 
     #[test]
-    fn build_display_menu_args_creates_correct_structure() {
-        let items = vec![
-            ("login".to_string(), "myapp/login".to_string()),
-            ("api".to_string(), "myapp/api".to_string()),
-        ];
-
-        let args = build_display_menu_args("Features", &items);
-
-        assert_eq!(args[0], "display-menu");
-        assert_eq!(args[1], "-T");
-        assert_eq!(args[2], "Features");
-        assert_eq!(args[3], "login");
-        assert_eq!(args[4], "1");
-        assert_eq!(args[5], "switch-client -t 'myapp/login'");
-        assert_eq!(args[6], "api");
-        assert_eq!(args[7], "2");
-        assert_eq!(args[8], "switch-client -t 'myapp/api'");
-    }
-
-    #[test]
-    fn build_display_menu_args_empty_list() {
-        let items: Vec<(String, String)> = vec![];
-        let args = build_display_menu_args("Empty", &items);
-
-        assert_eq!(args.len(), 3);
-        assert_eq!(args[0], "display-menu");
-        assert_eq!(args[2], "Empty");
-    }
-
-    #[test]
-    fn build_display_menu_args_many_items_uses_empty_shortcut_past_limit() {
-        let items: Vec<(String, String)> = (0..40)
-            .map(|i| (format!("item-{i}"), format!("session-{i}")))
-            .collect();
-
-        let args = build_display_menu_args("Big", &items);
-
-        assert_eq!(args[4], "1");
-        // Item at index 35 (0-indexed), past the 34 shortcuts available
-        let shortcut_pos = 3 + 35 * 3 + 1;
-        assert_eq!(args[shortcut_pos], "");
-    }
-
-    #[test]
     fn new_window_creates_second_window() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
@@ -732,17 +654,6 @@ mod tests {
 
         let result = send_keys(server.name(), &server.scope("nonexistent"), "echo hello");
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn display_menu_returns_ok_even_outside_tmux() {
-        let server = TestServer::new();
-        let name = server.scope("myapp");
-        let items = vec![("login".to_string(), session_name(&name, "login"))];
-
-        // display_menu swallows the tmux error (no client attached)
-        let result = display_menu(server.name(), "Test", &items);
-        assert!(result.is_ok());
     }
 
     #[test]

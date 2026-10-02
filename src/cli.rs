@@ -554,11 +554,6 @@ pub enum FeatCommands {
         /// Feature name (detected from CWD if omitted)
         name: Option<String>,
     },
-    /// Switch to a feature's tmux session
-    Switch {
-        /// Feature name (omit for interactive picker)
-        name: Option<String>,
-    },
     /// Delete a feature (with safety checks)
     Delete {
         /// Feature name (detected from CWD if omitted)
