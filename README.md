@@ -70,13 +70,9 @@ branch. Bundled skills, agents, and workflows install once per machine
 ([Asset tiers](#asset-tiers)). pm projects your `main/.agents/` customs
 into `main/.claude/`, which is generated: gitignore it.
 
-In the `main` session, start the orchestrator:
-
-```sh
-pm agent spawn main
-```
-
-`main` dispatches features and keeps the project's
+Each also starts the orchestrator, the `main` agent, in that session
+(`--no-main` skips it; `pm agent spawn main` starts it later). `main`
+dispatches features and keeps the project's
 [information store](#information-store-and-summaries). Run one per project;
 several projects side by side is the normal case.
 

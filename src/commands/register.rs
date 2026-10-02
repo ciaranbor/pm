@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
 use crate::hooks;
@@ -12,6 +12,8 @@ use crate::tmux;
 /// the original repo as `main/` inside it. Sets up the `.pm/` state directory
 /// and creates a `<project>/main` tmux session.
 ///
+/// Returns the project root, the wrapper directory.
+///
 /// The `tmux_server` parameter allows tests to use an isolated tmux server.
 pub fn register(
     repo_path: &Path,
@@ -20,7 +22,7 @@ pub fn register(
     move_repo: bool,
     tmux_server: Option<&str>,
     home: Option<&Path>,
-) -> Result<()> {
+) -> Result<PathBuf> {
     // Validate the repo path exists and is a git repo
     let repo_path = repo_path.canonicalize().map_err(|_| {
         PmError::Io(std::io::Error::new(
@@ -128,6 +130,8 @@ pub fn register(
     // Bootstrap default hook scripts and the harness's user-level hooks
     hooks::bootstrap(&wrapper_dir)?;
     super::hooks_install::install(Some(&wrapper_dir))?;
+    // The bundled definitions, `main`'s included, live in the global tier.
+    super::skills::install_global()?;
 
     // Register in global registry
     // Try to read the origin URL from the main worktree
@@ -150,7 +154,7 @@ pub fn register(
     let main_path = paths::main_worktree(&wrapper_dir);
     tmux::create_session(tmux_server, &session_name, &main_path)?;
 
-    Ok(())
+    Ok(wrapper_dir)
 }
 
 #[cfg(test)]

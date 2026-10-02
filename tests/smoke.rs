@@ -331,7 +331,7 @@ impl Smoke {
     fn init_with_feature(&self) -> PathBuf {
         let proj = self.proj();
         self.pm(self.home())
-            .args(["init", &proj.to_string_lossy()])
+            .args(["init", "--no-main", &proj.to_string_lossy()])
             .assert()
             .success();
         let main = proj.join("main");
@@ -480,6 +480,24 @@ fn spawn_builds_the_command_through_the_real_shell() {
     assert_eq!(rec.argv, expected);
     assert_eq!(rec.agent_name, "reviewer");
     assert_eq!(Path::new(&rec.cwd), login);
+}
+
+/// Catches: `pm init` run outside tmux not reaching the new main session
+/// with its `main` agent, or starting it outside the main worktree.
+#[test]
+#[ignore]
+fn init_starts_main_in_the_main_session() {
+    let s = Smoke::new();
+    s.pm(s.home())
+        .args(["init", &s.proj().to_string_lossy()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Spawned agent 'main'"));
+
+    let records = s.argv_records("main", 1);
+    assert_eq!(records[0].agent_name, "main");
+    assert_eq!(Path::new(&records[0].cwd), s.proj().join("main"));
+    assert_eq!(s.window_names("proj/main"), ["main"]);
 }
 
 /// Catches: `agent spawn --scope` resolving the target from the caller's
@@ -844,7 +862,7 @@ fn interrupting_pm_mid_migration_kills_its_opencode_server() {
 
     let s = Smoke::new();
     s.pm(s.home())
-        .args(["init", &s.proj().to_string_lossy()])
+        .args(["init", "--no-main", &s.proj().to_string_lossy()])
         .assert()
         .success();
     let (server_pid, child_pid, moving) = (
@@ -929,7 +947,7 @@ fn feat_new_refuses_a_mixed_team_whose_harness_binaries_cannot_run() {
     let s = Smoke::new();
     let proj = s.proj();
     s.pm(s.home())
-        .args(["init", &proj.to_string_lossy()])
+        .args(["init", "--no-main", &proj.to_string_lossy()])
         .assert()
         .success();
     let main = proj.join("main");
@@ -983,7 +1001,7 @@ fn doctor_reports_an_unrunnable_claude_only_when_an_agent_is_on_it() {
     let s = Smoke::new();
     let proj = s.proj();
     s.pm(s.home())
-        .args(["init", &proj.to_string_lossy()])
+        .args(["init", "--no-main", &proj.to_string_lossy()])
         .assert()
         .success();
     let main = proj.join("main");

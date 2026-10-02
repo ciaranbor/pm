@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::commands::agent_spawn::{SpawnOutcome, agent_respawn_in, agent_spawn, notes_suffix};
+use crate::commands::agent_spawn::{SpawnOutcome, agent_spawn, agent_spawn_in, notes_suffix};
 use crate::commands::attention::{AgentState, scope_agents};
 use crate::error::{PmError, Result};
 use crate::messages;
@@ -69,14 +69,14 @@ fn restart_one(
         Some(pane) if keep_old => {
             let fresh = panes::split(tmux_server, &pane, &worktree)?;
             (
-                agent_respawn_in(project_root, feature, agent_name, &fresh, tmux_server)?,
+                agent_spawn_in(project_root, feature, agent_name, &fresh, tmux_server)?,
                 Some(pane),
             )
         }
         Some(pane) => {
             panes::respawn(tmux_server, &pane, &worktree)?;
             (
-                agent_respawn_in(project_root, feature, agent_name, &pane, tmux_server)?,
+                agent_spawn_in(project_root, feature, agent_name, &pane, tmux_server)?,
                 None,
             )
         }

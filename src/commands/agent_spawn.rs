@@ -406,9 +406,9 @@ pub fn agent_spawn(
     )
 }
 
-/// Respawn a registered agent into `pane`, a pane whose shell is ready for
-/// it, instead of a window of its own.
-pub fn agent_respawn_in(
+/// [`agent_spawn`] into `pane`, a shell ready for the agent, whose window
+/// takes its name, instead of a window of its own.
+pub fn agent_spawn_in(
     project_root: &Path,
     feature: &str,
     agent_name: &str,
