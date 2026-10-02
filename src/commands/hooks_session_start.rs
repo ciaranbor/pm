@@ -18,7 +18,7 @@ use crate::error::Result;
 use crate::harness::Harness;
 use crate::state::agent::AgentRegistry;
 use crate::state::paths;
-use crate::state::runtime;
+use crate::state::runtime::{self, SessionPath};
 use crate::state::workflow;
 
 /// Run the SessionStart hook logic. Returns the exit code (always 0).
@@ -127,7 +127,7 @@ fn parse_payload(json_str: &str) -> crate::error::Result<Payload> {
 }
 
 /// Clear the agent's waiting marker, stamp its activity, record its
-/// transcript, and update its session_id in the registry, returning the harness and effective
+/// session paths, and update its session_id in the registry, returning the harness and effective
 /// definition its entry records. An unregistered agent is left alone
 /// (`None`): the spawn registers before launching, so this is a non-pm
 /// session.
@@ -145,10 +145,17 @@ fn record_start(
     };
     runtime::touch_activity(project_root, feature, agent_name)?;
     runtime::clear_waiting(project_root, feature, agent_name)?;
-    match &payload.transcript {
-        Some(path) => runtime::write_transcript(project_root, feature, agent_name, path)?,
-        None => runtime::clear_transcript(project_root, feature, agent_name)?,
-    }
+    let session_path = |which, path: Option<&Path>| {
+        runtime::write_session_path(project_root, feature, agent_name, which, path)
+    };
+    session_path(SessionPath::Transcript, payload.transcript.as_deref())?;
+    let config_dir = entry
+        .harness
+        .config_dir_env()
+        .and_then(std::env::var_os)
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from);
+    session_path(SessionPath::ConfigDir, config_dir.as_deref())?;
     entry.session_id = payload.session_id.clone();
     let recorded = (
         entry.harness,

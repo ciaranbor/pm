@@ -333,8 +333,9 @@ oldest, ending with `N more senders pending: b, c — pm msg read --from b`
 when others wait. History stays on disk. `pm msg send` never spawns an
 agent: it errors on an inactive recipient, and respawns one whose window
 died. To an `unarmed` recipient it types the prompt the Stop hook would
-have given, but only when that agent's input line is empty (and, in vim
-mode, in INSERT mode), so it never touches a draft or answers a dialog;
+have given, but only when that agent's input line is empty (in vim mode it
+presses `i` first to leave NORMAL mode), so it never touches a draft or
+answers a dialog;
 elsewhere the message waits. opencode agents never need it: pm's plugin
 waits again after every turn.
 

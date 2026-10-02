@@ -314,7 +314,12 @@ fn spawn_session_with_config(
         // before the session (README, "Attention view").
         let startup = runtime::Waiting::now(runtime::WaitingKind::Startup, None);
         runtime::write_waiting(params.project_root, params.feature, name, &startup)?;
-        runtime::clear_transcript(params.project_root, params.feature, name)?;
+        for which in [
+            runtime::SessionPath::Transcript,
+            runtime::SessionPath::ConfigDir,
+        ] {
+            runtime::write_session_path(params.project_root, params.feature, name, which, None)?;
+        }
     }
 
     tmux::send_keys(

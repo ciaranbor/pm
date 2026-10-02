@@ -6,11 +6,15 @@
 //! against typing into something other than an empty prompt: the marker
 //! must say unarmed (never asking — the keys would answer the dialog — nor
 //! a loop that stopped itself on purpose), the window must run its harness
-//! and not the hook, and the harness must read its input line as empty. A
-//! draft is never cleared; when any check fails the message just stays
-//! queued and the agent stays visibly unarmed. Removing the marker is the
-//! claim to type, so of two concurrent senders only one does; the prompt's
-//! UserPromptSubmit would clear it anyway.
+//! and not the hook, and the harness must read its input line as empty,
+//! once any key it names to make the line take text has been pressed (vim
+//! NORMAL mode). A draft is never cleared; when any check fails the message
+//! just stays queued and the agent stays visibly unarmed. Removing the
+//! marker is the claim to type, so of two concurrent senders only one does;
+//! the prompt's UserPromptSubmit would clear it anyway. An interrupt read
+//! from the transcript has no marker until a sender writes one to claim,
+//! so two senders within the moment before the typed prompt reaches the
+//! transcript may both type.
 
 use std::path::Path;
 
@@ -18,7 +22,7 @@ use crate::error::Result;
 use crate::state::agent::AgentRegistry;
 use crate::state::paths;
 use crate::state::project::{GlobalConfig, ProjectConfig, resolve_harness_config};
-use crate::state::runtime::{self, Waiting, WaitingClass, WaitingKind};
+use crate::state::runtime::{self, SessionPath, Waiting, WaitingClass, WaitingKind};
 use crate::tmux;
 
 use super::hooks_stop;
@@ -55,8 +59,21 @@ pub fn rearm(
     if liveness(windows.processes(pane).as_deref(), harness, &config) != Liveness::Busy {
         return Ok(None);
     }
-    let screen = tmux::capture_screen(tmux_server, &pane.window)?;
-    if harness.input_is_empty(&screen, &paths::home_dir()?) != Some(true) {
+    let home = paths::home_dir()?;
+    let config_dir = runtime::read_session_path(project_root, scope, agent, SessionPath::ConfigDir);
+    let config_dir = config_dir.as_deref();
+    let mut screen = tmux::capture_screen(tmux_server, &pane.id)?;
+    if let Some((key, undo)) = harness.text_mode_key(&screen, &home, config_dir) {
+        tmux::send_key(tmux_server, &pane.id, key)?;
+        screen = redrawn(tmux_server, &pane.id, |s| {
+            harness.text_mode_key(s, &home, config_dir).is_none()
+        })?;
+        if harness.text_mode_key(&screen, &home, config_dir).is_some() {
+            tmux::send_key(tmux_server, &pane.id, undo)?;
+            return Ok(None);
+        }
+    }
+    if harness.input_is_empty(&screen, &home, config_dir) != Some(true) {
         return Ok(None);
     }
     let prompt = hooks_stop::continuation(project_root, scope, agent)?;
@@ -67,11 +84,23 @@ pub fn rearm(
     if !runtime::clear_waiting(project_root, scope, agent)? {
         return Ok(None);
     }
-    if let Err(e) = tmux::send_text(tmux_server, &pane.window, &prompt) {
+    if let Err(e) = tmux::send_text(tmux_server, &pane.id, &prompt) {
         let _ = runtime::write_waiting(project_root, scope, agent, &waiting);
         return Err(e);
     }
     Ok(Some(waiting))
+}
+
+/// `pane`'s screen once `done` holds for it, or as it is after a second.
+fn redrawn(tmux_server: Option<&str>, pane: &str, done: impl Fn(&str) -> bool) -> Result<String> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    loop {
+        let screen = tmux::capture_screen(tmux_server, pane)?;
+        if done(&screen) || std::time::Instant::now() >= deadline {
+            return Ok(screen);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
 }
 
 #[cfg(test)]
@@ -213,7 +242,14 @@ mod tests {
             .unwrap()
             .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(1))
             .unwrap();
-        runtime::write_transcript(&project, "login", "implementer", &transcript).unwrap();
+        runtime::write_session_path(
+            &project,
+            "login",
+            "implementer",
+            runtime::SessionPath::Transcript,
+            Some(&transcript),
+        )
+        .unwrap();
 
         let status = send(&server, &project);
 
@@ -226,5 +262,44 @@ mod tests {
             None
         );
         server.wait_for_pane_text(&target, &format!("❯ {PROMPT}"));
+    }
+
+    #[test]
+    fn a_vim_key_the_prompt_takes_as_text_is_erased_and_the_agent_left_alone() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (project, target) = at_prompt(&server, dir.path(), WaitingKind::Prompt);
+        let config_dir = dir.path().join("claude-config");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(config_dir.join(".claude.json"), r#"{"editorMode":"vim"}"#).unwrap();
+        runtime::write_session_path(
+            &project,
+            "login",
+            "implementer",
+            SessionPath::ConfigDir,
+            Some(&config_dir),
+        )
+        .unwrap();
+
+        let status = send(&server, &project);
+
+        assert_eq!(
+            status,
+            "Message 001 sent to 'implementer' (from 'reviewer')"
+        );
+        assert_eq!(
+            runtime::read_waiting(&project, "login", "implementer").map(|w| w.kind),
+            Some(WaitingKind::Prompt)
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while screen(&server, &target).contains("❯ i") {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{}",
+                screen(&server, &target)
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(!screen(&server, &target).contains("You have new messages"));
     }
 }

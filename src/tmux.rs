@@ -209,6 +209,12 @@ pub fn send_text(server: Option<&str>, target: &str, text: &str) -> Result<()> {
     Ok(())
 }
 
+/// Press one key, by tmux's name for it, in `target`.
+pub fn send_key(server: Option<&str>, target: &str, key: &str) -> Result<()> {
+    run_tmux(server, &["send-keys", "-t", target, key])?;
+    Ok(())
+}
+
 /// The visible screen of `target`'s pane, with the escape sequences that
 /// style it.
 pub fn capture_screen(server: Option<&str>, target: &str) -> Result<String> {

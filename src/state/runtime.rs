@@ -12,9 +12,12 @@
 //! The **activity stamp** is a file whose mtime is the agent's last sign of
 //! life: every pm hook invocation touches it.
 //!
-//! The **transcript record** holds the path of the current session's
-//! transcript, written at SessionStart, for a harness that records an
-//! interrupt only there ([`Harness::interrupted`](crate::harness::Harness::interrupted)).
+//! The **session paths** are what the current session reported at its
+//! start: its transcript, for a harness that records an interrupt only
+//! there ([`Harness::interrupted`](crate::harness::Harness::interrupted)),
+//! and the config dir its environment named, where its input settings are
+//! read ([`Harness::config_dir_env`](crate::harness::Harness::config_dir_env)).
+//! Every spawn forgets them until the new session starts.
 //!
 //! They live in `<project>/.pm/runtime/<scope>/<agent>/` and last as long
 //! as the agent's registry entry. Every spawn rewrites what it hands the
@@ -33,7 +36,6 @@ use crate::state::paths;
 
 const WAITING_FILE: &str = "waiting.json";
 const ACTIVITY_FILE: &str = "activity";
-const TRANSCRIPT_FILE: &str = "transcript";
 
 fn root(project_root: &Path) -> PathBuf {
     paths::pm_dir(project_root).join("runtime")
@@ -185,27 +187,53 @@ pub fn clear_waiting(project_root: &Path, scope: &str, agent: &str) -> Result<bo
     }
 }
 
-/// Record where the agent's current session keeps its transcript, as its
-/// SessionStart hook reported it.
-pub fn write_transcript(project_root: &Path, scope: &str, agent: &str, path: &Path) -> Result<()> {
-    let file = agent_dir(project_root, scope, agent)?.join(TRANSCRIPT_FILE);
-    write_atomic(&file, path.to_string_lossy().as_bytes())
+/// A path the agent's current session reported at its start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionPath {
+    /// The session's transcript.
+    Transcript,
+    /// The harness's config dir, as the agent's environment named it.
+    ConfigDir,
 }
 
-/// The agent's current session's transcript, once its session has started.
-pub fn read_transcript(project_root: &Path, scope: &str, agent: &str) -> Option<PathBuf> {
-    let text =
-        std::fs::read_to_string(agent_file(project_root, scope, agent, TRANSCRIPT_FILE)).ok()?;
-    Some(PathBuf::from(text))
-}
-
-/// Forget the agent's transcript, for a spawn whose session has not
-/// started yet.
-pub fn clear_transcript(project_root: &Path, scope: &str, agent: &str) -> Result<()> {
-    match std::fs::remove_file(agent_file(project_root, scope, agent, TRANSCRIPT_FILE)) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
-        _ => Ok(()),
+impl SessionPath {
+    fn file(self) -> &'static str {
+        match self {
+            Self::Transcript => "transcript",
+            Self::ConfigDir => "config-dir",
+        }
     }
+}
+
+/// Record `path` as the agent's current session's, or forget it (`None`).
+pub fn write_session_path(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    which: SessionPath,
+    path: Option<&Path>,
+) -> Result<()> {
+    let file = agent_dir(project_root, scope, agent)?.join(which.file());
+    match path {
+        Some(path) => write_atomic(&file, path.to_string_lossy().as_bytes()),
+        None => match std::fs::remove_file(file) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+            _ => Ok(()),
+        },
+    }
+}
+
+/// The agent's current session's `which`, once the session has started
+/// and reported one.
+pub fn read_session_path(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    which: SessionPath,
+) -> Option<PathBuf> {
+    let text =
+        std::fs::read_to_string(agent_file(project_root, scope, agent, which.file())).ok()?;
+    Some(PathBuf::from(text))
 }
 
 /// Stamp the agent as active now.

@@ -256,11 +256,46 @@ impl Harness {
     /// it can't tell. `home` holds the harness's config. opencode's never
     /// stays unarmed — its plugin waits again after any turn and stops only
     /// on purpose — so its screen is never read.
-    pub fn input_is_empty(self, screen: &str, home: &Path) -> Option<bool> {
+    ///
+    /// `config_dir` is the value the agent's environment gave
+    /// [`config_dir_env`](Self::config_dir_env), if any.
+    pub fn input_is_empty(
+        self,
+        screen: &str,
+        home: &Path,
+        config_dir: Option<&Path>,
+    ) -> Option<bool> {
         match self {
-            Harness::ClaudeCode => claude_code::input::is_empty(screen, home),
+            Harness::ClaudeCode => claude_code::input::is_empty(screen, home, config_dir),
             Harness::Codex => codex::input::is_empty(screen),
             Harness::OpenCode => None,
+        }
+    }
+
+    /// The tmux key that switches an input line on `screen` into a mode that
+    /// takes typed keys as text, changing nothing else, and the one that
+    /// erases it should the line have taken it as text; `None` when it
+    /// already does or can't. Arguments as for
+    /// [`input_is_empty`](Self::input_is_empty).
+    pub fn text_mode_key(
+        self,
+        screen: &str,
+        home: &Path,
+        config_dir: Option<&Path>,
+    ) -> Option<(&'static str, &'static str)> {
+        match self {
+            Harness::ClaudeCode => claude_code::input::text_mode_key(screen, home, config_dir),
+            Harness::Codex | Harness::OpenCode => None,
+        }
+    }
+
+    /// The environment variable that moves the harness's config away from
+    /// its default, where the input line's settings are read, for the
+    /// SessionStart hook to record from the agent's own environment.
+    pub fn config_dir_env(self) -> Option<&'static str> {
+        match self {
+            Harness::ClaudeCode => Some(claude_code::input::CONFIG_DIR_ENV),
+            Harness::Codex | Harness::OpenCode => None,
         }
     }
 
