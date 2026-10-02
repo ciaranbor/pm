@@ -90,10 +90,6 @@ fn read_message_body(message: Option<String>) -> pm::error::Result<String> {
     }
 }
 
-/// Print the per-agent results of a multi-name agent op (stop, delete,
-/// restart), aggregating errors. Continues on error: each result is
-/// printed individually and a single `PmError::Agent` is returned only
-/// if any failed, so partial successes are still observable on stdout.
 /// Spawn a new project's `main` agent. The project is set up by now, so a
 /// failure is reported with the command that retries it, not returned.
 fn report_main_spawn(project_root: &std::path::Path, server: Option<&str>) {
@@ -106,6 +102,10 @@ fn report_main_spawn(project_root: &std::path::Path, server: Option<&str>) {
     }
 }
 
+/// Print the per-agent results of a multi-name agent op (stop, delete,
+/// restart), aggregating errors. Continues on error: each result is
+/// printed individually and a single `PmError::Agent` is returned only
+/// if any failed, so partial successes are still observable on stdout.
 fn report_agent_op_results(
     results: Vec<pm::error::Result<String>>,
     op_label: &str,

@@ -127,10 +127,10 @@ fn parse_payload(json_str: &str) -> crate::error::Result<Payload> {
 }
 
 /// Clear the agent's waiting marker, stamp its activity, record its
-/// session paths, and update its session_id in the registry, returning the harness and effective
-/// definition its entry records. An unregistered agent is left alone
-/// (`None`): the spawn registers before launching, so this is a non-pm
-/// session.
+/// session paths, and update its session_id in the registry, returning
+/// the harness and effective definition its entry records. An unregistered
+/// agent is left alone (`None`): the spawn registers before launching, so
+/// this is a non-pm session.
 fn record_start(
     project_root: &Path,
     feature: &str,
@@ -344,8 +344,38 @@ mod tests {
     #[test]
     fn parse_session_id_from_valid_json() {
         let json = r#"{"session_id":"abc123","cwd":"/tmp","hook_event_name":"SessionStart"}"#;
-        let id = parse_payload(json).unwrap().session_id;
-        assert_eq!(id, "abc123");
+        assert_eq!(parse_payload(json).unwrap(), started("abc123"));
+        let json = r#"{"session_id":"abc123","transcript_path":"/t/abc123.jsonl"}"#;
+        assert_eq!(
+            parse_payload(json).unwrap().transcript,
+            Some(PathBuf::from("/t/abc123.jsonl"))
+        );
+    }
+
+    #[test]
+    fn a_recorded_transcript_is_forgotten_by_the_next_spawn() {
+        use crate::commands::agent_spawn::agent_spawn;
+        let server = crate::testing::TestServer::new();
+        let dir = tempdir().unwrap();
+        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        agent_spawn(&project, "login", "reviewer", None, None, server.name()).unwrap();
+        let transcript =
+            || runtime::read_session_path(&project, "login", "reviewer", SessionPath::Transcript);
+
+        let payload = Payload {
+            transcript: Some(dir.path().join("old.jsonl")),
+            ..started("s1")
+        };
+        record_start(&project, "login", "reviewer", &payload).unwrap();
+        assert_eq!(transcript(), Some(dir.path().join("old.jsonl")));
+
+        let session = crate::tmux::session_name(&project_name, "login");
+        let window = crate::tmux::find_window(server.name(), &session, "reviewer")
+            .unwrap()
+            .unwrap();
+        crate::tmux::kill_window(server.name(), &window).unwrap();
+        agent_spawn(&project, "login", "reviewer", None, None, server.name()).unwrap();
+        assert_eq!(transcript(), None);
     }
 
     #[test]
