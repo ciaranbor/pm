@@ -25,8 +25,8 @@ use crate::error::Result;
 use crate::tmux::{self, options};
 
 use super::attention::{AgentSnapshot, AgentState};
+use super::tmux_lock::try_lock;
 use super::tmux_refresh::{refresh, window_values};
-use super::tmux_watch::try_lock;
 
 /// [`refresh`], while a watcher keeps the server's options current.
 pub fn push(projects_dir: &Path, tmux_server: Option<&str>) -> Result<()> {
@@ -85,7 +85,7 @@ impl AgentWindow {
 mod tests {
     use super::*;
     use crate::commands::tmux_refresh::WINDOW_OPTIONS;
-    use crate::commands::{feat_new, feat_status::feat_status, init, tmux_refresh::lock_file};
+    use crate::commands::{feat_new, feat_status::feat_status, init, tmux_lock};
     use crate::state::feature::Progress;
     use crate::testing::{OwnServer, TestServer};
     use std::time::{Duration, Instant};
@@ -172,8 +172,7 @@ mod tests {
         assert_eq!(count(), "", "no watcher, no push");
 
         let socket = tmux::socket_path(server.name()).unwrap().unwrap();
-        let watcher = lock_file(&socket, "watch").unwrap();
-        watcher.lock().unwrap();
+        let _watcher = tmux_lock::lock(&socket, "watch").unwrap();
         push(&projects_dir, server.name()).unwrap();
         assert_eq!(count(), "1");
     }

@@ -21,11 +21,9 @@
 //! published.
 
 use std::collections::HashSet;
-use std::fs::{File, OpenOptions};
 use std::path::Path;
 
 use crate::error::{PmError, Result};
-use crate::state::paths;
 use crate::tmux;
 use crate::tmux::options::{self, Command, Holder, Options, Scope, format_text};
 
@@ -36,6 +34,7 @@ use super::attention::{
     Snapshot,
 };
 use super::feat_status_view::{STALLED, span};
+use super::tmux_lock;
 
 mod badge;
 mod episode;
@@ -78,8 +77,7 @@ pub fn refresh(projects_dir: &Path, tmux_server: Option<&str>) -> Result<()> {
     let Some(socket) = tmux::socket_path(tmux_server)? else {
         return Ok(());
     };
-    let lock = lock_file(&socket, "refresh")?;
-    lock.lock()?;
+    let _lock = tmux_lock::lock(&socket, "refresh")?;
     let Some(published) =
         options::read(tmux_server, SESSION_OPTIONS, WINDOW_OPTIONS, GLOBAL_OPTIONS)?
     else {
@@ -87,27 +85,6 @@ pub fn refresh(projects_dir: &Path, tmux_server: Option<&str>) -> Result<()> {
     };
     let snapshot = attention::all(projects_dir, tmux_server)?;
     write(tmux_server, &commands(&snapshot, &published, Utc::now()))
-}
-
-/// The file whose lock of `kind` stands for the server at `socket`.
-pub(super) fn lock_file(socket: &str, kind: &str) -> Result<File> {
-    let dir = paths::global_config_dir()?.join("tmux");
-    std::fs::create_dir_all(&dir)?;
-    let name: String = socket
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || "._-".contains(c) {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    Ok(OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(dir.join(format!("{name}.{kind}.lock")))?)
 }
 
 /// Run `commands`, the client tail last. A client that detached since the
