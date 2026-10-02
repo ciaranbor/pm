@@ -10,10 +10,10 @@
 //! canonical copy at all. Runs when a feature is created and on an explicit
 //! `pm harness pull` — never as a side effect of another command, so a live
 //! feature changes only when someone asks. Copy-only — nothing in the
-//! feature is ever deleted, so a skill removed on the branch is copied back
-//! from main while main has it — and a file the feature's branch tracks
-//! in git is never written: its content is the branch's, and reaches or
-//! leaves main by merge.
+//! feature is ever deleted — and a file the feature's branch tracks in git,
+//! or deleted since it forked from main, is never written: its content (or
+//! absence) is the branch's, and reaches or leaves main by merge. A skill
+//! the branch deleted is also not copied from main's harness projection.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -32,14 +32,22 @@ use super::skills::{self, CANONICAL_DIR};
 /// main-sourced, matching where pm itself resolves definitions from.
 const CANONICAL_SUBDIRS: &[&str] = &["skills"];
 
+/// What a seed did, relative to the feature worktree.
+#[derive(Debug, Default)]
+pub struct Pulled {
+    /// Files written (or, with `dry_run`, that would be).
+    pub written: Vec<PathBuf>,
+    /// Main's files left absent because the feature's branch deleted them.
+    pub deleted: Vec<PathBuf>,
+}
+
 /// Called during `feat new` / `feat adopt` / `feat review`.
 pub fn seed_feature_assets(project_root: &Path, feature_worktree: &Path) -> Result<()> {
     sync_feature(project_root, feature_worktree, false).map(|_| ())
 }
 
-/// `pm harness pull`: seed an existing feature again. Returns the files
-/// written (or, with `dry_run`, that would be), relative to the worktree.
-pub fn pull(project_root: &Path, feature_name: &str, dry_run: bool) -> Result<Vec<PathBuf>> {
+/// `pm harness pull`: seed an existing feature again.
+pub fn pull(project_root: &Path, feature_name: &str, dry_run: bool) -> Result<Pulled> {
     super::feat_common::require_feature(project_root, feature_name)?;
     let worktree = project_root.join(feature_name);
     if !worktree.is_dir() {
@@ -54,18 +62,20 @@ pub fn pull(project_root: &Path, feature_name: &str, dry_run: bool) -> Result<Ve
     sync_feature(project_root, &worktree, dry_run)
 }
 
-fn sync_feature(
-    project_root: &Path,
-    feature_worktree: &Path,
-    dry_run: bool,
-) -> Result<Vec<PathBuf>> {
+fn sync_feature(project_root: &Path, feature_worktree: &Path, dry_run: bool) -> Result<Pulled> {
     let main = paths::main_worktree(project_root);
-    let mut written = Vec::new();
+    let mut out = Pulled::default();
     let harnesses = skills::harnesses_in_use(project_root)?;
     for sub in CANONICAL_SUBDIRS {
         let rel = Path::new(CANONICAL_DIR).join(sub);
-        let files = sync_untracked(&main, feature_worktree, &rel, &HashSet::new(), dry_run)?;
-        written.extend(files.into_iter().map(|f| rel.join(f)));
+        sync_untracked(
+            &main,
+            feature_worktree,
+            &rel,
+            &HashSet::new(),
+            dry_run,
+            &mut out,
+        )?;
     }
     // A dry run projects from what the canonical store would hold.
     let preview = if dry_run {
@@ -82,38 +92,52 @@ fn sync_feature(
         for sub in harness.projected_dirs() {
             let rel = cfg.join(sub);
             if !CANONICAL_SUBDIRS.contains(sub) {
-                let files =
-                    sync_untracked(&main, feature_worktree, &rel, &HashSet::new(), dry_run)?;
-                written.extend(files.into_iter().map(|f| rel.join(f)));
+                sync_untracked(
+                    &main,
+                    feature_worktree,
+                    &rel,
+                    &HashSet::new(),
+                    dry_run,
+                    &mut out,
+                )?;
                 continue;
             }
             // Main's projected copy fills in only what the feature's own
-            // store lacks (a hand-written harness-only entry), so the
-            // projection below never fights it.
-            let own = entry_names(&canonical.join(sub))?;
-            let files = sync_untracked(&main, feature_worktree, &rel, &own, dry_run)?;
-            written.extend(files.into_iter().map(|f| rel.join(f)));
+            // store lacks (a hand-written harness-only entry) and did not
+            // delete, so the projection below never fights it.
+            let mut own = entry_names(&canonical.join(sub))?;
+            let canonical_rel = Path::new(CANONICAL_DIR).join(sub);
+            own.extend(
+                deleted_under(&main, feature_worktree, &canonical_rel)?
+                    .iter()
+                    .filter_map(|f| f.components().next())
+                    .map(|c| PathBuf::from(c.as_os_str())),
+            );
+            sync_untracked(&main, feature_worktree, &rel, &own, dry_run, &mut out)?;
             let scope = ProjectionScope {
                 subdirs: Some(std::slice::from_ref(sub)),
-                keep: tracked_under(feature_worktree, &rel)?
+                keep: branch_owned(&main, feature_worktree, &rel)?
                     .into_iter()
                     .map(|f| Path::new(sub).join(f))
                     .collect(),
             };
             let projection =
                 harness.project_assets(&canonical, &feature_worktree.join(cfg), &scope, dry_run)?;
-            written.extend(projection.written.into_iter().map(|f| cfg.join(f)));
+            out.written
+                .extend(projection.written.into_iter().map(|f| cfg.join(f)));
         }
     }
     for harness in &harnesses {
         for file in harness.seeded_files() {
             let rel = Path::new(harness.config_dir()).join(file);
-            if seed_file(&main, feature_worktree, &rel, dry_run)? == Some(Seeded::Written) {
-                written.push(rel);
+            match seed_file(&main, feature_worktree, &rel, dry_run)? {
+                Some(Seeded::Written) => out.written.push(rel),
+                Some(Seeded::Deleted) => out.deleted.push(rel),
+                _ => {}
             }
         }
     }
-    Ok(written)
+    Ok(out)
 }
 
 /// A temporary copy of the feature's [`CANONICAL_SUBDIRS`] with main's
@@ -128,7 +152,7 @@ fn preview_canonical(main: &Path, feature_worktree: &Path) -> Result<tempfile::T
         }
         let src = main.join(&rel);
         if src.is_dir() {
-            let keep = tracked_under(feature_worktree, &rel)?;
+            let keep = branch_owned(main, feature_worktree, &rel)?;
             sync_tree_except(&src, &preview.path().join(sub), &keep, false)?;
         }
     }
@@ -154,10 +178,12 @@ pub enum Seeded {
     Unchanged,
     /// Left alone: the worktree's branch tracks it.
     Tracked,
+    /// Left absent: the worktree's branch deleted it.
+    Deleted,
 }
 
 /// Copy the file `rel` from `main` into `worktree` unless the worktree's
-/// branch tracks it. `None` when main has no such file.
+/// branch tracks or deleted it. `None` when main has no such file.
 pub fn seed_file(
     main: &Path,
     worktree: &Path,
@@ -170,6 +196,8 @@ pub fn seed_file(
     }
     Ok(Some(if !tracked_under(worktree, rel)?.is_empty() {
         Seeded::Tracked
+    } else if !deleted_under(main, worktree, rel)?.is_empty() {
+        Seeded::Deleted
     } else if sync_file(&src, &worktree.join(rel), dry_run)? {
         Seeded::Written
     } else {
@@ -177,27 +205,60 @@ pub fn seed_file(
     }))
 }
 
-/// Sync the directory `rel` from `main` into `worktree`, skipping files the
-/// worktree's branch tracks and the paths in `skip` (relative to `rel`).
-/// Returns the files written (or, with `dry_run`, that would be), relative
-/// to `rel`; a `rel` main doesn't have is a no-op.
+/// Sync the directory `rel` from `main` into `worktree`, skipping the
+/// [`branch_owned`] files and the paths in `skip` (relative to `rel`), and
+/// record what it did in `out`. A `rel` main doesn't have is a no-op.
 fn sync_untracked(
     main: &Path,
     worktree: &Path,
     rel: &Path,
     skip: &HashSet<PathBuf>,
     dry_run: bool,
-) -> Result<Vec<PathBuf>> {
+    out: &mut Pulled,
+) -> Result<()> {
     let src = main.join(rel);
     if !src.is_dir() {
-        return Ok(Vec::new());
+        return Ok(());
     }
+    let deleted = deleted_under(main, worktree, rel)?;
+    out.deleted.extend(
+        deleted
+            .iter()
+            .filter(|f| src.join(f).is_file())
+            .map(|f| rel.join(f)),
+    );
     let mut keep = tracked_under(worktree, rel)?;
+    keep.extend(deleted);
     keep.extend(skip.iter().cloned());
-    Ok(sync_tree_except(&src, &worktree.join(rel), &keep, dry_run)?
-        .into_iter()
-        .map(|(path, _)| path)
-        .collect())
+    out.written.extend(
+        sync_tree_except(&src, &worktree.join(rel), &keep, dry_run)?
+            .into_iter()
+            .map(|(path, _)| rel.join(path)),
+    );
+    Ok(())
+}
+
+/// Files under `rel` whose content is the worktree's branch's to decide,
+/// relative to `rel`: those it tracks, and those it deleted.
+fn branch_owned(main: &Path, worktree: &Path, rel: &Path) -> Result<HashSet<PathBuf>> {
+    let mut owned = tracked_under(worktree, rel)?;
+    owned.extend(deleted_under(main, worktree, rel)?);
+    Ok(owned)
+}
+
+/// Files under `rel` that `worktree`'s branch deleted since it forked from
+/// `main`'s HEAD, relative to `rel` (the empty path when `rel` is itself
+/// such a file).
+fn deleted_under(main: &Path, worktree: &Path, rel: &Path) -> Result<HashSet<PathBuf>> {
+    if !git::is_git_repo(worktree) {
+        return Ok(HashSet::new());
+    }
+    Ok(
+        git::deleted_since_fork(worktree, main, &rel.to_string_lossy())?
+            .iter()
+            .filter_map(|f| Path::new(f).strip_prefix(rel).ok().map(Path::to_path_buf))
+            .collect(),
+    )
 }
 
 /// Files under `rel` that `worktree`'s branch tracks, relative to `rel`
@@ -308,7 +369,7 @@ mod tests {
         let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
         let main = paths::main_worktree(&project);
         let feature_wt = project.join("login");
-        assert!(pull(&project, "login", true).unwrap().is_empty());
+        assert!(pull(&project, "login", true).unwrap().written.is_empty());
 
         write(&main.join(".agents/agents"), "custom.md", "custom def");
         write(&main.join(".claude/agents"), "custom.md", "custom def");
@@ -326,13 +387,13 @@ mod tests {
         .map(PathBuf::from)
         .collect();
 
-        assert_eq!(pull(&project, "login", true).unwrap(), expected);
+        assert_eq!(pull(&project, "login", true).unwrap().written, expected);
         assert!(
             !feature_wt.join(".claude/agents/custom.md").exists(),
             "dry-run wrote"
         );
 
-        assert_eq!(pull(&project, "login", false).unwrap(), expected);
+        assert_eq!(pull(&project, "login", false).unwrap().written, expected);
         assert_eq!(
             read(feature_wt.join(".claude/agents/custom.md")),
             "custom def"
@@ -345,7 +406,7 @@ mod tests {
             read(feature_wt.join(".claude/settings.json")),
             r#"{"changed":1}"#
         );
-        assert!(pull(&project, "login", false).unwrap().is_empty());
+        assert!(pull(&project, "login", false).unwrap().written.is_empty());
 
         let err = pull(&project, "nonexistent", false).unwrap_err();
         assert!(matches!(err, PmError::FeatureNotFound(_)));
@@ -402,9 +463,68 @@ mod tests {
             PathBuf::from(".agents/skills/custom/notes.md"),
             PathBuf::from(".claude/skills/custom/notes.md"),
         ];
-        assert_eq!(pull(&project, "login", true).unwrap(), expected);
-        assert_eq!(pull(&project, "login", false).unwrap(), expected);
+        assert_eq!(pull(&project, "login", true).unwrap().written, expected);
+        assert_eq!(pull(&project, "login", false).unwrap().written, expected);
         assert_kept("pull");
+    }
+
+    #[test]
+    fn seed_and_pull_leave_absent_what_the_feature_branch_deleted() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let main = paths::main_worktree(&project);
+        let feature_wt = project.join("login");
+        let deleted = [".agents/skills/gone/SKILL.md", ".claude/settings.json"];
+
+        for rel in deleted {
+            let rel = Path::new(rel);
+            let name = rel.file_name().unwrap().to_str().unwrap();
+            write(&main.join(rel.parent().unwrap()), name, "main's");
+            git::stage_file(&main, &rel.to_string_lossy()).unwrap();
+        }
+        git::commit(&main, "add customs").unwrap();
+        // Main's projection of the skill, which git doesn't track.
+        write(&main.join(".claude/skills/gone"), "SKILL.md", "main's");
+        git::merge_no_ff(&feature_wt, "main").unwrap();
+        // One deletion committed, one only staged.
+        for rel in deleted {
+            std::fs::remove_file(feature_wt.join(rel)).unwrap();
+            git::stage_file(&feature_wt, rel).unwrap();
+            if rel.starts_with(".agents") {
+                git::commit(&feature_wt, "drop skill").unwrap();
+            }
+        }
+        // Added on main after the branch forked: the branch never had it.
+        write(&main.join(".agents/skills/later"), "SKILL.md", "later");
+
+        let absent = |step: &str| {
+            for rel in [deleted[0], deleted[1], ".claude/skills/gone/SKILL.md"] {
+                assert!(!feature_wt.join(rel).exists(), "{step}: {rel}");
+            }
+        };
+        let preview = pull(&project, "login", true).unwrap();
+        assert_eq!(
+            preview.deleted,
+            deleted.map(PathBuf::from).to_vec(),
+            "{preview:?}"
+        );
+        assert!(
+            preview
+                .written
+                .contains(&PathBuf::from(".agents/skills/later/SKILL.md")),
+            "{preview:?}"
+        );
+        absent("dry run");
+
+        seed_feature_assets(&project, &feature_wt).unwrap();
+        absent("seed");
+        assert_eq!(
+            read(feature_wt.join(".agents/skills/later/SKILL.md")),
+            "later"
+        );
+        assert!(pull(&project, "login", false).unwrap().written.is_empty());
+        absent("pull");
     }
 
     #[test]
@@ -450,7 +570,7 @@ mod tests {
         assert_eq!(read(projected.join("custom/SKILL.md")), "branch's");
         assert_eq!(read(projected.join("hand/SKILL.md")), "harness-only");
         assert_eq!(read(projected.join("pinned/SKILL.md")), "tracked");
-        assert!(pull(&project, "login", false).unwrap().is_empty());
+        assert!(pull(&project, "login", false).unwrap().written.is_empty());
 
         write(
             &feature_wt.join(".agents/skills/custom"),
@@ -458,9 +578,9 @@ mod tests {
             "edited",
         );
         let expected = vec![PathBuf::from(".claude/skills/custom/SKILL.md")];
-        assert_eq!(pull(&project, "login", true).unwrap(), expected);
+        assert_eq!(pull(&project, "login", true).unwrap().written, expected);
         assert_eq!(read(projected.join("custom/SKILL.md")), "branch's");
-        assert_eq!(pull(&project, "login", false).unwrap(), expected);
+        assert_eq!(pull(&project, "login", false).unwrap().written, expected);
         assert_eq!(read(projected.join("custom/SKILL.md")), "edited");
     }
 
