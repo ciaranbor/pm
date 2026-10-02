@@ -133,7 +133,9 @@ pub fn read(
     Ok(Some(options))
 }
 
-/// The global values of `names`; `None` when no server is running.
+/// The global values of `names`; `None` when no server is running. A
+/// server exiting as it takes the command can end it successfully without
+/// printing even the line every answer has, which also reads as none.
 pub fn read_global(server: Option<&str>, names: &[&str]) -> Result<Option<Holder>> {
     // A unit separator, which no option value holds.
     const SEPARATOR: char = '\x1f';
@@ -144,7 +146,9 @@ pub fn read_global(server: Option<&str>, names: &[&str]) -> Result<Option<Holder
         Err(PmError::Tmux(msg)) if no_server(&msg) => return Ok(None),
         Err(e) => return Err(e),
     };
-    let line = output.strip_suffix('\n').unwrap_or(&output);
+    let Some(line) = output.strip_suffix('\n') else {
+        return Ok(None);
+    };
     Ok(Some(Holder {
         values: names
             .iter()
