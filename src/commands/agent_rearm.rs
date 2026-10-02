@@ -177,6 +177,7 @@ mod tests {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
         let (project, target) = at_prompt(&server, dir.path(), WaitingKind::HookEnded);
+        let users = server.split_before(&target);
 
         let status = send(&server, &project);
 
@@ -189,6 +190,8 @@ mod tests {
             None
         );
         server.wait_for_pane_text(&target, &format!("❯ {PROMPT}"));
+        let users = server.tmux_stdout(&["capture-pane", "-p", "-t", &users]);
+        assert!(!users.contains("You have new messages"), "{users}");
     }
 
     #[test]

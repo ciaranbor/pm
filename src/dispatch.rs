@@ -259,16 +259,20 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             use commands::open::ProjectOpen;
             let projects_dir = paths::global_projects_dir()?;
             let mut any = false;
+            let mut changed = false;
             commands::open::open_all(&projects_dir, server, |name, outcome| {
                 any = true;
                 match outcome {
-                    ProjectOpen::Opened(r) => println!(
-                        "{name}: restored {} session{}, respawned {} agent{}",
-                        r.sessions_restored,
-                        plural(r.sessions_restored),
-                        r.agents_respawned,
-                        plural(r.agents_respawned)
-                    ),
+                    ProjectOpen::Opened(r) => {
+                        changed |= r.changed();
+                        println!(
+                            "{name}: restored {} session{}, respawned {} agent{}",
+                            r.sessions_restored,
+                            plural(r.sessions_restored),
+                            r.agents_respawned,
+                            plural(r.agents_respawned)
+                        );
+                    }
                     ProjectOpen::RootMissing(root) => eprintln!(
                         "warning: {name}: skipped, root missing at {}",
                         root.display()
@@ -278,6 +282,9 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             })?;
             if !any {
                 println!("No projects in registry");
+            }
+            if changed {
+                push();
             }
             let current = paths::find_project_root(&std::env::current_dir()?)
                 .and_then(|root| pm::state::project::ProjectConfig::load(&paths::pm_dir(&root)));
@@ -293,13 +300,14 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             let projects_dir = paths::global_projects_dir()?;
             let project_root = project_root(&projects_dir, project.as_deref())?;
             let result = commands::open::open(&project_root, &projects_dir, server)?;
-            if result.sessions_restored == 0 && result.agents_respawned == 0 {
-                println!("Project sessions opened");
-            } else {
+            if result.changed() {
                 println!(
                     "Restored {} sessions. Respawned {} agents.",
                     result.sessions_restored, result.agents_respawned
                 );
+                push();
+            } else {
+                println!("Project sessions opened");
             }
             connect(server, &result.main_session);
             Ok(())
@@ -364,6 +372,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                             eprintln!("error: {err}");
                         }
                     }
+                    push();
                     Ok(())
                 }
                 AgentCommands::Stop { names, scope } => {
@@ -405,6 +414,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         report_agent_op_results(std::mem::take(&mut restarted.results), "restart");
                     std::io::Write::flush(&mut std::io::stdout())?;
                     restarted.finish(server);
+                    push();
                     reported
                 }
                 AgentCommands::List { active, scope } => {
@@ -429,6 +439,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         server,
                     )?;
                     println!("{msg}");
+                    push();
                     Ok(())
                 }
             }
@@ -882,6 +893,9 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             for line in lines {
                 println!("{line}");
             }
+            if fix {
+                push();
+            }
             Ok(())
         }
         Commands::Upgrade { all, dry_run } => {
@@ -1190,9 +1204,14 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
                 }
                 exit_unless_ok(code)
             }
-            HarnessHooksCommands::UserPrompt => {
-                exit_unless_ok(commands::hooks_user_prompt::user_prompt(push))
-            }
+            HarnessHooksCommands::UserPrompt => exit_unless_ok(
+                commands::hooks_user_prompt::user_prompt(|unread, changed| {
+                    publish(AgentState::Busy, unread);
+                    if changed {
+                        push();
+                    }
+                }),
+            ),
             HarnessHooksCommands::Waiting { harness } => exit_unless_ok(
                 commands::hooks_waiting::waiting(harness, |state, unread| {
                     publish(state, unread);

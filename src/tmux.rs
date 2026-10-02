@@ -103,9 +103,10 @@ pub fn switch_client_of(server: Option<&str>, client: &str, target: &str) -> Res
 }
 
 /// The server's socket, which names it whatever way it was reached; `None`
-/// when no server is running.
+/// when no server is running, or one exiting answered nothing.
 pub fn socket_path(server: Option<&str>) -> Result<Option<String>> {
     match run_tmux(server, &["display-message", "-p", "#{socket_path}"]) {
+        Ok(path) if path.is_empty() => Ok(None),
         Ok(path) => Ok(Some(path)),
         Err(PmError::Tmux(msg)) if no_server(&msg) => Ok(None),
         Err(e) => Err(e),
@@ -154,7 +155,7 @@ fn is_client_of(server: Option<&str>, session: &str, tmux_env: &str) -> bool {
 }
 
 /// Create a new window in an existing tmux session. Returns the new window's target
-/// (e.g. "session:1") for use with send_keys.
+/// (e.g. "session:1") for use with send_line.
 /// When `detached` is true, the new window is created without switching to it.
 pub fn new_window(
     server: Option<&str>,
@@ -193,23 +194,23 @@ pub fn list_windows(server: Option<&str>, session: &str) -> Result<usize> {
     Ok(output.lines().count())
 }
 
-/// Send keys to a tmux session (for running commands like setup.sh).
-pub fn send_keys(server: Option<&str>, target: &str, keys: &str) -> Result<()> {
-    run_tmux(server, &["send-keys", "-t", target, keys, "Enter"])?;
-    Ok(())
+/// Type `text` into `target` as literal keys, then press Enter: a command
+/// line for a shell.
+pub fn send_line(server: Option<&str>, target: &str, text: &str) -> Result<()> {
+    run_tmux(server, &["send-keys", "-t", target, "-l", text])?;
+    send_key(server, target, "Enter")
 }
 
-/// Type `text` into `target` as literal keys, then press Enter. The pause
-/// before Enter is what makes it submit: codex takes an Enter arriving
-/// right after a burst of keys as part of a paste, a newline.
+/// [`send_line`] for a harness's input box. The pause before Enter is what
+/// makes it submit: codex takes an Enter arriving right after a burst of
+/// keys as part of a paste, a newline.
 pub fn send_text(server: Option<&str>, target: &str, text: &str) -> Result<()> {
     run_tmux(server, &["send-keys", "-t", target, "-l", text])?;
     std::thread::sleep(std::time::Duration::from_millis(300));
-    run_tmux(server, &["send-keys", "-t", target, "Enter"])?;
-    Ok(())
+    send_key(server, target, "Enter")
 }
 
-/// Press one key, by tmux's name for it, in `target`.
+/// Press one key, by tmux's name for it (`Enter`, `C-c`), in `target`.
 pub fn send_key(server: Option<&str>, target: &str, key: &str) -> Result<()> {
     run_tmux(server, &["send-keys", "-t", target, key])?;
     Ok(())
@@ -266,7 +267,7 @@ pub fn current_session(server: Option<&str>) -> Option<String> {
     run_tmux(server, &["display-message", "-p", "#{client_session}"]).ok()
 }
 
-/// Shell-quote a string for safe use in send_keys (single-quote wrapping with escaping).
+/// Shell-quote a string for safe use in send_line (single-quote wrapping with escaping).
 pub fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
@@ -391,11 +392,22 @@ pub fn mark_agent_pane(server: Option<&str>, window: &str) -> Result<()> {
 /// The processes running in a window's agent pane: the pane's own and its
 /// descendants, which is where a harness started from the pane's shell is.
 pub fn pane_processes(server: Option<&str>, target: &str) -> Result<Vec<Process>> {
-    let output = run_tmux_untrimmed(server, &["list-panes", "-t", target, "-F", &pane_format()])?;
-    let Some(pane) = agent_panes_in(&output).into_iter().next() else {
+    let Some(pane) = agent_pane(server, target)? else {
         return Ok(Vec::new());
     };
     Ok(ProcessTable::read()?.tree(pane.pid))
+}
+
+/// `window`'s agent pane, as [`agent_panes`] reads it.
+fn agent_pane(server: Option<&str>, window: &str) -> Result<Option<Pane>> {
+    let output = run_tmux_untrimmed(server, &["list-panes", "-t", window, "-F", &pane_format()])?;
+    Ok(agent_panes_in(&output).into_iter().next())
+}
+
+/// The id of `window`'s agent pane, for commands that would otherwise act
+/// on its active pane; the window itself when it has none.
+fn agent_pane_target(server: Option<&str>, window: &str) -> Result<String> {
+    Ok(agent_pane(server, window)?.map_or_else(|| window.to_string(), |p| p.id))
 }
 
 /// A window's agent pane, as [`agent_panes`] lists it.
@@ -453,32 +465,43 @@ fn agent_panes_in(output: &str) -> Vec<Pane> {
     panes
 }
 
-/// Whether a tmux error says there is no server to talk to (the message
-/// varies by platform).
+/// Whether a tmux error says there is no server to talk to: none was
+/// running (the message varies by platform), or it exited mid-command.
 fn no_server(msg: &str) -> bool {
-    msg.contains("no server running") || msg.contains("error connecting")
+    [
+        "no server running",
+        "error connecting",
+        "server exited unexpectedly",
+        "lost server",
+    ]
+    .iter()
+    .any(|m| msg.contains(m))
 }
 
-/// Get the current command running in the first pane of a window.
-/// Returns the process name (e.g. "claude", "zsh", "bash").
-pub fn pane_command(server: Option<&str>, target: &str) -> Result<String> {
+/// The process name (e.g. "claude", "zsh") in the foreground of a
+/// window's agent pane.
+pub fn pane_command(server: Option<&str>, window: &str) -> Result<String> {
+    let pane = agent_pane_target(server, window)?;
     run_tmux(
         server,
-        &["list-panes", "-t", target, "-F", "#{pane_current_command}"],
+        &[
+            "display-message",
+            "-p",
+            "-t",
+            &pane,
+            "#{pane_current_command}",
+        ],
     )
-    .map(|output| {
-        // Take just the first pane's command
-        output.lines().next().unwrap_or("").to_string()
-    })
 }
 
-/// Full scrollback of a window's first pane as plain text, wrapped lines
+/// Full scrollback of a window's agent pane as plain text, wrapped lines
 /// joined. Tests use it to see the command a spawn typed into the shell.
 #[cfg(test)]
-pub fn capture_pane(server: Option<&str>, target: &str) -> Result<String> {
+pub fn capture_pane(server: Option<&str>, window: &str) -> Result<String> {
+    let pane = agent_pane_target(server, window)?;
     run_tmux(
         server,
-        &["capture-pane", "-p", "-J", "-S", "-", "-t", target],
+        &["capture-pane", "-p", "-J", "-S", "-", "-t", &pane],
     )
 }
 
@@ -536,6 +559,31 @@ mod tests {
             .map(|p| (p.window.as_str(), p.id.as_str()))
             .collect();
         assert_eq!(read, [("s:1", "%2"), ("s:2", "%4")]);
+    }
+
+    #[test]
+    fn pane_helpers_read_the_agent_pane_whichever_is_active() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let session = server.scope("agent-pane");
+        create_session(server.name(), &session, dir.path()).unwrap();
+        let window = format!("{session}:0");
+        mark_agent_pane(server.name(), &window).unwrap();
+        send_line(server.name(), &window, "exec sleep 999").unwrap();
+        server.split_before(&window);
+        send_text(server.name(), &window, "echo in-the-users-pane").unwrap();
+
+        server.wait_for_pane_text(&window, "exec sleep 999");
+        let start = std::time::Instant::now();
+        while pane_command(server.name(), &window).unwrap() != "sleep" {
+            assert!(start.elapsed() < std::time::Duration::from_secs(10));
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            !capture_pane(server.name(), &window)
+                .unwrap()
+                .contains("in-the-users-pane")
+        );
     }
 
     #[test]
@@ -698,22 +746,25 @@ mod tests {
     }
 
     #[test]
-    fn send_keys_to_existing_session_succeeds() {
+    fn a_line_that_names_a_key_is_typed_as_text() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let name = server.scope("keys-test");
-
+        let name = server.scope("literal");
         create_session(server.name(), &name, dir.path()).unwrap();
 
-        let result = send_keys(server.name(), &name, "echo hello");
-        assert!(result.is_ok());
+        send_line(server.name(), &name, "C-c").unwrap();
+        send_line(server.name(), &name, "echo typed-after").unwrap();
+
+        server.wait_for_pane_text(&name, "typed-after\n");
+        let text = capture_pane(server.name(), &name).unwrap();
+        assert!(text.lines().any(|l| l.ends_with("C-c")), "{text}");
     }
 
     #[test]
-    fn send_keys_to_nonexistent_session_fails() {
+    fn send_line_to_nonexistent_session_fails() {
         let server = TestServer::new();
 
-        let result = send_keys(server.name(), &server.scope("nonexistent"), "echo hello");
+        let result = send_line(server.name(), &server.scope("nonexistent"), "echo hello");
         assert!(result.is_err());
     }
 

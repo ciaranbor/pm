@@ -17,13 +17,13 @@
 //! status interval: each tick reads every project's state and the whole
 //! process table.
 //!
-//! A watcher exits when its server does or `@pm-auto-refresh` is `off`, and
+//! A watcher exits when its server does, taking the server's lock files
+//! ([`tmux_lock`]) with it, or when `@pm-auto-refresh` is `off`, and
 //! executes its binary afresh when that is replaced, so an upgrade reaches
 //! it. A watcher starting, afresh or after an upgrade, re-sets the formats
 //! pm owns ([`tmux_init`]), so a format change reaches a running
 //! server without a config reload.
 
-use std::fs::{File, TryLockError};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -32,7 +32,8 @@ use crate::error::Result;
 use crate::tmux::{self, options};
 
 use super::tmux_init;
-use super::tmux_refresh::{lock_file, refresh};
+use super::tmux_lock::{self, Lock};
+use super::tmux_refresh::refresh;
 
 pub const AUTO_REFRESH: &str = "@pm-auto-refresh";
 const INTERVAL: &str = "@pm-refresh-interval";
@@ -45,15 +46,16 @@ pub fn watch(projects_dir: &Path, tmux_server: Option<&str>) -> Result<()> {
     let Some(socket) = tmux::socket_path(tmux_server)? else {
         return Ok(());
     };
-    let Some(_lock) = take_watch(&socket)? else {
+    let Some(lock) = take_watch(&socket)? else {
         return Ok(());
     };
     let binary = Binary::current();
     // Anything printed would land in a pane.
     let _ = tmux_init::formats(tmux_server);
+    let _ = tmux_lock::prune();
     loop {
         let Some(settings) = options::read_global(tmux_server, &[AUTO_REFRESH, INTERVAL])? else {
-            return Ok(());
+            return tmux_lock::remove(&socket, lock);
         };
         if settings.get(AUTO_REFRESH) == "off" {
             return Ok(());
@@ -75,23 +77,14 @@ pub fn watch(projects_dir: &Path, tmux_server: Option<&str>) -> Result<()> {
 /// The server's watch lock, unless another watcher holds it. A push
 /// ([`tmux_push`](super::tmux_push)) takes it for an instant to see whether
 /// a watcher runs, so a watcher starting just then retries briefly.
-fn take_watch(socket: &str) -> Result<Option<File>> {
+fn take_watch(socket: &str) -> Result<Option<Lock>> {
     for _ in 0..5 {
-        if let Some(lock) = try_lock(socket, "watch")? {
+        if let Some(lock) = tmux_lock::try_lock(socket, "watch")? {
             return Ok(Some(lock));
         }
         std::thread::sleep(Duration::from_millis(50));
     }
     Ok(None)
-}
-
-pub(super) fn try_lock(socket: &str, kind: &str) -> Result<Option<File>> {
-    let file = lock_file(socket, kind)?;
-    match file.try_lock() {
-        Ok(()) => Ok(Some(file)),
-        Err(TryLockError::WouldBlock) => Ok(None),
-        Err(TryLockError::Error(e)) => Err(e.into()),
-    }
 }
 
 /// The running executable, as it was when the watcher started.
@@ -135,6 +128,7 @@ mod tests {
     use crate::commands::tmux_init::{TREE_FORMAT, TREE_FORMAT_OPTION};
     use crate::commands::{feat_new, feat_status::feat_status, init};
     use crate::state::feature::Progress;
+    use crate::state::paths;
     use crate::testing::OwnServer;
     use crate::tmux::options::{Scope, set};
     use std::sync::mpsc;
@@ -243,12 +237,24 @@ mod tests {
         let (_, projects_dir) = project(&server, dir.path());
         options::run(server.name(), &[set(Scope::Global, INTERVAL, Some("1"))]).unwrap();
 
+        let socket = tmux::socket_path(server.name()).unwrap().unwrap();
         let watcher = spawn_watch(&projects_dir, &server);
+        let start = std::time::Instant::now();
+        while tmux_lock::try_lock(&socket, "watch").unwrap().is_some() {
+            assert!(start.elapsed() < Duration::from_secs(10), "watching");
+            std::thread::sleep(Duration::from_millis(20));
+        }
         tmux::kill_server(server.name()).unwrap();
 
         watcher
             .recv_timeout(Duration::from_secs(10))
             .expect("server gone")
             .unwrap();
+        let files: Vec<_> = std::fs::read_dir(paths::global_config_dir().unwrap().join("tmux"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(server.name().unwrap()))
+            .collect();
+        assert!(files.is_empty(), "{files:?}");
     }
 }

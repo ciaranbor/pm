@@ -322,7 +322,7 @@ fn spawn_session_with_config(
         }
     }
 
-    tmux::send_keys(
+    tmux::send_line(
         params.tmux_server,
         &window_target,
         &window_command(params.agent_name, &cmd),

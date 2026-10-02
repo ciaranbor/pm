@@ -16,15 +16,14 @@
 //! `@pm_project` so its windows count as the project's when they are
 //! cleared, and its main agent's badge, so the tree shows whether the
 //! orchestrator is working or waiting on the user. Options are cleared only
-//! on sessions of projects the snapshot read: a project whose state couldn't
-//! be read keeps what it last published.
+//! on sessions of projects the snapshot read, or no longer registered: a
+//! project whose state or registry entry couldn't be read keeps what it last
+//! published.
 
 use std::collections::HashSet;
-use std::fs::{File, OpenOptions};
 use std::path::Path;
 
 use crate::error::{PmError, Result};
-use crate::state::paths;
 use crate::tmux;
 use crate::tmux::options::{self, Command, Holder, Options, Scope, format_text};
 
@@ -35,8 +34,12 @@ use super::attention::{
     Snapshot,
 };
 use super::feat_status_view::{STALLED, span};
+use super::tmux_lock;
 
 mod badge;
+mod episode;
+
+use episode::{ALERTED, Episode, feature_holds, main_holds};
 
 const PROJECT: &str = "@pm_project";
 const FEATURE: &str = "@pm_feature";
@@ -55,6 +58,7 @@ const SESSION_OPTIONS: &[&str] = &[
     BADGE,
     ACTIVITY,
     ALERT_PENDING,
+    ALERTED,
 ];
 
 const AGENT: &str = "@pm_agent";
@@ -73,8 +77,7 @@ pub fn refresh(projects_dir: &Path, tmux_server: Option<&str>) -> Result<()> {
     let Some(socket) = tmux::socket_path(tmux_server)? else {
         return Ok(());
     };
-    let lock = lock_file(&socket, "refresh")?;
-    lock.lock()?;
+    let _lock = tmux_lock::lock(&socket, "refresh")?;
     let Some(published) =
         options::read(tmux_server, SESSION_OPTIONS, WINDOW_OPTIONS, GLOBAL_OPTIONS)?
     else {
@@ -82,27 +85,6 @@ pub fn refresh(projects_dir: &Path, tmux_server: Option<&str>) -> Result<()> {
     };
     let snapshot = attention::all(projects_dir, tmux_server)?;
     write(tmux_server, &commands(&snapshot, &published, Utc::now()))
-}
-
-/// The file whose lock of `kind` stands for the server at `socket`.
-pub(super) fn lock_file(socket: &str, kind: &str) -> Result<File> {
-    let dir = paths::global_config_dir()?.join("tmux");
-    std::fs::create_dir_all(&dir)?;
-    let name: String = socket
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || "._-".contains(c) {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    Ok(OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(dir.join(format!("{name}.{kind}.lock")))?)
 }
 
 /// Run `commands`, the client tail last. A client that detached since the
@@ -133,21 +115,31 @@ fn commands(snapshot: &Snapshot, published: &Options, now: DateTime<Utc>) -> Vec
         sessions.insert(&feature.session);
         let scope = Scope::Session(&feature.session);
         let kind = feature.attention.kind;
-        let became = held.get(ATTENTION) != kind.to_string();
+        let mut episode = Episode::read(held, |k| feature_holds(feature, k));
+        // A session pm has not published to yet was just opened: a progress
+        // it shows was set before, and alerted on then if it was open.
+        if held.get(PROJECT).is_empty()
+            && matches!(kind, AttentionKind::Blocked | AttentionKind::Ready)
+        {
+            episode.record(kind);
+        }
+        let new = held.get(ATTENTION) != kind.to_string() && !episode.alerted(kind);
         // A feature that turns ready while its team is busy owes its alert
         // until the team goes quiet.
-        let owed = kind == AttentionKind::Ready && (became || !held.get(ALERT_PENDING).is_empty());
-        let mut values = session_values(feature, now);
-        values.push((ALERT_PENDING, (owed && feature.busy).then(|| "1".into())));
-        diff(&mut writes, scope, held, &values);
+        let owed = kind == AttentionKind::Ready && (new || !held.get(ALERT_PENDING).is_empty());
         let alerts_now = match kind {
-            AttentionKind::Blocked | AttentionKind::Asking => became,
+            AttentionKind::Blocked | AttentionKind::Asking => new,
             AttentionKind::Ready => owed && !feature.busy,
             _ => false,
         };
         if alerts_now {
-            alerts.push(alert(&feature.session, &feature.attention));
+            episode.record(kind);
+            alerts.push(alert(&feature.session, &feature.attention, &feature.agents));
         }
+        let mut values = session_values(feature, now);
+        values.push((ALERT_PENDING, (owed && feature.busy).then(|| "1".into())));
+        values.push((ALERTED, episode.value()));
+        diff(&mut writes, scope, held, &values);
         agent_windows(&mut writes, &mut windows, published, &feature.agents);
     }
     for project in &snapshot.projects {
@@ -158,31 +150,37 @@ fn commands(snapshot: &Snapshot, published: &Options, now: DateTime<Utc>) -> Vec
             continue;
         };
         sessions.insert(&main.session);
-        diff(
-            &mut writes,
-            Scope::Session(&main.session),
-            held,
-            &main_values(&project.name, main, now),
-        );
-        if main.attention.kind == AttentionKind::Asking
-            && held.get(ATTENTION) != main.attention.kind.to_string()
+        let kind = main.attention.kind;
+        let mut episode = Episode::read(held, |k| main_holds(&main.agents, k));
+        if kind == AttentionKind::Asking
+            && held.get(ATTENTION) != kind.to_string()
+            && !episode.alerted(kind)
         {
-            alerts.push(alert(&main.session, &main.attention));
+            episode.record(kind);
+            alerts.push(alert(&main.session, &main.attention, &main.agents));
         }
+        let mut values = main_values(&project.name, main, now);
+        values.push((ALERTED, episode.value()));
+        diff(&mut writes, Scope::Session(&main.session), held, &values);
         agent_windows(&mut writes, &mut windows, published, &main.agents);
     }
 
-    let read: HashSet<&str> = snapshot
-        .projects
-        .iter()
-        .filter(|p| p.skipped.is_none())
-        .map(|p| p.name.as_str())
-        .collect();
-    let ours = |session: &str| {
-        published
-            .sessions
+    let names = |skipped: bool| -> HashSet<String> {
+        snapshot
+            .projects
             .iter()
-            .any(|s| s.target == session && read.contains(s.get(PROJECT)))
+            .filter(|p| skipped || p.skipped.is_none())
+            .map(|p| format_text(&p.name))
+            .collect()
+    };
+    let (registered, read) = (names(true), names(false));
+    let ours = |session: &str| {
+        published.sessions.iter().any(|s| {
+            let project = s.get(PROJECT);
+            s.target == session
+                && !project.is_empty()
+                && (read.contains(project) || !registered.contains(project))
+        })
     };
     for held in &published.sessions {
         if ours(&held.target) && !sessions.contains(held.target.as_str()) {
@@ -215,12 +213,24 @@ fn commands(snapshot: &Snapshot, published: &Options, now: DateTime<Utc>) -> Vec
         &global_values(snapshot),
     );
 
-    if !alerts.is_empty() {
-        let text = format!("pm: {}", alerts.join(" · "));
-        writes.extend(published.clients.iter().map(|c| options::display(c, &text)));
+    for client in &published.clients {
+        let texts: Vec<&str> = alerts
+            .iter()
+            .filter(|a| a.pane.is_none_or(|p| p != client.pane))
+            .map(|a| a.text.as_str())
+            .collect();
+        if !texts.is_empty() {
+            let text = format!("pm: {}", texts.join(" · "));
+            writes.push(options::display(&client.name, &text));
+        }
     }
     if !writes.is_empty() {
-        writes.extend(published.clients.iter().map(|c| options::refresh_status(c)));
+        writes.extend(
+            published
+                .clients
+                .iter()
+                .map(|c| options::refresh_status(&c.name)),
+        );
     }
     writes
 }
@@ -380,11 +390,25 @@ fn global_values(snapshot: &Snapshot) -> Vec<(&'static str, Option<String>)> {
     ]
 }
 
-fn alert(session: &str, attention: &Attention) -> String {
+struct Alert<'a> {
+    text: String,
+    /// The pane of the agent asking, whose viewers it doesn't need to reach.
+    pane: Option<&'a str>,
+}
+
+fn alert<'a>(session: &str, attention: &Attention, agents: &'a [AgentSnapshot]) -> Alert<'a> {
     let what = format!("{session} {}", attention.kind);
-    match &attention.detail {
-        Some(detail) => format!("{what}: {detail}"),
-        None => what,
+    let pane = agents
+        .iter()
+        .filter(|_| attention.kind == AttentionKind::Asking)
+        .find(|a| attention.agent.as_ref() == Some(&a.name))
+        .and_then(|a| a.pane.as_deref());
+    Alert {
+        text: match &attention.detail {
+            Some(detail) => format!("{what}: {detail}"),
+            None => what,
+        },
+        pane,
     }
 }
 
@@ -399,6 +423,7 @@ mod tests {
     use crate::state::runtime::WaitingKind;
     use crate::testing::{OwnServer, TestServer, server_socket_exists};
     use crate::tmux;
+    use crate::tmux::options::Client;
     use std::io::{BufRead, BufReader, Write};
     use std::process::{Child, ChildStdin, Stdio};
     use std::sync::{Arc, Mutex, MutexGuard};
@@ -573,6 +598,7 @@ mod tests {
                 "#[fg=red,bold]\u{f256}#[default]",
                 "",
                 "",
+                "blocked",
             ]
         );
         assert_eq!(
@@ -615,7 +641,17 @@ mod tests {
         let now = published(&server);
         assert_eq!(
             values(&now.sessions, &session, SESSION_OPTIONS),
-            [project_name.as_str(), "login", "wip", "", "", "", "", ""]
+            [
+                project_name.as_str(),
+                "login",
+                "wip",
+                "",
+                "",
+                "",
+                "",
+                "",
+                ""
+            ]
         );
         assert_eq!(
             values(&now.windows, &implementer, WINDOW_OPTIONS),
@@ -672,6 +708,7 @@ mod tests {
                 "",
                 "",
                 "#[fg=colour245]\u{f252} #[fg=yellow]\u{f0e0}#[default]",
+                "",
                 "",
                 ""
             ],
@@ -731,9 +768,43 @@ mod tests {
         assert!(!now.sessions.iter().any(|s| s.target == search));
         assert_eq!(
             values(&now.sessions, &login, SESSION_OPTIONS),
-            ["", "", "", "", "", "", "", ""]
+            ["", "", "", "", "", "", "", "", ""]
         );
         assert_eq!([now.global.get(COUNT), now.global.get(SUMMARY)], ["0", ""]);
+    }
+
+    #[test]
+    fn a_project_removed_from_the_registry_takes_its_options_with_it() {
+        let _serial = serial();
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project);
+        let session = tmux::session_name(&project_name, "login");
+        let window = server.spawn_idle_fake_agent(&project, &session, "login", "implementer");
+        refresh(&projects_dir, server.name()).unwrap();
+        assert_eq!(
+            values(&published(&server).windows, &window, &[AGENT]),
+            ["implementer"]
+        );
+
+        std::fs::remove_file(projects_dir.join(format!("{project_name}.toml"))).unwrap();
+        refresh(&projects_dir, server.name()).unwrap();
+
+        let now = published(&server);
+        let main = tmux::session_name(&project_name, "main");
+        for session in [&session, &main] {
+            assert!(
+                values(&now.sessions, session, SESSION_OPTIONS)
+                    .iter()
+                    .all(|v| v.is_empty()),
+                "{session}"
+            );
+        }
+        assert_eq!(
+            values(&now.windows, &window, WINDOW_OPTIONS),
+            ["", "", "", ""]
+        );
     }
 
     #[test]
@@ -877,7 +948,7 @@ mod tests {
             "plan approval",
         )]);
         let published = |attention: &str| Options {
-            clients: vec!["c1".into()],
+            clients: vec![Client::named("c1")],
             sessions: vec![Holder::session("app/main", &[(ATTENTION, attention)])],
             ..Options::default()
         };
@@ -908,7 +979,7 @@ mod tests {
         assert!(displayed(&commands).is_empty());
     }
 
-    fn ready_feature(busy: bool) -> Snapshot {
+    fn feature_scope(progress: Progress, busy: bool, agents: Vec<AgentSnapshot>) -> Snapshot {
         let mut feature = FeatureSnapshot {
             project: "app".into(),
             name: "login".into(),
@@ -917,7 +988,7 @@ mod tests {
                 detail: None,
                 agent: None,
             },
-            progress: Progress::Ready,
+            progress,
             blocked_reason: None,
             blocked_by: None,
             summary: Some("Adds login".into()),
@@ -925,7 +996,7 @@ mod tests {
             pr: None,
             session: "app/login".into(),
             session_exists: true,
-            agents: Vec::new(),
+            agents,
             working: busy,
             busy,
             last_activity: None,
@@ -939,32 +1010,74 @@ mod tests {
     }
 
     #[test]
+    fn an_ask_is_not_alerted_to_a_client_already_on_the_asking_pane() {
+        let mut agent = main_agent(AgentState::Asking, WaitingKind::Plan, "plan approval");
+        agent.pane = Some("%5".into());
+        let client = |name: &str, pane: &str| Client {
+            name: name.into(),
+            pane: pane.into(),
+        };
+        let published = Options {
+            clients: vec![client("on-it", "%5"), client("elsewhere", "%6")],
+            sessions: vec![Holder::session("app/main", &[(PROJECT, "app")])],
+            ..Options::default()
+        };
+
+        let commands = commands(&main_scope(vec![agent]), &published, Utc::now());
+
+        let alerted: Vec<&str> = commands
+            .iter()
+            .filter(|c| c[0] == "display-message")
+            .map(|c| c[2].as_str())
+            .collect();
+        assert_eq!(alerted, ["elsewhere"]);
+    }
+
+    fn ready_feature(busy: bool) -> Snapshot {
+        feature_scope(Progress::Ready, busy, Vec::new())
+    }
+
+    /// Publish `snapshot` on `server` as a refresh would, returning what is
+    /// published after.
+    fn publish(server: &OwnServer, snapshot: &Snapshot) -> Options {
+        let read = || {
+            options::read(
+                server.name(),
+                SESSION_OPTIONS,
+                WINDOW_OPTIONS,
+                GLOBAL_OPTIONS,
+            )
+            .unwrap()
+            .unwrap()
+        };
+        options::run(server.name(), &commands(snapshot, &read(), Utc::now())).unwrap();
+        read()
+    }
+
+    /// A session pm has published to before.
+    fn published_session(server: &OwnServer, dir: &Path) {
+        tmux::create_session(server.name(), "app/login", dir).unwrap();
+        options::run(
+            server.name(),
+            &[options::set(
+                Scope::Session("app/login"),
+                PROJECT,
+                Some("app"),
+            )],
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn a_ready_feature_alerts_once_however_often_its_team_wakes() {
         let dir = tempdir().unwrap();
         let server = OwnServer::start("ready-busy");
-        tmux::create_session(server.name(), "app/login", dir.path()).unwrap();
+        published_session(&server, dir.path());
         let mut client = ControlClient::attach(server.name(), "app/login");
-        let now = Utc::now();
         let mut badges = Vec::new();
         let mut counts = Vec::new();
         for busy in [true, false, true, false, false] {
-            let held = options::read(
-                server.name(),
-                SESSION_OPTIONS,
-                WINDOW_OPTIONS,
-                GLOBAL_OPTIONS,
-            )
-            .unwrap()
-            .unwrap();
-            options::run(server.name(), &commands(&ready_feature(busy), &held, now)).unwrap();
-            let held = options::read(
-                server.name(),
-                SESSION_OPTIONS,
-                WINDOW_OPTIONS,
-                GLOBAL_OPTIONS,
-            )
-            .unwrap()
-            .unwrap();
+            let held = publish(&server, &ready_feature(busy));
             let login = held
                 .sessions
                 .iter()
@@ -978,6 +1091,84 @@ mod tests {
         let ready = "#[fg=green,bold]\u{f058}#[default]";
         assert_eq!(badges, [ready; 5]);
         assert_eq!(counts, ["0", "1", "0", "1", "1"]);
+    }
+
+    #[test]
+    fn a_kind_alerts_once_per_episode_however_often_it_is_outranked() {
+        let dir = tempdir().unwrap();
+        let server = OwnServer::start("episode");
+        published_session(&server, dir.path());
+        let mut client = ControlClient::attach(server.name(), "app/login");
+        let asking = || {
+            vec![AgentSnapshot {
+                waiting: Some(attention::WaitingSnapshot {
+                    kind: WaitingKind::Permission,
+                    detail: "permission".into(),
+                }),
+                ..agent_in(AgentState::Asking)
+            }]
+        };
+        let idle = || vec![agent_in(AgentState::Idle)];
+
+        publish(&server, &feature_scope(Progress::Ready, false, idle()));
+        publish(&server, &feature_scope(Progress::Ready, false, asking()));
+        publish(&server, &feature_scope(Progress::Ready, false, idle()));
+        publish(&server, &feature_scope(Progress::Wip, false, idle()));
+        publish(&server, &feature_scope(Progress::Ready, false, idle()));
+
+        assert_eq!(
+            client.messages(),
+            [
+                "pm: app/login ready: Adds login",
+                "pm: app/login asking: implementer: permission",
+                "pm: app/login ready: Adds login",
+            ]
+        );
+    }
+
+    fn agent_in(state: AgentState) -> AgentSnapshot {
+        AgentSnapshot {
+            name: "implementer".into(),
+            state,
+            unread: 0,
+            window: Some("app/login:1".into()),
+            pane: None,
+            waiting: None,
+        }
+    }
+
+    #[test]
+    fn a_reopened_session_shows_a_standing_progress_without_alerting_it() {
+        let opened = |snapshot: &Snapshot| {
+            let published = Options {
+                clients: vec![Client::named("c1")],
+                sessions: vec![Holder::session("app/login", &[])],
+                ..Options::default()
+            };
+            let commands = commands(snapshot, &published, Utc::now());
+            (
+                displayed(&commands).len(),
+                sets(&commands, ATTENTION).concat(),
+            )
+        };
+
+        assert_eq!(opened(&ready_feature(false)), (0, "ready".into()));
+        assert_eq!(
+            opened(&feature_scope(Progress::Blocked, false, Vec::new())),
+            (0, "blocked".into())
+        );
+        let asking = vec![AgentSnapshot {
+            waiting: Some(attention::WaitingSnapshot {
+                kind: WaitingKind::Permission,
+                detail: "permission".into(),
+            }),
+            ..agent_in(AgentState::Asking)
+        }];
+        assert_eq!(
+            opened(&feature_scope(Progress::Wip, false, asking)),
+            (1, "asking".into()),
+            "a dialog is up now"
+        );
     }
 
     #[test]
@@ -1126,7 +1317,7 @@ mod tests {
         .unwrap();
 
         let mut before = published(&server);
-        before.clients.push("client-gone".into());
+        before.clients.push(Client::named("client-gone"));
         let snapshot = attention::all(&projects_dir, server.name()).unwrap();
         write(server.name(), &commands(&snapshot, &before, Utc::now())).unwrap();
 

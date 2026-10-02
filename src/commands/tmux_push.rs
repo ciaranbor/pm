@@ -7,14 +7,16 @@
 //! [`refresh`] under the server's refresh lock, so it alerts no more than
 //! the watcher would, and it runs only while a watcher holds the server: a
 //! server without the plugin, or with `@pm-auto-refresh off`, is left alone.
-//! A command that only spawns agents doesn't push: until the harness
-//! starts, its window runs only a shell and reads as dead. The harness's
-//! own hooks push instead — SessionStart, where it has, and the Stop hook
-//! as the first turn ends.
+//! A command that spawns agents pushes too: until its harness starts, a
+//! just-spawned agent's window runs only a shell, which the snapshot reads
+//! as starting rather than dead ([`attention`](super::attention)). The
+//! harness's own hooks push as it starts — SessionStart, where it has, and
+//! the Stop hook as the first turn ends.
 //!
 //! The Stop hook writes its own window's options ([`AgentWindow`]), found
 //! by the pane it runs in, in one `tmux` call it does not wait for, as the
-//! agent goes idle and as it resumes. That write is ungated and never
+//! agent goes idle and as it resumes; the user-prompt hook does as typed
+//! input resumes it. That write is ungated and never
 //! alerts; the next refresh corrects anything it gets wrong. Going idle
 //! also pushes, since an idle team is what makes a feature stalled.
 
@@ -25,8 +27,8 @@ use crate::error::Result;
 use crate::tmux::{self, options};
 
 use super::attention::{AgentSnapshot, AgentState};
+use super::tmux_lock::try_lock;
 use super::tmux_refresh::{refresh, window_values};
-use super::tmux_watch::try_lock;
 
 /// [`refresh`], while a watcher keeps the server's options current.
 pub fn push(projects_dir: &Path, tmux_server: Option<&str>) -> Result<()> {
@@ -85,7 +87,7 @@ impl AgentWindow {
 mod tests {
     use super::*;
     use crate::commands::tmux_refresh::WINDOW_OPTIONS;
-    use crate::commands::{feat_new, feat_status::feat_status, init, tmux_refresh::lock_file};
+    use crate::commands::{feat_new, feat_status::feat_status, init, tmux_lock};
     use crate::state::feature::Progress;
     use crate::testing::{OwnServer, TestServer};
     use std::time::{Duration, Instant};
@@ -172,8 +174,7 @@ mod tests {
         assert_eq!(count(), "", "no watcher, no push");
 
         let socket = tmux::socket_path(server.name()).unwrap().unwrap();
-        let watcher = lock_file(&socket, "watch").unwrap();
-        watcher.lock().unwrap();
+        let _watcher = tmux_lock::lock(&socket, "watch").unwrap();
         push(&projects_dir, server.name()).unwrap();
         assert_eq!(count(), "1");
     }

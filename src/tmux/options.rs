@@ -46,10 +46,27 @@ impl Holder {
     }
 }
 
+/// An attached client.
+#[derive(Debug, Default)]
+pub struct Client {
+    pub name: String,
+    /// The active pane of the window it shows, by id (`%N`).
+    pub pane: String,
+}
+
+impl Client {
+    #[cfg(test)]
+    pub fn named(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            pane: String::new(),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Options {
-    /// Attached clients, by name.
-    pub clients: Vec<String>,
+    pub clients: Vec<Client>,
     pub sessions: Vec<Holder>,
     pub windows: Vec<Holder>,
     pub global: Holder,
@@ -82,7 +99,7 @@ pub fn read(
         &[
             "list-clients",
             "-F",
-            "C\t#{client_name}",
+            "C\t#{client_name}\t#{pane_id}",
             ";",
             "list-sessions",
             "-F",
@@ -107,7 +124,10 @@ pub fn read(
         let mut fields = line.split('\t');
         let kind = fields.next();
         if kind == Some("C") {
-            options.clients.extend(fields.next().map(str::to_string));
+            options.clients.push(Client {
+                name: fields.next().unwrap_or_default().to_string(),
+                pane: fields.next().unwrap_or_default().to_string(),
+            });
             continue;
         }
         let names = match kind {
@@ -133,7 +153,9 @@ pub fn read(
     Ok(Some(options))
 }
 
-/// The global values of `names`; `None` when no server is running.
+/// The global values of `names`; `None` when no server is running. A
+/// server exiting as it takes the command can end it successfully without
+/// printing even the line every answer has, which also reads as none.
 pub fn read_global(server: Option<&str>, names: &[&str]) -> Result<Option<Holder>> {
     // A unit separator, which no option value holds.
     const SEPARATOR: char = '\x1f';
@@ -144,7 +166,9 @@ pub fn read_global(server: Option<&str>, names: &[&str]) -> Result<Option<Holder
         Err(PmError::Tmux(msg)) if no_server(&msg) => return Ok(None),
         Err(e) => return Err(e),
     };
-    let line = output.strip_suffix('\n').unwrap_or(&output);
+    let Some(line) = output.strip_suffix('\n') else {
+        return Ok(None);
+    };
     Ok(Some(Holder {
         values: names
             .iter()
@@ -198,6 +222,11 @@ pub fn bind_key(key: &str, command: Command) -> Command {
     let mut bind = vec!["bind-key".to_string(), key.to_string()];
     bind.extend(command);
     bind
+}
+
+/// Unbind `key` in the prefix table.
+pub fn unbind_key(key: &str) -> Command {
+    vec!["unbind-key".to_string(), key.to_string()]
 }
 
 /// Open tree mode with sessions collapsed and sorted by name, each line in
