@@ -648,7 +648,7 @@ unset, text is escaped for formats, and each name is set at one scope only:
 |---|---|---|
 | feature or main session | `@pm_project`, `@pm_feature` | names; a `main` session has no `@pm_feature` |
 | | `@pm_progress` | `wip`, `blocked` or `ready`; unset on `main` |
-| | `@pm_attention` | the attention kind; unset for `none` |
+| | `@pm_attention` | the attention kind; unset for `none`, and for a `ready` feature while an agent is busy |
 | | `@pm_reason` | the attention detail, or for `stalled` what the attention view shows; unset without one |
 | | `@pm_badge` | the kind's glyph, styled; unset for `none`; on `main`, its main agent's badge |
 | | `@pm_activity` | the busy glyph while the scope is working, else how long it has been quiet (`2h`, styled); unset under 10 minutes, and on `main` while its badge already shows its main agent at work |
@@ -657,8 +657,8 @@ unset, text is escaped for formats, and each name is set at one scope only:
 | | `@pm_agent_state` | an [agent state](#attention-view) |
 | | `@pm_unread` | unread message count |
 | | `@pm_agent_badge` | the badge, styled; it resets with `#[default]`, so placed anywhere but the start of a format, follow it with your theme's style |
-| global | `@pm_summary` | each kind's glyph and how many scopes need it, styled and joined by ` · `; unset when nothing needs attention |
-| | `@pm_count` | scopes (features and mains) needing attention |
+| global | `@pm_summary` | each kind's glyph and how many sessions have `@pm_attention`, styled and joined by ` · `; unset when none has |
+| | `@pm_count` | sessions with `@pm_attention` set, so it matches what `@pm-attention-key` opens; a feature whose session is closed is not counted (`pm status` lists it) |
 | | `@pm_tree_format` | pm's `choose-tree` line format, set by `pm tmux init` |
 
 ### Attention view
@@ -672,7 +672,7 @@ closed) and a detail. A feature gets the first of these that applies:
 | `blocked` | status `blocked` | `<agent>: <question>`, the agent that set it (in JSON, `agent` and `detail`) |
 | `asking` | an agent's harness shows a dialog: a question, a permission prompt, a plan to approve, or a startup prompt (folder or hook trust, login) still up a minute after spawn | `<agent>: <what it asks>` |
 | `cleanup` | lifecycle `merged` or `stale`: delete it | `PR merged` or `stale` |
-| `ready` | status `ready`, or PR `approved`; while an agent is busy it is left out of `@pm_summary` and `@pm_count`, and its alert waits until none is | the summary's first line, or `PR approved` |
+| `ready` | status `ready`, or PR `approved`; while an agent is busy its session keeps the badge but publishes no `@pm_attention` (so it is not counted), and its alert waits until none is | the summary's first line, or `PR approved` |
 | `dead` | an agent's window is gone from an open session, or its harness exited | `<agent>: window missing` or `<agent>: harness exited` |
 | `unarmed` | an agent sits at its prompt where no message wakes it ([why](#agents-as-message-processors)) | `<agent>: <cause>` |
 | `stalled` | status `wip`, agents running, all idle with no unread messages: the team stopped without saying why | `every agent idle, no unread messages` (`null` in JSON) |

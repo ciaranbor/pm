@@ -103,6 +103,7 @@ fn commands(snapshot: &Snapshot, published: &Options, now: DateTime<Utc>) -> Vec
     let mut alerts = Vec::new();
     let mut sessions: HashSet<&str> = HashSet::new();
     let mut windows: HashSet<&str> = HashSet::new();
+    let mut needing = Vec::new();
     for feature in &snapshot.features {
         // A session made since the read is published next time.
         let Some(held) = published
@@ -137,6 +138,7 @@ fn commands(snapshot: &Snapshot, published: &Options, now: DateTime<Utc>) -> Vec
             alerts.push(alert(&feature.session, &feature.attention, &feature.agents));
         }
         let mut values = session_values(feature, now);
+        needing.extend(published_attention(feature));
         values.push((ALERT_PENDING, (owed && feature.busy).then(|| "1".into())));
         values.push((ALERTED, episode.value()));
         diff(&mut writes, scope, held, &values);
@@ -160,6 +162,7 @@ fn commands(snapshot: &Snapshot, published: &Options, now: DateTime<Utc>) -> Vec
             alerts.push(alert(&main.session, &main.attention, &main.agents));
         }
         let mut values = main_values(&project.name, main, now);
+        needing.extend((kind != AttentionKind::None).then_some(kind));
         values.push((ALERTED, episode.value()));
         diff(&mut writes, Scope::Session(&main.session), held, &values);
         agent_windows(&mut writes, &mut windows, published, &main.agents);
@@ -210,7 +213,7 @@ fn commands(snapshot: &Snapshot, published: &Options, now: DateTime<Utc>) -> Vec
         &mut writes,
         Scope::Global,
         &published.global,
-        &global_values(snapshot),
+        &global_values(needing),
     );
 
     for client in &published.clients {
@@ -283,13 +286,25 @@ fn session_values(
         (FEATURE, Some(format_text(&feature.name))),
         (PROGRESS, Some(feature.progress.to_string())),
         (REASON, reason(&feature.attention)),
-        (ATTENTION, needs.map(|k| k.to_string())),
+        (
+            ATTENTION,
+            published_attention(feature).map(|k| k.to_string()),
+        ),
         (BADGE, needs.and_then(badge::attention)),
         (
             ACTIVITY,
             activity(feature.working, feature.last_activity, now),
         ),
     ]
+}
+
+/// The attention `feature` publishes as needing the user: a ready feature
+/// whose team is busy isn't waiting on the user yet, so it keeps its badge
+/// but is neither in the attention tree nor counted.
+fn published_attention(feature: &FeatureSnapshot) -> Option<AttentionKind> {
+    let kind = feature.attention.kind;
+    let waiting = !(kind == AttentionKind::Ready && feature.busy);
+    (kind != AttentionKind::None && waiting).then_some(kind)
 }
 
 /// The attention detail; a stalled scope has none of its own, so it gets
@@ -364,21 +379,9 @@ pub(super) fn window_values(agent: &AgentSnapshot) -> Vec<(&'static str, Option<
     ]
 }
 
-fn global_values(snapshot: &Snapshot) -> Vec<(&'static str, Option<String>)> {
-    let mains = snapshot
-        .projects
-        .iter()
-        .filter_map(|p| p.main.as_ref())
-        .map(|m| m.attention.kind);
-    // A ready feature whose team is busy isn't waiting on the user yet.
-    let mut kinds: Vec<AttentionKind> = snapshot
-        .features
-        .iter()
-        .filter(|f| !(f.attention.kind == AttentionKind::Ready && f.busy))
-        .map(|f| f.attention.kind)
-        .chain(mains)
-        .filter(|k| *k != AttentionKind::None)
-        .collect();
+/// The totals of `kinds`, the attention of each session that publishes
+/// one, so the count matches what the attention tree lists.
+fn global_values(mut kinds: Vec<AttentionKind>) -> Vec<(&'static str, Option<String>)> {
     kinds.sort();
     let summary: Vec<String> = kinds
         .chunk_by(|a, b| a == b)
@@ -1075,6 +1078,7 @@ mod tests {
         published_session(&server, dir.path());
         let mut client = ControlClient::attach(server.name(), "app/login");
         let mut badges = Vec::new();
+        let mut attentions = Vec::new();
         let mut counts = Vec::new();
         for busy in [true, false, true, false, false] {
             let held = publish(&server, &ready_feature(busy));
@@ -1084,13 +1088,38 @@ mod tests {
                 .find(|s| s.target == "app/login")
                 .unwrap();
             badges.push(login.get(BADGE).to_string());
+            attentions.push(login.get(ATTENTION).to_string());
             counts.push(held.global.get(COUNT).to_string());
         }
 
         assert_eq!(client.messages(), ["pm: app/login ready: Adds login"]);
         let ready = "#[fg=green,bold]\u{f058}#[default]";
         assert_eq!(badges, [ready; 5]);
+        assert_eq!(attentions, ["", "ready", "", "ready", "ready"]);
         assert_eq!(counts, ["0", "1", "0", "1", "1"]);
+    }
+
+    #[test]
+    fn the_count_is_the_sessions_that_publish_an_attention() {
+        let open = ready_feature(false).features.remove(0);
+        let closed = FeatureSnapshot {
+            name: "closed".into(),
+            session: "app/closed".into(),
+            session_exists: false,
+            ..open.clone()
+        };
+        let snapshot = Snapshot {
+            features: vec![open, closed],
+            ..ready_feature(false)
+        };
+        let published = Options {
+            sessions: vec![Holder::session("app/login", &[(PROJECT, "app")])],
+            ..Options::default()
+        };
+
+        let commands = commands(&snapshot, &published, Utc::now());
+        assert_eq!(sets(&commands, ATTENTION), ["ready"]);
+        assert_eq!(sets(&commands, COUNT), ["1"]);
     }
 
     #[test]
