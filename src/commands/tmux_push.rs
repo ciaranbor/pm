@@ -69,6 +69,7 @@ impl AgentWindow {
             state,
             unread,
             window: None,
+            waiting: None,
         };
         let scope = options::Scope::PaneWindow(&self.pane);
         let commands: Vec<options::Command> = window_values(&agent)

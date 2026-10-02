@@ -342,7 +342,7 @@ pub enum HarnessSkillsCommands {
 
 #[derive(Subcommand)]
 pub enum HarnessHooksCommands {
-    /// Install pm hooks (Stop, SessionStart, UserPromptSubmit) into each harness's user-level hooks file, moving any out of project files
+    /// Install pm hooks into each harness's user-level hooks file, moving any out of project files
     Install,
     /// Stop hook handler — called by the harness on every Stop event (not for direct use)
     Stop,
@@ -350,6 +350,11 @@ pub enum HarnessHooksCommands {
     SessionStart,
     /// UserPromptSubmit hook handler — unblocks a feature on the user's input (not for direct use)
     UserPrompt,
+    /// Status hook handler — records when an agent waits on the user (not for direct use)
+    Waiting {
+        /// The harness whose hook payload arrives on stdin
+        harness: pm::harness::Harness,
+    },
 }
 
 #[derive(Subcommand)]

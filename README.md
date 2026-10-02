@@ -113,25 +113,35 @@ workflow.
 
 Agents record where a feature stands with `pm feat status`: `wip` while
 working, `blocked` when waiting on you (with the question), `ready` when
-done and waiting on your merge or delete. pm surfaces it in tmux:
+done and waiting on your merge or delete.
+
+pm also sees, without the agent saying so, when an agent's harness shows a
+dialog (a permission prompt, a question, a plan to approve) or sits at its
+prompt where no message will wake it (you interrupted it, an API error ended
+its turn). pm surfaces all of it in tmux:
 
 - the status line's summary (`2 blocked · 1 ready`), and an alert on every
-  attached client when a feature becomes blocked or ready;
-- pm's tree (prefix `s` / `w`), tmux's own tree with each feature's
-  attention and reason and each agent's badge. Enter on a feature's session
-  goes straight to the agent it is waiting on;
-- each window's badge: the agent busy, idle, dead or stopped, and an
-  envelope for unread messages.
+  attached client when a feature becomes blocked or ready, or an agent —
+  `main` included — starts asking;
+- pm's tree (prefix `s` / `w`), tmux's own tree with each session's
+  activity (working, or how long it has been quiet), attention and reason,
+  and each agent's badge. Enter on a session goes straight to the agent it
+  is waiting on;
+- each window's badge: the agent busy, asking, unarmed, waiting on
+  background work, idle, dead or stopped, and an envelope for unread
+  messages. A `main` session carries its main agent's badge.
 
 Behind the status line and the tree is the **attention view**: pm ranks
-every feature by what it needs from you — `blocked` on a question, `cleanup`
-after its PR merged, `ready` to merge, an agent `dead`, or `stalled` (every
-agent idle while the feature is still `wip`) — most urgent first. To see it
-as text, run `pm feat status` in the `main` session (`--all` for every
-project; `pm status` prints it too), and work down from the top row: answer
-what is blocked, merge what is ready, restart what is dead, and ask a
-stalled team why it stopped. In a feature, `pm feat status` shows just that
-feature: its status, blocked reason, last activity, and summary head.
+every feature by what it needs from you — `blocked` on a question, an agent
+`asking` in a dialog, `cleanup` after its PR merged, `ready` to merge, an
+agent `dead` or `unarmed`, or `stalled` (every agent idle while the feature
+is still `wip`) — most urgent first, with a row for `main` when one of its
+agents is asking, dead or unarmed. To see it as text, run `pm feat status`
+in the `main` session (`--all` for every project; `pm status` prints it
+too), and work down from the top row: answer what is blocked or asking,
+merge what is ready, restart what is dead, prompt what is unarmed, and ask
+a stalled team why it stopped. In a feature, `pm feat status` shows just
+that feature: its status, blocked reason, last activity, and summary head.
 [Attention view](#attention-view) has each kind's rule and the `--json` form
 for scripts.
 
@@ -269,11 +279,23 @@ just the first message.
 
 Exception: while a Claude Code background task or session cron is running
 and nothing is queued, the hook lets the turn end so that work isn't
-stalled; its completion wakes the agent. Codex and opencode agents block
-every turn.
+stalled; its completion wakes the agent, which reads `background` until
+then. Codex and opencode agents block every turn. The wait has a one-year
+timeout, so it never times out in practice.
+
+An agent whose turn ends any other way never re-enters the hook, so a
+message to it waits until you type: an interrupt, a rejected dialog, an API
+error, or the hook itself killed (Esc while it waits). pm shows such an
+agent as `unarmed`. A Claude Code agent interrupted mid-turn is the one case
+no hook reports; it reads `busy`, and its scope goes quiet.
 
 A second hook, on UserPromptSubmit, sets a blocked feature back to `wip`
 when you type into one of its agents; pm's own messages never fire it.
+
+A third, the status hook (`pm harness hooks waiting`), runs on the events
+that open and close a harness's dialogs and end its turns without Stop, and
+keeps each agent's `asking`/`unarmed` state. opencode's plugin reports the
+same through it.
 
 The hooks apply to every session of that harness on the machine, so each is
 guarded on `PM_AGENT_NAME`: a session pm didn't spawn exits it at once,
@@ -575,10 +597,11 @@ Plugin options, set before `run-shell 'pm tmux init'`:
 | `@pm-bind-tree` | on | turn prefix `s` / `w` into pm's tree, sorted by name, when they run tmux's default `choose-tree` |
 | `@pm-attention-key` | unset | a prefix key opening pm's tree with only the sessions needing attention |
 
-The badge glyphs are `nf-fa-gear` (busy), `nf-fa-hourglass_half` (idle),
-`nf-md-skull` (dead), `nf-fa-stop` (stopped), then `nf-fa-envelope` for
-unread messages. With `@pm-bind-tree off`, or to put the tree on another
-key:
+The badge glyphs are `nf-fa-gear` (busy), `nf-fa-question_circle`
+(asking), `nf-fa-bell_slash` (unarmed), `nf-fa-spinner` (background),
+`nf-fa-hourglass_half` (idle), `nf-md-skull` (dead), `nf-fa-stop` (stopped),
+then `nf-fa-envelope` for unread messages. With `@pm-bind-tree off`, or to
+put the tree on another key:
 
 ```tmux
 bind T choose-tree -Zs -O name -F '#{E:@pm_tree_format}' "run-shell \"pm tmux jump --client '#{client_name}' '%%'\""
@@ -590,17 +613,18 @@ unset, text is escaped for formats, and each name is set at one scope only:
 
 | Scope | Option | Value |
 |---|---|---|
-| feature session | `@pm_project`, `@pm_feature` | names; a `main` session carries only `@pm_project` |
-| | `@pm_progress` | `wip`, `blocked` or `ready` |
+| feature or main session | `@pm_project`, `@pm_feature` | names; a `main` session has no `@pm_feature` |
+| | `@pm_progress` | `wip`, `blocked` or `ready`; unset on `main` |
 | | `@pm_attention` | the attention kind; unset for `none` |
 | | `@pm_reason` | the attention detail; unset without one |
-| | `@pm_badge` | the kind, styled (`#[fg=red,bold]blocked#[default]`); unset for `none` |
+| | `@pm_badge` | the kind, styled (`#[fg=red,bold]blocked#[default]`), unset for `none`; on `main`, its main agent's badge |
+| | `@pm_activity` | the busy glyph while the scope is working, else how long it has been quiet (`2h`, styled); unset under 10 minutes |
 | agent window | `@pm_agent` | the agent's name |
-| | `@pm_agent_state` | `idle`, `busy`, `dead` or `stopped` |
+| | `@pm_agent_state` | an [agent state](#attention-view) |
 | | `@pm_unread` | unread message count |
 | | `@pm_agent_badge` | the badge, styled; it resets with `#[default]`, so placed anywhere but the start of a format, follow it with your theme's style |
 | global | `@pm_summary` | e.g. `2 blocked · 1 ready`, styled; unset when nothing needs attention |
-| | `@pm_count` | features needing attention |
+| | `@pm_count` | scopes (features and mains) needing attention |
 | | `@pm_tree_format` | pm's `choose-tree` line format, set by `pm tmux init` |
 
 ### Attention view
@@ -612,20 +636,30 @@ closed) and a detail. A feature gets the first of these that applies:
 | Attention | When | Detail |
 |---|---|---|
 | `blocked` | status `blocked` | `<agent>: <question>`, the agent that set it (in JSON, `agent` and `detail`) |
+| `asking` | an agent's harness shows a dialog: a question, a permission prompt, a plan to approve, or a startup prompt (folder or hook trust, login) still up a minute after spawn | `<agent>: <what it asks>` |
 | `cleanup` | lifecycle `merged` or `stale`: delete it | `PR merged` or `stale` |
 | `ready` | status `ready`, or PR `approved` | the summary's first line, or `PR approved` |
 | `dead` | an agent's window is gone from an open session, or its harness exited | `<agent>: window missing` or `<agent>: harness exited` |
+| `unarmed` | an agent sits at its prompt where no message wakes it ([why](#agents-as-message-processors)) | `<agent>: <cause>` |
 | `stalled` | status `wip`, agents running, all idle with no unread messages: the team stopped without saying why | `every agent idle, no unread messages` (`null` in JSON) |
 
-Anything else shows its status. An agent is `idle` (waiting for a message),
-`busy` (mid-turn or running background work), `dead`, `stopped` (`pm agent
-stop`), or `closed` (its feature's session is closed; `pm open` respawns
-it). PR state is what `pm feat sync` last recorded: the view never calls
+Anything else shows its status. A `main` scope has no status: it gets a row
+only when one of its agents is `asking`, `dead` or `unarmed`, in that
+order. An agent is `idle` (waiting for a message), `busy` (mid-turn),
+`asking`, `unarmed`, `background` (its turn ended for background work that
+will wake it), `dead`, `stopped` (`pm agent stop`), or `closed` (its
+feature's session is closed; `pm open` respawns it). A dialog you reject
+can read `asking` until you next type, since Claude Code reports no
+rejection. A scope is working while a busy or background agent showed
+activity in the last 20 minutes; otherwise rows show how long it has been
+quiet. PR state is what `pm feat sync` last recorded: the view never calls
 GitHub, so it is cheap to poll.
 
 `pm feat status --json` (with `--all`, or a feature name) prints the same
 snapshot for tools to build on. `version` changes only when a field changes
-meaning or goes away:
+meaning or goes away; new fields, attention kinds, agent states and waiting
+kinds can appear within one, so a consumer must tolerate values it doesn't
+know:
 
 ```json
 {
@@ -634,7 +668,14 @@ meaning or goes away:
     "name": "app",
     "root": "/src/app",
     "skipped": null,
-    "main": { "session": "app/main", "session_exists": true, "agents": [] }
+    "main": {
+      "session": "app/main",
+      "session_exists": true,
+      "agents": [],
+      "attention": { "kind": "none", "detail": null, "agent": null },
+      "working": false,
+      "last_activity": null
+    }
   }],
   "features": [{
     "project": "app",
@@ -648,7 +689,15 @@ meaning or goes away:
     "pr": null,
     "session": "app/login",
     "session_exists": true,
-    "agents": [{ "name": "implementer", "state": "idle", "unread": 0, "window": "app/login:1" }]
+    "agents": [{
+      "name": "implementer",
+      "state": "asking",
+      "unread": 0,
+      "window": "app/login:1",
+      "waiting": { "kind": "question", "detail": "Postgres or SQLite?" }
+    }],
+    "working": false,
+    "last_activity": "2026-10-02T09:30:00Z"
   }]
 }
 ```
@@ -658,7 +707,12 @@ kinds or `none`; `skipped` says why a project's features are missing, and
 `main` (its session and agents, shaped like a feature's) is then `null`,
 and `root` empty if its registry entry is unreadable;
 `summary` is the summary's first line whatever the status; `window` is the
-agent's tmux target, `null` while it has none.
+agent's tmux target, `null` while it has none. `waiting` is what an
+`asking`, `unarmed` or `background` agent is at (`kind` one of `question`,
+`permission`, `plan`, `dialog`, `startup`, `interrupted`, `hook-ended`,
+`error`, `prompt`, `tripped`, `background`), else `null`. `last_activity` is
+the last time any of the scope's agents showed activity, `null` if none
+ever has.
 
 ### Claude Code agents
 
@@ -690,7 +744,10 @@ unattended:
   without it (the agent idles after its first turn). Start `codex` once in a
   trusted directory and choose **"Trust all and continue"** at the "Hooks
   need review" prompt. Codex asks again when a hook's command changes, so
-  accept it again after an upgrade that changed one. The hooks file is
+  accept it again after an upgrade that changed one, or that added one (the
+  status hooks did); until then the agent's startup reads `asking`. Without
+  trust for the status hooks alone an agent still runs, but a dialog
+  waiting on you reads as busy. The hooks file is
   global: the prompt appears in whichever codex session comes first,
   including your own non-pm ones. `pm doctor` reports a missing trust
   entry; the escape hatch is `[harness.codex] bypass_hook_trust = true`

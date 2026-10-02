@@ -31,6 +31,19 @@ impl Holder {
     pub fn get(&self, name: &str) -> &str {
         self.values.get(name).map_or("", String::as_str)
     }
+
+    /// A session holding `values`.
+    #[cfg(test)]
+    pub fn session(name: &str, values: &[(&str, &str)]) -> Self {
+        Self {
+            target: name.to_string(),
+            session: name.to_string(),
+            values: values
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Default)]

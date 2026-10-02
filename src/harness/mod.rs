@@ -24,6 +24,38 @@ use serde::{Deserialize, Serialize};
 use crate::error::{PmError, Result};
 use crate::fs_utils;
 use crate::state::project::{AgentsConfig, HarnessConfig, layered};
+use crate::state::runtime::{Waiting, WaitingClass};
+
+/// A change to an agent's waiting marker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WaitingEvent {
+    /// Replace any marker.
+    Set(Waiting),
+    /// Set unless the agent already has a marker whose class isn't in
+    /// `over`: a vaguer report must not hide a more specific one.
+    Fill {
+        waiting: Waiting,
+        over: &'static [WaitingClass],
+    },
+    /// The agent is working again.
+    Clear,
+    /// A subagent is working again: clear a marker it set, and only that.
+    ClearSubagent(String),
+}
+
+/// `text`'s first line, cut to a length that fits a status line.
+pub(crate) fn one_line(text: &str) -> String {
+    const MAX: usize = 120;
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    match line.char_indices().nth(MAX) {
+        Some((cut, _)) => format!("{}…", &line[..cut]),
+        None => line.to_string(),
+    }
+}
 
 /// Which agent CLI a spawn runs on. Dispatched by `match` per seam rather
 /// than a trait: the variant set is small and closed.
@@ -225,6 +257,29 @@ impl Harness {
                 let reason = std::fs::read_to_string(file).ok()?;
                 Some(reason.trim().to_string())
             }
+        }
+    }
+
+    /// The hook events, beyond the never-idle loop's, whose payloads say
+    /// when the agent waits on the user ([`waiting_event`](Self::waiting_event)).
+    /// Each harness's own: an event the other lacks may make it reject the
+    /// file. Empty for a harness whose loop is a plugin, which reports them
+    /// itself.
+    pub fn waiting_events(self) -> &'static [&'static str] {
+        match self {
+            Harness::ClaudeCode => claude_code::waiting::EVENTS,
+            Harness::Codex => codex::waiting::EVENTS,
+            Harness::OpenCode => &[],
+        }
+    }
+
+    /// What a hook payload from this harness says about the agent's waiting
+    /// marker; `None` when nothing.
+    pub fn waiting_event(self, payload: &serde_json::Value) -> Option<WaitingEvent> {
+        match self {
+            Harness::ClaudeCode => claude_code::waiting::event(payload),
+            Harness::Codex => codex::waiting::event(payload),
+            Harness::OpenCode => opencode::waiting::event(payload),
         }
     }
 

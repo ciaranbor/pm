@@ -22,13 +22,10 @@ pub fn status(
         format!("Root:     {}", project_root.to_string_lossy()),
         format!("Features: {}", snapshot.features.len()),
     ];
-    if !snapshot.features.is_empty() {
+    let rows = feat_status_view::rows(&snapshot.features, &snapshot.projects, false);
+    if !rows.is_empty() {
         lines.push(String::new());
-        lines.extend(
-            feat_status_view::rows(&snapshot.features, false)
-                .into_iter()
-                .map(|row| format!("  {row}")),
-        );
+        lines.extend(rows.into_iter().map(|row| format!("  {row}")));
     }
 
     let report = doctor::offline(project_root, projects_dir, tmux_server)?;

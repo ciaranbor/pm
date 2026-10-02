@@ -36,6 +36,7 @@ pub mod hooks_install;
 pub mod hooks_session_start;
 pub mod hooks_stop;
 pub mod hooks_user_prompt;
+pub mod hooks_waiting;
 pub mod init;
 pub mod list;
 pub mod msg_list;

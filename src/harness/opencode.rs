@@ -74,6 +74,7 @@
 mod bounded;
 mod providers;
 pub(super) mod sessions;
+pub(super) mod waiting;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};

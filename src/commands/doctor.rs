@@ -747,7 +747,7 @@ fn hook_issues_in(project_root: &Path, home: &Path) -> Result<Vec<Issue>> {
                     message: format!("agents configured for {harness} cannot run: {message}"),
                     fix: Fix::None,
                 },
-                ProblemKind::LoopNotInstalled => Issue {
+                ProblemKind::LoopNotInstalled | ProblemKind::StatusHooksMissing => Issue {
                     kind: IssueKind::HooksNotInstalled,
                     message,
                     fix: Fix::Auto(FixAction::InstallStopHook),
@@ -757,7 +757,9 @@ fn hook_issues_in(project_root: &Path, home: &Path) -> Result<Vec<Issue>> {
                     message,
                     fix: Fix::None,
                 },
-                ProblemKind::HookUntrusted | ProblemKind::ResetHookUntrusted => Issue {
+                ProblemKind::HookUntrusted
+                | ProblemKind::ResetHookUntrusted
+                | ProblemKind::StatusHookUntrusted => Issue {
                     kind: IssueKind::HookUntrusted,
                     message,
                     fix: Fix::None,
@@ -1068,7 +1070,7 @@ fn feature_projection_issues(
 
 /// How long after its spawn an agent may go without a recorded session id,
 /// or a loaded never-idle loop, before that is reported.
-const START_GRACE: Duration = Duration::from_secs(60);
+pub(crate) const START_GRACE: Duration = Duration::from_secs(60);
 
 /// Findings about `scope`'s active agents, given its tmux session exists.
 fn agent_issues(
@@ -2500,13 +2502,20 @@ mod tests {
         let found = kinds(&diagnose(&project_path, &projects_dir, server.name(), false).unwrap());
         assert_eq!(
             found.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
-            vec![IssueKind::HookUntrusted; 3],
+            vec![IssueKind::HookUntrusted; 4],
             "{found:?}"
         );
         assert!(found[0].1.contains("pm's Stop hook"), "{found:?}");
         assert!(found[1].1.contains("pm's SessionStart hook"), "{found:?}");
         assert!(
             found[2].1.contains("pm's UserPromptSubmit hook"),
+            "{found:?}"
+        );
+        assert!(
+            found[3].1.contains(
+                "pm's status hooks (PermissionRequest, PreToolUse, PostToolUse, Interrupt), \
+                 so an agent waiting on you reads as busy"
+            ),
             "{found:?}"
         );
 
@@ -2525,12 +2534,16 @@ mod tests {
             .unwrap()
             .unwrap();
         let mut trust = String::new();
-        for &(event, markers) in hooks_install::PM_EVENTS {
+        for (event, markers) in hooks_install::pm_events(Harness::Codex) {
             let (i, j) = hooks_install::pm_hook_position(&root, event, markers).unwrap();
             let snake = match event {
                 "Stop" => "stop",
                 "SessionStart" => "session_start",
                 "UserPromptSubmit" => "user_prompt_submit",
+                "PermissionRequest" => "permission_request",
+                "PreToolUse" => "pre_tool_use",
+                "PostToolUse" => "post_tool_use",
+                "Interrupt" => "interrupt",
                 other => panic!("no codex trust key for {other}"),
             };
             trust.push_str(&format!(

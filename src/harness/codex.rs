@@ -43,6 +43,7 @@
 //! session then continues in the window's directory.
 
 pub(super) mod sessions;
+pub(super) mod waiting;
 
 use std::path::{Path, PathBuf};
 

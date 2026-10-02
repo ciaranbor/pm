@@ -8,6 +8,7 @@ use crate::state::project::{
     AgentSettings, AgentsConfig, GlobalConfig, HarnessConfig, ProjectConfig,
     resolve_agent_settings, resolve_harness_config,
 };
+use crate::state::runtime;
 use crate::state::workflow;
 use crate::tmux;
 
@@ -307,6 +308,11 @@ fn spawn_session_with_config(
             },
         );
         registry.save(&agents_dir, params.feature)?;
+        // Replaces whatever an earlier spawn left; the session's start
+        // clears it, so one that outlives the start grace is a dialog
+        // before the session (README, "Attention view").
+        let startup = runtime::Waiting::now(runtime::WaitingKind::Startup, None);
+        runtime::write_waiting(params.project_root, params.feature, name, &startup)?;
     }
 
     tmux::send_keys(
@@ -659,10 +665,17 @@ pub(crate) mod tests {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
         let (session_name, feature) = setup_project(dir.path(), &server);
+        let left = runtime::Waiting::now(runtime::WaitingKind::Interrupted, None);
+        runtime::write_waiting(dir.path(), &feature, "reviewer", &left).unwrap();
 
         let (outcome, msg, _) =
             agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
         assert_eq!(outcome, SpawnOutcome::Spawned);
+        assert_eq!(
+            runtime::read_waiting(dir.path(), &feature, "reviewer").map(|w| w.kind),
+            Some(runtime::WaitingKind::Startup),
+            "an earlier spawn's marker is replaced"
+        );
         assert!(msg.contains("Spawned agent 'reviewer'"));
 
         // Verify window was created

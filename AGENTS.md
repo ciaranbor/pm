@@ -48,10 +48,10 @@ Design decisions you can't recover by reading the tree. Preserve them.
 - That prompt instructs a bare `pm msg read`, so a bare read must never
   error when several senders have unread messages: it takes the oldest
   sender's (README has the selection rule).
-- The hook yields (`{}`) only when the harness reports a running background
-  task or active cron and nothing is queued, so the running work isn't
-  stalled (its completion wakes the agent); codex reports neither.
-- The hook gives up undecided only when its harness is gone, never on pm state.
+- The hook yields (`{}`) only for a reported running background task or
+  active cron with nothing queued; its completion wakes the agent.
+- The hook ends undecided only if its harness died or killed it, never on pm state.
+- A waiting marker only refines busy; a running Stop hook or dead harness wins.
 - Hooks are installed once per machine for **every supported harness**;
   `pm doctor` checks only those the project's agents run on, deliberately.
 - Hooks read the agent's identity from their environment, so a spawn never
