@@ -83,8 +83,6 @@ mod tests {
                 name: project_name.clone(),
                 max_features: None,
             },
-            setup: Default::default(),
-            github: Default::default(),
             agents: Default::default(),
             harness: Default::default(),
         };
@@ -258,8 +256,6 @@ mod tests {
                 name: "myapp".to_string(),
                 max_features: None,
             },
-            setup: Default::default(),
-            github: Default::default(),
             agents: Default::default(),
             harness: Default::default(),
         };

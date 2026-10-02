@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::error::{PmError, Result};
 use crate::hooks;
 use crate::state::paths;
-use crate::state::project::{GithubConfig, ProjectConfig, ProjectEntry, ProjectInfo, SetupConfig};
+use crate::state::project::{ProjectConfig, ProjectEntry, ProjectInfo};
 use crate::tmux;
 
 /// Register an existing git repo as a pm project.
@@ -120,8 +120,6 @@ pub fn register(
             name: project_name.clone(),
             max_features: None,
         },
-        setup: SetupConfig::default(),
-        github: GithubConfig::default(),
         agents: Default::default(),
         harness: Default::default(),
     };

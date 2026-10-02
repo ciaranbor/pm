@@ -28,10 +28,6 @@ fn default_main_branch() -> String {
 pub struct ProjectConfig {
     pub project: ProjectInfo,
     #[serde(default)]
-    pub setup: SetupConfig,
-    #[serde(default)]
-    pub github: GithubConfig,
-    #[serde(default)]
     pub agents: AgentsConfig,
     #[serde(default, skip_serializing_if = "is_default")]
     pub harness: HarnessConfig,
@@ -111,18 +107,6 @@ pub struct ProjectInfo {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_features: Option<u32>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct SetupConfig {
-    #[serde(default)]
-    pub script: String,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct GithubConfig {
-    #[serde(default)]
-    pub repo: String,
 }
 
 /// Global configuration stored at ~/.config/pm/config.toml.
@@ -710,12 +694,6 @@ main_branch = "main"
                 name: "myapp".to_string(),
                 max_features: None,
             },
-            setup: SetupConfig {
-                script: "setup.sh".to_string(),
-            },
-            github: GithubConfig {
-                repo: "owner/repo".to_string(),
-            },
             agents: Default::default(),
             harness: Default::default(),
         };
@@ -732,9 +710,34 @@ name = "myapp"
 "#;
         let config: ProjectConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.project.name, "myapp");
-        assert_eq!(config.setup.script, "");
-        assert_eq!(config.github.repo, "");
         assert!(config.agents.permissions.is_empty());
+    }
+
+    #[test]
+    fn project_config_written_by_older_releases_still_loads() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            r#"
+[project]
+name = "myapp"
+
+[setup]
+script = ""
+restore_script = ""
+
+[agents.harness]
+qa = "opencode"
+
+[github]
+repo = ""
+"#,
+        )
+        .unwrap();
+
+        let config = ProjectConfig::load(dir.path()).unwrap();
+        assert_eq!(config.project.name, "myapp");
+        assert_eq!(config.agents.harness["qa"], "opencode");
     }
 
     fn agents_config(permissions: &[(&str, &str)], models: &[(&str, &str)]) -> AgentsConfig {
@@ -1327,8 +1330,6 @@ default = "implementer"
                 name: "myapp".to_string(),
                 max_features: None,
             },
-            setup: SetupConfig::default(),
-            github: GithubConfig::default(),
             agents: Default::default(),
             harness: Default::default(),
         };
@@ -1387,8 +1388,6 @@ default = "implementer"
                 name: "test".to_string(),
                 max_features: None,
             },
-            setup: SetupConfig::default(),
-            github: GithubConfig::default(),
             agents: Default::default(),
             harness: Default::default(),
         };
@@ -1429,8 +1428,6 @@ default = "implementer"
                 name: "test".to_string(),
                 max_features: Some(2),
             },
-            setup: SetupConfig::default(),
-            github: GithubConfig::default(),
             agents: Default::default(),
             harness: Default::default(),
         };
@@ -1475,8 +1472,6 @@ default = "implementer"
                 name: "test".to_string(),
                 max_features: Some(3),
             },
-            setup: SetupConfig::default(),
-            github: GithubConfig::default(),
             agents: Default::default(),
             harness: Default::default(),
         };
@@ -1517,8 +1512,6 @@ default = "implementer"
                 name: "test".to_string(),
                 max_features: Some(1),
             },
-            setup: SetupConfig::default(),
-            github: GithubConfig::default(),
             agents: Default::default(),
             harness: Default::default(),
         };
@@ -1557,8 +1550,6 @@ default = "implementer"
                 name: "test".to_string(),
                 max_features: Some(1),
             },
-            setup: SetupConfig::default(),
-            github: GithubConfig::default(),
             agents: Default::default(),
             harness: Default::default(),
         };
@@ -1598,8 +1589,6 @@ default = "implementer"
                 name: "test".to_string(),
                 max_features: Some(5),
             },
-            setup: SetupConfig::default(),
-            github: GithubConfig::default(),
             agents: Default::default(),
             harness: Default::default(),
         };

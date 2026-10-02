@@ -255,8 +255,6 @@ mod tests {
                 name: project_name.to_string(),
                 max_features: None,
             },
-            setup: Default::default(),
-            github: Default::default(),
             agents: Default::default(),
             harness: Default::default(),
         };
