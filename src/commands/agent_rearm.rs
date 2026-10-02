@@ -12,7 +12,7 @@
 //! just stays queued and the agent stays visibly unarmed. Removing the
 //! marker is the claim to type, so of two concurrent senders only one does;
 //! the prompt's UserPromptSubmit would clear it anyway. A turn's end read
-//! from the transcript is claimed with a stamp instead
+//! from the transcript is claimed by its entry instead
 //! ([`runtime::claim_turn_end`]). The claim comes before any key is
 //! pressed, and is given back when nothing is typed.
 
@@ -61,10 +61,11 @@ pub fn rearm(
         return Ok(None);
     }
     let from_marker = runtime::read_waiting(project_root, scope, agent).as_ref() == Some(&waiting);
+    let entry = waiting.entry.as_deref().unwrap_or_default();
     let claimed = if from_marker {
         runtime::clear_waiting(project_root, scope, agent)?
     } else {
-        runtime::claim_turn_end(project_root, scope, agent, waiting.since)?
+        !entry.is_empty() && runtime::claim_turn_end(project_root, scope, agent, entry)?
     };
     if !claimed {
         return Ok(None);
@@ -73,7 +74,7 @@ pub fn rearm(
         if from_marker {
             runtime::write_waiting(project_root, scope, agent, &waiting)
         } else {
-            runtime::release_turn_end(project_root, scope, agent, waiting.since)
+            runtime::release_turn_end(project_root, scope, agent, entry)
         }
     };
     match type_prompt(project_root, scope, agent, harness, &pane.id, tmux_server) {
@@ -264,6 +265,7 @@ mod tests {
         let transcript = dir.path().join("session.jsonl");
         let interrupt = serde_json::json!({
             "type": "user",
+            "uuid": "5b0c7e1a-interrupt",
             "message": {"content": [{"type": "text", "text": "[Request interrupted by user for tool use]"}]},
         });
         std::fs::write(&transcript, format!("{interrupt}\n")).unwrap();
@@ -294,6 +296,20 @@ mod tests {
             "a re-armed interrupt no longer counts"
         );
         server.wait_for_pane_text(&target, &format!("❯ {PROMPT}"));
+
+        let bookkeeping = serde_json::json!({"type": "system", "uuid": "5b0c7e1a-later"});
+        let mut file = std::fs::File::options()
+            .append(true)
+            .open(&transcript)
+            .unwrap();
+        std::io::Write::write_all(&mut file, format!("{bookkeeping}\n").as_bytes()).unwrap();
+        file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(
+            waiting(&project, "login", "implementer", Harness::ClaudeCode),
+            None,
+            "nor once the transcript has moved on past it"
+        );
     }
 
     #[test]

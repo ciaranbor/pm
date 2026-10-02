@@ -12,7 +12,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::harness::transcript::{Cache, cached, last_entry};
+use crate::harness::transcript::{Cache, cached, entry_id, last_entry};
 use crate::state::runtime::{Waiting, WaitingKind};
 
 const INTERRUPTED: &str = "[Request interrupted by user";
@@ -20,15 +20,16 @@ const INTERRUPTED: &str = "[Request interrupted by user";
 static CACHE: Cache<Waiting> = std::sync::Mutex::new(None);
 
 /// The interrupt the session whose transcript is at `path` is at, if
-/// nothing has happened in it since, dated by the transcript's mtime.
+/// nothing has happened in it since, dated by the transcript's mtime and
+/// named by the entry's `uuid` (else that mtime).
 pub(in crate::harness) fn turn_ended(path: &Path) -> Option<Waiting> {
     cached(&CACHE, path, |len, mtime| {
-        last_entry(path, len, is_turn_entry)
-            .filter(is_interrupt)
-            .map(|_| Waiting {
-                since: mtime.into(),
-                ..Waiting::now(WaitingKind::Interrupted, None)
-            })
+        let interrupt = last_entry(path, len, is_turn_entry).filter(is_interrupt)?;
+        Some(Waiting {
+            since: mtime.into(),
+            entry: Some(entry_id(interrupt.get("uuid"), mtime)),
+            ..Waiting::now(WaitingKind::Interrupted, None)
+        })
     })
 }
 
@@ -99,7 +100,11 @@ mod tests {
                 r#"{"type":"file-history-snapshot"}"#.to_string(),
             ],
         );
-        assert!(turn_ended(&path).is_some());
+        let entry = turn_ended(&path).and_then(|w| w.entry);
+        assert!(
+            entry.is_some_and(|e| e.starts_with("mtime-")),
+            "an entry with no uuid is named by the mtime"
+        );
 
         append(&path, &[user("You have new messages")]);
         assert_eq!(turn_ended(&path), None);

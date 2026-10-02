@@ -141,6 +141,10 @@ pub struct Waiting {
     /// agent's own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent: Option<String>,
+    /// For a turn end read from the transcript, the id of the entry that
+    /// records it, which a claim on it names ([`claim_turn_end`]).
+    #[serde(skip)]
+    pub entry: Option<String>,
 }
 
 impl Waiting {
@@ -150,6 +154,7 @@ impl Waiting {
             detail: detail.filter(|d| !d.trim().is_empty()),
             since: Utc::now(),
             subagent: None,
+            entry: None,
         }
     }
 
@@ -240,27 +245,34 @@ pub fn read_session_path(
     Some(PathBuf::from(text))
 }
 
-/// The file whose existence says the turn end at `since` was claimed.
-fn turn_end_claim(project_root: &Path, scope: &str, agent: &str, since: DateTime<Utc>) -> PathBuf {
-    let stamp = since.timestamp_nanos_opt().unwrap_or_default();
+/// The file whose existence says the turn end recorded by transcript entry
+/// `entry` was claimed.
+fn turn_end_claim(project_root: &Path, scope: &str, agent: &str, entry: &str) -> PathBuf {
+    let name: String = entry
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
     agent_file(
         project_root,
         scope,
         agent,
-        &format!("{TURN_END_CLAIM}{stamp}"),
+        &format!("{TURN_END_CLAIM}{name}"),
     )
 }
 
-/// Claim the turn end at `since`, one no hook reported, for one caller
-/// only: true for the caller that claimed it. Earlier claims are dropped.
-pub fn claim_turn_end(
-    project_root: &Path,
-    scope: &str,
-    agent: &str,
-    since: DateTime<Utc>,
-) -> Result<bool> {
+/// Claim the turn end transcript entry `entry` records, one no hook
+/// reported, for one caller only: true for the caller that claimed it.
+/// Earlier claims are dropped. Keyed on the entry, not the transcript's
+/// mtime, so bookkeeping written after it leaves the claim standing.
+pub fn claim_turn_end(project_root: &Path, scope: &str, agent: &str, entry: &str) -> Result<bool> {
     let dir = agent_dir(project_root, scope, agent)?;
-    let file = turn_end_claim(project_root, scope, agent, since);
+    let file = turn_end_claim(project_root, scope, agent, entry);
     match std::fs::File::options()
         .write(true)
         .create_new(true)
@@ -270,9 +282,9 @@ pub fn claim_turn_end(
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
         Err(e) => return Err(e.into()),
     }
-    for entry in std::fs::read_dir(dir)?.flatten() {
-        let path = entry.path();
-        let stale = entry
+    for dirent in std::fs::read_dir(dir)?.flatten() {
+        let path = dirent.path();
+        let stale = dirent
             .file_name()
             .to_string_lossy()
             .starts_with(TURN_END_CLAIM);
@@ -284,26 +296,16 @@ pub fn claim_turn_end(
 }
 
 /// Give up a claim [`claim_turn_end`] made.
-pub fn release_turn_end(
-    project_root: &Path,
-    scope: &str,
-    agent: &str,
-    since: DateTime<Utc>,
-) -> Result<()> {
-    match std::fs::remove_file(turn_end_claim(project_root, scope, agent, since)) {
+pub fn release_turn_end(project_root: &Path, scope: &str, agent: &str, entry: &str) -> Result<()> {
+    match std::fs::remove_file(turn_end_claim(project_root, scope, agent, entry)) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
         _ => Ok(()),
     }
 }
 
-/// Whether the turn end at `since` has been claimed.
-pub fn turn_end_claimed(
-    project_root: &Path,
-    scope: &str,
-    agent: &str,
-    since: DateTime<Utc>,
-) -> bool {
-    turn_end_claim(project_root, scope, agent, since).exists()
+/// Whether the turn end transcript entry `entry` records has been claimed.
+pub fn turn_end_claimed(project_root: &Path, scope: &str, agent: &str, entry: &str) -> bool {
+    turn_end_claim(project_root, scope, agent, entry).exists()
 }
 
 /// Stamp the agent as active now.
@@ -444,8 +446,8 @@ mod tests {
     fn a_turn_end_is_claimed_once_until_given_back() {
         let dir = tempdir().unwrap();
         let root = dir.path();
-        let first = Utc::now();
-        let later = first + chrono::Duration::seconds(5);
+        let first = "6f1c2a8e-0001";
+        let later = "6f1c2a8e-0002";
 
         assert!(claim_turn_end(root, "login", "qa", first).unwrap());
         assert!(!claim_turn_end(root, "login", "qa", first).unwrap());

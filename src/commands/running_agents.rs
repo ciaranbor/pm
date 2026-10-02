@@ -107,7 +107,13 @@ pub fn waiting(project_root: &Path, scope: &str, agent: &str, harness: Harness) 
         .and_then(|transcript| harness.turn_ended(&transcript))
         .filter(|end| marker.as_ref().is_none_or(|m| end.since > m.since));
     match ended {
-        Some(end) if runtime::turn_end_claimed(project_root, scope, agent, end.since) => None,
+        Some(end)
+            if end.entry.as_deref().is_some_and(|entry| {
+                runtime::turn_end_claimed(project_root, scope, agent, entry)
+            }) =>
+        {
+            None
+        }
         Some(end) => Some(end),
         None => marker,
     }
