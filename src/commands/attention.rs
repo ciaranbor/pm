@@ -36,6 +36,7 @@ pub struct Snapshot {
 #[derive(Debug, Serialize)]
 pub struct ProjectSnapshot {
     pub name: String,
+    /// Empty when the project's registry entry couldn't be read.
     pub root: String,
     /// Why the project's features are missing from the snapshot.
     pub skipped: Option<String>,
@@ -203,8 +204,9 @@ pub fn attention(feature: &FeatureSnapshot) -> Attention {
     of(AttentionKind::None, None, None)
 }
 
-/// The snapshot of every registered project. A project whose state can't be
-/// read is listed as skipped, so one broken entry doesn't hide the rest.
+/// The snapshot of every registered project. A project whose state or
+/// registry entry can't be read is listed as skipped, so one broken entry
+/// doesn't hide the rest. Nothing is printed: the tmux watcher runs this.
 pub fn all(projects_dir: &Path, tmux_server: Option<&str>) -> Result<Snapshot> {
     let windows = Windows::read(tmux_server)?;
     let global = GlobalConfig::load_or_default().harness;
@@ -213,7 +215,8 @@ pub fn all(projects_dir: &Path, tmux_server: Option<&str>) -> Result<Snapshot> {
         projects: Vec::new(),
         features: Vec::new(),
     };
-    for (name, entry) in ProjectEntry::list(projects_dir)? {
+    let registry = ProjectEntry::scan(projects_dir)?;
+    for (name, entry) in registry.projects {
         let root = entry.root_path();
         let read = if paths::pm_dir(&root).is_dir() {
             project_features(&root, &windows, &global).map_err(|e| e.to_string())
@@ -234,6 +237,19 @@ pub fn all(projects_dir: &Path, tmux_server: Option<&str>) -> Result<Snapshot> {
             main,
         });
     }
+    snapshot
+        .projects
+        .extend(registry.malformed.into_iter().map(|bad| ProjectSnapshot {
+            name: bad.name,
+            root: String::new(),
+            skipped: Some(format!(
+                "registry entry {} unreadable: {}",
+                bad.path.display(),
+                bad.error
+            )),
+            main: None,
+        }));
+    snapshot.projects.sort_by(|a, b| a.name.cmp(&b.name));
     sort(&mut snapshot.features);
     Ok(snapshot)
 }
@@ -662,7 +678,7 @@ mod tests {
     }
 
     #[test]
-    fn every_project_is_snapshotted_most_urgent_first_and_a_missing_one_skipped() {
+    fn every_project_is_snapshotted_most_urgent_first_and_an_unreadable_one_skipped() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let projects_dir = dir.path().join("registry");
@@ -683,6 +699,8 @@ mod tests {
         let gone = dir.path().join(server.scope("gone"));
         init::init(&gone, &projects_dir, None, server.name()).unwrap();
         std::fs::remove_dir_all(&gone).unwrap();
+        let broken = projects_dir.join(format!("{}.toml", server.scope("broken")));
+        std::fs::write(&broken, "root = \"/x\"\nmain_branch = [").unwrap();
 
         let snapshot = all(&projects_dir, server.name()).unwrap();
 
@@ -703,7 +721,7 @@ mod tests {
             .iter()
             .map(|p| (p.name.as_str(), p.skipped.as_deref()))
             .collect();
-        assert_eq!(skipped.len(), 3);
+        assert_eq!(skipped.len(), 4);
         assert!(skipped.contains(&(server.scope("alpha").as_str(), None)));
         assert!(
             skipped
@@ -729,14 +747,23 @@ mod tests {
                 vec![format!("{}/login", server.scope("alpha")).as_str(), "wip"],
             ]
         );
+        assert!(
+            lines[2].starts_with(&format!(
+                "{}: skipped (registry entry {} unreadable: line 2: ",
+                server.scope("broken"),
+                broken.display()
+            )),
+            "{}",
+            lines[2]
+        );
         assert_eq!(
-            lines[2],
+            lines[3],
             format!(
                 "{}: skipped (no pm project at {})",
                 server.scope("gone"),
                 gone.display()
             )
         );
-        assert_eq!(lines.len(), 3);
+        assert_eq!(lines.len(), 4);
     }
 }

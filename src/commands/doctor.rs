@@ -577,6 +577,7 @@ fn run(
 ) -> Result<Report> {
     let mut warnings = baseline_capability_warnings(project_root)?;
     warnings.extend(global_config_warning());
+    warnings.extend(registry_warnings(projects_dir)?);
 
     let findings = diagnose(project_root, projects_dir, tmux_server, check_pr_state)?;
     let feature_count = FeatureState::list(&paths::features_dir(project_root))?.len();
@@ -655,6 +656,23 @@ fn global_config_warning_in(config_dir: &Path) -> Option<String> {
     Some(format!(
         "global config — {path} could not be read ({err}); max_features, [agents.models] and [agents.permissions] from it are all being ignored"
     ))
+}
+
+/// Warn about each registry entry that can't be read; all-project commands
+/// skip it.
+fn registry_warnings(projects_dir: &Path) -> Result<Vec<String>> {
+    Ok(ProjectEntry::scan(projects_dir)?
+        .malformed
+        .iter()
+        .map(|bad| {
+            format!(
+                "registry — {} could not be read ({}); all-project commands skip project '{}'",
+                bad.path.display(),
+                bad.error,
+                bad.name
+            )
+        })
+        .collect())
 }
 
 /// Warn when the shared agent baseline is installed for this project but a
@@ -2027,6 +2045,30 @@ mod tests {
         // Names both the file and what the user silently lost.
         assert!(warning.contains("config.toml"), "got: {warning}");
         assert!(warning.contains("[agents.models]"), "got: {warning}");
+    }
+
+    #[test]
+    fn registry_warnings_name_each_unreadable_entry_only() {
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("projects");
+        let good = ProjectEntry {
+            root: "/tmp/good".to_string(),
+            main_branch: "main".to_string(),
+            repo_url: None,
+            state_remote: None,
+        };
+        good.save(&projects_dir, "good").unwrap();
+        let bad = projects_dir.join("bad.toml");
+        std::fs::write(&bad, "root = ").unwrap();
+
+        let warnings = registry_warnings(&projects_dir).unwrap();
+
+        assert_eq!(warnings.len(), 1, "got: {warnings:?}");
+        assert!(
+            warnings[0].contains(&bad.display().to_string()) && warnings[0].contains("'bad'"),
+            "got: {}",
+            warnings[0]
+        );
     }
 
     #[test]

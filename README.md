@@ -655,7 +655,8 @@ meaning or goes away:
 
 `features` is sorted like the rows. `attention.kind` is one of the table's
 kinds or `none`; `skipped` says why a project's features are missing, and
-`main` (its session and agents, shaped like a feature's) is then `null`;
+`main` (its session and agents, shaped like a feature's) is then `null`,
+and `root` empty if its registry entry is unreadable;
 `summary` is the summary's first line whatever the status; `window` is the
 agent's tmux target, `null` while it has none.
 

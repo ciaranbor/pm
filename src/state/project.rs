@@ -429,30 +429,87 @@ impl ProjectEntry {
     }
 
     /// List all projects in the global registry. Returns (name, entry) pairs.
+    /// An entry that can't be read is skipped with a warning on stderr, so one
+    /// bad file doesn't fail every all-project command.
     pub fn list(projects_dir: &Path) -> Result<Vec<(String, Self)>> {
+        let registry = Self::scan(projects_dir)?;
+        for bad in &registry.malformed {
+            eprintln!(
+                "warning: skipping registry entry {}: {}",
+                bad.path.display(),
+                bad.error
+            );
+        }
+        Ok(registry.projects)
+    }
+
+    /// [`list`](Self::list) without the warnings: the unreadable entries are
+    /// returned instead, for a caller that reports them itself or must not
+    /// print.
+    pub fn scan(projects_dir: &Path) -> Result<Registry> {
+        let mut registry = Registry::default();
         if !projects_dir.exists() {
-            return Ok(Vec::new());
+            return Ok(registry);
         }
 
-        let mut projects = Vec::new();
         for entry in std::fs::read_dir(projects_dir)? {
-            let entry = entry?;
-            let path = entry.path();
+            let path = entry?.path();
             if path.extension().and_then(|e| e.to_str()) == Some("toml")
                 && let Some(name) = path.file_stem().and_then(|s| s.to_str())
             {
                 if name.starts_with('.') {
                     continue;
                 }
-                let content = std::fs::read_to_string(&path)?;
-                let project: Self = toml::from_str(&content)?;
-                projects.push((name.to_string(), project));
+                let read = std::fs::read_to_string(&path)
+                    .map_err(|e| e.to_string())
+                    .and_then(|content| {
+                        toml::from_str::<Self>(&content).map_err(|e| parse_error(&content, &e))
+                    });
+                match read {
+                    Ok(project) => registry.projects.push((name.to_string(), project)),
+                    Err(error) => registry.malformed.push(Malformed {
+                        name: name.to_string(),
+                        path,
+                        error,
+                    }),
+                }
             }
         }
 
-        projects.sort_by(|a, b| a.0.cmp(&b.0));
-        Ok(projects)
+        registry.projects.sort_by(|a, b| a.0.cmp(&b.0));
+        registry.malformed.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(registry)
     }
+}
+
+/// `error` on one line, where toml's own rendering quotes the source over
+/// several.
+fn parse_error(content: &str, error: &toml::de::Error) -> String {
+    let message = error.message().trim_end().replace('\n', ", ");
+    match error.span() {
+        Some(span) => {
+            let line = 1 + content[..span.start.min(content.len())]
+                .matches('\n')
+                .count();
+            format!("line {line}: {message}")
+        }
+        None => message,
+    }
+}
+
+/// The global registry as [`ProjectEntry::scan`] read it.
+#[derive(Debug, Default)]
+pub struct Registry {
+    pub projects: Vec<(String, ProjectEntry)>,
+    pub malformed: Vec<Malformed>,
+}
+
+/// A registry entry that could not be read or parsed.
+#[derive(Debug)]
+pub struct Malformed {
+    pub name: String,
+    pub path: PathBuf,
+    pub error: String,
 }
 
 impl ProjectConfig {
@@ -666,6 +723,37 @@ main_branch = "main"
         assert_eq!(projects.len(), 2);
         assert_eq!(projects[0].0, "alpha");
         assert_eq!(projects[1].0, "beta");
+    }
+
+    #[test]
+    fn project_entry_list_skips_an_unreadable_entry() {
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("projects");
+        let entry = ProjectEntry {
+            root: "/tmp/alpha".to_string(),
+            main_branch: "main".to_string(),
+            repo_url: None,
+            state_remote: None,
+        };
+        entry.save(&projects_dir, "alpha").unwrap();
+        let bad = projects_dir.join("beta.toml");
+        std::fs::write(&bad, "root = \"/tmp/beta\"\nmain_branch = 3\n").unwrap();
+
+        let registry = ProjectEntry::scan(&projects_dir).unwrap();
+        let names: Vec<&str> = registry.projects.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["alpha"]);
+        assert_eq!(registry.malformed.len(), 1);
+        let malformed = &registry.malformed[0];
+        assert_eq!((malformed.name.as_str(), &malformed.path), ("beta", &bad));
+        assert!(
+            malformed.error.starts_with("line 2: ") && !malformed.error.contains('\n'),
+            "{}",
+            malformed.error
+        );
+
+        let listed = ProjectEntry::list(&projects_dir).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].0, "alpha");
     }
 
     #[test]
