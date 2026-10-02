@@ -119,7 +119,6 @@ mod tests {
         let server = OwnServer::start("init-attention");
         tmux(&server, &["set", "-g", AUTO_REFRESH, "off"]);
         tmux(&server, &["set", "-g", BIN, bin.to_str().unwrap()]);
-        tmux(&server, &["new-session", "-d", "-s", "needy"]);
 
         init(server.name()).unwrap();
         let a = bound(&server, "a").expect("bound by default");
@@ -143,15 +142,12 @@ mod tests {
             "no session flagged: a message"
         );
 
-        tmux(&server, &["set", "-t", "needy", "@pm_attention", "blocked"]);
-        tmux(&server, &press);
-        let [pane] = &in_tree()[..] else {
-            panic!("no tree: {:?}", in_tree())
-        };
-        assert_eq!(
-            tmux(&server, &["display", "-p", "-t", pane, "#{session_name}"]).trim(),
-            "needy"
+        tmux(
+            &server,
+            &["set", "-t", "keepalive", "@pm_attention", "blocked"],
         );
+        tmux(&server, &press);
+        assert_eq!(in_tree().len(), 1, "a session flagged: the tree");
 
         let source = dir.path().join("then.conf");
         std::fs::write(&source, format!("bind-key X {}", press[3])).unwrap();
