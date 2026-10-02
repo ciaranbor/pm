@@ -712,9 +712,6 @@ impl TestServer {
         (project_path, project_name)
     }
 
-    /// Poll a window's scrollback until `needle` appears (the shell echoes
-    /// typed commands, so this observes what a spawn actually launched).
-    /// Panics with the captured text on timeout.
     /// Set a variable every new window of `session` inherits, as when the
     /// session was created from a shell that had it.
     pub fn set_session_env(&self, session: &str, key: &str, value: &str) {
@@ -753,6 +750,9 @@ impl TestServer {
         String::from_utf8_lossy(&output.stdout).trim().to_string()
     }
 
+    /// Poll a window's agent pane's scrollback until `needle` appears (the shell echoes
+    /// typed commands, so this observes what a spawn actually launched).
+    /// Panics with the captured text on timeout.
     pub fn wait_for_pane_text(&self, target: &str, needle: &str) {
         let mut last = String::new();
         for _ in 0..500 {

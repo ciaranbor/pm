@@ -391,11 +391,22 @@ pub fn mark_agent_pane(server: Option<&str>, window: &str) -> Result<()> {
 /// The processes running in a window's agent pane: the pane's own and its
 /// descendants, which is where a harness started from the pane's shell is.
 pub fn pane_processes(server: Option<&str>, target: &str) -> Result<Vec<Process>> {
-    let output = run_tmux_untrimmed(server, &["list-panes", "-t", target, "-F", &pane_format()])?;
-    let Some(pane) = agent_panes_in(&output).into_iter().next() else {
+    let Some(pane) = agent_pane(server, target)? else {
         return Ok(Vec::new());
     };
     Ok(ProcessTable::read()?.tree(pane.pid))
+}
+
+/// `window`'s agent pane, as [`agent_panes`] reads it.
+fn agent_pane(server: Option<&str>, window: &str) -> Result<Option<Pane>> {
+    let output = run_tmux_untrimmed(server, &["list-panes", "-t", window, "-F", &pane_format()])?;
+    Ok(agent_panes_in(&output).into_iter().next())
+}
+
+/// The id of `window`'s agent pane, for commands that would otherwise act
+/// on its active pane; the window itself when it has none.
+fn agent_pane_target(server: Option<&str>, window: &str) -> Result<String> {
+    Ok(agent_pane(server, window)?.map_or_else(|| window.to_string(), |p| p.id))
 }
 
 /// A window's agent pane, as [`agent_panes`] lists it.
@@ -466,26 +477,30 @@ fn no_server(msg: &str) -> bool {
     .any(|m| msg.contains(m))
 }
 
-/// Get the current command running in the first pane of a window.
-/// Returns the process name (e.g. "claude", "zsh", "bash").
-pub fn pane_command(server: Option<&str>, target: &str) -> Result<String> {
+/// The process name (e.g. "claude", "zsh") in the foreground of a
+/// window's agent pane.
+pub fn pane_command(server: Option<&str>, window: &str) -> Result<String> {
+    let pane = agent_pane_target(server, window)?;
     run_tmux(
         server,
-        &["list-panes", "-t", target, "-F", "#{pane_current_command}"],
+        &[
+            "display-message",
+            "-p",
+            "-t",
+            &pane,
+            "#{pane_current_command}",
+        ],
     )
-    .map(|output| {
-        // Take just the first pane's command
-        output.lines().next().unwrap_or("").to_string()
-    })
 }
 
-/// Full scrollback of a window's first pane as plain text, wrapped lines
+/// Full scrollback of a window's agent pane as plain text, wrapped lines
 /// joined. Tests use it to see the command a spawn typed into the shell.
 #[cfg(test)]
-pub fn capture_pane(server: Option<&str>, target: &str) -> Result<String> {
+pub fn capture_pane(server: Option<&str>, window: &str) -> Result<String> {
+    let pane = agent_pane_target(server, window)?;
     run_tmux(
         server,
-        &["capture-pane", "-p", "-J", "-S", "-", "-t", target],
+        &["capture-pane", "-p", "-J", "-S", "-", "-t", &pane],
     )
 }
 
@@ -543,6 +558,31 @@ mod tests {
             .map(|p| (p.window.as_str(), p.id.as_str()))
             .collect();
         assert_eq!(read, [("s:1", "%2"), ("s:2", "%4")]);
+    }
+
+    #[test]
+    fn pane_helpers_read_the_agent_pane_whichever_is_active() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let session = server.scope("agent-pane");
+        create_session(server.name(), &session, dir.path()).unwrap();
+        let window = format!("{session}:0");
+        mark_agent_pane(server.name(), &window).unwrap();
+        send_keys(server.name(), &window, "exec sleep 999").unwrap();
+        server.split_before(&window);
+        send_text(server.name(), &window, "echo in-the-users-pane").unwrap();
+
+        server.wait_for_pane_text(&window, "exec sleep 999");
+        let start = std::time::Instant::now();
+        while pane_command(server.name(), &window).unwrap() != "sleep" {
+            assert!(start.elapsed() < std::time::Duration::from_secs(10));
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            !capture_pane(server.name(), &window)
+                .unwrap()
+                .contains("in-the-users-pane")
+        );
     }
 
     #[test]
