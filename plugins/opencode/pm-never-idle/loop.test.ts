@@ -18,6 +18,7 @@ import {
   askOf,
   consumedMessage,
   drivesSession,
+  failedTurnOf,
   hookDecision,
   turnError,
   userInput,
@@ -471,7 +472,7 @@ test("an unloaded loop neither asks nor prompts", async () => {
   assert.deepEqual(seen, { prompts: [], sleeps: [], reports: [], lastTurn: [], asked: 0 })
 })
 
-test("a permission ask or a question form is a dialog waiting on the user, any other form is not", () => {
+test("a permission ask or any form is a dialog waiting on the user", () => {
   assert.deepEqual(
     askOf({
       type: "permission.asked",
@@ -479,17 +480,44 @@ test("a permission ask or a question form is a dialog waiting on the user, any o
     }),
     { id: "per_1", sessionID: "s1", payload: { hook_event_name: "PermissionRequest", detail: "edit src/a.ts" } },
   )
-  const form = (kind: string, title: string) => ({
+  const form = (metadata: object, title: string, sessionID = "s1") => ({
     type: "form.created",
-    data: { form: { id: "frm_1", sessionID: "s1", title, metadata: { kind }, fields: [{ label: "Which DB?" }] } },
+    data: {
+      form: {
+        id: "frm_1",
+        sessionID,
+        title,
+        metadata,
+        fields: [{ key: "q0", title: "Database", description: "Which DB?", type: "string" }],
+      },
+    },
   })
-  assert.deepEqual(askOf(form("question", "")), {
+  assert.deepEqual(askOf(form({ kind: "question" }, "Questions")), {
     id: "frm_1",
     sessionID: "s1",
     payload: { hook_event_name: "Question", detail: "Which DB?" },
   })
-  assert.equal(askOf(form("login", "Sign in")), null)
+  assert.deepEqual(askOf(form({ kind: "websearch.provider" }, "Web Search")), {
+    id: "frm_1",
+    sessionID: "s1",
+    payload: { hook_event_name: "Dialog", detail: "Web Search: Which DB?" },
+  })
+  const elicitation = { kind: "mcp-elicitation", server: "docs", message: "Pick a space" }
+  assert.deepEqual(askOf(form(elicitation, "docs is requesting input", "global")), {
+    id: "frm_1",
+    sessionID: null,
+    payload: { hook_event_name: "Dialog", detail: "docs is requesting input: Pick a space" },
+  })
   assert.equal(askOf({ type: "session.execution.succeeded", data: { sessionID: "s1" } }), null)
+})
+
+test("a failed turn reports its error, any other turn end nothing", () => {
+  assert.deepEqual(failedTurnOf(TURN_FAILED, { type: "provider.unavailable", message: "Model unavailable" }), {
+    hook_event_name: "TurnFailed",
+    detail: "Model unavailable (provider.unavailable)",
+  })
+  assert.equal(failedTurnOf(SUCCEEDED, undefined), null)
+  assert.equal(failedTurnOf("session.execution.interrupted", undefined), null)
 })
 
 test("a reply, an answer or a dismissal names the dialog it closes", () => {

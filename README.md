@@ -876,10 +876,11 @@ checks). What differs:
 - **The loop is a plugin**, `pm-never-idle`, which pm installs under
   `~/.config/opencode/plugins/`. It stops itself after five turns in a row
   that read no message (a failing model, an unreadable inbox) rather than
-  run away; `pm doctor` reports it with the last error. Fix the cause, then
-  `pm agent restart <name>`. A turn the plugin didn't prompt — one you
-  typed, or one opencode started itself — ends its wait, and the turn's
-  end starts the next one.
+  run away; `pm doctor` reports it with the last error. Fix the cause,
+  then `pm agent restart <name>`. A failed turn reads `unarmed` with its
+  error for the 30 s the plugin waits before it asks again. A turn the
+  plugin didn't prompt — one you typed, or one opencode started itself —
+  ends its wait, and the turn's end starts the next one.
 - **A model row is required.** opencode silently swaps a model it can't
   resolve for its default, so pm refuses to spawn an opencode agent without
   an `[agents.models]` row and limits the agent to that row's provider and
