@@ -46,10 +46,27 @@ impl Holder {
     }
 }
 
+/// An attached client.
+#[derive(Debug, Default)]
+pub struct Client {
+    pub name: String,
+    /// The active pane of the window it shows, by id (`%N`).
+    pub pane: String,
+}
+
+impl Client {
+    #[cfg(test)]
+    pub fn named(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            pane: String::new(),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Options {
-    /// Attached clients, by name.
-    pub clients: Vec<String>,
+    pub clients: Vec<Client>,
     pub sessions: Vec<Holder>,
     pub windows: Vec<Holder>,
     pub global: Holder,
@@ -82,7 +99,7 @@ pub fn read(
         &[
             "list-clients",
             "-F",
-            "C\t#{client_name}",
+            "C\t#{client_name}\t#{pane_id}",
             ";",
             "list-sessions",
             "-F",
@@ -107,7 +124,10 @@ pub fn read(
         let mut fields = line.split('\t');
         let kind = fields.next();
         if kind == Some("C") {
-            options.clients.extend(fields.next().map(str::to_string));
+            options.clients.push(Client {
+                name: fields.next().unwrap_or_default().to_string(),
+                pane: fields.next().unwrap_or_default().to_string(),
+            });
             continue;
         }
         let names = match kind {

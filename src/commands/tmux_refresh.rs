@@ -134,7 +134,7 @@ fn commands(snapshot: &Snapshot, published: &Options, now: DateTime<Utc>) -> Vec
         };
         if alerts_now {
             episode.record(kind);
-            alerts.push(alert(&feature.session, &feature.attention));
+            alerts.push(alert(&feature.session, &feature.attention, &feature.agents));
         }
         let mut values = session_values(feature, now);
         values.push((ALERT_PENDING, (owed && feature.busy).then(|| "1".into())));
@@ -157,7 +157,7 @@ fn commands(snapshot: &Snapshot, published: &Options, now: DateTime<Utc>) -> Vec
             && !episode.alerted(kind)
         {
             episode.record(kind);
-            alerts.push(alert(&main.session, &main.attention));
+            alerts.push(alert(&main.session, &main.attention, &main.agents));
         }
         let mut values = main_values(&project.name, main, now);
         values.push((ALERTED, episode.value()));
@@ -213,12 +213,24 @@ fn commands(snapshot: &Snapshot, published: &Options, now: DateTime<Utc>) -> Vec
         &global_values(snapshot),
     );
 
-    if !alerts.is_empty() {
-        let text = format!("pm: {}", alerts.join(" · "));
-        writes.extend(published.clients.iter().map(|c| options::display(c, &text)));
+    for client in &published.clients {
+        let texts: Vec<&str> = alerts
+            .iter()
+            .filter(|a| a.pane.is_none_or(|p| p != client.pane))
+            .map(|a| a.text.as_str())
+            .collect();
+        if !texts.is_empty() {
+            let text = format!("pm: {}", texts.join(" · "));
+            writes.push(options::display(&client.name, &text));
+        }
     }
     if !writes.is_empty() {
-        writes.extend(published.clients.iter().map(|c| options::refresh_status(c)));
+        writes.extend(
+            published
+                .clients
+                .iter()
+                .map(|c| options::refresh_status(&c.name)),
+        );
     }
     writes
 }
@@ -378,11 +390,25 @@ fn global_values(snapshot: &Snapshot) -> Vec<(&'static str, Option<String>)> {
     ]
 }
 
-fn alert(session: &str, attention: &Attention) -> String {
+struct Alert<'a> {
+    text: String,
+    /// The pane of the agent asking, whose viewers it doesn't need to reach.
+    pane: Option<&'a str>,
+}
+
+fn alert<'a>(session: &str, attention: &Attention, agents: &'a [AgentSnapshot]) -> Alert<'a> {
     let what = format!("{session} {}", attention.kind);
-    match &attention.detail {
-        Some(detail) => format!("{what}: {detail}"),
-        None => what,
+    let pane = agents
+        .iter()
+        .filter(|_| attention.kind == AttentionKind::Asking)
+        .find(|a| attention.agent.as_ref() == Some(&a.name))
+        .and_then(|a| a.pane.as_deref());
+    Alert {
+        text: match &attention.detail {
+            Some(detail) => format!("{what}: {detail}"),
+            None => what,
+        },
+        pane,
     }
 }
 
@@ -397,6 +423,7 @@ mod tests {
     use crate::state::runtime::WaitingKind;
     use crate::testing::{OwnServer, TestServer, server_socket_exists};
     use crate::tmux;
+    use crate::tmux::options::Client;
     use std::io::{BufRead, BufReader, Write};
     use std::process::{Child, ChildStdin, Stdio};
     use std::sync::{Arc, Mutex, MutexGuard};
@@ -921,7 +948,7 @@ mod tests {
             "plan approval",
         )]);
         let published = |attention: &str| Options {
-            clients: vec!["c1".into()],
+            clients: vec![Client::named("c1")],
             sessions: vec![Holder::session("app/main", &[(ATTENTION, attention)])],
             ..Options::default()
         };
@@ -980,6 +1007,30 @@ mod tests {
             projects: Vec::new(),
             features: vec![feature],
         }
+    }
+
+    #[test]
+    fn an_ask_is_not_alerted_to_a_client_already_on_the_asking_pane() {
+        let mut agent = main_agent(AgentState::Asking, WaitingKind::Plan, "plan approval");
+        agent.pane = Some("%5".into());
+        let client = |name: &str, pane: &str| Client {
+            name: name.into(),
+            pane: pane.into(),
+        };
+        let published = Options {
+            clients: vec![client("on-it", "%5"), client("elsewhere", "%6")],
+            sessions: vec![Holder::session("app/main", &[(PROJECT, "app")])],
+            ..Options::default()
+        };
+
+        let commands = commands(&main_scope(vec![agent]), &published, Utc::now());
+
+        let alerted: Vec<&str> = commands
+            .iter()
+            .filter(|c| c[0] == "display-message")
+            .map(|c| c[2].as_str())
+            .collect();
+        assert_eq!(alerted, ["elsewhere"]);
     }
 
     fn ready_feature(busy: bool) -> Snapshot {
@@ -1090,7 +1141,7 @@ mod tests {
     fn a_reopened_session_shows_a_standing_progress_without_alerting_it() {
         let opened = |snapshot: &Snapshot| {
             let published = Options {
-                clients: vec!["c1".into()],
+                clients: vec![Client::named("c1")],
                 sessions: vec![Holder::session("app/login", &[])],
                 ..Options::default()
             };
@@ -1266,7 +1317,7 @@ mod tests {
         .unwrap();
 
         let mut before = published(&server);
-        before.clients.push("client-gone".into());
+        before.clients.push(Client::named("client-gone"));
         let snapshot = attention::all(&projects_dir, server.name()).unwrap();
         write(server.name(), &commands(&snapshot, &before, Utc::now())).unwrap();
 
