@@ -191,6 +191,26 @@ impl Finding {
     }
 }
 
+/// How much a [`diagnose`] may cost.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Depth {
+    /// `pm doctor`: PR drift checks (one `gh` call per feature with a PR)
+    /// and fresh harness probes.
+    Full,
+    /// Latency-sensitive callers (`pm status`, `pm open`'s pre-recreate
+    /// warning): no `gh` calls, and harness probes from cache.
+    Quick,
+}
+
+impl Depth {
+    fn probe(self) -> Probe {
+        match self {
+            Depth::Full => Probe::Fresh,
+            Depth::Quick => Probe::Cached,
+        }
+    }
+}
+
 /// Run all diagnostic checks without applying any fixes.
 ///
 /// For each feature, checks:
@@ -200,16 +220,11 @@ impl Finding {
 /// 4. Tmux session exists
 /// 5. Status stuck on "initializing"
 /// 6. Referenced workflow directory exists
-/// 7. If PR linked and `check_pr_state` is true, check GH status drift
+/// 7. If PR linked and `depth` is [`Depth::Full`], check GH status drift
 ///
 /// Also runs main-scope checks (Stop hook installed, main session present, main
 /// agent windows alive) when there is at least one feature, mirroring the
 /// existing `doctor` behaviour.
-///
-/// `check_pr_state` controls whether to make `gh pr view` network calls (one
-/// per feature with a linked PR). `pm doctor` passes `true`; latency-sensitive
-/// callers like the pre-open warning hook pass `false` to avoid round-trips
-/// on every session reopen. Those callers also pass [`Probe::Cached`].
 ///
 /// Returns one [`Finding`] per scope that has issues (or per scope, including
 /// healthy ones — callers can filter by inspecting [`Finding::issues`]).
@@ -217,9 +232,9 @@ pub fn diagnose(
     project_root: &Path,
     projects_dir: &Path,
     tmux_server: Option<&str>,
-    check_pr_state: bool,
-    probe: Probe,
+    depth: Depth,
 ) -> Result<Vec<Finding>> {
+    let probe = depth.probe();
     let features_dir = paths::features_dir(project_root);
     let pm_dir = paths::pm_dir(project_root);
     let config = ProjectConfig::load(&pm_dir)?;
@@ -433,10 +448,8 @@ pub fn diagnose(
 
         issues.extend(legacy_vanilla_agent_issues(project_root, name));
 
-        // Check 7: PR status drift (skipped when `check_pr_state` is false to
-        // avoid network round-trips on latency-sensitive callers like
-        // `pm open`'s pre-recreate warning hook).
-        if check_pr_state && !state.pr.is_empty() {
+        // Check 7: PR status drift.
+        if depth == Depth::Full && !state.pr.is_empty() {
             match gh::pr_info(&main_repo, &state.pr).map(|i| i.state) {
                 Ok(gh_state) => match gh_state.as_str() {
                     "MERGED" if state.status != FeatureStatus::Merged => {
@@ -545,7 +558,7 @@ impl Report {
 /// Run a health check on all features in the project.
 ///
 /// Wraps [`diagnose`] with reporting and (optionally) auto-fix logic.
-/// Always passes `check_pr_state = true`, so PR drift is reported here.
+/// Runs at [`Depth::Full`], so PR drift is reported here.
 ///
 /// With `fix == true`, auto-resolves clear-cut issues and skips ambiguous ones.
 pub fn doctor(
@@ -554,32 +567,16 @@ pub fn doctor(
     fix: bool,
     tmux_server: Option<&str>,
 ) -> Result<Report> {
-    run(
-        project_root,
-        projects_dir,
-        fix,
-        tmux_server,
-        true,
-        Probe::Fresh,
-    )
+    run(project_root, projects_dir, fix, tmux_server, Depth::Full)
 }
 
-/// [`doctor`] without fixes or the PR drift checks, which call `gh` once
-/// per feature with a PR, and with harness binaries probed only when
-/// changed since a cached probe.
+/// [`doctor`] without fixes, at [`Depth::Quick`].
 pub fn offline(
     project_root: &Path,
     projects_dir: &Path,
     tmux_server: Option<&str>,
 ) -> Result<Report> {
-    run(
-        project_root,
-        projects_dir,
-        false,
-        tmux_server,
-        false,
-        Probe::Cached,
-    )
+    run(project_root, projects_dir, false, tmux_server, Depth::Quick)
 }
 
 fn run(
@@ -587,20 +584,13 @@ fn run(
     projects_dir: &Path,
     fix: bool,
     tmux_server: Option<&str>,
-    check_pr_state: bool,
-    probe: Probe,
+    depth: Depth,
 ) -> Result<Report> {
-    let mut warnings = baseline_capability_warnings(project_root, probe)?;
+    let mut warnings = baseline_capability_warnings(project_root, depth.probe())?;
     warnings.extend(global_config_warning());
     warnings.extend(registry_warnings(projects_dir)?);
 
-    let findings = diagnose(
-        project_root,
-        projects_dir,
-        tmux_server,
-        check_pr_state,
-        probe,
-    )?;
+    let findings = diagnose(project_root, projects_dir, tmux_server, depth)?;
     let feature_count = FeatureState::list(&paths::features_dir(project_root))?.len();
 
     let pm_dir = paths::pm_dir(project_root);
@@ -1368,14 +1358,7 @@ mod tests {
         git::commit(&main, "work").unwrap();
         TestServer::pause_rebase(&main, "HEAD~1");
 
-        let findings = diagnose(
-            &project_path,
-            &projects_dir,
-            server.name(),
-            false,
-            Probe::Fresh,
-        )
-        .unwrap();
+        let findings = diagnose(&project_path, &projects_dir, server.name(), Depth::Quick).unwrap();
         let main_finding = findings.iter().find(|f| f.feature() == "main").unwrap();
         assert!(
             main_finding
@@ -1429,14 +1412,7 @@ mod tests {
             .save(&paths::agents_dir(&project_path), "main")
             .unwrap();
 
-        let findings = diagnose(
-            &project_path,
-            &projects_dir,
-            server.name(),
-            false,
-            Probe::Fresh,
-        )
-        .unwrap();
+        let findings = diagnose(&project_path, &projects_dir, server.name(), Depth::Quick).unwrap();
         let main_kinds: Vec<IssueKind> = findings
             .iter()
             .filter(|f| f.feature() == "main")
@@ -2037,14 +2013,7 @@ mod tests {
 
         git::rename_branch(&main, "main", "master").unwrap();
 
-        let findings = diagnose(
-            &project_path,
-            &projects_dir,
-            server.name(),
-            false,
-            Probe::Fresh,
-        )
-        .unwrap();
+        let findings = diagnose(&project_path, &projects_dir, server.name(), Depth::Quick).unwrap();
         let main_scope = findings.iter().find(|f| f.feature == "main").unwrap();
         assert!(
             main_scope
@@ -2265,14 +2234,7 @@ mod tests {
         state.status = FeatureStatus::Initializing;
         state.save(&features_dir, "child").unwrap();
 
-        let findings = diagnose(
-            &project_path,
-            &projects_dir,
-            server.name(),
-            false,
-            Probe::Fresh,
-        )
-        .unwrap();
+        let findings = diagnose(&project_path, &projects_dir, server.name(), Depth::Quick).unwrap();
         let child = findings.iter().find(|f| f.feature == "child").unwrap();
         let base_scope = child
             .issues
@@ -2489,17 +2451,8 @@ mod tests {
         // wrote codex's file too.
         assert!(hooks_install::is_installed_for(Harness::Codex).unwrap());
         assert!(
-            kinds(
-                &diagnose(
-                    &project_path,
-                    &projects_dir,
-                    server.name(),
-                    false,
-                    Probe::Fresh
-                )
-                .unwrap()
-            )
-            .is_empty()
+            kinds(&diagnose(&project_path, &projects_dir, server.name(), Depth::Quick).unwrap())
+                .is_empty()
         );
 
         let pm_dir = paths::pm_dir(&project_path);
@@ -2552,16 +2505,8 @@ mod tests {
             "{lines:?}"
         );
         assert!(hooks_install::is_installed_for(Harness::Codex).unwrap());
-        let found = kinds(
-            &diagnose(
-                &project_path,
-                &projects_dir,
-                server.name(),
-                false,
-                Probe::Fresh,
-            )
-            .unwrap(),
-        );
+        let found =
+            kinds(&diagnose(&project_path, &projects_dir, server.name(), Depth::Quick).unwrap());
         assert_eq!(
             found.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
             vec![IssueKind::HookUntrusted; 4],
@@ -2665,14 +2610,7 @@ mod tests {
             std::fs::write(claude.join("settings.json"), legacy).unwrap();
         }
 
-        let findings = diagnose(
-            &project_path,
-            &projects_dir,
-            server.name(),
-            false,
-            Probe::Fresh,
-        )
-        .unwrap();
+        let findings = diagnose(&project_path, &projects_dir, server.name(), Depth::Quick).unwrap();
         let main = findings.iter().find(|f| f.feature() == "main").unwrap();
         let stale: Vec<&str> = main
             .issues()
@@ -2711,14 +2649,7 @@ mod tests {
             assert_eq!(settings["permissions"]["allow"][0], "Read", "{wt}");
             assert!(settings.get("hooks").is_none(), "{wt}: {settings}");
         }
-        let findings = diagnose(
-            &project_path,
-            &projects_dir,
-            server.name(),
-            false,
-            Probe::Fresh,
-        )
-        .unwrap();
+        let findings = diagnose(&project_path, &projects_dir, server.name(), Depth::Quick).unwrap();
         assert!(
             findings.iter().all(|f| f.feature() != "main"),
             "main still has issues after fix"
@@ -3026,19 +2957,13 @@ mod tests {
             registry.save(&agents_dir, "login").unwrap();
         };
         let login_issues = || -> Vec<(IssueKind, String)> {
-            diagnose(
-                &project_path,
-                &projects_dir,
-                server.name(),
-                false,
-                Probe::Fresh,
-            )
-            .unwrap()
-            .iter()
-            .filter(|f| f.feature() == "login")
-            .flat_map(|f| f.issues())
-            .map(|i| (i.kind(), i.message().to_string()))
-            .collect()
+            diagnose(&project_path, &projects_dir, server.name(), Depth::Quick)
+                .unwrap()
+                .iter()
+                .filter(|f| f.feature() == "login")
+                .flat_map(|f| f.issues())
+                .map(|i| (i.kind(), i.message().to_string()))
+                .collect()
         };
 
         // The session id is recorded before the TUI starts, so only the
@@ -3091,19 +3016,13 @@ mod tests {
             registry.save(&agents_dir, "login").unwrap();
         };
         let login_issues = || -> Vec<(IssueKind, String)> {
-            diagnose(
-                &project_path,
-                &projects_dir,
-                server.name(),
-                false,
-                Probe::Fresh,
-            )
-            .unwrap()
-            .iter()
-            .filter(|f| f.feature() == "login")
-            .flat_map(|f| f.issues())
-            .map(|i| (i.kind(), i.message().to_string()))
-            .collect()
+            diagnose(&project_path, &projects_dir, server.name(), Depth::Quick)
+                .unwrap()
+                .iter()
+                .filter(|f| f.feature() == "login")
+                .flat_map(|f| f.issues())
+                .map(|i| (i.kind(), i.message().to_string()))
+                .collect()
         };
 
         // Just spawned: the hook may simply not have fired yet.
