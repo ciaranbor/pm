@@ -5,6 +5,10 @@
 //! mtime, so the long-running tmux watcher rereads a transcript only once
 //! it has changed.
 
+pub(crate) mod items;
+pub(in crate::harness) mod jsonl;
+mod lines;
+
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};

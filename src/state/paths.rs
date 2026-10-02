@@ -9,6 +9,17 @@ const PROJECTS_DIR_NAME: &str = "projects";
 
 pub(crate) const WORKFLOWS_DIR_NAME: &str = "workflows";
 
+/// `$XDG_DATA_HOME`, where set. Under `cfg(test)` never, for the reason
+/// [`home_dir`] gives: a data path then derives from the test home.
+pub fn data_home() -> Option<PathBuf> {
+    if cfg!(test) {
+        return None;
+    }
+    std::env::var_os("XDG_DATA_HOME")
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+}
+
 /// The user's home directory. Every global-tier path (the `~/.agents` store,
 /// the pm config dir) derives from it. Under `cfg(test)` this is a per-binary
 /// temp dir (see `testing::test_home`) so tests never read or write the

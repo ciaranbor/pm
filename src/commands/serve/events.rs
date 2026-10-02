@@ -1,18 +1,22 @@
 //! `GET /v1/events`: a server-sent event stream. Each stream starts with
 //! the current snapshot, then gets a `snapshot` event whenever the snapshot
 //! changes and a `transition` event for each [`Transition`] into it. A
-//! comment line goes out whenever the stream has been silent for the
-//! heartbeat interval, so proxies keep it open and a client gone is found
-//! by the write that fails.
+//! stream that watches an agent also reads its conversation on a poll of
+//! its own and gets a `transcript` event for what it gained
+//! ([`TranscriptWatch`]). A comment line goes out whenever the stream has been
+//! silent for the heartbeat interval, so proxies keep it open and a client
+//! gone is found by the write that fails.
 
 use std::io::{self, Write};
 use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::commands::attention::Snapshot;
 use crate::commands::attention::transition::{Transition, Watch};
 use crate::error::Result;
+
+use super::transcript::TranscriptWatch;
 
 pub(super) struct Hub {
     inner: Mutex<Inner>,
@@ -76,9 +80,21 @@ fn event(name: &str, data: &str) -> String {
     format!("event: {name}\ndata: {data}\n\n")
 }
 
-/// Write an event stream to `out`, a raw response, until the client goes.
-pub(super) fn stream(out: &mut impl Write, hub: &Hub, heartbeat: Duration) -> io::Result<()> {
+/// Write an event stream to `out`, a raw response, until the client goes;
+/// with a watch, reading its conversation every given interval.
+pub(super) fn stream(
+    out: &mut impl Write,
+    hub: &Hub,
+    heartbeat: Duration,
+    mut watch: Option<(TranscriptWatch, Duration)>,
+) -> io::Result<()> {
     let (first, events) = hub.subscribe();
+    let mut failing: Option<String> = None;
+    // The watch's first read precedes the response, so a client that has
+    // the opening snapshot knows the watch has begun.
+    let opening = watch
+        .as_mut()
+        .and_then(|(watch, _)| transcript_event(watch, &mut failing));
     out.write_all(
         b"HTTP/1.1 200 OK\r\n\
           Content-Type: text/event-stream\r\n\
@@ -86,13 +102,56 @@ pub(super) fn stream(out: &mut impl Write, hub: &Hub, heartbeat: Duration) -> io
           Connection: close\r\n\r\n",
     )?;
     out.write_all(first.as_bytes())?;
+    if let Some(opening) = opening {
+        out.write_all(opening.as_bytes())?;
+    }
     out.flush()?;
+    let mut wrote = Instant::now();
+    let mut next_poll = Instant::now() + watch.as_ref().map_or(Duration::ZERO, |(_, every)| *every);
     loop {
-        match events.recv_timeout(heartbeat) {
+        if let Some((watch, every)) = watch.as_mut()
+            && Instant::now() >= next_poll
+        {
+            next_poll = Instant::now() + *every;
+            if let Some(e) = transcript_event(watch, &mut failing) {
+                out.write_all(e.as_bytes())?;
+                out.flush()?;
+                wrote = Instant::now();
+            }
+        }
+        let until_heartbeat = heartbeat.saturating_sub(wrote.elapsed());
+        let wait = match &watch {
+            Some(_) => until_heartbeat.min(next_poll.saturating_duration_since(Instant::now())),
+            None => until_heartbeat,
+        };
+        match events.recv_timeout(wait) {
             Ok(e) => out.write_all(e.as_bytes())?,
-            Err(RecvTimeoutError::Timeout) => out.write_all(b": heartbeat\n\n")?,
+            Err(RecvTimeoutError::Timeout) if wrote.elapsed() >= heartbeat => {
+                out.write_all(b": heartbeat\n\n")?
+            }
+            Err(RecvTimeoutError::Timeout) => continue,
             Err(RecvTimeoutError::Disconnected) => return Ok(()),
         }
         out.flush()?;
+        wrote = Instant::now();
+    }
+}
+
+/// The `transcript` event for what `watch` finds changed, if anything. A
+/// failure is logged once until it changes or the watch reads again.
+fn transcript_event(watch: &mut TranscriptWatch, failing: &mut Option<String>) -> Option<String> {
+    match watch.poll() {
+        Ok(data) => {
+            *failing = None;
+            data.map(|data| event("transcript", &data))
+        }
+        Err(e) => {
+            let e = e.to_string();
+            if failing.as_ref() != Some(&e) {
+                super::log(&format!("transcript unreadable: {e}"));
+                *failing = Some(e);
+            }
+            None
+        }
     }
 }

@@ -138,6 +138,9 @@ pub enum PmError {
 
     #[error("{0}")]
     Serve(String),
+
+    #[error("Transcript unreadable: {0}")]
+    Transcript(String),
 }
 
 fn display_paths(paths: &[PathBuf]) -> String {

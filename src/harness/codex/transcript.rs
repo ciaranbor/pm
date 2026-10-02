@@ -49,7 +49,7 @@ fn is_boundary(entry: &Value) -> bool {
 
 /// One line for `error`: the API's own message when `error.message` holds
 /// the response body, else its first line.
-fn describe(error: &Value) -> String {
+pub(in crate::harness) fn describe(error: &Value) -> String {
     let raw = error.get("message").and_then(Value::as_str).unwrap_or("");
     let body = serde_json::from_str::<Value>(raw).ok();
     let inner = body

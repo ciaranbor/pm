@@ -42,6 +42,7 @@
 //! interactive directory chooser, which stalls an unwatched window. The
 //! session then continues in the window's directory.
 
+pub(super) mod chat;
 pub(super) mod input;
 pub(super) mod sessions;
 pub(super) mod transcript;

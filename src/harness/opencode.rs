@@ -72,6 +72,8 @@
 //! own state dirs ahead of the row, which can still override them.
 
 mod bounded;
+pub(super) mod chat;
+mod messages;
 mod providers;
 pub(super) mod sessions;
 pub(super) mod waiting;

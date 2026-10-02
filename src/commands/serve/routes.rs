@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use crate::commands::attention;
 use crate::error::Result;
+use crate::state::agent::AgentRegistry;
 use crate::state::devices::{Devices, Scope};
 use crate::state::feature::FeatureState;
 use crate::state::paths;
@@ -15,6 +16,7 @@ use crate::state::project::ProjectEntry;
 use crate::tmux;
 
 use super::Config;
+use super::transcript::{Agent, DEFAULT_LIMIT, MAX_LIMIT, TranscriptWatch, page_json};
 
 pub(super) enum Reply {
     Body {
@@ -22,15 +24,16 @@ pub(super) enum Reply {
         content_type: &'static str,
         body: String,
     },
-    /// Hand the connection to an event stream.
-    Events,
+    /// Hand the connection to an event stream, watching an agent's
+    /// conversation if the request named one.
+    Events(Option<Box<TranscriptWatch>>),
 }
 
 impl Reply {
     pub(super) fn status(&self) -> u16 {
         match self {
             Self::Body { status, .. } => *status,
-            Self::Events => 200,
+            Self::Events(_) => 200,
         }
     }
 }
@@ -65,6 +68,7 @@ pub(super) fn route(
     config: &Config,
     method: &str,
     path: &str,
+    query: &str,
     authorization: Option<&str>,
 ) -> Handled {
     let token = authorization.and_then(bearer);
@@ -88,7 +92,7 @@ pub(super) fn route(
     } else if !paired.scopes.contains(&Scope::Read) {
         error(403, "this device's token lacks the read scope")
     } else {
-        get(config, path).unwrap_or_else(|e| error(500, &e.to_string()))
+        get(config, path, &Query::parse(query)).unwrap_or_else(|e| error(500, &e.to_string()))
     };
     Handled {
         device: Some(device.to_string()),
@@ -102,7 +106,32 @@ fn bearer(authorization: &str) -> Option<&str> {
     scheme.eq_ignore_ascii_case("bearer").then_some(token)
 }
 
-fn get(config: &Config, path: &str) -> Result<Reply> {
+/// A request's query parameters, decoded.
+struct Query(Vec<(String, String)>);
+
+impl Query {
+    fn parse(query: &str) -> Self {
+        Self(
+            query
+                .split('&')
+                .filter(|pair| !pair.is_empty())
+                .map(|pair| {
+                    let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+                    (decode(key), decode(value))
+                })
+                .collect(),
+        )
+    }
+
+    fn get(&self, key: &str) -> Option<&str> {
+        self.0
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+    }
+}
+
+fn get(config: &Config, path: &str, query: &Query) -> Result<Reply> {
     let segments: Option<Vec<String>> = path
         .strip_prefix("/v1/")
         .map(|rest| rest.split('/').map(decode).collect());
@@ -114,7 +143,58 @@ fn get(config: &Config, path: &str) -> Result<Reply> {
             let snapshot = attention::all(&config.projects_dir, server)?;
             Ok(ok(JSON, serde_json::to_string(&snapshot)?))
         }
-        ["events"] => Ok(Reply::Events),
+        ["events"] => {
+            let Some(watch) = query.get("watch") else {
+                return Ok(Reply::Events(None));
+            };
+            let [project, scope, agent] = watch.split('/').collect::<Vec<_>>()[..] else {
+                return Ok(error(400, "watch names <project>/<scope>/<agent>"));
+            };
+            Ok(match find_agent(config, project, scope, agent)? {
+                Ok(agent) => Reply::Events(Some(Box::new(TranscriptWatch::new(
+                    agent,
+                    query.get("after").map(str::to_string),
+                )))),
+                Err(reply) => reply,
+            })
+        }
+        ["agents", project, scope, agent, "transcript"] => {
+            let agent = match find_agent(config, project, scope, agent)? {
+                Ok(agent) => agent,
+                Err(reply) => return Ok(reply),
+            };
+            let limit = match query.get("limit").map(str::parse::<usize>) {
+                None => DEFAULT_LIMIT,
+                Some(Ok(limit)) if (1..=MAX_LIMIT).contains(&limit) => limit,
+                Some(_) => {
+                    return Ok(error(
+                        400,
+                        &format!("limit is a number from 1 to {MAX_LIMIT}"),
+                    ));
+                }
+            };
+            let Some(conversation) = agent.conversation()? else {
+                return Ok(error(404, "the agent has no conversation yet"));
+            };
+            let page = conversation.page(query.get("before"), limit)?;
+            Ok(ok(JSON, page_json(&conversation, &page)?))
+        }
+        ["agents", project, scope, agent, "transcript", "result"] => {
+            let agent = match find_agent(config, project, scope, agent)? {
+                Ok(agent) => agent,
+                Err(reply) => return Ok(reply),
+            };
+            let Some(reference) = query.get("ref") else {
+                return Ok(error(400, "ref names the result"));
+            };
+            let Some(conversation) = agent.conversation()? else {
+                return Ok(error(404, "the agent has no conversation yet"));
+            };
+            match conversation.full_result(reference)? {
+                Some(text) => Ok(ok(TEXT, text)),
+                None => Ok(error(404, "no such result")),
+            }
+        }
         ["features", project, feature, "summary"] => {
             let Some(root) = project_root(config, project)? else {
                 return Ok(error(404, "no such project"));
@@ -148,6 +228,32 @@ fn get(config: &Config, path: &str) -> Result<Reply> {
         }
         _ => Ok(error(404, "no such endpoint")),
     }
+}
+
+/// The registered agent `name` of `scope` in `project`, or the reply saying
+/// which of them does not exist.
+fn find_agent(
+    config: &Config,
+    project: &str,
+    scope: &str,
+    name: &str,
+) -> Result<std::result::Result<Agent, Reply>> {
+    let Some(root) = project_root(config, project)? else {
+        return Ok(Err(error(404, "no such project")));
+    };
+    if scope != "main" && !has_feature(&root, scope)? {
+        return Ok(Err(error(404, "no such scope")));
+    }
+    let registry = AgentRegistry::load(&paths::agents_dir(&root), scope)?;
+    if registry.get(name).is_none() {
+        return Ok(Err(error(404, "no such agent")));
+    }
+    Ok(Ok(Agent {
+        project: project.to_string(),
+        scope: scope.to_string(),
+        name: name.to_string(),
+        root,
+    }))
 }
 
 /// The root of the registered project named `name`.
