@@ -198,6 +198,22 @@ pub fn send_keys(server: Option<&str>, target: &str, keys: &str) -> Result<()> {
     Ok(())
 }
 
+/// Type `text` into `target` as literal keys, then press Enter. The pause
+/// before Enter is what makes it submit: codex takes an Enter arriving
+/// right after a burst of keys as part of a paste, a newline.
+pub fn send_text(server: Option<&str>, target: &str, text: &str) -> Result<()> {
+    run_tmux(server, &["send-keys", "-t", target, "-l", text])?;
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    run_tmux(server, &["send-keys", "-t", target, "Enter"])?;
+    Ok(())
+}
+
+/// The visible screen of `target`'s pane, with the escape sequences that
+/// style it.
+pub fn capture_screen(server: Option<&str>, target: &str) -> Result<String> {
+    run_tmux(server, &["capture-pane", "-p", "-e", "-t", target])
+}
+
 /// Find a window by name in a session. Returns the window target (e.g. "session:1") if found.
 pub fn find_window(server: Option<&str>, session: &str, name: &str) -> Result<Option<String>> {
     let output = run_tmux(

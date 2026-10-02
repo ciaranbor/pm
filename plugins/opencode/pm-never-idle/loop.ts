@@ -147,7 +147,8 @@ export async function drivesSession(
 /**
  * What the hook decided. The plugin only asks between turns, where the hook
  * has nothing to yield to, so anything but a block is a failure: `pm` could
- * not be run, exited with an error, or could not tell which agent this is.
+ * not be run, exited with an error, said why its wait ended, or could not
+ * tell which agent this is.
  */
 export function hookDecision(result: HookResult): { block: string } | { failure: string } {
   if (result.code !== 0) {
@@ -161,6 +162,9 @@ export function hookDecision(result: HookResult): { block: string } | { failure:
   }
   if (decision?.decision === "block" && typeof decision.reason === "string") {
     return { block: decision.reason }
+  }
+  if (typeof decision?.systemMessage === "string") {
+    return { failure: decision.systemMessage }
   }
   return { failure: "it did not recognise this agent" }
 }

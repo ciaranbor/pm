@@ -1,7 +1,9 @@
 //! `pm msg send`: a queue that never spawns a new agent. Same-scope and
 //! cross-scope sends (`--scope`/`--upstream`, same project) heal a dead
-//! window of an active recipient after queuing; a cross-project send only
-//! queues, since the target agent lives in a project this one can't spawn in.
+//! window of an active recipient after queuing, and re-arm a live one no
+//! message would wake ([`agent_rearm`](super::agent_rearm)); a
+//! cross-project send only queues, since the target agent lives in a
+//! project this one can't spawn in.
 
 use std::path::Path;
 
@@ -167,11 +169,19 @@ pub fn agent_send(
     // and exit 0 rather than make the sender think the message was lost.
     match super::agent_spawn::agent_spawn(project_root, feature, recipient, None, None, tmux_server)
     {
-        Ok((outcome, spawn_msg, _)) => {
-            if outcome.is_new_window() {
-                status = format!("{status}\n{spawn_msg}");
-            }
+        Ok((outcome, spawn_msg, _)) if outcome.is_new_window() => {
+            status = format!("{status}\n{spawn_msg}");
         }
+        Ok(_) => match super::agent_rearm::rearm(project_root, feature, recipient, tmux_server) {
+            Ok(Some(waiting)) => {
+                status = format!("{status}\nRe-armed '{recipient}' ({})", waiting.describe());
+            }
+            Ok(None) => {}
+            Err(e) => eprintln!(
+                "warning: message {index:03} is queued for '{recipient}@{feature}', but it could \
+                 not be re-armed: {e}"
+            ),
+        },
         Err(e) => eprintln!(
             "warning: message {index:03} is queued for '{recipient}@{feature}', but its tmux \
              window could not be respawned: {e}\n  It will be read if and when that agent next runs."

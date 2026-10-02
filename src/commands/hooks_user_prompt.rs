@@ -1,10 +1,11 @@
 //! `pm harness hooks user-prompt`: the user typing into an agent's window
 //! answers a blocked feature, so the feature goes back to `wip`.
 //!
-//! Only the user's input reaches it. pm messages arrive only as Stop-hook
-//! continuations, which no harness runs this hook for; the one other prompt
-//! is pm's own [`SPAWN_PROMPT`], which is ignored. Blocked is per feature, so
-//! input to any of its agents resets it.
+//! Only the user's input resets it. pm messages arrive as Stop-hook
+//! continuations, which no harness runs this hook for, or as the same text
+//! typed in to re-arm an agent (see `agent_rearm`); that and
+//! pm's own [`SPAWN_PROMPT`] are ignored. Blocked is per feature, so input
+//! to any of its agents resets it.
 //!
 //! Any prompt, pm's own included, also means the agent is working again, so
 //! it clears the agent's waiting marker ([`runtime`]) and stamps its
@@ -20,6 +21,7 @@ use std::path::Path;
 
 use crate::commands::agent_spawn::SPAWN_PROMPT;
 use crate::commands::feat_status::feat_status;
+use crate::commands::hooks_stop;
 use crate::error::Result;
 use crate::state::feature::{FeatureState, Progress};
 use crate::state::paths;
@@ -66,7 +68,7 @@ fn on_prompt(project_root: &Path, scope: &str, agent: &str, prompt: &str) -> Res
 /// Set `scope` back to `wip` if it is a blocked feature and `prompt` is the
 /// user's. Returns whether it did.
 pub(crate) fn on_user_prompt(project_root: &Path, scope: &str, prompt: &str) -> Result<bool> {
-    if scope == "main" || prompt.trim() == SPAWN_PROMPT {
+    if scope == "main" || prompt.trim() == SPAWN_PROMPT || hooks_stop::is_continuation(prompt) {
         return Ok(false);
     }
     let state = FeatureState::load(&paths::features_dir(project_root), scope)?;
@@ -123,6 +125,27 @@ mod tests {
         let state = state(&project);
         assert_eq!(state.progress, Progress::Blocked);
         assert_eq!(state.blocked_reason.as_deref(), Some("which DB?"));
+    }
+
+    #[test]
+    fn a_re_arm_prompt_leaves_the_feature_blocked() {
+        let dir = tempdir().unwrap();
+        let project = blocked_feature(dir.path());
+        crate::messages::send(
+            &paths::messages_dir(&project),
+            "login",
+            "implementer",
+            "reviewer",
+            "hi",
+        )
+        .unwrap();
+        let rearm = hooks_stop::continuation(&project, "login", "implementer").unwrap();
+
+        assert!(!on_user_prompt(&project, "login", &rearm).unwrap());
+        assert_eq!(state(&project).progress, Progress::Blocked);
+        // The user quoting it in a longer prompt is still the user.
+        let quoted = format!("why did you get \"{rearm}\"?");
+        assert!(on_user_prompt(&project, "login", &quoted).unwrap());
     }
 
     #[test]

@@ -129,6 +129,29 @@ fn fake_claude() -> std::path::PathBuf {
     .clone()
 }
 
+/// A script that draws Claude Code's input box, leaves the cursor on its
+/// prompt line, and execs [`fake_claude`].
+fn fake_claude_at_prompt() -> std::path::PathBuf {
+    static FAKE: OnceLock<std::path::PathBuf> = OnceLock::new();
+    FAKE.get_or_init(|| {
+        let claude = fake_claude();
+        let script = claude.with_file_name("claude-at-prompt");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nclear\nprintf '──── agent ─\\n❯ \\n────────\\n\\033[2A\\033[3G'\n\
+                 exec {} 999\n",
+                claude.display()
+            ),
+        )
+        .expect("write claude-at-prompt");
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .expect("chmod claude-at-prompt");
+        script
+    })
+    .clone()
+}
+
 static TMUX_SERVER_COUNTER: AtomicU32 = AtomicU32::new(0);
 static SHARED_SERVER_NAME: OnceLock<String> = OnceLock::new();
 static TEST_HOME: OnceLock<std::path::PathBuf> = OnceLock::new();
@@ -764,6 +787,28 @@ impl TestServer {
             &format!("exec {} 999", fake_claude().display()),
         )
         .unwrap();
+        self.await_liveness(
+            &target,
+            agent_name,
+            crate::commands::running_agents::Liveness::Busy,
+        );
+        self.register_fake_agent(project_root, feature, agent_name);
+        target
+    }
+
+    /// [`Self::spawn_fake_agent`] whose window shows Claude Code's input
+    /// box, with the cursor on its prompt line so typed keys echo there.
+    pub fn spawn_prompting_fake_agent(
+        &self,
+        project_root: &std::path::Path,
+        session_name: &str,
+        feature: &str,
+        agent_name: &str,
+    ) -> String {
+        let script = fake_claude_at_prompt();
+        let target = self.fake_agent_window(project_root, session_name, feature, agent_name);
+        crate::tmux::send_keys(self.name(), &target, &format!("exec {}", script.display()))
+            .unwrap();
         self.await_liveness(
             &target,
             agent_name,

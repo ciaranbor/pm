@@ -287,13 +287,16 @@ then. Codex and opencode agents block every turn. The wait has a one-year
 timeout, so it never times out in practice.
 
 An agent whose turn ends any other way never re-enters the hook, so a
-message to it waits until you type: an interrupt, a rejected dialog, an API
-error, or the hook itself killed (Esc while it waits). pm shows such an
-agent as `unarmed`. A Claude Code agent interrupted mid-turn is the one case
-no hook reports; it reads `busy`, and its scope goes quiet.
+message to it waits until something prompts it: an interrupt, a rejected
+dialog, an API error, or the hook itself ended by its harness (Esc while it
+waits), which then says why in the harness's transcript. pm shows such an
+agent as `unarmed`, and [`pm msg send`](#messaging) re-arms it when it can.
+A Claude Code agent interrupted mid-turn is the one case no hook reports; it
+reads `busy`, and its scope goes quiet. A SIGTERM from any process other than
+the harness leaves the hook waiting.
 
 A second hook, on UserPromptSubmit, sets a blocked feature back to `wip`
-when you type into one of its agents; pm's own messages never fire it.
+when you type into one of its agents; pm's own prompts don't count.
 
 A third, the status hook (`pm harness hooks waiting`), runs on the events
 that open and close a harness's dialogs and end its turns without Stop, and
@@ -329,7 +332,11 @@ A bare `read` takes one sender: the one whose earliest unread message is
 oldest, ending with `N more senders pending: b, c — pm msg read --from b`
 when others wait. History stays on disk. `pm msg send` never spawns an
 agent: it errors on an inactive recipient, and respawns one whose window
-died.
+died. To an `unarmed` recipient it types the prompt the Stop hook would
+have given, but only when that agent's input line is empty (and, in vim
+mode, in INSERT mode), so it never touches a draft or answers a dialog;
+elsewhere the message waits. opencode agents never need it: pm's plugin
+waits again after every turn.
 
 Identity resolves as `PM_AGENT_NAME` (set at spawn) > `$USER` > `"user"`, so
 spawned agents need no `--as-agent`.
