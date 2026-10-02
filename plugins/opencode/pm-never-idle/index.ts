@@ -6,6 +6,9 @@
 // of whichever client started it, so a second agent would be driven under
 // the first one's PM_AGENT_NAME.
 //
+// It also stands in for the hooks opencode lacks: it reports the user's
+// prompts, the dialogs that wait on the user, and the agent's activity.
+//
 // Installed by pm and overwritten on upgrade. opencode reloads it in every
 // running server when the file changes, so the cleanup must leave nothing
 // waiting and setup must arm again.
@@ -15,12 +18,16 @@ import type { ChildProcess } from "node:child_process"
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import {
+  ACTIVITY_FILE,
+  Asks,
   INBOX_ENQUEUED,
   LOADED_FILE,
   Loop,
   PM_PROMPT,
   TURN_END,
   TURN_ERROR_FILE,
+  answeredOf,
+  askOf,
   drivesSession,
   userInput,
 } from "./loop.ts"
@@ -51,6 +58,14 @@ export default {
     }
     const loadedFile = stateFile(LOADED_FILE)
     const turnErrorFile = stateFile(TURN_ERROR_FILE)
+    const activityFile = stateFile(ACTIVITY_FILE)
+    const active = () => record(activityFile, "")
+    const asks = new Asks()
+    // In order, so a reply can't overtake the ask it answers.
+    let reported: Promise<unknown> = Promise.resolve()
+    const waiting = (payload: object) => {
+      reported = reported.then(() => pm(["harness", "hooks", "waiting", "opencode"], JSON.stringify(payload)))
+    }
     // A restart's new TUI may write its marker before this one's cleanup runs.
     const loadedMark = `${process.pid} ${new Date().toISOString()}`
 
@@ -93,6 +108,7 @@ export default {
 
     void ctx.tool.hook("execute.after", (event: any) => {
       if (controller.signal.aborted) return
+      active()
       loop.toolRan(event.tool, event.input?.command, event.result)
     })
 
@@ -111,12 +127,26 @@ export default {
         try {
           for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
             loop.eventReceived()
+            const parentOf = async (id: string) => (await ctx.session.get({ sessionID: id })).parentID
+            // opencode has no hooks for dialogs; these stand in for them.
+            const ask = askOf(event)
+            if (ask) {
+              if (await drivesSession(own, ask.sessionID, parentOf)) {
+                asks.opened(ask.id)
+                waiting(ask.payload)
+              }
+              continue
+            }
+            const answered = answeredOf(event)
+            if (answered) {
+              if (asks.closed(answered)) waiting({ hook_event_name: "Resolved" })
+              continue
+            }
             const sessionID = event.data?.sessionID as string | undefined
             if (!sessionID) continue
             if (event.type === "session.created" && !own && !event.data?.parentID) {
               await pm(["harness", "hooks", "session-start"], JSON.stringify({ session_id: sessionID }))
             }
-            const parentOf = async (id: string) => (await ctx.session.get({ sessionID: id })).parentID
             if (event.type === INBOX_ENQUEUED) {
               // opencode has no UserPromptSubmit hook; this stands in for it.
               const text = userInput(event.data?.item)
@@ -127,6 +157,7 @@ export default {
             }
             if (!TURN_END.has(event.type)) continue
             if (await drivesSession(own, sessionID, parentOf)) {
+              active()
               void loop.turnEnded(sessionID, event.type, event.data?.error)
             }
           }

@@ -180,6 +180,16 @@ fn agent_window(server: Option<&str>, agent: &str) -> Option<AgentWindow> {
     Some(AgentWindow::new(server, &pane, agent))
 }
 
+/// Write this agent's own window options now, as a hook changing its state
+/// does, ahead of the push that refreshes the rest.
+fn publish(state: AgentState, unread: u32) {
+    if let Some(mut window) =
+        running_agent().and_then(|agent| agent_window(tmux_server_from_env().as_deref(), &agent))
+    {
+        window.publish(state, unread);
+    }
+}
+
 /// Hook handlers hand back a process exit code; a non-zero one is the
 /// handler's whole answer to the harness and must reach it verbatim.
 fn exit_unless_ok(code: i32) -> pm::error::Result<()> {
@@ -1136,7 +1146,7 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
                     if let Some(window) = window.as_mut() {
                         window.publish(state, unread);
                     }
-                    if state == AgentState::Idle {
+                    if state != AgentState::Busy {
                         push();
                     }
                 }))
@@ -1153,6 +1163,12 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
             HarnessHooksCommands::UserPrompt => {
                 exit_unless_ok(commands::hooks_user_prompt::user_prompt(push))
             }
+            HarnessHooksCommands::Waiting { harness } => exit_unless_ok(
+                commands::hooks_waiting::waiting(harness, |state, unread| {
+                    publish(state, unread);
+                    push();
+                }),
+            ),
         },
         HarnessCommands::Pull { name, dry_run } => {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;

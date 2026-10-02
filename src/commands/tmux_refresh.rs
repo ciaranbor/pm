@@ -14,9 +14,10 @@
 //! A scope's agents, main's included, are found through the registry, never
 //! by window, and only their windows carry options. A main session carries
 //! `@pm_project` so its windows count as the project's when they are
-//! cleared. Options are cleared only on sessions of projects the snapshot
-//! read: a project whose state couldn't be read keeps what it last
-//! published.
+//! cleared, and its main agent's badge, so the tree shows whether the
+//! orchestrator is working or waiting on the user. Options are cleared only
+//! on sessions of projects the snapshot read: a project whose state couldn't
+//! be read keeps what it last published.
 
 use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
@@ -27,7 +28,13 @@ use crate::state::paths;
 use crate::tmux;
 use crate::tmux::options::{self, Command, Holder, Options, Scope, format_text};
 
-use super::attention::{self, AgentSnapshot, AgentState, AttentionKind, FeatureSnapshot, Snapshot};
+use chrono::{DateTime, Utc};
+
+use super::attention::{
+    self, AgentSnapshot, AgentState, Attention, AttentionKind, FeatureSnapshot, ScopeSnapshot,
+    Snapshot,
+};
+use super::feat_status_view::span;
 
 const PROJECT: &str = "@pm_project";
 const FEATURE: &str = "@pm_feature";
@@ -35,7 +42,10 @@ const PROGRESS: &str = "@pm_progress";
 const REASON: &str = "@pm_reason";
 const ATTENTION: &str = "@pm_attention";
 const BADGE: &str = "@pm_badge";
-const SESSION_OPTIONS: &[&str] = &[PROJECT, FEATURE, PROGRESS, REASON, ATTENTION, BADGE];
+const ACTIVITY: &str = "@pm_activity";
+const SESSION_OPTIONS: &[&str] = &[
+    PROJECT, FEATURE, PROGRESS, REASON, ATTENTION, BADGE, ACTIVITY,
+];
 
 const AGENT: &str = "@pm_agent";
 const AGENT_STATE: &str = "@pm_agent_state";
@@ -61,7 +71,7 @@ pub fn refresh(projects_dir: &Path, tmux_server: Option<&str>) -> Result<()> {
         return Ok(());
     };
     let snapshot = attention::all(projects_dir, tmux_server)?;
-    write(tmux_server, &commands(&snapshot, &published))
+    write(tmux_server, &commands(&snapshot, &published, Utc::now()))
 }
 
 /// The file whose lock of `kind` stands for the server at `socket`.
@@ -94,9 +104,9 @@ fn write(tmux_server: Option<&str>, commands: &[Command]) -> Result<()> {
     }
 }
 
-/// What turns `published` into `snapshot`: the changed options, then an
-/// alert and a redraw for each client.
-fn commands(snapshot: &Snapshot, published: &Options) -> Vec<Command> {
+/// What turns `published` into `snapshot`, as of `now`: the changed
+/// options, then an alert and a redraw for each client.
+fn commands(snapshot: &Snapshot, published: &Options, now: DateTime<Utc>) -> Vec<Command> {
     let mut writes = Vec::new();
     let mut alerts = Vec::new();
     let mut sessions: HashSet<&str> = HashSet::new();
@@ -112,12 +122,13 @@ fn commands(snapshot: &Snapshot, published: &Options) -> Vec<Command> {
         };
         sessions.insert(&feature.session);
         let scope = Scope::Session(&feature.session);
-        diff(&mut writes, scope, held, &session_values(feature));
-        let kind = feature.attention.kind;
-        if matches!(kind, AttentionKind::Blocked | AttentionKind::Ready)
-            && held.get(ATTENTION) != kind.to_string()
+        diff(&mut writes, scope, held, &session_values(feature, now));
+        if matches!(
+            feature.attention.kind,
+            AttentionKind::Blocked | AttentionKind::Ready | AttentionKind::Asking
+        ) && held.get(ATTENTION) != feature.attention.kind.to_string()
         {
-            alerts.push(alert(feature));
+            alerts.push(alert(&feature.session, &feature.attention));
         }
         agent_windows(&mut writes, &mut windows, published, &feature.agents);
     }
@@ -133,8 +144,13 @@ fn commands(snapshot: &Snapshot, published: &Options) -> Vec<Command> {
             &mut writes,
             Scope::Session(&main.session),
             held,
-            &main_values(&project.name),
+            &main_values(&project.name, main, now),
         );
+        if main.attention.kind == AttentionKind::Asking
+            && held.get(ATTENTION) != main.attention.kind.to_string()
+        {
+            alerts.push(alert(&main.session, &main.attention));
+        }
         agent_windows(&mut writes, &mut windows, published, &main.agents);
     }
 
@@ -228,37 +244,79 @@ fn clear(writes: &mut Vec<Command>, scope: Scope, held: &Holder, names: &[&str])
     }
 }
 
-fn session_values(feature: &FeatureSnapshot) -> Vec<(&'static str, Option<String>)> {
+fn session_values(
+    feature: &FeatureSnapshot,
+    now: DateTime<Utc>,
+) -> Vec<(&'static str, Option<String>)> {
     let kind = feature.attention.kind;
     let needs = (kind != AttentionKind::None).then_some(kind);
     vec![
         (PROJECT, Some(format_text(&feature.project))),
         (FEATURE, Some(format_text(&feature.name))),
         (PROGRESS, Some(feature.progress.to_string())),
-        (
-            REASON,
-            feature
-                .attention
-                .detail
-                .as_deref()
-                .map(format_text)
-                .filter(|r| !r.is_empty()),
-        ),
+        (REASON, reason(&feature.attention)),
         (ATTENTION, needs.map(|k| k.to_string())),
         (
             BADGE,
             needs.map(|k| styled(attention_style(k), &k.to_string())),
         ),
+        (
+            ACTIVITY,
+            activity(feature.working, feature.last_activity, now),
+        ),
     ]
 }
 
-/// A main session carries only its project: it has no progress or
-/// attention.
-fn main_values(project: &str) -> Vec<(&'static str, Option<String>)> {
-    SESSION_OPTIONS
+fn reason(attention: &Attention) -> Option<String> {
+    attention
+        .detail
+        .as_deref()
+        .map(format_text)
+        .filter(|r| !r.is_empty())
+}
+
+/// A main session has no feature or progress. Its badge is its main
+/// agent's, whatever its attention.
+fn main_values(
+    project: &str,
+    main: &ScopeSnapshot,
+    now: DateTime<Utc>,
+) -> Vec<(&'static str, Option<String>)> {
+    let kind = main.attention.kind;
+    let lead = main
+        .agents
         .iter()
-        .map(|name| (*name, (*name == PROJECT).then(|| format_text(project))))
-        .collect()
+        .find(|a| a.name == "main")
+        .or(main.agents.first());
+    vec![
+        (PROJECT, Some(format_text(project))),
+        (FEATURE, None),
+        (PROGRESS, None),
+        (REASON, reason(&main.attention)),
+        (
+            ATTENTION,
+            (kind != AttentionKind::None).then(|| kind.to_string()),
+        ),
+        (BADGE, lead.map(|a| agent_badge(a.state, a.unread))),
+        (ACTIVITY, activity(main.working, main.last_activity, now)),
+    ]
+}
+
+/// The busy glyph while the scope works, else how long it has been quiet,
+/// once that is long enough to matter.
+fn activity(
+    working: bool,
+    last_activity: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> Option<String> {
+    if working {
+        return Some(styled(
+            agent_style(AgentState::Busy),
+            agent_glyph(AgentState::Busy),
+        ));
+    }
+    let since = attention::quiet_since(working, last_activity, now)?;
+    Some(styled("fg=colour245", &span(since, now)))
 }
 
 pub(super) fn window_values(agent: &AgentSnapshot) -> Vec<(&'static str, Option<String>)> {
@@ -282,13 +340,19 @@ fn agent_badge(state: AgentState, unread: u32) -> String {
 }
 
 fn global_values(snapshot: &Snapshot) -> Vec<(&'static str, Option<String>)> {
-    let kinds: Vec<AttentionKind> = snapshot
+    let mains = snapshot
+        .projects
+        .iter()
+        .filter_map(|p| p.main.as_ref())
+        .map(|m| m.attention.kind);
+    let mut kinds: Vec<AttentionKind> = snapshot
         .features
         .iter()
         .map(|f| f.attention.kind)
+        .chain(mains)
         .filter(|k| *k != AttentionKind::None)
         .collect();
-    // `features` is sorted most urgent first, so equal kinds are adjacent.
+    kinds.sort();
     let summary: Vec<String> = kinds
         .chunk_by(|a, b| a == b)
         .map(|run| {
@@ -312,8 +376,8 @@ fn styled(style: &str, text: &str) -> String {
 
 fn attention_style(kind: AttentionKind) -> &'static str {
     match kind {
-        AttentionKind::Blocked => "fg=red,bold",
-        AttentionKind::Cleanup => "fg=magenta",
+        AttentionKind::Blocked | AttentionKind::Asking => "fg=red,bold",
+        AttentionKind::Cleanup | AttentionKind::Unarmed => "fg=magenta",
         AttentionKind::Ready => "fg=green,bold",
         AttentionKind::Dead => "fg=red",
         AttentionKind::Stalled => "fg=yellow",
@@ -323,26 +387,32 @@ fn attention_style(kind: AttentionKind) -> &'static str {
 
 fn agent_style(state: AgentState) -> &'static str {
     match state {
-        AgentState::Busy => "fg=green",
+        AgentState::Busy | AgentState::Background => "fg=green",
+        AgentState::Asking => "fg=red,bold",
+        AgentState::Unarmed => "fg=magenta",
         AgentState::Dead => "fg=red",
         AgentState::Idle | AgentState::Stopped | AgentState::Closed => "fg=colour245",
     }
 }
 
-/// Nerd Font (v3) glyphs, one cell wide: nf-fa-gear, nf-fa-hourglass_half,
-/// nf-md-skull, nf-fa-stop.
+/// Nerd Font (v3) glyphs, one cell wide: nf-fa-gear, nf-fa-question_circle,
+/// nf-fa-bell_slash, nf-fa-spinner, nf-fa-hourglass_half, nf-md-skull,
+/// nf-fa-stop.
 fn agent_glyph(state: AgentState) -> &'static str {
     match state {
         AgentState::Busy => "\u{f013}",
+        AgentState::Asking => "\u{f059}",
+        AgentState::Unarmed => "\u{f1f6}",
+        AgentState::Background => "\u{f110}",
         AgentState::Idle => "\u{f252}",
         AgentState::Dead => "\u{f068c}",
         AgentState::Stopped | AgentState::Closed => "\u{f04d}",
     }
 }
 
-fn alert(feature: &FeatureSnapshot) -> String {
-    let what = format!("{} {}", feature.session, feature.attention.kind);
-    match &feature.attention.detail {
+fn alert(session: &str, attention: &Attention) -> String {
+    let what = format!("{session} {}", attention.kind);
+    match &attention.detail {
         Some(detail) => format!("{what}: {detail}"),
         None => what,
     }
@@ -356,6 +426,7 @@ mod tests {
     use crate::state::agent::AgentRegistry;
     use crate::state::feature::{FeatureState, FeatureStatus, Progress};
     use crate::state::paths;
+    use crate::state::runtime::WaitingKind;
     use crate::testing::{OwnServer, TestServer, server_socket_exists};
     use crate::tmux;
     use std::io::{BufRead, BufReader, Write};
@@ -530,6 +601,7 @@ mod tests {
                 "which ##[fg=red]DB?",
                 "blocked",
                 "#[fg=red,bold]blocked#[default]",
+                "",
             ]
         );
         assert_eq!(
@@ -572,7 +644,7 @@ mod tests {
         let now = published(&server);
         assert_eq!(
             values(&now.sessions, &session, SESSION_OPTIONS),
-            [project_name.as_str(), "login", "wip", "", "", ""]
+            [project_name.as_str(), "login", "wip", "", "", "", ""]
         );
         assert_eq!(
             values(&now.windows, &implementer, WINDOW_OPTIONS),
@@ -598,7 +670,7 @@ mod tests {
     }
 
     #[test]
-    fn main_agents_get_badges_and_main_carries_only_its_project() {
+    fn main_agents_get_badges_and_main_carries_its_project_and_its_agents_badge() {
         let _serial = serial();
         let dir = tempdir().unwrap();
         let server = TestServer::new();
@@ -622,7 +694,16 @@ mod tests {
         );
         assert_eq!(
             values(&now.sessions, &main, SESSION_OPTIONS),
-            [project_name.as_str(), "", "", "", "", ""]
+            [
+                project_name.as_str(),
+                "",
+                "",
+                "",
+                "",
+                "#[fg=colour245]\u{f252}#[fg=yellow]\u{f0e0}#[default]",
+                ""
+            ],
+            "main's own badge, whatever its attention"
         );
 
         let agents_dir = paths::agents_dir(&project);
@@ -678,7 +759,7 @@ mod tests {
         assert!(!now.sessions.iter().any(|s| s.target == search));
         assert_eq!(
             values(&now.sessions, &login, SESSION_OPTIONS),
-            ["", "", "", "", "", ""]
+            ["", "", "", "", "", "", ""]
         );
         assert_eq!([now.global.get(COUNT), now.global.get(SUMMARY)], ["0", ""]);
     }
@@ -757,6 +838,112 @@ mod tests {
         assert_eq!(writers(), first);
     }
 
+    fn main_scope(agents: Vec<AgentSnapshot>) -> Snapshot {
+        let attention = attention::main_attention(&agents);
+        Snapshot {
+            version: attention::VERSION,
+            projects: vec![attention::ProjectSnapshot {
+                name: "app".into(),
+                root: "/src/app".into(),
+                skipped: None,
+                main: Some(ScopeSnapshot {
+                    session: "app/main".into(),
+                    session_exists: true,
+                    agents,
+                    attention,
+                    working: false,
+                    last_activity: None,
+                }),
+            }],
+            features: Vec::new(),
+        }
+    }
+
+    fn main_agent(state: AgentState, kind: WaitingKind, detail: &str) -> AgentSnapshot {
+        AgentSnapshot {
+            name: "main".into(),
+            state,
+            unread: 0,
+            window: Some("app/main:1".into()),
+            waiting: Some(attention::WaitingSnapshot {
+                kind,
+                detail: detail.into(),
+            }),
+        }
+    }
+
+    fn sets<'a>(commands: &'a [Command], name: &str) -> Vec<&'a str> {
+        commands
+            .iter()
+            .filter(|c| c[0] == "set-option" && c.iter().any(|a| a == name))
+            .filter_map(|c| c.last().map(String::as_str))
+            .filter(|v| *v != name)
+            .collect()
+    }
+
+    fn displayed(commands: &[Command]) -> Vec<&str> {
+        commands
+            .iter()
+            .filter(|c| c[0] == "display-message")
+            .map(|c| c[3].as_str())
+            .collect()
+    }
+
+    #[test]
+    fn main_asking_needs_attention_alerts_once_and_unarmed_never_alerts() {
+        let asking = main_scope(vec![main_agent(
+            AgentState::Asking,
+            WaitingKind::Plan,
+            "plan approval",
+        )]);
+        let published = |attention: &str| Options {
+            clients: vec!["c1".into()],
+            sessions: vec![Holder::session("app/main", &[(ATTENTION, attention)])],
+            ..Options::default()
+        };
+        let now = Utc::now();
+
+        let commands = commands(&asking, &published(""), now);
+        assert_eq!(sets(&commands, ATTENTION), ["asking"]);
+        assert_eq!(sets(&commands, REASON), ["main: plan approval"]);
+        assert_eq!(sets(&commands, BADGE), ["#[fg=red,bold]\u{f059}#[default]"]);
+        assert_eq!(sets(&commands, COUNT), ["1"]);
+        assert_eq!(
+            displayed(&commands),
+            ["pm: app/main asking: main: plan approval"]
+        );
+        assert!(displayed(&super::commands(&asking, &published("asking"), now)).is_empty());
+
+        let unarmed = main_scope(vec![main_agent(
+            AgentState::Unarmed,
+            WaitingKind::Interrupted,
+            "interrupted",
+        )]);
+        let commands = super::commands(&unarmed, &published(""), now);
+        assert_eq!(sets(&commands, ATTENTION), ["unarmed"]);
+        assert_eq!(
+            sets(&commands, SUMMARY),
+            ["#[fg=magenta]1 unarmed#[default]"]
+        );
+        assert!(displayed(&commands).is_empty());
+    }
+
+    #[test]
+    fn activity_shows_work_or_a_quiet_spell_long_enough_to_matter() {
+        let now = Utc::now();
+        let ago = |minutes| Some(now - chrono::Duration::minutes(minutes));
+        assert_eq!(
+            activity(true, ago(1), now).as_deref(),
+            Some("#[fg=green]\u{f013}#[default]")
+        );
+        assert_eq!(activity(false, ago(9), now), None, "between turns");
+        assert_eq!(
+            activity(false, ago(185), now).as_deref(),
+            Some("#[fg=colour245]3h#[default]")
+        );
+        assert_eq!(activity(false, None, now), None);
+    }
+
     #[test]
     fn no_server_publishes_nothing() {
         let dir = tempdir().unwrap();
@@ -825,7 +1012,7 @@ mod tests {
         let mut before = published(&server);
         before.clients.push("client-gone".into());
         let snapshot = attention::all(&projects_dir, server.name()).unwrap();
-        write(server.name(), &commands(&snapshot, &before)).unwrap();
+        write(server.name(), &commands(&snapshot, &before, Utc::now())).unwrap();
 
         let now = published(&server);
         assert_eq!(values(&now.sessions, &session, &[ATTENTION]), ["blocked"]);

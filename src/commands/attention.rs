@@ -1,15 +1,23 @@
 //! The attention snapshot behind `pm feat status` and `pm status`: every
-//! feature, what its agents are doing, and what — if anything — it needs
-//! from the user (README, "Attention view", has the ranking and the JSON
-//! contract). It reads pm state and the tmux server once ([`Windows`]),
-//! takes the PR state `pm feat sync` last recorded, and never calls `gh` or
-//! a harness, so it is cheap enough to poll.
+//! feature, what its agents are doing, and what — if anything — it or a
+//! project's main scope needs from the user (README, "Attention view", has
+//! the ranking and the JSON contract). It reads pm state and the tmux server
+//! once ([`Windows`]), takes the PR state `pm feat sync` last recorded, and
+//! never calls `gh` or a harness, so it is cheap enough to poll.
+//!
+//! An agent the window reads as busy is refined by its waiting marker
+//! ([`runtime`]) into asking, unarmed or background. A scope is working
+//! while a busy or background agent showed activity in the last
+//! [`WORKING_SECS`]; a busy agent silent longer, which is also what a user's
+//! undetectable interrupt looks like, reads quiet.
 
 use std::path::Path;
 
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use crate::error::Result;
+use crate::harness::Harness;
 use crate::messages;
 use crate::state::agent::AgentRegistry;
 use crate::state::feature::{FeatureState, FeatureStatus, Progress};
@@ -17,13 +25,32 @@ use crate::state::paths;
 use crate::state::project::{
     GlobalConfig, HarnessConfig, ProjectConfig, ProjectEntry, resolve_harness_config,
 };
+use crate::state::runtime::{self, WaitingClass, WaitingKind};
 use crate::tmux;
 
 use super::feat_status_view::first_line;
 use super::running_agents::{Liveness, Windows, liveness};
 
-/// Bumped when a field changes meaning or goes away; added fields keep it.
+/// Bumped when a field changes meaning or goes away; added fields, kinds
+/// and states keep it.
 pub const VERSION: u32 = 1;
+
+/// How recent a busy agent's activity must be for its scope to be working.
+pub const WORKING_SECS: i64 = 20 * 60;
+
+/// A scope quiet for less than this is shown as neither working nor quiet,
+/// so the gaps between turns don't flicker.
+pub const QUIET_SECS: i64 = 10 * 60;
+
+/// How long a scope that isn't working has been quiet, once that is
+/// [`QUIET_SECS`] or more.
+pub fn quiet_since(
+    working: bool,
+    last_activity: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    last_activity.filter(|t| !working && (now - *t).num_seconds() >= QUIET_SECS)
+}
 
 #[derive(Debug, Serialize)]
 pub struct Snapshot {
@@ -45,12 +72,16 @@ pub struct ProjectSnapshot {
 }
 
 /// A scope's session and agents: all the main scope has, with no progress
-/// or attention of its own.
+/// of its own.
 #[derive(Debug, Clone, Serialize)]
 pub struct ScopeSnapshot {
     pub session: String,
     pub session_exists: bool,
     pub agents: Vec<AgentSnapshot>,
+    /// What the scope's agents need, by [`main_attention`]'s rule.
+    pub attention: Attention,
+    pub working: bool,
+    pub last_activity: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -70,6 +101,8 @@ pub struct FeatureSnapshot {
     pub session: String,
     pub session_exists: bool,
     pub agents: Vec<AgentSnapshot>,
+    pub working: bool,
+    pub last_activity: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -79,6 +112,14 @@ pub struct AgentSnapshot {
     pub unread: u32,
     /// The window's tmux target, while it has one.
     pub window: Option<String>,
+    /// What an asking, unarmed or background agent is at.
+    pub waiting: Option<WaitingSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WaitingSnapshot {
+    pub kind: WaitingKind,
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -86,8 +127,14 @@ pub struct AgentSnapshot {
 pub enum AgentState {
     /// Waiting for a message, between turns.
     Idle,
-    /// Mid-turn, or running background work.
+    /// Mid-turn.
     Busy,
+    /// A dialog waits on the user.
+    Asking,
+    /// At its prompt, where a message won't wake it.
+    Unarmed,
+    /// Its turn ended for background work, whose completion wakes it.
+    Background,
     /// Active, but its window is gone from a live session or its harness
     /// exited.
     Dead,
@@ -99,7 +146,20 @@ pub enum AgentState {
 
 impl AgentState {
     fn is_running(self) -> bool {
-        matches!(self, Self::Idle | Self::Busy)
+        matches!(
+            self,
+            Self::Idle | Self::Busy | Self::Asking | Self::Unarmed | Self::Background
+        )
+    }
+}
+
+impl From<WaitingClass> for AgentState {
+    fn from(class: WaitingClass) -> Self {
+        match class {
+            WaitingClass::Asking => Self::Asking,
+            WaitingClass::Unarmed => Self::Unarmed,
+            WaitingClass::Background => Self::Background,
+        }
     }
 }
 
@@ -108,6 +168,9 @@ impl std::fmt::Display for AgentState {
         f.pad(match self {
             Self::Idle => "idle",
             Self::Busy => "busy",
+            Self::Asking => "asking",
+            Self::Unarmed => "unarmed",
+            Self::Background => "background",
             Self::Dead => "dead",
             Self::Stopped => "stopped",
             Self::Closed => "closed",
@@ -130,9 +193,11 @@ pub struct Attention {
 #[serde(rename_all = "lowercase")]
 pub enum AttentionKind {
     Blocked,
+    Asking,
     Cleanup,
     Ready,
     Dead,
+    Unarmed,
     Stalled,
     None,
 }
@@ -141,29 +206,52 @@ impl std::fmt::Display for AttentionKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.pad(match self {
             Self::Blocked => "blocked",
+            Self::Asking => "asking",
             Self::Cleanup => "cleanup",
             Self::Ready => "ready",
             Self::Stalled => "stalled",
             Self::Dead => "dead",
+            Self::Unarmed => "unarmed",
             Self::None => "none",
         })
     }
 }
 
-/// The attention a feature needs: the first kind that applies, in
-/// [`AttentionKind`]'s order.
-pub fn attention(feature: &FeatureSnapshot) -> Attention {
-    let of = |kind, detail: Option<String>, agent: Option<String>| Attention {
+fn of(kind: AttentionKind, detail: Option<String>, agent: Option<String>) -> Attention {
+    Attention {
         kind,
         detail,
         agent,
+    }
+}
+
+/// The first of `agents` in `state`, as attention of `kind` naming it.
+fn agent_in(agents: &[AgentSnapshot], state: AgentState, kind: AttentionKind) -> Option<Attention> {
+    let agent = agents.iter().find(|a| a.state == state)?;
+    let what = match (&agent.waiting, agent.window.is_some()) {
+        (Some(waiting), _) => waiting.detail.as_str(),
+        (None, true) => "harness exited",
+        (None, false) => "window missing",
     };
+    Some(of(
+        kind,
+        Some(format!("{}: {what}", agent.name)),
+        Some(agent.name.clone()),
+    ))
+}
+
+/// The attention a feature needs: the first kind that applies, in
+/// [`AttentionKind`]'s order.
+pub fn attention(feature: &FeatureSnapshot) -> Attention {
     if feature.progress == Progress::Blocked {
         return of(
             AttentionKind::Blocked,
             feature.blocked_reason.clone(),
             feature.blocked_by.clone(),
         );
+    }
+    if let Some(asking) = agent_in(&feature.agents, AgentState::Asking, AttentionKind::Asking) {
+        return asking;
     }
     match feature.lifecycle {
         FeatureStatus::Merged => return of(AttentionKind::Cleanup, Some("PR merged".into()), None),
@@ -176,17 +264,11 @@ pub fn attention(feature: &FeatureSnapshot) -> Attention {
     if feature.lifecycle == FeatureStatus::Approved {
         return of(AttentionKind::Ready, Some("PR approved".into()), None);
     }
-    if let Some(dead) = feature.agents.iter().find(|a| a.state == AgentState::Dead) {
-        let why = if dead.window.is_some() {
-            "harness exited"
-        } else {
-            "window missing"
-        };
-        return of(
-            AttentionKind::Dead,
-            Some(format!("{}: {why}", dead.name)),
-            Some(dead.name.clone()),
-        );
+    if let Some(dead) = agent_in(&feature.agents, AgentState::Dead, AttentionKind::Dead) {
+        return dead;
+    }
+    if let Some(unarmed) = agent_in(&feature.agents, AgentState::Unarmed, AttentionKind::Unarmed) {
+        return unarmed;
     }
     let running: Vec<&AgentSnapshot> = feature
         .agents
@@ -202,6 +284,19 @@ pub fn attention(feature: &FeatureSnapshot) -> Attention {
         return of(AttentionKind::Stalled, None, None);
     }
     of(AttentionKind::None, None, None)
+}
+
+/// The attention a main scope needs, which has no progress: an agent
+/// asking, dead or unarmed, in that order.
+pub fn main_attention(agents: &[AgentSnapshot]) -> Attention {
+    [
+        (AgentState::Asking, AttentionKind::Asking),
+        (AgentState::Dead, AttentionKind::Dead),
+        (AgentState::Unarmed, AttentionKind::Unarmed),
+    ]
+    .into_iter()
+    .find_map(|(state, kind)| agent_in(agents, state, kind))
+    .unwrap_or_else(|| of(AttentionKind::None, None, None))
 }
 
 /// The snapshot of every registered project. A project whose state or
@@ -310,6 +405,9 @@ fn project_features(
                 session,
                 session_exists,
                 agents,
+                working,
+                last_activity,
+                ..
             } = reader.read(&name)?;
             let mut feature = FeatureSnapshot {
                 project: project.clone(),
@@ -331,6 +429,8 @@ fn project_features(
                 session,
                 session_exists,
                 agents,
+                working,
+                last_activity,
                 name,
             };
             feature.attention = attention(&feature);
@@ -358,38 +458,72 @@ impl ScopeReader<'_> {
         let session_exists = self.windows.has_session(&session);
         let registry = AgentRegistry::load(&paths::agents_dir(self.project_root), scope)?;
         let messages_dir = paths::messages_dir(self.project_root);
-        let agents = registry
+        let now = Utc::now();
+        let mut working = false;
+        let mut last_activity = None;
+        let agents: Vec<AgentSnapshot> = registry
             .agents
             .iter()
             .map(|(agent, entry)| {
                 let pane = self.windows.find(&session, &entry.window_name);
-                let state = match pane {
-                    _ if !entry.active => AgentState::Stopped,
-                    _ if !session_exists => AgentState::Closed,
-                    None => AgentState::Dead,
+                let (state, waiting) = match pane {
+                    _ if !entry.active => (AgentState::Stopped, None),
+                    _ if !session_exists => (AgentState::Closed, None),
+                    None => (AgentState::Dead, None),
                     Some(pane) => match liveness(
                         self.windows.processes(pane).as_deref(),
                         entry.harness,
                         self.config,
                     ) {
-                        Liveness::Idle => AgentState::Idle,
-                        Liveness::Busy => AgentState::Busy,
-                        Liveness::Dead => AgentState::Dead,
+                        Liveness::Idle => (AgentState::Idle, None),
+                        Liveness::Busy => self.busy(scope, agent, entry.harness, now),
+                        Liveness::Dead => (AgentState::Dead, None),
                     },
                 };
+                let active = runtime::last_activity(self.project_root, scope, agent);
+                working |= matches!(state, AgentState::Busy | AgentState::Background)
+                    && active.is_some_and(|t| (now - t).num_seconds() < WORKING_SECS);
+                last_activity = last_activity.max(active);
                 AgentSnapshot {
                     name: agent.clone(),
                     state,
                     unread: messages::unread_count(&messages_dir, scope, agent),
                     window: pane.map(|p| p.window.clone()),
+                    waiting,
                 }
             })
             .collect();
         Ok(ScopeSnapshot {
             session,
             session_exists,
+            attention: main_attention(&agents),
             agents,
+            working,
+            last_activity,
         })
+    }
+
+    /// A busy agent, refined by its waiting marker or a stopped loop. A
+    /// startup marker counts only once the start has had time to finish.
+    fn busy(
+        &self,
+        scope: &str,
+        agent: &str,
+        harness: Harness,
+        now: DateTime<Utc>,
+    ) -> (AgentState, Option<WaitingSnapshot>) {
+        let grace = super::doctor::START_GRACE.as_secs() as i64;
+        let waiting = runtime::read_waiting(self.project_root, scope, agent)
+            .filter(|w| w.kind != WaitingKind::Startup || (now - w.since).num_seconds() > grace)
+            .map(|w| (w.kind, w.describe()))
+            .or_else(|| {
+                let reason = harness.loop_stopped(self.project_root, scope, agent)?;
+                Some((WaitingKind::Tripped, format!("loop stopped: {reason}")))
+            });
+        let Some((kind, detail)) = waiting else {
+            return (AgentState::Busy, None);
+        };
+        (kind.class().into(), Some(WaitingSnapshot { kind, detail }))
     }
 }
 
@@ -414,6 +548,8 @@ mod tests {
             session: "app/login".into(),
             session_exists: true,
             agents: Vec::new(),
+            working: false,
+            last_activity: None,
         }
     }
 
@@ -431,6 +567,17 @@ mod tests {
             state,
             unread,
             window: (state != AgentState::Dead).then(|| format!("app/login:{name}")),
+            waiting: None,
+        }
+    }
+
+    fn waiting(name: &str, state: AgentState, kind: WaitingKind, detail: &str) -> AgentSnapshot {
+        AgentSnapshot {
+            waiting: Some(WaitingSnapshot {
+                kind,
+                detail: detail.into(),
+            }),
+            ..agent(name, state, 0)
         }
     }
 
@@ -521,8 +668,20 @@ mod tests {
                     session_exists: true,
                     agents: vec![AgentSnapshot {
                         window: Some("app/main:1".into()),
-                        ..agent("main", AgentState::Busy, 2)
+                        ..waiting(
+                            "main",
+                            AgentState::Asking,
+                            WaitingKind::Plan,
+                            "plan approval",
+                        )
                     }],
+                    attention: Attention {
+                        kind: AttentionKind::Asking,
+                        detail: Some("main: plan approval".into()),
+                        agent: Some("main".into()),
+                    },
+                    working: false,
+                    last_activity: Some("2026-10-02T09:30:00Z".parse().unwrap()),
                 }),
             }],
             features: vec![f],
@@ -541,10 +700,18 @@ mod tests {
                         "session_exists": true,
                         "agents": [{
                             "name": "main",
-                            "state": "busy",
-                            "unread": 2,
-                            "window": "app/main:1"
-                        }]
+                            "state": "asking",
+                            "unread": 0,
+                            "window": "app/main:1",
+                            "waiting": { "kind": "plan", "detail": "plan approval" }
+                        }],
+                        "attention": {
+                            "kind": "asking",
+                            "detail": "main: plan approval",
+                            "agent": "main"
+                        },
+                        "working": false,
+                        "last_activity": "2026-10-02T09:30:00Z"
                     }
                 }],
                 "features": [{
@@ -563,8 +730,11 @@ mod tests {
                         "name": "implementer",
                         "state": "idle",
                         "unread": 0,
-                        "window": "app/login:implementer"
-                    }]
+                        "window": "app/login:implementer",
+                        "waiting": null
+                    }],
+                    "working": false,
+                    "last_activity": null
                 }]
             })
         );
@@ -572,15 +742,21 @@ mod tests {
             AttentionKind::Cleanup,
             AttentionKind::Ready,
             AttentionKind::Dead,
+            AttentionKind::Unarmed,
             AttentionKind::Stalled,
             AttentionKind::None,
         ]
         .iter()
         .map(|k| serde_json::to_value(k).unwrap())
         .collect();
-        assert_eq!(kinds, ["cleanup", "ready", "dead", "stalled", "none"]);
+        assert_eq!(
+            kinds,
+            ["cleanup", "ready", "dead", "unarmed", "stalled", "none"]
+        );
         let states: Vec<serde_json::Value> = [
             AgentState::Busy,
+            AgentState::Unarmed,
+            AgentState::Background,
             AgentState::Dead,
             AgentState::Stopped,
             AgentState::Closed,
@@ -588,7 +764,192 @@ mod tests {
         .iter()
         .map(|s| serde_json::to_value(s).unwrap())
         .collect();
-        assert_eq!(states, ["busy", "dead", "stopped", "closed"]);
+        assert_eq!(
+            states,
+            ["busy", "unarmed", "background", "dead", "stopped", "closed"]
+        );
+        let waiting: Vec<serde_json::Value> = [
+            WaitingKind::Question,
+            WaitingKind::Permission,
+            WaitingKind::Dialog,
+            WaitingKind::Startup,
+            WaitingKind::Interrupted,
+            WaitingKind::HookEnded,
+            WaitingKind::Error,
+            WaitingKind::Prompt,
+            WaitingKind::Tripped,
+            WaitingKind::Background,
+        ]
+        .iter()
+        .map(|k| serde_json::to_value(k).unwrap())
+        .collect();
+        assert_eq!(
+            waiting,
+            [
+                "question",
+                "permission",
+                "dialog",
+                "startup",
+                "interrupted",
+                "hook-ended",
+                "error",
+                "prompt",
+                "tripped",
+                "background"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_asking_agent_ranks_after_blocked_and_before_everything_else() {
+        let mut f = feature(Progress::Wip, FeatureStatus::Merged);
+        f.agents = vec![
+            agent("implementer", AgentState::Dead, 0),
+            waiting(
+                "reviewer",
+                AgentState::Asking,
+                WaitingKind::Question,
+                "Which DB?",
+            ),
+        ];
+        assert_eq!(
+            attention(&f),
+            Attention {
+                kind: AttentionKind::Asking,
+                detail: Some("reviewer: Which DB?".into()),
+                agent: Some("reviewer".into()),
+            }
+        );
+        f.progress = Progress::Blocked;
+        assert_eq!(kind(&f), AttentionKind::Blocked);
+    }
+
+    #[test]
+    fn an_unarmed_agent_ranks_after_a_dead_one() {
+        let mut f = feature(Progress::Wip, FeatureStatus::Wip);
+        f.agents = vec![waiting(
+            "implementer",
+            AgentState::Unarmed,
+            WaitingKind::Interrupted,
+            "interrupted",
+        )];
+        assert_eq!(
+            attention(&f).detail.as_deref(),
+            Some("implementer: interrupted")
+        );
+        assert_eq!(kind(&f), AttentionKind::Unarmed);
+        f.agents.push(agent("reviewer", AgentState::Dead, 0));
+        assert_eq!(kind(&f), AttentionKind::Dead);
+    }
+
+    #[test]
+    fn a_waiting_agent_keeps_its_team_from_stalling() {
+        for (state, waiting_kind, kind_) in [
+            (
+                AgentState::Asking,
+                WaitingKind::Question,
+                AttentionKind::Asking,
+            ),
+            (
+                AgentState::Unarmed,
+                WaitingKind::Interrupted,
+                AttentionKind::Unarmed,
+            ),
+            (
+                AgentState::Background,
+                WaitingKind::Background,
+                AttentionKind::None,
+            ),
+        ] {
+            let mut f = feature(Progress::Wip, FeatureStatus::Wip);
+            f.agents = vec![
+                agent("implementer", AgentState::Idle, 0),
+                waiting("reviewer", state, waiting_kind, "x"),
+            ];
+            assert_eq!(kind(&f), kind_, "{state}");
+        }
+    }
+
+    #[test]
+    fn main_needs_an_asking_then_a_dead_then_an_unarmed_agent() {
+        let unarmed = waiting("a", AgentState::Unarmed, WaitingKind::Error, "API error");
+        let dead = agent("b", AgentState::Dead, 0);
+        let asking = waiting("c", AgentState::Asking, WaitingKind::Plan, "plan approval");
+        let idle = agent("main", AgentState::Idle, 0);
+        let kind_of = |agents: Vec<AgentSnapshot>| main_attention(&agents).kind;
+
+        assert_eq!(kind_of(vec![idle.clone()]), AttentionKind::None);
+        assert_eq!(
+            kind_of(vec![idle.clone(), unarmed.clone()]),
+            AttentionKind::Unarmed
+        );
+        assert_eq!(
+            kind_of(vec![unarmed.clone(), dead.clone()]),
+            AttentionKind::Dead
+        );
+        assert_eq!(
+            main_attention(&[unarmed, dead, asking]),
+            Attention {
+                kind: AttentionKind::Asking,
+                detail: Some("c: plan approval".into()),
+                agent: Some("c".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn a_marker_refines_only_an_agent_its_window_reads_as_busy() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let session = tmux::session_name(&project_name, "login");
+        server.spawn_fake_agent(&project, &session, "login", "asking");
+        server.spawn_fake_agent(&project, &session, "login", "starting");
+        server.spawn_idle_fake_agent(&project, &session, "login", "idle");
+        server.spawn_dead_fake_agent(&project, &session, "login", "dead");
+        let mark = |agent: &str, kind: WaitingKind| {
+            let waiting = runtime::Waiting::now(kind, Some("Which DB?".into()));
+            runtime::write_waiting(&project, "login", agent, &waiting).unwrap();
+        };
+        mark("asking", WaitingKind::Question);
+        mark("starting", WaitingKind::Startup);
+        mark("idle", WaitingKind::Interrupted);
+        mark("dead", WaitingKind::Question);
+        runtime::touch_activity(&project, "login", "asking").unwrap();
+
+        let login = &super::project(&project, server.name()).unwrap().features[0];
+
+        let states: Vec<(&str, AgentState, Option<&str>)> = login
+            .agents
+            .iter()
+            .map(|a| {
+                let detail = a.waiting.as_ref().map(|w| w.detail.as_str());
+                (a.name.as_str(), a.state, detail)
+            })
+            .collect();
+        assert_eq!(
+            states,
+            [
+                ("asking", AgentState::Asking, Some("Which DB?")),
+                ("dead", AgentState::Dead, None),
+                ("idle", AgentState::Idle, None),
+                ("starting", AgentState::Busy, None),
+            ]
+        );
+        assert_eq!(login.attention.kind, AttentionKind::Asking);
+        assert!(!login.working, "its only busy agent was never active");
+
+        let at = |minutes| Utc::now() - chrono::Duration::minutes(minutes);
+        runtime::set_activity(&project, "login", "starting", at(1));
+        let login = &super::project(&project, server.name()).unwrap().features[0];
+        assert!(login.working);
+
+        runtime::set_activity(&project, "login", "starting", at(30));
+        runtime::set_activity(&project, "login", "asking", at(25));
+        let login = &super::project(&project, server.name()).unwrap().features[0];
+        assert!(!login.working, "a busy agent silent for 30 minutes");
+        let quiet = Utc::now() - login.last_activity.unwrap();
+        assert_eq!(quiet.num_minutes(), 25, "the latest of its agents");
     }
 
     #[test]

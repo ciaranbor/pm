@@ -1,7 +1,8 @@
 //! `pm tmux jump`: what choosing an item in pm's tree does. A window or pane
-//! is switched to as chosen; a feature's session goes to the window of the
-//! agent its attention names — the one that set `blocked`, or a dead agent
-//! whose window is still open — and otherwise to the session.
+//! is switched to as chosen; a feature's or main's session goes to the
+//! window of the agent its attention names — the one that set `blocked`, one
+//! asking, or a dead agent whose window is still open — and otherwise to the
+//! session.
 
 use std::path::Path;
 
@@ -33,13 +34,21 @@ fn destination(snapshot: &Snapshot, target: &str) -> String {
     else {
         return target.to_string();
     };
-    snapshot
+    let features = snapshot
         .features
         .iter()
-        .find(|f| f.session == session)
-        .and_then(|f| {
-            let agent = f.attention.agent.as_deref()?;
-            f.agents.iter().find(|a| a.name == agent)?.window.clone()
+        .map(|f| (&f.session, &f.attention, &f.agents));
+    let mains = snapshot
+        .projects
+        .iter()
+        .filter_map(|p| p.main.as_ref())
+        .map(|m| (&m.session, &m.attention, &m.agents));
+    features
+        .chain(mains)
+        .find(|(s, _, _)| *s == session)
+        .and_then(|(_, attention, agents)| {
+            let agent = attention.agent.as_deref()?;
+            agents.iter().find(|a| a.name == agent)?.window.clone()
         })
         .map_or_else(|| target.to_string(), |window| format!("={window}"))
 }
@@ -101,5 +110,25 @@ mod tests {
         );
         let main = format!("={}:", tmux::session_name(&project_name, "main"));
         assert_eq!(destination(&snapshot, &main), main);
+    }
+
+    #[test]
+    fn a_main_session_goes_to_its_asking_agent() {
+        use crate::state::runtime::{self, Waiting, WaitingKind};
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project);
+        let session = tmux::session_name(&project_name, "main");
+        let window = server.spawn_fake_agent(&project, &session, "main", "main");
+        let plan = Waiting::now(WaitingKind::Plan, None);
+        runtime::write_waiting(&project, "main", "main", &plan).unwrap();
+
+        let snapshot = attention::all(&projects_dir, server.name()).unwrap();
+
+        assert_eq!(
+            destination(&snapshot, &format!("={session}:")),
+            format!("={window}")
+        );
     }
 }

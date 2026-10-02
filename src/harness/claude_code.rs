@@ -7,6 +7,7 @@
 //! exit 2 refuses the prompt.
 
 pub(super) mod sessions;
+pub(super) mod waiting;
 
 use std::path::Path;
 

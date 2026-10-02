@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test, type TestContext } from "node:test"
 import {
+  Asks,
   Breaker,
   FAILURE_BACKOFF_MS,
   IMMEDIATE_MS,
@@ -13,6 +14,8 @@ import {
   PM_PROMPT,
   RETRY_MS,
   TURN_FAILED,
+  answeredOf,
+  askOf,
   consumedMessage,
   drivesSession,
   hookDecision,
@@ -358,4 +361,42 @@ test("an unloaded loop neither asks nor prompts", async () => {
   await loop.turnEnded("ses_1", SUCCEEDED)
   assert.equal(await loop.subscriptionEnded("ses_1", "aborted"), false)
   assert.deepEqual(seen, { prompts: [], sleeps: [], reports: [], lastTurn: [], asked: 0 })
+})
+
+test("a permission ask or a question form is a dialog waiting on the user, any other form is not", () => {
+  assert.deepEqual(
+    askOf({
+      type: "permission.asked",
+      data: { id: "per_1", sessionID: "s1", action: "edit", resources: ["src/a.ts"], source: { type: "tool" } },
+    }),
+    { id: "per_1", sessionID: "s1", payload: { hook_event_name: "PermissionRequest", detail: "edit src/a.ts" } },
+  )
+  const form = (kind: string, title: string) => ({
+    type: "form.created",
+    data: { form: { id: "frm_1", sessionID: "s1", title, metadata: { kind }, fields: [{ label: "Which DB?" }] } },
+  })
+  assert.deepEqual(askOf(form("question", "")), {
+    id: "frm_1",
+    sessionID: "s1",
+    payload: { hook_event_name: "Question", detail: "Which DB?" },
+  })
+  assert.equal(askOf(form("login", "Sign in")), null)
+  assert.equal(askOf({ type: "session.execution.succeeded", data: { sessionID: "s1" } }), null)
+})
+
+test("a reply, an answer or a dismissal names the dialog it closes", () => {
+  assert.equal(answeredOf({ type: "permission.replied", data: { sessionID: "s1", requestID: "per_1", reply: "reject" } }), "per_1")
+  assert.equal(answeredOf({ type: "form.replied", data: { id: "frm_1", sessionID: "s1", answer: {} } }), "frm_1")
+  assert.equal(answeredOf({ type: "form.cancelled", data: { id: "frm_1", sessionID: "s1" } }), "frm_1")
+  assert.equal(answeredOf({ type: "form.created", data: { form: { id: "frm_1" } } }), null)
+})
+
+test("the agent stops waiting only once every open dialog has closed", () => {
+  const asks = new Asks()
+  asks.opened("per_1")
+  asks.opened("frm_1")
+  assert.equal(asks.closed("per_1"), false)
+  assert.equal(asks.closed("unknown"), false)
+  assert.equal(asks.closed("frm_1"), true)
+  assert.equal(asks.closed("frm_1"), false, "nothing was open")
 })

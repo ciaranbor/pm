@@ -1,7 +1,8 @@
 //! Bare `pm feat status`: what needs the user's attention, for one feature
 //! or, from `main`, the [`super::attention`] snapshot of every feature in
-//! the project (all projects with `--all`). `pm feat list` is the inventory
-//! (branch, base, PR); this view omits those.
+//! the project (all projects with `--all`), with a row for a main scope
+//! that needs it too. `pm feat list` is the inventory (branch, base, PR);
+//! this view omits those.
 
 use std::path::Path;
 
@@ -10,8 +11,11 @@ use chrono::{DateTime, Utc};
 use crate::error::Result;
 use crate::state::feature::{FeatureState, Progress};
 use crate::state::paths;
+use crate::state::runtime;
 
-use super::attention::{self, AttentionKind, FeatureSnapshot};
+use super::attention::{
+    self, AgentSnapshot, Attention, AttentionKind, FeatureSnapshot, ProjectSnapshot,
+};
 
 /// Summary lines shown in a single feature's view.
 const SUMMARY_HEAD_LINES: usize = 10;
@@ -19,10 +23,11 @@ const SUMMARY_HEAD_LINES: usize = 10;
 /// One feature: its progress, reason, last activity and summary head.
 pub fn feature(project_root: &Path, name: &str) -> Result<Vec<String>> {
     let state = FeatureState::load(&paths::features_dir(project_root), name)?;
+    let active = runtime::scope_last_activity(project_root, name).unwrap_or(state.last_active);
     let mut lines = vec![format!(
         "{name}  {}  (last active {})",
         state.progress,
-        age(state.last_active, Utc::now())
+        age(active, Utc::now())
     )];
     if let Some(reason) = reason(&state) {
         match &state.blocked_by {
@@ -67,7 +72,12 @@ pub fn project(
     if json {
         return Ok(vec![serde_json::to_string_pretty(&snapshot)?]);
     }
-    Ok(rows(&snapshot.features, false))
+    let mains = if name.is_some() {
+        &[][..]
+    } else {
+        &snapshot.projects[..]
+    };
+    Ok(rows(&snapshot.features, mains, false))
 }
 
 /// Every feature of every registered project, with a line for each project
@@ -77,7 +87,7 @@ pub fn all(projects_dir: &Path, json: bool, tmux_server: Option<&str>) -> Result
     if json {
         return Ok(vec![serde_json::to_string_pretty(&snapshot)?]);
     }
-    let mut lines = rows(&snapshot.features, true);
+    let mut lines = rows(&snapshot.features, &snapshot.projects, true);
     lines.extend(snapshot.projects.iter().filter_map(|p| {
         p.skipped
             .as_ref()
@@ -86,31 +96,82 @@ pub fn all(projects_dir: &Path, json: bool, tmux_server: Option<&str>) -> Result
     Ok(lines)
 }
 
-/// One row per feature, in the snapshot's order: name (with its project
-/// when `with_project`), what it needs (its progress when nothing), its
-/// agents, and the detail.
-pub fn rows(features: &[FeatureSnapshot], with_project: bool) -> Vec<String> {
-    let name = |f: &FeatureSnapshot| {
+/// One row per feature, in the snapshot's order, and one for each of
+/// `projects`' main scopes that needs attention, ranked among them: name
+/// (with its project when `with_project`), what it needs (its progress when
+/// nothing), its agents, how long it has been quiet, and the detail.
+pub fn rows(
+    features: &[FeatureSnapshot],
+    projects: &[ProjectSnapshot],
+    with_project: bool,
+) -> Vec<String> {
+    let now = Utc::now();
+    let name = |project: &str, name: &str| {
         if with_project {
-            format!("{}/{}", f.project, f.name)
+            format!("{project}/{name}")
         } else {
-            f.name.clone()
+            name.to_string()
         }
     };
-    let label = |f: &FeatureSnapshot| match f.attention.kind {
-        AttentionKind::None => f.progress.to_string(),
-        kind => kind.to_string(),
+    let quiet = |working, last_activity| {
+        attention::quiet_since(working, last_activity, now)
+            .map(|since| format!("quiet {}", span(since, now)))
+            .unwrap_or_default()
     };
-    let rendered: Vec<[String; 4]> = features
-        .iter()
-        .map(|f| [name(f), label(f), agents(f), detail(f)])
+    let features = features.iter().map(|f| {
+        let label = match f.attention.kind {
+            AttentionKind::None => f.progress.to_string(),
+            kind => kind.to_string(),
+        };
+        (
+            f.attention.kind,
+            [
+                name(&f.project, &f.name),
+                label,
+                agents(f.session_exists, &f.agents),
+                quiet(f.working, f.last_activity),
+                detail(&f.attention),
+            ],
+        )
+    });
+    let mains = projects.iter().filter_map(|p| {
+        let main = p.main.as_ref()?;
+        let kind = main.attention.kind;
+        (kind != AttentionKind::None).then(|| {
+            (
+                kind,
+                [
+                    name(&p.name, "main"),
+                    kind.to_string(),
+                    agents(main.session_exists, &main.agents),
+                    quiet(main.working, main.last_activity),
+                    detail(&main.attention),
+                ],
+            )
+        })
+    });
+    let mut rendered: Vec<(AttentionKind, [String; 5])> = features.chain(mains).collect();
+    rendered.sort_by_key(|(kind, _)| *kind);
+    let widths: Vec<usize> = (0..5)
+        .map(|col| {
+            rendered
+                .iter()
+                .map(|(_, r)| r[col].len())
+                .max()
+                .unwrap_or(0)
+        })
         .collect();
-    let width = |col: usize| rendered.iter().map(|r| r[col].len()).max().unwrap_or(0);
-    let (name_w, label_w, agents_w) = (width(0), width(1), width(2));
     rendered
         .iter()
-        .map(|[name, label, agents, detail]| {
-            format!("{name:<name_w$}  {label:<label_w$}  {agents:<agents_w$}  {detail}")
+        .map(|(_, cells)| {
+            // A column empty in every row takes no space.
+            cells
+                .iter()
+                .zip(&widths)
+                .filter(|(_, width)| **width > 0)
+                .map(|(cell, width)| format!("{cell:<width$}"))
+                .collect::<Vec<_>>()
+                .join("  ")
                 .trim_end()
                 .to_string()
         })
@@ -118,13 +179,12 @@ pub fn rows(features: &[FeatureSnapshot], with_project: bool) -> Vec<String> {
 }
 
 /// `agent:state` for each agent, `+N` for its unread messages; `no session`
-/// when the feature's session is closed.
-fn agents(feature: &FeatureSnapshot) -> String {
-    if !feature.session_exists {
+/// when the scope's session is closed.
+fn agents(session_exists: bool, agents: &[AgentSnapshot]) -> String {
+    if !session_exists {
         return "no session".to_string();
     }
-    feature
-        .agents
+    agents
         .iter()
         .map(|a| match a.unread {
             0 => format!("{}:{}", a.name, a.state),
@@ -134,8 +194,7 @@ fn agents(feature: &FeatureSnapshot) -> String {
         .join(" ")
 }
 
-fn detail(feature: &FeatureSnapshot) -> String {
-    let attention = &feature.attention;
+fn detail(attention: &Attention) -> String {
     match (attention.kind, &attention.agent, &attention.detail) {
         (AttentionKind::Blocked, Some(agent), Some(reason)) => format!("{agent}: {reason}"),
         (AttentionKind::Blocked, Some(agent), None) => format!("{agent}: (no reason given)"),
@@ -163,18 +222,27 @@ pub(crate) fn first_line(project_root: &Path, name: &str) -> Option<String> {
 }
 
 fn age(then: DateTime<Utc>, now: DateTime<Utc>) -> String {
+    if (now - then).num_seconds() < 60 {
+        return "just now".to_string();
+    }
+    format!("{} ago", span(then, now))
+}
+
+/// How long ago `then` was, rounded down to its largest unit: `5m`, `3h`,
+/// `2d`.
+pub(crate) fn span(then: DateTime<Utc>, now: DateTime<Utc>) -> String {
     let secs = (now - then).num_seconds().max(0);
     match secs {
-        0..60 => "just now".to_string(),
-        60..3600 => format!("{}m ago", secs / 60),
-        3600..86400 => format!("{}h ago", secs / 3600),
-        _ => format!("{}d ago", secs / 86400),
+        0..3600 => format!("{}m", secs / 60),
+        3600..86400 => format!("{}h", secs / 3600),
+        _ => format!("{}d", secs / 86400),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::attention::AgentState;
     use crate::commands::{feat_status::feat_status, feat_summary};
     use crate::testing::TestServer;
     use tempfile::tempdir;
@@ -249,6 +317,119 @@ mod tests {
         assert_eq!(lines[12], "  line 10");
         assert!(lines[13].starts_with("  … 2 more lines"), "{lines:?}");
         assert_eq!(lines.len(), 14);
+    }
+
+    fn scope_agent(name: &str, state: AgentState) -> AgentSnapshot {
+        AgentSnapshot {
+            name: name.into(),
+            state,
+            unread: 0,
+            window: None,
+            waiting: None,
+        }
+    }
+
+    fn snapshot_feature(
+        name: &str,
+        attention: Attention,
+        agents: Vec<AgentSnapshot>,
+        last_activity: Option<DateTime<Utc>>,
+    ) -> FeatureSnapshot {
+        FeatureSnapshot {
+            project: "app".into(),
+            name: name.into(),
+            attention,
+            progress: Progress::Wip,
+            blocked_reason: None,
+            blocked_by: None,
+            summary: None,
+            lifecycle: crate::state::feature::FeatureStatus::Wip,
+            pr: None,
+            session: format!("app/{name}"),
+            session_exists: true,
+            agents,
+            working: false,
+            last_activity,
+        }
+    }
+
+    fn needs(kind: AttentionKind, detail: Option<&str>) -> Attention {
+        Attention {
+            kind,
+            detail: detail.map(str::to_string),
+            agent: None,
+        }
+    }
+
+    #[test]
+    fn a_main_needing_attention_is_ranked_among_the_features_and_quiet_shows_how_long() {
+        let hours = |h| Some(Utc::now() - chrono::Duration::hours(h));
+        let features = [
+            snapshot_feature(
+                "login",
+                needs(AttentionKind::Dead, Some("qa: window missing")),
+                vec![scope_agent("qa", AgentState::Dead)],
+                None,
+            ),
+            snapshot_feature(
+                "search",
+                needs(AttentionKind::Stalled, None),
+                vec![scope_agent("implementer", AgentState::Idle)],
+                hours(3),
+            ),
+        ];
+        let main = |attention: Attention| ProjectSnapshot {
+            name: "app".into(),
+            root: "/src/app".into(),
+            skipped: None,
+            main: Some(attention::ScopeSnapshot {
+                session: "app/main".into(),
+                session_exists: true,
+                agents: vec![scope_agent("main", AgentState::Asking)],
+                attention,
+                working: false,
+                last_activity: None,
+            }),
+        };
+
+        let lines = rows(
+            &features,
+            &[main(needs(
+                AttentionKind::Asking,
+                Some("main: plan approval"),
+            ))],
+            true,
+        );
+        assert_eq!(
+            lines,
+            vec![
+                "app/main    asking   main:asking                 main: plan approval",
+                "app/login   dead     qa:dead                     qa: window missing",
+                "app/search  stalled  implementer:idle  quiet 3h  \
+                 every agent idle, no unread messages",
+            ]
+        );
+
+        let lines = rows(&features, &[main(needs(AttentionKind::None, None))], false);
+        assert_eq!(lines.len(), 2, "a main that needs nothing has no row");
+        assert!(lines[0].starts_with("login "), "{lines:?}");
+    }
+
+    #[test]
+    fn feature_view_dates_the_last_activity_by_its_agents() {
+        let dir = tempdir().unwrap();
+        let (project, _) =
+            TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
+        runtime::set_activity(
+            &project,
+            "login",
+            "implementer",
+            Utc::now() - chrono::Duration::hours(3),
+        );
+
+        let lines = feature(&project, "login").unwrap();
+
+        assert_eq!(lines[0], "login  wip  (last active 3h ago)");
     }
 
     #[test]

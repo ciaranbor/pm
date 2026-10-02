@@ -5,6 +5,8 @@
 // pm reads them under these names.
 export const LOADED_FILE = "opencode.loaded"
 export const TURN_ERROR_FILE = "opencode.turn-error"
+// Its mtime is the agent's last sign of life.
+export const ACTIVITY_FILE = "activity"
 
 export const TURN_FAILED = "session.execution.failed"
 
@@ -291,5 +293,56 @@ export class Loop {
     try {
       await this.deps.prompt(sessionID, notice)
     } catch {}
+  }
+}
+
+/** What `pm harness hooks waiting opencode` reads. */
+export type WaitingPayload = { hook_event_name: "PermissionRequest" | "Question" | "Resolved"; detail?: string }
+
+/**
+ * A dialog that opened, waiting on the user: a permission ask, or a form the
+ * question tool raised. Null for any other event.
+ */
+export function askOf(event: { type?: unknown; data?: any }): { id: string; sessionID: string; payload: WaitingPayload } | null {
+  const data = event.data ?? {}
+  if (event.type === "permission.asked" && typeof data.id === "string") {
+    const resources = Array.isArray(data.resources) ? data.resources.join(" ") : String(data.resources ?? "")
+    return {
+      id: data.id,
+      sessionID: data.sessionID,
+      payload: { hook_event_name: "PermissionRequest", detail: `${data.action ?? ""} ${resources}`.trim() },
+    }
+  }
+  const form = data.form
+  if (event.type === "form.created" && form?.metadata?.kind === "question" && typeof form.id === "string") {
+    const label = Array.isArray(form.fields) ? form.fields[0]?.label : undefined
+    return {
+      id: form.id,
+      sessionID: form.sessionID,
+      payload: { hook_event_name: "Question", detail: String(form.title || label || "") },
+    }
+  }
+  return null
+}
+
+/** The id of a dialog the user answered or dismissed; null for any other event. */
+export function answeredOf(event: { type?: unknown; data?: any }): string | null {
+  const data = event.data ?? {}
+  if (event.type === "permission.replied" && typeof data.requestID === "string") return data.requestID
+  if ((event.type === "form.replied" || event.type === "form.cancelled") && typeof data.id === "string") return data.id
+  return null
+}
+
+/** The dialogs open in the sessions the loop drives; several can be at once. */
+export class Asks {
+  private readonly open = new Set<string>()
+
+  opened(id: string): void {
+    this.open.add(id)
+  }
+
+  /** Whether that closed the last one open. */
+  closed(id: string): boolean {
+    return this.open.delete(id) && this.open.size === 0
   }
 }

@@ -21,8 +21,18 @@
 //! plugin read stdout through a pipe, Claude Code through a socketpair, and
 //! `poll` reports a closed peer of either as `POLLHUP`/`POLLERR`). Neither
 //! fires while the harness is alive, so a live agent's hook keeps blocking.
+//!
+//! The hook keeps the agent's waiting marker ([`runtime`]): it clears it as a
+//! turn ends, writes `background` when it yields, and `hook-ended` whenever
+//! it ends without a decision or fails — the agent then sits at its prompt
+//! where no message wakes it. Claude Code ends the hook with SIGTERM (on
+//! its timeout, or Esc while it waits) and kills it outright soon after, so
+//! the wait sleeps on a pipe the signal handler writes to and records the
+//! marker at once. Codex kills it with an uncatchable signal and reports
+//! the interrupt through its own hook instead.
 
 use std::io::Read;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Duration;
 
 use serde_json::json;
@@ -31,6 +41,7 @@ use crate::commands::agent_wait;
 use crate::commands::attention::AgentState;
 use crate::messages;
 use crate::state::paths;
+use crate::state::runtime::{self, Waiting, WaitingKind};
 
 /// Reason text returned after messages arrive; `senders` is oldest first.
 fn reason(senders: &[String]) -> String {
@@ -46,38 +57,167 @@ fn reason(senders: &[String]) -> String {
 /// Run the Stop hook. Prints the decision JSON and returns the exit code.
 /// Non-pm sessions (unresolvable agent/scope) let the turn end, staying invisible.
 /// `on_turn` is told the agent's state and unread count as it enters its
-/// wait (idle) and as it returns `block` (busy); it must not block.
+/// wait (idle), as it returns `block` (busy), as it yields (background) and
+/// as it ends without a decision (unarmed); it must not block.
 pub fn stop(on_turn: &mut dyn FnMut(AgentState, u32)) -> i32 {
-    match stop_inner(on_turn) {
-        Ok(Some(json)) => {
-            print!("{json}");
-            0
-        }
-        Ok(None) => 0,
-        Err(_) => {
+    let caller = Caller::current();
+    // Resolve identity before reading stdin: a non-pm session bails here.
+    let Ok(agent) = std::env::var("PM_AGENT_NAME") else {
+        print!("{}", allow_decision());
+        return 0;
+    };
+    let busy = read_busy_from_stdin();
+    let Ok((project_root, scope)) = scope() else {
+        print!("{}", allow_decision());
+        return 0;
+    };
+    let signals = Signals::install();
+    let decided = wait_and_decide(
+        busy,
+        &project_root,
+        &scope,
+        &agent,
+        None,
+        on_turn,
+        |interval| {
+            match &signals {
+                Some(signals) => {
+                    if let Some(signal) = signals.pause(interval) {
+                        return Some(format!("ended by {signal}"));
+                    }
+                }
+                None => std::thread::sleep(interval),
+            }
+            (!caller.alive()).then(|| "ended: its harness stopped waiting".to_string())
+        },
+    );
+    match decided {
+        Ok(Some(json)) => print!("{json}"),
+        Ok(None) => {}
+        Err(e) => {
+            hook_ended(
+                &project_root,
+                &scope,
+                &agent,
+                format!("failed: {e}"),
+                on_turn,
+            );
             print!("{}", allow_decision());
-            0
+        }
+    }
+    0
+}
+
+fn scope() -> crate::error::Result<(std::path::PathBuf, String)> {
+    let cwd = std::env::current_dir()?;
+    let project_root = paths::find_project_root(&cwd)?;
+    let scope = paths::resolve_scope_from(&project_root, &cwd)?;
+    Ok((project_root, scope))
+}
+
+/// Record that the hook ended without the agent getting a decision, so it
+/// sits at its prompt with nothing to wake it. Best-effort.
+fn hook_ended(
+    project_root: &std::path::Path,
+    scope: &str,
+    agent: &str,
+    why: String,
+    on_turn: &mut dyn FnMut(AgentState, u32),
+) {
+    let waiting = Waiting::now(WaitingKind::HookEnded, Some(format!("Stop hook {why}")));
+    if runtime::write_waiting(project_root, scope, agent, &waiting).is_ok() {
+        let unread = messages::unread_count(&paths::messages_dir(project_root), scope, agent);
+        on_turn(AgentState::Unarmed, unread);
+    }
+}
+
+/// SIGTERM, SIGHUP and SIGINT, caught for the rest of the process so the
+/// wait can record why it ended before it exits. A handler may only do
+/// async-signal-safe work, so it writes a byte to a pipe the wait polls.
+struct Signals {
+    read: libc::c_int,
+    write: libc::c_int,
+}
+
+impl Drop for Signals {
+    fn drop(&mut self) {
+        Self::handle(libc::SIG_DFL);
+        SIGNAL_PIPE.store(-1, Ordering::SeqCst);
+        // SAFETY: closing the pipe this value opened.
+        unsafe {
+            libc::close(self.read);
+            libc::close(self.write);
         }
     }
 }
 
-/// `None` when the harness went away while the hook waited.
-fn stop_inner(on_turn: &mut dyn FnMut(AgentState, u32)) -> crate::error::Result<Option<String>> {
-    let caller = Caller::current();
-    // Resolve identity before reading stdin: non-pm sessions bail here, and
-    // tests calling `stop_inner` without piped stdin must not block.
-    let agent = std::env::var("PM_AGENT_NAME")
-        .map_err(|_| crate::error::PmError::Messaging("no PM_AGENT_NAME".into()))?;
+static SIGNAL_PIPE: AtomicI32 = AtomicI32::new(-1);
+static CAUGHT: AtomicI32 = AtomicI32::new(0);
 
-    let busy = read_busy_from_stdin();
+extern "C" fn on_signal(signal: libc::c_int) {
+    CAUGHT.store(signal, Ordering::SeqCst);
+    let fd = SIGNAL_PIPE.load(Ordering::SeqCst);
+    if fd >= 0 {
+        // SAFETY: write(2) is async-signal-safe; one byte from a static.
+        unsafe { libc::write(fd, b"!".as_ptr().cast(), 1) };
+    }
+}
 
-    let cwd = std::env::current_dir()?;
-    let project_root = paths::find_project_root(&cwd)?;
-    let feature = paths::resolve_scope_from(&project_root, &cwd)?;
+impl Signals {
+    const CAUGHT: [libc::c_int; 3] = [libc::SIGTERM, libc::SIGHUP, libc::SIGINT];
 
-    wait_and_decide(busy, &project_root, &feature, &agent, None, on_turn, || {
-        caller.alive()
-    })
+    /// `None` when the handlers can't be installed; the default actions
+    /// then stay.
+    fn install() -> Option<Self> {
+        let mut fds = [0; 2];
+        // SAFETY: fds has room for the two descriptors pipe() writes.
+        if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+            return None;
+        }
+        let [read, write] = fds;
+        // SAFETY: setting flags on descriptors this process just opened.
+        unsafe {
+            libc::fcntl(write, libc::F_SETFL, libc::O_NONBLOCK);
+            libc::fcntl(read, libc::F_SETFD, libc::FD_CLOEXEC);
+            libc::fcntl(write, libc::F_SETFD, libc::FD_CLOEXEC);
+        }
+        CAUGHT.store(0, Ordering::SeqCst);
+        SIGNAL_PIPE.store(write, Ordering::SeqCst);
+        Self::handle(on_signal as *const () as libc::sighandler_t);
+        Some(Self { read, write })
+    }
+
+    fn handle(handler: libc::sighandler_t) {
+        for signal in Self::CAUGHT {
+            // SAFETY: a zeroed sigaction with either the default action or
+            // an `extern "C"` handler that only touches atomics and write(2).
+            unsafe {
+                let mut action: libc::sigaction = std::mem::zeroed();
+                action.sa_sigaction = handler;
+                libc::sigemptyset(&mut action.sa_mask);
+                libc::sigaction(signal, &action, std::ptr::null_mut());
+            }
+        }
+    }
+
+    /// Sleep up to `timeout`, or until a signal is caught. The signal's
+    /// name once one has been.
+    fn pause(&self, timeout: Duration) -> Option<&'static str> {
+        let mut pfd = libc::pollfd {
+            fd: self.read,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ms = libc::c_int::try_from(timeout.as_millis()).unwrap_or(libc::c_int::MAX);
+        // SAFETY: one valid pollfd, count 1.
+        unsafe { libc::poll(&mut pfd, 1, ms) };
+        match CAUGHT.load(Ordering::SeqCst) {
+            0 => None,
+            libc::SIGTERM => Some("SIGTERM"),
+            libc::SIGHUP => Some("SIGHUP"),
+            _ => Some("SIGINT"),
+        }
+    }
 }
 
 /// The harness process that ran this hook, as it was when the hook started.
@@ -116,8 +256,10 @@ fn peer_closed(fd: libc::c_int) -> bool {
 }
 
 /// Decide the Stop outcome. Testable seam: takes an explicit `busy` flag
-/// instead of reading stdin. Messages take priority over `busy`. `None`
-/// once `caller_alive` turns false while waiting.
+/// instead of reading stdin. Messages take priority over `busy`. `pause`
+/// waits up to the poll interval between checks, and returns why the wait
+/// should end once it should; the hook then records that and returns
+/// `None`.
 fn wait_and_decide(
     busy: bool,
     project_root: &std::path::Path,
@@ -125,30 +267,36 @@ fn wait_and_decide(
     agent: &str,
     poll_interval: Option<Duration>,
     on_turn: &mut dyn FnMut(AgentState, u32),
-    caller_alive: impl Fn() -> bool,
+    mut pause: impl FnMut(Duration) -> Option<String>,
 ) -> crate::error::Result<Option<String>> {
     let block = |on_turn: &mut dyn FnMut(AgentState, u32), senders: &[String]| {
+        let _ = runtime::touch_activity(project_root, feature, agent);
         let unread = messages::unread_count(&paths::messages_dir(project_root), feature, agent);
         on_turn(AgentState::Busy, unread);
         Some(block_decision(senders))
     };
+    runtime::touch_activity(project_root, feature, agent)?;
+    runtime::clear_waiting(project_root, feature, agent)?;
     let senders = unread_senders(project_root, feature, agent)?;
     if !senders.is_empty() {
         return Ok(block(on_turn, &senders));
     }
     if busy {
+        let waiting = Waiting::now(WaitingKind::Background, None);
+        runtime::write_waiting(project_root, feature, agent, &waiting)?;
+        on_turn(AgentState::Background, 0);
         return Ok(Some(allow_decision()));
     }
     on_turn(AgentState::Idle, 0);
-    let waited = agent_wait::agent_wait_while(
-        project_root,
-        feature,
-        agent,
-        None,
-        poll_interval,
-        caller_alive,
-    )?;
+    let mut ended = None;
+    let waited =
+        agent_wait::agent_wait_while(project_root, feature, agent, None, poll_interval, |d| {
+            ended = pause(d);
+            ended.is_none()
+        })?;
     if waited.is_none() {
+        let why = ended.unwrap_or_default();
+        hook_ended(project_root, feature, agent, why, on_turn);
         return Ok(None);
     }
     let senders = unread_senders(project_root, feature, agent)?;
@@ -266,7 +414,7 @@ mod tests {
             "reviewer",
             Some(Duration::from_millis(50)),
             &mut |state, unread| turns.push((state, unread)),
-            || true,
+            |_| None,
         )
         .unwrap()
         .unwrap();
@@ -295,7 +443,7 @@ mod tests {
             "reviewer",
             Some(Duration::from_millis(50)),
             &mut |_, _| {},
-            || true,
+            |_| None,
         )
         .unwrap()
         .unwrap();
@@ -323,7 +471,7 @@ mod tests {
             // Long interval surfaces any accidental blocking.
             Some(Duration::from_secs(30)),
             &mut |_, _| {},
-            || true,
+            |_| None,
         )
         .unwrap()
         .unwrap();
@@ -352,7 +500,7 @@ mod tests {
                 "reviewer",
                 Some(Duration::from_millis(50)),
                 &mut |state, unread| turns.push((state, unread)),
-                || true,
+                |_| None,
             )
             .unwrap()
             .unwrap();
@@ -390,7 +538,7 @@ mod tests {
             "reviewer",
             Some(Duration::from_millis(50)),
             &mut |_, _| {},
-            || true,
+            |_| None,
         )
         .unwrap()
         .unwrap();
@@ -403,10 +551,11 @@ mod tests {
     }
 
     #[test]
-    fn idle_wait_ends_without_a_decision_once_the_caller_is_gone() {
+    fn a_wait_that_ends_undecided_leaves_the_agent_unarmed() {
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
-        let polls = std::sync::atomic::AtomicU32::new(0);
+        let mut polls = 0;
+        let mut turns = Vec::new();
 
         let result = wait_and_decide(
             false,
@@ -414,12 +563,73 @@ mod tests {
             "login",
             "reviewer",
             Some(Duration::from_millis(10)),
-            &mut |_, _| {},
-            || polls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 3,
+            &mut |state, unread| turns.push((state, unread)),
+            |_| {
+                polls += 1;
+                (polls > 3).then(|| "ended by SIGTERM".to_string())
+            },
         )
         .unwrap();
 
         assert_eq!(result, None);
+        assert_eq!(turns, [(AgentState::Idle, 0), (AgentState::Unarmed, 0)]);
+        let waiting = runtime::read_waiting(&root, "login", "reviewer").unwrap();
+        assert_eq!(waiting.kind, WaitingKind::HookEnded);
+        assert_eq!(waiting.describe(), "Stop hook ended by SIGTERM");
+    }
+
+    #[test]
+    fn a_turn_end_clears_the_marker_and_a_yield_marks_background_work() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        let asked = Waiting::now(WaitingKind::Question, Some("Which DB?".into()));
+        runtime::write_waiting(&root, "login", "reviewer", &asked).unwrap();
+        send(&root);
+
+        wait_and_decide(
+            false,
+            &root,
+            "login",
+            "reviewer",
+            None,
+            &mut |_, _| {},
+            |_| None,
+        )
+        .unwrap();
+        assert_eq!(runtime::read_waiting(&root, "login", "reviewer"), None);
+        assert!(runtime::last_activity(&root, "login", "reviewer").is_some());
+
+        let mut turns = Vec::new();
+        wait_and_decide(
+            true,
+            &root,
+            "login",
+            "qa",
+            None,
+            &mut |state, unread| turns.push((state, unread)),
+            |_| None,
+        )
+        .unwrap();
+        assert_eq!(turns, [(AgentState::Background, 0)]);
+        assert_eq!(
+            runtime::read_waiting(&root, "login", "qa").map(|w| w.kind),
+            Some(WaitingKind::Background)
+        );
+    }
+
+    #[test]
+    fn a_caught_signal_ends_the_pause_at_once() {
+        let signals = Signals::install().unwrap();
+        assert_eq!(signals.pause(Duration::from_millis(1)), None);
+        let start = Instant::now();
+        let sender = std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_millis(50));
+            // SAFETY: raising a signal this process now handles.
+            unsafe { libc::raise(libc::SIGHUP) };
+        });
+        assert_eq!(signals.pause(Duration::from_secs(30)), Some("SIGHUP"));
+        assert!(start.elapsed() < Duration::from_secs(5));
+        sender.join().unwrap();
     }
 
     #[test]
@@ -433,15 +643,6 @@ mod tests {
         unsafe { libc::close(read) };
         assert!(peer_closed(write));
         unsafe { libc::close(write) };
-    }
-
-    #[test]
-    fn stop_inner_fails_without_agent_env() {
-        // Ensure PM_AGENT_NAME is not set — stop_inner should error.
-        // SAFETY: Only stop_inner reads PM_AGENT_NAME in this binary. Fragile
-        // if another test starts reading it concurrently — revisit if that happens.
-        unsafe { std::env::remove_var("PM_AGENT_NAME") };
-        assert!(stop_inner(&mut |_, _| {}).is_err());
     }
 
     // --- busy parsing ----------------------------------------------------

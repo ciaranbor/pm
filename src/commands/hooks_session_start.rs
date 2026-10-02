@@ -6,6 +6,8 @@
 //! harness with no launch-time role channel (codex), it also prints the
 //! agent's composed prompt — definition body, baseline, notice boards — as
 //! `additionalContext`, so the role re-applies on every start and resume.
+//! A started session is past any startup dialog, so it also clears the
+//! agent's waiting marker and stamps its activity.
 //!
 //! Non-agent sessions (no `PM_AGENT_NAME` env var) are silently ignored.
 
@@ -16,6 +18,7 @@ use crate::error::Result;
 use crate::harness::Harness;
 use crate::state::agent::AgentRegistry;
 use crate::state::paths;
+use crate::state::runtime;
 use crate::state::workflow;
 
 /// Run the SessionStart hook logic. Returns the exit code (always 0).
@@ -52,7 +55,7 @@ fn session_start_inner() -> Result<Option<String>> {
     let feature = paths::resolve_scope_from(&project_root, &cwd)?;
 
     let Some((harness, definition)) =
-        update_agent_session_id(&project_root, &feature, &agent_name, &session_id)?
+        record_start(&project_root, &feature, &agent_name, &session_id)?
     else {
         return Ok(None);
     };
@@ -116,11 +119,12 @@ fn parse_session_id(json_str: &str) -> crate::error::Result<String> {
     Ok(session_id.to_string())
 }
 
-/// Update the agent's session_id in the registry, returning the harness and
-/// effective definition its entry records. An unregistered agent is left
-/// alone (`None`): the spawn registers before launching, so this is a
-/// non-pm session.
-fn update_agent_session_id(
+/// Clear the agent's waiting marker, stamp its activity, and update its
+/// session_id in the registry, returning the harness and effective
+/// definition its entry records. An unregistered agent is left alone
+/// (`None`): the spawn registers before launching, so this is a non-pm
+/// session.
+fn record_start(
     project_root: &Path,
     feature: &str,
     agent_name: &str,
@@ -132,6 +136,8 @@ fn update_agent_session_id(
     let Some(entry) = registry.get_mut(agent_name) else {
         return Ok(None);
     };
+    runtime::touch_activity(project_root, feature, agent_name)?;
+    runtime::clear_waiting(project_root, feature, agent_name)?;
     entry.session_id = session_id.to_string();
     let recorded = (
         entry.harness,
@@ -209,7 +215,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = setup_project_with_agent(dir.path(), "login", "reviewer");
         write_project_def(&root, "reviewer", "# Reviewer");
-        let (harness, definition) = update_agent_session_id(&root, "login", "reviewer", "s1")
+        let (harness, definition) = record_start(&root, "login", "reviewer", "s1")
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -218,10 +224,21 @@ mod tests {
         );
         assert_eq!(hook_output(&root, harness, &definition).unwrap(), None);
         // An unregistered agent is not a pm agent at all.
-        assert_eq!(
-            update_agent_session_id(&root, "login", "ghost", "s1").unwrap(),
-            None
-        );
+        assert_eq!(record_start(&root, "login", "ghost", "s1").unwrap(), None);
+    }
+
+    #[test]
+    fn a_started_session_is_past_its_startup_dialog() {
+        use crate::state::runtime::{Waiting, WaitingKind};
+        let dir = tempdir().unwrap();
+        let root = setup_project_with_agent(dir.path(), "login", "reviewer");
+        let startup = Waiting::now(WaitingKind::Startup, None);
+        runtime::write_waiting(&root, "login", "reviewer", &startup).unwrap();
+
+        record_start(&root, "login", "reviewer", "s1").unwrap();
+
+        assert_eq!(runtime::read_waiting(&root, "login", "reviewer"), None);
+        assert!(runtime::last_activity(&root, "login", "reviewer").is_some());
     }
 
     #[test]
@@ -245,7 +262,7 @@ mod tests {
             "---\nname: implementer\n---\n# Implementer\n\nBuild things.\n",
         );
 
-        let (harness, definition) = update_agent_session_id(&root, "login", "backend", "s1")
+        let (harness, definition) = record_start(&root, "login", "backend", "s1")
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -325,7 +342,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = setup_project_with_agent(dir.path(), "login", "reviewer");
 
-        update_agent_session_id(&root, "login", "reviewer", "sess-42").unwrap();
+        record_start(&root, "login", "reviewer", "sess-42").unwrap();
 
         let agents_dir = root.join(".pm/agents");
         let registry = AgentRegistry::load(&agents_dir, "login").unwrap();
@@ -337,8 +354,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = setup_project_with_agent(dir.path(), "login", "reviewer");
 
-        update_agent_session_id(&root, "login", "reviewer", "sess-42").unwrap();
-        update_agent_session_id(&root, "login", "reviewer", "sess-42").unwrap();
+        record_start(&root, "login", "reviewer", "sess-42").unwrap();
+        record_start(&root, "login", "reviewer", "sess-42").unwrap();
 
         let agents_dir = root.join(".pm/agents");
         let registry = AgentRegistry::load(&agents_dir, "login").unwrap();
@@ -351,7 +368,7 @@ mod tests {
         let root = setup_project_with_agent(dir.path(), "login", "reviewer");
 
         // Should not error for unknown agent
-        update_agent_session_id(&root, "login", "unknown-agent", "sess-42").unwrap();
+        record_start(&root, "login", "unknown-agent", "sess-42").unwrap();
 
         // Original agent unchanged
         let agents_dir = root.join(".pm/agents");

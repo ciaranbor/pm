@@ -31,6 +31,11 @@ pub enum ProblemKind {
     /// The harness has no trust entry for pm's blocked-reset hook. The agent
     /// still runs, so this alone never refuses a team.
     ResetHookUntrusted,
+    /// The harness has no trust entry for a pm status hook: the agent runs,
+    /// but a dialog waiting on the user reads as busy.
+    StatusHookUntrusted,
+    /// A pm status hook is missing, with the same effect.
+    StatusHooksMissing,
 }
 
 /// One reason agents on a harness would not start, or would start and never
@@ -77,23 +82,40 @@ pub fn harness_problems(
                 ),
             );
         }
-        for &(event, markers) in hooks_install::PM_EVENTS {
-            if let Some((entry, hook)) = hooks_install::pm_hook_position(root, event, markers)
-                && !harness.hook_trusted(config, home, event, entry, hook)
-            {
-                push(
-                    if event == hooks_install::USER_PROMPT_EVENT {
-                        ProblemKind::ResetHookUntrusted
-                    } else {
-                        ProblemKind::HookUntrusted
-                    },
-                    format!(
-                        "{harness} has not trusted pm's {event} hook, so it silently does not \
-                         run: {}",
-                        harness.hook_trust_remedy()
-                    ),
-                );
-            }
+        let untrusted = |(event, markers): &(&str, &[&str])| {
+            hooks_install::pm_hook_position(root, event, markers).is_some_and(|(entry, hook)| {
+                !harness.hook_trusted(config, home, event, entry, hook)
+            })
+        };
+        let (status, others): (Vec<_>, Vec<_>) = hooks_install::pm_events(harness)
+            .into_iter()
+            .filter(untrusted)
+            .partition(|(_, markers)| markers.contains(&hooks_install::PM_WAITING_MARKER));
+        for (event, _) in others {
+            push(
+                if event == hooks_install::USER_PROMPT_EVENT {
+                    ProblemKind::ResetHookUntrusted
+                } else {
+                    ProblemKind::HookUntrusted
+                },
+                format!(
+                    "{harness} has not trusted pm's {event} hook, so it silently does not \
+                     run: {}",
+                    harness.hook_trust_remedy()
+                ),
+            );
+        }
+        if !status.is_empty() {
+            let events: Vec<&str> = status.iter().map(|(event, _)| *event).collect();
+            push(
+                ProblemKind::StatusHookUntrusted,
+                format!(
+                    "{harness} has not trusted pm's status hooks ({}), so an agent waiting on \
+                     you reads as busy: {}",
+                    events.join(", "),
+                    harness.hook_trust_remedy()
+                ),
+            );
         }
     }
     if !hooks_install::hooks_registered(harness, home, root.as_ref()) {
@@ -101,6 +123,18 @@ pub fn harness_problems(
             ProblemKind::LoopNotInstalled,
             format!("pm hooks not installed in {shown} (run `pm harness hooks install`)"),
         );
+    } else if harness.user_settings_file(home).is_some() {
+        let missing = hooks_install::missing_status_hooks(harness, root.as_ref());
+        if !missing.is_empty() {
+            push(
+                ProblemKind::StatusHooksMissing,
+                format!(
+                    "pm status hooks ({}) not installed in {shown}, so an agent waiting on you \
+                     reads as busy (run `pm harness hooks install`)",
+                    missing.join(", ")
+                ),
+            );
+        }
     }
     Ok(problems)
 }
@@ -198,11 +232,14 @@ fn team_problems(
                         by_harness.len() - 1
                     }
                 };
-                for problem in by_harness[cached]
-                    .1
-                    .iter()
-                    .filter(|p| p.kind != ProblemKind::ResetHookUntrusted)
-                {
+                for problem in by_harness[cached].1.iter().filter(|p| {
+                    !matches!(
+                        p.kind,
+                        ProblemKind::ResetHookUntrusted
+                            | ProblemKind::StatusHookUntrusted
+                            | ProblemKind::StatusHooksMissing
+                    )
+                }) {
                     out.lines
                         .push(format!("{member} ({harness}): {}", problem.message));
                 }
@@ -328,6 +365,45 @@ mod tests {
             &projected_main(dir.path()),
             &home,
             &team(&["implementer", "reviewer", "qa"]),
+        )
+        .unwrap();
+        assert_eq!(problems, TeamProblems::default());
+    }
+
+    #[test]
+    fn missing_status_hooks_are_reported_but_never_refuse_a_team() {
+        let dir = tempdir().unwrap();
+        let home = home_with_hooks(dir.path());
+        let settings = home.join(".claude/settings.json");
+        let mut root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        let hooks = root["hooks"].as_object_mut().unwrap();
+        hooks.remove("Notification");
+        hooks.remove("StopFailure");
+        std::fs::write(&settings, root.to_string()).unwrap();
+
+        let problems =
+            harness_problems(Harness::ClaudeCode, &HarnessConfig::default(), &home).unwrap();
+        let kinds: Vec<(ProblemKind, &str)> = problems
+            .iter()
+            .map(|p| (p.kind, p.message.as_str()))
+            .collect();
+        assert_eq!(kinds.len(), 1, "{kinds:?}");
+        assert_eq!(kinds[0].0, ProblemKind::StatusHooksMissing);
+        assert!(
+            kinds[0]
+                .1
+                .starts_with("pm status hooks (StopFailure, Notification) not installed"),
+            "{kinds:?}"
+        );
+
+        let problems = team_problems(
+            &AgentsConfig::default(),
+            &AgentsConfig::default(),
+            &HarnessConfig::default(),
+            &projected_main(dir.path()),
+            &home,
+            &team(&["implementer"]),
         )
         .unwrap();
         assert_eq!(problems, TeamProblems::default());
