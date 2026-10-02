@@ -344,7 +344,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     // value is treated as a literal string (no file resolution).
                     let context = commands::feat_new::resolve_stdin_context(context.as_deref())?;
                     if let Some(agent_name) = name {
-                        let (_, msg, _) = commands::agent_spawn::agent_spawn(
+                        let (outcome, msg, _) = commands::agent_spawn::agent_spawn(
                             &project_root,
                             &feature,
                             &agent_name,
@@ -352,6 +352,17 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                             context.as_deref(),
                             server,
                         )?;
+                        if outcome.is_new_window()
+                            && let Err(e) = commands::launch_check::check(
+                                &project_root,
+                                &feature,
+                                &agent_name,
+                                server,
+                            )
+                        {
+                            push();
+                            return Err(e);
+                        }
                         println!("{msg}");
                     } else {
                         if agent_definition.is_some() {
@@ -360,11 +371,12 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                                     .to_string(),
                             ));
                         }
-                        let result = commands::agent_spawn::agent_spawn_all(
+                        let mut result = commands::agent_spawn::agent_spawn_all(
                             &project_root,
                             &feature,
                             server,
                         )?;
+                        result.confirm_launches(&project_root, &feature, server);
                         for msg in &result.successes {
                             println!("{msg}");
                         }
@@ -410,6 +422,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         force,
                         server,
                     );
+                    restarted.confirm_launches(&project_root, &target_scope, server);
                     let reported =
                         report_agent_op_results(std::mem::take(&mut restarted.results), "restart");
                     std::io::Write::flush(&mut std::io::stdout())?;

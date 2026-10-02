@@ -163,7 +163,10 @@ another project or request something of it without you relaying it.
 When an agent misbehaves, `pm agent restart <name>` respawns it on the same
 conversation; `pm agent spawn <name>` adds one to the feature. A restart
 refuses an agent that is busy, asking, or running background work; with
-`--force` it interrupts it and leaves it a message to resume.
+`--force` it interrupts it and leaves it a message to resume. Both wait a
+moment for the harness to stay up, and report one that exits at launch (a
+flag its CLI rejects, say) with what its window shows; `pm doctor` reports
+an agent whose harness has since exited.
 
 ### Finish a feature
 

@@ -117,7 +117,7 @@ fn read_lines(path: &std::path::Path) -> Vec<String> {
 
 /// A `claude` that is `sleep` under another name, in the test home: a
 /// window running it has a Claude Code harness as far as pm can tell.
-fn fake_claude() -> std::path::PathBuf {
+pub(crate) fn fake_claude() -> std::path::PathBuf {
     static FAKE: OnceLock<std::path::PathBuf> = OnceLock::new();
     FAKE.get_or_init(|| {
         let dir = test_home().join("fake-bin");
@@ -784,7 +784,7 @@ impl TestServer {
         crate::tmux::send_line(
             self.name(),
             &target,
-            &format!("exec {} 999", fake_claude().display()),
+            &format!("{} 999", fake_claude().display()),
         )
         .unwrap();
         self.await_liveness(
