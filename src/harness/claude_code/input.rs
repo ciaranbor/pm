@@ -36,14 +36,15 @@ pub(in crate::harness) fn is_empty(
 
 /// The key that puts an input box in vim NORMAL mode into INSERT mode, and
 /// the one that erases it should the box have taken it as text after all;
-/// `None` when the box is not in NORMAL mode, or there is none.
+/// `None` when the box is not an empty one in NORMAL mode, so a draft is
+/// left alone, mode included.
 pub(in crate::harness) fn text_mode_key(
     screen: &str,
     home: &Path,
     config_dir: Option<&Path>,
 ) -> Option<(&'static str, &'static str)> {
     let vim = vim_mode(config_dir.unwrap_or(home));
-    (vim && is_empty_in(screen, false).is_some() && is_empty_in(screen, true).is_none())
+    (vim && is_empty_in(screen, false) == Some(true) && is_empty_in(screen, true).is_none())
         .then_some(("i", "BSpace"))
 }
 
@@ -153,6 +154,8 @@ mod tests {
         );
         assert_eq!(text_mode_key(&insert, vim.path(), None), None);
         assert_eq!(text_mode_key(dialog, vim.path(), None), None);
+        let draft = input("❯\u{a0}half a thought");
+        assert_eq!(text_mode_key(&draft, vim.path(), None), None);
     }
 
     #[test]

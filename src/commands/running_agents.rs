@@ -97,7 +97,9 @@ pub fn liveness(
 }
 
 /// What an agent its window reads as busy is at: its waiting marker, unless
-/// its harness recorded an interrupt after it, which fires no hook.
+/// its harness recorded an interrupt after it, which fires no hook. Once
+/// that interrupt is claimed ([`runtime::claim_interrupt`]) the agent was
+/// prompted, so it is at nothing: busy.
 pub fn waiting(project_root: &Path, scope: &str, agent: &str, harness: Harness) -> Option<Waiting> {
     let marker = runtime::read_waiting(project_root, scope, agent);
     let interrupted =
@@ -106,6 +108,7 @@ pub fn waiting(project_root: &Path, scope: &str, agent: &str, harness: Harness) 
             .map(chrono::DateTime::<chrono::Utc>::from)
             .filter(|at| marker.as_ref().is_none_or(|m| *at > m.since));
     match interrupted {
+        Some(since) if runtime::interrupt_claimed(project_root, scope, agent, since) => None,
         Some(since) => Some(Waiting {
             since,
             ..Waiting::now(WaitingKind::Interrupted, None)

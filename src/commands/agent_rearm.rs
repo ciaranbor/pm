@@ -12,13 +12,14 @@
 //! just stays queued and the agent stays visibly unarmed. Removing the
 //! marker is the claim to type, so of two concurrent senders only one does;
 //! the prompt's UserPromptSubmit would clear it anyway. An interrupt read
-//! from the transcript has no marker until a sender writes one to claim,
-//! so two senders within the moment before the typed prompt reaches the
-//! transcript may both type.
+//! from the transcript is claimed with a stamp instead
+//! ([`runtime::claim_interrupt`]). The claim comes before any key is
+//! pressed, and is given back when nothing is typed.
 
 use std::path::Path;
 
 use crate::error::Result;
+use crate::harness::Harness;
 use crate::state::agent::AgentRegistry;
 use crate::state::paths;
 use crate::state::project::{GlobalConfig, ProjectConfig, resolve_harness_config};
@@ -59,36 +60,62 @@ pub fn rearm(
     if liveness(windows.processes(pane).as_deref(), harness, &config) != Liveness::Busy {
         return Ok(None);
     }
+    let from_marker = runtime::read_waiting(project_root, scope, agent).as_ref() == Some(&waiting);
+    let claimed = if from_marker {
+        runtime::clear_waiting(project_root, scope, agent)?
+    } else {
+        runtime::claim_interrupt(project_root, scope, agent, waiting.since)?
+    };
+    if !claimed {
+        return Ok(None);
+    }
+    let release = || {
+        if from_marker {
+            runtime::write_waiting(project_root, scope, agent, &waiting)
+        } else {
+            runtime::release_interrupt(project_root, scope, agent, waiting.since)
+        }
+    };
+    match type_prompt(project_root, scope, agent, harness, &pane.id, tmux_server) {
+        Ok(true) => Ok(Some(waiting)),
+        Ok(false) => release().map(|()| None),
+        Err(e) => {
+            let _ = release();
+            Err(e)
+        }
+    }
+}
+
+/// Type the agent's messages prompt into `pane` if its input line is empty,
+/// first pressing any key its harness names to make the line take text.
+/// Returns whether it typed.
+fn type_prompt(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    harness: Harness,
+    pane: &str,
+    tmux_server: Option<&str>,
+) -> Result<bool> {
     let home = paths::home_dir()?;
     let config_dir = runtime::read_session_path(project_root, scope, agent, SessionPath::ConfigDir);
     let config_dir = config_dir.as_deref();
-    let mut screen = tmux::capture_screen(tmux_server, &pane.id)?;
+    let mut screen = tmux::capture_screen(tmux_server, pane)?;
     if let Some((key, undo)) = harness.text_mode_key(&screen, &home, config_dir) {
-        tmux::send_key(tmux_server, &pane.id, key)?;
-        screen = redrawn(tmux_server, &pane.id, |s| {
-            harness.text_mode_key(s, &home, config_dir).is_none()
-        })?;
-        if harness.text_mode_key(&screen, &home, config_dir).is_some() {
-            tmux::send_key(tmux_server, &pane.id, undo)?;
-            return Ok(None);
+        tmux::send_key(tmux_server, pane, key)?;
+        let takes_text = |s: &str| harness.input_is_empty(s, &home, config_dir).is_some();
+        screen = redrawn(tmux_server, pane, takes_text)?;
+        if !takes_text(&screen) {
+            tmux::send_key(tmux_server, pane, undo)?;
+            return Ok(false);
         }
     }
     if harness.input_is_empty(&screen, &home, config_dir) != Some(true) {
-        return Ok(None);
+        return Ok(false);
     }
     let prompt = hooks_stop::continuation(project_root, scope, agent)?;
-    // An interrupt read from the transcript has no marker yet to claim.
-    if runtime::read_waiting(project_root, scope, agent).as_ref() != Some(&waiting) {
-        runtime::write_waiting(project_root, scope, agent, &waiting)?;
-    }
-    if !runtime::clear_waiting(project_root, scope, agent)? {
-        return Ok(None);
-    }
-    if let Err(e) = tmux::send_text(tmux_server, &pane.id, &prompt) {
-        let _ = runtime::write_waiting(project_root, scope, agent, &waiting);
-        return Err(e);
-    }
-    Ok(Some(waiting))
+    tmux::send_text(tmux_server, pane, &prompt)?;
+    Ok(true)
 }
 
 /// `pane`'s screen once `done` holds for it, or as it is after a second.
@@ -258,8 +285,9 @@ mod tests {
             "{status}"
         );
         assert_eq!(
-            runtime::read_waiting(&project, "login", "implementer"),
-            None
+            waiting(&project, "login", "implementer", Harness::ClaudeCode),
+            None,
+            "a re-armed interrupt no longer counts"
         );
         server.wait_for_pane_text(&target, &format!("❯ {PROMPT}"));
     }
