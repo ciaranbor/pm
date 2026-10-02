@@ -645,7 +645,7 @@ unset, text is escaped for formats, and each name is set at one scope only:
 | | `@pm_attention` | the attention kind; unset for `none` |
 | | `@pm_reason` | the attention detail, or for `stalled` what the attention view shows; unset without one |
 | | `@pm_badge` | the kind's glyph, styled; unset for `none`; on `main`, its main agent's badge |
-| | `@pm_activity` | the busy glyph while the scope is working, else how long it has been quiet (`2h`, styled); unset under 10 minutes |
+| | `@pm_activity` | the busy glyph while the scope is working, else how long it has been quiet (`2h`, styled); unset under 10 minutes, and on `main` while its badge already shows its main agent at work |
 | | `@pm_alert_pending` | set while a feature's ready alert waits for its team to go quiet; pm's own bookkeeping |
 | agent window | `@pm_agent` | the agent's name |
 | | `@pm_agent_state` | an [agent state](#attention-view) |

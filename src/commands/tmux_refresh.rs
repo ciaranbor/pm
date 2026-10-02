@@ -31,7 +31,8 @@ use crate::tmux::options::{self, Command, Holder, Options, Scope, format_text};
 use chrono::{DateTime, Utc};
 
 use super::attention::{
-    self, AgentSnapshot, Attention, AttentionKind, FeatureSnapshot, ScopeSnapshot, Snapshot,
+    self, AgentSnapshot, AgentState, Attention, AttentionKind, FeatureSnapshot, ScopeSnapshot,
+    Snapshot,
 };
 use super::feat_status_view::{STALLED, span};
 
@@ -314,8 +315,20 @@ fn main_values(
             (kind != AttentionKind::None).then(|| kind.to_string()),
         ),
         (BADGE, lead.map(|a| badge::agent(a.state, a.unread))),
-        (ACTIVITY, activity(main.working, main.last_activity, now)),
+        (ACTIVITY, main_activity(main, lead, now)),
     ]
+}
+
+/// A main scope's activity, without the busy glyph its `lead`'s badge
+/// already shows.
+fn main_activity(
+    main: &ScopeSnapshot,
+    lead: Option<&AgentSnapshot>,
+    now: DateTime<Utc>,
+) -> Option<String> {
+    let lead_shows_work =
+        lead.is_some_and(|a| matches!(a.state, AgentState::Busy | AgentState::Background));
+    activity(main.working, main.last_activity, now).filter(|_| !(main.working && lead_shows_work))
 }
 
 /// The busy glyph while the scope works, else how long it has been quiet,
@@ -378,7 +391,6 @@ fn alert(session: &str, attention: &Attention) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::attention::AgentState;
     use crate::commands::{feat_delete::feat_delete, feat_status::feat_status};
     use crate::messages;
     use crate::state::agent::AgentRegistry;
@@ -966,6 +978,60 @@ mod tests {
         let ready = "#[fg=green,bold]\u{f058}#[default]";
         assert_eq!(badges, [ready; 5]);
         assert_eq!(counts, ["0", "1", "0", "1", "1"]);
+    }
+
+    #[test]
+    fn a_main_session_shows_work_once() {
+        let now = Utc::now();
+        let main = |lead: AgentState, other: AgentState, working, minutes_ago| {
+            let mut snapshot = main_scope(vec![
+                AgentSnapshot {
+                    name: "main".into(),
+                    state: lead,
+                    unread: 0,
+                    window: Some("app/main:1".into()),
+                    pane: None,
+                    waiting: None,
+                },
+                AgentSnapshot {
+                    name: "helper".into(),
+                    state: other,
+                    unread: 0,
+                    window: Some("app/main:2".into()),
+                    pane: None,
+                    waiting: None,
+                },
+            ]);
+            let scope = snapshot.projects[0].main.as_mut().unwrap();
+            scope.working = working;
+            scope.last_activity = Some(now - chrono::Duration::minutes(minutes_ago));
+            snapshot
+        };
+        let published = Options {
+            sessions: vec![Holder::session("app/main", &[])],
+            ..Options::default()
+        };
+        let activity = |snapshot: &Snapshot| {
+            sets(&commands(snapshot, &published, now), ACTIVITY)
+                .into_iter()
+                .map(String::from)
+                .collect::<Vec<_>>()
+        };
+        let gear = "#[fg=green]\u{f013}#[default]";
+
+        assert!(
+            activity(&main(AgentState::Busy, AgentState::Idle, true, 1)).is_empty(),
+            "the main agent's badge shows it"
+        );
+        assert_eq!(
+            activity(&main(AgentState::Idle, AgentState::Busy, true, 1)),
+            [gear],
+            "another agent of main's is working"
+        );
+        assert_eq!(
+            activity(&main(AgentState::Idle, AgentState::Idle, false, 185)),
+            ["#[fg=colour245]3h#[default]"]
+        );
     }
 
     #[test]
