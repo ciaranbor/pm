@@ -16,8 +16,9 @@
 //! `@pm_project` so its windows count as the project's when they are
 //! cleared, and its main agent's badge, so the tree shows whether the
 //! orchestrator is working or waiting on the user. Options are cleared only
-//! on sessions of projects the snapshot read: a project whose state couldn't
-//! be read keeps what it last published.
+//! on sessions of projects the snapshot read, or no longer registered: a
+//! project whose state or registry entry couldn't be read keeps what it last
+//! published.
 
 use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
@@ -187,17 +188,22 @@ fn commands(snapshot: &Snapshot, published: &Options, now: DateTime<Utc>) -> Vec
         agent_windows(&mut writes, &mut windows, published, &main.agents);
     }
 
-    let read: HashSet<&str> = snapshot
-        .projects
-        .iter()
-        .filter(|p| p.skipped.is_none())
-        .map(|p| p.name.as_str())
-        .collect();
-    let ours = |session: &str| {
-        published
-            .sessions
+    let names = |skipped: bool| -> HashSet<String> {
+        snapshot
+            .projects
             .iter()
-            .any(|s| s.target == session && read.contains(s.get(PROJECT)))
+            .filter(|p| skipped || p.skipped.is_none())
+            .map(|p| format_text(&p.name))
+            .collect()
+    };
+    let (registered, read) = (names(true), names(false));
+    let ours = |session: &str| {
+        published.sessions.iter().any(|s| {
+            let project = s.get(PROJECT);
+            s.target == session
+                && !project.is_empty()
+                && (read.contains(project) || !registered.contains(project))
+        })
     };
     for held in &published.sessions {
         if ours(&held.target) && !sessions.contains(held.target.as_str()) {
@@ -631,7 +637,17 @@ mod tests {
         let now = published(&server);
         assert_eq!(
             values(&now.sessions, &session, SESSION_OPTIONS),
-            [project_name.as_str(), "login", "wip", "", "", "", "", "", ""]
+            [
+                project_name.as_str(),
+                "login",
+                "wip",
+                "",
+                "",
+                "",
+                "",
+                "",
+                ""
+            ]
         );
         assert_eq!(
             values(&now.windows, &implementer, WINDOW_OPTIONS),
@@ -751,6 +767,40 @@ mod tests {
             ["", "", "", "", "", "", "", "", ""]
         );
         assert_eq!([now.global.get(COUNT), now.global.get(SUMMARY)], ["0", ""]);
+    }
+
+    #[test]
+    fn a_project_removed_from_the_registry_takes_its_options_with_it() {
+        let _serial = serial();
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project);
+        let session = tmux::session_name(&project_name, "login");
+        let window = server.spawn_idle_fake_agent(&project, &session, "login", "implementer");
+        refresh(&projects_dir, server.name()).unwrap();
+        assert_eq!(
+            values(&published(&server).windows, &window, &[AGENT]),
+            ["implementer"]
+        );
+
+        std::fs::remove_file(projects_dir.join(format!("{project_name}.toml"))).unwrap();
+        refresh(&projects_dir, server.name()).unwrap();
+
+        let now = published(&server);
+        let main = tmux::session_name(&project_name, "main");
+        for session in [&session, &main] {
+            assert!(
+                values(&now.sessions, session, SESSION_OPTIONS)
+                    .iter()
+                    .all(|v| v.is_empty()),
+                "{session}"
+            );
+        }
+        assert_eq!(
+            values(&now.windows, &window, WINDOW_OPTIONS),
+            ["", "", "", ""]
+        );
     }
 
     #[test]
