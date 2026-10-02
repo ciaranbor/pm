@@ -80,7 +80,21 @@ fn resolve_projects(
     all: bool,
 ) -> Result<Vec<Project>> {
     if all {
-        let entries = ProjectEntry::list(projects_dir)?;
+        // Skipping an entry would drop a project from the migration bundle
+        // unnoticed until the other machine.
+        let registry = ProjectEntry::scan(projects_dir)?;
+        if !registry.malformed.is_empty() {
+            let entries: Vec<String> = registry
+                .malformed
+                .iter()
+                .map(|bad| format!("{} ({})", bad.path.display(), bad.error))
+                .collect();
+            return Err(PmError::ExportImport(format!(
+                "unreadable registry entries, fix or remove them first: {}",
+                entries.join("; ")
+            )));
+        }
+        let entries = registry.projects;
         if entries.is_empty() {
             return Err(PmError::ExportImport("no projects registered".to_string()));
         }
@@ -393,6 +407,32 @@ pub(super) mod tests {
         let manifest = manifest_of(&output_path, Harness::ClaudeCode);
         let names: Vec<_> = manifest.as_object().unwrap().keys().collect();
         assert_eq!(names, ["alpha"]);
+    }
+
+    #[test]
+    fn export_all_refuses_an_unreadable_registry_entry() {
+        let home = tempdir().unwrap();
+        let project = tempdir().unwrap();
+        let projects_dir = tempdir().unwrap();
+        let output_dir = tempdir().unwrap();
+        let main = setup_project(project.path(), "alpha", projects_dir.path());
+        setup_claude_sessions(home.path(), &main);
+        let bad = projects_dir.path().join("beta.toml");
+        std::fs::write(&bad, "root = ").unwrap();
+
+        let output_path = output_dir.path().join("all.tar.gz");
+        let err = run_export(
+            Harness::ClaudeCode,
+            None,
+            projects_dir.path(),
+            &output_path,
+            home.path(),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains(&bad.display().to_string()), "{err}");
+        assert!(!output_path.exists());
     }
 
     #[test]
