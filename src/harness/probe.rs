@@ -60,8 +60,11 @@ pub(super) fn run<E>(
     }
 }
 
-fn cache_file(config_dir: &Path) -> PathBuf {
-    config_dir.join("cache").join("harness-probes.json")
+/// The config dir's machine-local cache dir, which the probe cache is in.
+pub(crate) const CACHE_DIR_NAME: &str = "cache";
+
+pub(crate) fn cache_file(config_dir: &Path) -> PathBuf {
+    config_dir.join(CACHE_DIR_NAME).join("harness-probes.json")
 }
 
 fn run_in<E>(

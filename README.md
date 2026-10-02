@@ -591,10 +591,11 @@ feature with no worktree here.
 one machine.
 
 The registry repo syncs your global custom workflows but never the bundled
-ones: its `.gitignore` carries a block pm regenerates, so `pm upgrade`
-rewriting them never dirties it. If an earlier release committed them, `pm
-upgrade` untracks them and stages the deletion for `pm state push --global`.
-A machine that pulls that commit loses the bundled dirs until it runs `pm
+ones or machine-local files (the harness probe cache, tmux lock files): its
+`.gitignore` carries a block pm regenerates, so `pm upgrade` rewriting them
+never dirties it. If an earlier release committed any of them, `pm upgrade`
+untracks them and stages the deletion for `pm state push --global`. A
+machine that pulls that commit loses the bundled dirs until it runs `pm
 upgrade`.
 
 ## Reference

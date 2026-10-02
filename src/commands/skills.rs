@@ -1166,7 +1166,7 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|l| l.starts_with("Untracked 1 bundled workflow(s)")),
+                .any(|l| l.starts_with(&format!("Untracked workflows/{bundled} from"))),
             "{lines:?}"
         );
 
@@ -1194,7 +1194,7 @@ mod tests {
 
         let again = install_global_in(&store).unwrap();
         assert!(
-            !again.iter().any(|l| l.contains("bundled workflow")),
+            !again.iter().any(|l| l.starts_with("Untracked")),
             "{again:?}"
         );
     }
@@ -1211,11 +1211,11 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|l| l.starts_with("Would untrack 1 bundled workflow(s)")),
+                .any(|l| l.starts_with(&format!("Would untrack workflows/{bundled} from"))),
             "{lines:?}"
         );
         assert!(
-            lines.iter().any(|l| l.starts_with("Would ignore")),
+            lines.iter().any(|l| l.starts_with("Would update")),
             "{lines:?}"
         );
         assert_eq!(

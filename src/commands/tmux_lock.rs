@@ -74,8 +74,11 @@ pub fn prune() -> Result<()> {
     Ok(())
 }
 
+/// The lock files' dir under the config dir.
+pub(crate) const DIR_NAME: &str = "tmux";
+
 fn dir() -> Result<PathBuf> {
-    let dir = paths::global_config_dir()?.join("tmux");
+    let dir = paths::global_config_dir()?.join(DIR_NAME);
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }
