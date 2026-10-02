@@ -495,8 +495,7 @@ pub fn pane_command(server: Option<&str>, window: &str) -> Result<String> {
 }
 
 /// Full scrollback of a window's agent pane as plain text, wrapped lines
-/// joined. Tests use it to see the command a spawn typed into the shell.
-#[cfg(test)]
+/// joined.
 pub fn capture_pane(server: Option<&str>, window: &str) -> Result<String> {
     let pane = agent_pane_target(server, window)?;
     run_tmux(

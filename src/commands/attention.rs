@@ -42,7 +42,7 @@ pub const WORKING_SECS: i64 = 20 * 60;
 /// How long after its spawn an agent whose window runs no harness reads as
 /// starting rather than dead: long enough for the window's shell to start
 /// the harness, short enough that one that exits at once soon reads dead.
-const STARTING_SECS: i64 = 10;
+pub(crate) const STARTING_SECS: i64 = 10;
 
 /// A scope quiet for less than this is shown as neither working nor quiet,
 /// so the gaps between turns don't flicker.

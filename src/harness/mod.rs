@@ -13,7 +13,7 @@
 mod claude_code;
 mod codex;
 mod opencode;
-mod probe;
+pub(crate) mod probe;
 mod screen;
 mod transcript;
 

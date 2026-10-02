@@ -39,6 +39,7 @@ fn is_open_recoverable(kind: IssueKind) -> bool {
         IssueKind::TmuxSessionMissing | IssueKind::AgentWindowMissing => true,
         IssueKind::OrphanedState
         | IssueKind::AgentSessionNotStarted
+        | IssueKind::AgentHarnessExited
         | IssueKind::WorktreeDirMissing
         | IssueKind::DirNotGitWorktree
         | IssueKind::GitWorktreeNoDir

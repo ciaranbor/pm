@@ -2,6 +2,7 @@ use std::path::Path;
 
 use crate::commands::agent_spawn::{SpawnOutcome, agent_spawn, agent_spawn_in, notes_suffix};
 use crate::commands::attention::{AgentState, scope_agents};
+use crate::commands::launch_check::{self, FailedLaunch};
 use crate::error::{PmError, Result};
 use crate::messages;
 use crate::state::agent::AgentRegistry;
@@ -109,12 +110,37 @@ pub(super) fn restarted_line(agent_name: &str, outcome: SpawnOutcome, notes: &[S
 #[derive(Debug)]
 pub struct Restarted {
     pub results: Vec<Result<String>>,
+    /// Each restarted agent but the caller, by its index in `results`: the
+    /// caller's report prints in its old pane, which is killed right after,
+    /// so its launch is not waited for.
+    launched: Vec<(usize, String)>,
     /// The old pane of the agent the restart ran from, left to
     /// [`Restarted::finish`].
     caller_pane: Option<String>,
 }
 
 impl Restarted {
+    /// Turn the result of each launched agent whose harness exited at
+    /// launch into an error saying why ([`launch_check`]).
+    pub fn confirm_launches(
+        &mut self,
+        project_root: &Path,
+        scope: &str,
+        tmux_server: Option<&str>,
+    ) {
+        let names: Vec<String> = self.launched.iter().map(|(_, n)| n.clone()).collect();
+        let failed = launch_check::confirm(project_root, scope, &names, tmux_server);
+        self.record_failures(failed, scope);
+    }
+
+    fn record_failures(&mut self, failed: Vec<FailedLaunch>, scope: &str) {
+        for failure in failed {
+            if let Some((at, _)) = self.launched.iter().find(|(_, n)| *n == failure.agent) {
+                self.results[*at] = Err(PmError::Agent(failure.message(scope)));
+            }
+        }
+    }
+
     /// Kill the old pane the restart ran from, if it ran from one. That
     /// ends the calling process, so it comes after the results are printed.
     pub fn finish(self, tmux_server: Option<&str>) {
@@ -153,10 +179,12 @@ pub fn agent_restart_many(
             "could not tell whether agent '{name}' is mid-turn ({e})"
         )),
     };
+    let mut launched = Vec::new();
     let mut results: Vec<Result<String>> = names
         .iter()
         .filter(|n| Some(*n) != caller)
-        .map(|name| {
+        .enumerate()
+        .map(|(at, name)| {
             let reason = mid_turn_reason(name);
             let resume = reason.is_some();
             if let Some(reason) = reason.filter(|_| !force) {
@@ -164,8 +192,9 @@ pub fn agent_restart_many(
                     "{reason}, or pass --force to interrupt it and have it resume"
                 )));
             }
-            restart_one(project_root, feature, name, tmux_server, false, resume)
-                .map(|(line, _)| line)
+            let line = restart_one(project_root, feature, name, tmux_server, false, resume)?.0;
+            launched.push((at, name.clone()));
+            Ok(line)
         })
         .collect();
     let mut caller_pane = None;
@@ -180,6 +209,7 @@ pub fn agent_restart_many(
     }
     Restarted {
         results,
+        launched,
         caller_pane,
     }
 }
@@ -570,6 +600,48 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert!(results[0].is_ok());
         assert!(results[1].is_err());
+    }
+
+    #[test]
+    fn only_the_restarted_agent_that_exited_at_launch_has_its_result_turned_into_an_error() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let session = tmux::session_name(&project_name, "login");
+        server.spawn_fake_agent(&project, &session, "login", "implementer");
+        server.spawn_dead_fake_agent(&project, &session, "login", "reviewer");
+        server.spawn_dead_fake_agent(&project, &session, "login", "qa");
+        let names = ["implementer", "reviewer", "qa"].map(String::from);
+
+        let mut restarted = agent_restart_many(&project, "login", &names, false, server.name());
+        restarted.record_failures(
+            vec![FailedLaunch {
+                agent: "reviewer".into(),
+                output: "  error: bad flag".into(),
+            }],
+            "login",
+        );
+
+        let results = &restarted.results;
+        assert!(
+            results[0]
+                .as_ref()
+                .unwrap_err()
+                .to_string()
+                .contains("--force")
+        );
+        let exited = results[1].as_ref().unwrap_err().to_string();
+        assert!(
+            exited.contains("agent 'reviewer': its harness exited at launch")
+                && exited.ends_with("error: bad flag"),
+            "{exited}"
+        );
+        assert!(
+            results[2]
+                .as_ref()
+                .unwrap()
+                .starts_with("Restarted agent 'qa'")
+        );
     }
 
     #[test]

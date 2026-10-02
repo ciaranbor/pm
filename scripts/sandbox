@@ -38,10 +38,14 @@ Usage: scripts/sandbox [COMMAND] [OPTIONS] [-- CMD...]
 
   -n NAME    sandbox name (default: "default", or $PM_SANDBOX)
   --real     real claude/codex/opencode instead of shims, with
-             ~/.claude.json and ~/.codex/auth.json copied in. Credentials
-             are not: log in once (attach, then /login) or export
-             CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY before `up` (the
-             sandbox inherits them), and `trust` each project dir before
+             ~/.claude.json and ~/.codex/auth.json copied in. Claude Code
+             credentials are not copied: the sandbox inherits
+             CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY from the caller;
+             when neither is set, the token (from `claude setup-token`) is
+             read from $PM_SANDBOX_CLAUDE_TOKEN_FILE (default
+             ~/.config/pm-secrets/claude-token) into the environment of
+             `up`, `run` and `shell` — never into a file. Failing both, log
+             in once (attach, then /login). `trust` each project dir before
              spawning agents in it. opencode gets nothing copied: set its
              providers in pm config ([harness.opencode.providers.<id>])
   --shell S  shell tmux windows run (default: $SHELL, non-login, no rc files
@@ -94,6 +98,20 @@ esac
 tmpbase=$(cd "${TMPDIR:-/tmp}" && pwd -P)
 sockdir="${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)"
 caller_path=$PATH caller_agent=${PM_AGENT_NAME:-}
+
+# A real sandbox's Claude Code token: exported (so it reaches the tmux
+# server and every process through the environment, not argv) when the
+# caller has no Claude credential of its own.
+load_claude_token() {
+  local f=${PM_SANDBOX_CLAUDE_TOKEN_FILE:-$HOME/.config/pm-secrets/claude-token}
+  [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ] || return 0
+  if [ ! -r "$f" ]; then
+    echo "sandbox: no CLAUDE_CODE_OAUTH_TOKEN and no token file at $f; claude will ask to /login" >&2
+    return 0
+  fi
+  CLAUDE_CODE_OAUTH_TOKEN=$(tr -d '[:space:]' < "$f")
+  export CLAUDE_CODE_OAUTH_TOKEN
+}
 
 # Point every helper at sandbox NAME. The sandbox environment: everything
 # the real machine could leak through is unset, and the sandbox's own bin/
@@ -148,6 +166,8 @@ up() {
     > "$home/.gitconfig"
   ln -s "$pm_bin" "$home/bin/pm"
   if [ "$real" = 1 ]; then
+    echo "real=1" >> "$home/.sandbox"
+    load_claude_token
     [ -f "$HOME/.claude.json" ] && cp "$HOME/.claude.json" "$home/.claude.json"
     if [ -f "$HOME/.codex/auth.json" ]; then
       mkdir -p "$home/.codex" && cp "$HOME/.codex/auth.json" "$home/.codex/auth.json"
@@ -179,6 +199,7 @@ up() {
 
 run() {
   require
+  [ "$(meta "$name" real)" != 1 ] || load_claude_token
   [ $# -gt 0 ] || die "run: no command after --"
   case $cdir in
     "") cd "$home" ;;
@@ -190,6 +211,7 @@ run() {
 
 shell() {
   require
+  [ "$(meta "$name" real)" != 1 ] || load_claude_token
   cd "$home"
   echo "sandbox '$name': HOME=$home, tmux -L $server; exit to leave"
   scrubbed "${SHELL:-/bin/sh}" || true

@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use crate::commands::attention::{self, AgentState};
 use crate::commands::feat_delete::{self, CleanupParams};
 use crate::commands::harness_check::{self, Problem, ProblemKind};
 use crate::commands::{agent_spawn, hooks_install, skills};
@@ -36,6 +37,8 @@ pub enum IssueKind {
     /// An active agent's window is up but no session id has been recorded
     /// for it since its spawn.
     AgentSessionNotStarted,
+    /// An active agent's window is up but its harness exited to the shell.
+    AgentHarnessExited,
     /// Feature status stuck on `initializing`.
     StuckInitializing,
     /// Feature references a workflow whose directory is missing.
@@ -1106,6 +1109,8 @@ fn agent_issues(
             .and_then(|since| since.elapsed().ok())
             .is_some_and(|age| age > START_GRACE)
     };
+    // What the attention snapshot reads each agent as; unreadable, none.
+    let states = attention::scope_agents(project_root, scope, tmux_server).unwrap_or_default();
     let mut issues = Vec::new();
     for (agent_name, entry) in &registry.agents {
         if entry.agent_type != AgentType::Agent || !entry.active {
@@ -1118,6 +1123,22 @@ fn agent_issues(
                 fix: Fix::Auto(FixAction::RespawnAgent {
                     agent_name: agent_name.clone(),
                 }),
+            });
+            continue;
+        }
+        if states
+            .iter()
+            .any(|a| a.name == *agent_name && a.state == AgentState::Dead)
+        {
+            issues.push(Issue {
+                kind: IssueKind::AgentHarnessExited,
+                message: format!(
+                    "agent '{agent_name}' has its window open but its {} harness exited \
+                     (its window shows why; fix that, then `pm agent restart {agent_name} \
+                     --scope {scope}`)",
+                    entry.harness
+                ),
+                fix: Fix::None,
             });
             continue;
         }
@@ -2996,6 +3017,40 @@ mod tests {
         std::fs::remove_file(runtime.join("opencode.loaded")).unwrap();
         save(&|e| e.harness = Harness::ClaudeCode);
         assert_eq!(login_issues(), vec![]);
+    }
+
+    #[test]
+    fn an_open_window_whose_harness_exited_is_flagged_instead_of_its_missing_session() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
+        let session_name = tmux::session_name(&project_name, "login");
+        server.spawn_dead_fake_agent(&project_path, &session_name, "login", "reviewer");
+        let agents_dir = paths::agents_dir(&project_path);
+        let mut registry = AgentRegistry::load(&agents_dir, "login").unwrap();
+        let entry = registry.get_mut("reviewer").unwrap();
+        entry.harness = Harness::Codex;
+        entry.spawned_at = Some(chrono::Utc::now() - 2 * START_GRACE);
+        registry.save(&agents_dir, "login").unwrap();
+
+        let issues: Vec<(IssueKind, String)> =
+            diagnose(&project_path, &projects_dir, server.name(), Depth::Quick)
+                .unwrap()
+                .iter()
+                .filter(|f| f.feature() == "login")
+                .flat_map(|f| f.issues())
+                .map(|i| (i.kind(), i.message().to_string()))
+                .collect();
+        assert_eq!(
+            issues,
+            vec![(
+                IssueKind::AgentHarnessExited,
+                "agent 'reviewer' has its window open but its codex harness exited (its window \
+                 shows why; fix that, then `pm agent restart reviewer --scope login`)"
+                    .to_string()
+            )]
+        );
     }
 
     #[test]

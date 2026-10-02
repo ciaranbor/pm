@@ -26,6 +26,9 @@ description: Exercise a pm build by hand or end to end without touching the real
   `down` stop them.
 - `status` prints the harness invocations the shims recorded. Use
   `up --real` only when the behaviour under test needs a real harness.
+  Claude Code there authenticates with the user's long-lived token, which
+  `--real` loads from outside the sandbox (`--help` says where); never copy
+  it into the sandbox or print it.
 - `PM_TMUX_SERVER` is what points pm at the private server, named
   `pm-test-<sandbox name>`. Pass `-L pm-test-<sandbox name>` on any hand-run
   `tmux` command.
