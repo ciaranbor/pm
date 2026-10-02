@@ -196,7 +196,7 @@ mod tests {
         tmux::create_session(server.name(), &session, dir.path()).unwrap();
         let state = |command: &str| {
             let window = tmux::new_window(server.name(), &session, dir.path(), None, true).unwrap();
-            tmux::send_keys(server.name(), &window, command).unwrap();
+            tmux::send_line(server.name(), &window, command).unwrap();
             let config = HarnessConfig::default();
             let mut last = None;
             for _ in 0..250 {

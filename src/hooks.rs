@@ -192,7 +192,7 @@ pub fn run_hook(tmux_server: Option<&str>, ctx: &HookContext, hook_path: &Path) 
     }
     let cmd = hook_command(ctx, hook_path);
     match tmux::find_or_create_window(tmux_server, &ctx.session, HOOK_WINDOW_NAME, &ctx.worktree)
-        .and_then(|target| tmux::send_keys(tmux_server, &target, &cmd))
+        .and_then(|target| tmux::send_line(tmux_server, &target, &cmd))
     {
         Ok(()) => {}
         Err(e) => eprintln!("warning: hook failed: {e}"),

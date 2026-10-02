@@ -781,7 +781,7 @@ impl TestServer {
         agent_name: &str,
     ) -> String {
         let target = self.fake_agent_window(project_root, session_name, feature, agent_name);
-        crate::tmux::send_keys(
+        crate::tmux::send_line(
             self.name(),
             &target,
             &format!("exec {} 999", fake_claude().display()),
@@ -807,7 +807,7 @@ impl TestServer {
     ) -> String {
         let script = fake_claude_at_prompt();
         let target = self.fake_agent_window(project_root, session_name, feature, agent_name);
-        crate::tmux::send_keys(self.name(), &target, &format!("exec {}", script.display()))
+        crate::tmux::send_line(self.name(), &target, &format!("exec {}", script.display()))
             .unwrap();
         self.await_liveness(
             &target,
@@ -869,7 +869,7 @@ impl TestServer {
     ) -> String {
         let target = self.fake_agent_window(project_root, session_name, feature, agent_name);
         // The `; :` keeps `sh` from exec'ing `sleep` in its own place.
-        crate::tmux::send_keys(
+        crate::tmux::send_line(
             self.name(),
             &target,
             &format!(

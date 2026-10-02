@@ -155,7 +155,7 @@ fn is_client_of(server: Option<&str>, session: &str, tmux_env: &str) -> bool {
 }
 
 /// Create a new window in an existing tmux session. Returns the new window's target
-/// (e.g. "session:1") for use with send_keys.
+/// (e.g. "session:1") for use with send_line.
 /// When `detached` is true, the new window is created without switching to it.
 pub fn new_window(
     server: Option<&str>,
@@ -194,23 +194,23 @@ pub fn list_windows(server: Option<&str>, session: &str) -> Result<usize> {
     Ok(output.lines().count())
 }
 
-/// Send keys to a tmux session (for running commands like setup.sh).
-pub fn send_keys(server: Option<&str>, target: &str, keys: &str) -> Result<()> {
-    run_tmux(server, &["send-keys", "-t", target, keys, "Enter"])?;
-    Ok(())
+/// Type `text` into `target` as literal keys, then press Enter: a command
+/// line for a shell.
+pub fn send_line(server: Option<&str>, target: &str, text: &str) -> Result<()> {
+    run_tmux(server, &["send-keys", "-t", target, "-l", text])?;
+    send_key(server, target, "Enter")
 }
 
-/// Type `text` into `target` as literal keys, then press Enter. The pause
-/// before Enter is what makes it submit: codex takes an Enter arriving
-/// right after a burst of keys as part of a paste, a newline.
+/// [`send_line`] for a harness's input box. The pause before Enter is what
+/// makes it submit: codex takes an Enter arriving right after a burst of
+/// keys as part of a paste, a newline.
 pub fn send_text(server: Option<&str>, target: &str, text: &str) -> Result<()> {
     run_tmux(server, &["send-keys", "-t", target, "-l", text])?;
     std::thread::sleep(std::time::Duration::from_millis(300));
-    run_tmux(server, &["send-keys", "-t", target, "Enter"])?;
-    Ok(())
+    send_key(server, target, "Enter")
 }
 
-/// Press one key, by tmux's name for it, in `target`.
+/// Press one key, by tmux's name for it (`Enter`, `C-c`), in `target`.
 pub fn send_key(server: Option<&str>, target: &str, key: &str) -> Result<()> {
     run_tmux(server, &["send-keys", "-t", target, key])?;
     Ok(())
@@ -267,7 +267,7 @@ pub fn current_session(server: Option<&str>) -> Option<String> {
     run_tmux(server, &["display-message", "-p", "#{client_session}"]).ok()
 }
 
-/// Shell-quote a string for safe use in send_keys (single-quote wrapping with escaping).
+/// Shell-quote a string for safe use in send_line (single-quote wrapping with escaping).
 pub fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
@@ -569,7 +569,7 @@ mod tests {
         create_session(server.name(), &session, dir.path()).unwrap();
         let window = format!("{session}:0");
         mark_agent_pane(server.name(), &window).unwrap();
-        send_keys(server.name(), &window, "exec sleep 999").unwrap();
+        send_line(server.name(), &window, "exec sleep 999").unwrap();
         server.split_before(&window);
         send_text(server.name(), &window, "echo in-the-users-pane").unwrap();
 
@@ -746,22 +746,37 @@ mod tests {
     }
 
     #[test]
-    fn send_keys_to_existing_session_succeeds() {
+    fn send_line_to_existing_session_succeeds() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
         let name = server.scope("keys-test");
 
         create_session(server.name(), &name, dir.path()).unwrap();
 
-        let result = send_keys(server.name(), &name, "echo hello");
+        let result = send_line(server.name(), &name, "echo hello");
         assert!(result.is_ok());
     }
 
     #[test]
-    fn send_keys_to_nonexistent_session_fails() {
+    fn a_line_that_names_a_key_is_typed_as_text() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let name = server.scope("literal");
+        create_session(server.name(), &name, dir.path()).unwrap();
+
+        send_line(server.name(), &name, "C-c").unwrap();
+        send_line(server.name(), &name, "echo typed-after").unwrap();
+
+        server.wait_for_pane_text(&name, "typed-after\n");
+        let text = capture_pane(server.name(), &name).unwrap();
+        assert!(text.lines().any(|l| l.ends_with("C-c")), "{text}");
+    }
+
+    #[test]
+    fn send_line_to_nonexistent_session_fails() {
         let server = TestServer::new();
 
-        let result = send_keys(server.name(), &server.scope("nonexistent"), "echo hello");
+        let result = send_line(server.name(), &server.scope("nonexistent"), "echo hello");
         assert!(result.is_err());
     }
 
