@@ -45,6 +45,20 @@ pub(in crate::harness) fn cached<T: Clone>(
     answer
 }
 
+/// What names a turn end read from a transcript: the entry's own `id`, else
+/// the transcript's mtime, which bookkeeping written after it moves on.
+pub(in crate::harness) fn entry_id(id: Option<&Value>, mtime: SystemTime) -> String {
+    match id.and_then(Value::as_str) {
+        Some(id) => id.to_string(),
+        None => {
+            let nanos = mtime
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default();
+            format!("mtime-{}", nanos.as_nanos())
+        }
+    }
+}
+
 /// The last complete entry of the first `len` bytes of `path` that
 /// `matches` accepts.
 pub(in crate::harness) fn last_entry(

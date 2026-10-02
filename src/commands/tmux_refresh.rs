@@ -69,7 +69,12 @@ pub(super) const WINDOW_OPTIONS: &[&str] = &[AGENT, AGENT_STATE, UNREAD, AGENT_B
 
 const SUMMARY: &str = "@pm_summary";
 const COUNT: &str = "@pm_count";
-const GLOBAL_OPTIONS: &[&str] = &[SUMMARY, COUNT];
+const FEATURES_ALERTED: &str = "@pm_features_alerted";
+const GLOBAL_OPTIONS: &[&str] = &[SUMMARY, COUNT, FEATURES_ALERTED];
+
+/// What separates [`FEATURES_ALERTED`] entries: a unit separator, which no
+/// session name holds, where a space may be in a project's name.
+const ENTRY_SEPARATOR: &str = "\x1f";
 
 /// Publish the snapshot of every project registered in `projects_dir`. No
 /// server running publishes nothing.
@@ -104,6 +109,17 @@ fn commands(snapshot: &Snapshot, published: &Options, now: DateTime<Utc>) -> Vec
     let mut sessions: HashSet<&str> = HashSet::new();
     let mut windows: HashSet<&str> = HashSet::new();
     let mut needing = Vec::new();
+    let recorded = features_alerted(published.global.get(FEATURES_ALERTED));
+    let recorded_for = |session: &str| {
+        recorded
+            .iter()
+            .find(|(s, _)| *s == session)
+            .map(|(_, kinds)| *kinds)
+    };
+    // Nothing published yet: the server is new, and what a closed feature
+    // needs was set before it.
+    let first_publish = published.global.get(COUNT).is_empty();
+    let mut record = Vec::new();
     for feature in &snapshot.features {
         // A session made since the read is published next time.
         let Some(held) = published
@@ -111,12 +127,32 @@ fn commands(snapshot: &Snapshot, published: &Options, now: DateTime<Utc>) -> Vec
             .iter()
             .find(|s| s.target == feature.session)
         else {
+            let mut kinds = recorded_for(&feature.session).map(str::to_string);
+            if !feature.session_exists {
+                let previous = match &kinds {
+                    Some(kinds) => Some(Judged {
+                        alerted: Judged::parse_alerted(kinds),
+                        ..Judged::default()
+                    }),
+                    None if first_publish => None,
+                    None => Some(Judged::default()),
+                };
+                let verdict = transition::judge_feature(previous.as_ref(), feature);
+                if verdict.alert {
+                    alerts.push(alert(&feature.session, &feature.attention, &[]));
+                }
+                kinds = verdict.judged.alerted_list();
+            }
+            record.extend(kinds.map(|kinds| feature_entry(&feature.session, &kinds)));
             continue;
         };
         sessions.insert(&feature.session);
         let verdict = transition::judge_feature(previous(held).as_ref(), feature);
         if verdict.alert {
             alerts.push(alert(&feature.session, &feature.attention, &feature.agents));
+        }
+        if let Some(kinds) = verdict.judged.alerted_list() {
+            record.push(feature_entry(&feature.session, &kinds));
         }
         needing.extend(verdict.judged.attention);
         let mut values = session_values(feature, &verdict.judged, now);
@@ -151,6 +187,16 @@ fn commands(snapshot: &Snapshot, published: &Options, now: DateTime<Utc>) -> Vec
             .collect()
     };
     let (registered, read) = (names(true), names(false));
+    // A project that couldn't be read keeps its features' record.
+    for project in snapshot.projects.iter().filter(|p| p.skipped.is_some()) {
+        let prefix = tmux::session_name(&project.name, "");
+        record.extend(
+            recorded
+                .iter()
+                .filter(|(session, _)| session.starts_with(&prefix))
+                .map(|(session, kinds)| feature_entry(session, kinds)),
+        );
+    }
     let ours = |session: &str| {
         published.sessions.iter().any(|s| {
             let project = s.get(PROJECT);
@@ -187,7 +233,7 @@ fn commands(snapshot: &Snapshot, published: &Options, now: DateTime<Utc>) -> Vec
         &mut writes,
         Scope::Global,
         &published.global,
-        &global_values(needing),
+        &global_values(needing, &record),
     );
 
     for client in &published.clients {
@@ -358,7 +404,24 @@ pub(super) fn window_values(agent: &AgentSnapshot) -> Vec<(&'static str, Option<
 
 /// The totals of `kinds`, the attention of each session that publishes
 /// one, so the count matches what the attention tree lists.
-fn global_values(mut kinds: Vec<AttentionKind>) -> Vec<(&'static str, Option<String>)> {
+/// The `(session, alerted kinds)` entries of a [`FEATURES_ALERTED`] value,
+/// which keeps every feature's alerted kinds so a closed feature, which has
+/// no session to hold them, is judged against them too.
+fn features_alerted(value: &str) -> Vec<(&str, &str)> {
+    value
+        .split(ENTRY_SEPARATOR)
+        .filter_map(|entry| entry.rsplit_once('='))
+        .collect()
+}
+
+fn feature_entry(session: &str, kinds: &str) -> String {
+    format!("{session}={kinds}")
+}
+
+fn global_values(
+    mut kinds: Vec<AttentionKind>,
+    record: &[String],
+) -> Vec<(&'static str, Option<String>)> {
     kinds.sort();
     let summary: Vec<String> = kinds
         .chunk_by(|a, b| a == b)
@@ -367,6 +430,10 @@ fn global_values(mut kinds: Vec<AttentionKind>) -> Vec<(&'static str, Option<Str
     vec![
         (SUMMARY, Some(summary.join(" · ")).filter(|s| !s.is_empty())),
         (COUNT, Some(kinds.len().to_string())),
+        (
+            FEATURES_ALERTED,
+            Some(record.join(ENTRY_SEPARATOR)).filter(|v| !v.is_empty()),
+        ),
     ]
 }
 
@@ -1132,6 +1199,86 @@ mod tests {
                 "pm: app/login asking: implementer: permission",
                 "pm: app/login ready: Adds login",
             ]
+        );
+    }
+
+    #[test]
+    fn a_closed_feature_alerts_once_when_it_turns_ready_but_not_on_closing_or_a_new_server() {
+        let closed = |progress: Progress| Snapshot {
+            features: vec![FeatureSnapshot {
+                session_exists: false,
+                ..feature_scope(progress, false, Vec::new())
+                    .features
+                    .remove(0)
+            }],
+            ..ready_feature(false)
+        };
+        let refresh = |snapshot: &Snapshot, global: &[(&str, &str)], session: Option<Holder>| {
+            let published = Options {
+                clients: vec![Client::named("c1")],
+                sessions: session.into_iter().collect(),
+                global: Holder::session("", global),
+                ..Options::default()
+            };
+            let commands = commands(snapshot, &published, Utc::now());
+            let record = commands
+                .iter()
+                .find(|c| c[0] == "set-option" && c.iter().any(|a| a == FEATURES_ALERTED))
+                .map(|c| c[c.len() - 2..].join(" "));
+            (displayed(&commands).len(), record.unwrap_or_default())
+        };
+        let served = (COUNT, "0");
+
+        assert_eq!(
+            refresh(&closed(Progress::Ready), &[served], None),
+            (1, "@pm_features_alerted app/login=ready".into()),
+            "turned ready while closed"
+        );
+        let alerted = (FEATURES_ALERTED, "app/login=ready");
+        assert_eq!(
+            refresh(&closed(Progress::Ready), &[served, alerted], None),
+            (0, String::new())
+        );
+        assert_eq!(
+            refresh(&closed(Progress::Wip), &[served, alerted], None),
+            (0, "-u @pm_features_alerted".into()),
+            "the episode ended"
+        );
+        assert_eq!(
+            refresh(&closed(Progress::Blocked), &[], None),
+            (0, "@pm_features_alerted app/login=blocked".into()),
+            "a new server records what was set before it"
+        );
+
+        let open = Holder::session("app/login", &[(PROJECT, "app"), (ALERTED, "ready")]);
+        let (_, recorded) = refresh(&ready_feature(false), &[served], Some(open));
+        assert_eq!(
+            recorded, "@pm_features_alerted app/login=ready",
+            "an open feature's record"
+        );
+        assert_eq!(
+            refresh(&closed(Progress::Ready), &[served, alerted], None).0,
+            0,
+            "closing a ready feature"
+        );
+
+        let mut two = closed(Progress::Ready);
+        let spaced = FeatureSnapshot {
+            project: "My App".into(),
+            session: "My App/login".into(),
+            ..two.features[0].clone()
+        };
+        two.features.push(spaced);
+        let (alerts, both) = refresh(&two, &[served], None);
+        assert_eq!(alerts, 1, "one alert naming both");
+        let both = both
+            .strip_prefix("@pm_features_alerted ")
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            refresh(&two, &[served, (FEATURES_ALERTED, &both)], None),
+            (0, String::new()),
+            "a project name with a space keeps its record"
         );
     }
 

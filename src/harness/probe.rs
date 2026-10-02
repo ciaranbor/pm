@@ -2,7 +2,11 @@
 //! cache in the pm config dir so `pm status` doesn't spawn every harness in
 //! use each time it runs. An entry is keyed by the resolved binary's path and
 //! the probed argument, and is valid only while that file's size and mtime
-//! are unchanged — an upgrade replaces or retargets the binary. Only a probe
+//! are unchanged — an upgrade replaces or retargets the binary. A `#!`
+//! wrapper's own file stays the same when what it runs is upgraded, so its
+//! entry also holds the size and mtime of each file it names: by absolute
+//! path, or by the name of a file beside it (`exec "$(dirname "$0")/x"`).
+//! A target it computes any other way is not seen. Only a probe
 //! that ran to an exit is stored; one that could not run is retried. The
 //! cache is best-effort: an unreadable or unwritable file only costs a probe.
 
@@ -102,23 +106,55 @@ fn run_in<E>(
     Ok(exit)
 }
 
-/// The file `binary` runs: itself when it names a path, else the first
-/// match on `PATH`, with symlinks followed.
+/// The file `binary` runs, as found on `PATH`.
 fn resolve(binary: &str) -> Option<PathBuf> {
-    let found = if binary.contains('/') {
-        PathBuf::from(binary)
-    } else {
-        std::env::split_paths(&std::env::var_os("PATH")?)
-            .map(|dir| dir.join(binary))
-            .find(|path| path.is_file())?
-    };
-    found.canonicalize().ok()
+    crate::fs_utils::resolve_binary(binary, std::env::var_os("PATH").as_deref())
 }
 
+/// A wrapper read for the files it names is at most this long.
+const WRAPPER_MAX: u64 = 64 * 1024;
+
 fn stamp(path: &Path) -> Option<String> {
+    let mut stamp = file_stamp(path)?;
+    for target in wrapped(path) {
+        stamp.push(' ');
+        stamp.push_str(&file_stamp(&target).unwrap_or_default());
+    }
+    Some(stamp)
+}
+
+fn file_stamp(path: &Path) -> Option<String> {
     let meta = std::fs::metadata(path).ok()?;
     let mtime = meta.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
     Some(format!("{}:{}", meta.len(), mtime.as_nanos()))
+}
+
+/// The files a `#!` script at `path` names: absolute paths, and names of
+/// files in its own directory. Empty for anything else.
+fn wrapped(path: &Path) -> Vec<PathBuf> {
+    let small = std::fs::metadata(path).is_ok_and(|m| m.len() <= WRAPPER_MAX);
+    let Some(text) = small.then(|| std::fs::read(path).ok()).flatten() else {
+        return Vec::new();
+    };
+    if !text.starts_with(b"#!") {
+        return Vec::new();
+    }
+    let dir = path.parent().unwrap_or(Path::new("/"));
+    let text = String::from_utf8_lossy(&text);
+    let mut files: Vec<PathBuf> = text
+        .split(|c: char| !(c.is_alphanumeric() || "._-/+@".contains(c)))
+        .flat_map(|token| {
+            [
+                Some(PathBuf::from(token)),
+                token.rsplit('/').next().map(|n| dir.join(n)),
+            ]
+        })
+        .flatten()
+        .filter(|f| f.is_absolute() && f.as_path() != path && f.is_file())
+        .collect();
+    files.sort();
+    files.dedup();
+    files
 }
 
 fn load(cache: &Path) -> BTreeMap<String, Entry> {
@@ -195,6 +231,44 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![upgraded.canonicalize().unwrap()]
         );
+    }
+
+    #[test]
+    fn a_wrapper_is_probed_again_when_the_file_beside_it_that_it_runs_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("harness-probes.json");
+        let wrapper = dir.path().join("harness");
+        std::fs::write(
+            &wrapper,
+            "#!/bin/sh\nexec \"$(dirname \"$0\")/real\" \"$@\"\n",
+        )
+        .unwrap();
+        let real = dir.path().join("real");
+        std::fs::write(&real, "v1").unwrap();
+        let spawns = Cell::new(0);
+        let probe = || {
+            run_in(
+                &cache,
+                wrapper.to_str().unwrap(),
+                "--version",
+                Probe::Cached,
+                || {
+                    spawns.set(spawns.get() + 1);
+                    Ok::<_, ()>(Exit {
+                        success: true,
+                        stdout: String::new(),
+                    })
+                },
+            )
+            .unwrap();
+            spawns.get()
+        };
+
+        assert_eq!(probe(), 1);
+        assert_eq!(probe(), 1, "cached");
+        std::fs::write(&real, "v2, upgraded").unwrap();
+        assert_eq!(probe(), 2, "its target changed");
+        assert_eq!(probe(), 2);
     }
 
     #[test]

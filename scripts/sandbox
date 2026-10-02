@@ -158,6 +158,8 @@ up() {
     (cd "$here" && cargo build -q)
     pm_bin=$here/target/debug/pm
   fi
+  [ -f "$pm_bin" ] || die "--pm $pm_bin: no such file"
+  case $pm_bin in /*) ;; *) pm_bin=$(cd "$(dirname "$pm_bin")" && pwd)/$(basename "$pm_bin") ;; esac
   mkdir -p "$home/bin" "$home/log"
   # Who made it, for `list` and `prune`.
   printf 'created=%s\nworktree=%s\nagent=%s\n' "$(date +%s)" "$here" "$caller_agent" \

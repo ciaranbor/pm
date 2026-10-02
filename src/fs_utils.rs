@@ -165,6 +165,19 @@ fn process_alive(pid: u32) -> bool {
 
 static TMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// The file `binary` runs: itself when it names a path, else the first
+/// match in the directories of `path` (a `PATH` value), symlinks followed.
+pub fn resolve_binary(binary: &str, path: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
+    let found = if binary.contains('/') {
+        PathBuf::from(binary)
+    } else {
+        std::env::split_paths(path?)
+            .map(|dir| dir.join(binary))
+            .find(|candidate| candidate.is_file())?
+    };
+    found.canonicalize().ok()
+}
+
 /// Write `content` to `path` via a uniquely-named sibling temp file and a
 /// rename, creating parent directories as needed. A concurrent reader sees
 /// either the old file or the complete new one, never a partial write.

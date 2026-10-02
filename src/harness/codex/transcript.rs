@@ -12,23 +12,24 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::harness::transcript::{Cache, cached, last_entry};
+use crate::harness::transcript::{Cache, cached, entry_id, last_entry};
 use crate::state::runtime::{Waiting, WaitingKind};
 
 static CACHE: Cache<Waiting> = std::sync::Mutex::new(None);
 
 /// The failure the session whose rollout is at `path` ended its last turn
-/// with, if no turn has started since, dated by the rollout's mtime.
+/// with, if no turn has started since, dated by the rollout's mtime and
+/// named by the turn's `turn_id` (else that mtime).
 pub(in crate::harness) fn turn_ended(path: &Path) -> Option<Waiting> {
     cached(&CACHE, path, |len, mtime| {
         let end = last_entry(path, len, is_boundary)?;
-        let error = end
+        let payload = end
             .pointer("/payload")
-            .filter(|p| p.get("type").and_then(Value::as_str) == Some("task_complete"))?
-            .get("error")
-            .filter(|e| !e.is_null())?;
+            .filter(|p| p.get("type").and_then(Value::as_str) == Some("task_complete"))?;
+        let error = payload.get("error").filter(|e| !e.is_null())?;
         Some(Waiting {
             since: mtime.into(),
+            entry: Some(entry_id(payload.get("turn_id"), mtime)),
             ..Waiting::now(WaitingKind::Error, Some(describe(error)))
         })
     })
@@ -114,6 +115,7 @@ mod tests {
         append(&path, &[started(), failed(), token_count(), bulky()]);
         let failure = turn_ended(&path).expect("failed");
         assert_eq!(failure.kind, WaitingKind::Error);
+        assert_eq!(failure.entry.as_deref(), Some("t1"), "named by its turn");
         assert_eq!(
             failure.describe(),
             "API error 400: The 'no-such-model-xyz' model is not supported."

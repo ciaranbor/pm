@@ -113,6 +113,19 @@ pub fn socket_path(server: Option<&str>) -> Result<Option<String>> {
     }
 }
 
+/// `name` in the server's global environment, which the jobs it runs get;
+/// `None` when it is unset there or no server is running.
+pub fn global_environment(server: Option<&str>, name: &str) -> Result<Option<String>> {
+    match run_tmux(server, &["show-environment", "-g", name]) {
+        Ok(line) => Ok(line
+            .strip_prefix(name)
+            .and_then(|rest| rest.strip_prefix('='))
+            .map(str::to_string)),
+        Err(PmError::Tmux(msg)) if no_server(&msg) || msg.contains("unknown variable") => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// Attach the current terminal to a tmux session. Inherits stdio so tmux takes
 /// over the controlling terminal; returns when the user detaches. From a pane
 /// of another server the client nests in that pane.

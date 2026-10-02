@@ -400,7 +400,15 @@ pub fn scope_agents(
     scope: &str,
     tmux_server: Option<&str>,
 ) -> Result<Vec<AgentSnapshot>> {
-    let windows = Windows::read(tmux_server)?;
+    scope_agents_in(project_root, scope, &Windows::read(tmux_server)?)
+}
+
+/// [`scope_agents`] from a scan of the windows already taken.
+pub fn scope_agents_in(
+    project_root: &Path,
+    scope: &str,
+    windows: &Windows,
+) -> Result<Vec<AgentSnapshot>> {
     let project_config = ProjectConfig::load(&paths::pm_dir(project_root))?;
     let config = resolve_harness_config(
         &project_config.harness,
@@ -409,7 +417,7 @@ pub fn scope_agents(
     let reader = ScopeReader {
         project_root,
         project: &project_config.project.name,
-        windows: &windows,
+        windows,
         config: &config,
     };
     Ok(reader.read(scope)?.agents)

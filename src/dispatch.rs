@@ -127,6 +127,40 @@ fn report_agent_op_results(
     }
 }
 
+/// Print what a send did, reporting a respawned recipient only once its
+/// harness has stayed up. The message is queued either way, so a failed
+/// launch is a warning.
+fn report_sent(
+    project_root: &std::path::Path,
+    sent: commands::agent_send::Sent,
+    server: Option<&str>,
+) {
+    println!("{}", sent.status);
+    if let Some(heal) = sent.heal {
+        let agents = [heal.agent];
+        match commands::launch_check::confirm(project_root, &heal.scope, &agents, server).first() {
+            None => println!("{}", heal.report),
+            Some(failure) => eprintln!("warning: {}", failure.message()),
+        }
+    }
+}
+
+/// Print each launch that failed; an error saying how many, if any did.
+fn report_failed_launches(
+    failed: &[commands::launch_check::FailedLaunch],
+) -> pm::error::Result<()> {
+    for failure in failed {
+        eprintln!("error: {}", failure.message());
+    }
+    match failed.len() {
+        0 => Ok(()),
+        n => Err(PmError::Agent(format!(
+            "{n} agent{} failed to launch",
+            plural(n)
+        ))),
+    }
+}
+
 /// Parse `agent@scope` shorthand. Returns `(agent, Some(scope))` if `@` is
 /// present, otherwise `(original, None)`.
 fn parse_agent_at_scope(input: &str) -> (&str, Option<&str>) {
@@ -258,11 +292,9 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
         Commands::Open { all: true, .. } => {
             use commands::open::ProjectOpen;
             let projects_dir = paths::global_projects_dir()?;
-            let mut any = false;
             let mut changed = false;
-            commands::open::open_all(&projects_dir, server, |name, outcome| {
-                any = true;
-                match outcome {
+            let mut outcomes =
+                commands::open::open_all(&projects_dir, server, |name, outcome| match outcome {
                     ProjectOpen::Opened(r) => {
                         changed |= r.changed();
                         println!(
@@ -278,9 +310,24 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         root.display()
                     ),
                     ProjectOpen::Failed(e) => eprintln!("warning: {name}: {e}"),
+                })?;
+            commands::open::confirm_launches(
+                outcomes
+                    .iter_mut()
+                    .filter_map(|(_, outcome)| match outcome {
+                        ProjectOpen::Opened(r) => Some(r),
+                        _ => None,
+                    }),
+                server,
+            );
+            for (name, outcome) in &outcomes {
+                if let ProjectOpen::Opened(r) = outcome {
+                    for failure in &r.failed_launches {
+                        eprintln!("error: {name}: {}", failure.message());
+                    }
                 }
-            })?;
-            if !any {
+            }
+            if outcomes.is_empty() {
                 println!("No projects in registry");
             }
             if changed {
@@ -299,7 +346,8 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
         Commands::Open { project, .. } => {
             let projects_dir = paths::global_projects_dir()?;
             let project_root = project_root(&projects_dir, project.as_deref())?;
-            let result = commands::open::open(&project_root, &projects_dir, server)?;
+            let mut result = commands::open::open(&project_root, &projects_dir, server)?;
+            commands::open::confirm_launches([&mut result], server);
             if result.changed() {
                 println!(
                     "Restored {} sessions. Respawned {} agents.",
@@ -308,6 +356,9 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                 push();
             } else {
                 println!("Project sessions opened");
+            }
+            for failure in &result.failed_launches {
+                eprintln!("error: {}", failure.message());
             }
             connect(server, &result.main_session);
             Ok(())
@@ -451,8 +502,11 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         &name,
                         server,
                     )?;
-                    println!("{msg}");
+                    let launched =
+                        commands::launch_check::check(&project_root, &feature, &name, server);
                     push();
+                    launched?;
+                    println!("{msg}");
                     Ok(())
                 }
             }
@@ -518,7 +572,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         } else {
                             effective_scope
                         };
-                        let line = commands::agent_send::agent_send(
+                        let sent = commands::agent_send::agent_send(
                             &project_root,
                             &feature,
                             target_scope.as_deref(),
@@ -527,7 +581,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                             &message,
                             server,
                         )?;
-                        println!("{line}");
+                        report_sent(&project_root, sent, server);
                     }
                     push();
                     Ok(())
@@ -589,14 +643,14 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                 MsgCommands::Reply { message, as_agent } => {
                     let message = read_message_body(message)?;
                     let sender = as_agent.unwrap_or_else(pm::messages::default_user_name);
-                    let line = commands::msg_reply::msg_reply(
+                    let sent = commands::msg_reply::msg_reply(
                         &project_root,
                         &feature,
                         &sender,
                         &message,
                         server,
                     )?;
-                    println!("{line}");
+                    report_sent(&project_root, sent, server);
                     push();
                     Ok(())
                 }
@@ -665,8 +719,10 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                             tmux_server: server,
                         })?;
                     println!("Created feature '{feat_name}'");
+                    let failed =
+                        commands::launch_check::confirm_scope(&project_root, &feat_name, server);
                     push();
-                    Ok(())
+                    report_failed_launches(&failed)
                 }
                 FeatCommands::Adopt {
                     name,
@@ -688,8 +744,10 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                             home: None,
                         })?;
                     println!("Adopted feature '{feat_name}'");
+                    let failed =
+                        commands::launch_check::confirm_scope(&project_root, &feat_name, server);
                     push();
-                    Ok(())
+                    report_failed_launches(&failed)
                 }
                 // `--all` is dispatched before a project is resolved.
                 FeatCommands::List { .. } => {
@@ -1294,12 +1352,19 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
             let name = resolve_feature_name(name, &project_root)?;
             let pulled = commands::seed::pull(&project_root, &name, dry_run)?;
-            if pulled.written.is_empty() {
+            if pulled.written.is_empty() && pulled.removed.is_empty() {
                 println!("Feature '{name}' is up to date with main");
             }
             let verb = if dry_run { "Would write" } else { "Wrote" };
             for file in pulled.written {
                 println!("{verb} {name}/{}", file.display());
+            }
+            let verb = if dry_run { "Would remove" } else { "Removed" };
+            for file in pulled.removed {
+                println!(
+                    "{verb} {name}/{}: the branch deleted its skill",
+                    file.display()
+                );
             }
             if dry_run {
                 for file in pulled.deleted {

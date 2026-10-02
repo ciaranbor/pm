@@ -10,7 +10,8 @@
 //! own layout (`~/.claude/` and `main/.claude/` for claude-code) via
 //! [`Harness::project_assets`]; the canonical copy always wins over a
 //! same-named projected file, and projection never deletes. A feature
-//! worktree's projection is [`seed`](super::seed)'s.
+//! worktree's projection is [`seed`](super::seed)'s, which removes that of a
+//! skill the feature's branch deleted.
 
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -9,11 +9,13 @@
 //! projected copy comes from main's projection, and the feature gets no
 //! canonical copy at all. Runs when a feature is created and on an explicit
 //! `pm harness pull` — never as a side effect of another command, so a live
-//! feature changes only when someone asks. Copy-only — nothing in the
-//! feature is ever deleted — and a file the feature's branch tracks in git,
-//! or deleted since it forked from main, is never written: its content (or
-//! absence) is the branch's, and reaches or leaves main by merge. A skill
-//! the branch deleted is also not copied from main's harness projection.
+//! feature changes only when someone asks. A file the feature's branch
+//! tracks in git, or deleted since it forked from main, is never written:
+//! its content (or absence) is the branch's, and reaches or leaves main by
+//! merge. A skill directory whose tracked files the branch deleted, all of
+//! them, is deleted as a whole: none of main's files for it are copied, and
+//! its harness projection — which git does not track, so no merge removes
+//! it — is removed. Nothing else in the feature is ever deleted.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -39,6 +41,9 @@ pub struct Pulled {
     pub written: Vec<PathBuf>,
     /// Main's files left absent because the feature's branch deleted them.
     pub deleted: Vec<PathBuf>,
+    /// Projections of skills the branch deleted, removed (or, with
+    /// `dry_run`, that would be).
+    pub removed: Vec<PathBuf>,
 }
 
 /// Called during `feat new` / `feat adopt` / `feat review`.
@@ -69,7 +74,7 @@ fn sync_feature(project_root: &Path, feature_worktree: &Path, dry_run: bool) -> 
     let harnesses = skills::harnesses_in_use(project_root)?;
     for sub in CANONICAL_SUBDIRS {
         let rel = Path::new(CANONICAL_DIR).join(sub);
-        seeder.sync_untracked(&rel, &HashSet::new(), &mut out)?;
+        seeder.sync_untracked(&rel, &seeder.deleted_entries(&rel)?, &mut out)?;
     }
     // A dry run projects from what the canonical store would hold.
     let preview = if dry_run {
@@ -101,18 +106,22 @@ fn sync_feature(project_root: &Path, feature_worktree: &Path, dry_run: bool) -> 
                     .map(|c| PathBuf::from(c.as_os_str())),
             );
             seeder.sync_untracked(&rel, &own, &mut out)?;
+            let gone = seeder.deleted_entries(&Path::new(CANONICAL_DIR).join(sub))?;
+            let mut keep = seeder.branch_owned(&rel)?;
+            keep.extend(gone.iter().cloned());
             let scope = ProjectionScope {
                 subdirs: Some(std::slice::from_ref(sub)),
-                keep: seeder
-                    .branch_owned(&rel)?
-                    .into_iter()
-                    .map(|f| Path::new(sub).join(f))
-                    .collect(),
+                keep: keep.into_iter().map(|f| Path::new(sub).join(f)).collect(),
             };
             let projection =
                 harness.project_assets(&canonical, &feature_worktree.join(cfg), &scope, dry_run)?;
             out.written
                 .extend(projection.written.into_iter().map(|f| cfg.join(f)));
+            for name in gone {
+                if let Some(removed) = seeder.remove_untracked(&rel.join(name))? {
+                    out.removed.push(removed);
+                }
+            }
         }
     }
     for harness in &harnesses {
@@ -140,7 +149,8 @@ fn preview_canonical(seeder: &Seeder) -> Result<tempfile::TempDir> {
         }
         let src = seeder.main.join(&rel);
         if src.is_dir() {
-            let keep = seeder.branch_owned(&rel)?;
+            let mut keep = seeder.branch_owned(&rel)?;
+            keep.extend(seeder.deleted_entries(&rel)?);
             sync_tree_except(&src, &preview.path().join(sub), &keep, false)?;
         }
     }
@@ -216,6 +226,39 @@ impl<'a> Seeder<'a> {
             .iter()
             .filter_map(|f| f.strip_prefix(rel).ok().map(Path::to_path_buf))
             .collect()
+    }
+
+    /// The entries of the directory `rel` the worktree's branch deleted as a
+    /// whole: it deleted files under each and tracks none there now.
+    fn deleted_entries(&self, rel: &Path) -> Result<HashSet<PathBuf>> {
+        let mut out = HashSet::new();
+        for file in self.deleted_under(rel) {
+            let Some(name) = file.components().next() else {
+                continue;
+            };
+            let name = PathBuf::from(name.as_os_str());
+            if !out.contains(&name) && tracked_under(self.worktree, &rel.join(&name))?.is_empty() {
+                out.insert(name);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Remove the worktree's `rel` unless its branch tracks something
+    /// there; `rel` when it was there to remove (with `dry_run`, left).
+    fn remove_untracked(&self, rel: &Path) -> Result<Option<PathBuf>> {
+        let path = self.worktree.join(rel);
+        if !path.exists() || !tracked_under(self.worktree, rel)?.is_empty() {
+            return Ok(None);
+        }
+        if !self.dry_run {
+            if path.is_dir() {
+                std::fs::remove_dir_all(&path)?;
+            } else {
+                std::fs::remove_file(&path)?;
+            }
+        }
+        Ok(Some(rel.to_path_buf()))
     }
 
     /// Files under `rel` whose content is the worktree's branch's to decide,
@@ -476,6 +519,50 @@ mod tests {
         assert_eq!(pull(&project, "login", true).unwrap().written, expected);
         assert_eq!(pull(&project, "login", false).unwrap().written, expected);
         assert_kept("pull");
+    }
+
+    #[test]
+    fn a_skill_the_branch_deleted_loses_its_projection_and_gets_none_of_mains_later_files() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let main = paths::main_worktree(&project);
+        let feature_wt = project.join("login");
+        for rel in [
+            ".agents/skills/gone/SKILL.md",
+            ".agents/skills/kept/SKILL.md",
+            ".agents/skills/kept/old.md",
+        ] {
+            let rel = Path::new(rel);
+            let name = rel.file_name().unwrap().to_str().unwrap();
+            write(&main.join(rel.parent().unwrap()), name, "main's");
+            git::stage_file(&main, &rel.to_string_lossy()).unwrap();
+        }
+        git::commit(&main, "add skills").unwrap();
+        git::merge_no_ff(&feature_wt, "main").unwrap();
+        seed_feature_assets(&project, &feature_wt).unwrap();
+        assert!(feature_wt.join(".claude/skills/gone/SKILL.md").is_file());
+        for rel in [".agents/skills/gone/SKILL.md", ".agents/skills/kept/old.md"] {
+            std::fs::remove_file(feature_wt.join(rel)).unwrap();
+            git::stage_file(&feature_wt, rel).unwrap();
+        }
+        git::commit(&feature_wt, "drop a skill and a file of another").unwrap();
+        write(&main.join(".agents/skills/gone"), "extra.md", "added later");
+
+        let preview = pull(&project, "login", true).unwrap();
+        assert_eq!(preview.removed, [PathBuf::from(".claude/skills/gone")]);
+        assert!(
+            !preview.written.iter().any(|f| f.ends_with("extra.md")),
+            "{preview:?}"
+        );
+        assert!(feature_wt.join(".claude/skills/gone/SKILL.md").is_file());
+
+        let pulled = pull(&project, "login", false).unwrap();
+        assert_eq!(pulled.removed, [PathBuf::from(".claude/skills/gone")]);
+        assert!(!feature_wt.join(".claude/skills/gone").exists());
+        assert!(!feature_wt.join(".agents/skills/gone/extra.md").exists());
+        assert!(feature_wt.join(".claude/skills/kept/SKILL.md").is_file());
+        assert!(pull(&project, "login", false).unwrap().removed.is_empty());
     }
 
     #[test]

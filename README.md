@@ -121,7 +121,9 @@ its turn). pm surfaces all of it in tmux:
   agent — `main` included — starts asking (except on a client already
   showing that agent's pane). A feature alerts once per episode — not
   again when its agent's question outranks its `ready` for a while, nor
-  when its session is opened on a status it already had;
+  when its session is opened or closed on a status it already had. One
+  whose session is closed still alerts when it becomes blocked or ready (a
+  PR approved through `pm feat sync`, say);
 - pm's tree (prefix `s` / `w`), tmux's own tree with each session's
   activity (working, or how long it has been quiet), attention glyph and
   reason, and each agent's badge. Enter on a session goes straight to the
@@ -163,10 +165,12 @@ another project or request something of it without you relaying it.
 When an agent misbehaves, `pm agent restart <name>` respawns it on the same
 conversation; `pm agent spawn <name>` adds one to the feature. A restart
 refuses an agent that is busy, asking, or running background work; with
-`--force` it interrupts it and leaves it a message to resume. Both wait a
-moment for the harness to stay up, and report one that exits at launch (a
-flag its CLI rejects, say) with what its window shows; `pm doctor` reports
-an agent whose harness has since exited.
+`--force` it interrupts it and leaves it a message to resume. Every command
+that launches a harness — these, `feat new`/`adopt`, `open`, `agent fork`,
+and a `msg send` that respawns a dead window — waits a moment for it to stay
+up, and reports one that exits at launch (a flag its CLI rejects, say) with
+what its window shows; `pm doctor` reports an agent whose harness has since
+exited.
 
 ### Finish a feature
 
@@ -443,7 +447,8 @@ new`/`adopt`/`review` copy main's custom skills, agent definitions and
 `.claude/settings.json` into the new worktree; `pm upgrade` never modifies a
 feature worktree. `pm harness pull [feature]` (`--dry-run` to preview)
 brings later changes in. Neither writes over a file the feature's branch
-tracks, nor restores one it deleted. A feature's own `.agents/skills/` is
+tracks, nor restores one it deleted; a skill the branch deleted also loses
+its harness projection. A feature's own `.agents/skills/` is
 projected for its harnesses on seed or pull; agent definitions stay main's
 until merged, because pm resolves them from main.
 
@@ -642,11 +647,11 @@ Plugin options, set before `run-shell 'pm tmux init'`:
 | Option | Default | Effect |
 |---|---|---|
 | `@pm-bin` | `pm` | the pm binary tmux runs |
-| `@pm-auto-refresh` | on | keep pm's options current with a background `pm tmux refresh` loop; pm pushes its own changes at once, so the loop only catches what happens outside pm. The loop also re-sets pm's formats when it starts or pm is upgraded, so a new pm reaches a running server without a config reload |
+| `@pm-auto-refresh` | on | keep pm's options current with a background `pm tmux refresh` loop; pm pushes its own changes at once, so the loop only catches what happens outside pm. The loop also re-sets pm's formats when it starts or pm is upgraded, so a new pm reaches a running server without a config reload; it switches to another pm when `@pm-bin` or the server's `PATH` comes to name one |
 | `@pm-refresh-interval` | `30` | seconds between refreshes |
 | `@pm-window-status` | on | put each agent window's badge just before the window name in `window-status-format` and `window-status-current-format`, keeping your theme's style for the name |
 | `@pm-bind-tree` | on | turn prefix `s` / `w` into pm's tree, sorted by name, when they run tmux's default `choose-tree` |
-| `@pm-attention-key` | `a` | the prefix key opening pm's tree with only the sessions needing attention, or a message when none does; `off` for none. A key your config binds is left alone |
+| `@pm-attention-key` | `a` | the prefix key opening pm's tree with only the sessions needing attention, or a message when none does; `off` for none. A key your config binds is left alone; a key pm lets go of gets tmux's default binding back, if it has one |
 
 Badges are Nerd Font glyphs: an agent window's shows its [agent
 state](#attention-view), a feature session's the attention it needs, with
@@ -694,6 +699,7 @@ unset, text is escaped for formats, and each name is set at one scope only:
 | | `@pm_agent_badge` | the badge, styled; it resets with `#[default]`, so placed anywhere but the start of a format, follow it with your theme's style |
 | global | `@pm_summary` | each kind's glyph and how many sessions have `@pm_attention`, styled and joined by ` · `; unset when none has |
 | | `@pm_count` | sessions with `@pm_attention` set, so it matches what `@pm-attention-key` opens; a feature whose session is closed is not counted (`pm status` lists it) |
+| | `@pm_features_alerted` | pm's own bookkeeping: the kinds each feature has alerted on, kept for a closed feature |
 | | `@pm_tree_format` | pm's `choose-tree` line format, set by `pm tmux init` |
 
 ### Attention view
@@ -870,10 +876,11 @@ checks). What differs:
 - **The loop is a plugin**, `pm-never-idle`, which pm installs under
   `~/.config/opencode/plugins/`. It stops itself after five turns in a row
   that read no message (a failing model, an unreadable inbox) rather than
-  run away; `pm doctor` reports it with the last error. Fix the cause, then
-  `pm agent restart <name>`. A turn the plugin didn't prompt — one you
-  typed, or one opencode started itself — ends its wait, and the turn's
-  end starts the next one.
+  run away; `pm doctor` reports it with the last error. Fix the cause,
+  then `pm agent restart <name>`. A failed turn reads `unarmed` with its
+  error for the 30 s the plugin waits before it asks again. A turn the
+  plugin didn't prompt — one you typed, or one opencode started itself —
+  ends its wait, and the turn's end starts the next one.
 - **A model row is required.** opencode silently swaps a model it can't
   resolve for its default, so pm refuses to spawn an opencode agent without
   an `[agents.models]` row and limits the agent to that row's provider and

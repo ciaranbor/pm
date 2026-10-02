@@ -88,6 +88,80 @@ pub fn prefix_table(server: Option<&str>) -> Result<BTreeMap<String, Binding>> {
     Ok(table)
 }
 
+/// The bindings tmux makes in the prefix table by default, by key name as
+/// [`prefix_table`] has it, each as the config line that makes it, note
+/// included. Read from a server of its own started without a config, which
+/// exits once it has answered.
+pub fn default_prefix_table() -> Result<BTreeMap<String, String>> {
+    let server = format!("pm-defaults-{}", std::process::id());
+    let output = run_tmux(
+        Some(&server),
+        &[
+            "-f",
+            "/dev/null",
+            "start-server",
+            ";",
+            "list-keys",
+            "-T",
+            "prefix",
+            ";",
+            "list-keys",
+            "-N",
+            "-P",
+            "",
+            "-T",
+            "prefix",
+        ],
+    )?;
+    let mut lines = BTreeMap::new();
+    let mut notes = BTreeMap::new();
+    for line in output.lines() {
+        let Some(rest) = line.strip_prefix("bind-key") else {
+            if let Some((key, note)) = line.trim_start().split_once(char::is_whitespace) {
+                notes.insert(key.to_string(), note.trim().to_string());
+            }
+            continue;
+        };
+        let Some((flags, rest)) = rest.split_once("-T prefix") else {
+            continue;
+        };
+        let Some((key, command)) = rest.trim_start().split_once(char::is_whitespace) else {
+            continue;
+        };
+        lines.insert(
+            key.to_string(),
+            (flags.trim().to_string(), command.trim().to_string()),
+        );
+    }
+    Ok(lines
+        .into_iter()
+        .map(|(key, (flags, command))| {
+            // A note's key is printed unescaped.
+            let note = notes
+                .get(key.strip_prefix('\\').unwrap_or(&key))
+                .filter(|n| !n.contains('\''))
+                .map(|n| format!(" -N '{n}'"))
+                .unwrap_or_default();
+            let flags = if flags.is_empty() {
+                flags
+            } else {
+                format!(" {flags}")
+            };
+            // A key printed escaped (`\;`) does not survive a second parse
+            // as printed; quoted, it does.
+            let name = match key.strip_prefix('\\') {
+                Some("'") => "\"'\"".to_string(),
+                Some(c) => format!("'{c}'"),
+                None => key.clone(),
+            };
+            (
+                key,
+                format!("bind-key{flags}{note} -T prefix {name} {command}"),
+            )
+        })
+        .collect())
+}
+
 /// `text`'s arguments as tmux's parser reads them: whitespace-separated,
 /// with `\` escapes outside single quotes. `None` for a command list (an
 /// unquoted `\;`) or a form tmux prints that this doesn't read: an octal
@@ -139,6 +213,29 @@ fn split(text: &str) -> Option<Command> {
 mod tests {
     use super::*;
     use crate::testing::OwnServer;
+
+    #[test]
+    fn every_default_binding_comes_back_as_tmux_made_it() {
+        let server = OwnServer::start("keys-defaults");
+        let made = prefix_table(server.name()).unwrap();
+        let defaults = default_prefix_table().unwrap();
+        assert!(defaults.contains_key("\\;"), "{:?}", defaults.keys());
+
+        let mut commands: Vec<Command> = vec![vec![
+            "unbind-key".into(),
+            "-a".into(),
+            "-T".into(),
+            "prefix".into(),
+        ]];
+        commands.extend(
+            defaults
+                .into_values()
+                .map(|line| vec!["if-shell".into(), "-F".into(), "1".into(), line]),
+        );
+        super::super::options::run(server.name(), &commands).unwrap();
+
+        assert_eq!(prefix_table(server.name()).unwrap(), made);
+    }
 
     #[test]
     fn a_binding_reads_back_as_the_arguments_it_was_bound_with() {

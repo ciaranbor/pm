@@ -130,13 +130,17 @@ impl Restarted {
     ) {
         let names: Vec<String> = self.launched.iter().map(|(_, n)| n.clone()).collect();
         let failed = launch_check::confirm(project_root, scope, &names, tmux_server);
-        self.record_failures(failed, scope);
+        self.record_failures(failed);
     }
 
-    fn record_failures(&mut self, failed: Vec<FailedLaunch>, scope: &str) {
+    fn record_failures(&mut self, failed: Vec<FailedLaunch>) {
         for failure in failed {
-            if let Some((at, _)) = self.launched.iter().find(|(_, n)| *n == failure.agent) {
-                self.results[*at] = Err(PmError::Agent(failure.message(scope)));
+            if let Some((at, _)) = self
+                .launched
+                .iter()
+                .find(|(_, n)| *n == failure.launch.agent)
+            {
+                self.results[*at] = Err(PmError::Agent(failure.message()));
             }
         }
     }
@@ -258,6 +262,7 @@ fn callers_agent<'a>(
 mod tests {
     use super::*;
     use crate::commands::agent_spawn;
+    use crate::commands::launch_check::Launch;
     use crate::harness::Harness;
     use crate::state::agent::{AgentEntry, AgentType};
     use crate::state::feature::{FeatureState, FeatureStatus};
@@ -614,13 +619,14 @@ mod tests {
         let names = ["implementer", "reviewer", "qa"].map(String::from);
 
         let mut restarted = agent_restart_many(&project, "login", &names, false, server.name());
-        restarted.record_failures(
-            vec![FailedLaunch {
+        restarted.record_failures(vec![FailedLaunch {
+            launch: Launch {
+                project_root: project.clone(),
+                scope: "login".to_string(),
                 agent: "reviewer".into(),
-                output: "  error: bad flag".into(),
-            }],
-            "login",
-        );
+            },
+            output: "  error: bad flag".into(),
+        }]);
 
         let results = &restarted.results;
         assert!(

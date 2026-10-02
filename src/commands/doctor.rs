@@ -4,6 +4,7 @@ use std::time::{Duration, SystemTime};
 use crate::commands::attention::{self, AgentState};
 use crate::commands::feat_delete::{self, CleanupParams};
 use crate::commands::harness_check::{self, Problem, ProblemKind};
+use crate::commands::running_agents::Windows;
 use crate::commands::{agent_spawn, hooks_install, skills};
 use crate::error::Result;
 use crate::harness::{Harness, Probe};
@@ -1109,14 +1110,15 @@ fn agent_issues(
             .and_then(|since| since.elapsed().ok())
             .is_some_and(|age| age > START_GRACE)
     };
+    let windows = Windows::read(tmux_server)?;
     // What the attention snapshot reads each agent as; unreadable, none.
-    let states = attention::scope_agents(project_root, scope, tmux_server).unwrap_or_default();
+    let states = attention::scope_agents_in(project_root, scope, &windows).unwrap_or_default();
     let mut issues = Vec::new();
     for (agent_name, entry) in &registry.agents {
         if entry.agent_type != AgentType::Agent || !entry.active {
             continue;
         }
-        if tmux::find_window(tmux_server, session_name, &entry.window_name)?.is_none() {
+        if windows.find(session_name, &entry.window_name).is_none() {
             issues.push(Issue {
                 kind: IssueKind::AgentWindowMissing,
                 message: format!("agent '{agent_name}' registered as active but window missing"),

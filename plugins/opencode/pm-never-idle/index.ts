@@ -7,7 +7,8 @@
 // the first one's PM_AGENT_NAME.
 //
 // It also stands in for the hooks opencode lacks: it reports the user's
-// prompts, the dialogs that wait on the user, and the agent's activity.
+// prompts, the dialogs that wait on the user, failed turns, and the agent's
+// activity.
 //
 // Installed by pm and overwritten on upgrade. opencode reloads it in every
 // running server when the file changes, so the cleanup must leave nothing
@@ -30,6 +31,7 @@ import {
   answeredOf,
   askOf,
   drivesSession,
+  failedTurnOf,
   userInput,
 } from "./loop.ts"
 import { runPm } from "./pm.ts"
@@ -132,7 +134,7 @@ export default {
             // opencode has no hooks for dialogs; these stand in for them.
             const ask = askOf(event)
             if (ask) {
-              if (await drivesSession(own, ask.sessionID, parentOf)) {
+              if (ask.sessionID === null || (await drivesSession(own, ask.sessionID, parentOf))) {
                 asks.opened(ask.id)
                 waiting(ask.payload)
               }
@@ -163,6 +165,8 @@ export default {
             if (!TURN_END.has(event.type)) continue
             if (await drivesSession(own, sessionID, parentOf)) {
               active()
+              const failed = failedTurnOf(event.type, event.data?.error)
+              if (failed) waiting(failed)
               void loop.turnEnded(sessionID, event.type, event.data?.error)
             }
           }

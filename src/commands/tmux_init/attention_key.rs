@@ -7,6 +7,8 @@
 //! which had none, by being exactly what that pm bound. Only pm's binding
 //! is ever replaced or removed; a key of the user's is skipped silently,
 //! since `run-shell` output from a config is either lost or opens view mode.
+//! A key pm lets go of gets back the binding tmux gives it by default, if
+//! any.
 
 use std::collections::BTreeMap;
 
@@ -24,12 +26,13 @@ const EMPTY: &str = "nothing needs attention";
 /// What places pm's attention tree on `setting`'s key (unset:
 /// [`DEFAULT_KEY`]; `off`: none) given the prefix `table`, drawing each line
 /// in `format` and running `template` on the chosen one. pm's binding on any
-/// other key comes off.
+/// other key comes off, back to the config line `default` gives for it.
 pub(super) fn commands(
     setting: &str,
     table: &BTreeMap<String, Binding>,
     format: &str,
     template: &str,
+    default: impl Fn(&str) -> Option<String>,
 ) -> Vec<Command> {
     let key = match setting {
         "" => Some(DEFAULT_KEY),
@@ -39,7 +42,11 @@ pub(super) fn commands(
     let mut commands: Vec<Command> = table
         .iter()
         .filter(|(k, bound)| Some(k.as_str()) != key && is_pms(bound, format))
-        .map(|(k, _)| vec!["unbind-key".to_string(), k.clone()])
+        .map(|(k, _)| match default(k) {
+            // `if-shell` parses its command as a config line.
+            Some(line) => vec!["if-shell".into(), "-F".into(), "1".into(), line],
+            None => vec!["unbind-key".to_string(), k.clone()],
+        })
         .collect();
     if let Some(key) = key
         && table.get(key).is_none_or(|bound| is_pms(bound, format))
@@ -214,6 +221,25 @@ mod tests {
         init(server.name()).unwrap();
         assert_eq!(bound(&server, "A"), None);
         assert_eq!(bound(&server, "a"), None);
+
+        tmux(&server, &["unbind", "q"]);
+        tmux(&server, &["set", "-g", ATTENTION_KEY, "q"]);
+        init(server.name()).unwrap();
+        assert_eq!(
+            bound(&server, "q").unwrap().note.as_deref(),
+            Some(super::NOTE)
+        );
+        tmux(&server, &["set", "-g", ATTENTION_KEY, "off"]);
+        init(server.name()).unwrap();
+        assert_eq!(
+            bound(&server, "q"),
+            Some(Binding {
+                repeat: false,
+                note: Some("Display pane numbers".into()),
+                command: Some(vec!["display-panes".into()]),
+            }),
+            "tmux's own binding back"
+        );
 
         tmux(&server, &["bind", "a", "display-message", "mine"]);
         tmux(&server, &["set", "-gu", ATTENTION_KEY]);

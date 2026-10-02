@@ -31,7 +31,7 @@ use super::tmux_watch::AUTO_REFRESH;
 mod attention_key;
 mod window_status;
 
-const BIN: &str = "@pm-bin";
+pub(super) const BIN: &str = "@pm-bin";
 const WINDOW_STATUS: &str = "@pm-window-status";
 const BIND_TREE: &str = "@pm-bind-tree";
 const ATTENTION_KEY: &str = "@pm-attention-key";
@@ -85,11 +85,18 @@ pub fn init(tmux_server: Option<&str>) -> Result<()> {
             commands.extend(tree_key(key, bound, bind_tree, &template));
         }
     }
+    let defaults = std::cell::OnceCell::new();
     commands.extend(attention_key::commands(
         settings.get(ATTENTION_KEY),
         &table,
         &tree_format(),
         &template,
+        |key| {
+            defaults
+                .get_or_init(|| keys::default_prefix_table().unwrap_or_default())
+                .get(key)
+                .cloned()
+        },
     ));
     if settings.get(AUTO_REFRESH) != "off" {
         commands.push(options::run_shell_background(&format!("{bin} tmux watch")));

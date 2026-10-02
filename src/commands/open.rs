@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::commands::agent_spawn;
 use crate::commands::doctor::{self, Depth, IssueKind};
+use crate::commands::launch_check::{self, FailedLaunch, Launch};
 use crate::error::{PmError, Result};
 use crate::hooks;
 use crate::state::agent::{AgentRegistry, AgentType};
@@ -18,12 +19,40 @@ pub struct OpenResult {
     pub agents_respawned: usize,
     /// The project's main tmux session name, for attaching/switching the client.
     pub main_session: String,
+    project_root: PathBuf,
+    /// The respawned agents, whose launches [`confirm_launches`] checks.
+    launched: Vec<Launch>,
+    /// The respawned agents whose harness exited at launch.
+    pub failed_launches: Vec<FailedLaunch>,
 }
 
 impl OpenResult {
     /// Whether the open made any session or agent.
     pub fn changed(&self) -> bool {
         self.sessions_restored > 0 || self.agents_respawned > 0
+    }
+}
+
+/// Check the launches of every agent `results` respawned, together, and
+/// move each that exited at launch from its result's `agents_respawned` to
+/// its `failed_launches`.
+pub fn confirm_launches<'a>(
+    results: impl IntoIterator<Item = &'a mut OpenResult>,
+    tmux_server: Option<&str>,
+) {
+    let mut results: Vec<&mut OpenResult> = results.into_iter().collect();
+    let launches: Vec<Launch> = results
+        .iter_mut()
+        .flat_map(|r| std::mem::take(&mut r.launched))
+        .collect();
+    for failure in launch_check::confirm_all(&launches, tmux_server) {
+        if let Some(result) = results
+            .iter_mut()
+            .find(|r| r.project_root == failure.launch.project_root)
+        {
+            result.agents_respawned = result.agents_respawned.saturating_sub(1);
+            result.failed_launches.push(failure);
+        }
     }
 }
 
@@ -143,8 +172,8 @@ fn warn_about_drift(
 
 /// Respawn agents for a given scope.
 ///
-/// Returns the number of agents successfully respawned. If `select_window_zero`
-/// is true and no agents were respawned, selects window 0 as the landing window.
+/// Adds each agent respawned to `launched`. If `select_window_zero` is true
+/// and no agents were respawned, selects window 0 as the landing window.
 fn respawn_agents_for_scope(
     project_root: &Path,
     scope: &str,
@@ -152,12 +181,18 @@ fn respawn_agents_for_scope(
     agents_dir: &Path,
     tmux_server: Option<&str>,
     select_window_zero: bool,
-) -> Result<usize> {
+    launched: &mut Vec<Launch>,
+) -> Result<()> {
     let spawn_result = agent_spawn::agent_spawn_all(project_root, scope, tmux_server)?;
     let spawned = spawn_result.spawned_count;
     for err in &spawn_result.errors {
         eprintln!("warning: {err}");
     }
+    launched.extend(spawn_result.launched().map(|agent| Launch {
+        project_root: project_root.to_path_buf(),
+        scope: scope.to_string(),
+        agent: agent.to_string(),
+    }));
 
     if spawned > 0 {
         let registry = AgentRegistry::load(agents_dir, scope)?;
@@ -177,7 +212,7 @@ fn respawn_agents_for_scope(
         let _ = tmux::select_window(tmux_server, &format!("{session_name}:0"));
     }
 
-    Ok(spawned)
+    Ok(())
 }
 
 /// Open a project: ensure all tmux sessions exist, then respawn agents.
@@ -222,7 +257,8 @@ pub enum ProjectOpen {
 }
 
 /// [`open`] every project registered in `projects_dir`, in registry order,
-/// passing each project's outcome to `report` as soon as it is known.
+/// passing each project's outcome to `report` as soon as it is known; each
+/// outcome, by name, for the launches to be confirmed after.
 ///
 /// A project whose root is missing, or whose open fails, is reported and the
 /// sweep continues. The client is never switched or attached here; that is
@@ -231,7 +267,8 @@ pub fn open_all(
     projects_dir: &Path,
     tmux_server: Option<&str>,
     mut report: impl FnMut(&str, &ProjectOpen),
-) -> Result<()> {
+) -> Result<Vec<(String, ProjectOpen)>> {
+    let mut outcomes = Vec::new();
     for (name, entry) in ProjectEntry::list(projects_dir)? {
         let root = entry.root_path();
         let outcome = if !root.exists() {
@@ -243,8 +280,9 @@ pub fn open_all(
             }
         };
         report(&name, &outcome);
+        outcomes.push((name, outcome));
     }
-    Ok(())
+    Ok(outcomes)
 }
 
 fn open_project(
@@ -265,7 +303,7 @@ fn open_project(
     hooks::bootstrap(project_root)?;
 
     let mut sessions_restored: usize = 0;
-    let mut agents_respawned: usize = 0;
+    let mut launched = Vec::new();
     let agents_dir = paths::agents_dir(project_root);
 
     // Ensure <project>/main session exists
@@ -292,13 +330,14 @@ fn open_project(
     // recreated, their windows are gone and agent_spawn will create new ones.
     // If the session already existed, agent_spawn is idempotent (skips agents
     // whose windows are still present).
-    agents_respawned += respawn_agents_for_scope(
+    respawn_agents_for_scope(
         project_root,
         "main",
         &main_session,
         &agents_dir,
         tmux_server,
         false,
+        &mut launched,
     )?;
 
     // Ensure sessions exist for all active features
@@ -340,20 +379,24 @@ fn open_project(
     // agent_spawn is idempotent — skips agents whose windows already exist.
     for feature in &active_features {
         let session_name = tmux::session_name(project_name, feature);
-        agents_respawned += respawn_agents_for_scope(
+        respawn_agents_for_scope(
             project_root,
             feature,
             &session_name,
             &agents_dir,
             tmux_server,
             true,
+            &mut launched,
         )?;
     }
 
     Ok(OpenResult {
         sessions_restored,
-        agents_respawned,
+        agents_respawned: launched.len(),
         main_session,
+        project_root: project_root.to_path_buf(),
+        launched,
+        failed_launches: Vec::new(),
     })
 }
 
@@ -365,6 +408,58 @@ mod tests {
     use crate::state::feature::FeatureStatus;
     use crate::testing::TestServer;
     use tempfile::tempdir;
+
+    #[test]
+    fn a_launch_that_exits_is_taken_off_its_own_projects_count() {
+        use crate::testing::fake_claude;
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (a, a_name) = server.setup_project_with_feature(dir.path(), "login");
+        let b_name = server.scope("other");
+        let b = dir.path().join(&b_name);
+        let projects_dir = dir.path().join("registry");
+        init::init(&b, &projects_dir, None, server.name()).unwrap();
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
+            &b,
+            &projects_dir,
+            "login",
+            server.name(),
+        ))
+        .unwrap();
+        server.spawn_fake_agent(&a, &tmux::session_name(&a_name, "login"), "login", "up");
+        let quits = server.spawn_dead_fake_agent(
+            &b,
+            &tmux::session_name(&b_name, "login"),
+            "login",
+            "quits",
+        );
+        tmux::send_line(
+            server.name(),
+            &quits,
+            &format!("{} 0.3", fake_claude().display()),
+        )
+        .unwrap();
+        let opened = |project: &Path, agent: &str| OpenResult {
+            sessions_restored: 0,
+            agents_respawned: 1,
+            main_session: String::new(),
+            project_root: project.to_path_buf(),
+            launched: vec![Launch {
+                project_root: project.to_path_buf(),
+                scope: "login".into(),
+                agent: agent.into(),
+            }],
+            failed_launches: Vec::new(),
+        };
+        let mut results = [opened(&a, "up"), opened(&b, "quits")];
+
+        confirm_launches(results.iter_mut(), server.name());
+
+        assert_eq!(
+            results.map(|r| (r.agents_respawned, r.failed_launches.len())),
+            [(1, 0), (0, 1)]
+        );
+    }
 
     #[test]
     fn is_open_recoverable_filters_tmux_and_agents() {
@@ -551,16 +646,18 @@ mod tests {
             tmux::kill_session(server.name(), s).unwrap();
         }
 
-        let mut outcomes = Vec::new();
-        open_all(&projects_dir, server.name(), |name, outcome| {
-            let label = match outcome {
-                ProjectOpen::Opened(r) => format!("restored {}", r.sessions_restored),
-                ProjectOpen::RootMissing(_) => "root missing".to_string(),
-                ProjectOpen::Failed(_) => "failed".to_string(),
-            };
-            outcomes.push((name.to_string(), label));
-        })
-        .unwrap();
+        let outcomes: Vec<(String, String)> = open_all(&projects_dir, server.name(), |_, _| {})
+            .unwrap()
+            .into_iter()
+            .map(|(name, outcome)| {
+                let label = match outcome {
+                    ProjectOpen::Opened(r) => format!("restored {}", r.sessions_restored),
+                    ProjectOpen::RootMissing(_) => "root missing".to_string(),
+                    ProjectOpen::Failed(_) => "failed".to_string(),
+                };
+                (name, label)
+            })
+            .collect();
 
         for s in &sessions {
             assert!(
@@ -598,16 +695,18 @@ mod tests {
         .unwrap();
         tmux::kill_session(server.name(), &tmux::session_name(&healthy, "main")).unwrap();
 
-        let mut outcomes = Vec::new();
-        open_all(&projects_dir, server.name(), |name, outcome| {
-            let label = match outcome {
-                ProjectOpen::Opened(r) => format!("restored {}", r.sessions_restored),
-                ProjectOpen::RootMissing(_) => "root missing".to_string(),
-                ProjectOpen::Failed(_) => "failed".to_string(),
-            };
-            outcomes.push((name.to_string(), label));
-        })
-        .unwrap();
+        let outcomes: Vec<(String, String)> = open_all(&projects_dir, server.name(), |_, _| {})
+            .unwrap()
+            .into_iter()
+            .map(|(name, outcome)| {
+                let label = match outcome {
+                    ProjectOpen::Opened(r) => format!("restored {}", r.sessions_restored),
+                    ProjectOpen::RootMissing(_) => "root missing".to_string(),
+                    ProjectOpen::Failed(_) => "failed".to_string(),
+                };
+                (name, label)
+            })
+            .collect();
 
         assert_eq!(
             outcomes,

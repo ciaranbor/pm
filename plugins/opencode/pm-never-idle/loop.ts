@@ -348,13 +348,23 @@ export class Loop {
 }
 
 /** What `pm harness hooks waiting opencode` reads. */
-export type WaitingPayload = { hook_event_name: "PermissionRequest" | "Question" | "Resolved"; detail?: string }
+export type WaitingPayload = {
+  hook_event_name: "PermissionRequest" | "Question" | "Dialog" | "TurnFailed" | "Resolved"
+  detail?: string
+}
+
+/** The session of a form no session owns: an MCP server's elicitation. */
+export const GLOBAL_SESSION = "global"
 
 /**
- * A dialog that opened, waiting on the user: a permission ask, or a form the
- * question tool raised. Null for any other event.
+ * A dialog that opened, waiting on the user: a permission ask, or a form —
+ * the question tool's, or any other (an MCP server's elicitation, the web
+ * search provider choice). `sessionID` is null for a form no session owns,
+ * which under `--standalone` is this agent's. Null for any other event.
  */
-export function askOf(event: { type?: unknown; data?: any }): { id: string; sessionID: string; payload: WaitingPayload } | null {
+export function askOf(
+  event: { type?: unknown; data?: any },
+): { id: string; sessionID: string | null; payload: WaitingPayload } | null {
   const data = event.data ?? {}
   if (event.type === "permission.asked" && typeof data.id === "string") {
     const resources = Array.isArray(data.resources) ? data.resources.join(" ") : String(data.resources ?? "")
@@ -365,15 +375,27 @@ export function askOf(event: { type?: unknown; data?: any }): { id: string; sess
     }
   }
   const form = data.form
-  if (event.type === "form.created" && form?.metadata?.kind === "question" && typeof form.id === "string") {
-    const label = Array.isArray(form.fields) ? form.fields[0]?.label : undefined
+  if (event.type === "form.created" && typeof form?.id === "string") {
+    // The question tool's title is always "Questions"; its first field
+    // holds the question, under `description` (`title` is its header).
+    const question = form.metadata?.kind === "question"
+    const field = Array.isArray(form.fields) ? form.fields[0] : undefined
+    const parts = question
+      ? [field?.description || field?.title || form.title]
+      : [form.title, form.metadata?.message || field?.description]
+    const detail = parts.filter((part) => typeof part === "string" && part).join(": ")
     return {
       id: form.id,
-      sessionID: form.sessionID,
-      payload: { hook_event_name: "Question", detail: String(form.title || label || "") },
+      sessionID: form.sessionID === GLOBAL_SESSION ? null : form.sessionID,
+      payload: { hook_event_name: question ? "Question" : "Dialog", detail },
     }
   }
   return null
+}
+
+/** What a turn end reports: a failed turn's error. Null for any other end. */
+export function failedTurnOf(type: string, error: unknown): WaitingPayload | null {
+  return type === TURN_FAILED ? { hook_event_name: "TurnFailed", detail: turnError(error) } : null
 }
 
 /** The id of a dialog the user answered or dismissed; null for any other event. */
