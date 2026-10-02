@@ -247,7 +247,6 @@ pub fn diagnose(
     main_issues.extend(asset_issues(project_root, &projections)?);
     main_issues.extend(rebase_issue(&main_repo));
     main_issues.extend(legacy_vanilla_agent_issues(project_root, "main"));
-    main_issues.extend(loop_issues(project_root, "main"));
     let main_branch = ProjectEntry::load(projects_dir, project_name)
         .ok()
         .map(|e| e.main_branch);
@@ -432,7 +431,6 @@ pub fn diagnose(
         }
 
         issues.extend(legacy_vanilla_agent_issues(project_root, name));
-        issues.extend(loop_issues(project_root, name));
 
         // Check 7: PR status drift (skipped when `check_pr_state` is false to
         // avoid network round-trips on latency-sensitive callers like
@@ -1106,7 +1104,10 @@ fn agent_issues(
                     agent_name: agent_name.clone(),
                 }),
             });
-        } else if past_grace(entry) {
+            continue;
+        }
+        issues.extend(loop_issue(project_root, scope, agent_name, entry));
+        if past_grace(entry) {
             if entry.session_id.is_empty() {
                 issues.push(Issue {
                     kind: IssueKind::AgentSessionNotStarted,
@@ -1134,41 +1135,31 @@ fn agent_issues(
     Ok(issues)
 }
 
-/// Agents of `scope` whose never-idle loop stopped itself, or whose last
-/// turn failed while the loop still retries. Not fixable here: a restart
-/// re-arms the loop, but whatever stopped it (a model that fails every turn,
-/// an inbox the agent cannot read) would stop it again.
-fn loop_issues(project_root: &Path, scope: &str) -> Vec<Issue> {
-    let Ok(registry) = AgentRegistry::load(&paths::agents_dir(project_root), scope) else {
-        return Vec::new();
-    };
-    registry
-        .agents
-        .iter()
-        .filter(|(_, entry)| entry.agent_type == AgentType::Agent && entry.active)
-        .filter_map(|(name, entry)| {
-            // A stopped loop's reason already carries the last turn's error.
-            if let Some(reason) = entry.harness.loop_stopped(project_root, scope, name) {
-                return Some(Issue {
-                    kind: IssueKind::LoopStopped,
-                    message: format!(
-                        "agent '{name}' no longer wakes for messages — its never-idle loop \
-                         stopped: {reason}. Fix the cause, then `pm agent restart {name}`"
-                    ),
-                    fix: Fix::None,
-                });
-            }
-            let error = entry.harness.last_turn_error(project_root, scope, name)?;
-            Some(Issue {
-                kind: IssueKind::TurnFailed,
-                message: format!(
-                    "agent '{name}' failed its last turn: {error}. Its loop retries, and \
-                     stops if turns keep failing"
-                ),
-                fix: Fix::None,
-            })
-        })
-        .collect()
+/// Whether `agent`'s never-idle loop stopped itself, or its last turn
+/// failed while the loop still retries. Not fixable here: a restart re-arms
+/// the loop, but whatever stopped it (a model that fails every turn, an
+/// inbox the agent cannot read) would stop it again.
+fn loop_issue(project_root: &Path, scope: &str, name: &str, entry: &AgentEntry) -> Option<Issue> {
+    // A stopped loop's reason already carries the last turn's error.
+    if let Some(reason) = entry.harness.loop_stopped(project_root, scope, name) {
+        return Some(Issue {
+            kind: IssueKind::LoopStopped,
+            message: format!(
+                "agent '{name}' no longer wakes for messages — its never-idle loop \
+                 stopped: {reason}. Fix the cause, then `pm agent restart {name}`"
+            ),
+            fix: Fix::None,
+        });
+    }
+    let error = entry.harness.last_turn_error(project_root, scope, name)?;
+    Some(Issue {
+        kind: IssueKind::TurnFailed,
+        message: format!(
+            "agent '{name}' failed its last turn: {error}. Its loop retries, and \
+             stops if turns keep failing"
+        ),
+        fix: Fix::None,
+    })
 }
 
 /// One warning per active agent in `scope` whose effective definition is
@@ -1779,17 +1770,12 @@ mod tests {
             harness,
             spawned_at: None,
         };
-        let agents_dir = paths::agents_dir(&project_path);
-        let mut registry = AgentRegistry::default();
-        registry.register("reviewer", entry(Harness::OpenCode));
-        registry.save(&agents_dir, "login").unwrap();
-        // The same name in another scope, and on a harness with a native hook.
-        registry.save(&agents_dir, "signup").unwrap();
-        let mut native = AgentRegistry::default();
-        native.register("reviewer", entry(Harness::ClaudeCode));
-        native.save(&agents_dir, "main").unwrap();
+        let opencode = entry(Harness::OpenCode);
+        let native = entry(Harness::ClaudeCode);
+        let loop_issues =
+            |scope, entry| Vec::from_iter(loop_issue(&project_path, scope, "reviewer", entry));
 
-        assert!(loop_issues(&project_path, "login").is_empty());
+        assert!(loop_issues("login", &opencode).is_empty());
 
         // Written where the spawn told the plugin to write it.
         let spawn = || {
@@ -1834,7 +1820,7 @@ mod tests {
             "Model unavailable: local/qwen (provider.no-route)\n",
         )
         .unwrap();
-        let issues = loop_issues(&project_path, "login");
+        let issues = loop_issues("login", &opencode);
         assert_eq!(
             messages(&issues, IssueKind::TurnFailed),
             vec![
@@ -1845,7 +1831,7 @@ mod tests {
 
         // The trip reason already names the last turn's error.
         std::fs::write(trip_file, "5 consecutive turns read none\n").unwrap();
-        let issues = loop_issues(&project_path, "login");
+        let issues = loop_issues("login", &opencode);
         assert_eq!(
             messages(&issues, IssueKind::LoopStopped),
             vec![
@@ -1854,11 +1840,12 @@ mod tests {
             ]
         );
         assert!(messages(&issues, IssueKind::TurnFailed).is_empty());
-        assert!(loop_issues(&project_path, "signup").is_empty());
-        assert!(loop_issues(&project_path, "main").is_empty());
+        // The same name in another scope, and on a harness with a native hook.
+        assert!(loop_issues("signup", &opencode).is_empty());
+        assert!(loop_issues("login", &native).is_empty());
 
         spawn();
-        assert!(loop_issues(&project_path, "login").is_empty());
+        assert!(loop_issues("login", &opencode).is_empty());
     }
 
     #[test]
@@ -2788,11 +2775,19 @@ mod tests {
                 window_name: "reviewer".to_string(),
                 active: true,
                 agent_definition: None,
-                harness: crate::harness::Harness::ClaudeCode,
+                harness: crate::harness::Harness::OpenCode,
                 spawned_at: None,
             },
         );
         registry.save(&agents_dir, "login").unwrap();
+        // A loop stopped in the dead window is moot until it respawns.
+        let runtime = crate::state::runtime::agent_dir(&project_path, "login", "reviewer").unwrap();
+        std::fs::create_dir_all(&runtime).unwrap();
+        std::fs::write(
+            runtime.join("opencode.tripped"),
+            "5 consecutive turns read none\n",
+        )
+        .unwrap();
 
         let lines = doctor(&project_path, &projects_dir, false, server.name())
             .unwrap()
@@ -2801,6 +2796,10 @@ mod tests {
             lines
                 .iter()
                 .any(|l| l.contains("agent 'reviewer'") && l.contains("window missing")),
+            "got: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("no longer wakes")),
             "got: {lines:?}"
         );
     }
