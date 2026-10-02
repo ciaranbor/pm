@@ -13,7 +13,10 @@
 mod claude_code;
 mod codex;
 mod opencode;
+mod probe;
 mod screen;
+
+pub use probe::Probe;
 
 use std::collections::HashSet;
 use std::fmt;
@@ -120,24 +123,24 @@ impl Harness {
     /// (the shared baseline and notice boards) to a spawned agent — see
     /// [`prompt_mechanism`](Self::prompt_mechanism). `None` when the binary
     /// can't be probed at all.
-    pub fn supports_prompt_delivery(self, config: &HarnessConfig) -> Option<bool> {
+    pub fn supports_prompt_delivery(self, config: &HarnessConfig, probe: Probe) -> Option<bool> {
         match self {
-            Harness::ClaudeCode => claude_code::supports_append_file(),
-            Harness::Codex => codex::version_supported(),
-            Harness::OpenCode => opencode::version_supported(&config.opencode),
+            Harness::ClaudeCode => claude_code::supports_append_file(probe),
+            Harness::Codex => codex::version_supported(probe),
+            Harness::OpenCode => opencode::version_supported(&config.opencode, probe),
         }
     }
 
     /// Why no agent can run on this harness as installed: its binary can't
     /// be run, or is older than the release pm's command line or never-idle
     /// loop needs. `None` when it can.
-    pub fn unusable_reason(self, config: &HarnessConfig) -> Option<String> {
+    pub fn unusable_reason(self, config: &HarnessConfig, probe: Probe) -> Option<String> {
         match self {
             // Lib tests must not depend on what the machine has installed.
             Harness::ClaudeCode | Harness::Codex if cfg!(test) => None,
-            Harness::ClaudeCode => claude_code::unusable_reason(),
-            Harness::Codex => codex::unusable_reason(),
-            Harness::OpenCode => opencode::unusable_reason(&config.opencode),
+            Harness::ClaudeCode => claude_code::unusable_reason(probe),
+            Harness::Codex => codex::unusable_reason(probe),
+            Harness::OpenCode => opencode::unusable_reason(&config.opencode, probe),
         }
     }
 

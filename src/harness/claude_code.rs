@@ -13,6 +13,7 @@ pub(super) mod waiting;
 use std::path::Path;
 
 use crate::error::Result;
+use crate::harness::probe::{self, Probe};
 use crate::harness::{Projection, ProjectionScope, SpawnSpec};
 use crate::tmux;
 
@@ -115,12 +116,8 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>) -> String {
     parts.join(" ")
 }
 
-pub(super) fn unusable_reason() -> Option<String> {
-    let runs = std::process::Command::new(BINARY)
-        .arg("--version")
-        .stdin(std::process::Stdio::null())
-        .output()
-        .is_ok_and(|out| out.status.success());
+pub(super) fn unusable_reason(probe: Probe) -> Option<String> {
+    let runs = run_probe("--version", probe).is_ok_and(|exit| exit.success);
     (!runs).then(|| "`claude` could not be run; install Claude Code".to_string())
 }
 
@@ -144,16 +141,19 @@ fn help_lists_append_file(help: &str) -> bool {
 ///   mechanism has regressed: spawned agents would silently lose it.
 /// - `None`        — `claude` not found or `--help` failed; nothing to spawn
 ///   against anyway, so callers treat this as "can't tell, don't warn".
-pub(super) fn supports_append_file() -> Option<bool> {
-    let out = std::process::Command::new(BINARY)
-        .arg("--help")
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let help = String::from_utf8_lossy(&out.stdout);
-    Some(help_lists_append_file(&help))
+pub(super) fn supports_append_file(probe: Probe) -> Option<bool> {
+    let exit = run_probe("--help", probe).ok()?;
+    exit.success.then(|| help_lists_append_file(&exit.stdout))
+}
+
+fn run_probe(arg: &str, probe: Probe) -> std::io::Result<probe::Exit> {
+    probe::run(BINARY, arg, probe, || {
+        std::process::Command::new(BINARY)
+            .arg(arg)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map(probe::Exit::from)
+    })
 }
 
 #[cfg(test)]

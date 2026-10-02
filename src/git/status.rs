@@ -99,6 +99,36 @@ pub fn ls_files(repo: &Path, path: &str) -> Result<Vec<String>> {
         .collect())
 }
 
+/// Files `repo`'s branch deleted, committed or staged, since it forked from
+/// `other`'s HEAD (a rename deletes the old path), relative to the repo
+/// root. Empty when the two share no history.
+pub fn deleted_since_fork(repo: &Path, other: &Path) -> Result<Vec<String>> {
+    let fork = run_git(other, &["rev-parse", "HEAD"])
+        .and_then(|other_head| run_git(repo, &["merge-base", "HEAD", &other_head]));
+    let fork = match fork {
+        Ok(fork) => fork,
+        Err(PmError::Git(_)) => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
+    let output = run_git(
+        repo,
+        &[
+            "diff",
+            "--cached",
+            "--no-renames",
+            "--diff-filter=D",
+            "--name-only",
+            "-z",
+            &fork,
+        ],
+    )?;
+    Ok(output
+        .split('\0')
+        .filter(|l| !l.is_empty())
+        .map(|l| l.to_string())
+        .collect())
+}
+
 /// Remove a path from the git index without deleting it from disk
 /// (`git rm --cached -rf <path>`). Forced because the index is the only
 /// thing touched: a staged-but-uncommitted version of the path is not worth

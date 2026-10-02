@@ -150,6 +150,9 @@ pub fn pull(project_root: &Path, feature_name: &str, harness: Harness) -> Result
             Some(Seeded::Tracked) => lines.push(format!(
                 "Left {rel_str} alone: feature '{feature_name}' tracks it in git"
             )),
+            Some(Seeded::Deleted) => lines.push(format!(
+                "Left {rel_str} absent: feature '{feature_name}' deleted it in git"
+            )),
             Some(Seeded::Written) => {
                 lines.push(format!("Pulled {rel_str} into feature '{feature_name}'"))
             }

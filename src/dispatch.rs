@@ -1173,13 +1173,21 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
         HarnessCommands::Pull { name, dry_run } => {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
             let name = resolve_feature_name(name, &project_root)?;
-            let files = commands::seed::pull(&project_root, &name, dry_run)?;
-            if files.is_empty() {
+            let pulled = commands::seed::pull(&project_root, &name, dry_run)?;
+            if pulled.written.is_empty() {
                 println!("Feature '{name}' is up to date with main");
             }
             let verb = if dry_run { "Would write" } else { "Wrote" };
-            for file in files {
+            for file in pulled.written {
                 println!("{verb} {name}/{}", file.display());
+            }
+            if dry_run {
+                for file in pulled.deleted {
+                    println!(
+                        "Would skip {name}/{}: the branch deleted it",
+                        file.display()
+                    );
+                }
             }
             Ok(())
         }

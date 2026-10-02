@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::commands::agent_spawn;
-use crate::commands::doctor::{self, IssueKind};
+use crate::commands::doctor::{self, Depth, IssueKind};
 use crate::error::{PmError, Result};
 use crate::hooks;
 use crate::state::agent::{AgentRegistry, AgentType};
@@ -80,7 +80,7 @@ fn collect_drift_warnings(
     projects_dir: &Path,
     tmux_server: Option<&str>,
 ) -> Result<Vec<String>> {
-    let findings = doctor::diagnose(project_root, projects_dir, tmux_server, false)?;
+    let findings = doctor::diagnose(project_root, projects_dir, tmux_server, Depth::Quick)?;
     let mut warnings: Vec<String> = Vec::new();
     for finding in &findings {
         for issue in finding.issues() {

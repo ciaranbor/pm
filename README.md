@@ -403,9 +403,9 @@ new`/`adopt`/`review` copy main's custom skills, agent definitions and
 `.claude/settings.json` into the new worktree; `pm upgrade` never modifies a
 feature worktree. `pm harness pull [feature]` (`--dry-run` to preview)
 brings later changes in. Neither writes over a file the feature's branch
-tracks. A feature's own `.agents/skills/` is projected for its harnesses on
-seed or pull; agent definitions stay main's until merged, because pm
-resolves them from main.
+tracks, nor restores one it deleted. A feature's own `.agents/skills/` is
+projected for its harnesses on seed or pull; agent definitions stay main's
+until merged, because pm resolves them from main.
 
 ### Shared baseline and notice board
 

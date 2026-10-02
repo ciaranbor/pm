@@ -83,6 +83,7 @@ use serde_json::{Value, json};
 
 use crate::error::{PmError, Result};
 use crate::fs_utils::write_atomic;
+use crate::harness::probe::{self, Probe};
 use crate::harness::{LaunchContext, PreLaunch, Projection, ProjectionScope, SpawnSpec};
 use crate::state::project::OpenCodeConfig;
 use crate::state::workflow::VANILLA_AGENT;
@@ -617,28 +618,32 @@ fn parse_version(output: &str) -> Option<(u32, u32, u32)> {
 
 /// The installed version's raw string, or why opencode could not be asked.
 /// `--version` starts no server, so it needs no `--standalone`.
-fn installed_version(cfg: &OpenCodeConfig) -> std::result::Result<String, String> {
-    let mut command = Command::new(binary(cfg));
-    command.arg("--version").stdin(Stdio::null());
+fn installed_version(cfg: &OpenCodeConfig, probe: Probe) -> std::result::Result<String, String> {
     let unrunnable = || format!("`{}` could not be run", binary(cfg));
-    let out = bounded::run(&mut command, bounded::CALL).map_err(|failure| match failure {
-        bounded::Failure::TimedOut { .. } => failure.describe("--version"),
-        bounded::Failure::Unrunnable { .. } => unrunnable(),
+    let exit = probe::run(binary(cfg), "--version", probe, || {
+        let mut command = Command::new(binary(cfg));
+        command.arg("--version").stdin(Stdio::null());
+        bounded::run(&mut command, bounded::CALL)
+            .map(probe::Exit::from)
+            .map_err(|failure| match failure {
+                bounded::Failure::TimedOut { .. } => failure.describe("--version"),
+                bounded::Failure::Unrunnable { .. } => unrunnable(),
+            })
     })?;
-    if !out.status.success() {
+    if !exit.success {
         return Err(unrunnable());
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    Ok(exit.stdout.trim().to_string())
 }
 
 /// Whether the installed opencode is at least [`MIN_VERSION`]; `None` when
 /// it can't be probed.
-pub(super) fn version_supported(cfg: &OpenCodeConfig) -> Option<bool> {
-    Some(parse_version(&installed_version(cfg).ok()?)? >= MIN_VERSION)
+pub(super) fn version_supported(cfg: &OpenCodeConfig, probe: Probe) -> Option<bool> {
+    Some(parse_version(&installed_version(cfg, probe).ok()?)? >= MIN_VERSION)
 }
 
-pub(super) fn unusable_reason(cfg: &OpenCodeConfig) -> Option<String> {
-    let found = match installed_version(cfg) {
+pub(super) fn unusable_reason(cfg: &OpenCodeConfig, probe: Probe) -> Option<String> {
+    let found = match installed_version(cfg, probe) {
         Ok(found) => found,
         Err(reason) => {
             return Some(format!(
@@ -1529,21 +1534,21 @@ mod tests {
             binary: Some(dir.path().join("nope").to_string_lossy().into_owned()),
             ..Default::default()
         };
-        let reason = unusable_reason(&missing).unwrap();
+        let reason = unusable_reason(&missing, Probe::Fresh).unwrap();
         assert!(reason.contains("could not be run"), "{reason}");
-        assert_eq!(version_supported(&missing), None);
+        assert_eq!(version_supported(&missing, Probe::Fresh), None);
 
         let old = fake_opencode(dir.path(), "opencode v2.0.17", 0);
         assert_eq!(
-            unusable_reason(&old).unwrap(),
+            unusable_reason(&old, Probe::Fresh).unwrap(),
             "installed opencode is `opencode v2.0.17`; pm's never-idle plugin needs 2.0.18 or \
              later"
         );
-        assert_eq!(version_supported(&old), Some(false));
+        assert_eq!(version_supported(&old, Probe::Fresh), Some(false));
 
         let current = fake_opencode(dir.path(), "opencode v2.0.18", 0);
-        assert_eq!(unusable_reason(&current), None);
-        assert_eq!(version_supported(&current), Some(true));
+        assert_eq!(unusable_reason(&current, Probe::Fresh), None);
+        assert_eq!(version_supported(&current, Probe::Fresh), Some(true));
     }
 
     #[test]
