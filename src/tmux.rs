@@ -103,9 +103,10 @@ pub fn switch_client_of(server: Option<&str>, client: &str, target: &str) -> Res
 }
 
 /// The server's socket, which names it whatever way it was reached; `None`
-/// when no server is running.
+/// when no server is running, or one exiting answered nothing.
 pub fn socket_path(server: Option<&str>) -> Result<Option<String>> {
     match run_tmux(server, &["display-message", "-p", "#{socket_path}"]) {
+        Ok(path) if path.is_empty() => Ok(None),
         Ok(path) => Ok(Some(path)),
         Err(PmError::Tmux(msg)) if no_server(&msg) => Ok(None),
         Err(e) => Err(e),
