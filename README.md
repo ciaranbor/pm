@@ -601,7 +601,7 @@ Plugin options, set before `run-shell 'pm tmux init'`:
 | Option | Default | Effect |
 |---|---|---|
 | `@pm-bin` | `pm` | the pm binary tmux runs |
-| `@pm-auto-refresh` | on | keep pm's options current with a background `pm tmux refresh` loop; pm pushes its own changes at once, so the loop only catches what happens outside pm |
+| `@pm-auto-refresh` | on | keep pm's options current with a background `pm tmux refresh` loop; pm pushes its own changes at once, so the loop only catches what happens outside pm. |
 | `@pm-refresh-interval` | `30` | seconds between refreshes |
 | `@pm-window-status` | on | put each agent window's badge just before the window name in `window-status-format` and `window-status-current-format`, keeping your theme's style for the name |
 | `@pm-bind-tree` | on | turn prefix `s` / `w` into pm's tree, sorted by name, when they run tmux's default `choose-tree` |
@@ -610,7 +610,8 @@ Plugin options, set before `run-shell 'pm tmux init'`:
 Badges are Nerd Font glyphs: an agent window's shows its [agent
 state](#attention-view), a feature session's the attention it needs, with
 the reason after it in pm's tree. A kind that means what a state means
-shares its glyph.
+shares its glyph. Follow a badge with a space in your own formats: some
+terminals (Ghostty) draw a glyph small when the next cell isn't blank.
 
 | Glyph | Colour | Agent state | Attention |
 |---|---|---|---|

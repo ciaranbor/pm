@@ -559,7 +559,7 @@ mod tests {
                 "reviewer",
                 "busy",
                 "1",
-                "#[fg=green]\u{f013}#[fg=yellow]\u{f0e0}#[default]"
+                "#[fg=green]\u{f013} #[fg=yellow]\u{f0e0}#[default]"
             ]
         );
         assert_eq!(
@@ -629,7 +629,7 @@ mod tests {
                 "main",
                 "idle",
                 "1",
-                "#[fg=colour245]\u{f252}#[fg=yellow]\u{f0e0}#[default]"
+                "#[fg=colour245]\u{f252} #[fg=yellow]\u{f0e0}#[default]"
             ]
         );
         assert_eq!(
@@ -640,7 +640,7 @@ mod tests {
                 "",
                 "",
                 "",
-                "#[fg=colour245]\u{f252}#[fg=yellow]\u{f0e0}#[default]",
+                "#[fg=colour245]\u{f252} #[fg=yellow]\u{f0e0}#[default]",
                 ""
             ],
             "main's own badge, whatever its attention"
