@@ -200,6 +200,11 @@ pub fn bind_key(key: &str, command: Command) -> Command {
     bind
 }
 
+/// Unbind `key` in the prefix table.
+pub fn unbind_key(key: &str) -> Command {
+    vec!["unbind-key".to_string(), key.to_string()]
+}
+
 /// Open tree mode with sessions collapsed and sorted by name, each line in
 /// `format`, showing only items `filter` matches, and run `template` (with
 /// `%%` the chosen item's target) on the chosen one.
