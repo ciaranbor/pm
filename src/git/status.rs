@@ -99,10 +99,10 @@ pub fn ls_files(repo: &Path, path: &str) -> Result<Vec<String>> {
         .collect())
 }
 
-/// Files under `path` that `repo`'s branch deleted, committed or staged,
-/// since it forked from `other`'s HEAD (a rename deletes the old path),
-/// relative to the repo root. Empty when the two share no history.
-pub fn deleted_since_fork(repo: &Path, other: &Path, path: &str) -> Result<Vec<String>> {
+/// Files `repo`'s branch deleted, committed or staged, since it forked from
+/// `other`'s HEAD (a rename deletes the old path), relative to the repo
+/// root. Empty when the two share no history.
+pub fn deleted_since_fork(repo: &Path, other: &Path) -> Result<Vec<String>> {
     let fork = run_git(other, &["rev-parse", "HEAD"])
         .and_then(|other_head| run_git(repo, &["merge-base", "HEAD", &other_head]));
     let fork = match fork {
@@ -120,8 +120,6 @@ pub fn deleted_since_fork(repo: &Path, other: &Path, path: &str) -> Result<Vec<S
             "--name-only",
             "-z",
             &fork,
-            "--",
-            path,
         ],
     )?;
     Ok(output

@@ -64,22 +64,16 @@ pub fn pull(project_root: &Path, feature_name: &str, dry_run: bool) -> Result<Pu
 
 fn sync_feature(project_root: &Path, feature_worktree: &Path, dry_run: bool) -> Result<Pulled> {
     let main = paths::main_worktree(project_root);
+    let seeder = Seeder::new(&main, feature_worktree, dry_run)?;
     let mut out = Pulled::default();
     let harnesses = skills::harnesses_in_use(project_root)?;
     for sub in CANONICAL_SUBDIRS {
         let rel = Path::new(CANONICAL_DIR).join(sub);
-        sync_untracked(
-            &main,
-            feature_worktree,
-            &rel,
-            &HashSet::new(),
-            dry_run,
-            &mut out,
-        )?;
+        seeder.sync_untracked(&rel, &HashSet::new(), &mut out)?;
     }
     // A dry run projects from what the canonical store would hold.
     let preview = if dry_run {
-        Some(preview_canonical(&main, feature_worktree)?)
+        Some(preview_canonical(&seeder)?)
     } else {
         None
     };
@@ -92,31 +86,25 @@ fn sync_feature(project_root: &Path, feature_worktree: &Path, dry_run: bool) -> 
         for sub in harness.projected_dirs() {
             let rel = cfg.join(sub);
             if !CANONICAL_SUBDIRS.contains(sub) {
-                sync_untracked(
-                    &main,
-                    feature_worktree,
-                    &rel,
-                    &HashSet::new(),
-                    dry_run,
-                    &mut out,
-                )?;
+                seeder.sync_untracked(&rel, &HashSet::new(), &mut out)?;
                 continue;
             }
             // Main's projected copy fills in only what the feature's own
             // store lacks (a hand-written harness-only entry) and did not
             // delete, so the projection below never fights it.
             let mut own = entry_names(&canonical.join(sub))?;
-            let canonical_rel = Path::new(CANONICAL_DIR).join(sub);
             own.extend(
-                deleted_under(&main, feature_worktree, &canonical_rel)?
+                seeder
+                    .deleted_under(&Path::new(CANONICAL_DIR).join(sub))
                     .iter()
                     .filter_map(|f| f.components().next())
                     .map(|c| PathBuf::from(c.as_os_str())),
             );
-            sync_untracked(&main, feature_worktree, &rel, &own, dry_run, &mut out)?;
+            seeder.sync_untracked(&rel, &own, &mut out)?;
             let scope = ProjectionScope {
                 subdirs: Some(std::slice::from_ref(sub)),
-                keep: branch_owned(&main, feature_worktree, &rel)?
+                keep: seeder
+                    .branch_owned(&rel)?
                     .into_iter()
                     .map(|f| Path::new(sub).join(f))
                     .collect(),
@@ -130,7 +118,7 @@ fn sync_feature(project_root: &Path, feature_worktree: &Path, dry_run: bool) -> 
     for harness in &harnesses {
         for file in harness.seeded_files() {
             let rel = Path::new(harness.config_dir()).join(file);
-            match seed_file(&main, feature_worktree, &rel, dry_run)? {
+            match seeder.seed_file(&rel)? {
                 Some(Seeded::Written) => out.written.push(rel),
                 Some(Seeded::Deleted) => out.deleted.push(rel),
                 _ => {}
@@ -142,17 +130,17 @@ fn sync_feature(project_root: &Path, feature_worktree: &Path, dry_run: bool) -> 
 
 /// A temporary copy of the feature's [`CANONICAL_SUBDIRS`] with main's
 /// untracked files synced in, as a real run leaves them.
-fn preview_canonical(main: &Path, feature_worktree: &Path) -> Result<tempfile::TempDir> {
+fn preview_canonical(seeder: &Seeder) -> Result<tempfile::TempDir> {
     let preview = tempfile::tempdir()?;
     for sub in CANONICAL_SUBDIRS {
         let rel = Path::new(CANONICAL_DIR).join(sub);
-        let own = feature_worktree.join(&rel);
+        let own = seeder.worktree.join(&rel);
         if own.is_dir() {
             copy_dir_recursive(&own, &preview.path().join(sub))?;
         }
-        let src = main.join(&rel);
+        let src = seeder.main.join(&rel);
         if src.is_dir() {
-            let keep = branch_owned(main, feature_worktree, &rel)?;
+            let keep = seeder.branch_owned(&rel)?;
             sync_tree_except(&src, &preview.path().join(sub), &keep, false)?;
         }
     }
@@ -190,75 +178,97 @@ pub fn seed_file(
     rel: &Path,
     dry_run: bool,
 ) -> Result<Option<Seeded>> {
-    let src = main.join(rel);
-    if !src.exists() {
-        return Ok(None);
-    }
-    Ok(Some(if !tracked_under(worktree, rel)?.is_empty() {
-        Seeded::Tracked
-    } else if !deleted_under(main, worktree, rel)?.is_empty() {
-        Seeded::Deleted
-    } else if sync_file(&src, &worktree.join(rel), dry_run)? {
-        Seeded::Written
-    } else {
-        Seeded::Unchanged
-    }))
+    Seeder::new(main, worktree, dry_run)?.seed_file(rel)
 }
 
-/// Sync the directory `rel` from `main` into `worktree`, skipping the
-/// [`branch_owned`] files and the paths in `skip` (relative to `rel`), and
-/// record what it did in `out`. A `rel` main doesn't have is a no-op.
-fn sync_untracked(
-    main: &Path,
-    worktree: &Path,
-    rel: &Path,
-    skip: &HashSet<PathBuf>,
+/// One seed of `worktree` from `main`.
+struct Seeder<'a> {
+    main: &'a Path,
+    worktree: &'a Path,
     dry_run: bool,
-    out: &mut Pulled,
-) -> Result<()> {
-    let src = main.join(rel);
-    if !src.is_dir() {
-        return Ok(());
-    }
-    let deleted = deleted_under(main, worktree, rel)?;
-    out.deleted.extend(
-        deleted
-            .iter()
-            .filter(|f| src.join(f).is_file())
-            .map(|f| rel.join(f)),
-    );
-    let mut keep = tracked_under(worktree, rel)?;
-    keep.extend(deleted);
-    keep.extend(skip.iter().cloned());
-    out.written.extend(
-        sync_tree_except(&src, &worktree.join(rel), &keep, dry_run)?
-            .into_iter()
-            .map(|(path, _)| rel.join(path)),
-    );
-    Ok(())
+    /// What the worktree's branch deleted since it forked from main's HEAD,
+    /// relative to the worktree.
+    deleted: Vec<PathBuf>,
 }
 
-/// Files under `rel` whose content is the worktree's branch's to decide,
-/// relative to `rel`: those it tracks, and those it deleted.
-fn branch_owned(main: &Path, worktree: &Path, rel: &Path) -> Result<HashSet<PathBuf>> {
-    let mut owned = tracked_under(worktree, rel)?;
-    owned.extend(deleted_under(main, worktree, rel)?);
-    Ok(owned)
-}
-
-/// Files under `rel` that `worktree`'s branch deleted since it forked from
-/// `main`'s HEAD, relative to `rel` (the empty path when `rel` is itself
-/// such a file).
-fn deleted_under(main: &Path, worktree: &Path, rel: &Path) -> Result<HashSet<PathBuf>> {
-    if !git::is_git_repo(worktree) {
-        return Ok(HashSet::new());
+impl<'a> Seeder<'a> {
+    fn new(main: &'a Path, worktree: &'a Path, dry_run: bool) -> Result<Self> {
+        let deleted = if git::is_git_repo(worktree) {
+            git::deleted_since_fork(worktree, main)?
+                .into_iter()
+                .map(PathBuf::from)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Ok(Seeder {
+            main,
+            worktree,
+            dry_run,
+            deleted,
+        })
     }
-    Ok(
-        git::deleted_since_fork(worktree, main, &rel.to_string_lossy())?
+
+    /// The deleted files under `rel`, relative to `rel` (the empty path
+    /// when `rel` is itself one).
+    fn deleted_under(&self, rel: &Path) -> HashSet<PathBuf> {
+        self.deleted
             .iter()
-            .filter_map(|f| Path::new(f).strip_prefix(rel).ok().map(Path::to_path_buf))
-            .collect(),
-    )
+            .filter_map(|f| f.strip_prefix(rel).ok().map(Path::to_path_buf))
+            .collect()
+    }
+
+    /// Files under `rel` whose content is the worktree's branch's to decide,
+    /// relative to `rel`: those it tracks, and those it deleted.
+    fn branch_owned(&self, rel: &Path) -> Result<HashSet<PathBuf>> {
+        let mut owned = tracked_under(self.worktree, rel)?;
+        owned.extend(self.deleted_under(rel));
+        Ok(owned)
+    }
+
+    /// Sync the directory `rel` from main, skipping the
+    /// [`branch_owned`](Self::branch_owned) files and the paths in `skip`
+    /// (relative to `rel`), and record what it did in `out`. A `rel` main
+    /// doesn't have is a no-op.
+    fn sync_untracked(&self, rel: &Path, skip: &HashSet<PathBuf>, out: &mut Pulled) -> Result<()> {
+        let src = self.main.join(rel);
+        if !src.is_dir() {
+            return Ok(());
+        }
+        let deleted = self.deleted_under(rel);
+        out.deleted.extend(
+            deleted
+                .iter()
+                .filter(|f| src.join(f).is_file())
+                .map(|f| rel.join(f)),
+        );
+        let mut keep = tracked_under(self.worktree, rel)?;
+        keep.extend(deleted);
+        keep.extend(skip.iter().cloned());
+        out.written.extend(
+            sync_tree_except(&src, &self.worktree.join(rel), &keep, self.dry_run)?
+                .into_iter()
+                .map(|(path, _)| rel.join(path)),
+        );
+        Ok(())
+    }
+
+    /// See [`seed_file`].
+    fn seed_file(&self, rel: &Path) -> Result<Option<Seeded>> {
+        let src = self.main.join(rel);
+        if !src.exists() {
+            return Ok(None);
+        }
+        Ok(Some(if !tracked_under(self.worktree, rel)?.is_empty() {
+            Seeded::Tracked
+        } else if !self.deleted_under(rel).is_empty() {
+            Seeded::Deleted
+        } else if sync_file(&src, &self.worktree.join(rel), self.dry_run)? {
+            Seeded::Written
+        } else {
+            Seeded::Unchanged
+        }))
+    }
 }
 
 /// Files under `rel` that `worktree`'s branch tracks, relative to `rel`
