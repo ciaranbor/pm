@@ -601,14 +601,6 @@ pub enum FeatCommands {
     /// The feature's summary for the orchestrator (kept in pm state, not the branch)
     #[command(subcommand)]
     Summary(SummaryCommands),
-    /// Rebase a feature onto a branch and record it as the feature's base
-    Rebase {
-        /// Feature name (detected from CWD if omitted)
-        name: Option<String>,
-        /// Branch to rebase onto (defaults to the feature's current base)
-        #[arg(long)]
-        onto: Option<String>,
-    },
     /// Rename a feature (branch, worktree, tmux session, state, agent sessions)
     Rename {
         /// New feature name

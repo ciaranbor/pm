@@ -22,7 +22,6 @@ pub mod feat_new;
 pub mod feat_pr;
 pub mod feat_pr_edit;
 pub mod feat_pr_ready;
-pub mod feat_rebase;
 pub mod feat_rename;
 pub mod feat_review;
 pub mod feat_status;
