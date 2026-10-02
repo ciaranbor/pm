@@ -58,6 +58,36 @@ fn session_id(path: &Path) -> Option<&str> {
     (stem.is_char_boundary(at) && stem[..at].ends_with('-')).then(|| &stem[at..])
 }
 
+/// The rollout of session `id` in `codex_home`'s store, preferring one
+/// codex has not compressed.
+pub(in crate::harness) fn find_rollout(codex_home: &Path, id: &str) -> Option<PathBuf> {
+    fn walk(dir: &Path, names: &[String; 2], found: &mut [Option<PathBuf>; 2]) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, names, found);
+            } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                for (at, suffix) in names.iter().enumerate() {
+                    if name.starts_with("rollout-") && name.ends_with(suffix.as_str()) {
+                        found[at] = Some(path.clone());
+                    }
+                }
+            }
+        }
+    }
+    if id.is_empty() {
+        return None;
+    }
+    let names = [format!("-{id}.jsonl"), format!("-{id}.jsonl.zst")];
+    let mut found = [None, None];
+    walk(&codex_home.join(SESSIONS_DIR), &names, &mut found);
+    let [plain, compressed] = found;
+    plain.or(compressed)
+}
+
 /// The directory the session in `rollout` was last run in.
 fn recorded_cwd(rollout: &Path) -> Result<Option<String>> {
     let mut created_in = None;

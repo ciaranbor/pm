@@ -6,6 +6,7 @@
 //! on 2.1.286). Its stdout on exit 0 is added to the model's context, and
 //! exit 2 refuses the prompt.
 
+pub(super) mod chat;
 pub(super) mod input;
 pub(super) mod sessions;
 pub(super) mod transcript;

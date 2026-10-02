@@ -236,9 +236,56 @@ The API, all `GET` under `/v1`, needing the `read` scope:
 | Path | Returns |
 |---|---|
 | `snapshot` | `pm feat status --all --json` ([Attention view](#attention-view)) |
-| `events` | server-sent events: `snapshot` (the snapshot, at connect and on each change), `transition` (`{project, scope, kind, detail, agent}` as a feature or `main` becomes blocked, asking or ready — alerted as tmux alerts — or an agent dies); a comment line every 25 s of silence |
+| `events` | server-sent events: `snapshot` (the snapshot, at connect and on each change), `transition` (`{project, scope, kind, detail, agent}` as a feature or `main` becomes blocked, asking or ready — alerted as tmux alerts — or an agent dies); with `?watch={project}/{scope}/{agent}[&after={cursor}]`, also `transcript` (below); a comment line every 25 s of silence |
 | `features/{project}/{feature}/summary` | the feature's summary, Markdown |
 | `agents/{project}/{scope}/{agent}/screen` | what the agent's pane shows now, plain text |
+| `agents/{project}/{scope}/{agent}/transcript?before={cursor}&limit={n}` | the agent's conversation, a page back from `before` (the end when absent); `limit` 1–200, default 50 |
+| `agents/{project}/{scope}/{agent}/transcript/result?ref={full}` | a tool result's whole output, plain text |
+
+#### Transcript contract (version 1)
+
+The conversation of the agent's current session, read from its harness's
+own store (Claude Code's and codex's transcript files, opencode's
+database) and normalized. A transcript page:
+
+```json
+{"version": 1, "harness": "claude-code", "items": [Item, …], "before": "…" | null, "after": "…"}
+```
+
+`items` run oldest first. `before` is the cursor of the next older page
+(`null` at the conversation's start); `after` is where this read ended.
+Cursors are opaque strings. A page holds about `limit` items: a few more
+when one record gives several, fewer — possibly none — when a stretch of
+the transcript is bookkeeping, so a client pages until `before` is `null`. An `Item` is `{"id", "at": RFC 3339 | null,
+"kind", …}`:
+
+| `kind` | Fields | Is |
+|---|---|---|
+| `user` | `text` | a prompt the human typed |
+| `assistant` | `text` | the agent's reply, Markdown |
+| `thinking` | `text` | the model's reasoning, where the harness records it |
+| `tool` | `name`, `input`, `result` | a tool call: `input` is one line saying what it does; `result` is `null` until it returns, then `{"text", "error", "truncated", "full"?}`, `text` cut at 4 KB, `full` (only when cut) the `ref` that reads the whole |
+| `continuation` | `text` | a prompt pm's never-idle loop sent the agent (a wake-up), not the human |
+| `compaction` | `summary` (or `null`) | the harness compacted the conversation's context |
+| `event` | `text` | anything else worth a row: an interrupt, a failed turn, a background task's end |
+
+An `id` is stable. An item sent again with an id already shown replaces
+it: a tool call is sent again once its result arrives, and an opencode
+message again while it is written. A client ignores a kind it does not
+know. A subagent's conversation is not included.
+
+A watching event stream polls the conversation about every second and sends
+
+```json
+{"project", "scope", "agent", "reset": false, "items": [Item, …], "after": "…"}
+```
+
+with what changed since `after` (the start of the watch when absent; pass
+a page's `after` so nothing between the page and the watch is missed).
+When the agent's session changes (restart, fork), it sends `"reset": true`
+with the new conversation's latest page and its `before`: the client
+replaces what it shows. Claude Code deletes transcripts after 30 days by
+default; an agent whose transcript is gone has no conversation (404).
 
 ## Concepts
 

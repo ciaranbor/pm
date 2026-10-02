@@ -1,0 +1,259 @@
+//! The harness-neutral chat view of a conversation: what `pm serve` hands
+//! the phone app, in the shape README's "Remote access" publishes as a
+//! versioned contract. Every harness's reader produces these and nothing
+//! else, so a change here is a change to that contract.
+
+use chrono::{DateTime, Utc};
+use serde::Serialize;
+use serde_json::Value;
+
+/// The contract's version, bumped on any change a client could break on.
+pub const VERSION: u32 = 1;
+
+/// Tool output longer than this is cut, and served whole on request.
+pub const RESULT_LIMIT: usize = 4 * 1024;
+
+/// One row of the chat view. `id` is stable: a row read again — a tool call
+/// once its result arrives, a message still being written — keeps its id,
+/// and the client replaces the row it has.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Item {
+    pub id: String,
+    pub at: Option<DateTime<Utc>>,
+    #[serde(flatten)]
+    pub body: Body,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Body {
+    /// Typed by the human.
+    User {
+        text: String,
+    },
+    /// The agent's reply, markdown.
+    Assistant {
+        text: String,
+    },
+    Thinking {
+        text: String,
+    },
+    Tool {
+        name: String,
+        /// One line saying what the call was for.
+        input: String,
+        result: Option<ToolResult>,
+    },
+    /// A prompt pm's never-idle loop sent: a wake-up, not the human.
+    Continuation {
+        text: String,
+    },
+    /// The harness compacted the conversation's context.
+    Compaction {
+        summary: Option<String>,
+    },
+    /// Anything else worth a row of its own: an interrupt, a failed turn, a
+    /// background task's end.
+    Event {
+        text: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ToolResult {
+    pub text: String,
+    pub error: bool,
+    pub truncated: bool,
+    /// What fetches the whole output, when `text` was cut.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub full: Option<String>,
+}
+
+impl ToolResult {
+    /// `text` cut to [`RESULT_LIMIT`]; `full` names where the whole of it
+    /// is read back from, kept only when something was cut.
+    pub fn new(text: &str, error: bool, full: impl FnOnce() -> String) -> Self {
+        if text.len() <= RESULT_LIMIT {
+            return Self {
+                text: text.to_string(),
+                error,
+                truncated: false,
+                full: None,
+            };
+        }
+        let mut cut = RESULT_LIMIT;
+        while !text.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        Self {
+            text: text[..cut].to_string(),
+            error,
+            truncated: true,
+            full: Some(full()),
+        }
+    }
+}
+
+impl Item {
+    pub fn new(id: impl Into<String>, at: Option<DateTime<Utc>>, body: Body) -> Self {
+        Self {
+            id: id.into(),
+            at,
+            body,
+        }
+    }
+}
+
+/// A run of items read backwards from a cursor.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Page {
+    /// Oldest first.
+    pub items: Vec<Item>,
+    /// Where the next older page ends; `None` at the conversation's start.
+    pub before: Option<String>,
+    /// Where reading forward from the conversation's present end resumes.
+    pub after: String,
+}
+
+/// What a conversation gained after a cursor.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Tail {
+    /// Items new or changed since, and the cursor after them.
+    Items { items: Vec<Item>, after: String },
+    /// The cursor no longer points into this conversation: its file was
+    /// replaced or cut short.
+    Reset,
+}
+
+/// A timestamp field as the harnesses write it: RFC 3339, or epoch
+/// milliseconds.
+pub fn timestamp(value: Option<&Value>) -> Option<DateTime<Utc>> {
+    match value? {
+        Value::String(s) => DateTime::parse_from_rfc3339(s)
+            .ok()
+            .map(|t| t.with_timezone(&Utc)),
+        Value::Number(n) => DateTime::from_timestamp_millis(n.as_i64()?),
+        _ => None,
+    }
+}
+
+/// Keys whose value says what a tool call is for, most telling first.
+const INPUT_KEYS: &[&str] = &[
+    "command",
+    "cmd",
+    "file_path",
+    "filePath",
+    "path",
+    "pattern",
+    "url",
+    "query",
+    "skill",
+    "description",
+    "prompt",
+];
+
+/// One line for a tool call's `input`: its most telling field, else the
+/// whole of it as compact JSON.
+pub fn summarize_input(input: &Value) -> String {
+    let text = match input {
+        Value::String(s) => match serde_json::from_str::<Value>(s) {
+            Ok(parsed @ Value::Object(_)) => return summarize_input(&parsed),
+            _ => s.clone(),
+        },
+        Value::Object(map) => INPUT_KEYS
+            .iter()
+            .find_map(|key| match map.get(*key)? {
+                Value::String(s) if !s.trim().is_empty() => Some(s.clone()),
+                Value::Array(words) => Some(
+                    words
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                ),
+                _ => None,
+            })
+            .unwrap_or_else(|| input.to_string()),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    };
+    crate::harness::one_line(&text)
+}
+
+/// The text of a content value: a string, or an array of blocks whose
+/// `text` fields are joined and whose images are marked.
+pub fn content_text(content: &Value) -> String {
+    match content {
+        Value::String(s) => s.clone(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter_map(|block| match block {
+                Value::String(s) => Some(s.clone()),
+                _ if block.get("type").and_then(Value::as_str) == Some("image") => {
+                    Some("[image]".to_string())
+                }
+                _ => block
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn an_item_serializes_flat_with_its_kind() {
+        let item = Item::new(
+            "t1",
+            timestamp(Some(&json!("2026-10-02T18:08:51.608Z"))),
+            Body::Tool {
+                name: "Bash".into(),
+                input: "ls".into(),
+                result: Some(ToolResult::new(
+                    "x".repeat(RESULT_LIMIT + 2).as_str(),
+                    false,
+                    || "ref".into(),
+                )),
+            },
+        );
+        let json = serde_json::to_value(&item).unwrap();
+        assert_eq!(json["kind"], "tool");
+        assert_eq!(json["at"], "2026-10-02T18:08:51.608Z");
+        assert_eq!(json["result"]["truncated"], true);
+        assert_eq!(json["result"]["full"], "ref");
+        assert_eq!(json["result"]["text"].as_str().unwrap().len(), RESULT_LIMIT);
+    }
+
+    #[test]
+    fn a_cut_never_splits_a_character() {
+        let text = format!("{}é", "x".repeat(RESULT_LIMIT - 1));
+        let result = ToolResult::new(&text, false, String::new);
+        assert_eq!(result.text.len(), RESULT_LIMIT - 1);
+        assert!(result.truncated);
+    }
+
+    #[test]
+    fn an_input_reads_as_its_most_telling_field() {
+        assert_eq!(
+            summarize_input(&json!({"description": "list", "command": "ls -la\npwd"})),
+            "ls -la"
+        );
+        assert_eq!(
+            summarize_input(&json!({"cmd": ["/bin/zsh", "-lc", "ls"]})),
+            "/bin/zsh -lc ls"
+        );
+        assert_eq!(
+            summarize_input(&json!("{\"cmd\":\"cargo test\",\"yield_time_ms\":1000}")),
+            "cargo test"
+        );
+        assert_eq!(summarize_input(&json!({"a": 1})), r#"{"a":1}"#);
+    }
+}

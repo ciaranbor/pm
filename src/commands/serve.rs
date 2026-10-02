@@ -34,6 +34,7 @@ use super::reexec::Binary;
 
 mod events;
 mod routes;
+mod transcript;
 
 use events::Hub;
 use routes::Reply;
@@ -51,6 +52,8 @@ pub struct Config {
     pub poll: Duration,
     /// How long an event stream may go without sending anything.
     pub heartbeat: Duration,
+    /// How often a stream watching an agent reads its conversation.
+    pub transcript_poll: Duration,
 }
 
 impl Config {
@@ -61,6 +64,7 @@ impl Config {
             tmux_server: tmux_server.map(str::to_string),
             poll: Duration::from_secs(3),
             heartbeat: Duration::from_secs(25),
+            transcript_poll: Duration::from_secs(1),
         }
     }
 }
@@ -143,13 +147,18 @@ impl Server {
             .find(|h| h.field.equiv("Authorization"))
             .map(|h| h.value.as_str().to_string());
         let method = request.method().as_str().to_string();
-        let path = request
+        let (path, query) = request
             .url()
-            .split('?')
-            .next()
-            .unwrap_or_default()
-            .to_string();
-        let handled = routes::route(&self.config, &method, &path, authorization.as_deref());
+            .split_once('?')
+            .map_or((request.url(), ""), |(path, query)| (path, query));
+        let (path, query) = (path.to_string(), query.to_string());
+        let handled = routes::route(
+            &self.config,
+            &method,
+            &path,
+            &query,
+            authorization.as_deref(),
+        );
         let device = handled.device.as_deref().unwrap_or("-");
         log(&format!(
             "{device} {method} {path} {}",
@@ -169,9 +178,10 @@ impl Server {
                 }
                 request.respond(response)
             }
-            Reply::Events => {
+            Reply::Events(watch) => {
                 let mut writer = request.into_writer();
-                events::stream(&mut writer, &self.hub, self.config.heartbeat)
+                let watch = watch.map(|w| (*w, self.config.transcript_poll));
+                events::stream(&mut writer, &self.hub, self.config.heartbeat, watch)
             }
         };
     }
