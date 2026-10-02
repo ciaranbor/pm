@@ -2,19 +2,25 @@
 
 Terminal-based project manager built around tmux and git worktrees.
 
-pm gives every feature its own git branch, worktree, and tmux session, and
-optionally a team of Claude Code agents that talk to each other through a
-file-based message queue. You dispatch work; the agents implement, review,
-and report back in their own sessions.
+pm gives every feature its own git branch, worktree, and tmux session, and a
+team of agents (Claude Code, codex, or opencode) that talk to each other
+through a file-based message queue. You tell a per-project orchestrator what
+you want; it dispatches features, the agents implement, review, and report
+back in their own sessions, and you merge.
 
-Every command supports `--help` for its full flag reference — this README
-covers the mental model and the parts you can't get from `--help`.
+Every command supports `--help` for its full flag reference. This README
+covers how pm is used, the mental model, and the parts `--help` can't give
+you.
 
 ## Requirements
 
-- tmux
+- tmux, with a [Nerd Font](https://www.nerdfonts.com) (v3) as your terminal
+  font for the plugin's badges
 - git
-- [gh](https://cli.github.com/) — for the PR/review/sync commands (`pm feat pr`, `pm feat review`, `pm feat sync`)
+- an agent harness: [Claude Code](https://claude.com/claude-code) (the
+  default), codex, or opencode
+- [gh](https://cli.github.com/), only for the PR commands (`pm feat pr`,
+  `pm feat review`, `pm feat sync`)
 
 ## Install
 
@@ -23,126 +29,577 @@ cargo install --path .
 ```
 
 Installs the `pm` binary to `~/.cargo/bin/` (ensure it's on your `PATH`).
+Once pm's own source is a registered pm project, `pm self-update` pulls,
+rebuilds, and upgrades every project.
 
-### tmux plugin
-
-The plugin's badges need a [Nerd Font](https://www.nerdfonts.com) (v3) as
-your terminal font. Add one line to your tmux config, after any options
-below and any `bind s` or `bind w` of yours, since init reads them as they
-stand when it runs:
+Then add pm's tmux plugin: one line in your tmux config, after any `@pm-*`
+options (see [tmux integration](#tmux-integration)) and any `bind s` or
+`bind w` of yours, since init reads them as they stand when it runs:
 
 ```tmux
 run-shell 'pm tmux init'
 ```
 
 The plugin is part of the binary, so it always matches the installed pm.
-tmux runs it with the server's environment, not your shell's, so
-`pm` must be on the `PATH` the server started with; set `@pm-bin` to its
-full path otherwise. Init only adds to your config: it sets pm's own
-`@pm_*` options, adds to formats rather than replacing them, makes your
-session and window trees pm's tree (below), and is safe to re-run on a
-config reload.
-
-| Option | Default | Effect |
-|---|---|---|
-| `@pm-bin` | `pm` | the pm binary tmux runs |
-| `@pm-auto-refresh` | on | keep pm's options current: one background `pm tmux refresh` loop per server; `off` stops it |
-| `@pm-refresh-interval` | `30` | seconds between refreshes; pm pushes its own changes at once, so the poll only catches what happens outside pm (below) |
-| `@pm-window-status` | on | put each agent window's badge just before the window name (`#W` or `#{window_name}`) in `window-status-format` and `window-status-current-format`, so the bar reads `3 ⚙ main`; the name keeps your theme's style (below). With no name outside a `#{…}`, the badge goes first. Skipped for a format where you placed `@pm_agent_badge` yourself; a badge an earlier pm placed elsewhere is moved; `off` removes it |
-| `@pm-bind-tree` | on | when prefix `s` or `w` runs a `choose-tree` with no format or template of yours (tmux's default does), add pm's format and Enter action, keeping its flags and note, and sort by name (`-O name`, grouping each project's sessions) if it sets no order: tmux's defaults become `choose-tree -Zs -O name` and `choose-tree -Zw -O name` plus pm's; `off` takes pm's additions off again |
-| `@pm-attention-key` | unset | a prefix key opening pm's tree with only the sessions needing attention — when none does, tmux shows them all |
-
-The window badge is a glyph for the agent's state, then a yellow envelope
-if it has unread messages (`pm feat status` has the count):
-
-| busy (green) | idle (grey) | dead (red) | stopped (grey) | unread (yellow) |
-|---|---|---|---|---|
-| `nf-fa-gear` | `nf-fa-hourglass_half` | `nf-md-skull` | `nf-fa-stop` | `nf-fa-envelope` |
-
-The attention summary (`2 blocked · 1 ready`) goes where you put it; init
-leaves `status-right` alone, as it is your theme's and its length limit
-would cut your own content short:
+tmux runs it with the server's environment, not your shell's, so `pm` must
+be on the `PATH` the server started with; set `@pm-bin` to its full path
+otherwise. Init only adds to your config and is safe to re-run on a reload.
+It makes prefix `s` / `w` pm's tree, puts an agent badge in each window's
+status entry, and keeps pm's state current on the server. The summary of
+what needs you (`2 blocked · 1 ready`) goes where you put it; init leaves
+`status-right` alone, as it is your theme's:
 
 ```tmux
 set -g status-right '#{E:@pm_summary} %H:%M'
 ```
 
-pm's tree is tmux's own tree, less pane titles, with each feature's
-attention and reason and each agent's badge. Choosing a feature's session
-goes to the agent it is waiting on (`pm tmux jump`). With
-`@pm-bind-tree off`, or on another key:
+## Using pm
 
-```tmux
-bind T choose-tree -Zs -O name -F '#{E:@pm_tree_format}' "run-shell \"pm tmux jump --client '#{client_name}' '%%'\""
-```
-
-## Quick start
-
-Create a project — three ways, pick one:
+### Set up a project
 
 ```sh
-pm init ~/projects/myapp                                   # new repo
+pm init ~/projects/myapp                                         # new repo
 pm init ~/projects/myapp --git https://github.com/org/myapp.git  # clone
-pm register ~/code/myapp --name myapp                      # adopt an existing repo (--move to restructure in place)
+pm register ~/code/myapp --name myapp                            # existing repo (--move to restructure in place)
 ```
 
-Each gives you a project root with the repo in `main/` and a `.pm/` state
-directory. pm records the repo's default branch (`origin/HEAD`, else the
-checked-out branch) as the project's main branch. Bundled skills, agent
-definitions, workflows, and the baseline install once per machine (see
-[Asset tiers](#asset-tiers)), not per project. Anything you add per project
-under `main/.agents/` is projected into `main/.claude/`, which is generated
-— gitignore it. Then `cd <root>/main` and create a feature:
+Each gives a project root with the repo in `main/`, a `.pm/` state
+directory, and a `myapp/main` tmux session. pm records the repo's default
+branch (`origin/HEAD`, else the checked-out branch) as the project's main
+branch. Bundled skills, agents, and workflows install once per machine
+([Asset tiers](#asset-tiers)). pm projects your `main/.agents/` customs
+into `main/.claude/`, which is generated: gitignore it.
+
+In the `main` session, start the orchestrator:
 
 ```sh
-pm feat new login                                          # bare feature, no agents
-pm feat new login --context "Implement login per #42"      # solo developer agent
-pm feat new login --workflow implement-and-review --context "Implement login per #42"
-pm feat new child --base parent                            # stack on another feature
+pm agent spawn main
+```
 
-# Long brief via stdin (--context -), no approval prompt:
-pm feat new login --workflow implement-and-review --context - <<'EOF'
+`main` dispatches features and keeps the project's
+[information store](#information-store-and-summaries). Run one per project;
+several projects side by side is the normal case.
+
+### Dispatch work
+
+Tell `main` what you want in plain language. It names the feature, picks a
+[workflow](#workflows-and-agents) (`implement-and-review`, a `-qa-` variant
+for a change with user-facing behaviour to exercise, a `research-` variant
+when the approach is uncertain), and runs `pm feat new` with your request as
+the brief. That creates the branch, worktree, and tmux session
+(`myapp/<feature>`), spawns the workflow's team, and briefs it. `main` then
+steps back: the team works and reports in its own session, not through
+`main`.
+
+You can dispatch by hand the same way:
+
+```sh
+pm feat new login --workflow implement-and-review --context "Implement login per #42"
+pm feat new login --workflow implement-qa-review --context - <<'EOF'
 Implement the login page.
 - validate the email field
 - add an integration test
 EOF
+pm feat new login                                   # bare feature, no agents
+pm feat new child --base parent                     # stack on another feature
 ```
 
-`pm feat new` creates the branch, worktree, and tmux session (`myapp/login`).
-`--workflow <name>` picks the agent team to spawn and who to brief; with
-`--context` but no `--workflow`, pm defaults to the single-agent `solo`
-workflow. See `pm feat new --help` for stacking, naming, and editor options.
+With `--context` but no `--workflow`, pm uses the single-agent `solo`
+workflow. `pm feat adopt <branch>` takes over an existing branch the same
+way, and `pm feat review <pr>` checks out a GitHub PR for the `pr-review`
+workflow.
+
+### Follow what needs you
+
+Agents record where a feature stands with `pm feat status`: `wip` while
+working, `blocked` when waiting on you (with the question), `ready` when
+done and waiting on your merge or delete. pm surfaces it in tmux:
+
+- the status line's summary (`2 blocked · 1 ready`), and an alert on every
+  attached client when a feature becomes blocked or ready;
+- pm's tree (prefix `s` / `w`), tmux's own tree with each feature's
+  attention and reason and each agent's badge. Enter on a feature's session
+  goes straight to the agent it is waiting on;
+- each window's badge: the agent busy, idle, dead or stopped, and an
+  envelope for unread messages.
+
+Behind the status line and the tree is the **attention view**: pm ranks
+every feature by what it needs from you — `blocked` on a question, `cleanup`
+after its PR merged, `ready` to merge, an agent `dead`, or `stalled` (every
+agent idle while the feature is still `wip`) — most urgent first. To see it
+as text, run `pm feat status` in the `main` session (`--all` for every
+project; `pm status` prints it too), and work down from the top row: answer
+what is blocked, merge what is ready, restart what is dead, and ask a
+stalled team why it stopped. In a feature, `pm feat status` shows just that
+feature: its status, blocked reason, last activity, and summary head.
+[Attention view](#attention-view) has each kind's rule and the `--json` form
+for scripts.
+
+### Work with the agents
+
+Type straight into an agent's window to answer a question, redirect, or
+add work. Typing into a blocked feature's agent sets the feature back to
+`wip`. Agents never sit idle: each waits for its next message and acts on
+it ([Agents as message processors](#agents-as-message-processors)), so
+`pm msg send <agent> "…"` from any pane also reaches it.
+
+Agents also message across projects: `pm msg send main --project tools
+"…"` reaches the `tools` project's orchestrator, so an agent can ask about
+another project or request something of it without you relaying it.
+
+When an agent misbehaves, `pm agent restart <name>` respawns it on the same
+conversation; `pm agent spawn <name>` adds one to the feature.
+
+### Finish a feature
+
+When a feature is `ready`, its summary owner has written a summary for
+`main`, and `main` has reviewed it for gaps while the team can still
+answer. Then, from any pane of the feature's session:
+
+```sh
+pm feat merge              # merge into its base, then remove worktree, session, branch
+pm feat delete             # or discard it
+```
+
+The feature is the one your CWD is in, and tmux moves you to the base's
+session before the feature's goes. From elsewhere, name it:
+`pm feat merge login`.
+
+Either tells `main`, which triages the summary into the project's
+information store (`.pm/docs/`): follow-up todos, issues, ideas, and
+durable findings. Ask `main` what's in the store when deciding what to do
+next.
+
+`pm feat pr create` / `pm feat pr ready` and `pm feat sync` cover features
+that go through a GitHub PR instead.
+
+### Around a reboot
+
+pm keeps running in tmux; there is nothing to restart day to day. After a
+reboot, `pm open` in each project recreates whatever sessions are missing,
+respawns every active agent on its conversation, runs the `restore`
+[lifecycle hook](#lifecycle-hooks), and warns about drift `pm doctor`
+finds. `pm close` (`--all` for every project) tears the sessions down by
+choice, without touching state; `pm open` brings them back. `pm delete`,
+by contrast, removes the project from pm, and with `--force` deletes its
+worktrees too — `main` included, unpushed history with it.
 
 ## Concepts
 
 ### Features and worktrees
 
 A **feature** is a branch + worktree + tmux session, tracked in `.pm/`. Omit
-`--base` and the base is detected from your CWD, so `pm feat new child` inside
-a feature worktree stacks on it (stacked features merge into their parent, not
-main). If the parent is merged or deleted first, the child's base is gone:
-`pm feat delete --force` still removes it, but `merge` and the non-forced
-`delete` refuse and tell you how to rebase it onto a live branch.
+`--base` and the base is detected from your CWD, so `pm feat new child`
+inside a feature worktree stacks on it; stacked features merge into their
+parent, not main. If the parent is merged or deleted first, the child's base
+is gone: `pm feat delete --force` still removes it, but `merge` and the
+non-forced `delete` refuse and say how to rebase it onto a live branch.
 
-The lifecycle: `pm feat new` → work → optionally `pm feat pr create` /
-`pm feat pr ready` / `pm feat review` → `pm feat merge` (cleans up by default).
-While it runs, the agents record where it stands with `pm feat status
-wip|blocked|ready` — `blocked` when waiting on you (`-m "<question>"` says
-what for), `ready` when done and waiting on your merge or delete (`merge`
-warns about a feature not marked ready). Typing into a blocked feature's
-agent sets it back to `wip`.
+`merge` warns about a feature not marked ready, and refuses a feature or
+base worktree with uncommitted changes or a paused rebase. `pm feat info`
+shows a feature's paused rebase; `pm status` and `pm doctor` show one in any
+worktree, main's included.
 
-Bare `pm feat status` shows what needs your attention: in a feature, its
-status, blocked reason and the agent that set it, last activity and the
-head of its summary; in main, the attention view (below) of every feature,
-and with `--all` of every registered project. `pm feat list` is the
-inventory instead — status, lifecycle, branch, base and PR — and `pm feat
-list --all` covers every registered project.
-Inspection and housekeeping subcommands (`list`, `info`, `switch`, `rename`,
-`rebase`, `delete`, `sync`) round out `pm feat` — see `pm feat --help`.
-`merge` refuses a feature or base worktree with uncommitted changes or a
-paused rebase; `feat info` shows a feature's paused rebase, and `pm status` and
-`pm doctor` show one in any worktree, main's included.
+### Workflows and agents
+
+Two decoupled layers:
+
+- **Agent definitions** (`~/.agents/agents/<name>.md`, or
+  `main/.agents/agents/` for one project) describe an agent's *job*: what it
+  does and how it evaluates work. They carry no routing, and no tool
+  allowlist — each agent has its harness's full tool set.
+- **Workflows** (`<pm config dir>/workflows/<name>/`, or
+  `<project>/.pm/workflows/` for one project) define a feature's *topology*:
+  the team, who receives the brief, who hands off to whom, who reports to
+  the user, who writes the summary.
+
+So one `implementer` plays different roles in different features. Every
+agent runs `pm workflow show` at the start of each task to learn its
+routing.
+
+| Agent | Job |
+|-------|-----|
+| **main** | The project orchestrator: dispatches features, reviews summaries, keeps the information store |
+| **implementer** | Implements each message, runs tests, addresses reviewer feedback |
+| **reviewer** | Diffs the branch against base, evaluates quality and correctness, sends feedback |
+| **researcher** | Read-only; explores the problem space and sends a refined brief to the implementer |
+| **qa** | Runs the change as a user would, inside the project skill's safety boundary (isolated by default); reports bugs to the implementer and testing gaps for the summary |
+
+| Workflow | Routing |
+|----------|---------|
+| **solo** | A single vanilla agent owns the feature end to end (the default with `--context` and no `--workflow`) |
+| **implement-and-review** | Implementer ↔ reviewer loop |
+| **research-implement-review** | Researcher → implementer → reviewer |
+| **implement-qa-review** | Implementer → qa → reviewer; each gate loops with the implementer |
+| **research-implement-qa-review** | Researcher → implementer → qa → reviewer |
+| **research-only** | Researcher explores and reports to the user |
+| **pr-review** | Reviewer reviews a checked-out PR and reports to the user (`pm feat review`) |
+
+"Reports to the user" means **in the agent's own tmux session**, not by
+messaging `main`. `main` is a dispatcher, not a relay: it re-engages only to
+review a ready feature's summary and to triage it once the feature is merged
+or deleted.
+
+The definition name `default` is reserved: a definition-less vanilla
+session, even if a `default.md` exists. `solo`'s team is exactly this name.
+
+A workflow directory holds `config.toml` (`description`, optional
+`when_to_use`, `agents` = the team spawned at `feat new`, `brief_agents` =
+those who receive the brief) and `workflow.md` (routing prose with one
+`## <agent>` section each, naming the summary owner). To write your own,
+copy a bundled one under a new name (see [Asset tiers](#asset-tiers));
+`pm workflow list` shows what is installed and where from.
+
+`pm agent spawn <name> --agent <def>` separates the display name from the
+definition, so several agents can run off one definition (`frontend-dev`
+and `backend-dev`, both `--agent implementer`).
+
+### Agents as message processors
+
+`pm init` and `pm upgrade` install a **Stop hook** into the user-level hooks
+file of every supported harness (`~/.claude/settings.json` for Claude Code,
+`$CODEX_HOME/hooks.json` for codex; opencode gets a
+[plugin](#opencode-agents) that does the same), once per machine. After
+every turn it blocks until the agent has unread messages, then hands the
+harness a continuation prompt to read them. The agent processes the message,
+the turn ends, and the hook fires again. The brief at feature creation is
+just the first message.
+
+Exception: while a Claude Code background task or session cron is running
+and nothing is queued, the hook lets the turn end so that work isn't
+stalled; its completion wakes the agent. Codex and opencode agents block
+every turn.
+
+A second hook, on UserPromptSubmit, sets a blocked feature back to `wip`
+when you type into one of its agents; pm's own messages never fire it.
+
+The hooks apply to every session of that harness on the machine, so each is
+guarded on `PM_AGENT_NAME`: a session pm didn't spawn exits it at once,
+without needing `pm` on its `PATH`. Reinstall with `pm harness hooks
+install`; `pm doctor --fix` restores a missing one.
+
+### Messaging
+
+Agents communicate through a file-based queue: one inbox per agent, scoped
+to the feature, holding an ordered queue per sender with a cursor.
+
+```sh
+pm msg send reviewer "ready for review"
+pm msg send reviewer <<'EOF'              # markdown body via quoted heredoc, passed verbatim
+## Review findings
+Details here.
+EOF
+pm msg send main --scope main "x"        # agent in another scope of this project
+pm msg send main --project pm "x"         # agent in another project
+pm msg read                               # next unread from the oldest sender, advances the cursor
+pm msg read --from b --index -1           # re-read without moving the cursor
+pm msg reply "short reply"                # reply to the last-read message, across scopes
+pm msg wait                               # block until a message arrives
+pm msg list                               # the inbox, with cursor markers
+```
+
+A bare `read` takes one sender: the one whose earliest unread message is
+oldest, ending with `N more senders pending: b, c — pm msg read --from b`
+when others wait. History stays on disk. `pm msg send` never spawns an
+agent: it errors on an inactive recipient, and respawns one whose window
+died.
+
+Identity resolves as `PM_AGENT_NAME` (set at spawn) > `$USER` > `"user"`, so
+spawned agents need no `--as-agent`.
+
+### Information store and summaries
+
+Each project has an information store at `.pm/docs/`: todos, issues, ideas,
+findings (the default categories, in `categories.toml`; add your own).
+`main` manages it and keeps it lean: completed items are deleted (git
+history is the record), with durable learnings moved into `findings.md`
+first. The store holds knowledge; messaging is a queue. Don't use one for
+the other.
+
+A feature's **summary** is the hand-off its workflow's summary owner writes
+for `main` (`pm workflow show` says what belongs in it), kept at
+`.pm/summaries/<feature>.md` (`pm feat summary path`), never on the branch.
+`pm feat status ready` requires it and asks `main` to review it. Merging or
+deleting the feature always tells `main` which happened (a deleted
+feature's changes never landed), and the summary stays until `main` has
+triaged and deleted it; until then `pm feat new` and `pm feat adopt` refuse
+that feature name.
+
+### Asset tiers
+
+Bundled assets — skills, agent definitions, workflows, and the shared
+baseline — install **once per machine** and are refreshed by `pm upgrade` /
+`pm self-update`:
+
+| Tier | Skills / agents / baseline | Workflows |
+|------|----------------------------|-----------|
+| Global (pm's, plus your machine-wide customs) | `~/.agents/{skills,agents}`, `~/.agents/pm-baseline.md` | `<pm config dir>/workflows/` |
+| Project (your customs only) | `main/.agents/{skills,agents}` | `<project>/.pm/workflows/` |
+
+Everything resolves **project tier first, then global**, by name, so a
+project file with a bundled name overrides it for that project. Bundled
+names are pm's in the global tier — `pm upgrade` rewrites them there — so
+keep global customs under names of your own. Only the `.agents/` copy of a
+definition counts; pm projects it into each harness's own directory where
+the harness needs one. To customise a bundled agent for one project:
+
+```sh
+cp ~/.agents/agents/reviewer.md <project>/main/.agents/agents/reviewer.md
+pm upgrade                      # projects it for the harness
+pm harness pull <feature>       # existing features don't get it otherwise
+```
+
+For a workflow, copy `<pm config dir>/workflows/<name>/` into
+`<project>/.pm/workflows/<name>/`.
+
+**Skills are the exception.** Claude Code ranks *personal* skills above
+project ones, and pm projects every bundled skill into `~/.claude/skills/`,
+so a project copy under a bundled skill's name never applies. Customise a
+bundled skill globally (accepting that `pm upgrade` rewrites it) or copy it
+to a name of your own; `pm doctor` flags a shadowed project skill.
+
+Project-specific procedures — how to run, test, or review *here* — go in a
+project skill, `main/.agents/skills/<name>/`. Only a skill's description is
+in view when the agent decides whether to load it, so put the trigger and
+any always-on rule there. pm's own `.agents/skills/pm-sandbox/` is an
+example.
+
+**Features get main's customs when created, and not again.** `pm feat
+new`/`adopt`/`review` copy main's custom skills, agent definitions and
+`.claude/settings.json` into the new worktree; `pm upgrade` never modifies a
+feature worktree. `pm harness pull [feature]` (`--dry-run` to preview)
+brings later changes in. Neither writes over a file the feature's branch
+tracks. A feature's own `.agents/skills/` is projected for its harnesses on
+seed or pull; agent definitions stay main's until merged, because pm
+resolves them from main.
+
+### Shared baseline and notice board
+
+Rules common to every agent live in one bundled `~/.agents/pm-baseline.md`,
+appended to every spawned agent's system prompt (`main` included).
+
+Standing directives of your own go on the **notice board**, composed onto
+the baseline at spawn. Two hand-edited markdown files, no command:
+
+- `notices.md` in the pm config dir — every project
+- `.pm/notices.md` — this project
+
+Keep them terse: every line reaches every agent on every spawn. Both live in
+the git-backed state repos, so they sync with `pm state push` (`--global`
+for the global one). Example:
+
+```markdown
+Hit a pm bug or quirk? Message pm's main agent briefly —
+`pm msg send main --project pm '<what broke>'`. Don't try to fix pm from here.
+```
+
+### Lifecycle hooks
+
+Each project is bootstrapped with **lifecycle hooks** under `.pm/hooks/` for
+project-specific steps: `post-create.sh` (after `pm feat new`/`adopt`/
+`review` creates a feature), `post-merge.sh` (after `pm feat merge`, or
+`feat delete` of a feature whose PR merged), and an opt-in `restore.sh`
+(when `pm open` recreates a session). They run asynchronously in a `hook`
+tmux window of the session they concern — the new feature's for
+`post-create`, the base's for `post-merge`, each recreated session's for
+`restore` — with that session's worktree as the working directory. Use them
+to install deps, run migrations, copy gitignored secrets into a new
+worktree; remove a script to disable it. pm only writes a hook script that
+is missing, so your edits survive upgrades.
+
+Every hook receives its context as `PM_*` environment variables, scoped to
+the hook process (concurrent projects never see each other's values):
+
+| Variable            | Value                                                                 |
+|---------------------|-----------------------------------------------------------------------|
+| `PM_PROJECT_ROOT`   | project root — the directory holding `.pm/` and the worktrees         |
+| `PM_MAIN_WORKTREE`  | the main worktree (`$PM_PROJECT_ROOT/main`)                           |
+| `PM_WORKTREE`       | the worktree the hook concerns (its working directory)                |
+| `PM_SESSION`        | the tmux session the hook window is in                                |
+| `PM_FEATURE`        | feature owning `PM_WORKTREE`/`PM_SESSION`; **empty** (set, `""`) in main scope |
+| `PM_MERGED_FEATURE` | `post-merge` only: the feature that was merged into `PM_WORKTREE`     |
+
+`PM_FEATURE` is always set so `set -u` scripts stay safe; test it with
+`[ -n "$PM_FEATURE" ]`. For a `post-merge` of a stacked feature it names the
+base feature, not the merged one.
+
+## Configuration
+
+Settings live in `<project>/.pm/config.toml`, or `config.toml` in the pm
+config dir (`~/.config/pm/` on Linux, `~/Library/Application Support/pm/` on
+macOS) for every project. Agent settings are re-read at every spawn, so
+restart, fork, `pm open`, and a dead-window heal pick up edits; there is no
+spawn-time flag. For a one-off change, edit the row and restart the agent,
+or switch inside the session (`/model`).
+
+```toml
+[agents.models]              # alias or full id, in the harness's own terms
+"*" = "opus"
+reviewer = "gpt-5"
+
+[agents.harness]             # "claude-code" (the default), "codex" or "opencode"
+reviewer = "codex"
+
+[agents.permissions]         # the harness's own mode string; unset passes none
+reviewer = "read-only"       # codex's -s sandbox mode, as reviewer runs on codex
+
+[project]
+max_features = 6             # refuse feat new / feat adopt beyond 6 unmerged features
+```
+
+**Rows.** Keys are the `--agent` definition, not the display name: an agent
+spawned as `frontend-dev --agent implementer` takes `implementer`'s row.
+`"*"` applies to every agent without a row of its own. Per setting, the
+first of these wins: project named row, project `"*"`, global named row,
+global `"*"`; `""` masks the rows below it.
+
+**Models and permissions** are in the harness's terms: `--model` /
+`--permission-mode` values for Claude Code, `-m` / the `-s` sandbox mode for
+codex, `<provider>/<model>` / a permission rule list for opencode. Claude
+Code and codex get them as written, so a typo surfaces in the agent's
+window. Permissions are optional; with Claude Code's own auto mode most
+setups need none.
+
+A model or permission row is bound to the harness configured under the same
+key, looking from the row's own file down: a `reviewer` row to the
+`reviewer` harness row (else that file's `"*"`, else the global file's,
+else `claude-code`), a `"*"` row to the `"*"` harness row. A row bound to
+another harness than the one the agent spawns on is dropped, and the spawn
+line says why. So when you move an agent to another harness in the project
+config, a global model row for it no longer applies — set the model next to
+the new harness row. With a global `[agents.models] reviewer = "opus"` and a
+project `[agents.harness] reviewer = "codex"`, the reviewer gets codex's
+default model and the spawn line reads:
+
+```
+Spawned agent 'reviewer' in myapp/login:1 (global [agents.models] row for 'reviewer' is bound to claude-code, not codex — not applied)
+```
+
+**Harness.** Any value besides the three is an error at spawn; pm never
+falls back. A conversation is resumed only on the harness that produced it,
+so after a harness change the next respawn starts fresh (and says so) and
+`pm agent fork` refuses. `pm harness list` shows the harnesses; `pm agent
+list` each agent's.
+
+**`[project] max_features`** caps a project's in-flight features (any not
+merged or stale); the project value beats the global one, and unset means
+no cap.
+
+### Mixed-harness teams
+
+A workflow's team can span harnesses: each member takes the harness its
+`[agents.harness]` row names. A common shape is a second model family as
+reviewer and a local model for qa:
+
+```toml
+[agents.harness]             # implementer has no row: claude-code
+reviewer = "codex"
+qa = "opencode"
+
+[agents.models]
+qa = "local/qwen"
+```
+
+`pm feat new` and `pm feat adopt --workflow` first check that each member's
+harness can spawn it, find its definition, and wake it for messages, and
+refuse before creating anything, naming each failing member and what is
+missing. Not checked, because only running the harness would tell: that
+codex still trusts the hook's current command, that the harness is logged
+in, and that a model id resolves. `pm agent spawn` skips the check; `pm
+doctor` reports the same problems for existing agents.
+
+What each harness needs is under Reference:
+[Claude Code](#claude-code-agents), [codex](#codex-agents) (one
+interactive hook-trust step per machine), and [opencode](#opencode-agents)
+(a model row per agent).
+
+## Moving to another machine
+
+`.pm/` holds a project's state (features, agents, messages, config,
+summaries, docs); the pm config dir holds the project registry, global
+config, notices, and your global workflows. Both can be git-backed.
+
+On the old machine, once, each against a new, empty repo (`init --remote`
+resets local state to a remote that already has commits):
+
+```sh
+pm state init --global --remote <registry-url>   # the registry
+pm state init --remote <state-url>               # in each project
+pm state backfill                                # record repo and state URLs in the registry
+```
+
+Then, at each move, from a shell outside pm's tmux sessions:
+
+```sh
+pm close --all                  # stop agents so nothing is written after the push
+pm state push --global          # and pm state push in each project
+pm harness export --all -o pm-claude-code.tar.gz   # conversations live in the harness, not .pm/
+```
+
+On the new machine, with pm installed:
+
+```sh
+pm state init --global --remote <registry-url>
+pm restore                      # clone repos, pull state, recreate worktrees and sessions
+pm harness import pm-claude-code.tar.gz   # after restore, so the worktrees exist
+```
+
+`pm harness export|import` take `--harness` (default `claude-code`); run
+them once per harness your agents use, with a file per harness. An export
+holds the sessions of main and every feature worktree; an import skips a
+feature with no worktree here.
+`pm harness migrate --from <old path>` does the same for a project moved on
+one machine.
+
+The registry repo syncs your global custom workflows but never the bundled
+ones: its `.gitignore` carries a block pm regenerates, so `pm upgrade`
+rewriting them never dirties it. If an earlier release committed them, `pm
+upgrade` untracks them and stages the deletion for `pm state push --global`.
+A machine that pulls that commit loses the bundled dirs until it runs `pm
+upgrade`.
+
+## Reference
+
+### tmux integration
+
+Plugin options, set before `run-shell 'pm tmux init'`:
+
+| Option | Default | Effect |
+|---|---|---|
+| `@pm-bin` | `pm` | the pm binary tmux runs |
+| `@pm-auto-refresh` | on | keep pm's options current with a background `pm tmux refresh` loop; pm pushes its own changes at once, so the loop only catches what happens outside pm |
+| `@pm-refresh-interval` | `30` | seconds between refreshes |
+| `@pm-window-status` | on | put each agent window's badge just before the window name in `window-status-format` and `window-status-current-format`, keeping your theme's style for the name |
+| `@pm-bind-tree` | on | turn prefix `s` / `w` into pm's tree, sorted by name, when they run tmux's default `choose-tree` |
+| `@pm-attention-key` | unset | a prefix key opening pm's tree with only the sessions needing attention |
+
+The badge glyphs are `nf-fa-gear` (busy), `nf-fa-hourglass_half` (idle),
+`nf-md-skull` (dead), `nf-fa-stop` (stopped), then `nf-fa-envelope` for
+unread messages. With `@pm-bind-tree off`, or to put the tree on another
+key:
+
+```tmux
+bind T choose-tree -Zs -O name -F '#{E:@pm_tree_format}' "run-shell \"pm tmux jump --client '#{client_name}' '%%'\""
+```
+
+`pm tmux refresh` publishes every project's attention view as user options
+for your own status line or formats. An option whose value goes away is
+unset, text is escaped for formats, and each name is set at one scope only:
+
+| Scope | Option | Value |
+|---|---|---|
+| feature session | `@pm_project`, `@pm_feature` | names; a `main` session carries only `@pm_project` |
+| | `@pm_progress` | `wip`, `blocked` or `ready` |
+| | `@pm_attention` | the attention kind; unset for `none` |
+| | `@pm_reason` | the attention detail; unset without one |
+| | `@pm_badge` | the kind, styled (`#[fg=red,bold]blocked#[default]`); unset for `none` |
+| agent window | `@pm_agent` | the agent's name |
+| | `@pm_agent_state` | `idle`, `busy`, `dead` or `stopped` |
+| | `@pm_unread` | unread message count |
+| | `@pm_agent_badge` | the badge, styled; it resets with `#[default]`, so placed anywhere but the start of a format, follow it with your theme's style |
+| global | `@pm_summary` | e.g. `2 blocked · 1 ready`, styled; unset when nothing needs attention |
+| | `@pm_count` | features needing attention |
+| | `@pm_tree_format` | pm's `choose-tree` line format, set by `pm tmux init` |
 
 ### Attention view
 
@@ -200,296 +657,54 @@ kinds or `none`; `skipped` says why a project's features are missing, and
 `summary` is the summary's first line whatever the status; `window` is the
 agent's tmux target, `null` while it has none.
 
-`pm register`, `pm feat adopt --from` and `pm feat rename` carry agent
-sessions to the new path for every harness in use, and print what they did.
-Rename restarts the feature's running agents, resumed on their sessions,
-and keeps the feature's status and summary; the project's unread messages
-from the feature, and the replies `pm msg reply` would send to it, are
-re-addressed to the new name. Rename refuses while any of the feature's
-agents is mid-turn, since restarting it would cut off its work: wait until
-they are idle, or pass `--force` to interrupt them. An agent whose harness
-exited has no work to cut off and is restarted like an idle one. Each
-interrupted agent, and the agent that ran the rename, is told to resume.
+### Claude Code agents
 
-### tmux options
+The default harness; it needs no setup beyond `claude` on your `PATH`
+(`pm harness probe` checks it).
 
-`pm tmux refresh` publishes the attention snapshot of every project on the
-tmux server (`PM_TMUX_SERVER`, else the default) as user options, for
-status lines and `choose-tree` formats to read. It writes only what
-changed, in one `tmux` call, then redraws attached clients' status lines,
-which rebuilds an open tree mode. With no server running it does nothing.
-
-While the plugin's watcher runs (Install), pm keeps the options current
-itself: a pm command that changes what they show refreshes them in the
-background as it finishes, and each agent's Stop hook writes its own
-window's state as it goes idle and as it resumes. The watcher's poll
-catches the rest: a harness that exits or is killed, sessions or windows
-killed outside pm, state files edited by hand.
-
-| Scope | Option | Value |
-|---|---|---|
-| feature session | `@pm_project`, `@pm_feature` | names; a `main` session carries only `@pm_project` |
-| | `@pm_progress` | `wip`, `blocked` or `ready` |
-| | `@pm_attention` | the attention kind; unset for `none` |
-| | `@pm_reason` | the attention detail; unset without one |
-| | `@pm_badge` | the kind, styled (`#[fg=red,bold]blocked#[default]`); unset for `none` |
-| agent window | `@pm_agent` | the agent's name |
-| | `@pm_agent_state` | `idle`, `busy`, `dead` or `stopped` |
-| | `@pm_unread` | unread message count |
-| | `@pm_agent_badge` | a glyph for the state, then an envelope if any message is unread, styled (below) |
-| global | `@pm_summary` | e.g. `2 blocked · 1 ready`, styled; unset when nothing needs attention |
-| | `@pm_count` | features needing attention |
-| | `@pm_tree_format` | pm's `choose-tree` line format, set by `pm tmux init` |
-
-Only the registry's agents' windows carry window options, `main`'s
-included. An option whose value goes away
-is unset, so it never outlives its cause; a session's go with the session.
-Text is escaped for formats (`#` doubled). Each name is set at one
-scope only, so tmux's fallback from window to session to global never
-yields another scope's value.
-
-`@pm_agent_badge` (glyphs under Install) is sized for
-`window-status-format`. It sets only the foreground, then resets to the
-window's default style with `#[default]`. Where init places it, it is
-followed by every `#[…]` that comes before the name outside a `#{…}`,
-which rebuilds your theme's style for the name. If you place it yourself
-anywhere but the start of a format, follow it with your theme's style.
-
-When a feature with an open session becomes `blocked` or `ready`, every
-attached client is shown it once. The previous attention is the published
-`@pm_attention`, so the first refresh after a session opens alerts on a
-feature already in that state.
-
-### Lifecycle hooks
-
-Each project is bootstrapped with **lifecycle hooks** under `.pm/hooks/`:
-`post-create.sh` (after `pm feat new`/`adopt`/`review` creates a feature),
-`post-merge.sh` (after `pm feat merge`, or `feat delete` of a feature whose PR
-merged), and an opt-in `restore.sh` (when `pm open` recreates a session). They
-run asynchronously in a dedicated `hook` tmux window of the session they
-concern — the new feature's for `post-create`, the base's for `post-merge`,
-each recreated session's for `restore` — with that session's worktree as the
-working directory. Edit them to install deps, run migrations, copy gitignored
-secrets into a new worktree, etc.; remove a script to disable it. pm only
-writes a hook script that is missing, so editing one is safe and later pm
-releases never overwrite it.
-
-Every hook receives its context as `PM_*` environment variables, scoped to
-the hook process (concurrent projects never see each other's values):
-
-| Variable            | Value                                                                 |
-|---------------------|-----------------------------------------------------------------------|
-| `PM_PROJECT_ROOT`   | project root — the directory holding `.pm/` and the worktrees         |
-| `PM_MAIN_WORKTREE`  | the main worktree (`$PM_PROJECT_ROOT/main`)                           |
-| `PM_WORKTREE`       | the worktree the hook concerns (its working directory)                |
-| `PM_SESSION`        | the tmux session the hook window is in                                |
-| `PM_FEATURE`        | feature owning `PM_WORKTREE`/`PM_SESSION`; **empty** (set, `""`) in main scope |
-| `PM_MERGED_FEATURE` | `post-merge` only: the feature that was merged into `PM_WORKTREE`     |
-
-`PM_FEATURE` is always set so `set -u` scripts stay safe; test it with
-`[ -n "$PM_FEATURE" ]`. For a `post-merge` of a stacked feature it names the
-base feature, not the merged one.
-
-### Workflows and agents
-
-Two decoupled layers:
-
-- **Agent definitions** (`~/.agents/agents/<name>.md`, or
-  `main/.agents/agents/` for one project) describe an agent's *job* — what it
-  does, how it evaluates work. They carry no routing. pm projects them into
-  each harness's own dir on `init`/`upgrade` where the harness needs that
-  (Claude Code and opencode do; codex reads `.agents/` itself); only the
-  `.agents/` copy counts as a definition.
-- **Workflows** (`<pm config dir>/workflows/<name>/`, or
-  `<project>/.pm/workflows/` for one project) define the per-feature
-  *topology* — who hands off to whom, who reports to the user.
-
-This lets the same `implementer` play different routing roles in different
-features without forking its definition. Every agent ships with the
-`pm-workflow` skill and runs `pm workflow show` at the start of each task to
-discover its routing. `pm workflow list` shows installed workflows and the
-tier each came from.
-
-Bundled agents:
-
-| Agent | Job |
-|-------|-----|
-| **implementer** | Drains its inbox, implements each message, runs tests, addresses reviewer feedback |
-| **reviewer** | Diffs the branch against base, evaluates quality/correctness, sends feedback |
-| **researcher** | Read-only; explores the problem space and sends a refined brief to the implementer |
-| **qa** | Runs the change as a user would, inside the project skill's safety boundary (isolated by default); reports bugs to the implementer and testing gaps for the summary |
-
-The definition name `default` is **reserved**: it always means a
-definition-less vanilla agent session (no definition passed to the
-harness), even if a `default.md` definition file exists. The bundled `solo`
-workflow's team is exactly this name. Earlier releases spelled it `claude`;
-that alias is gone — `pm upgrade` rewrites `solo` to name `default`, and
-`pm doctor` flags any still-running agent named `claude` (it cannot be
-restarted; stop it and respawn).
-
-Bundled workflows:
-
-| Workflow | Routing |
-|----------|---------|
-| **solo** | Single developer owns the feature end-to-end (default when `--context` is given without `--workflow`) |
-| **implement-and-review** | Implementer drains tasks; reviewer ↔ implementer loop |
-| **research-implement-review** | Researcher → implementer → reviewer |
-| **implement-qa-review** | Implementer → qa → reviewer; each gate loops with the implementer |
-| **research-implement-qa-review** | Researcher → implementer → qa → reviewer |
-| **research-only** | Researcher explores and reports findings to the user |
-| **pr-review** | Reviewer reviews a checked-out PR and reports to the user (used by `pm feat review`) |
-
-Each workflow directory holds a `config.toml` (`description`, optional
-`when_to_use` hint, `agents` = the full team spawned at `feat new` time,
-`brief_agents` = the subset that receives the `--context` brief) and a
-`workflow.md` (free-form routing prose, with `## <agent>` sections; names the
-summary owner). The bundled workflow names are pm-owned: like agents,
-skills, and the baseline they are **overwritten** by `pm upgrade`. Directories
-under `.pm/workflows/` with other names are yours and are never touched;
-`pm workflow list` tags each entry `[bundled]` or `[user]`.
-
-"Reports to the user" means **in the agent's own tmux session**, where you read
-it live — not by messaging the `main` orchestrator. `main` is a dispatcher, not
-a relay: it spins up features and steps back, re-engaging only to review a
-ready feature's summary and to triage it once the feature is merged or
-deleted. Intra-feature handoffs (reviewer ↔ implementer, researcher →
-implementer) are what use messaging.
-
-Agent defs carry no `tools:` allowlist — each inherits the harness's full
-tool set (including skills). Real guardrails belong in the permissions layer
-(see below), not a per-agent tool list.
-
-Manage agents with `pm agent spawn|list|stop|restart|delete|fork`. `spawn
-<name> --agent <def>` decouples the display/messaging identity from the agent
-definition, so you can run several agents off one definition (e.g.
-`frontend-dev` and `backend-dev` both `--agent implementer`). `fork` starts a
-new agent from a copy of another's history. Each acts on the current scope, or
-on another with `--scope <feature|main>`.
-See `pm agent --help`.
-
-### Configuration
-
-Settings live in `<project>/.pm/config.toml`, or `config.toml` in the pm
-config dir (`~/.config/pm/` on Linux, `~/Library/Application Support/pm/` on
-macOS) to apply across projects. A `"*"` row applies to every agent without a
-row of its own. Per setting, the first of these wins: project named row,
-project `"*"`, global named row, global `"*"`; `""` masks the rows below it,
-unset means no flag is passed.
-
-```toml
-[agents.permissions]         # harness's own mode string
-reviewer = "plan"
-
-[agents.models]              # alias or full id, in the harness's own terms
-"*" = "gpt-5"
-reviewer = "opus"
-
-[agents.harness]             # agent CLI: "claude-code" (the default), "codex" or "opencode"
-"*" = "codex"
-reviewer = "claude-code"
-```
-
-Permission modes and model ids are in the terms of the agent's harness:
-`--permission-mode` / `--model` values for Claude Code, the `-s` sandbox
-mode / `-m` for codex, a permission rule list / `<provider>/<model>` for
-opencode. On Claude Code and codex pm passes them through as written, so a
-typo surfaces in the agent's tmux window. On opencode a missing row or one
-of the wrong shape is an error at spawn, and a model opencode cannot resolve
-fails the agent's first turn (see [opencode agents](#opencode-agents)).
-
-A model or permission row is bound to the harness configured under the same
-key, looking from the row's own file down: a `reviewer` row to the `reviewer`
-harness row (else that file's `"*"`, else the global file's, else
-`claude-code`), a `"*"` row to the `"*"` harness row. A row bound to a
-harness other than the one the agent spawns on is dropped and the spawn line
-says why. In the example above, `gpt-5` reaches every codex agent and `opus`
-the claude-code reviewer. Change an agent's harness in the project config and
-a global row for that agent no longer applies — set it again next to the new
-harness row: with a global `[agents.models] reviewer = "opus"` and a project
-`[agents.harness] reviewer = "codex"`, the reviewer gets codex's default
-model and the spawn line reads:
-
-```
-Spawned agent 'reviewer' in myapp-login:1 (global [agents.models] row for 'reviewer' is bound to claude-code, not codex — not applied)
-```
-
-Any other `[agents.harness]` value is an error at spawn — pm never falls back
-silently. `pm harness list` shows what pm can spawn and `pm agent list` each
-agent's harness; a stored session is only resumed on the harness that
-produced it — change an agent's harness and its next respawn starts a fresh
-session (and `pm agent fork` refuses).
-
-Config is the only way to set these: there is no spawn-time flag, so a
-restart, fork, or heal launches with the same settings as the first spawn.
-For a one-off change, edit the row and spawn, or switch inside the session
-(`/model`, `/permissions` on Claude Code and codex).
-
-Keys are the `--agent` definition, not the display name: an agent spawned as
-`frontend-dev --agent implementer` takes `implementer`'s row. The vanilla
-`default` agent is an ordinary key; `"*"` is the only row that reaches every
-agent.
-
-### Mixed-harness teams
-
-A workflow's team can run on several harnesses at once: each member takes
-the harness its `[agents.harness]` row names.
-
-```toml
-[agents.harness]             # implementer has no row: claude-code
-reviewer = "codex"
-qa = "opencode"
-
-[agents.models]
-qa = "local/qwen"
-```
-
-`pm feat new` and `pm feat adopt --workflow` first check that each member's
-harness can spawn it, find its definition, and wake it for messages, and
-refuse before creating anything, naming each failing member, its harness, and
-what is missing. Not checked: that an installed hook's command is exactly the
-one pm would write (an entry counts as pm's by the command it names), and,
-because only running the harness would tell, that codex's trust entry still
-matches the hook's current command text, that the harness is logged in, and
-that a model id resolves.
-
-`pm agent spawn` does not run this check; `pm doctor` reports the same
-problems for a project's existing agents.
+- pm launches `claude --agent <def>` (no `--agent` for `default`), appends the
+  [baseline](#shared-baseline-and-notice-board) with
+  `--append-system-prompt-file`, and gives feature agents the summaries
+  directory with `--add-dir`. It passes no `--permission-mode` unless an
+  `[agents.permissions]` row sets one, so your own Claude Code default
+  (auto mode, say) applies.
+- A feature gets main's `.claude/settings.json` when created; `pm harness
+  settings list|diff|pull|push|merge` compares and syncs the two later.
+  `settings.local.json` is shared by every worktree at the main checkout,
+  so pm leaves it alone.
+- Personal skills outrank project ones, so a project copy of a bundled
+  skill never applies ([Asset tiers](#asset-tiers)).
 
 ### Codex agents
 
-Set `[agents.harness] <def> = "codex"` and pm spawns that agent in the
-codex TUI instead of Claude Code. The same never-idle loop, messaging, and
-skills apply; the differences are what codex needs before it will run
+Set `[agents.harness] <def> = "codex"` and pm spawns that agent in the codex
+TUI. The loop, messaging, and skills are the same; what codex needs to run
 unattended:
 
-- **Hook trust — one interactive step per machine.** `pm init`/`pm upgrade`
-  install pm's hooks into `$CODEX_HOME/hooks.json`, but codex runs no hook it
-  has not been told to trust, and it fails **silently** when trust is
-  missing (the agent just idles after its first turn). Start `codex` once in
-  a trusted directory and choose **"Trust all and continue"** at the "Hooks
-  need review" prompt. Codex asks again only when a hook's command text
-  changes. `pm doctor` reports a missing trust entry; the escape hatch is
-  `[harness.codex] bypass_hook_trust = true` (passes
-  `--dangerously-bypass-hook-trust`, one warning line per launch).
-  The hooks file is global, so the prompt appears once in *any* codex
-  session on the machine — including your own non-pm codex work, and even
-  if no pm project uses codex, since pm installs its hooks for every
-  harness it supports.
+- **Hook trust — one interactive step per machine.** pm installs its hooks
+  into `$CODEX_HOME/hooks.json` (creating `$CODEX_HOME` if needed), but
+  codex runs no hook it has not been told to trust, and fails **silently**
+  without it (the agent idles after its first turn). Start `codex` once in a
+  trusted directory and choose **"Trust all and continue"** at the "Hooks
+  need review" prompt. Codex asks again when a hook's command changes, so
+  accept it again after an upgrade that changed one. The hooks file is
+  global: the prompt appears in whichever codex session comes first,
+  including your own non-pm ones. `pm doctor` reports a missing trust
+  entry; the escape hatch is `[harness.codex] bypass_hook_trust = true`
+  (`--dangerously-bypass-hook-trust`, one warning line per launch).
 - **Directory trust** pm writes itself: each worktree gets a
-  `[projects."<path>"] trust_level = "trusted"` entry in
-  `$CODEX_HOME/config.toml` at spawn (`pm doctor --fix` adds any missing for
-  a worktree whose agents or workflow team run on codex).
+  `trust_level = "trusted"` entry in `$CODEX_HOME/config.toml` at spawn
+  (`pm doctor --fix` adds any missing).
 - **No sandbox by default.** pm launches codex with `-a never -s
   danger-full-access`. pm's tmux socket cannot be reached from inside any
-  codex sandbox (macOS blocks the Unix-socket connect independently of
-  writable roots), so a sandboxed agent cannot spawn, stop, restart, or heal
-  other agents — a codex `main` needs full access. This is the same blast
-  radius pm's Claude Code agents already run with; if you chose codex *for*
-  its sandbox, know that pm turns it off unless you say otherwise:
+  codex sandbox, so a sandboxed agent cannot spawn, stop, restart, or heal
+  other agents — a codex `main` needs full access. This is the blast radius
+  pm's Claude Code agents already run with. To sandbox read-and-report
+  agents anyway:
 
   ```toml
-  [agents.permissions]          # for a codex agent this is the -s sandbox mode
-  implementer = "workspace-write"
+  [agents.permissions]          # for a codex agent, the -s sandbox mode
+  reviewer = "workspace-write"
 
   [harness.codex]               # harness-wide, project beats global per key
   sandbox = "workspace-write"   # default for codex agents with no permissions row
@@ -497,99 +712,37 @@ unattended:
   writable_roots = ["main/target"]   # extra --add-dir; a project [] masks global
   ```
 
-  A sandboxed codex agent can read, run git, and send and receive messages
-  — pm always adds `--add-dir` for its own state dir, the shared `main/.git`,
-  and the pm config dir — but every tmux-touching command fails. Feature
-  agents that only read and report fit that mode; orchestrators do not.
-- **Role delivery.** Codex has no `--agent`; the agent's definition, the
-  baseline, and the notice boards reach it through the SessionStart hook as
-  developer context, on start and on every `codex resume`.
-- **No shared daemon.** pm always launches codex with `--no-daemon`: attached
-  to codex's background server, hooks run in the server's environment
-  instead of the agent's, and the agent idles unreachable after its first
-  turn. `pm doctor` reports a running agent that has recorded no session
-  id after a grace period; restart it with `pm agent restart <name>`.
-- `pm harness probe --harness codex` checks the installed version (0.156.0
-  or newer, the first with `--no-daemon`).
+  pm always adds `--add-dir` for its state dir, the shared `main/.git`, and
+  the pm config dir, so a sandboxed agent can read, run git, and message;
+  every tmux-touching command fails.
+- **Role delivery.** Codex has no `--agent`; the definition, baseline, and
+  notice boards reach it through the SessionStart hook, on start and on
+  every resume.
+- **No shared daemon.** pm launches codex with `--no-daemon`, since hooks
+  attached to codex's background server run in the server's environment,
+  not the agent's. `pm doctor` reports a running agent that has recorded no
+  session id after a grace period; `pm agent restart` it.
+- `pm harness probe --harness codex` checks the version (0.156.0 or newer).
 
 ### opencode agents
 
 Set `[agents.harness] <def> = "opencode"` and pm spawns that agent in the
-opencode TUI (2.0.18 or later). Messaging and skills work as on the other
-harnesses; what differs:
+opencode TUI (2.0.18 or later; `pm harness probe --harness opencode`
+checks). What differs:
 
-- **The never-idle loop is a plugin.** opencode has no Stop hook, so `pm
-  init`/`pm upgrade` install `pm-never-idle` under
-  `~/.config/opencode/plugins/` (or `$XDG_CONFIG_HOME/opencode/plugins/`).
-  When the agent's turn ends it waits for a message exactly as the Stop hook
-  does, then prompts the session; it also resets a blocked feature when
-  you type into the session. It does nothing in a session pm didn't
-  spawn. The files are pm's: an upgrade overwrites them, and opencode
-  reloads the plugin in running agents when it does. A plugin opencode
-  cannot load leaves the agent idle; `pm doctor` reports a running agent
-  whose plugin has not loaded a minute after its spawn, and `/plugins` in
-  its window says why.
-- **The loop stops itself rather than run away.** `pm doctor` reports a
-  failed turn's error (`Model unavailable: …`, the endpoint's own refusal)
-  as soon as the turn ends, until a later one succeeds. After a failed turn
-  the plugin waits 30 seconds before asking again. If five turns in a row are
-  prompted for unread messages and read none — the model fails every turn, or
-  the agent cannot read its inbox — the plugin stops prompting, says so in the
-  session, and `pm doctor` reports the loop stopped, with the error of the
-  last turn when it failed. Fix the cause, then `pm agent restart <name>`.
-- **Always `--standalone`.** pm launches `opencode --standalone --auto
-  --session <id>`, with the session created beforehand. Without
-  `--standalone` every opencode command shares one background server per
-  `$HOME`, and that server's plugins act under the identity of whichever
-  agent started it. If you run `opencode` yourself in an agent's window,
-  pass `--standalone` too.
-- **An unknown agent name is silent.** opencode reads definitions from
-  `~/.config/opencode/agents/` and `<worktree>/.opencode/agents/`, where pm
-  projects them, and runs its built-in prompt — no error — for a name it finds
-  in neither. So an opencode spawn, and `pm feat new`'s check, refuse a
-  definition with no projected copy, as `pm doctor` flags it for main and
-  each feature worktree. `pm upgrade` projects it into main and the global
-  dir; a feature worktree takes main's copy from `pm harness pull <feature>`,
-  which `pm doctor --fix` runs.
-- **Permissions.** `--auto` approves whatever no rule denies, because an
-  approval prompt in an unwatched window stalls the agent. An
-  `[agents.permissions]` row is opencode's own rule list as a JSON array;
-  the last matching rule wins:
-
-  ```toml
-  [agents.harness]
-  reviewer = "opencode"
-
-  [agents.models]               # "<provider>/<model>"
-  reviewer = "anthropic/claude-opus-5"
-
-  [agents.permissions]
-  reviewer = '[{"action":"edit","resource":"*","effect":"deny"}]'
-
-  [harness.opencode]            # harness-wide, project beats global per key
-  auto = false                  # drop --auto; asks then wait for an answer
-  binary = "/opt/opencode/bin/opencode"   # default: opencode from PATH
-  ```
-
-  With `auto = false` pm adds
-  `{"action":"external_directory","resource":"<dir>/*","effect":"allow"}`
-  ahead of the row for its own state dir, the shared `main/.git`, and the pm
-  config dir, so reading `.pm/` does not prompt — unless a later rule of the
-  row matches those paths, which wins.
-- **A model row is required, and binding.** Left to its config, opencode
-  replaces a model it cannot resolve with its default one — hosted by
-  opencode when no provider is configured — without an error. pm therefore
-  refuses to spawn (or respawn, or fork) an opencode agent that has no
-  `[agents.models]` row, pins the row on the agent's session, and limits the
-  agent to the row's provider and the providers pm config defines. A row
-  opencode cannot resolve then fails the agent's first turn (`Model
-  unavailable`) before any request is made, and the loop stops and reports
-  it as above.
-- **Providers are pm config.** Each `[harness.opencode.providers.<id>]`
-  table is an entry of opencode's own `providers` object and is written to
-  every opencode agent's config as it stands, so a subagent can run on
-  another provider than its parent's. A project entry replaces the global
-  one of the same id whole; an empty project table removes it.
+- **The loop is a plugin**, `pm-never-idle`, which pm installs under
+  `~/.config/opencode/plugins/`. It stops itself after five turns in a row
+  that read no message (a failing model, an unreadable inbox) rather than
+  run away; `pm doctor` reports it with the last error. Fix the cause, then
+  `pm agent restart <name>`.
+- **A model row is required.** opencode silently swaps a model it can't
+  resolve for its default, so pm refuses to spawn an opencode agent without
+  an `[agents.models]` row and limits the agent to that row's provider and
+  the providers pm config defines. A bad row fails the first turn with
+  `Model unavailable` instead.
+- **Providers are pm config**, as entries of opencode's own `providers`
+  object. API keys are named by environment variable, never stored; a
+  literal key is an error at spawn.
 
   ```toml
   [agents.harness]
@@ -602,334 +755,27 @@ harnesses; what differs:
   package = "@opencode/ai/providers/openai-compatible"
   settings = { baseURL = "http://127.0.0.1:8000/v1" }
   env = ["LOCAL_API_KEY"]       # optional: the variable holding the key
-  # optional; quote ids holding `/` or `.`:
-  models = { "mlx-community/Qwen3.8-27B-4bit" = { name = "Qwen" } }
   ```
 
-  opencode resolves no model a provider does not list, so pm adds the row's
-  model to its provider's `models`; a mistyped id therefore fails at the
-  endpoint, not before. When the entry declares `models` and the row's id is
-  not among them, the spawn line and `pm doctor` say so. They also flag an
-  unquoted dotted id, which TOML splits into nested tables (`models.Qwen3.8-27B`
-  is model `Qwen3` holding a table `8-27B`). A row may still name
-  a provider pm config does not define — one opencode ships (`anthropic/…`)
-  or one from your own `~/.config/opencode/opencode.json`: pm allows it and
-  leaves its definition alone. Once pm config defines the same id, pm's
-  entry replaces that file's whole.
-- **Keys are named, never stored.** Name the variable — `env = ["NAME"]`,
-  or `{env:NAME}` inside a value — and set it in the environment agents
-  start in. An `apiKey` that is not exactly `{env:NAME}`, or an
-  `Authorization` header without an `{env:…}`, is an error at spawn.
-  opencode sends the request **without a key** when the variable is unset;
-  the spawn line and `pm doctor` say when pm's own environment lacks it.
-- **opencode's own config can undo the restriction.** opencode merges
-  `~/.config/opencode/opencode.json[c]` and any `.opencode/` directory above
-  the worktree into the agent's config. A provider restriction there
-  (`enabled_providers`) replaces pm's: the agent's model becomes `Model
-  unavailable` and that file's providers are allowed. `pm doctor` reports
-  such a file, and an entry opencode dropped because a field has the wrong
-  type (it drops unknown keys silently).
-- **Forking needs a turn.** opencode refuses to fork a session that has had
-  none, so `pm agent fork` fails for an agent that has not processed a
-  message yet.
-- pm writes the model, the providers and the permission rules to a config
-  file of its own named by `OPENCODE_CONFIG`. An agent never inherits
-  `OPENCODE_CONFIG` or `OPENCODE_CONFIG_CONTENT` from the shell that spawned
-  it.
-- **A session opencode no longer has** is not resumed: the respawn starts
-  a fresh one and the spawn line says so, as after a harness change.
-- **Every call pm makes to opencode is bounded** — a minute, five for a
-  session export or import — and one that runs over is stopped and named,
-  so a hung opencode fails the pm command instead of hanging it.
-- **Moved worktree.** opencode cannot resume a session whose directory is
-  gone. pm's own moves carry sessions (see Features and worktrees); after any other,
-  stop the agent and run `pm harness migrate --harness opencode --from <old
-  path>` in the new directory.
-- `pm harness probe --harness opencode` checks the installed version.
-
-### Agents as never-idle message processors
-
-`pm init` and `pm upgrade` install a **Stop hook** into the user-level hooks
-file of every supported harness (`~/.claude/settings.json` for Claude Code,
-`$CODEX_HOME/hooks.json` for codex; opencode gets a
-[plugin](#opencode-agents) that does the same), once per machine, so every
-project on it is covered whichever harness it configures — `$CODEX_HOME` is created if
-codex has never been run, and codex's one-time trust prompt then fires in
-whichever codex session comes first. After every turn it blocks until the
-agent has unread messages (calling `pm msg wait` internally), then returns a
-`block` decision that the harness delivers as a continuation prompt. The
-agent reads the message, processes it, the turn ends, and the hook fires
-again. This turns every pm-managed agent into a never-idle processor:
-`--context` at feature creation just queues the first message, delivered
-exactly like any later peer message.
-
-A second hook, on UserPromptSubmit, sets a blocked feature back to `wip`
-when you type into one of its agents; pm's messages arrive as continuations,
-which never fire it. Codex asks you to trust each new hook once: after
-upgrading, accept the trust prompt again (`pm doctor` reports a hook codex
-has not trusted). Until then the reset does not happen on codex, but agents
-run normally.
-
-The hooks apply to every session of that harness on the machine, so each
-command is guarded on `PM_AGENT_NAME`: a session pm didn't spawn exits it
-immediately, without needing `pm` on its `PATH`.
-
-Exception: if a Claude Code background task or session cron is still running
-and no messages are queued, the hook lets the turn end so the work isn't
-stalled. Codex has no such second wake source, so its agents block every
-turn; so do opencode's, where the plugin only starts waiting once the turn
-is over.
-
-Reinstall with `pm harness hooks install` (idempotent, works outside a
-project); `pm doctor --fix` restores a missing one. Earlier releases wrote
-the hooks per project; `pm upgrade` moves them out of the project files, and
-`pm doctor` flags any left behind.
-
-### Messaging
-
-Agents communicate through a file-based queue, one inbox per agent scoped to
-the feature. Each inbox holds an ordered queue per sender with a cursor
-tracking the last message processed; `pm msg read` returns the next unread and
-advances the cursor.
-
-```sh
-pm msg send reviewer "ready for review"
-pm msg send reviewer <<'EOF'              # multi-line / markdown body via heredoc
-## Review findings
-Details here.
-EOF
-pm msg send impl@main "note"              # cross-scope: agent in another scope
-pm msg read                               # next unread from the oldest sender
-pm msg reply "short reply"                # reply to the last-read cross-scope message
-pm msg wait                               # block until a new message arrives
-pm msg list                               # enumerate inbox with cursor markers
-```
-
-Conventions worth knowing (the rest is in `pm msg --help`):
-
-- **Use a quoted-delimiter heredoc** (`<<'EOF' … EOF`) for any body with
-  markdown, backticks, `$`, or apostrophes — it's passed verbatim. Reserve the
-  positional `"…"` form for trivial one-liners.
-- **`read` reads *and* advances.** `--index <n>` (requires `--from`) re-reads a
-  past message without moving the cursor; history stays on disk forever.
-- **One sender per read.** Without `--from`, the sender whose earliest unread
-  message is oldest is picked; when others are also waiting the output ends
-  with `N more senders pending: b, c — pm msg read --from b`. `--from`
-  overrides the pick.
-
-Identity resolves as `PM_AGENT_NAME` (set by `pm agent spawn`) > `$USER` >
-`"user"`, so spawned agents need no `--as-agent`.
-
-### Information store
-
-Each project has an information store at `.pm/docs/` for project-level
-persistent knowledge — todos, issues, ideas, findings (the default categories,
-defined in `categories.toml`; add your own). The `main` orchestrator manages it
-directly, keeping it lean: completed items are **deleted** (git history is the
-record), with durable learnings migrated into `findings.md` first.
-
-This is distinct from messaging: the store is a database for durable knowledge,
-the queue is for cross-agent/cross-scope communication. Don't conflate them.
-
-A feature's summary is the hand-off its workflow's summary owner writes for
-the orchestrator (`pm workflow show` says what belongs in it), kept at
-`.pm/summaries/<feature>.md` (`pm feat summary path`), never on the branch;
-agents edit it like any other file (Claude Code agents are spawned with
-`--add-dir` on that directory). `pm feat status ready` requires it and
-messages `main` to review it for gaps while the team can still answer.
-Triage waits for the end: merging or deleting a feature always tells `main`
-which of the two happened (a deleted feature's changes never landed), with or
-without a summary, and keeps the summary until `main` has triaged and
-deleted it. Until then, `pm feat new` and `pm feat adopt` refuse that
-feature name. A worktree `summary.md` from an
-older feature is still collected on cleanup; to mark such a feature ready,
-move it to that path first.
-
-### Asset tiers
-
-Bundled assets — skills, agent definitions, workflows, and the shared
-baseline — install **once per machine** and are refreshed by `pm upgrade` /
-`pm self-update`:
-
-| Tier | Skills / agents / baseline | Workflows |
-|------|----------------------------|-----------|
-| Global (pm's, plus your machine-wide customs) | `~/.agents/{skills,agents}`, `~/.agents/pm-baseline.md` | `<pm config dir>/workflows/` |
-| Project (your customs only) | `main/.agents/{skills,agents}` | `<project>/.pm/workflows/` |
-
-Everything resolves **project tier first, then global**, by name: a project
-file with a bundled name overrides it for that project. Bundled names are
-pm's in the global tier — `pm upgrade` rewrites them there — so keep global
-customs under names of your own. To customise, copy the bundled file and
-edit:
-
-```sh
-cp ~/.agents/agents/reviewer.md <project>/main/.agents/agents/reviewer.md
-pm upgrade                                     # projects it for the harness
-pm harness pull <feature>                      # existing features don't get it otherwise
-```
-
-For workflows, copy `<pm config dir>/workflows/<name>/` into
-`<project>/.pm/workflows/<name>/`. The pm config dir is `~/.config/pm/` on
-Linux and `~/Library/Application Support/pm/` on macOS.
-
-**Skills are the exception.** Claude Code ranks *personal* skills above
-project ones, the inverse of its agent-definition precedence, and pm
-projects every bundled skill into `~/.claude/skills/` — so a project copy
-under a bundled skill's name never applies. Customise a bundled skill
-globally (edit `~/.agents/skills/<name>/`, accepting that `pm upgrade`
-rewrites it) or copy it to a name of your own. `pm doctor` flags a project
-skill shadowed this way.
-
-Project-specific procedures for agents — how to run, test, or review
-*here* — go in a project skill of your own, `main/.agents/skills/<name>/`,
-which `pm upgrade` projects for the harness. Only a skill's description is
-in view when the agent decides whether to load it, so put the trigger and
-any rule agents must always see there. pm's own
-`.agents/skills/pm-sandbox/` is an example.
-
-**Features get main's customs when they are created, and not again.**
-`pm feat new`/`adopt`/`review` copy main's custom skills, agent definitions
-and `.claude/settings.json` into the new worktree; `pm upgrade` never
-modifies a feature worktree. A custom added to or changed in main afterwards
-does not reach an existing feature until someone pulls it:
-
-```sh
-pm harness pull [feature]             # feature detected from CWD if omitted
-pm harness pull [feature] --dry-run   # list what would be written
-```
-
-Both the creation-time copy and the pull take main's working copy, and
-neither writes over a file the feature's branch tracks, so an edit committed
-on a feature branch survives. A feature's skills are its own: the feature's
-`.agents/skills/` is projected for its harnesses, so an agent there sees a
-skill edited on the branch once the feature is seeded or pulled — run
-`pm harness pull` after editing one mid-feature. Agent definitions stay
-main's until merged, because pm resolves them from main.
-
-Upgrading an existing project removes the per-project copies of bundled
-assets that earlier releases installed — your own files are never touched.
-The copies under `.pm/workflows/` are recoverable from `.pm/` git history
-(commit the deletion with `pm state push`); the rest lived in generated,
-gitignored directories.
-
-### Shared agent baseline
-
-Cross-cutting operating rules common to every agent — prose (brevity, no
-mannered flourish), the comment/docs and test doctrine, the environment/CWD
-conventions, the messaging heredoc form, the `pm workflow show` reminder,
-surfacing out-of-scope problems, what "the user" means — live in a single
-bundled `pm-baseline.md` rather than being repeated per agent.
-`pm init`/`pm upgrade` install it to `~/.agents/pm-baseline.md`, and every
-agent pm spawns (including `main`) has it appended to its system prompt
-(`--append-system-prompt-file` on Claude Code; SessionStart hook context on
-codex; the plugin's context hook on opencode).
-
-### Notice board
-
-Standing directives you want every spawned agent to obey, composed onto the
-baseline at spawn time. Two hand-edited markdown files, no command — write or
-remove notices by editing them directly:
-
-- `notices.md` in the pm config dir — global, applies in every project
-- `.pm/notices.md` — per-project
-
-Keep them terse: every line is seeded into every agent on every spawn. Absent
-or empty files seed nothing. Both live in the git-backed state repos, so they
-sync via `pm state push` (`--global` for the global one). Example global
-notice:
-
-```markdown
-Hit a pm bug or quirk? Message pm's main agent briefly —
-`pm msg send main --project pm '<what broke>'`. Don't try to fix pm from here.
-```
-
-### State backup, sync, and restore
-
-`.pm/` holds all project state (features, agents, messages, config, summaries,
-docs) and the pm config dir holds project entries, cross-project config, and
-the global workflow tier. Both can be git-backed:
-
-```sh
-pm state init --remote <url>     # init .pm/ repo, set remote, pull
-pm state push                    # auto-commit and push
-pm state init --global --remote <url>   # same for the global registry
-pm state backfill                # record repo_url / state_remote for existing projects
-```
-
-This enables full machine migration — back both up to git, then on a fresh
-machine:
-
-```sh
-pm state init --global --remote <global-registry-url>
-pm restore                       # clone repos, pull state, recreate worktrees + sessions
-```
-
-Agent conversations live in each harness's own store, not in `.pm/`. Carry
-them with `pm harness export [--all]` on the old machine and `pm harness
-import <tarball>` on the new one, after `pm restore`: an export holds the
-sessions of main and every feature worktree, and an import skips a feature
-that has no worktree here yet.
-
-The global registry repo syncs your global custom workflows but never the
-bundled ones: its `.gitignore` carries a block pm regenerates from the
-bundle, so `pm upgrade` rewriting them never dirties the repo. If an earlier
-release committed them, `pm upgrade` untracks them and stages the deletion —
-commit it with `pm state push --global`. A machine that pulls that commit
-loses the bundled dirs from disk (and hits a conflict if its own copies
-differ) until it runs `pm upgrade`, which reinstalls them.
-
-See `pm state --help` and `pm restore --help`.
-
-## Other commands
-
-These round out the tool; each has its full flag reference under `--help`:
-
-- `pm open` / `pm close` — recreate or tear down a project's tmux sessions
-  without touching state (e.g. after a reboot). `pm open` also runs `pm
-  doctor`'s checks and warns about unfixable drift.
-- `pm status` / `pm doctor` — project dashboard (the attention view, then
-  doctor's issues short of PR drift, so it never calls GitHub); audit and
-  auto-fix drift between pm state and git/tmux/GitHub reality.
-- `pm harness` — the agent harness: `hooks`, bundled `skills`/`agents`
-  (installed to `~/.agents/`, projected per harness), per-feature `settings`
-  for a harness that has such files (Claude Code's `settings.json` only —
-  Claude Code keeps `settings.local.json` at the main checkout for every
-  worktree, so pm neither seeds nor syncs it), `pull` of main's customs into
-  a feature, re-projecting its own skills (see Asset tiers), and
-  `migrate|export|import` of session data across worktrees and machines
-  (`--harness`, default `claude-code`); `list` the supported harnesses and
-  `probe` the installed binary. `pm claude …` remains as a hidden alias for
-  one release.
-- `pm tmux refresh` — publish the attention snapshot as tmux options (see
-  tmux options).
-- `pm tmux init` — install the tmux plugin on the running server (see
-  Install); `pm tmux jump` — the Enter action of pm's tree.
-- `pm upgrade` / `pm self-update` — update bundled assets and the binary.
-- `pm completions <shell>` — generate shell completion scripts.
-- `pm list` — list registered projects.
-- `pm delete` — full project teardown (sessions, `.pm/`, registry entry).
-  Worktrees stay on disk as plain git checkouts; `--force` skips the safety
-  checks and removes them, `main` included — that is the local repository, so
-  history with no remote goes with it (warned about, never refused).
-  Destructive — distinct from `pm close`, which only tears down sessions.
+- **Permissions.** pm runs opencode with `--auto`, which approves whatever no
+  rule denies; an `[agents.permissions]` row is opencode's rule list as a
+  JSON array. `[harness.opencode] auto = false` makes it ask instead.
+- **Always `--standalone`.** Without it, opencode commands share one server
+  whose plugins act as whichever agent started it. If you run `opencode`
+  yourself in an agent's window, pass `--standalone` too.
+- An `enabled_providers` in your own `~/.config/opencode/opencode.json`
+  overrides pm's provider restriction; `pm doctor` reports it.
 
 ## Development
 
-```sh
-cargo build
-cargo test
-cargo clippy --all-targets
-cargo fmt
-```
-
-Tests spawn real tmux sessions on a private server; `AGENTS.md` (Development)
-has the pty budget and how to clean up leaked test servers.
+`AGENTS.md` (Development) has the build, test, and lint commands. Tests
+spawn real tmux sessions on a private server; the same section has the pty
+budget and how to clean up leaked test servers.
 
 Setting `PM_TMUX_SERVER=<name>` makes every `pm` command target that tmux
 server (`tmux -L <name>`) instead of the default one; `pm open` run from a
 pane of another server attaches a nested client rather than switching that
-server's. `scripts/sandbox` uses
-it to give you a throwaway pm environment for trying changes by hand (see
-`AGENTS.md`).
+server's. `scripts/sandbox` uses it to give you a throwaway pm environment
+for trying changes by hand (see `AGENTS.md`).
 
 See `AGENTS.md` for architecture and development guidelines.

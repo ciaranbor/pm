@@ -1,6 +1,6 @@
 //! `pm tmux init`: pm's tmux plugin, run from the user's config as
 //! `run-shell 'pm tmux init'` so it always matches the installed binary
-//! (README, "tmux plugin", has the user-facing options).
+//! (README, "tmux integration", has the user-facing options).
 //!
 //! The user's config is theirs: init sets only the `@pm_*` options pm owns,
 //! adds to a format rather than replacing it, and changes a key the user
