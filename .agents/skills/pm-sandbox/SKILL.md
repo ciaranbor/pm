@@ -19,6 +19,11 @@ description: Exercise a pm build by hand or end to end without touching the real
 - `up` builds the working tree, and inside the sandbox `pm` is that build.
   Outside it, `pm` is the installed release and `cargo run --` the local
   build; both act on the real environment, so neither belongs in a QA run.
+- Never select processes by pattern (`pgrep -f`, `pkill`, `killall`): a
+  pattern matches the real agents' processes on the whole machine, their
+  hooks included. Target pids under the sandbox, found through its tmux
+  server (`list-panes -a -F '#{pane_pid}'` and their descendants), or let
+  `down` stop them.
 - `status` prints the harness invocations the shims recorded. Use
   `up --real` only when the behaviour under test needs a real harness.
 - `PM_TMUX_SERVER` is what points pm at the private server, named

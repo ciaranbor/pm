@@ -247,6 +247,17 @@ impl Harness {
         }
     }
 
+    /// Whether the input line on this harness's `screen`, captured with its
+    /// escape sequences, is empty and takes typed keys as text; `None` when
+    /// it can't tell. `home` holds the harness's config. Codex and opencode
+    /// don't parse their screens, so they can't.
+    pub fn input_is_empty(self, screen: &str, home: &Path) -> Option<bool> {
+        match self {
+            Harness::ClaudeCode => claude_code::input::is_empty(screen, home),
+            Harness::Codex | Harness::OpenCode => None,
+        }
+    }
+
     /// Why this agent's never-idle loop stopped itself, if it did. Only a
     /// harness whose loop pm emulates can report one.
     pub fn loop_stopped(self, project_root: &Path, scope: &str, agent: &str) -> Option<String> {

@@ -1,0 +1,194 @@
+//! Re-arms an agent no message can wake (unarmed, at its prompt) by typing
+//! the prompt the Stop hook would have returned, so it reads its messages
+//! and its next turn ends in the hook again.
+//!
+//! Keystrokes reach whatever the window shows, so every condition guards
+//! against typing into something other than an empty prompt: the marker
+//! must say unarmed (never asking — the keys would answer the dialog — nor
+//! a loop that stopped itself on purpose), the window must run its harness
+//! and not the hook, and the harness must read its input line as empty. A
+//! draft is never cleared; when any check fails the message just stays
+//! queued and the agent stays visibly unarmed. Removing the marker is the
+//! claim to type, so of two concurrent senders only one does; the prompt's
+//! UserPromptSubmit would clear it anyway.
+
+use std::path::Path;
+
+use crate::error::Result;
+use crate::state::agent::AgentRegistry;
+use crate::state::paths;
+use crate::state::project::{GlobalConfig, ProjectConfig, resolve_harness_config};
+use crate::state::runtime::{self, Waiting, WaitingClass, WaitingKind};
+use crate::tmux;
+
+use super::hooks_stop;
+use super::running_agents::{Liveness, Windows, liveness};
+
+/// Re-arm `agent` if it is unarmed at an empty prompt. Returns the marker
+/// it was re-armed from, or `None` when it was left alone.
+pub fn rearm(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    tmux_server: Option<&str>,
+) -> Result<Option<Waiting>> {
+    let Some(waiting) = runtime::read_waiting(project_root, scope, agent)
+        .filter(|w| w.kind.class() == WaitingClass::Unarmed && w.kind != WaitingKind::Tripped)
+    else {
+        return Ok(None);
+    };
+    let registry = AgentRegistry::load(&paths::agents_dir(project_root), scope)?;
+    let Some(entry) = registry.get(agent).filter(|e| e.active) else {
+        return Ok(None);
+    };
+    let harness = entry.harness;
+    if harness.loop_stopped(project_root, scope, agent).is_some() {
+        return Ok(None);
+    }
+    let project = ProjectConfig::load(&paths::pm_dir(project_root))?;
+    let config = resolve_harness_config(&project.harness, &GlobalConfig::load_or_default().harness);
+    let session = tmux::session_name(&project.project.name, scope);
+    let windows = Windows::read(tmux_server)?;
+    let Some(pane) = windows.find(&session, &entry.window_name) else {
+        return Ok(None);
+    };
+    if liveness(windows.processes(pane).as_deref(), harness, &config) != Liveness::Busy {
+        return Ok(None);
+    }
+    let screen = tmux::capture_screen(tmux_server, &pane.window)?;
+    if harness.input_is_empty(&screen, &paths::home_dir()?) != Some(true) {
+        return Ok(None);
+    }
+    let prompt = hooks_stop::continuation(project_root, scope, agent)?;
+    if !runtime::clear_waiting(project_root, scope, agent)? {
+        return Ok(None);
+    }
+    if let Err(e) = tmux::send_text(tmux_server, &pane.window, &prompt) {
+        let _ = runtime::write_waiting(project_root, scope, agent, &waiting);
+        return Err(e);
+    }
+    Ok(Some(waiting))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::agent_send::agent_send;
+    use crate::testing::TestServer;
+    use tempfile::tempdir;
+
+    const PROMPT: &str = "You have new messages from reviewer. Run `pm msg read` to read them.";
+
+    /// A feature whose `implementer` sits at an empty Claude Code prompt
+    /// with `marker` as its waiting marker.
+    fn at_prompt(
+        server: &TestServer,
+        dir: &Path,
+        marker: WaitingKind,
+    ) -> (std::path::PathBuf, String) {
+        let (project, project_name) = server.setup_project_with_feature(dir, "login");
+        let session = tmux::session_name(&project_name, "login");
+        let target = server.spawn_prompting_fake_agent(&project, &session, "login", "implementer");
+        server.wait_for_pane_text(&target, "❯");
+        let waiting = Waiting::now(marker, None);
+        runtime::write_waiting(&project, "login", "implementer", &waiting).unwrap();
+        (project, target)
+    }
+
+    fn send(server: &TestServer, project: &Path) -> String {
+        agent_send(
+            project,
+            "login",
+            None,
+            "implementer",
+            "reviewer",
+            "hi",
+            server.name(),
+        )
+        .unwrap()
+    }
+
+    fn screen(server: &TestServer, target: &str) -> String {
+        tmux::capture_pane(server.name(), target).unwrap()
+    }
+
+    #[test]
+    fn an_unarmed_agent_at_an_empty_prompt_is_typed_its_messages_prompt() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (project, target) = at_prompt(&server, dir.path(), WaitingKind::HookEnded);
+
+        let status = send(&server, &project);
+
+        assert!(
+            status.ends_with("\nRe-armed 'implementer' (Stop hook ended)"),
+            "{status}"
+        );
+        assert_eq!(
+            runtime::read_waiting(&project, "login", "implementer"),
+            None
+        );
+        server.wait_for_pane_text(&target, &format!("❯ {PROMPT}"));
+    }
+
+    #[test]
+    fn an_agent_asking_the_user_is_left_alone() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (project, target) = at_prompt(&server, dir.path(), WaitingKind::Permission);
+
+        let status = send(&server, &project);
+
+        assert_eq!(
+            status,
+            "Message 001 sent to 'implementer' (from 'reviewer')"
+        );
+        assert!(!screen(&server, &target).contains("You have new messages"));
+    }
+
+    #[test]
+    fn a_loop_that_stopped_itself_is_left_alone() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (project, target) = at_prompt(&server, dir.path(), WaitingKind::Tripped);
+
+        let status = send(&server, &project);
+
+        assert_eq!(
+            status,
+            "Message 001 sent to 'implementer' (from 'reviewer')"
+        );
+        assert!(!screen(&server, &target).contains("You have new messages"));
+    }
+
+    #[test]
+    fn a_draft_in_the_input_line_is_left_untouched() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (project, target) = at_prompt(&server, dir.path(), WaitingKind::Prompt);
+        let mut tmux = std::process::Command::new("tmux");
+        if let Some(name) = server.name() {
+            tmux.args(["-L", name]);
+        }
+        let typed = tmux
+            .args(["send-keys", "-t", &target, "-l", "half a thought"])
+            .status()
+            .unwrap();
+        assert!(typed.success());
+        server.wait_for_pane_text(&target, "❯ half a thought");
+
+        let status = send(&server, &project);
+
+        assert_eq!(
+            status,
+            "Message 001 sent to 'implementer' (from 'reviewer')"
+        );
+        let screen = screen(&server, &target);
+        assert!(screen.contains("❯ half a thought"), "{screen}");
+        assert!(!screen.contains("You have new messages"), "{screen}");
+        assert_eq!(
+            runtime::read_waiting(&project, "login", "implementer").map(|w| w.kind),
+            Some(WaitingKind::Prompt)
+        );
+    }
+}

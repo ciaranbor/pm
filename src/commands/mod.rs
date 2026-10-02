@@ -2,6 +2,7 @@ pub mod agent_delete;
 pub mod agent_fork;
 pub mod agent_list;
 pub mod agent_read;
+pub mod agent_rearm;
 pub mod agent_restart;
 pub mod agent_send;
 pub mod agent_spawn;

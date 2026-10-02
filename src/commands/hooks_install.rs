@@ -21,13 +21,14 @@
 //! so each installed command is guarded on `PM_AGENT_NAME`: a non-pm session
 //! exits 0 before `pm` is ever resolved, which also keeps the hook inert
 //! when `pm` is not on that session's `PATH`. The guard is `[ -n … ] || exit
-//! 0; pm …`, not `&&` — `&&` would turn a false test into an exit-1 hook
-//! error. The guard reads the environment the hook runs in, so it
-//! identifies a session only when that is the session's own. Codex
-//! additionally runs no hook until the user has trusted it
-//! interactively (`pm doctor` reports a missing trust entry), and pm appends
-//! its entries so existing ones keep their positions — codex keys trust on
-//! the entry's index.
+//! 0; exec pm …`, not `&&` — `&&` would turn a false test into an exit-1
+//! hook error. `exec` so the harness's child is pm itself, which can tell a
+//! signal's sender; macOS `/bin/sh` does not exec a final `-c` command. The
+//! guard reads the environment the hook runs in, so it identifies a session
+//! only when that is the session's own. Codex additionally runs no hook
+//! until the user has trusted it interactively (`pm doctor` reports a
+//! missing trust entry), and pm appends its entries so existing ones keep
+//! their positions — codex keys trust on the entry's index.
 //!
 //! The Stop hook is `pm harness hooks stop`, which blocks until the agent has
 //! unread messages (by calling `agent_wait` internally), then returns
@@ -135,10 +136,10 @@ pub fn waiting_events(
         .map(|event| (*event, WAITING_MARKERS))
 }
 
-/// Shell prefix that makes a hook exit 0 outside pm agent sessions. `||`
-/// rather than `&&`: a false test must not produce a non-zero exit, which
-/// Claude Code would surface as a hook error.
-const GUARD: &str = "[ -n \"$PM_AGENT_NAME\" ] || exit 0; ";
+/// Shell prefix that makes a hook exit 0 outside pm agent sessions and
+/// otherwise replaces the shell with the `pm` command that follows (see the
+/// module doc).
+const GUARD: &str = "[ -n \"$PM_AGENT_NAME\" ] || exit 0; exec ";
 
 /// The shell command registered as the Stop hook. It blocks until unread
 /// messages are available, printing the JSON decision to stdout.
@@ -861,7 +862,11 @@ mod tests {
 
     #[test]
     fn install_rewrites_older_user_level_spellings_in_place() {
-        for old in ["pm claude hooks stop", "pm harness hooks stop"] {
+        for old in [
+            "pm claude hooks stop",
+            "pm harness hooks stop",
+            "[ -n \"$PM_AGENT_NAME\" ] || exit 0; pm harness hooks stop",
+        ] {
             let (_dir, home, _root) = setup();
             write_json(
                 &user_file(&home),
@@ -1140,12 +1145,13 @@ mod tests {
 
     #[test]
     fn installed_commands_reach_pm_inside_pm_sessions() {
-        // With PM_AGENT_NAME set the guard falls through to `pm`, resolved
-        // from PATH — here a stub that echoes its arguments.
+        // With PM_AGENT_NAME set the guard execs `pm`, resolved from PATH —
+        // here a stub that echoes its parent and arguments. Its parent is
+        // this test process, so no shell sits between the harness and pm.
         use std::os::unix::fs::PermissionsExt;
         let dir = tempdir().unwrap();
         let stub = dir.path().join("pm");
-        fs::write(&stub, "#!/bin/sh\necho \"stub $*\"\n").unwrap();
+        fs::write(&stub, "#!/bin/sh\necho \"stub $PPID $*\"\n").unwrap();
         fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
 
         for (command, args) in [
@@ -1167,7 +1173,7 @@ mod tests {
             assert!(out.status.success(), "{command}: {out:?}");
             assert_eq!(
                 String::from_utf8_lossy(&out.stdout),
-                format!("stub {args}\n")
+                format!("stub {} {args}\n", std::process::id())
             );
         }
     }

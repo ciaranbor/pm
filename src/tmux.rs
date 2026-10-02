@@ -198,6 +198,19 @@ pub fn send_keys(server: Option<&str>, target: &str, keys: &str) -> Result<()> {
     Ok(())
 }
 
+/// Type `text` into `target` as literal keys, then press Enter.
+pub fn send_text(server: Option<&str>, target: &str, text: &str) -> Result<()> {
+    run_tmux(server, &["send-keys", "-t", target, "-l", text])?;
+    run_tmux(server, &["send-keys", "-t", target, "Enter"])?;
+    Ok(())
+}
+
+/// The visible screen of `target`'s pane, with the escape sequences that
+/// style it.
+pub fn capture_screen(server: Option<&str>, target: &str) -> Result<String> {
+    run_tmux(server, &["capture-pane", "-p", "-e", "-t", target])
+}
+
 /// Find a window by name in a session. Returns the window target (e.g. "session:1") if found.
 pub fn find_window(server: Option<&str>, session: &str, name: &str) -> Result<Option<String>> {
     let output = run_tmux(

@@ -50,7 +50,7 @@ Design decisions you can't recover by reading the tree. Preserve them.
   sender's (README has the selection rule).
 - The hook yields (`{}`) only for a reported running background task or
   active cron with nothing queued; its completion wakes the agent.
-- The hook ends undecided only if its harness died or killed it, never on pm state.
+- Only the harness or a terminal ends the hook undecided — never pm state.
 - A waiting marker only refines busy; a running Stop hook or dead harness wins.
 - Hooks are installed once per machine for **every supported harness**;
   `pm doctor` checks only those the project's agents run on, deliberately.
@@ -63,7 +63,8 @@ Design decisions you can't recover by reading the tree. Preserve them.
   the whole team (refused up front if a member's harness can't run it) and
   brief only `brief_agents` (none is an error); `agent spawn --context`
   enqueues, then spawns or no-ops — ungated, being also the heal path;
-  `msg send` never spawns, errors on an inactive recipient, heals a dead window.
+  `msg send` never spawns, errors on an inactive recipient, heals a dead
+  window, re-arms an unarmed one only at an empty prompt.
 
 ### Workflows vs agents
 
@@ -104,8 +105,7 @@ Design decisions you can't recover by reading the tree. Preserve them.
 
 - The information store (`.pm/docs/`) is project-level persistent knowledge,
   managed by the orchestrator. Completed items are deleted, not marked done
-  (git history is the record); a durable finding is migrated to
-  `findings.md` first.
+  (git history is the record); a durable finding moves to `findings.md` first.
 - Messaging (`pm msg`) is cross-scope or cross-role communication: a queue,
   not a database. Don't use messaging as storage or the store as a mailbox.
 

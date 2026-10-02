@@ -14,13 +14,14 @@
 //! gone, since a hook blocked in its wait outlives a harness that dies
 //! without killing it: codex never kills it, and Claude Code kills the
 //! hook's process group on a clean exit but not when it is SIGKILLed.
-//! Two signals, either sufficient: our parent pid changes (codex runs the
-//! hook as its direct child, so its death reparents us), or the peer of our
-//! stdout closes (Claude Code runs it under an intermediate `/bin/sh`, which
-//! is orphaned instead, so the parent never changes; codex and the opencode
-//! plugin read stdout through a pipe, Claude Code through a socketpair, and
-//! `poll` reports a closed peer of either as `POLLHUP`/`POLLERR`). Neither
-//! fires while the harness is alive, so a live agent's hook keeps blocking.
+//! Two signals, either sufficient: our parent pid changes (the installed
+//! command execs pm, so the harness is our parent and its death reparents
+//! us), or the peer of our stdout closes (an install that predates the
+//! `exec` leaves an intermediate `/bin/sh` as our parent, which is orphaned
+//! instead, so the parent never changes; codex and the opencode plugin read
+//! stdout through a pipe, Claude Code through a socketpair, and `poll`
+//! reports a closed peer of either as `POLLHUP`/`POLLERR`). Neither fires
+//! while the harness is alive, so a live agent's hook keeps blocking.
 //!
 //! The hook keeps the agent's waiting marker ([`runtime`]): it clears it as a
 //! turn ends, writes `background` when it yields, and `hook-ended` whenever
@@ -28,11 +29,15 @@
 //! where no message wakes it. Claude Code ends the hook with SIGTERM (on
 //! its timeout, or Esc while it waits) and kills it outright soon after, so
 //! the wait sleeps on a pipe the signal handler writes to and records the
-//! marker at once. Codex kills it with an uncatchable signal and reports
+//! marker at once. A SIGTERM from any process but the harness (our parent)
+//! — a `pkill` matching hook command lines machine-wide — is ignored, so it
+//! cannot leave the agent unarmed (`Caller::sent` has why only SIGTERM).
+//! Codex kills the hook with an uncatchable signal and reports
 //! the interrupt through its own hook instead.
 
+mod signals;
+
 use std::io::Read;
-use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Duration;
 
 use serde_json::json;
@@ -43,15 +48,38 @@ use crate::messages;
 use crate::state::paths;
 use crate::state::runtime::{self, Waiting, WaitingKind};
 
+use signals::{Caught, Signals};
+
+const REASON_START: &str = "You have new messages";
+const REASON_END: &str = ". Run `pm msg read` to read them.";
+
 /// Reason text returned after messages arrive; `senders` is oldest first.
 fn reason(senders: &[String]) -> String {
     if senders.is_empty() {
-        return "You have new messages. Run `pm msg read` to read them.".to_string();
+        return format!("{REASON_START}{REASON_END}");
     }
-    format!(
-        "You have new messages from {}. Run `pm msg read` to read them.",
-        senders.join(", ")
-    )
+    format!("{REASON_START} from {}{REASON_END}", senders.join(", "))
+}
+
+/// The prompt that tells `agent` to read its unread messages: the reason
+/// the hook returns, so pm sends one text however it reaches the agent.
+pub(crate) fn continuation(
+    project_root: &std::path::Path,
+    scope: &str,
+    agent: &str,
+) -> crate::error::Result<String> {
+    Ok(reason(&unread_senders(project_root, scope, agent)?))
+}
+
+/// Whether `prompt` is one pm generated with [`continuation`].
+pub(crate) fn is_continuation(prompt: &str) -> bool {
+    let prompt = prompt.trim();
+    prompt == reason(&[])
+        || prompt
+            .strip_prefix(REASON_START)
+            .and_then(|rest| rest.strip_suffix(REASON_END))
+            .and_then(|rest| rest.strip_prefix(" from "))
+            .is_some_and(|senders| !senders.is_empty() && !senders.contains('\n'))
 }
 
 /// Run the Stop hook. Prints the decision JSON and returns the exit code.
@@ -59,6 +87,10 @@ fn reason(senders: &[String]) -> String {
 /// `on_turn` is told the agent's state and unread count as it enters its
 /// wait (idle), as it returns `block` (busy), as it yields (background) and
 /// as it ends without a decision (unarmed); it must not block.
+///
+/// Ending without a decision while the harness is still there — it sent
+/// the signal, or the wait failed — exits 1 with the reason on stderr (see
+/// the `claude_code` harness module for why 1).
 pub fn stop(on_turn: &mut dyn FnMut(AgentState, u32)) -> i32 {
     let caller = Caller::current();
     // Resolve identity before reading stdin: a non-pm session bails here.
@@ -72,6 +104,7 @@ pub fn stop(on_turn: &mut dyn FnMut(AgentState, u32)) -> i32 {
         return 0;
     };
     let signals = Signals::install();
+    let mut signalled = None;
     let decided = wait_and_decide(
         busy,
         &project_root,
@@ -82,8 +115,10 @@ pub fn stop(on_turn: &mut dyn FnMut(AgentState, u32)) -> i32 {
         |interval| {
             match &signals {
                 Some(signals) => {
-                    if let Some(signal) = signals.pause(interval) {
-                        return Some(format!("ended by {signal}"));
+                    let caught = signals.pause(interval);
+                    if let Some(caught) = caught.iter().find(|c| caller.sent(c)) {
+                        signalled = Some(format!("ended by {caught}"));
+                        return signalled.clone();
                     }
                 }
                 None => std::thread::sleep(interval),
@@ -91,21 +126,22 @@ pub fn stop(on_turn: &mut dyn FnMut(AgentState, u32)) -> i32 {
             (!caller.alive()).then(|| "ended: its harness stopped waiting".to_string())
         },
     );
-    match decided {
-        Ok(Some(json)) => print!("{json}"),
-        Ok(None) => {}
-        Err(e) => {
-            hook_ended(
-                &project_root,
-                &scope,
-                &agent,
-                format!("failed: {e}"),
-                on_turn,
-            );
-            print!("{}", allow_decision());
+    let why = match decided {
+        Ok(Some(json)) => {
+            print!("{json}");
+            return 0;
         }
-    }
-    0
+        // The harness is gone, so there is no one to tell.
+        Ok(None) if signalled.is_none() => return 0,
+        Ok(None) => signalled.unwrap_or_default(),
+        Err(e) => {
+            let why = format!("failed: {e}");
+            hook_ended(&project_root, &scope, &agent, why.clone(), on_turn);
+            why
+        }
+    };
+    eprintln!("pm: Stop hook {why}; no message will wake this agent until its next turn");
+    1
 }
 
 fn scope() -> crate::error::Result<(std::path::PathBuf, String)> {
@@ -131,95 +167,6 @@ fn hook_ended(
     }
 }
 
-/// SIGTERM, SIGHUP and SIGINT, caught for the rest of the process so the
-/// wait can record why it ended before it exits. A handler may only do
-/// async-signal-safe work, so it writes a byte to a pipe the wait polls.
-struct Signals {
-    read: libc::c_int,
-    write: libc::c_int,
-}
-
-impl Drop for Signals {
-    fn drop(&mut self) {
-        Self::handle(libc::SIG_DFL);
-        SIGNAL_PIPE.store(-1, Ordering::SeqCst);
-        // SAFETY: closing the pipe this value opened.
-        unsafe {
-            libc::close(self.read);
-            libc::close(self.write);
-        }
-    }
-}
-
-static SIGNAL_PIPE: AtomicI32 = AtomicI32::new(-1);
-static CAUGHT: AtomicI32 = AtomicI32::new(0);
-
-extern "C" fn on_signal(signal: libc::c_int) {
-    CAUGHT.store(signal, Ordering::SeqCst);
-    let fd = SIGNAL_PIPE.load(Ordering::SeqCst);
-    if fd >= 0 {
-        // SAFETY: write(2) is async-signal-safe; one byte from a static.
-        unsafe { libc::write(fd, b"!".as_ptr().cast(), 1) };
-    }
-}
-
-impl Signals {
-    const CAUGHT: [libc::c_int; 3] = [libc::SIGTERM, libc::SIGHUP, libc::SIGINT];
-
-    /// `None` when the handlers can't be installed; the default actions
-    /// then stay.
-    fn install() -> Option<Self> {
-        let mut fds = [0; 2];
-        // SAFETY: fds has room for the two descriptors pipe() writes.
-        if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
-            return None;
-        }
-        let [read, write] = fds;
-        // SAFETY: setting flags on descriptors this process just opened.
-        unsafe {
-            libc::fcntl(write, libc::F_SETFL, libc::O_NONBLOCK);
-            libc::fcntl(read, libc::F_SETFD, libc::FD_CLOEXEC);
-            libc::fcntl(write, libc::F_SETFD, libc::FD_CLOEXEC);
-        }
-        CAUGHT.store(0, Ordering::SeqCst);
-        SIGNAL_PIPE.store(write, Ordering::SeqCst);
-        Self::handle(on_signal as *const () as libc::sighandler_t);
-        Some(Self { read, write })
-    }
-
-    fn handle(handler: libc::sighandler_t) {
-        for signal in Self::CAUGHT {
-            // SAFETY: a zeroed sigaction with either the default action or
-            // an `extern "C"` handler that only touches atomics and write(2).
-            unsafe {
-                let mut action: libc::sigaction = std::mem::zeroed();
-                action.sa_sigaction = handler;
-                libc::sigemptyset(&mut action.sa_mask);
-                libc::sigaction(signal, &action, std::ptr::null_mut());
-            }
-        }
-    }
-
-    /// Sleep up to `timeout`, or until a signal is caught. The signal's
-    /// name once one has been.
-    fn pause(&self, timeout: Duration) -> Option<&'static str> {
-        let mut pfd = libc::pollfd {
-            fd: self.read,
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        let ms = libc::c_int::try_from(timeout.as_millis()).unwrap_or(libc::c_int::MAX);
-        // SAFETY: one valid pollfd, count 1.
-        unsafe { libc::poll(&mut pfd, 1, ms) };
-        match CAUGHT.load(Ordering::SeqCst) {
-            0 => None,
-            libc::SIGTERM => Some("SIGTERM"),
-            libc::SIGHUP => Some("SIGHUP"),
-            _ => Some("SIGINT"),
-        }
-    }
-}
-
 /// The harness process that ran this hook, as it was when the hook started.
 struct Caller {
     parent: libc::pid_t,
@@ -231,6 +178,15 @@ impl Caller {
         Self {
             parent: unsafe { libc::getppid() },
         }
+    }
+
+    /// Whether `caught` should end the wait. A SIGTERM must come from the
+    /// harness: it is what `kill`, `pkill` and `killall` send by default, so
+    /// a stray one must not leave the agent unarmed. SIGINT and SIGHUP are
+    /// what a terminal sends, and macOS reports a terminal's signal as sent
+    /// by whichever process wrote to it, so they end the wait from anyone.
+    fn sent(&self, caught: &Caught) -> bool {
+        caught.signal != libc::SIGTERM || caught.sender == self.parent
     }
 
     /// See the module docs for why both checks are needed.
@@ -615,21 +571,6 @@ mod tests {
             runtime::read_waiting(&root, "login", "qa").map(|w| w.kind),
             Some(WaitingKind::Background)
         );
-    }
-
-    #[test]
-    fn a_caught_signal_ends_the_pause_at_once() {
-        let signals = Signals::install().unwrap();
-        assert_eq!(signals.pause(Duration::from_millis(1)), None);
-        let start = Instant::now();
-        let sender = std::thread::spawn(|| {
-            std::thread::sleep(Duration::from_millis(50));
-            // SAFETY: raising a signal this process now handles.
-            unsafe { libc::raise(libc::SIGHUP) };
-        });
-        assert_eq!(signals.pause(Duration::from_secs(30)), Some("SIGHUP"));
-        assert!(start.elapsed() < Duration::from_secs(5));
-        sender.join().unwrap();
     }
 
     #[test]

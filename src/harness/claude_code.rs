@@ -5,7 +5,13 @@
 //! prompt included, but not for a Stop hook's `block` continuation (verified
 //! on 2.1.286). Its stdout on exit 0 is added to the model's context, and
 //! exit 2 refuses the prompt.
+//!
+//! A hook's other non-zero exits show the user its stderr and change
+//! nothing, so the Stop hook reports a wait that ended undecided with exit
+//! 1; exit 2 would feed stderr back as a prompt, looping the agent on a
+//! persistent failure.
 
+pub(super) mod input;
 pub(super) mod sessions;
 pub(super) mod waiting;
 
