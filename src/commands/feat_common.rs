@@ -54,8 +54,7 @@ pub fn resolve_workflow_in<'a>(
             {
                 return Err(PmError::SafetyCheck(format!(
                     "default workflow '{DEFAULT_WORKFLOW}' is not installed. \
-                     Run `pm upgrade` (or `pm workflow install {DEFAULT_WORKFLOW}`), \
-                     or pass --workflow <name>."
+                     Run `pm upgrade`, or pass --workflow <name>."
                 )));
             }
             Ok(Some(DEFAULT_WORKFLOW))

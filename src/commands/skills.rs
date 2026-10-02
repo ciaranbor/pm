@@ -1006,23 +1006,6 @@ pub fn bundled_workflow_names() -> Vec<&'static str> {
     names
 }
 
-/// (Re)install bundled workflows into the global tier, overwriting any
-/// on-disk content — the way to revert a hand-edited global copy.
-pub fn workflows_install(name: Option<&str>) -> Result<Vec<String>> {
-    let store = GlobalStore::resolve()?;
-    let mut lines = install_messages(&store.workflows_dir(), BundledKind::Workflow, name)?;
-    lines.extend(state_gitignore::sync_global_registry_ignore(
-        &store.config_dir,
-        false,
-    )?);
-    Ok(lines)
-}
-
-pub fn workflows_uninstall(name: Option<&str>) -> Result<Vec<String>> {
-    let store = GlobalStore::resolve()?;
-    uninstall_in(&store.workflows_dir(), BundledKind::Workflow, name)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

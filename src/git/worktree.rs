@@ -73,20 +73,6 @@ pub fn find_worktree_for_branch(repo: &Path, branch: &str) -> Result<Option<Path
     Ok(None)
 }
 
-/// Move a git worktree to a new path.
-pub fn move_worktree(repo: &Path, old_path: &Path, new_path: &Path) -> Result<()> {
-    run_git(
-        repo,
-        &[
-            "worktree",
-            "move",
-            &old_path.to_string_lossy(),
-            &new_path.to_string_lossy(),
-        ],
-    )?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

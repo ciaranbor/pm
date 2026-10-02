@@ -614,16 +614,12 @@ impl TestServer {
         std::fs::create_dir_all(&features_dir).unwrap();
 
         // Write project config
-        use crate::state::project::{
-            AgentsConfig, GithubConfig, ProjectConfig, ProjectInfo, SetupConfig,
-        };
+        use crate::state::project::{AgentsConfig, ProjectConfig, ProjectInfo};
         let config = ProjectConfig {
             project: ProjectInfo {
                 name: name.clone(),
                 max_features: None,
             },
-            setup: SetupConfig::default(),
-            github: GithubConfig::default(),
             agents: AgentsConfig::default(),
             harness: Default::default(),
         };

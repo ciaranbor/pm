@@ -42,13 +42,13 @@ pub enum Commands {
     /// Feature management
     #[command(subcommand)]
     Feat(FeatCommands),
-    /// Agent management (spawn, list)
+    /// Agent management
     #[command(subcommand)]
     Agent(AgentCommands),
-    /// Inter-agent messaging (send, read, next, list, wait)
+    /// Inter-agent messaging
     #[command(subcommand)]
     Msg(MsgCommands),
-    /// Agent harness integration: hooks, bundled skills/agents, settings, sessions
+    /// Agent harness integration
     #[command(subcommand)]
     Harness(HarnessCommands),
     /// Hidden alias for `pm harness` kept for one release
@@ -87,7 +87,7 @@ pub enum Commands {
         #[arg(long)]
         project: Option<String>,
     },
-    /// Reinstall bundled assets (hooks, skills, agents) to projects
+    /// Reinstall pm's hooks and bundled assets
     Upgrade {
         /// Upgrade all registered projects instead of just the current one
         #[arg(long)]
@@ -192,26 +192,11 @@ pub enum WorkflowCommands {
     /// List installed workflows (project tier first, then global) with
     /// their descriptions
     List,
-    /// (Re)install a bundled workflow into the global tier (bundled
-    /// workflows are pm-owned and rewritten on upgrade; to customise one,
-    /// copy it into <project>/.pm/workflows/ or to a new name)
-    Install {
-        /// Workflow name (installs all bundled workflows if omitted)
-        name: Option<String>,
-    },
-    /// Uninstall a bundled workflow from the global tier
-    Uninstall {
-        /// Workflow name (required unless --all is passed)
-        name: Option<String>,
-        /// Uninstall all bundled workflows
-        #[arg(long)]
-        all: bool,
-    },
 }
 
 #[derive(Subcommand)]
 pub enum HarnessCommands {
-    /// Lifecycle hooks managed by pm (install, plus the handlers the harness calls)
+    /// Lifecycle hooks managed by pm
     #[command(subcommand)]
     Hooks(HarnessHooksCommands),
     /// Manage bundled skills (global `~/.agents/skills/`, projected per harness)
@@ -445,9 +430,7 @@ pub enum MsgCommands {
         /// Deliver to the parent scope (base branch's feature). Shorthand for --scope <base>.
         #[arg(long, conflicts_with = "scope")]
         upstream: bool,
-        /// Deliver to a different project (by registered name). Resolves the
-        /// target project's root from ~/.config/pm/projects/<name>.toml and
-        /// delivers there. Auto-spawn is disabled for cross-project messages.
+        /// Deliver to a different project (by registered name)
         #[arg(long, conflicts_with = "upstream")]
         project: Option<String>,
     },
@@ -554,11 +537,6 @@ pub enum FeatCommands {
         /// Feature name (detected from CWD if omitted)
         name: Option<String>,
     },
-    /// Switch to a feature's tmux session
-    Switch {
-        /// Feature name (omit for interactive picker)
-        name: Option<String>,
-    },
     /// Delete a feature (with safety checks)
     Delete {
         /// Feature name (detected from CWD if omitted)
@@ -575,7 +553,7 @@ pub enum FeatCommands {
         #[arg(long)]
         keep: bool,
     },
-    /// GitHub PR management (create, edit, ready)
+    /// GitHub PR management
     #[command(subcommand)]
     Pr(PrCommands),
     /// Set where the feature's work stands: wip, blocked (waiting on the
@@ -601,25 +579,6 @@ pub enum FeatCommands {
     /// The feature's summary for the orchestrator (kept in pm state, not the branch)
     #[command(subcommand)]
     Summary(SummaryCommands),
-    /// Rebase a feature onto a branch and record it as the feature's base
-    Rebase {
-        /// Feature name (detected from CWD if omitted)
-        name: Option<String>,
-        /// Branch to rebase onto (defaults to the feature's current base)
-        #[arg(long)]
-        onto: Option<String>,
-    },
-    /// Rename a feature (branch, worktree, tmux session, state, agent sessions)
-    Rename {
-        /// New feature name
-        new_name: String,
-        /// Current feature name (detected from CWD if omitted)
-        #[arg(long)]
-        old_name: Option<String>,
-        /// Interrupt agents that are mid-turn, and tell them to resume
-        #[arg(long)]
-        force: bool,
-    },
     /// Check out a PR for review (fetch branch + worktree + tmux session)
     Review {
         /// PR number or GitHub PR URL

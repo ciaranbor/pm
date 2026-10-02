@@ -6,9 +6,7 @@ use crate::error::{PmError, Result};
 use crate::git;
 use crate::hooks;
 use crate::state::paths;
-use crate::state::project::{
-    AgentsConfig, GithubConfig, ProjectConfig, ProjectEntry, ProjectInfo, SetupConfig,
-};
+use crate::state::project::{AgentsConfig, ProjectConfig, ProjectEntry, ProjectInfo};
 use crate::tmux;
 
 /// Initialize a new pm project at the given path.
@@ -99,8 +97,6 @@ pub fn init_in(
             name: name.clone(),
             max_features: None,
         },
-        setup: SetupConfig::default(),
-        github: GithubConfig::default(),
         agents: AgentsConfig::default(),
         harness: Default::default(),
     };

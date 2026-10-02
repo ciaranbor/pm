@@ -192,10 +192,8 @@ pub struct CrossProjectSendParams<'a> {
     pub body: &'a str,
 }
 
-/// Send a message to an agent in a different project. Looks up the target
-/// project from the global registry, delivers the message to its
-/// `.pm/messages/` directory, but does NOT auto-spawn the recipient
-/// (we can't safely spawn agents in a foreign project).
+/// Send a message to an agent in a different project, found through the
+/// global registry.
 pub fn agent_send_cross_project(params: &CrossProjectSendParams<'_>) -> Result<String> {
     let projects_dir = paths::global_projects_dir()?;
     agent_send_cross_project_with_dir(&projects_dir, params)
@@ -255,8 +253,6 @@ mod tests {
                 name: project_name.to_string(),
                 max_features: None,
             },
-            setup: Default::default(),
-            github: Default::default(),
             agents: Default::default(),
             harness: Default::default(),
         };
@@ -648,8 +644,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let (root, session_name, feature) = setup_project_with_tmux(dir.path(), &server);
 
-        // Pre-spawn the recipient active with a live window — messaging no
-        // longer auto-spawns.
+        // Messaging never spawns, so the recipient needs a live window.
         create_agent_definition(&root, "reviewer");
         server.spawn_fake_agent(&root, &session_name, &feature, "reviewer");
 

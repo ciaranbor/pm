@@ -1,6 +1,6 @@
 //! Every command pm runs opencode for returns within a limit. A hung call
-//! would otherwise hang the pm command that made it — a rename, register or
-//! adopt whose own work is done — with nothing printed.
+//! would otherwise hang the pm command that made it — a register or adopt
+//! whose own work is done — with nothing printed.
 //!
 //! The call runs in a process group of its own, killed whole when it ends
 //! or at the limit, so nothing it started — a standalone server — outlives

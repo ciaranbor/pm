@@ -73,12 +73,6 @@ pub fn kill_session(server: Option<&str>, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Rename a tmux session.
-pub fn rename_session(server: Option<&str>, old_name: &str, new_name: &str) -> Result<()> {
-    run_tmux(server, &["rename-session", "-t", old_name, new_name])?;
-    Ok(())
-}
-
 /// List all tmux session names.
 pub fn list_sessions(server: Option<&str>) -> Result<Vec<String>> {
     let result = run_tmux(server, &["list-sessions", "-F", "#{session_name}"]);
@@ -254,40 +248,6 @@ pub fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-/// Show a tmux display-menu for selecting from a list of items.
-/// Each item is a (label, session_name) pair. Selecting an item switches to that session.
-pub fn display_menu(server: Option<&str>, title: &str, items: &[(String, String)]) -> Result<()> {
-    let args = build_display_menu_args(title, items);
-    let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    // display-menu fails silently outside tmux — that's acceptable
-    let _ = run_tmux(server, &args_refs);
-    Ok(())
-}
-
-/// Build tmux display-menu arguments for a list of items.
-/// Each item gets a shortcut key (1-9, a-z).
-fn build_display_menu_args(
-    title: &str,
-    items: &[(String, String)], // (label, session_name)
-) -> Vec<String> {
-    let mut args = vec![
-        "display-menu".to_string(),
-        "-T".to_string(),
-        title.to_string(),
-    ];
-
-    let shortcuts: Vec<char> = "123456789abcdefghijklmnopqrstuvwxyz".chars().collect();
-
-    for (i, (label, session_name)) in items.iter().enumerate() {
-        let key = shortcuts.get(i).map(|c| c.to_string()).unwrap_or_default();
-        args.push(label.clone());
-        args.push(key);
-        args.push(format!("switch-client -t '{session_name}'"));
-    }
-
-    args
-}
-
 /// Rename a window in a tmux session.
 pub fn rename_window(server: Option<&str>, target: &str, new_name: &str) -> Result<()> {
     run_tmux(server, &["rename-window", "-t", target, new_name])?;
@@ -383,10 +343,6 @@ impl ProcessTable {
         }
         found
     }
-
-    fn contains(&self, process: &Process) -> bool {
-        self.0.iter().any(|(live, _)| live == process)
-    }
 }
 
 /// The processes running in a window's first pane: the pane's own and its
@@ -455,26 +411,6 @@ pub fn first_panes(server: Option<&str>) -> Result<Vec<Pane>> {
 /// varies by platform).
 fn no_server(msg: &str) -> bool {
     msg.contains("no server running") || msg.contains("error connecting")
-}
-
-/// Wait until every one of `processes` has exited, for at most `limit`.
-/// Returns those still running.
-pub fn wait_for_exit(processes: &[Process], limit: std::time::Duration) -> Vec<Process> {
-    let started = std::time::Instant::now();
-    loop {
-        let Ok(table) = ProcessTable::read() else {
-            return processes.to_vec();
-        };
-        let left: Vec<Process> = processes
-            .iter()
-            .filter(|process| table.contains(process))
-            .cloned()
-            .collect();
-        if left.is_empty() || started.elapsed() >= limit {
-            return left;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
 }
 
 /// Get the current command running in the first pane of a window.
@@ -609,50 +545,6 @@ mod tests {
     }
 
     #[test]
-    fn build_display_menu_args_creates_correct_structure() {
-        let items = vec![
-            ("login".to_string(), "myapp/login".to_string()),
-            ("api".to_string(), "myapp/api".to_string()),
-        ];
-
-        let args = build_display_menu_args("Features", &items);
-
-        assert_eq!(args[0], "display-menu");
-        assert_eq!(args[1], "-T");
-        assert_eq!(args[2], "Features");
-        assert_eq!(args[3], "login");
-        assert_eq!(args[4], "1");
-        assert_eq!(args[5], "switch-client -t 'myapp/login'");
-        assert_eq!(args[6], "api");
-        assert_eq!(args[7], "2");
-        assert_eq!(args[8], "switch-client -t 'myapp/api'");
-    }
-
-    #[test]
-    fn build_display_menu_args_empty_list() {
-        let items: Vec<(String, String)> = vec![];
-        let args = build_display_menu_args("Empty", &items);
-
-        assert_eq!(args.len(), 3);
-        assert_eq!(args[0], "display-menu");
-        assert_eq!(args[2], "Empty");
-    }
-
-    #[test]
-    fn build_display_menu_args_many_items_uses_empty_shortcut_past_limit() {
-        let items: Vec<(String, String)> = (0..40)
-            .map(|i| (format!("item-{i}"), format!("session-{i}")))
-            .collect();
-
-        let args = build_display_menu_args("Big", &items);
-
-        assert_eq!(args[4], "1");
-        // Item at index 35 (0-indexed), past the 34 shortcuts available
-        let shortcut_pos = 3 + 35 * 3 + 1;
-        assert_eq!(args[shortcut_pos], "");
-    }
-
-    #[test]
     fn new_window_creates_second_window() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
@@ -687,61 +579,6 @@ mod tests {
             false,
         );
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn a_killed_windows_processes_are_waited_for() {
-        let server = TestServer::new();
-        let dir = tempdir().unwrap();
-        let name = server.scope("exit-test");
-        create_session(server.name(), &name, dir.path()).unwrap();
-        let target = new_window(server.name(), &name, dir.path(), Some("agent"), true).unwrap();
-        // A child of the pane's shell, as a harness is.
-        send_keys(server.name(), &target, "sleep 999").unwrap();
-        let started = (0..500).any(|_| {
-            let running = pane_command(server.name(), &target).unwrap() == "sleep";
-            if !running {
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
-            running
-        });
-        assert!(started, "sleep never started in {target}");
-        let processes = pane_processes(server.name(), &target).unwrap();
-        assert!(processes.len() > 1, "{processes:?}");
-        assert_eq!(
-            wait_for_exit(&processes, std::time::Duration::from_millis(100)),
-            processes
-        );
-
-        kill_window(server.name(), &target).unwrap();
-
-        assert_eq!(
-            wait_for_exit(&processes, std::time::Duration::from_secs(10)),
-            Vec::<Process>::new()
-        );
-        kill_session(server.name(), &name).unwrap();
-    }
-
-    #[test]
-    fn a_reused_pid_does_not_count_as_the_process_still_running() {
-        let own = ProcessTable::read()
-            .unwrap()
-            .0
-            .into_iter()
-            .map(|(process, _)| process)
-            .find(|process| process.pid == std::process::id())
-            .unwrap();
-        let earlier = Process {
-            pid: own.pid,
-            started: "an earlier start".to_string(),
-            command: own.command.clone(),
-        };
-
-        assert_eq!(
-            wait_for_exit(std::slice::from_ref(&own), std::time::Duration::ZERO),
-            [own]
-        );
-        assert_eq!(wait_for_exit(&[earlier], std::time::Duration::ZERO), []);
     }
 
     #[test]
@@ -817,17 +654,6 @@ mod tests {
 
         let result = send_keys(server.name(), &server.scope("nonexistent"), "echo hello");
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn display_menu_returns_ok_even_outside_tmux() {
-        let server = TestServer::new();
-        let name = server.scope("myapp");
-        let items = vec![("login".to_string(), session_name(&name, "login"))];
-
-        // display_menu swallows the tmux error (no client attached)
-        let result = display_menu(server.name(), "Test", &items);
-        assert!(result.is_ok());
     }
 
     #[test]

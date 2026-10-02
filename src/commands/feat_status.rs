@@ -73,8 +73,7 @@ pub fn feat_status(
     Ok(())
 }
 
-/// Tell `main` that `name` is ready and where its summary is. The message
-/// always carries the feature's scope, which `pm feat rename` rewrites.
+/// Tell `main` that `name` is ready and where its summary is.
 fn notify_ready(project_root: &Path, name: &str, agent: Option<&str>) -> Result<()> {
     let body = ready_body(project_root, name, agent.is_some());
     let sender = agent.map_or_else(messages::default_user_name, str::to_string);
@@ -90,7 +89,7 @@ fn notify_ready(project_root: &Path, name: &str, agent: Option<&str>) -> Result<
 }
 
 /// The ready message for `name`; `repliable` when an agent sent it.
-pub(crate) fn ready_body(project_root: &Path, name: &str, repliable: bool) -> String {
+fn ready_body(project_root: &Path, name: &str, repliable: bool) -> String {
     let mut body = format!(
         "Feature '{name}' is ready: its work is done and waits on the user to merge or delete it. \
          Review its summary at {} for gaps; triage happens at merge or delete.",

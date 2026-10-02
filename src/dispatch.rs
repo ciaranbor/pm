@@ -371,8 +371,6 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     let effective_scope = shorthand_scope.map(|s| s.to_string()).or(scope);
 
                     if let Some(ref proj_name) = target_project {
-                        // Cross-project delivery: resolve target project root,
-                        // deliver message, but do NOT auto-spawn.
                         let target_scope = effective_scope.as_deref().unwrap_or("main");
                         let pm_dir = paths::pm_dir(&project_root);
                         let sender_project_config =
@@ -598,26 +596,6 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     }
                     Ok(())
                 }
-                FeatCommands::Switch { name } => {
-                    let name = name.or_else(|| {
-                        paths::detect_feature_from_cwd(
-                            &project_root,
-                            &std::env::current_dir().ok()?,
-                        )
-                    });
-                    if let Some(name) = name {
-                        commands::feat_switch::feat_switch(&project_root, &name, server)
-                    } else {
-                        let items = commands::feat_switch::feat_switch_menu(&project_root)?;
-                        let pm_dir = paths::pm_dir(&project_root);
-                        let config = pm::state::project::ProjectConfig::load(&pm_dir)?;
-                        tmux::display_menu(
-                            server,
-                            &format!("{} features", config.project.name),
-                            &items,
-                        )
-                    }
-                }
                 FeatCommands::Delete { name, force } => {
                     let name = resolve_feature_name(name, &project_root)?;
                     commands::feat_delete::feat_delete(
@@ -646,17 +624,6 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         println!("Merged and deleted feature '{name}'");
                     }
                     push();
-                    Ok(())
-                }
-                FeatCommands::Rebase { name, onto } => {
-                    let name = resolve_feature_name(name, &project_root)?;
-                    let base = commands::feat_rebase::feat_rebase(
-                        &project_root,
-                        &projects_dir,
-                        &name,
-                        onto.as_deref(),
-                    )?;
-                    println!("Rebased feature '{name}' onto '{base}'");
                     Ok(())
                 }
                 FeatCommands::Pr(pr_cmd) => match pr_cmd {
@@ -770,28 +737,6 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         Ok(())
                     }
                 },
-                FeatCommands::Rename {
-                    old_name,
-                    new_name,
-                    force,
-                } => {
-                    let old_name = resolve_feature_name(old_name, &project_root)?;
-                    let renamed = commands::feat_rename::feat_rename(
-                        &project_root,
-                        &old_name,
-                        &new_name,
-                        force,
-                        server,
-                    )?;
-                    println!("Renamed feature '{old_name}' to '{new_name}'");
-                    for line in &renamed.report {
-                        println!("{line}");
-                    }
-                    std::io::Write::flush(&mut std::io::stdout())?;
-                    renamed.finish(server);
-                    push();
-                    Ok(())
-                }
                 FeatCommands::Review { pr } => {
                     let feature_name =
                         commands::feat_review::feat_review(&project_root, &pr, server)?;
@@ -987,24 +932,6 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         None => {
                             println!("No workflow active for this feature.");
                         }
-                    }
-                    Ok(())
-                }
-                WorkflowCommands::Install { name } => {
-                    let messages = commands::skills::workflows_install(name.as_deref())?;
-                    for m in messages {
-                        println!("{m}");
-                    }
-                    Ok(())
-                }
-                WorkflowCommands::Uninstall { name, all } => {
-                    if name.is_none() && !all {
-                        eprintln!("Provide a workflow name or use --all to uninstall all");
-                        std::process::exit(1);
-                    }
-                    let messages = commands::skills::workflows_uninstall(name.as_deref())?;
-                    for m in messages {
-                        println!("{m}");
                     }
                     Ok(())
                 }
