@@ -118,7 +118,9 @@ its turn). pm surfaces all of it in tmux:
 
 - the status line's summary (a glyph and count per kind), and an alert on
   every attached client when a feature becomes blocked or ready, or an
-  agent — `main` included — starts asking;
+  agent — `main` included — starts asking. A feature alerts once on each:
+  not again when its agent's question outranks its `ready` for a while, nor
+  when its session is opened on a status it already had;
 - pm's tree (prefix `s` / `w`), tmux's own tree with each session's
   activity (working, or how long it has been quiet), attention glyph and
   reason, and each agent's badge. Enter on a session goes straight to the
@@ -647,7 +649,7 @@ unset, text is escaped for formats, and each name is set at one scope only:
 | | `@pm_reason` | the attention detail, or for `stalled` what the attention view shows; unset without one |
 | | `@pm_badge` | the kind's glyph, styled; unset for `none`; on `main`, its main agent's badge |
 | | `@pm_activity` | the busy glyph while the scope is working, else how long it has been quiet (`2h`, styled); unset under 10 minutes, and on `main` while its badge already shows its main agent at work |
-| | `@pm_alert_pending` | set while a feature's ready alert waits for its team to go quiet; pm's own bookkeeping |
+| | `@pm_alert_pending`, `@pm_alerted` | pm's own bookkeeping: a ready alert waiting for its team to go quiet, and the kinds already alerted on |
 | agent window | `@pm_agent` | the agent's name |
 | | `@pm_agent_state` | an [agent state](#attention-view) |
 | | `@pm_unread` | unread message count |

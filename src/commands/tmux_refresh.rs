@@ -37,6 +37,9 @@ use super::attention::{
 use super::feat_status_view::{STALLED, span};
 
 mod badge;
+mod episode;
+
+use episode::{ALERTED, Episode, feature_holds, main_holds};
 
 const PROJECT: &str = "@pm_project";
 const FEATURE: &str = "@pm_feature";
@@ -55,6 +58,7 @@ const SESSION_OPTIONS: &[&str] = &[
     BADGE,
     ACTIVITY,
     ALERT_PENDING,
+    ALERTED,
 ];
 
 const AGENT: &str = "@pm_agent";
@@ -133,21 +137,31 @@ fn commands(snapshot: &Snapshot, published: &Options, now: DateTime<Utc>) -> Vec
         sessions.insert(&feature.session);
         let scope = Scope::Session(&feature.session);
         let kind = feature.attention.kind;
-        let became = held.get(ATTENTION) != kind.to_string();
+        let mut episode = Episode::read(held, |k| feature_holds(feature, k));
+        // A session pm has not published to yet was just opened: a progress
+        // it shows was set before, and alerted on then if it was open.
+        if held.get(PROJECT).is_empty()
+            && matches!(kind, AttentionKind::Blocked | AttentionKind::Ready)
+        {
+            episode.record(kind);
+        }
+        let new = held.get(ATTENTION) != kind.to_string() && !episode.alerted(kind);
         // A feature that turns ready while its team is busy owes its alert
         // until the team goes quiet.
-        let owed = kind == AttentionKind::Ready && (became || !held.get(ALERT_PENDING).is_empty());
-        let mut values = session_values(feature, now);
-        values.push((ALERT_PENDING, (owed && feature.busy).then(|| "1".into())));
-        diff(&mut writes, scope, held, &values);
+        let owed = kind == AttentionKind::Ready && (new || !held.get(ALERT_PENDING).is_empty());
         let alerts_now = match kind {
-            AttentionKind::Blocked | AttentionKind::Asking => became,
+            AttentionKind::Blocked | AttentionKind::Asking => new,
             AttentionKind::Ready => owed && !feature.busy,
             _ => false,
         };
         if alerts_now {
+            episode.record(kind);
             alerts.push(alert(&feature.session, &feature.attention));
         }
+        let mut values = session_values(feature, now);
+        values.push((ALERT_PENDING, (owed && feature.busy).then(|| "1".into())));
+        values.push((ALERTED, episode.value()));
+        diff(&mut writes, scope, held, &values);
         agent_windows(&mut writes, &mut windows, published, &feature.agents);
     }
     for project in &snapshot.projects {
@@ -158,17 +172,18 @@ fn commands(snapshot: &Snapshot, published: &Options, now: DateTime<Utc>) -> Vec
             continue;
         };
         sessions.insert(&main.session);
-        diff(
-            &mut writes,
-            Scope::Session(&main.session),
-            held,
-            &main_values(&project.name, main, now),
-        );
-        if main.attention.kind == AttentionKind::Asking
-            && held.get(ATTENTION) != main.attention.kind.to_string()
+        let kind = main.attention.kind;
+        let mut episode = Episode::read(held, |k| main_holds(&main.agents, k));
+        if kind == AttentionKind::Asking
+            && held.get(ATTENTION) != kind.to_string()
+            && !episode.alerted(kind)
         {
+            episode.record(kind);
             alerts.push(alert(&main.session, &main.attention));
         }
+        let mut values = main_values(&project.name, main, now);
+        values.push((ALERTED, episode.value()));
+        diff(&mut writes, Scope::Session(&main.session), held, &values);
         agent_windows(&mut writes, &mut windows, published, &main.agents);
     }
 
@@ -573,6 +588,7 @@ mod tests {
                 "#[fg=red,bold]\u{f256}#[default]",
                 "",
                 "",
+                "blocked",
             ]
         );
         assert_eq!(
@@ -615,7 +631,7 @@ mod tests {
         let now = published(&server);
         assert_eq!(
             values(&now.sessions, &session, SESSION_OPTIONS),
-            [project_name.as_str(), "login", "wip", "", "", "", "", ""]
+            [project_name.as_str(), "login", "wip", "", "", "", "", "", ""]
         );
         assert_eq!(
             values(&now.windows, &implementer, WINDOW_OPTIONS),
@@ -672,6 +688,7 @@ mod tests {
                 "",
                 "",
                 "#[fg=colour245]\u{f252} #[fg=yellow]\u{f0e0}#[default]",
+                "",
                 "",
                 ""
             ],
@@ -731,7 +748,7 @@ mod tests {
         assert!(!now.sessions.iter().any(|s| s.target == search));
         assert_eq!(
             values(&now.sessions, &login, SESSION_OPTIONS),
-            ["", "", "", "", "", "", "", ""]
+            ["", "", "", "", "", "", "", "", ""]
         );
         assert_eq!([now.global.get(COUNT), now.global.get(SUMMARY)], ["0", ""]);
     }
@@ -908,7 +925,7 @@ mod tests {
         assert!(displayed(&commands).is_empty());
     }
 
-    fn ready_feature(busy: bool) -> Snapshot {
+    fn feature_scope(progress: Progress, busy: bool, agents: Vec<AgentSnapshot>) -> Snapshot {
         let mut feature = FeatureSnapshot {
             project: "app".into(),
             name: "login".into(),
@@ -917,7 +934,7 @@ mod tests {
                 detail: None,
                 agent: None,
             },
-            progress: Progress::Ready,
+            progress,
             blocked_reason: None,
             blocked_by: None,
             summary: Some("Adds login".into()),
@@ -925,7 +942,7 @@ mod tests {
             pr: None,
             session: "app/login".into(),
             session_exists: true,
-            agents: Vec::new(),
+            agents,
             working: busy,
             busy,
             last_activity: None,
@@ -938,33 +955,51 @@ mod tests {
         }
     }
 
+    fn ready_feature(busy: bool) -> Snapshot {
+        feature_scope(Progress::Ready, busy, Vec::new())
+    }
+
+    /// Publish `snapshot` on `server` as a refresh would, returning what is
+    /// published after.
+    fn publish(server: &OwnServer, snapshot: &Snapshot) -> Options {
+        let read = || {
+            options::read(
+                server.name(),
+                SESSION_OPTIONS,
+                WINDOW_OPTIONS,
+                GLOBAL_OPTIONS,
+            )
+            .unwrap()
+            .unwrap()
+        };
+        options::run(server.name(), &commands(snapshot, &read(), Utc::now())).unwrap();
+        read()
+    }
+
+    /// A session pm has published to before.
+    fn published_session(server: &OwnServer, dir: &Path) {
+        tmux::create_session(server.name(), "app/login", dir).unwrap();
+        options::run(
+            server.name(),
+            &[options::set(
+                Scope::Session("app/login"),
+                PROJECT,
+                Some("app"),
+            )],
+        )
+        .unwrap();
+    }
+
     #[test]
     fn a_ready_feature_alerts_once_however_often_its_team_wakes() {
         let dir = tempdir().unwrap();
         let server = OwnServer::start("ready-busy");
-        tmux::create_session(server.name(), "app/login", dir.path()).unwrap();
+        published_session(&server, dir.path());
         let mut client = ControlClient::attach(server.name(), "app/login");
-        let now = Utc::now();
         let mut badges = Vec::new();
         let mut counts = Vec::new();
         for busy in [true, false, true, false, false] {
-            let held = options::read(
-                server.name(),
-                SESSION_OPTIONS,
-                WINDOW_OPTIONS,
-                GLOBAL_OPTIONS,
-            )
-            .unwrap()
-            .unwrap();
-            options::run(server.name(), &commands(&ready_feature(busy), &held, now)).unwrap();
-            let held = options::read(
-                server.name(),
-                SESSION_OPTIONS,
-                WINDOW_OPTIONS,
-                GLOBAL_OPTIONS,
-            )
-            .unwrap()
-            .unwrap();
+            let held = publish(&server, &ready_feature(busy));
             let login = held
                 .sessions
                 .iter()
@@ -978,6 +1013,84 @@ mod tests {
         let ready = "#[fg=green,bold]\u{f058}#[default]";
         assert_eq!(badges, [ready; 5]);
         assert_eq!(counts, ["0", "1", "0", "1", "1"]);
+    }
+
+    #[test]
+    fn a_kind_alerts_once_per_episode_however_often_it_is_outranked() {
+        let dir = tempdir().unwrap();
+        let server = OwnServer::start("episode");
+        published_session(&server, dir.path());
+        let mut client = ControlClient::attach(server.name(), "app/login");
+        let asking = || {
+            vec![AgentSnapshot {
+                waiting: Some(attention::WaitingSnapshot {
+                    kind: WaitingKind::Permission,
+                    detail: "permission".into(),
+                }),
+                ..agent_in(AgentState::Asking)
+            }]
+        };
+        let idle = || vec![agent_in(AgentState::Idle)];
+
+        publish(&server, &feature_scope(Progress::Ready, false, idle()));
+        publish(&server, &feature_scope(Progress::Ready, false, asking()));
+        publish(&server, &feature_scope(Progress::Ready, false, idle()));
+        publish(&server, &feature_scope(Progress::Wip, false, idle()));
+        publish(&server, &feature_scope(Progress::Ready, false, idle()));
+
+        assert_eq!(
+            client.messages(),
+            [
+                "pm: app/login ready: Adds login",
+                "pm: app/login asking: implementer: permission",
+                "pm: app/login ready: Adds login",
+            ]
+        );
+    }
+
+    fn agent_in(state: AgentState) -> AgentSnapshot {
+        AgentSnapshot {
+            name: "implementer".into(),
+            state,
+            unread: 0,
+            window: Some("app/login:1".into()),
+            pane: None,
+            waiting: None,
+        }
+    }
+
+    #[test]
+    fn a_reopened_session_shows_a_standing_progress_without_alerting_it() {
+        let opened = |snapshot: &Snapshot| {
+            let published = Options {
+                clients: vec!["c1".into()],
+                sessions: vec![Holder::session("app/login", &[])],
+                ..Options::default()
+            };
+            let commands = commands(snapshot, &published, Utc::now());
+            (
+                displayed(&commands).len(),
+                sets(&commands, ATTENTION).concat(),
+            )
+        };
+
+        assert_eq!(opened(&ready_feature(false)), (0, "ready".into()));
+        assert_eq!(
+            opened(&feature_scope(Progress::Blocked, false, Vec::new())),
+            (0, "blocked".into())
+        );
+        let asking = vec![AgentSnapshot {
+            waiting: Some(attention::WaitingSnapshot {
+                kind: WaitingKind::Permission,
+                detail: "permission".into(),
+            }),
+            ..agent_in(AgentState::Asking)
+        }];
+        assert_eq!(
+            opened(&feature_scope(Progress::Wip, false, asking)),
+            (1, "asking".into()),
+            "a dialog is up now"
+        );
     }
 
     #[test]
