@@ -24,9 +24,9 @@ docs (`//!`) hold each mechanism. What follows is only what the tree doesn't say
   — except Claude Code skills, where personal outranks project, so `pm
   doctor` reports the shadow instead. No harness reads pm's canonical store,
   so each tier is *projected* into the harness's layout: same-named files
-  are overwritten, and nothing is deleted but pm's own abandoned temp
-  files. The global tier's bundled workflows are never git-backed
-  (`commands/state_gitignore.rs`).
+  are overwritten; nothing is deleted but pm's abandoned temp files and a
+  feature's projection of a skill its branch deleted (`commands/seed.rs`).
+  Bundled workflows are never git-backed (`commands/state_gitignore.rs`).
 - **Portability** — `path_utils.rs` swaps `~/` ↔ `$HOME` so registry state
   moves between machines.
 - **Harness** (`harness/`) — the agent CLI pm launches, behind a `Harness`
