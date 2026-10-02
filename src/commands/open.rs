@@ -20,6 +20,13 @@ pub struct OpenResult {
     pub main_session: String,
 }
 
+impl OpenResult {
+    /// Whether the open made any session or agent.
+    pub fn changed(&self) -> bool {
+        self.sessions_restored > 0 || self.agents_respawned > 0
+    }
+}
+
 /// Returns true for issue kinds that `pm open` is about to fix automatically
 /// (recreating tmux sessions and respawning agent windows). These are filtered
 /// out of the pre-open warnings to avoid noisy output for normal restart flows.
@@ -202,11 +209,7 @@ pub fn open(
     projects_dir: &Path,
     tmux_server: Option<&str>,
 ) -> Result<OpenResult> {
-    let result = open_project(project_root, projects_dir, tmux_server)?;
-    if result.sessions_restored > 0 {
-        refresh_options(projects_dir, tmux_server);
-    }
-    Ok(result)
+    open_project(project_root, projects_dir, tmux_server)
 }
 
 /// What `open_all` did with one registered project.
@@ -221,15 +224,13 @@ pub enum ProjectOpen {
 /// passing each project's outcome to `report` as soon as it is known.
 ///
 /// A project whose root is missing, or whose open fails, is reported and the
-/// sweep continues. Session options are published once, after the sweep,
-/// rather than once per project. The client is never switched or attached
-/// here; that is the caller's choice.
+/// sweep continues. The client is never switched or attached here; that is
+/// the caller's choice.
 pub fn open_all(
     projects_dir: &Path,
     tmux_server: Option<&str>,
     mut report: impl FnMut(&str, &ProjectOpen),
 ) -> Result<()> {
-    let mut restored = false;
     for (name, entry) in ProjectEntry::list(projects_dir)? {
         let root = entry.root_path();
         let outcome = if !root.exists() {
@@ -240,20 +241,9 @@ pub fn open_all(
                 Err(e) => ProjectOpen::Failed(e),
             }
         };
-        restored |= matches!(&outcome, ProjectOpen::Opened(r) if r.sessions_restored > 0);
         report(&name, &outcome);
     }
-    if restored {
-        refresh_options(projects_dir, tmux_server);
-    }
     Ok(())
-}
-
-/// Republish pm's session options, which die with their session.
-fn refresh_options(projects_dir: &Path, tmux_server: Option<&str>) {
-    if let Err(e) = super::tmux_refresh::refresh(projects_dir, tmux_server) {
-        eprintln!("warning: could not publish pm's tmux options: {e}");
-    }
 }
 
 fn open_project(

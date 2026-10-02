@@ -7,14 +7,16 @@
 //! [`refresh`] under the server's refresh lock, so it alerts no more than
 //! the watcher would, and it runs only while a watcher holds the server: a
 //! server without the plugin, or with `@pm-auto-refresh off`, is left alone.
-//! A command that only spawns agents doesn't push: until the harness
-//! starts, its window runs only a shell and reads as dead. The harness's
-//! own hooks push instead — SessionStart, where it has, and the Stop hook
-//! as the first turn ends.
+//! A command that spawns agents pushes too: until its harness starts, a
+//! just-spawned agent's window runs only a shell, which the snapshot reads
+//! as starting rather than dead ([`attention`](super::attention)). The
+//! harness's own hooks push as it starts — SessionStart, where it has, and
+//! the Stop hook as the first turn ends.
 //!
 //! The Stop hook writes its own window's options ([`AgentWindow`]), found
 //! by the pane it runs in, in one `tmux` call it does not wait for, as the
-//! agent goes idle and as it resumes. That write is ungated and never
+//! agent goes idle and as it resumes; the user-prompt hook does as typed
+//! input resumes it. That write is ungated and never
 //! alerts; the next refresh corrects anything it gets wrong. Going idle
 //! also pushes, since an idle team is what makes a feature stalled.
 

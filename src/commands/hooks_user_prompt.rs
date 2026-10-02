@@ -8,8 +8,9 @@
 //! to any of its agents resets it.
 //!
 //! Any prompt, pm's own included, also means the agent is working again, so
-//! it clears the agent's waiting marker ([`runtime`]) and stamps its
-//! activity.
+//! it clears the agent's waiting marker ([`runtime`]), stamps its activity,
+//! and has its window published busy, as the Stop hook does as a turn
+//! resumes.
 //!
 //! The harness adds the hook's stdout to the model's context and may refuse
 //! the prompt on a non-zero exit, so it prints nothing and always exits 0.
@@ -23,25 +24,27 @@ use crate::commands::agent_spawn::SPAWN_PROMPT;
 use crate::commands::feat_status::feat_status;
 use crate::commands::hooks_stop;
 use crate::error::Result;
+use crate::messages;
 use crate::state::feature::{FeatureState, Progress};
 use crate::state::paths;
 use crate::state::runtime;
 
-/// Run the hook. Always exit code 0, whatever happened. `on_change` runs
-/// once the feature is set back to `wip` or the agent's marker cleared.
-pub fn user_prompt(on_change: impl FnOnce()) -> i32 {
-    if user_prompt_inner().unwrap_or(false) {
-        on_change();
+/// Run the hook. Always exit code 0, whatever happened. `on_prompt` gets
+/// the agent's unread message count, and whether the feature was set back
+/// to `wip` or the agent's marker cleared.
+pub fn user_prompt(on_prompt: impl FnOnce(u32, bool)) -> i32 {
+    if let Ok(Some((unread, changed))) = user_prompt_inner() {
+        on_prompt(unread, changed);
     }
     0
 }
 
-fn user_prompt_inner() -> Result<bool> {
+fn user_prompt_inner() -> Result<Option<(u32, bool)>> {
     let Some(agent) = std::env::var("PM_AGENT_NAME")
         .ok()
         .filter(|a| !a.is_empty())
     else {
-        return Ok(false);
+        return Ok(None);
     };
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input)?;
@@ -49,12 +52,14 @@ fn user_prompt_inner() -> Result<bool> {
         .ok()
         .and_then(|v| v.get("prompt")?.as_str().map(str::to_string))
     else {
-        return Ok(false);
+        return Ok(None);
     };
     let cwd = std::env::current_dir()?;
     let project_root = paths::find_project_root(&cwd)?;
     let scope = paths::resolve_scope_from(&project_root, &cwd)?;
-    on_prompt(&project_root, &scope, &agent, &prompt)
+    let changed = on_prompt(&project_root, &scope, &agent, &prompt)?;
+    let unread = messages::unread_count(&paths::messages_dir(&project_root), &scope, &agent);
+    Ok(Some((unread, changed)))
 }
 
 /// Any prompt to `agent`: clear its marker, and unblock its feature if the

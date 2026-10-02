@@ -7,9 +7,11 @@
 //!
 //! An agent the window reads as busy is refined by its waiting marker, or
 //! an interrupt no hook reported ([`running_agents::waiting`]), into
-//! asking, unarmed or background. A scope is working while a busy or
-//! background agent showed activity in the last [`WORKING_SECS`]; a busy
-//! agent silent longer reads quiet.
+//! asking, unarmed or background. One it reads as dead is busy while its
+//! startup marker is within the start grace: its harness may not have
+//! started yet. A scope is working while a busy or background agent showed
+//! activity in the last [`WORKING_SECS`]; a busy agent silent longer reads
+//! quiet.
 
 use std::path::Path;
 
@@ -511,6 +513,9 @@ impl ScopeReader<'_> {
                     ) {
                         Liveness::Idle => (AgentState::Idle, None),
                         Liveness::Busy => self.busy(scope, agent, entry.harness, now),
+                        Liveness::Dead if self.starting(scope, agent, now) => {
+                            (AgentState::Busy, None)
+                        }
                         Liveness::Dead => (AgentState::Dead, None),
                     },
                 };
@@ -540,6 +545,15 @@ impl ScopeReader<'_> {
         })
     }
 
+    /// Whether `agent` was spawned within the start grace and its harness
+    /// has not started a session: its window may still run only the shell
+    /// it was typed into.
+    fn starting(&self, scope: &str, agent: &str, now: DateTime<Utc>) -> bool {
+        runtime::read_waiting(self.project_root, scope, agent).is_some_and(|w| {
+            w.kind == WaitingKind::Startup && (now - w.since).num_seconds() <= start_grace()
+        })
+    }
+
     /// A busy agent, refined by its waiting marker or a stopped loop. A
     /// startup marker counts only once the start has had time to finish.
     fn busy(
@@ -562,6 +576,10 @@ impl ScopeReader<'_> {
         };
         (kind.class().into(), Some(WaitingSnapshot { kind, detail }))
     }
+}
+
+fn start_grace() -> i64 {
+    super::doctor::START_GRACE.as_secs() as i64
 }
 
 #[cfg(test)]
@@ -948,6 +966,8 @@ mod tests {
         server.spawn_fake_agent(&project, &session, "login", "starting");
         server.spawn_idle_fake_agent(&project, &session, "login", "idle");
         server.spawn_dead_fake_agent(&project, &session, "login", "dead");
+        server.spawn_dead_fake_agent(&project, &session, "login", "spawned");
+        server.spawn_dead_fake_agent(&project, &session, "login", "never-started");
         let mark = |agent: &str, kind: WaitingKind| {
             let waiting = runtime::Waiting::now(kind, Some("Which DB?".into()));
             runtime::write_waiting(&project, "login", agent, &waiting).unwrap();
@@ -956,6 +976,10 @@ mod tests {
         mark("starting", WaitingKind::Startup);
         mark("idle", WaitingKind::Interrupted);
         mark("dead", WaitingKind::Question);
+        mark("spawned", WaitingKind::Startup);
+        let mut stale = runtime::Waiting::now(WaitingKind::Startup, None);
+        stale.since -= chrono::Duration::seconds(start_grace() + 1);
+        runtime::write_waiting(&project, "login", "never-started", &stale).unwrap();
         runtime::touch_activity(&project, "login", "asking").unwrap();
 
         let login = &super::project(&project, server.name()).unwrap().features[0];
@@ -974,6 +998,8 @@ mod tests {
                 ("asking", AgentState::Asking, Some("Which DB?")),
                 ("dead", AgentState::Dead, None),
                 ("idle", AgentState::Idle, None),
+                ("never-started", AgentState::Dead, None),
+                ("spawned", AgentState::Busy, None),
                 ("starting", AgentState::Busy, None),
             ]
         );
