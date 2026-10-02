@@ -44,6 +44,7 @@
 
 pub(super) mod input;
 pub(super) mod sessions;
+pub(super) mod transcript;
 pub(super) mod waiting;
 
 use std::path::{Path, PathBuf};

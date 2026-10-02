@@ -21,7 +21,7 @@ use crate::harness::Harness;
 use crate::state::agent::{AgentEntry, AgentRegistry};
 use crate::state::paths;
 use crate::state::project::HarnessConfig;
-use crate::state::runtime::{self, SessionPath, Waiting, WaitingKind};
+use crate::state::runtime::{self, SessionPath, Waiting};
 use crate::tmux::{self, Pane, Process, ProcessTable};
 
 use super::hooks_install::runs_stop_hook;
@@ -97,22 +97,18 @@ pub fn liveness(
 }
 
 /// What an agent its window reads as busy is at: its waiting marker, unless
-/// its harness recorded an interrupt after it, which fires no hook. Once
-/// that interrupt is claimed ([`runtime::claim_interrupt`]) the agent was
-/// prompted, so it is at nothing: busy.
+/// its harness recorded a turn's end after it that fires no hook (an
+/// interrupt, a failure). Once that end is claimed
+/// ([`runtime::claim_turn_end`]) the agent was prompted, so it is at
+/// nothing: busy.
 pub fn waiting(project_root: &Path, scope: &str, agent: &str, harness: Harness) -> Option<Waiting> {
     let marker = runtime::read_waiting(project_root, scope, agent);
-    let interrupted =
-        runtime::read_session_path(project_root, scope, agent, SessionPath::Transcript)
-            .and_then(|transcript| harness.interrupted(&transcript))
-            .map(chrono::DateTime::<chrono::Utc>::from)
-            .filter(|at| marker.as_ref().is_none_or(|m| *at > m.since));
-    match interrupted {
-        Some(since) if runtime::interrupt_claimed(project_root, scope, agent, since) => None,
-        Some(since) => Some(Waiting {
-            since,
-            ..Waiting::now(WaitingKind::Interrupted, None)
-        }),
+    let ended = runtime::read_session_path(project_root, scope, agent, SessionPath::Transcript)
+        .and_then(|transcript| harness.turn_ended(&transcript))
+        .filter(|end| marker.as_ref().is_none_or(|m| end.since > m.since));
+    match ended {
+        Some(end) if runtime::turn_end_claimed(project_root, scope, agent, end.since) => None,
+        Some(end) => Some(end),
         None => marker,
     }
 }
@@ -159,6 +155,7 @@ impl Windows {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::runtime::WaitingKind;
     use crate::testing::TestServer;
     use tempfile::tempdir;
 

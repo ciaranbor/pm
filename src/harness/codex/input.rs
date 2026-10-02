@@ -5,16 +5,42 @@
 //! selection list — an approval or trust prompt — marks its current option
 //! with the same `›` followed by a number, so a numbered line reads as
 //! unknown, as does a screen with no `›` line.
+//!
+//! The vim composer (`/vim`, `tui.vim_mode_default`) shows `Vim: Normal` or
+//! `Vim: Insert` in the footer. In NORMAL mode typed keys are commands, so
+//! the composer reads as unknown; `i` there enters INSERT mode and changes
+//! nothing else ([`text_mode_key`]).
 
 use crate::harness::screen::visible_text;
 
 const PROMPT: char = '›';
+const VIM_NORMAL: &str = "Vim: Normal";
 
 /// Whether the composer at the bottom of `screen` holds no text; `None`
-/// when no composer is found.
+/// when no composer is found or typed keys would not reach it as text.
 pub(in crate::harness) fn is_empty(screen: &str) -> Option<bool> {
+    let (empty, normal) = composer(screen)?;
+    if normal { None } else { empty }
+}
+
+/// The key that puts an empty composer in vim NORMAL mode into INSERT mode,
+/// and the one that erases it should the composer have taken it as text;
+/// `None` otherwise, so a draft is left alone, mode included.
+pub(in crate::harness) fn text_mode_key(screen: &str) -> Option<(&'static str, &'static str)> {
+    let (empty, normal) = composer(screen)?;
+    (normal && empty == Some(true)).then_some(("i", "BSpace"))
+}
+
+/// The composer at the bottom of `screen`: whether it holds no text,
+/// whatever its mode, and whether it is in vim NORMAL mode.
+fn composer(screen: &str) -> Option<(Option<bool>, bool)> {
     let lines: Vec<String> = screen.lines().map(visible_text).collect();
     let prompt = lines.iter().rposition(|line| line.starts_with(PROMPT))?;
+    let normal = lines[prompt..].iter().any(|line| line.contains(VIM_NORMAL));
+    Some((composer_is_empty(&lines, prompt), normal))
+}
+
+fn composer_is_empty(lines: &[String], prompt: usize) -> Option<bool> {
     let rest = lines[prompt].trim_start_matches(PROMPT).trim();
     let numbered = rest
         .split_once(". ")
@@ -67,5 +93,30 @@ mod tests {
             None
         );
         assert_eq!(is_empty(""), None);
+    }
+
+    fn vim_screen(composer: &str, mode: &str) -> String {
+        format!(
+            "\n{composer}\n\n  \x1b[38;2;246;226;183mGPT-6.1-Sol default\x1b[39m · ~/scratch      \
+             \x1b[38;5;5mVim: {mode}\x1b[39m\n  \x1b[1m?\x1b[0m for shortcuts\n"
+        )
+    }
+
+    #[test]
+    fn vim_normal_mode_is_unknown_until_i_enters_insert_mode() {
+        let placeholder = "\x1b[1m›\x1b[0m \x1b[2mAsk Codex to do anything\x1b[0m";
+        let normal = vim_screen(placeholder, "Normal");
+        assert_eq!(is_empty(&normal), None);
+        assert_eq!(text_mode_key(&normal), Some(("i", "BSpace")));
+
+        let insert = vim_screen(placeholder, "Insert");
+        assert_eq!(is_empty(&insert), Some(true));
+        assert_eq!(text_mode_key(&insert), None);
+
+        let draft = vim_screen("\x1b[1m›\x1b[0m half a thought", "Normal");
+        assert_eq!(is_empty(&draft), None);
+        assert_eq!(text_mode_key(&draft), None);
+
+        assert_eq!(text_mode_key(&screen(placeholder)), None);
     }
 }

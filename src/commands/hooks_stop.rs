@@ -24,16 +24,20 @@
 //! while the harness is alive, so a live agent's hook keeps blocking.
 //!
 //! The hook keeps the agent's waiting marker ([`runtime`]): it clears it as a
-//! turn ends, writes `background` when it yields, and `hook-ended` whenever
-//! it ends without a decision or fails — the agent then sits at its prompt
-//! where no message wakes it. Claude Code ends the hook with SIGTERM (on
+//! turn ends, writes `background` when it yields, and `hook-ended` when its
+//! harness ends it or the wait fails — the agent then sits at its prompt
+//! where no message wakes it. A hook whose harness is gone writes nothing:
+//! the agent is dead, or already respawned, and a late marker would mark the
+//! new session unarmed. Claude Code ends the hook with SIGTERM (on
 //! its timeout, or Esc while it waits) and kills it outright soon after, so
 //! the wait sleeps on a pipe the signal handler writes to and records the
 //! marker at once. A SIGTERM from any process but the harness (our parent)
 //! — a `pkill` matching hook command lines machine-wide — is ignored, so it
 //! cannot leave the agent unarmed (`Caller::sent` has why only SIGTERM).
 //! Codex kills the hook with an uncatchable signal and reports
-//! the interrupt through its own hook instead.
+//! the interrupt through its own hook instead; opencode's plugin kills it
+//! the same way when a turn it did not prompt starts, and waits again once
+//! that turn ends.
 
 mod signals;
 
@@ -107,7 +111,6 @@ pub fn stop(on_turn: &mut dyn FnMut(AgentState, u32)) -> i32 {
         return 0;
     };
     let signals = Signals::install();
-    let mut signalled = None;
     let decided = wait_and_decide(
         busy,
         &project_root,
@@ -120,23 +123,22 @@ pub fn stop(on_turn: &mut dyn FnMut(AgentState, u32)) -> i32 {
                 Some(signals) => {
                     let caught = signals.pause(interval);
                     if let Some(caught) = caught.iter().find(|c| caller.sent(c)) {
-                        signalled = Some(format!("ended by {caught}"));
-                        return signalled.clone();
+                        return Some(Ended::By(format!("ended by {caught}")));
                     }
                 }
                 None => std::thread::sleep(interval),
             }
-            (!caller.alive()).then(|| "ended: its harness stopped waiting".to_string())
+            (!caller.alive()).then_some(Ended::HarnessGone)
         },
     );
     let why = match decided {
-        Ok(Some(json)) => {
+        Ok(Decided::Answer(json)) => {
             print!("{json}");
             return 0;
         }
         // The harness is gone, so there is no one to tell.
-        Ok(None) if signalled.is_none() => return 0,
-        Ok(None) => signalled.unwrap_or_default(),
+        Ok(Decided::Ended(Ended::HarnessGone)) => return 0,
+        Ok(Decided::Ended(Ended::By(why))) => why,
         Err(e) => {
             let why = format!("failed: {e}");
             hook_ended(&project_root, &scope, &agent, why.clone(), on_turn);
@@ -215,11 +217,26 @@ fn peer_closed(fd: libc::c_int) -> bool {
     ready > 0 && pfd.revents & (libc::POLLHUP | libc::POLLERR) != 0
 }
 
+/// Why a wait ended without a decision.
+#[derive(Debug, PartialEq)]
+enum Ended {
+    /// The harness ended it; the reason completes "Stop hook …".
+    By(String),
+    /// The harness that ran the hook is gone.
+    HarnessGone,
+}
+
+#[derive(Debug, PartialEq)]
+enum Decided {
+    /// The JSON to print.
+    Answer(String),
+    Ended(Ended),
+}
+
 /// Decide the Stop outcome. Testable seam: takes an explicit `busy` flag
 /// instead of reading stdin. Messages take priority over `busy`. `pause`
 /// waits up to the poll interval between checks, and returns why the wait
-/// should end once it should; the hook then records that and returns
-/// `None`.
+/// should end once it should; an end its harness caused is recorded.
 fn wait_and_decide(
     busy: bool,
     project_root: &std::path::Path,
@@ -227,13 +244,13 @@ fn wait_and_decide(
     agent: &str,
     poll_interval: Option<Duration>,
     on_turn: &mut dyn FnMut(AgentState, u32),
-    mut pause: impl FnMut(Duration) -> Option<String>,
-) -> crate::error::Result<Option<String>> {
+    mut pause: impl FnMut(Duration) -> Option<Ended>,
+) -> crate::error::Result<Decided> {
     let block = |on_turn: &mut dyn FnMut(AgentState, u32), senders: &[String]| {
         let _ = runtime::touch_activity(project_root, feature, agent);
         let unread = messages::unread_count(&paths::messages_dir(project_root), feature, agent);
         on_turn(AgentState::Busy, unread);
-        Some(block_decision(senders))
+        Decided::Answer(block_decision(senders))
     };
     runtime::touch_activity(project_root, feature, agent)?;
     runtime::clear_waiting(project_root, feature, agent)?;
@@ -245,7 +262,7 @@ fn wait_and_decide(
         let waiting = Waiting::now(WaitingKind::Background, None);
         runtime::write_waiting(project_root, feature, agent, &waiting)?;
         on_turn(AgentState::Background, 0);
-        return Ok(Some(allow_decision()));
+        return Ok(Decided::Answer(allow_decision()));
     }
     on_turn(AgentState::Idle, 0);
     let mut ended = None;
@@ -255,9 +272,11 @@ fn wait_and_decide(
             ended.is_none()
         })?;
     if waited.is_none() {
-        let why = ended.unwrap_or_default();
-        hook_ended(project_root, feature, agent, why, on_turn);
-        return Ok(None);
+        let ended = ended.unwrap_or(Ended::HarnessGone);
+        if let Ended::By(why) = &ended {
+            hook_ended(project_root, feature, agent, why.clone(), on_turn);
+        }
+        return Ok(Decided::Ended(ended));
     }
     let senders = unread_senders(project_root, feature, agent)?;
     Ok(block(on_turn, &senders))
@@ -345,6 +364,15 @@ mod tests {
     use std::time::Instant;
     use tempfile::tempdir;
 
+    impl Decided {
+        fn answer(self) -> String {
+            match self {
+                Decided::Answer(json) => json,
+                ended => panic!("expected an answer, got {ended:?}"),
+            }
+        }
+    }
+
     fn setup_project(dir: &std::path::Path) -> std::path::PathBuf {
         let root = dir.to_path_buf();
         std::fs::create_dir_all(root.join(".pm/features")).unwrap();
@@ -377,7 +405,7 @@ mod tests {
             |_| None,
         )
         .unwrap()
-        .unwrap();
+        .answer();
 
         assert_eq!(turns, [(AgentState::Busy, 2)], "no wait, so never idle");
 
@@ -406,7 +434,7 @@ mod tests {
             |_| None,
         )
         .unwrap()
-        .unwrap();
+        .answer();
 
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["decision"], "block");
@@ -434,7 +462,7 @@ mod tests {
             |_| None,
         )
         .unwrap()
-        .unwrap();
+        .answer();
         let elapsed = start.elapsed();
 
         assert_eq!(result, "{}");
@@ -463,7 +491,7 @@ mod tests {
                 |_| None,
             )
             .unwrap()
-            .unwrap();
+            .answer();
             (decision, turns)
         });
 
@@ -501,7 +529,7 @@ mod tests {
             |_| None,
         )
         .unwrap()
-        .unwrap();
+        .answer();
 
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(
@@ -526,16 +554,44 @@ mod tests {
             &mut |state, unread| turns.push((state, unread)),
             |_| {
                 polls += 1;
-                (polls > 3).then(|| "ended by SIGTERM".to_string())
+                (polls > 3).then(|| Ended::By("ended by SIGTERM".to_string()))
             },
         )
         .unwrap();
 
-        assert_eq!(result, None);
+        assert_eq!(result, Decided::Ended(Ended::By("ended by SIGTERM".into())));
         assert_eq!(turns, [(AgentState::Idle, 0), (AgentState::Unarmed, 0)]);
         let waiting = runtime::read_waiting(&root, "login", "reviewer").unwrap();
         assert_eq!(waiting.kind, WaitingKind::HookEnded);
         assert_eq!(waiting.describe(), "Stop hook ended by SIGTERM");
+    }
+
+    #[test]
+    fn a_wait_whose_harness_is_gone_leaves_the_marker_alone() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        let mut turns = Vec::new();
+
+        let result = wait_and_decide(
+            false,
+            &root,
+            "login",
+            "reviewer",
+            Some(Duration::from_millis(10)),
+            &mut |state, unread| turns.push((state, unread)),
+            |_| {
+                // A respawned session's hook marks it while the orphan waits.
+                let asked = Waiting::now(WaitingKind::Question, Some("Which DB?".into()));
+                runtime::write_waiting(&root, "login", "reviewer", &asked).unwrap();
+                Some(Ended::HarnessGone)
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result, Decided::Ended(Ended::HarnessGone));
+        assert_eq!(turns, [(AgentState::Idle, 0)]);
+        let waiting = runtime::read_waiting(&root, "login", "reviewer").unwrap();
+        assert_eq!(waiting.kind, WaitingKind::Question);
     }
 
     #[test]

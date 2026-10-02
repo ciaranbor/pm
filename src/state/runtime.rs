@@ -13,11 +13,12 @@
 //! life: every pm hook invocation touches it.
 //!
 //! The **session paths** are what the current session reported at its
-//! start: its transcript, for a harness that records an interrupt only
-//! there ([`Harness::interrupted`](crate::harness::Harness::interrupted)),
-//! and the config dir its environment named, where its input settings are
+//! start: its transcript, for a harness that records an interrupt or a
+//! failed turn only there
+//! ([`Harness::turn_ended`](crate::harness::Harness::turn_ended)), and the
+//! config dir its environment named, where its input settings are
 //! read ([`Harness::config_dir_env`](crate::harness::Harness::config_dir_env)).
-//! Every spawn forgets them until the new session starts. An interrupt read
+//! Every spawn forgets them until the new session starts. A turn's end read
 //! from the transcript has no marker to remove, so the one who acts on it
 //! claims it with a stamp instead, after which it no longer counts.
 //!
@@ -38,7 +39,7 @@ use crate::state::paths;
 
 const WAITING_FILE: &str = "waiting.json";
 const ACTIVITY_FILE: &str = "activity";
-const INTERRUPT_CLAIM: &str = "interrupt-claimed-";
+const TURN_END_CLAIM: &str = "turn-end-claimed-";
 
 fn root(project_root: &Path) -> PathBuf {
     paths::pm_dir(project_root).join("runtime")
@@ -239,27 +240,27 @@ pub fn read_session_path(
     Some(PathBuf::from(text))
 }
 
-/// The file whose existence says the interrupt at `since` was claimed.
-fn interrupt_claim(project_root: &Path, scope: &str, agent: &str, since: DateTime<Utc>) -> PathBuf {
+/// The file whose existence says the turn end at `since` was claimed.
+fn turn_end_claim(project_root: &Path, scope: &str, agent: &str, since: DateTime<Utc>) -> PathBuf {
     let stamp = since.timestamp_nanos_opt().unwrap_or_default();
     agent_file(
         project_root,
         scope,
         agent,
-        &format!("{INTERRUPT_CLAIM}{stamp}"),
+        &format!("{TURN_END_CLAIM}{stamp}"),
     )
 }
 
-/// Claim the interrupt at `since`, one no hook reported, for one caller
+/// Claim the turn end at `since`, one no hook reported, for one caller
 /// only: true for the caller that claimed it. Earlier claims are dropped.
-pub fn claim_interrupt(
+pub fn claim_turn_end(
     project_root: &Path,
     scope: &str,
     agent: &str,
     since: DateTime<Utc>,
 ) -> Result<bool> {
     let dir = agent_dir(project_root, scope, agent)?;
-    let file = interrupt_claim(project_root, scope, agent, since);
+    let file = turn_end_claim(project_root, scope, agent, since);
     match std::fs::File::options()
         .write(true)
         .create_new(true)
@@ -274,7 +275,7 @@ pub fn claim_interrupt(
         let stale = entry
             .file_name()
             .to_string_lossy()
-            .starts_with(INTERRUPT_CLAIM);
+            .starts_with(TURN_END_CLAIM);
         if stale && path != file {
             let _ = std::fs::remove_file(path);
         }
@@ -282,27 +283,27 @@ pub fn claim_interrupt(
     Ok(true)
 }
 
-/// Give up a claim [`claim_interrupt`] made.
-pub fn release_interrupt(
+/// Give up a claim [`claim_turn_end`] made.
+pub fn release_turn_end(
     project_root: &Path,
     scope: &str,
     agent: &str,
     since: DateTime<Utc>,
 ) -> Result<()> {
-    match std::fs::remove_file(interrupt_claim(project_root, scope, agent, since)) {
+    match std::fs::remove_file(turn_end_claim(project_root, scope, agent, since)) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
         _ => Ok(()),
     }
 }
 
-/// Whether the interrupt at `since` has been claimed.
-pub fn interrupt_claimed(
+/// Whether the turn end at `since` has been claimed.
+pub fn turn_end_claimed(
     project_root: &Path,
     scope: &str,
     agent: &str,
     since: DateTime<Utc>,
 ) -> bool {
-    interrupt_claim(project_root, scope, agent, since).exists()
+    turn_end_claim(project_root, scope, agent, since).exists()
 }
 
 /// Stamp the agent as active now.
@@ -440,19 +441,19 @@ mod tests {
     }
 
     #[test]
-    fn an_interrupt_is_claimed_once_until_given_back() {
+    fn a_turn_end_is_claimed_once_until_given_back() {
         let dir = tempdir().unwrap();
         let root = dir.path();
         let first = Utc::now();
         let later = first + chrono::Duration::seconds(5);
 
-        assert!(claim_interrupt(root, "login", "qa", first).unwrap());
-        assert!(!claim_interrupt(root, "login", "qa", first).unwrap());
-        assert!(interrupt_claimed(root, "login", "qa", first));
+        assert!(claim_turn_end(root, "login", "qa", first).unwrap());
+        assert!(!claim_turn_end(root, "login", "qa", first).unwrap());
+        assert!(turn_end_claimed(root, "login", "qa", first));
 
-        assert!(claim_interrupt(root, "login", "qa", later).unwrap());
-        release_interrupt(root, "login", "qa", later).unwrap();
-        assert!(!interrupt_claimed(root, "login", "qa", later));
-        assert!(claim_interrupt(root, "login", "qa", later).unwrap());
+        assert!(claim_turn_end(root, "login", "qa", later).unwrap());
+        release_turn_end(root, "login", "qa", later).unwrap();
+        assert!(!turn_end_claimed(root, "login", "qa", later));
+        assert!(claim_turn_end(root, "login", "qa", later).unwrap());
     }
 }

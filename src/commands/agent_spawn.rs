@@ -300,7 +300,7 @@ fn spawn_session_with_config(
             name,
             AgentEntry {
                 agent_type: AgentType::Agent,
-                session_id: pre.session_id.clone().unwrap_or_default(),
+                session_id: registered_session(&pre.session_id, &spec),
                 window_name: name.to_string(),
                 active: true,
                 agent_definition: stored_definition,
@@ -341,6 +341,17 @@ fn spawn_session_with_config(
         notes,
         resumed,
     })
+}
+
+/// The session id to register before launch. A resume keeps the id it
+/// resumes, so a harness that exits before its SessionStart hook leaves the
+/// conversation resumable; a fork's id is unknown until that hook records it.
+fn registered_session(opened: &Option<String>, spec: &SpawnSpec) -> String {
+    match (opened, spec.resume_session) {
+        (Some(id), _) => id.clone(),
+        (None, Some(id)) if !spec.fork_session => id.to_string(),
+        _ => String::new(),
+    }
 }
 
 /// Outcome of an [`agent_spawn`] call. Lets callers tell whether work was
@@ -969,6 +980,28 @@ pub(crate) mod tests {
         assert_eq!(outcome, SpawnOutcome::Resumed);
         assert!(outcome.is_new_window());
         assert!(msg.contains("Resumed agent 'reviewer'"));
+    }
+
+    #[test]
+    fn a_resume_keeps_its_session_id_until_the_harness_reports_one() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+        agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
+        let agents_dir = paths::agents_dir(dir.path());
+        let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        registry.get_mut("reviewer").unwrap().session_id = "sess-abc123".to_string();
+        registry.save(&agents_dir, &feature).unwrap();
+        tmux::kill_session(server.name(), &session_name).unwrap();
+        tmux::create_session(server.name(), &session_name, &dir.path().join("login")).unwrap();
+
+        // The test harness never starts, so no SessionStart hook replaces
+        // the id: a relaunch that dies at startup must not lose it.
+        let (outcome, _, _) =
+            agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
+        assert_eq!(outcome, SpawnOutcome::Resumed);
+        let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        assert_eq!(registry.get("reviewer").unwrap().session_id, "sess-abc123");
     }
 
     /// Point `definition`'s `[agents.harness]` row at `harness` in the

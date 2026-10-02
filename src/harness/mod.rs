@@ -15,6 +15,7 @@ mod codex;
 mod opencode;
 mod probe;
 mod screen;
+mod transcript;
 
 pub use probe::Probe;
 
@@ -285,7 +286,8 @@ impl Harness {
     ) -> Option<(&'static str, &'static str)> {
         match self {
             Harness::ClaudeCode => claude_code::input::text_mode_key(screen, home, config_dir),
-            Harness::Codex | Harness::OpenCode => None,
+            Harness::Codex => codex::input::text_mode_key(screen),
+            Harness::OpenCode => None,
         }
     }
 
@@ -299,13 +301,15 @@ impl Harness {
         }
     }
 
-    /// When the user interrupted the session whose transcript is at
-    /// `transcript`, for a harness that fires no hook for it, if nothing has
-    /// happened in it since.
-    pub fn interrupted(self, transcript: &Path) -> Option<std::time::SystemTime> {
+    /// How the last turn of the session whose transcript is at `transcript`
+    /// ended, when it ended in a way the harness fires no hook for —
+    /// interrupted, or failed — and nothing has happened in it since; dated
+    /// by the transcript's mtime.
+    pub fn turn_ended(self, transcript: &Path) -> Option<Waiting> {
         match self {
-            Harness::ClaudeCode => claude_code::transcript::interrupted(transcript),
-            Harness::Codex | Harness::OpenCode => None,
+            Harness::ClaudeCode => claude_code::transcript::turn_ended(transcript),
+            Harness::Codex => codex::transcript::turn_ended(transcript),
+            Harness::OpenCode => None,
         }
     }
 

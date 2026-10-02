@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test, type TestContext } from "node:test"
@@ -30,7 +30,7 @@ const SUCCEEDED = "session.execution.succeeded"
 const BLOCK: HookResult = { code: 0, out: '{"decision":"block","reason":"You have new messages"}' }
 
 /** A loop over scripted hook answers, recording what it did. */
-function harness(answers: HookResult[] | (() => Promise<HookResult>)) {
+function harness(answers: HookResult[] | ((cancel: AbortSignal) => Promise<HookResult>)) {
   const seen = {
     prompts: [] as string[],
     sleeps: [] as number[],
@@ -41,9 +41,9 @@ function harness(answers: HookResult[] | (() => Promise<HookResult>)) {
   const queue = Array.isArray(answers) ? [...answers] : null
   const loop = new Loop({
     agent: "reviewer",
-    hook: async () => {
+    hook: async (cancel) => {
       seen.asked += 1
-      if (!queue) return (answers as () => Promise<HookResult>)()
+      if (!queue) return (answers as (cancel: AbortSignal) => Promise<HookResult>)(cancel)
       const next = queue.shift()
       if (!next) throw new Error("the loop asked the hook more often than scripted")
       return next
@@ -207,6 +207,88 @@ test("a turn ending while the hook is blocked does not start a second waiter", a
   assert.deepEqual(seen.prompts, ["You have new messages"])
 })
 
+/** A hook that blocks until cancelled, then answers as killed. */
+function blockingHook() {
+  return (cancel: AbortSignal) =>
+    new Promise<HookResult>((resolve) => cancel.addEventListener("abort", () => resolve({ code: null, out: "" })))
+}
+
+test("a turn the plugin did not prompt cancels the wait, which is no failure, and its end waits again", async () => {
+  let answers = 0
+  const blocking = blockingHook()
+  const { loop, seen } = harness((cancel) => (answers++ === 0 ? blocking(cancel) : Promise.resolve(BLOCK)))
+  const waiting = loop.arm("ses_1")
+  loop.turnStarted("ses_1")
+  await waiting
+  assert.deepEqual(seen.prompts, [])
+  assert.deepEqual(seen.sleeps, [], "no retry after a cancelled wait")
+
+  await loop.turnEnded("ses_1", SUCCEEDED)
+  assert.equal(seen.asked, 2)
+  assert.deepEqual(seen.prompts, ["You have new messages"])
+  assert.deepEqual(seen.reports, [])
+})
+
+test("cancelled waits never stop the loop", async () => {
+  const { loop, seen } = harness(blockingHook())
+  for (let turn = 0; turn < MAX_FAILURES + 1; turn++) {
+    const waiting = turn === 0 ? loop.arm("ses_1") : loop.turnEnded("ses_1", SUCCEEDED)
+    loop.turnStarted("ses_1")
+    await waiting
+  }
+  assert.equal(loop.stopped, null)
+  assert.deepEqual(seen.reports, [])
+})
+
+test("a turn that ends before its cancelled wait returns is still waited after", async () => {
+  let release: (result: HookResult) => void = () => {}
+  let answers = 0
+  const { loop, seen } = harness(() =>
+    answers++ === 0 ? new Promise<HookResult>((resolve) => (release = resolve)) : Promise.resolve(BLOCK),
+  )
+  const waiting = loop.arm("ses_1")
+  loop.turnStarted("ses_1")
+  await loop.turnEnded("ses_1", SUCCEEDED)
+  release({ code: null, out: "" })
+  await waiting
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(seen.asked, 2)
+  assert.deepEqual(seen.prompts, ["You have new messages"])
+})
+
+test("a turn that starts while the loop backs off is not waited through, and its end waits again", async () => {
+  let wake: () => void = () => {}
+  let asked = 0
+  const loop = new Loop({
+    agent: "reviewer",
+    hook: async () => {
+      asked += 1
+      return BLOCK
+    },
+    prompt: async () => {},
+    sleep: () => new Promise<void>((resolve) => (wake = resolve)),
+    report: () => {},
+    lastTurn: () => {},
+    now: () => 0,
+  })
+  const failed = loop.turnEnded("ses_1", TURN_FAILED, { message: "down" })
+  loop.turnStarted("ses_1")
+  wake()
+  await failed
+  assert.equal(asked, 0, "not asked during the turn")
+
+  await loop.turnEnded("ses_1", SUCCEEDED)
+  assert.equal(asked, 1)
+})
+
+test("a turn starting with no wait blocked is the plugin's own prompt and cancels nothing", async () => {
+  const { loop, seen } = harness([BLOCK, BLOCK])
+  await loop.arm("ses_1")
+  loop.turnStarted("ses_1")
+  await loop.turnEnded("ses_1", SUCCEEDED)
+  assert.deepEqual(seen.prompts, Array(2).fill("You have new messages"))
+})
+
 test("a failed turn is followed by a wait before the hook is asked", async () => {
   const { loop, seen } = harness([BLOCK])
   await loop.turnEnded("ses_1", TURN_FAILED)
@@ -337,6 +419,29 @@ test("`pm` is given the hook's input and its answer is returned", async (t) => {
     command,
   })
   assert.deepEqual(hookDecision(result), { block: "harness hooks stop {}" })
+})
+
+test("a cancelled `pm` is killed with a signal it cannot catch", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "pm-plugin-test-"))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const caught = join(dir, "caught")
+  const ready = join(dir, "ready")
+  const command = fakePm(t, `trap 'touch ${caught}; exit 0' TERM INT; touch ${ready}; while :; do sleep 0.05; done`)
+  const cancel = new AbortController()
+  const children = new Set<any>()
+  const running = runPm(["harness", "hooks", "stop"], "{}", {
+    cwd: tmpdir(),
+    env: process.env,
+    children,
+    command,
+    signal: cancel.signal,
+  })
+  while (!existsSync(ready)) await new Promise((resolve) => setTimeout(resolve, 10))
+  cancel.abort()
+  const result = await running
+  assert.equal(result.code, null)
+  assert.equal(existsSync(caught), false)
+  assert.equal(children.size, 0)
 })
 
 test("a subscription that keeps ending stops the loop; one that recovers does not", async () => {

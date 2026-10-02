@@ -26,6 +26,7 @@ import {
   PM_PROMPT,
   TURN_END,
   TURN_ERROR_FILE,
+  TURN_STARTED,
   answeredOf,
   askOf,
   drivesSession,
@@ -44,8 +45,8 @@ export default {
     const tripFile = process.env.PM_OPENCODE_TRIP_FILE
     const controller = new AbortController()
     const children = new Set<ChildProcess>()
-    const pm = (args: string[], stdin: string) =>
-      runPm(args, stdin, { cwd: ctx.location.directory, env: process.env, children })
+    const pm = (args: string[], stdin: string, signal?: AbortSignal) =>
+      runPm(args, stdin, { cwd: ctx.location.directory, env: process.env, children, signal })
 
     const stateFile = (name: string) => (tripFile ? join(dirname(tripFile), name) : undefined)
     const record = (file: string | undefined, text: string | null) => {
@@ -75,7 +76,7 @@ export default {
       agent,
       // Always `{}`: the plugin never holds a turn open, so the hook has no
       // running background work to yield to.
-      hook: () => pm(["harness", "hooks", "stop"], "{}"),
+      hook: (cancel) => pm(["harness", "hooks", "stop"], "{}", cancel),
       prompt: (sessionID, text) => ctx.session.prompt({ sessionID, text, metadata: PM_PROMPT }),
       sleep: (ms) =>
         new Promise((resolve) => {
@@ -153,6 +154,10 @@ export default {
               if (text !== null && (await drivesSession(own, sessionID, parentOf))) {
                 void pm(["harness", "hooks", "user-prompt"], JSON.stringify({ prompt: text }))
               }
+              continue
+            }
+            if (event.type === TURN_STARTED) {
+              if (await drivesSession(own, sessionID, parentOf)) loop.turnStarted(sessionID)
               continue
             }
             if (!TURN_END.has(event.type)) continue

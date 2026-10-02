@@ -11,9 +11,9 @@
 //! NORMAL mode). A draft is never cleared; when any check fails the message
 //! just stays queued and the agent stays visibly unarmed. Removing the
 //! marker is the claim to type, so of two concurrent senders only one does;
-//! the prompt's UserPromptSubmit would clear it anyway. An interrupt read
+//! the prompt's UserPromptSubmit would clear it anyway. A turn's end read
 //! from the transcript is claimed with a stamp instead
-//! ([`runtime::claim_interrupt`]). The claim comes before any key is
+//! ([`runtime::claim_turn_end`]). The claim comes before any key is
 //! pressed, and is given back when nothing is typed.
 
 use std::path::Path;
@@ -64,7 +64,7 @@ pub fn rearm(
     let claimed = if from_marker {
         runtime::clear_waiting(project_root, scope, agent)?
     } else {
-        runtime::claim_interrupt(project_root, scope, agent, waiting.since)?
+        runtime::claim_turn_end(project_root, scope, agent, waiting.since)?
     };
     if !claimed {
         return Ok(None);
@@ -73,7 +73,7 @@ pub fn rearm(
         if from_marker {
             runtime::write_waiting(project_root, scope, agent, &waiting)
         } else {
-            runtime::release_interrupt(project_root, scope, agent, waiting.since)
+            runtime::release_turn_end(project_root, scope, agent, waiting.since)
         }
     };
     match type_prompt(project_root, scope, agent, harness, &pane.id, tmux_server) {
