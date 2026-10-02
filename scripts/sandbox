@@ -12,7 +12,8 @@ usage() {
 Usage: scripts/sandbox [COMMAND] [OPTIONS] [-- CMD...]
 
   (none)                        up if needed, shell, then down on exit
-  up [--real] [--pm P] [--shell S]  create the sandbox (builds pm unless --pm)
+  up [--real] [--pm P] [--shell S]  create the sandbox (builds pm unless --pm);
+                                replaces one an interrupted up/down left
   run [-C DIR] -- CMD...        run CMD with the sandbox's environment
                                 (cwd DIR, relative to the sandbox HOME)
   shell                         interactive shell inside the sandbox
@@ -24,8 +25,9 @@ Usage: scripts/sandbox [COMMAND] [OPTIONS] [-- CMD...]
                                 run it before `pm feat new`/`pm agent spawn`
                                 (relative to the sandbox HOME, exact paths —
                                 claude does not inherit trust from parents)
-  down [--force]                kill the server and delete the HOME; a
-                                running test binary's pid-named sandbox
+  down [--force]                stop the server and every process still
+                                in the sandbox env, then delete the HOME;
+                                a running test binary's pid-named sandbox
                                 only with --force
   list                          every sandbox on this machine: windows (each
                                 holds a pty), age, creator, and why it is
@@ -113,10 +115,27 @@ select_sandbox "$name"
 scrubbed() { env "${sandbox_env[@]}" "$@"; }
 stmux() { scrubbed tmux -L "$server" "$@"; }
 exists() { [ -d "$home" ]; }
-require() { exists || die "no sandbox '$name' (scripts/sandbox up -n $name)"; }
+# The pm `up` installed, recorded as its last step and removed as the first
+# of `down`; empty if the sandbox is incomplete.
+installed_pm() {
+  local want
+  want=$(meta "$name" pm)
+  [ -n "$want" ] && [ -x "$home/bin/pm" ] && echo "$want"
+}
+# A HOME without its pm would leave the installed `pm` first on PATH, so
+# the build under test would silently not be the one running.
+require() {
+  exists || die "no sandbox '$name' (scripts/sandbox up -n $name)"
+  [ -n "$(installed_pm)" ] \
+    || die "sandbox '$name' at $home is incomplete (an interrupted up or down), so its pm build may be missing: scripts/sandbox up -n $name replaces it"
+}
 
 up() {
-  exists && die "sandbox '$name' already exists at $home (down first)"
+  if exists; then
+    [ -z "$(installed_pm)" ] || die "sandbox '$name' already exists at $home (down first)"
+    echo "sandbox '$name' at $home is incomplete (an interrupted up or down); removing it"
+    down
+  fi
   if [ -z "$pm_bin" ]; then
     (cd "$here" && cargo build -q)
     pm_bin=$here/target/debug/pm
@@ -149,6 +168,7 @@ up() {
   # Windows would otherwise run a login shell, whose profile (macOS
   # path_helper) moves system dirs ahead of the sandbox's bin/.
   stmux set -g default-command "${shell_bin:-${SHELL:-/bin/sh}}"
+  echo "pm=$pm_bin" >> "$home/.sandbox"
   echo "sandbox '$name' up: HOME=$home  tmux -L $server"
   local own=()
   for n in $(sandbox_names); do
@@ -211,23 +231,98 @@ trust() {
 }
 
 # The server is killed even when the HOME is already gone (macOS prunes
-# idle $TMPDIR entries), so a sandbox can never leak its server.
+# idle $TMPDIR entries), so a sandbox can never leak its server. Killing it
+# is not enough: a job it started (`pm tmux watch`, a hook) can outlive it
+# and write into the HOME while it is removed, so every sandbox process is
+# stopped first.
 down() {
-  local had_socket=0
+  local had_socket=0 tree
   if [ "$force" = 0 ] && live_pid "$name"; then
     die "sandbox '$name' belongs to running process $name (--force to down it anyway)"
   fi
   [ -e "$socket" ] && had_socket=1
+  if [ -f "$home/.sandbox" ]; then
+    grep -v '^pm=' "$home/.sandbox" > "$home/.sandbox.tmp" || true
+    mv "$home/.sandbox.tmp" "$home/.sandbox"
+  fi
+  # Read before the kill, which orphans the server's children to init.
+  tree=$(server_tree)
   stmux kill-server 2>/dev/null || true
   rm -f "$socket"
+  # shellcheck disable=SC2046,SC2086
+  stop_pids $tree $(env_pids)
   if exists; then
-    rm -rf "$home"
+    if ! remove_home; then
+      # shellcheck disable=SC2046
+      stop_pids $(env_pids)
+      remove_home || {
+        lsof +D "$home" 2>/dev/null >&2 || true
+        die "could not remove $home: something still writes into it (above, if lsof found it); stop it and run down again"
+      }
+    fi
     echo "sandbox '$name' down"
   elif [ "$had_socket" = 1 ]; then
     echo "sandbox '$name' down (server only, no HOME)"
   else
     echo "no sandbox '$name'"
   fi
+}
+
+remove_home() { rm -rf "$home" 2>/dev/null; ! exists; }
+
+# The sandbox server and its descendants.
+server_tree() {
+  local root
+  root=$(stmux display -p '#{pid}' 2>/dev/null) || return 0
+  ps -ax -o pid= -o ppid= | awk -v root="$root" '
+    { parent[$1] = $2 }
+    END {
+      for (p in parent) {
+        for (q = p; q != "" && q > 1; q = parent[q]) if (q == root) { print p; break }
+      }
+    }'
+}
+
+# Processes whose environment is the sandbox's, including any a dead
+# server orphaned. macOS hides the environment of its own platform
+# binaries (sh, sleep), which server_tree covers while the server lives.
+env_pids() {
+  local f p
+  if [ -r /proc/self/environ ]; then
+    for f in /proc/[0-9]*/environ; do
+      tr '\0' '\n' < "$f" 2>/dev/null \
+        | grep -qxF -e "HOME=$home" -e "PM_TMUX_SERVER=$server" || continue
+      p=${f#/proc/}; echo "${p%/environ}"
+    done
+  else
+    ps -Eww -ax -o pid= -o command= 2>/dev/null \
+      | awk -v h=" HOME=$home " -v s=" PM_TMUX_SERVER=$server " \
+          'index($0 " ", h) || index($0 " ", s) { print $1 }'
+  fi
+}
+
+# TERM the given pids, except this script and its ancestors (a down run
+# from a sandbox shell), then KILL whatever is left, and wait for them all.
+stop_pids() {
+  local p q self=" " left alive i
+  for (( q = $$; q > 1; q = $(ps -o ppid= -p "$q" 2>/dev/null || echo 1) )); do
+    self+="$q "
+  done
+  left=()
+  for p in "$@"; do
+    case $self in *" $p "*) continue ;; esac
+    left+=("$p")
+  done
+  [ ${#left[@]} -gt 0 ] || return 0
+  kill -TERM "${left[@]}" 2>/dev/null || true
+  for i in $(seq 50); do
+    [ "$i" != 30 ] || kill -KILL "${left[@]}" 2>/dev/null || true
+    alive=()
+    for p in "${left[@]}"; do kill -0 "$p" 2>/dev/null && alive+=("$p"); done
+    [ ${#alive[@]} -gt 0 ] || return 0
+    left=("${alive[@]}")
+    sleep 0.1
+  done
 }
 
 # Whether NAME is the pid of a live process: its sandbox belongs to a
@@ -295,7 +390,7 @@ prune() {
 
 case $cmd in
   "") created=0
-      if ! exists; then up; created=1; fi
+      if [ -z "$(installed_pm)" ]; then up; created=1; fi
       shell
       if [ "$created" = 1 ]; then force=1 down; fi ;;
   up) up ;;
