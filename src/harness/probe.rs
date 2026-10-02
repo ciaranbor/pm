@@ -42,6 +42,7 @@ impl From<std::process::Output> for Exit {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Entry {
+    binary: PathBuf,
     stamp: String,
     exit: Exit,
 }
@@ -70,12 +71,13 @@ fn run_in<E>(
     probe: Probe,
     spawn: impl FnOnce() -> Result<Exit, E>,
 ) -> Result<Exit, E> {
-    let Some((key, stamp)) = resolve(binary).and_then(|path| {
-        let stamp = stamp(&path)?;
-        Some((format!("{} {arg}", path.display()), stamp))
-    }) else {
+    let Some(path) = resolve(binary) else {
         return spawn();
     };
+    let Some(stamp) = stamp(&path) else {
+        return spawn();
+    };
+    let key = format!("{} {arg}", path.display());
     let mut entries = load(cache);
     if probe == Probe::Cached
         && let Some(entry) = entries.get(&key).filter(|e| e.stamp == stamp)
@@ -86,10 +88,13 @@ fn run_in<E>(
     entries.insert(
         key,
         Entry {
+            binary: path,
             stamp,
             exit: exit.clone(),
         },
     );
+    // A versioned install leaves its old path behind at each upgrade.
+    entries.retain(|_, entry| entry.binary.exists());
     store(cache, &entries);
     Ok(exit)
 }
@@ -162,6 +167,31 @@ mod tests {
         std::fs::write(binary, "v2 upgraded").unwrap();
         assert_eq!(probe(Probe::Cached, "2.0"), "2.0");
         assert_eq!(spawns.get(), 3);
+
+        // An upgrade to a new versioned path drops the old path's entry.
+        let upgraded = dir.path().join("harness-3");
+        std::fs::write(&upgraded, "v3").unwrap();
+        std::fs::remove_file(binary).unwrap();
+        run_in(
+            &cache,
+            upgraded.to_str().unwrap(),
+            "--version",
+            Probe::Cached,
+            || {
+                Ok::<_, ()>(Exit {
+                    success: true,
+                    stdout: "3.0".to_string(),
+                })
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            load(&cache)
+                .into_values()
+                .map(|e| e.binary)
+                .collect::<Vec<_>>(),
+            vec![upgraded.canonicalize().unwrap()]
+        );
     }
 
     #[test]
