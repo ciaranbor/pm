@@ -2,11 +2,14 @@
 //! doing ([`Liveness`]).
 //!
 //! An agent is idle only while it waits in pm's Stop hook. A window whose
-//! agent pane ([`tmux::mark_agent_pane`]) runs no process of the agent's
-//! harness ([`Harness::runs_as`]) is dead: the harness exited to the shell
-//! and nothing will wake it. Anything else is busy, a harness that yielded
-//! for background work included. A pane whose processes cannot be read
-//! counts as busy.
+//! agent pane ([`tmux::mark_agent_pane`]) has its shell back at the prompt
+//! — in the terminal's foreground, running no job — and no process of the
+//! agent's harness ([`Harness::runs_as`]) is dead: the harness exited to
+//! the shell and nothing will wake it. A foreground job is the harness
+//! whatever it is named, so a wrapper with another name doesn't read dead,
+//! and a shell's own background helpers don't read busy. Anything else is
+//! busy, a harness that yielded for background work included. A pane whose
+//! processes cannot be read counts as busy.
 //!
 //! [`Windows`] reads every pane on the server and the process table once,
 //! so classifying any number of agents costs one `tmux` and one `ps` call.
@@ -69,8 +72,8 @@ pub enum Liveness {
     Dead,
 }
 
-/// Classify a window by the processes of its pane; `None`, processes that
-/// could not be read, counts as busy.
+/// Classify a window by the processes of its pane, the pane's own first;
+/// `None`, processes that could not be read, counts as busy.
 pub fn liveness(
     processes: Option<&[Process]>,
     harness: Harness,
@@ -79,11 +82,13 @@ pub fn liveness(
     let Some(processes) = processes else {
         return Liveness::Busy;
     };
+    let at_prompt = processes.first().is_some_and(|shell| shell.foreground);
     if is_idle(processes) {
         Liveness::Idle
-    } else if processes
-        .iter()
-        .any(|p| harness.runs_as(&p.command, config))
+    } else if !at_prompt
+        || processes
+            .iter()
+            .any(|p| harness.runs_as(&p.command, config))
     {
         Liveness::Busy
     } else {
@@ -178,6 +183,32 @@ mod tests {
         assert_eq!(state("busy"), Liveness::Busy);
         assert_eq!(state("idle"), Liveness::Idle);
         assert_eq!(state("dead"), Liveness::Dead);
+    }
+
+    #[test]
+    fn a_foreground_job_of_any_name_is_busy_and_a_background_one_is_not() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let session = server.scope("jobs");
+        tmux::create_session(server.name(), &session, dir.path()).unwrap();
+        let state = |command: &str| {
+            let window = tmux::new_window(server.name(), &session, dir.path(), None, true).unwrap();
+            tmux::send_keys(server.name(), &window, command).unwrap();
+            let config = HarnessConfig::default();
+            let mut last = None;
+            for _ in 0..250 {
+                let processes = tmux::pane_processes(server.name(), &window).unwrap();
+                if processes.iter().any(|p| p.command.contains("sleep")) {
+                    return liveness(Some(&processes), Harness::ClaudeCode, &config);
+                }
+                last = Some(processes);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            panic!("{command} never started: {last:?}");
+        };
+
+        assert_eq!(state("sleep 999"), Liveness::Busy);
+        assert_eq!(state("sleep 999 &"), Liveness::Dead);
     }
 
     #[test]

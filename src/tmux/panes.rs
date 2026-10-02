@@ -5,12 +5,12 @@
 
 use std::path::Path;
 
-use super::{agent_panes_in, pane_format, run_tmux};
+use super::{agent_panes_in, pane_format, run_tmux, run_tmux_untrimmed};
 use crate::error::Result;
 
 /// The id (`%N`) of `window`'s agent pane: its marked pane, else its first.
 pub fn agent_pane(server: Option<&str>, window: &str) -> Result<Option<String>> {
-    let output = run_tmux(server, &["list-panes", "-t", window, "-F", &pane_format()])?;
+    let output = run_tmux_untrimmed(server, &["list-panes", "-t", window, "-F", &pane_format()])?;
     Ok(agent_panes_in(&output).into_iter().next().map(|p| p.id))
 }
 
