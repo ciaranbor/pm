@@ -54,6 +54,7 @@ use toml_edit::{DocumentMut, Item, Table, value};
 use crate::error::{PmError, Result};
 use crate::fs_utils::write_atomic;
 use crate::harness::SpawnSpec;
+use crate::harness::probe::{self, Probe};
 use crate::state::project::CodexConfig;
 use crate::tmux;
 
@@ -305,26 +306,26 @@ fn parse_version(output: &str) -> Option<(u32, u32, u32)> {
 }
 
 /// The installed version's raw string, or `None` when `codex` can't be run.
-pub(super) fn installed_version() -> Option<String> {
-    let out = std::process::Command::new(BINARY)
-        .arg("--version")
-        .stdin(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+pub(super) fn installed_version(probe: Probe) -> Option<String> {
+    let exit = probe::run(BINARY, "--version", probe, || {
+        std::process::Command::new(BINARY)
+            .arg("--version")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map(probe::Exit::from)
+    })
+    .ok()?;
+    exit.success.then(|| exit.stdout.trim().to_string())
 }
 
 /// Whether the installed codex is at least [`MIN_VERSION`]; `None` when it
 /// can't be probed.
-pub(super) fn version_supported() -> Option<bool> {
-    Some(parse_version(&installed_version()?)? >= MIN_VERSION)
+pub(super) fn version_supported(probe: Probe) -> Option<bool> {
+    Some(parse_version(&installed_version(probe)?)? >= MIN_VERSION)
 }
 
-pub(super) fn unusable_reason() -> Option<String> {
-    version_problem(installed_version().as_deref())
+pub(super) fn unusable_reason(probe: Probe) -> Option<String> {
+    version_problem(installed_version(probe).as_deref())
 }
 
 /// What is wrong with `found`, the installed version's raw string (`None`

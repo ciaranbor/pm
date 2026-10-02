@@ -31,6 +31,7 @@ use serde_json::{Value, json};
 
 use super::{api, binary, bounded, command, detached, installed_version, refusal, run_api};
 use crate::error::{PmError, Result};
+use crate::harness::Probe;
 use crate::harness::{ImportOutcome, InUse, per_session_outcome};
 use crate::state::project::OpenCodeConfig;
 
@@ -227,7 +228,7 @@ impl<'a> MoveServer<'a> {
 }
 
 pub(in crate::harness) fn unreachable(cfg: &OpenCodeConfig) -> Option<String> {
-    installed_version(cfg).err()
+    installed_version(cfg, Probe::Fresh).err()
 }
 
 pub(in crate::harness) fn migrate(

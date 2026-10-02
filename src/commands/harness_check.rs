@@ -9,7 +9,7 @@ use std::path::Path;
 
 use crate::commands::{agent_spawn, hooks_install};
 use crate::error::{PmError, Result};
-use crate::harness::Harness;
+use crate::harness::{Harness, Probe};
 use crate::state::paths;
 use crate::state::project::{
     AgentSettings, AgentsConfig, GlobalConfig, HarnessConfig, ProjectConfig, WILDCARD_AGENT,
@@ -52,11 +52,12 @@ pub fn harness_problems(
     harness: Harness,
     config: &HarnessConfig,
     home: &Path,
+    probe: Probe,
 ) -> Result<Vec<Problem>> {
     let mut problems = Vec::new();
     let mut push = |kind, message| problems.push(Problem { kind, message });
 
-    if let Some(reason) = harness.unusable_reason(config) {
+    if let Some(reason) = harness.unusable_reason(config, probe) {
         push(ProblemKind::Unusable, reason);
     }
     let shown = hooks_install::install_location(harness, home)
@@ -228,7 +229,10 @@ fn team_problems(
                 let cached = match by_harness.iter().position(|(h, _)| *h == harness) {
                     Some(i) => i,
                     None => {
-                        by_harness.push((harness, harness_problems(harness, config, home)?));
+                        by_harness.push((
+                            harness,
+                            harness_problems(harness, config, home, Probe::Fresh)?,
+                        ));
                         by_harness.len() - 1
                     }
                 };
@@ -382,8 +386,13 @@ mod tests {
         hooks.remove("StopFailure");
         std::fs::write(&settings, root.to_string()).unwrap();
 
-        let problems =
-            harness_problems(Harness::ClaudeCode, &HarnessConfig::default(), &home).unwrap();
+        let problems = harness_problems(
+            Harness::ClaudeCode,
+            &HarnessConfig::default(),
+            &home,
+            Probe::Fresh,
+        )
+        .unwrap();
         let kinds: Vec<(ProblemKind, &str)> = problems
             .iter()
             .map(|p| (p.kind, p.message.as_str()))

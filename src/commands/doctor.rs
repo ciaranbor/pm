@@ -5,7 +5,7 @@ use crate::commands::feat_delete::{self, CleanupParams};
 use crate::commands::harness_check::{self, Problem, ProblemKind};
 use crate::commands::{agent_spawn, hooks_install, skills};
 use crate::error::Result;
-use crate::harness::Harness;
+use crate::harness::{Harness, Probe};
 use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
@@ -209,7 +209,7 @@ impl Finding {
 /// `check_pr_state` controls whether to make `gh pr view` network calls (one
 /// per feature with a linked PR). `pm doctor` passes `true`; latency-sensitive
 /// callers like the pre-open warning hook pass `false` to avoid round-trips
-/// on every session reopen.
+/// on every session reopen. Those callers also pass [`Probe::Cached`].
 ///
 /// Returns one [`Finding`] per scope that has issues (or per scope, including
 /// healthy ones — callers can filter by inspecting [`Finding::issues`]).
@@ -218,6 +218,7 @@ pub fn diagnose(
     projects_dir: &Path,
     tmux_server: Option<&str>,
     check_pr_state: bool,
+    probe: Probe,
 ) -> Result<Vec<Finding>> {
     let features_dir = paths::features_dir(project_root);
     let pm_dir = paths::pm_dir(project_root);
@@ -231,7 +232,7 @@ pub fn diagnose(
     // Main-scope checks: stop hook installed, main tmux session present.
     let main_session = tmux::session_name(project_name, "main");
     let mut main_issues: Vec<Issue> = Vec::new();
-    main_issues.extend(hook_issues(project_root)?);
+    main_issues.extend(hook_issues(project_root, probe)?);
     for path in hooks_install::stale_project_files(project_root)? {
         main_issues.push(Issue {
             kind: IssueKind::StaleProjectHooks,
@@ -553,17 +554,32 @@ pub fn doctor(
     fix: bool,
     tmux_server: Option<&str>,
 ) -> Result<Report> {
-    run(project_root, projects_dir, fix, tmux_server, true)
+    run(
+        project_root,
+        projects_dir,
+        fix,
+        tmux_server,
+        true,
+        Probe::Fresh,
+    )
 }
 
 /// [`doctor`] without fixes or the PR drift checks, which call `gh` once
-/// per feature with a PR.
+/// per feature with a PR, and with harness binaries probed only when
+/// changed since a cached probe.
 pub fn offline(
     project_root: &Path,
     projects_dir: &Path,
     tmux_server: Option<&str>,
 ) -> Result<Report> {
-    run(project_root, projects_dir, false, tmux_server, false)
+    run(
+        project_root,
+        projects_dir,
+        false,
+        tmux_server,
+        false,
+        Probe::Cached,
+    )
 }
 
 fn run(
@@ -572,12 +588,19 @@ fn run(
     fix: bool,
     tmux_server: Option<&str>,
     check_pr_state: bool,
+    probe: Probe,
 ) -> Result<Report> {
-    let mut warnings = baseline_capability_warnings(project_root)?;
+    let mut warnings = baseline_capability_warnings(project_root, probe)?;
     warnings.extend(global_config_warning());
     warnings.extend(registry_warnings(projects_dir)?);
 
-    let findings = diagnose(project_root, projects_dir, tmux_server, check_pr_state)?;
+    let findings = diagnose(
+        project_root,
+        projects_dir,
+        tmux_server,
+        check_pr_state,
+        probe,
+    )?;
     let feature_count = FeatureState::list(&paths::features_dir(project_root))?.len();
 
     let pm_dir = paths::pm_dir(project_root);
@@ -677,7 +700,7 @@ fn registry_warnings(projects_dir: &Path) -> Result<Vec<String>> {
 /// harness in use can't deliver pm's composed prompt — how the baseline
 /// reaches an agent at spawn time. Nothing when the baseline isn't installed
 /// (nothing to apply) or a binary can't be probed.
-fn baseline_capability_warnings(project_root: &Path) -> Result<Vec<String>> {
+fn baseline_capability_warnings(project_root: &Path, probe: Probe) -> Result<Vec<String>> {
     if !crate::commands::skills::baseline_path(project_root).exists() {
         return Ok(Vec::new());
     }
@@ -685,8 +708,8 @@ fn baseline_capability_warnings(project_root: &Path) -> Result<Vec<String>> {
     Ok(skills::harnesses_in_use(project_root)?
         .into_iter()
         // An unusable harness is reported as a finding of its own.
-        .filter(|h| h.unusable_reason(&config).is_none())
-        .filter(|h| h.supports_prompt_delivery(&config) == Some(false))
+        .filter(|h| h.unusable_reason(&config, probe).is_none())
+        .filter(|h| h.supports_prompt_delivery(&config, probe) == Some(false))
         .map(|h| format!("baseline — {}", prompt_delivery_unsupported(h)))
         .collect())
 }
@@ -704,7 +727,7 @@ fn prompt_delivery_unsupported(harness: Harness) -> String {
 /// the capabilities pm relies on.
 pub fn probe_line(harness: Harness, project_root: Option<&Path>) -> String {
     let mechanism = harness.prompt_mechanism();
-    match harness.supports_prompt_delivery(&harness_config(project_root)) {
+    match harness.supports_prompt_delivery(&harness_config(project_root), Probe::Fresh) {
         Some(true) => format!("{harness}: {mechanism} supported — the shared baseline is applied"),
         Some(false) => format!(
             "{harness}: does not support {mechanism} — the shared agent baseline will not be \
@@ -721,18 +744,20 @@ pub fn probe_line(harness: Harness, project_root: Option<&Path>) -> String {
 /// because codex fails silently on both counts. Only harnesses in use, although the install
 /// writes every supported harness's file: a trust finding for a harness
 /// none of this project's agents run on would be noise.
-fn hook_issues(project_root: &Path) -> Result<Vec<Issue>> {
-    hook_issues_in(project_root, &paths::home_dir()?)
+fn hook_issues(project_root: &Path, probe: Probe) -> Result<Vec<Issue>> {
+    hook_issues_in(project_root, &paths::home_dir()?, probe)
 }
 
 /// [`hook_issues`] against an explicit `home`.
-fn hook_issues_in(project_root: &Path, home: &Path) -> Result<Vec<Issue>> {
+fn hook_issues_in(project_root: &Path, home: &Path, probe: Probe) -> Result<Vec<Issue>> {
     let worktree_harnesses = worktree_harnesses(project_root)?;
     let (project, global) = agents_configs(project_root)?;
     let config = harness_config(Some(project_root));
     let mut issues = Vec::new();
     for harness in skills::harnesses_in_use(project_root)? {
-        for Problem { kind, message } in harness_check::harness_problems(harness, &config, home)? {
+        for Problem { kind, message } in
+            harness_check::harness_problems(harness, &config, home, probe)?
+        {
             // The default harness is in use whether or not an agent is on it.
             if kind == ProblemKind::Unusable
                 && !harness_check::has_agents(harness, &project, &global)
@@ -1343,7 +1368,14 @@ mod tests {
         git::commit(&main, "work").unwrap();
         TestServer::pause_rebase(&main, "HEAD~1");
 
-        let findings = diagnose(&project_path, &projects_dir, server.name(), false).unwrap();
+        let findings = diagnose(
+            &project_path,
+            &projects_dir,
+            server.name(),
+            false,
+            Probe::Fresh,
+        )
+        .unwrap();
         let main_finding = findings.iter().find(|f| f.feature() == "main").unwrap();
         assert!(
             main_finding
@@ -1397,7 +1429,14 @@ mod tests {
             .save(&paths::agents_dir(&project_path), "main")
             .unwrap();
 
-        let findings = diagnose(&project_path, &projects_dir, server.name(), false).unwrap();
+        let findings = diagnose(
+            &project_path,
+            &projects_dir,
+            server.name(),
+            false,
+            Probe::Fresh,
+        )
+        .unwrap();
         let main_kinds: Vec<IssueKind> = findings
             .iter()
             .filter(|f| f.feature() == "main")
@@ -1431,7 +1470,7 @@ mod tests {
         let project_root = dir.path();
         std::fs::create_dir_all(paths::main_worktree(project_root).join(".claude")).unwrap();
         assert!(
-            baseline_capability_warnings(project_root)
+            baseline_capability_warnings(project_root, Probe::Fresh)
                 .unwrap()
                 .is_empty()
         );
@@ -1522,7 +1561,7 @@ mod tests {
         let home = dir.path().join("home");
 
         // Not in use: nothing about opencode, whatever is installed.
-        let issues = hook_issues_in(&project_path, &home).unwrap();
+        let issues = hook_issues_in(&project_path, &home, Probe::Fresh).unwrap();
         assert!(
             issues.iter().all(|i| !i.message().contains("opencode")),
             "{:?}",
@@ -1530,7 +1569,7 @@ mod tests {
         );
 
         use_opencode(&project_path, "reviewer", "opencode v2.0.17");
-        let issues = hook_issues_in(&project_path, &home).unwrap();
+        let issues = hook_issues_in(&project_path, &home, Probe::Fresh).unwrap();
         assert_eq!(
             messages(&issues, IssueKind::HarnessUnusable),
             vec![
@@ -1564,7 +1603,7 @@ mod tests {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, content).unwrap();
         }
-        let issues = hook_issues_in(&project_path, &home).unwrap();
+        let issues = hook_issues_in(&project_path, &home, Probe::Fresh).unwrap();
         assert!(
             issues.iter().all(|i| !i.message().contains("opencode")),
             "{:?}",
@@ -1574,7 +1613,7 @@ mod tests {
         // A copy an upgrade has not replaced yet.
         let (index, _) = Harness::OpenCode.plugin_files(&home).remove(0);
         std::fs::write(index, "export default {}").unwrap();
-        let issues = hook_issues_in(&project_path, &home).unwrap();
+        let issues = hook_issues_in(&project_path, &home, Probe::Fresh).unwrap();
         assert_eq!(
             messages(&issues, IssueKind::HooksNotInstalled)
                 .iter()
@@ -1998,7 +2037,14 @@ mod tests {
 
         git::rename_branch(&main, "main", "master").unwrap();
 
-        let findings = diagnose(&project_path, &projects_dir, server.name(), false).unwrap();
+        let findings = diagnose(
+            &project_path,
+            &projects_dir,
+            server.name(),
+            false,
+            Probe::Fresh,
+        )
+        .unwrap();
         let main_scope = findings.iter().find(|f| f.feature == "main").unwrap();
         assert!(
             main_scope
@@ -2219,7 +2265,14 @@ mod tests {
         state.status = FeatureStatus::Initializing;
         state.save(&features_dir, "child").unwrap();
 
-        let findings = diagnose(&project_path, &projects_dir, server.name(), false).unwrap();
+        let findings = diagnose(
+            &project_path,
+            &projects_dir,
+            server.name(),
+            false,
+            Probe::Fresh,
+        )
+        .unwrap();
         let child = findings.iter().find(|f| f.feature == "child").unwrap();
         let base_scope = child
             .issues
@@ -2436,8 +2489,17 @@ mod tests {
         // wrote codex's file too.
         assert!(hooks_install::is_installed_for(Harness::Codex).unwrap());
         assert!(
-            kinds(&diagnose(&project_path, &projects_dir, server.name(), false).unwrap())
-                .is_empty()
+            kinds(
+                &diagnose(
+                    &project_path,
+                    &projects_dir,
+                    server.name(),
+                    false,
+                    Probe::Fresh
+                )
+                .unwrap()
+            )
+            .is_empty()
         );
 
         let pm_dir = paths::pm_dir(&project_path);
@@ -2452,7 +2514,11 @@ mod tests {
         // is written by every concurrent `init`): hooks missing, worktrees
         // untrusted.
         let bare_home = dir.path().join("bare-home");
-        let found = hook_kinds(hook_issues_in(&project_path, &bare_home).unwrap().iter());
+        let found = hook_kinds(
+            hook_issues_in(&project_path, &bare_home, Probe::Fresh)
+                .unwrap()
+                .iter(),
+        );
         assert_eq!(
             found.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
             vec![
@@ -2486,7 +2552,16 @@ mod tests {
             "{lines:?}"
         );
         assert!(hooks_install::is_installed_for(Harness::Codex).unwrap());
-        let found = kinds(&diagnose(&project_path, &projects_dir, server.name(), false).unwrap());
+        let found = kinds(
+            &diagnose(
+                &project_path,
+                &projects_dir,
+                server.name(),
+                false,
+                Probe::Fresh,
+            )
+            .unwrap(),
+        );
         assert_eq!(
             found.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
             vec![IssueKind::HookUntrusted; 4],
@@ -2541,7 +2616,11 @@ mod tests {
         let config_toml = trusted_home.join(".codex/config.toml");
         let existing = std::fs::read_to_string(&config_toml).unwrap();
         std::fs::write(&config_toml, format!("{existing}\n{trust}")).unwrap();
-        let found = hook_kinds(hook_issues_in(&project_path, &trusted_home).unwrap().iter());
+        let found = hook_kinds(
+            hook_issues_in(&project_path, &trusted_home, Probe::Fresh)
+                .unwrap()
+                .iter(),
+        );
         assert!(found.is_empty(), "{found:?}");
 
         // A flat hooks.json registers nothing in codex: flagged, not "installed".
@@ -2552,7 +2631,11 @@ mod tests {
             r#"{"hooks":{"Stop":[{"type":"command","command":"pm harness hooks stop"}]}}"#,
         )
         .unwrap();
-        let found = hook_kinds(hook_issues_in(&project_path, &bare_home).unwrap().iter());
+        let found = hook_kinds(
+            hook_issues_in(&project_path, &bare_home, Probe::Fresh)
+                .unwrap()
+                .iter(),
+        );
         assert_eq!(
             found.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
             vec![
@@ -2582,7 +2665,14 @@ mod tests {
             std::fs::write(claude.join("settings.json"), legacy).unwrap();
         }
 
-        let findings = diagnose(&project_path, &projects_dir, server.name(), false).unwrap();
+        let findings = diagnose(
+            &project_path,
+            &projects_dir,
+            server.name(),
+            false,
+            Probe::Fresh,
+        )
+        .unwrap();
         let main = findings.iter().find(|f| f.feature() == "main").unwrap();
         let stale: Vec<&str> = main
             .issues()
@@ -2621,7 +2711,14 @@ mod tests {
             assert_eq!(settings["permissions"]["allow"][0], "Read", "{wt}");
             assert!(settings.get("hooks").is_none(), "{wt}: {settings}");
         }
-        let findings = diagnose(&project_path, &projects_dir, server.name(), false).unwrap();
+        let findings = diagnose(
+            &project_path,
+            &projects_dir,
+            server.name(),
+            false,
+            Probe::Fresh,
+        )
+        .unwrap();
         assert!(
             findings.iter().all(|f| f.feature() != "main"),
             "main still has issues after fix"
@@ -2929,13 +3026,19 @@ mod tests {
             registry.save(&agents_dir, "login").unwrap();
         };
         let login_issues = || -> Vec<(IssueKind, String)> {
-            diagnose(&project_path, &projects_dir, server.name(), false)
-                .unwrap()
-                .iter()
-                .filter(|f| f.feature() == "login")
-                .flat_map(|f| f.issues())
-                .map(|i| (i.kind(), i.message().to_string()))
-                .collect()
+            diagnose(
+                &project_path,
+                &projects_dir,
+                server.name(),
+                false,
+                Probe::Fresh,
+            )
+            .unwrap()
+            .iter()
+            .filter(|f| f.feature() == "login")
+            .flat_map(|f| f.issues())
+            .map(|i| (i.kind(), i.message().to_string()))
+            .collect()
         };
 
         // The session id is recorded before the TUI starts, so only the
@@ -2988,13 +3091,19 @@ mod tests {
             registry.save(&agents_dir, "login").unwrap();
         };
         let login_issues = || -> Vec<(IssueKind, String)> {
-            diagnose(&project_path, &projects_dir, server.name(), false)
-                .unwrap()
-                .iter()
-                .filter(|f| f.feature() == "login")
-                .flat_map(|f| f.issues())
-                .map(|i| (i.kind(), i.message().to_string()))
-                .collect()
+            diagnose(
+                &project_path,
+                &projects_dir,
+                server.name(),
+                false,
+                Probe::Fresh,
+            )
+            .unwrap()
+            .iter()
+            .filter(|f| f.feature() == "login")
+            .flat_map(|f| f.issues())
+            .map(|i| (i.kind(), i.message().to_string()))
+            .collect()
         };
 
         // Just spawned: the hook may simply not have fired yet.
