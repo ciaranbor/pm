@@ -13,6 +13,7 @@
 mod claude_code;
 mod codex;
 mod opencode;
+mod screen;
 
 use std::collections::HashSet;
 use std::fmt;
@@ -249,12 +250,14 @@ impl Harness {
 
     /// Whether the input line on this harness's `screen`, captured with its
     /// escape sequences, is empty and takes typed keys as text; `None` when
-    /// it can't tell. `home` holds the harness's config. Codex and opencode
-    /// don't parse their screens, so they can't.
+    /// it can't tell. `home` holds the harness's config. opencode's never
+    /// stays unarmed — its plugin waits again after any turn and stops only
+    /// on purpose — so its screen is never read.
     pub fn input_is_empty(self, screen: &str, home: &Path) -> Option<bool> {
         match self {
             Harness::ClaudeCode => claude_code::input::is_empty(screen, home),
-            Harness::Codex | Harness::OpenCode => None,
+            Harness::Codex => codex::input::is_empty(screen),
+            Harness::OpenCode => None,
         }
     }
 

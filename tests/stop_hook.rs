@@ -118,15 +118,16 @@ fn a_signal_from_the_harness_ends_the_hook_and_says_why() {
     );
     wait_for_exit(&mut hook);
     let out = hook.wait_with_output().unwrap();
-    assert_eq!(out.status.code(), Some(1), "{out:?}");
-    assert!(out.stdout.is_empty(), "{out:?}");
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{out:?}");
+    let answer: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(answer.get("decision"), None, "{answer}");
+    let message = answer["systemMessage"].as_str().unwrap();
     assert!(
-        stderr.contains(&format!(
+        message.contains(&format!(
             "Stop hook ended by SIGTERM from pid {}",
             std::process::id()
         )),
-        "{stderr}"
+        "{message}"
     );
     let waiting = runtime::read_waiting(dir.path(), "main", AGENT).unwrap();
     assert_eq!(waiting.kind, WaitingKind::HookEnded);

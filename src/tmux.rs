@@ -198,9 +198,12 @@ pub fn send_keys(server: Option<&str>, target: &str, keys: &str) -> Result<()> {
     Ok(())
 }
 
-/// Type `text` into `target` as literal keys, then press Enter.
+/// Type `text` into `target` as literal keys, then press Enter. The pause
+/// before Enter is what makes it submit: codex takes an Enter arriving
+/// right after a burst of keys as part of a paste, a newline.
 pub fn send_text(server: Option<&str>, target: &str, text: &str) -> Result<()> {
     run_tmux(server, &["send-keys", "-t", target, "-l", text])?;
+    std::thread::sleep(std::time::Duration::from_millis(300));
     run_tmux(server, &["send-keys", "-t", target, "Enter"])?;
     Ok(())
 }

@@ -82,15 +82,18 @@ pub(crate) fn is_continuation(prompt: &str) -> bool {
             .is_some_and(|senders| !senders.is_empty() && !senders.contains('\n'))
 }
 
-/// Run the Stop hook. Prints the decision JSON and returns the exit code.
+/// Run the Stop hook. Prints its answer as JSON and returns the exit code,
+/// always 0, like every hook handler's.
 /// Non-pm sessions (unresolvable agent/scope) let the turn end, staying invisible.
 /// `on_turn` is told the agent's state and unread count as it enters its
 /// wait (idle), as it returns `block` (busy), as it yields (background) and
 /// as it ends without a decision (unarmed); it must not block.
 ///
 /// Ending without a decision while the harness is still there — it sent
-/// the signal, or the wait failed — exits 1 with the reason on stderr (see
-/// the `claude_code` harness module for why 1).
+/// the signal, or the wait failed — prints the reason as a `systemMessage`,
+/// which Claude Code and codex both show the user (verified on 2.1.287 and
+/// 0.160). A non-zero exit would not do: codex drops a failed hook's stderr,
+/// and Claude Code feeds exit 2's back as a prompt, looping the agent.
 pub fn stop(on_turn: &mut dyn FnMut(AgentState, u32)) -> i32 {
     let caller = Caller::current();
     // Resolve identity before reading stdin: a non-pm session bails here.
@@ -140,8 +143,9 @@ pub fn stop(on_turn: &mut dyn FnMut(AgentState, u32)) -> i32 {
             why
         }
     };
-    eprintln!("pm: Stop hook {why}; no message will wake this agent until its next turn");
-    1
+    let message = format!("pm: Stop hook {why}; this agent is unarmed");
+    print!("{}", json!({ "systemMessage": message }));
+    0
 }
 
 fn scope() -> crate::error::Result<(std::path::PathBuf, String)> {

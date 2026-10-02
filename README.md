@@ -289,7 +289,7 @@ timeout, so it never times out in practice.
 An agent whose turn ends any other way never re-enters the hook, so a
 message to it waits until something prompts it: an interrupt, a rejected
 dialog, an API error, or the hook itself ended by its harness (Esc while it
-waits), which then says why in the harness's hook error. pm shows such an
+waits), which then says why in the harness's transcript. pm shows such an
 agent as `unarmed`, and [`pm msg send`](#messaging) re-arms it when it can.
 A Claude Code agent interrupted mid-turn is the one case no hook reports; it
 reads `busy`, and its scope goes quiet. A SIGTERM from any process other than
@@ -335,8 +335,8 @@ agent: it errors on an inactive recipient, and respawns one whose window
 died. To an `unarmed` recipient it types the prompt the Stop hook would
 have given, but only when that agent's input line is empty (and, in vim
 mode, in INSERT mode), so it never touches a draft or answers a dialog;
-elsewhere the message waits. Only Claude Code's input line is read, so
-codex and opencode agents stay unarmed.
+elsewhere the message waits. opencode agents never need it: pm's plugin
+waits again after every turn.
 
 Identity resolves as `PM_AGENT_NAME` (set at spawn) > `$USER` > `"user"`, so
 spawned agents need no `--as-agent`.

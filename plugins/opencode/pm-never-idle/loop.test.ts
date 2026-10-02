@@ -175,6 +175,9 @@ test("only a block from a hook that exited cleanly is a decision", () => {
   assert.deepEqual(hookDecision({ code: 0, out: '{"decision":"block"}' }), {
     failure: "it did not recognise this agent",
   })
+  assert.deepEqual(hookDecision({ code: 0, out: '{"systemMessage":"pm: Stop hook failed: x"}' }), {
+    failure: "pm: Stop hook failed: x",
+  })
   assert.deepEqual(hookDecision({ code: 0, out: "" }), { failure: "unreadable answer: " })
   assert.deepEqual(hookDecision({ code: 1, out: BLOCK.out }), { failure: "exit 1" })
   assert.deepEqual(hookDecision({ code: -1, out: "" }), { failure: "exit -1" })

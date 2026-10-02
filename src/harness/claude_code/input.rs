@@ -11,6 +11,8 @@
 
 use std::path::Path;
 
+use crate::harness::screen::visible_text;
+
 const PROMPT: char = '❯';
 const RULE: char = '─';
 const INSERT: &str = "-- INSERT --";
@@ -42,43 +44,6 @@ fn is_empty_in(screen: &str, vim: bool) -> Option<bool> {
     }
     let rest = lines[prompt].trim_start().trim_start_matches(PROMPT);
     Some(rest.trim().is_empty())
-}
-
-/// `line` without its escape sequences or the text they draw dim.
-fn visible_text(line: &str) -> String {
-    let mut text = String::new();
-    let mut dim = false;
-    let mut chars = line.chars();
-    while let Some(c) = chars.next() {
-        if c != '\x1b' {
-            if !dim {
-                text.push(c);
-            }
-            continue;
-        }
-        if chars.next() != Some('[') {
-            continue;
-        }
-        let mut params = String::new();
-        let mut last = None;
-        for c in chars.by_ref() {
-            if ('\x40'..='\x7e').contains(&c) {
-                last = Some(c);
-                break;
-            }
-            params.push(c);
-        }
-        if last == Some('m') {
-            for param in params.split(';') {
-                match param {
-                    "2" => dim = true,
-                    "" | "0" | "22" => dim = false,
-                    _ => {}
-                }
-            }
-        }
-    }
-    text
 }
 
 /// Whether Claude Code's global config turns on its vim editor mode.
