@@ -121,7 +121,9 @@ its turn). pm surfaces all of it in tmux:
   agent — `main` included — starts asking (except on a client already
   showing that agent's pane). A feature alerts once per episode — not
   again when its agent's question outranks its `ready` for a while, nor
-  when its session is opened on a status it already had;
+  when its session is opened or closed on a status it already had. One
+  whose session is closed still alerts when it becomes blocked or ready (a
+  PR approved through `pm feat sync`, say);
 - pm's tree (prefix `s` / `w`), tmux's own tree with each session's
   activity (working, or how long it has been quiet), attention glyph and
   reason, and each agent's badge. Enter on a session goes straight to the
@@ -697,6 +699,7 @@ unset, text is escaped for formats, and each name is set at one scope only:
 | | `@pm_agent_badge` | the badge, styled; it resets with `#[default]`, so placed anywhere but the start of a format, follow it with your theme's style |
 | global | `@pm_summary` | each kind's glyph and how many sessions have `@pm_attention`, styled and joined by ` · `; unset when none has |
 | | `@pm_count` | sessions with `@pm_attention` set, so it matches what `@pm-attention-key` opens; a feature whose session is closed is not counted (`pm status` lists it) |
+| | `@pm_features_alerted` | pm's own bookkeeping: the kinds each feature has alerted on, kept for a closed feature |
 | | `@pm_tree_format` | pm's `choose-tree` line format, set by `pm tmux init` |
 
 ### Attention view

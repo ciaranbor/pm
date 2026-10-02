@@ -1,7 +1,9 @@
 //! Which changes to a scope's attention alert the user. The tmux refresh
 //! and `pm serve` share the rule; each keeps what it last judged of a scope
 //! ([`Judged`]) and hands it back with the next snapshot — tmux in the
-//! scope's session options, serve in memory ([`Watch`]).
+//! scope's session options, and for every feature in one global option,
+//! which is all a closed feature has; serve in memory ([`Watch`]), which
+//! judges closed features alongside the rest.
 //!
 //! A scope alerts as it enters blocked, asking or ready. A kind's episode
 //! lasts while its condition holds, not while it is the scope's attention:
