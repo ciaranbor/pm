@@ -5,11 +5,11 @@
 //! once ([`Windows`]), takes the PR state `pm feat sync` last recorded, and
 //! never calls `gh` or a harness, so it is cheap enough to poll.
 //!
-//! An agent the window reads as busy is refined by its waiting marker
-//! ([`runtime`]) into asking, unarmed or background. A scope is working
-//! while a busy or background agent showed activity in the last
-//! [`WORKING_SECS`]; a busy agent silent longer, which is also what a user's
-//! undetectable interrupt looks like, reads quiet.
+//! An agent the window reads as busy is refined by its waiting marker, or
+//! an interrupt no hook reported ([`running_agents::waiting`]), into
+//! asking, unarmed or background. A scope is working while a busy or
+//! background agent showed activity in the last [`WORKING_SECS`]; a busy
+//! agent silent longer reads quiet.
 
 use std::path::Path;
 
@@ -29,7 +29,7 @@ use crate::state::runtime::{self, WaitingClass, WaitingKind};
 use crate::tmux;
 
 use super::feat_status_view::first_line;
-use super::running_agents::{Liveness, Windows, liveness};
+use super::running_agents::{self, Liveness, Windows, liveness};
 
 /// Bumped when a field changes meaning or goes away; added fields, kinds
 /// and states keep it.
@@ -550,7 +550,7 @@ impl ScopeReader<'_> {
         now: DateTime<Utc>,
     ) -> (AgentState, Option<WaitingSnapshot>) {
         let grace = super::doctor::START_GRACE.as_secs() as i64;
-        let waiting = runtime::read_waiting(self.project_root, scope, agent)
+        let waiting = running_agents::waiting(self.project_root, scope, agent, harness)
             .filter(|w| w.kind != WaitingKind::Startup || (now - w.since).num_seconds() > grace)
             .map(|w| (w.kind, w.describe()))
             .or_else(|| {

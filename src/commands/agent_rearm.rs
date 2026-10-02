@@ -22,7 +22,7 @@ use crate::state::runtime::{self, Waiting, WaitingClass, WaitingKind};
 use crate::tmux;
 
 use super::hooks_stop;
-use super::running_agents::{Liveness, Windows, liveness};
+use super::running_agents::{Liveness, Windows, liveness, waiting};
 
 /// Re-arm `agent` if it is unarmed at an empty prompt. Returns the marker
 /// it was re-armed from, or `None` when it was left alone.
@@ -32,16 +32,16 @@ pub fn rearm(
     agent: &str,
     tmux_server: Option<&str>,
 ) -> Result<Option<Waiting>> {
-    let Some(waiting) = runtime::read_waiting(project_root, scope, agent)
-        .filter(|w| w.kind.class() == WaitingClass::Unarmed && w.kind != WaitingKind::Tripped)
-    else {
-        return Ok(None);
-    };
     let registry = AgentRegistry::load(&paths::agents_dir(project_root), scope)?;
     let Some(entry) = registry.get(agent).filter(|e| e.active) else {
         return Ok(None);
     };
     let harness = entry.harness;
+    let Some(waiting) = waiting(project_root, scope, agent, harness)
+        .filter(|w| w.kind.class() == WaitingClass::Unarmed && w.kind != WaitingKind::Tripped)
+    else {
+        return Ok(None);
+    };
     if harness.loop_stopped(project_root, scope, agent).is_some() {
         return Ok(None);
     }
@@ -60,6 +60,10 @@ pub fn rearm(
         return Ok(None);
     }
     let prompt = hooks_stop::continuation(project_root, scope, agent)?;
+    // An interrupt read from the transcript has no marker yet to claim.
+    if runtime::read_waiting(project_root, scope, agent).as_ref() != Some(&waiting) {
+        runtime::write_waiting(project_root, scope, agent, &waiting)?;
+    }
     if !runtime::clear_waiting(project_root, scope, agent)? {
         return Ok(None);
     }
@@ -190,5 +194,37 @@ mod tests {
             runtime::read_waiting(&project, "login", "implementer").map(|w| w.kind),
             Some(WaitingKind::Prompt)
         );
+    }
+
+    #[test]
+    fn an_agent_interrupted_without_a_hook_is_re_armed_from_its_transcript() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (project, target) = at_prompt(&server, dir.path(), WaitingKind::Permission);
+        let transcript = dir.path().join("session.jsonl");
+        let interrupt = serde_json::json!({
+            "type": "user",
+            "message": {"content": [{"type": "text", "text": "[Request interrupted by user for tool use]"}]},
+        });
+        std::fs::write(&transcript, format!("{interrupt}\n")).unwrap();
+        std::fs::File::options()
+            .append(true)
+            .open(&transcript)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(1))
+            .unwrap();
+        runtime::write_transcript(&project, "login", "implementer", &transcript).unwrap();
+
+        let status = send(&server, &project);
+
+        assert!(
+            status.ends_with("\nRe-armed 'implementer' (interrupted)"),
+            "{status}"
+        );
+        assert_eq!(
+            runtime::read_waiting(&project, "login", "implementer"),
+            None
+        );
+        server.wait_for_pane_text(&target, &format!("❯ {PROMPT}"));
     }
 }

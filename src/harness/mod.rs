@@ -264,6 +264,16 @@ impl Harness {
         }
     }
 
+    /// When the user interrupted the session whose transcript is at
+    /// `transcript`, for a harness that fires no hook for it, if nothing has
+    /// happened in it since.
+    pub fn interrupted(self, transcript: &Path) -> Option<std::time::SystemTime> {
+        match self {
+            Harness::ClaudeCode => claude_code::transcript::interrupted(transcript),
+            Harness::Codex | Harness::OpenCode => None,
+        }
+    }
+
     /// Why this agent's never-idle loop stopped itself, if it did. Only a
     /// harness whose loop pm emulates can report one.
     pub fn loop_stopped(self, project_root: &Path, scope: &str, agent: &str) -> Option<String> {

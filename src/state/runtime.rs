@@ -12,6 +12,10 @@
 //! The **activity stamp** is a file whose mtime is the agent's last sign of
 //! life: every pm hook invocation touches it.
 //!
+//! The **transcript record** holds the path of the current session's
+//! transcript, written at SessionStart, for a harness that records an
+//! interrupt only there ([`Harness::interrupted`](crate::harness::Harness::interrupted)).
+//!
 //! They live in `<project>/.pm/runtime/<scope>/<agent>/` and last as long
 //! as the agent's registry entry. Every spawn rewrites what it hands the
 //! harness, so a deleted file is restored by the next spawn. The directory
@@ -29,6 +33,7 @@ use crate::state::paths;
 
 const WAITING_FILE: &str = "waiting.json";
 const ACTIVITY_FILE: &str = "activity";
+const TRANSCRIPT_FILE: &str = "transcript";
 
 fn root(project_root: &Path) -> PathBuf {
     paths::pm_dir(project_root).join("runtime")
@@ -177,6 +182,29 @@ pub fn clear_waiting(project_root: &Path, scope: &str, agent: &str) -> Result<bo
         Ok(()) => Ok(true),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(e.into()),
+    }
+}
+
+/// Record where the agent's current session keeps its transcript, as its
+/// SessionStart hook reported it.
+pub fn write_transcript(project_root: &Path, scope: &str, agent: &str, path: &Path) -> Result<()> {
+    let file = agent_dir(project_root, scope, agent)?.join(TRANSCRIPT_FILE);
+    write_atomic(&file, path.to_string_lossy().as_bytes())
+}
+
+/// The agent's current session's transcript, once its session has started.
+pub fn read_transcript(project_root: &Path, scope: &str, agent: &str) -> Option<PathBuf> {
+    let text =
+        std::fs::read_to_string(agent_file(project_root, scope, agent, TRANSCRIPT_FILE)).ok()?;
+    Some(PathBuf::from(text))
+}
+
+/// Forget the agent's transcript, for a spawn whose session has not
+/// started yet.
+pub fn clear_transcript(project_root: &Path, scope: &str, agent: &str) -> Result<()> {
+    match std::fs::remove_file(agent_file(project_root, scope, agent, TRANSCRIPT_FILE)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+        _ => Ok(()),
     }
 }
 

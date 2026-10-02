@@ -7,7 +7,8 @@
 //!   for every open dialog.
 //! - `PostToolUse` fires when a dialog is approved or answered; rejecting
 //!   one ends the turn with no event at all, so the marker stays until the
-//!   user next types (UserPromptSubmit). Hooks fired inside a subagent
+//!   user next types (UserPromptSubmit), but the transcript records the
+//!   rejection ([`super::transcript`]). Hooks fired inside a subagent
 //!   carry its `agent_id`: its `PostToolUse` resolves only a dialog of its
 //!   own, never the main thread's or another subagent's.
 //! - `Notification` follows 6s after any dialog opens, tool or not (plan

@@ -290,8 +290,9 @@ message to it waits until something prompts it: an interrupt, a rejected
 dialog, an API error, or the hook itself ended by its harness (Esc while it
 waits), which then says why in the harness's transcript. pm shows such an
 agent as `unarmed`, and [`pm msg send`](#messaging) re-arms it when it can.
-A Claude Code agent interrupted mid-turn is the one case no hook reports; it
-reads `busy`, and its scope goes quiet. A SIGTERM from any process other than
+No hook reports a Claude Code agent interrupted mid-turn or a dialog it
+rejected; pm reads that from the tail of the session's transcript instead.
+A SIGTERM from any process other than
 the harness leaves the hook waiting.
 
 A second hook, on UserPromptSubmit, sets a blocked feature back to `wip`

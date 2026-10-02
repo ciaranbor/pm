@@ -18,6 +18,7 @@ use crate::harness::Harness;
 use crate::state::agent::{AgentEntry, AgentRegistry};
 use crate::state::paths;
 use crate::state::project::HarnessConfig;
+use crate::state::runtime::{self, Waiting, WaitingKind};
 use crate::tmux::{self, Pane, Process, ProcessTable};
 
 use super::hooks_install::runs_stop_hook;
@@ -87,6 +88,23 @@ pub fn liveness(
         Liveness::Busy
     } else {
         Liveness::Dead
+    }
+}
+
+/// What an agent its window reads as busy is at: its waiting marker, unless
+/// its harness recorded an interrupt after it, which fires no hook.
+pub fn waiting(project_root: &Path, scope: &str, agent: &str, harness: Harness) -> Option<Waiting> {
+    let marker = runtime::read_waiting(project_root, scope, agent);
+    let interrupted = runtime::read_transcript(project_root, scope, agent)
+        .and_then(|transcript| harness.interrupted(&transcript))
+        .map(chrono::DateTime::<chrono::Utc>::from)
+        .filter(|at| marker.as_ref().is_none_or(|m| *at > m.since));
+    match interrupted {
+        Some(since) => Some(Waiting {
+            since,
+            ..Waiting::now(WaitingKind::Interrupted, None)
+        }),
+        None => marker,
     }
 }
 
@@ -194,5 +212,30 @@ mod tests {
             liveness(Some(&[process]), Harness::OpenCode, &config),
             Liveness::Dead
         );
+    }
+
+    #[test]
+    fn an_interrupt_refines_an_agent_only_when_newer_than_its_marker() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let transcript = root.join("session.jsonl");
+        let interrupt = r#"{"type":"user","message":{"content":"[Request interrupted by user]"}}"#;
+        std::fs::write(&transcript, format!("{interrupt}\n")).unwrap();
+        let written = std::fs::metadata(&transcript).unwrap().modified().unwrap();
+        runtime::write_transcript(root, "login", "qa", &transcript).unwrap();
+        let kind = |harness| waiting(root, "login", "qa", harness).map(|w| w.kind);
+
+        assert_eq!(kind(Harness::ClaudeCode), Some(WaitingKind::Interrupted));
+        assert_eq!(kind(Harness::Codex), None);
+
+        let mut newer = Waiting::now(WaitingKind::Prompt, None);
+        newer.since = (written + std::time::Duration::from_secs(1)).into();
+        runtime::write_waiting(root, "login", "qa", &newer).unwrap();
+        assert_eq!(kind(Harness::ClaudeCode), Some(WaitingKind::Prompt));
+
+        let mut older = newer.clone();
+        older.since = (written - std::time::Duration::from_secs(1)).into();
+        runtime::write_waiting(root, "login", "qa", &older).unwrap();
+        assert_eq!(kind(Harness::ClaudeCode), Some(WaitingKind::Interrupted));
     }
 }

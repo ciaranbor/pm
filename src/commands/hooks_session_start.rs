@@ -12,7 +12,7 @@
 //! Non-agent sessions (no `PM_AGENT_NAME` env var) are silently ignored.
 
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::Result;
 use crate::harness::Harness;
@@ -48,14 +48,15 @@ fn session_start_inner() -> Result<Option<String>> {
     let agent_name = std::env::var("PM_AGENT_NAME")
         .map_err(|_| crate::error::PmError::Messaging("no PM_AGENT_NAME".into()))?;
 
-    let session_id = read_session_id_from_stdin()?;
+    let mut input = String::new();
+    std::io::stdin().read_to_string(&mut input)?;
+    let payload = parse_payload(&input)?;
 
     let cwd = std::env::current_dir()?;
     let project_root = paths::find_project_root(&cwd)?;
     let feature = paths::resolve_scope_from(&project_root, &cwd)?;
 
-    let Some((harness, definition)) =
-        record_start(&project_root, &feature, &agent_name, &session_id)?
+    let Some((harness, definition)) = record_start(&project_root, &feature, &agent_name, &payload)?
     else {
         return Ok(None);
     };
@@ -91,15 +92,14 @@ fn injected_context(project_root: &Path, definition: &str) -> Result<Option<Stri
     })
 }
 
-/// Read stdin and extract `session_id` from the JSON payload.
-fn read_session_id_from_stdin() -> crate::error::Result<String> {
-    let mut input = String::new();
-    std::io::stdin().read_to_string(&mut input)?;
-    parse_session_id(&input)
+/// What the hook reads of its payload.
+#[derive(Debug, PartialEq, Eq)]
+struct Payload {
+    session_id: String,
+    transcript: Option<PathBuf>,
 }
 
-/// Parse `session_id` from a JSON string.
-fn parse_session_id(json_str: &str) -> crate::error::Result<String> {
+fn parse_payload(json_str: &str) -> crate::error::Result<Payload> {
     let parsed: serde_json::Value = serde_json::from_str(json_str)
         .map_err(|e| crate::error::PmError::Messaging(format!("invalid JSON from stdin: {e}")))?;
 
@@ -116,11 +116,18 @@ fn parse_session_id(json_str: &str) -> crate::error::Result<String> {
         ));
     }
 
-    Ok(session_id.to_string())
+    Ok(Payload {
+        session_id: session_id.to_string(),
+        transcript: parsed
+            .get("transcript_path")
+            .and_then(|v| v.as_str())
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from),
+    })
 }
 
-/// Clear the agent's waiting marker, stamp its activity, and update its
-/// session_id in the registry, returning the harness and effective
+/// Clear the agent's waiting marker, stamp its activity, record its
+/// transcript, and update its session_id in the registry, returning the harness and effective
 /// definition its entry records. An unregistered agent is left alone
 /// (`None`): the spawn registers before launching, so this is a non-pm
 /// session.
@@ -128,7 +135,7 @@ fn record_start(
     project_root: &Path,
     feature: &str,
     agent_name: &str,
-    session_id: &str,
+    payload: &Payload,
 ) -> Result<Option<(Harness, String)>> {
     let agents_dir = paths::agents_dir(project_root);
     let mut registry = AgentRegistry::load(&agents_dir, feature)?;
@@ -138,7 +145,11 @@ fn record_start(
     };
     runtime::touch_activity(project_root, feature, agent_name)?;
     runtime::clear_waiting(project_root, feature, agent_name)?;
-    entry.session_id = session_id.to_string();
+    match &payload.transcript {
+        Some(path) => runtime::write_transcript(project_root, feature, agent_name, path)?,
+        None => runtime::clear_transcript(project_root, feature, agent_name)?,
+    }
+    entry.session_id = payload.session_id.clone();
     let recorded = (
         entry.harness,
         entry.effective_definition(agent_name).to_string(),
@@ -153,6 +164,13 @@ mod tests {
     use crate::harness::Harness;
     use crate::state::agent::{AgentEntry, AgentType};
     use tempfile::tempdir;
+
+    fn started(session_id: &str) -> Payload {
+        Payload {
+            session_id: session_id.to_string(),
+            transcript: None,
+        }
+    }
 
     fn setup_project_with_agent(
         dir: &std::path::Path,
@@ -215,7 +233,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = setup_project_with_agent(dir.path(), "login", "reviewer");
         write_project_def(&root, "reviewer", "# Reviewer");
-        let (harness, definition) = record_start(&root, "login", "reviewer", "s1")
+        let (harness, definition) = record_start(&root, "login", "reviewer", &started("s1"))
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -224,7 +242,10 @@ mod tests {
         );
         assert_eq!(hook_output(&root, harness, &definition).unwrap(), None);
         // An unregistered agent is not a pm agent at all.
-        assert_eq!(record_start(&root, "login", "ghost", "s1").unwrap(), None);
+        assert_eq!(
+            record_start(&root, "login", "ghost", &started("s1")).unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -235,7 +256,7 @@ mod tests {
         let startup = Waiting::now(WaitingKind::Startup, None);
         runtime::write_waiting(&root, "login", "reviewer", &startup).unwrap();
 
-        record_start(&root, "login", "reviewer", "s1").unwrap();
+        record_start(&root, "login", "reviewer", &started("s1")).unwrap();
 
         assert_eq!(runtime::read_waiting(&root, "login", "reviewer"), None);
         assert!(runtime::last_activity(&root, "login", "reviewer").is_some());
@@ -262,7 +283,7 @@ mod tests {
             "---\nname: implementer\n---\n# Implementer\n\nBuild things.\n",
         );
 
-        let (harness, definition) = record_start(&root, "login", "backend", "s1")
+        let (harness, definition) = record_start(&root, "login", "backend", &started("s1"))
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -316,25 +337,25 @@ mod tests {
     #[test]
     fn parse_session_id_from_valid_json() {
         let json = r#"{"session_id":"abc123","cwd":"/tmp","hook_event_name":"SessionStart"}"#;
-        let id = parse_session_id(json).unwrap();
+        let id = parse_payload(json).unwrap().session_id;
         assert_eq!(id, "abc123");
     }
 
     #[test]
     fn parse_session_id_missing_field() {
         let json = r#"{"cwd":"/tmp"}"#;
-        assert!(parse_session_id(json).is_err());
+        assert!(parse_payload(json).is_err());
     }
 
     #[test]
     fn parse_session_id_empty_string() {
         let json = r#"{"session_id":""}"#;
-        assert!(parse_session_id(json).is_err());
+        assert!(parse_payload(json).is_err());
     }
 
     #[test]
     fn parse_session_id_invalid_json() {
-        assert!(parse_session_id("not json").is_err());
+        assert!(parse_payload("not json").is_err());
     }
 
     #[test]
@@ -342,7 +363,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = setup_project_with_agent(dir.path(), "login", "reviewer");
 
-        record_start(&root, "login", "reviewer", "sess-42").unwrap();
+        record_start(&root, "login", "reviewer", &started("sess-42")).unwrap();
 
         let agents_dir = root.join(".pm/agents");
         let registry = AgentRegistry::load(&agents_dir, "login").unwrap();
@@ -354,8 +375,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = setup_project_with_agent(dir.path(), "login", "reviewer");
 
-        record_start(&root, "login", "reviewer", "sess-42").unwrap();
-        record_start(&root, "login", "reviewer", "sess-42").unwrap();
+        record_start(&root, "login", "reviewer", &started("sess-42")).unwrap();
+        record_start(&root, "login", "reviewer", &started("sess-42")).unwrap();
 
         let agents_dir = root.join(".pm/agents");
         let registry = AgentRegistry::load(&agents_dir, "login").unwrap();
@@ -368,7 +389,7 @@ mod tests {
         let root = setup_project_with_agent(dir.path(), "login", "reviewer");
 
         // Should not error for unknown agent
-        record_start(&root, "login", "unknown-agent", "sess-42").unwrap();
+        record_start(&root, "login", "unknown-agent", &started("sess-42")).unwrap();
 
         // Original agent unchanged
         let agents_dir = root.join(".pm/agents");
