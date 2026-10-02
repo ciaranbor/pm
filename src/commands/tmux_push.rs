@@ -135,6 +135,7 @@ mod tests {
             "busy",
             "2",
             "#[fg=green]\u{f013} #[fg=yellow]\u{f0e0}#[default]",
+            "#[fg=green]\u{f013} busy#[default] #[fg=yellow]\u{f0e0} 2#[default]",
         ];
         let start = Instant::now();
         while window_values(&server, &window) != want {
