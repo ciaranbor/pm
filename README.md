@@ -601,7 +601,7 @@ Plugin options, set before `run-shell 'pm tmux init'`:
 | Option | Default | Effect |
 |---|---|---|
 | `@pm-bin` | `pm` | the pm binary tmux runs |
-| `@pm-auto-refresh` | on | keep pm's options current with a background `pm tmux refresh` loop; pm pushes its own changes at once, so the loop only catches what happens outside pm. |
+| `@pm-auto-refresh` | on | keep pm's options current with a background `pm tmux refresh` loop; pm pushes its own changes at once, so the loop only catches what happens outside pm. The loop also re-sets pm's formats when it starts or pm is upgraded, so a new pm reaches a running server without a config reload |
 | `@pm-refresh-interval` | `30` | seconds between refreshes |
 | `@pm-window-status` | on | put each agent window's badge just before the window name in `window-status-format` and `window-status-current-format`, keeping your theme's style for the name |
 | `@pm-bind-tree` | on | turn prefix `s` / `w` into pm's tree, sorted by name, when they run tmux's default `choose-tree` |

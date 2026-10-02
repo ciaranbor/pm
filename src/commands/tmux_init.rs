@@ -72,16 +72,7 @@ pub fn init(tmux_server: Option<&str>) -> Result<()> {
         bin => shell_quote(bin),
     };
 
-    let mut commands = vec![options::set(
-        Scope::Global,
-        TREE_FORMAT_OPTION,
-        Some(TREE_FORMAT),
-    )];
-    let badges = settings.get(WINDOW_STATUS) != "off";
-    for name in WINDOW_FORMATS {
-        let format = options::show(tmux_server, name)?;
-        commands.extend(window_status(name, &format, badges));
-    }
+    let mut commands = format_commands(tmux_server, settings.get(WINDOW_STATUS) != "off")?;
     let template = jump_template(&bin);
     let bind_tree = settings.get(BIND_TREE) != "off";
     let table = keys::prefix_table(tmux_server)?;
@@ -101,6 +92,31 @@ pub fn init(tmux_server: Option<&str>) -> Result<()> {
         commands.push(options::run_shell_background(&format!("{bin} tmux watch")));
     }
     options::run(tmux_server, &commands)
+}
+
+/// Re-set the formats pm owns, so a running server picks up the ones this
+/// binary has without a config reload. Bindings are left to init: they
+/// read the tree format through `@pm_tree_format`. No server, no change.
+pub(super) fn formats(tmux_server: Option<&str>) -> Result<()> {
+    let Some(settings) = options::read_global(tmux_server, &[WINDOW_STATUS])? else {
+        return Ok(());
+    };
+    let commands = format_commands(tmux_server, settings.get(WINDOW_STATUS) != "off")?;
+    options::run(tmux_server, &commands)
+}
+
+/// pm's tree format, and the window-list badge in or out per `badges`.
+fn format_commands(tmux_server: Option<&str>, badges: bool) -> Result<Vec<Command>> {
+    let mut commands = vec![options::set(
+        Scope::Global,
+        TREE_FORMAT_OPTION,
+        Some(TREE_FORMAT),
+    )];
+    for name in WINDOW_FORMATS {
+        let format = options::show(tmux_server, name)?;
+        commands.extend(window_status(name, &format, badges));
+    }
+    Ok(commands)
 }
 
 /// The change to the window-list format `name`, now `format`, that
