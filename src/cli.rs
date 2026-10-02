@@ -3,6 +3,7 @@ use clap_complete::Shell;
 use std::path::PathBuf;
 
 use pm::harness::Harness;
+use pm::state::devices::Scope;
 
 #[derive(Parser)]
 #[command(
@@ -123,6 +124,16 @@ pub enum Commands {
     /// tmux integration: pm state published on the tmux server
     #[command(subcommand)]
     Tmux(TmuxCommands),
+    /// Serve pm state read-only over HTTP for the phone app, on 127.0.0.1;
+    /// reach it through `tailscale serve`
+    #[command(args_conflicts_with_subcommands = true)]
+    Serve {
+        #[command(subcommand)]
+        command: Option<ServeCommands>,
+        /// Loopback port to listen on
+        #[arg(long, default_value_t = pm::commands::serve::DEFAULT_PORT)]
+        port: u16,
+    },
     /// Generate shell completion scripts
     #[command(hide = true)]
     Completions {
@@ -197,6 +208,38 @@ pub enum TmuxCommands {
     /// that change what the options show)
     #[command(hide = true)]
     Push,
+}
+
+#[derive(Subcommand)]
+pub enum ServeCommands {
+    /// Pair a device: print a QR code of the server's URL and a new token
+    Pair {
+        /// The device's name, used to revoke it and in the request log
+        #[arg(long, default_value = "phone")]
+        name: String,
+        /// What the token may do (repeatable or comma-separated)
+        #[arg(long, value_enum, value_delimiter = ',', default_value = "read")]
+        scope: Vec<Scope>,
+        /// The URL the device reaches the server at (default: this machine's
+        /// tailnet name over HTTPS, as `tailscale serve` serves it)
+        #[arg(long)]
+        url: Option<String>,
+    },
+    /// List paired devices
+    Devices,
+    /// Revoke a device's token
+    Revoke {
+        /// The device's name
+        device: String,
+    },
+    /// Run `pm serve` as a launchd LaunchAgent, at login and across restarts
+    Install {
+        /// Loopback port to listen on
+        #[arg(long, default_value_t = pm::commands::serve::DEFAULT_PORT)]
+        port: u16,
+    },
+    /// Remove the LaunchAgent `install` wrote
+    Uninstall,
 }
 
 #[derive(Subcommand)]

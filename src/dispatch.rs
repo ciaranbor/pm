@@ -1002,6 +1002,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             clap_complete::generate(shell, &mut cmd, "pm", &mut std::io::stdout());
             Ok(())
         }
+        Commands::Serve { command, port } => dispatch_serve(command, port, server),
         Commands::Tmux(TmuxCommands::Refresh) => {
             commands::tmux_refresh::refresh(&paths::global_projects_dir()?, server)
         }
@@ -1071,6 +1072,63 @@ fn optional_project_root() -> pm::error::Result<Option<std::path::PathBuf>> {
         Ok(root) => Ok(Some(root)),
         Err(pm::error::PmError::NotInProject) => Ok(None),
         Err(e) => Err(e),
+    }
+}
+
+fn dispatch_serve(
+    command: Option<ServeCommands>,
+    port: u16,
+    server: Option<&str>,
+) -> pm::error::Result<()> {
+    use pm::state::devices::Devices;
+    let devices = Devices::path(&paths::global_config_dir()?);
+    match command {
+        None => commands::serve::serve(
+            commands::serve::Config::new(paths::global_projects_dir()?, devices, server),
+            port,
+        ),
+        Some(ServeCommands::Pair { name, scope, url }) => {
+            let pairing = commands::serve_pair::pair(&devices, &name, &scope, url.as_deref())?;
+            println!("{}", pairing.qr()?);
+            println!("url:    {}", pairing.url);
+            println!("device: {}", pairing.device);
+            println!("token:  {}", pairing.token);
+            println!("The token is shown only now; `pm serve revoke {name}` withdraws it.");
+            Ok(())
+        }
+        Some(ServeCommands::Devices) => {
+            let lines = commands::serve_devices::devices(&devices)?;
+            if lines.is_empty() {
+                println!("No devices paired; `pm serve pair` pairs one.");
+            }
+            for line in lines {
+                println!("{line}");
+            }
+            Ok(())
+        }
+        Some(ServeCommands::Revoke { device }) => {
+            commands::serve_revoke::revoke(&devices, &device)?;
+            println!("Revoked {device}.");
+            Ok(())
+        }
+        Some(ServeCommands::Install { port }) => {
+            let (plist, log) = commands::serve_install::install(port, server)?;
+            println!(
+                "Installed {}; serving on 127.0.0.1:{port}.",
+                plist.display()
+            );
+            println!("Log: {}", log.display());
+            println!("Expose it on your tailnet with `tailscale serve --bg {port}`.");
+            Ok(())
+        }
+        Some(ServeCommands::Uninstall) => {
+            if commands::serve_install::uninstall()? {
+                println!("Uninstalled the pm serve LaunchAgent.");
+            } else {
+                println!("No pm serve LaunchAgent was installed.");
+            }
+            Ok(())
+        }
     }
 }
 

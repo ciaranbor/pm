@@ -7,9 +7,9 @@
 //! own reads, one `tmux` call that takes what is published now along with the
 //! attached clients, and, only when something changed, one more that writes
 //! the difference. What it last published is also the previous state a
-//! transition alert is judged against; pm keeps no other record of it, so
-//! refreshes of one server take turns on a lock keyed by the server's socket,
-//! which names it however it was reached.
+//! transition alert is judged against ([`transition`]); pm keeps no other
+//! record of it, so refreshes of one server take turns on a lock keyed by
+//! the server's socket, which names it however it was reached.
 //!
 //! A scope's agents, main's included, are found through the registry, never
 //! by window, and only their windows carry options. A main session carries
@@ -37,9 +37,8 @@ use super::feat_status_view::{STALLED, span};
 use super::tmux_lock;
 
 mod badge;
-mod episode;
 
-use episode::{ALERTED, Episode, feature_holds, main_holds};
+use attention::transition::{self, Judged};
 
 const PROJECT: &str = "@pm_project";
 const FEATURE: &str = "@pm_feature";
@@ -49,6 +48,7 @@ const ATTENTION: &str = "@pm_attention";
 const BADGE: &str = "@pm_badge";
 const ACTIVITY: &str = "@pm_activity";
 const ALERT_PENDING: &str = "@pm_alert_pending";
+const ALERTED: &str = "@pm_alerted";
 const SESSION_OPTIONS: &[&str] = &[
     PROJECT,
     FEATURE,
@@ -114,34 +114,14 @@ fn commands(snapshot: &Snapshot, published: &Options, now: DateTime<Utc>) -> Vec
             continue;
         };
         sessions.insert(&feature.session);
-        let scope = Scope::Session(&feature.session);
-        let kind = feature.attention.kind;
-        let mut episode = Episode::read(held, |k| feature_holds(feature, k));
-        // A session pm has not published to yet was just opened: a progress
-        // it shows was set before, and alerted on then if it was open.
-        if held.get(PROJECT).is_empty()
-            && matches!(kind, AttentionKind::Blocked | AttentionKind::Ready)
-        {
-            episode.record(kind);
-        }
-        let new = held.get(ATTENTION) != kind.to_string() && !episode.alerted(kind);
-        // A feature that turns ready while its team is busy owes its alert
-        // until the team goes quiet.
-        let owed = kind == AttentionKind::Ready && (new || !held.get(ALERT_PENDING).is_empty());
-        let alerts_now = match kind {
-            AttentionKind::Blocked | AttentionKind::Asking => new,
-            AttentionKind::Ready => owed && !feature.busy,
-            _ => false,
-        };
-        if alerts_now {
-            episode.record(kind);
+        let verdict = transition::judge_feature(previous(held).as_ref(), feature);
+        if verdict.alert {
             alerts.push(alert(&feature.session, &feature.attention, &feature.agents));
         }
-        let mut values = session_values(feature, now);
-        needing.extend(published_attention(feature));
-        values.push((ALERT_PENDING, (owed && feature.busy).then(|| "1".into())));
-        values.push((ALERTED, episode.value()));
-        diff(&mut writes, scope, held, &values);
+        needing.extend(verdict.judged.attention);
+        let mut values = session_values(feature, &verdict.judged, now);
+        values.push((ALERT_PENDING, verdict.judged.owed.then(|| "1".into())));
+        diff(&mut writes, Scope::Session(&feature.session), held, &values);
         agent_windows(&mut writes, &mut windows, published, &feature.agents);
     }
     for project in &snapshot.projects {
@@ -152,18 +132,12 @@ fn commands(snapshot: &Snapshot, published: &Options, now: DateTime<Utc>) -> Vec
             continue;
         };
         sessions.insert(&main.session);
-        let kind = main.attention.kind;
-        let mut episode = Episode::read(held, |k| main_holds(&main.agents, k));
-        if kind == AttentionKind::Asking
-            && held.get(ATTENTION) != kind.to_string()
-            && !episode.alerted(kind)
-        {
-            episode.record(kind);
+        let verdict = transition::judge_main(previous(held).as_ref(), main);
+        if verdict.alert {
             alerts.push(alert(&main.session, &main.attention, &main.agents));
         }
-        let mut values = main_values(&project.name, main, now);
-        needing.extend((kind != AttentionKind::None).then_some(kind));
-        values.push((ALERTED, episode.value()));
+        needing.extend(verdict.judged.attention);
+        let values = main_values(&project.name, main, &verdict.judged, now);
         diff(&mut writes, Scope::Session(&main.session), held, &values);
         agent_windows(&mut writes, &mut windows, published, &main.agents);
     }
@@ -257,6 +231,19 @@ fn agent_windows<'a>(
     }
 }
 
+/// What a session's options record of its last judgement; `None` for a
+/// session pm has not published to yet, which was just opened.
+fn previous(held: &Holder) -> Option<Judged> {
+    if held.get(PROJECT).is_empty() {
+        return None;
+    }
+    Some(Judged {
+        attention: Judged::parse_attention(held.get(ATTENTION)),
+        alerted: Judged::parse_alerted(held.get(ALERTED)),
+        owed: !held.get(ALERT_PENDING).is_empty(),
+    })
+}
+
 /// Set each of `values` that differs from what `held` has; a `None` value
 /// is unset.
 fn diff(writes: &mut Vec<Command>, scope: Scope, held: &Holder, values: &[(&str, Option<String>)]) {
@@ -275,8 +262,11 @@ fn clear(writes: &mut Vec<Command>, scope: Scope, held: &Holder, names: &[&str])
     }
 }
 
+/// A feature session's options. Its badge shows its attention even while
+/// its judgement leaves it out of the attention tree and the count.
 fn session_values(
     feature: &FeatureSnapshot,
+    judged: &Judged,
     now: DateTime<Utc>,
 ) -> Vec<(&'static str, Option<String>)> {
     let kind = feature.attention.kind;
@@ -286,25 +276,14 @@ fn session_values(
         (FEATURE, Some(format_text(&feature.name))),
         (PROGRESS, Some(feature.progress.to_string())),
         (REASON, reason(&feature.attention)),
-        (
-            ATTENTION,
-            published_attention(feature).map(|k| k.to_string()),
-        ),
+        (ATTENTION, judged.attention.map(|k| k.to_string())),
         (BADGE, needs.and_then(badge::attention)),
         (
             ACTIVITY,
             activity(feature.working, feature.last_activity, now),
         ),
+        (ALERTED, judged.alerted_list()),
     ]
-}
-
-/// The attention `feature` publishes as needing the user: a ready feature
-/// whose team is busy isn't waiting on the user yet, so it keeps its badge
-/// but is neither in the attention tree nor counted.
-fn published_attention(feature: &FeatureSnapshot) -> Option<AttentionKind> {
-    let kind = feature.attention.kind;
-    let waiting = !(kind == AttentionKind::Ready && feature.busy);
-    (kind != AttentionKind::None && waiting).then_some(kind)
 }
 
 /// The attention detail; a stalled scope has none of its own, so it gets
@@ -322,9 +301,9 @@ fn reason(attention: &Attention) -> Option<String> {
 fn main_values(
     project: &str,
     main: &ScopeSnapshot,
+    judged: &Judged,
     now: DateTime<Utc>,
 ) -> Vec<(&'static str, Option<String>)> {
-    let kind = main.attention.kind;
     let lead = main
         .agents
         .iter()
@@ -335,12 +314,10 @@ fn main_values(
         (FEATURE, None),
         (PROGRESS, None),
         (REASON, reason(&main.attention)),
-        (
-            ATTENTION,
-            (kind != AttentionKind::None).then(|| kind.to_string()),
-        ),
+        (ATTENTION, judged.attention.map(|k| k.to_string())),
         (BADGE, lead.map(|a| badge::agent(a.state, a.unread))),
         (ACTIVITY, main_activity(main, lead, now)),
+        (ALERTED, judged.alerted_list()),
     ]
 }
 
@@ -952,7 +929,10 @@ mod tests {
         )]);
         let published = |attention: &str| Options {
             clients: vec![Client::named("c1")],
-            sessions: vec![Holder::session("app/main", &[(ATTENTION, attention)])],
+            sessions: vec![Holder::session(
+                "app/main",
+                &[(PROJECT, "app"), (ATTENTION, attention)],
+            )],
             ..Options::default()
         };
         let now = Utc::now();

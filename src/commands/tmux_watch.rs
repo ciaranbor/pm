@@ -24,13 +24,13 @@
 //! pm owns ([`tmux_init`]), so a format change reaches a running
 //! server without a config reload.
 
-use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::path::Path;
+use std::time::Duration;
 
 use crate::error::Result;
 use crate::tmux::{self, options};
 
+use super::reexec::Binary;
 use super::tmux_init;
 use super::tmux_lock::{self, Lock};
 use super::tmux_refresh::refresh;
@@ -87,41 +87,6 @@ fn take_watch(socket: &str) -> Result<Option<Lock>> {
     Ok(None)
 }
 
-/// The running executable, as it was when the watcher started.
-struct Binary {
-    path: PathBuf,
-    modified: SystemTime,
-}
-
-impl Binary {
-    fn current() -> Option<Self> {
-        // A test binary rebuilt mid-run must not re-execute the suite.
-        if cfg!(test) {
-            return None;
-        }
-        let path = std::env::current_exe().ok()?;
-        let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
-        Some(Self { path, modified })
-    }
-
-    /// Whether a different file is at the path now. A path with nothing
-    /// there is mid-replacement, not replaced.
-    fn replaced(&self) -> bool {
-        std::fs::metadata(&self.path)
-            .and_then(|m| m.modified())
-            .is_ok_and(|m| m != self.modified)
-    }
-
-    /// Replace this process with the binary at the path, run as this one
-    /// was. Returns only on failure. The locks close with this process's
-    /// files, so the new one takes them afresh.
-    fn exec(&self) -> std::io::Error {
-        std::process::Command::new(&self.path)
-            .args(std::env::args_os().skip(1))
-            .exec()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,6 +96,7 @@ mod tests {
     use crate::state::paths;
     use crate::testing::OwnServer;
     use crate::tmux::options::{Scope, set};
+    use std::path::PathBuf;
     use std::sync::mpsc;
     use tempfile::tempdir;
 
