@@ -6,8 +6,10 @@
 //! adds to a format rather than replacing it, and changes a key the user
 //! didn't name only by adding pm's format and Enter action to a plain
 //! `choose-tree` on `s` or `w`, keeping its flags, note and repeat flag, and
-//! sorting it by name if it sets no order. It reads those bindings as they
-//! stand when it runs, so it must run after the config binds them.
+//! sorting it by name if it sets no order. The attention key, `a` unless
+//! named, is bound only while unbound or pm's (`attention_key`). It reads
+//! the bindings as they stand when it runs, so it must run after the config
+//! binds them.
 //!
 //! A config reload runs it again, so every step is idempotent: the
 //! window-list badge goes in once, and one an earlier pm placed elsewhere
@@ -26,6 +28,7 @@ use crate::tmux::shell_quote;
 
 use super::tmux_watch::AUTO_REFRESH;
 
+mod attention_key;
 mod window_status;
 
 const BIN: &str = "@pm-bin";
@@ -82,15 +85,12 @@ pub fn init(tmux_server: Option<&str>) -> Result<()> {
             commands.extend(tree_key(key, bound, bind_tree, &template));
         }
     }
-    let attention_key = settings.get(ATTENTION_KEY);
-    for (key, bound) in &table {
-        if key != attention_key && is_attention_tree(bound) {
-            commands.push(options::unbind_key(key));
-        }
-    }
-    if !attention_key.is_empty() {
-        commands.push(options::bind_key(attention_key, attention_tree(&template)));
-    }
+    commands.extend(attention_key::commands(
+        settings.get(ATTENTION_KEY),
+        &table,
+        &tree_format(),
+        &template,
+    ));
     if settings.get(AUTO_REFRESH) != "off" {
         commands.push(options::run_shell_background(&format!("{bin} tmux watch")));
     }
@@ -127,30 +127,6 @@ fn format_commands(tmux_server: Option<&str>, badges: bool) -> Result<Vec<Comman
 fn window_status(name: &str, format: &str, badges: bool) -> Option<Command> {
     let wanted = window_status::wanted(format, badges);
     (wanted != format).then(|| options::set(Scope::Global, name, Some(&wanted)))
-}
-
-/// pm's tree with only the sessions needing attention.
-fn attention_tree(template: &str) -> Command {
-    options::choose_tree(&tree_format(), Some(ATTENTION_FILTER), template)
-}
-
-const ATTENTION_FILTER: &str = "#{@pm_attention}";
-
-/// Whether `bound` is the binding [`attention_tree`] makes, under any
-/// `@pm-bin`.
-fn is_attention_tree(bound: &Binding) -> bool {
-    let Some(command) = &bound.command else {
-        return false;
-    };
-    let follows = |flag: &str, value: &str| {
-        command
-            .windows(2)
-            .any(|pair| pair[0] == flag && pair[1] == value)
-    };
-    command.first().is_some_and(|c| c == "choose-tree")
-        && follows("-F", &tree_format())
-        && follows("-f", ATTENTION_FILTER)
-        && command.last().is_some_and(|t| t.contains(" tmux jump "))
 }
 
 fn tree_format() -> String {
@@ -321,14 +297,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["tmux jump --client  =app/login:"],
             "no client in a sourced file"
-        );
-        assert_eq!(
-            tmux(&server, &["list-keys", "-T", "prefix"])
-                .lines()
-                .filter(|l| l.contains("@pm_attention"))
-                .count(),
-            0,
-            "a key the user didn't name"
         );
         let watches = || {
             std::fs::read_to_string(&calls)
@@ -542,41 +510,6 @@ mod tests {
             ),
             (default, THEME_CURRENT.to_string())
         );
-    }
-
-    #[test]
-    fn the_attention_key_follows_its_option() {
-        let server = OwnServer::start("init-attention");
-        tmux(&server, &["set", "-g", AUTO_REFRESH, "off"]);
-        tmux(
-            &server,
-            &["bind", "b", "choose-tree", "-Zs", "-f", "#{@pm_attention}"],
-        );
-        let attention_keys = || -> Vec<String> {
-            keys::prefix_table(server.name())
-                .unwrap()
-                .into_iter()
-                .filter(|(_, b)| is_attention_tree(b))
-                .map(|(k, _)| k)
-                .collect()
-        };
-
-        tmux(&server, &["set", "-g", ATTENTION_KEY, "a"]);
-        init(server.name()).unwrap();
-        assert_eq!(attention_keys(), ["a"]);
-
-        tmux(&server, &["set", "-g", ATTENTION_KEY, "A"]);
-        tmux(&server, &["set", "-g", BIN, "/new/pm"]);
-        init(server.name()).unwrap();
-        assert_eq!(attention_keys(), ["A"]);
-        assert!(!keys::prefix_table(server.name()).unwrap().contains_key("a"));
-
-        tmux(&server, &["set", "-gu", ATTENTION_KEY]);
-        init(server.name()).unwrap();
-        let table = keys::prefix_table(server.name()).unwrap();
-        assert!(attention_keys().is_empty());
-        assert!(!table.contains_key("A"));
-        assert!(table.contains_key("b"), "the user's own binding");
     }
 
     #[test]
