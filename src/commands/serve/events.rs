@@ -51,8 +51,12 @@ impl Hub {
     }
 
     /// Send every stream what changed from what `watch` last saw to
-    /// `snapshot`, returning the watch after it.
-    pub(super) fn update(&self, watch: &Watch, snapshot: &Snapshot) -> Result<Watch> {
+    /// `snapshot`, returning the watch after it and the transitions sent.
+    pub(super) fn update(
+        &self,
+        watch: &Watch,
+        snapshot: &Snapshot,
+    ) -> Result<(Watch, Vec<Transition>)> {
         let json = serde_json::to_string(snapshot)?;
         let (next, transitions) = watch.observe(snapshot);
         let mut events = Vec::new();
@@ -67,7 +71,7 @@ impl Hub {
         for e in events {
             inner.streams.retain(|s| s.send(e.clone()).is_ok());
         }
-        Ok(next)
+        Ok((next, transitions))
     }
 }
 

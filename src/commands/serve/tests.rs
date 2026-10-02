@@ -41,17 +41,36 @@ fn fixture() -> Fixture {
 }
 
 fn pair(config: &Config, name: &str, scopes: &[Scope]) -> String {
-    let mut devices = Devices::load(&config.devices).unwrap();
-    let token = devices.pair(name, scopes).unwrap();
-    devices.save(&config.devices).unwrap();
-    token
+    Devices::update(&config.devices, |d| d.pair(name, scopes)).unwrap()
+}
+
+fn request<'a>(
+    method: &'a str,
+    path: &'a str,
+    query: &'a str,
+    authorization: Option<&'a str>,
+    body: &'a str,
+) -> super::routes::Request<'a> {
+    super::routes::Request {
+        method,
+        path,
+        query,
+        authorization,
+        body,
+    }
 }
 
 /// The status and body `path` gets with `token`.
 fn get(config: &Config, path: &str, token: Option<&str>) -> (u16, String) {
     let authorization = token.map(|t| format!("Bearer {t}"));
     let (path, query) = path.split_once('?').unwrap_or((path, ""));
-    match route(config, "GET", path, query, authorization.as_deref()).reply {
+    match route(
+        config,
+        "",
+        &request("GET", path, query, authorization.as_deref(), ""),
+    )
+    .reply
+    {
         Reply::Body { status, body, .. } => (status, body),
         Reply::Events(_) => (200, "<events>".into()),
     }
@@ -63,9 +82,7 @@ fn a_request_without_a_live_token_with_the_read_scope_is_refused() {
     let reader = pair(&f.config, "reader", &[Scope::Read]);
     let typist = pair(&f.config, "typist", &[Scope::Input]);
     let revoked = pair(&f.config, "gone", &[Scope::Read]);
-    let mut devices = Devices::load(&f.config.devices).unwrap();
-    devices.revoke("gone");
-    devices.save(&f.config.devices).unwrap();
+    crate::commands::serve_revoke::revoke(&f.config.devices, "gone").unwrap();
 
     let status = |path: &str, token: Option<&str>| get(&f.config, path, token).0;
     assert_eq!(status("/v1/snapshot", None), 401);
@@ -76,20 +93,18 @@ fn a_request_without_a_live_token_with_the_read_scope_is_refused() {
     assert_eq!(status("/v1/events", Some(&typist)), 403);
     assert_eq!(status("/v1/snapshot", Some(&reader)), 200);
 
+    let bearer = format!("Bearer {reader}");
     let handled = route(
         &f.config,
-        "GET",
-        "/v1/snapshot",
         "",
-        Some(&format!("Bearer {reader}")),
+        &request("GET", "/v1/snapshot", "", Some(&bearer), ""),
     );
     assert_eq!(handled.device.as_deref(), Some("reader"));
+    let lowercase_bearer = format!("bearer {reader}");
     let lowercase = route(
         &f.config,
-        "GET",
-        "/v1/snapshot",
         "",
-        Some(&format!("bearer {reader}")),
+        &request("GET", "/v1/snapshot", "", Some(&lowercase_bearer), ""),
     );
     assert_eq!(
         lowercase.reply.status(),
@@ -472,4 +487,226 @@ fn a_conversation_that_appears_after_the_watch_began_is_sent_whole() {
         .map(|i| i["id"].as_str().unwrap())
         .collect();
     assert_eq!(ids, ["u1", "u2"], "the opening the client never paged");
+}
+
+const VAPID: &str = "the-servers-vapid-key";
+
+/// The status and body `method` on `path` gets with `token` and `body`.
+fn call(config: &Config, method: &str, path: &str, token: &str, body: &str) -> (u16, String) {
+    let authorization = format!("Bearer {token}");
+    match route(
+        config,
+        VAPID,
+        &request(method, path, "", Some(&authorization), body),
+    )
+    .reply
+    {
+        Reply::Body { status, body, .. } => (status, body),
+        Reply::Events(_) => (200, "<events>".into()),
+    }
+}
+
+/// A device's push keys: the secret it decrypts with, and the
+/// subscription JSON it registers.
+fn subscriber(endpoint: &str) -> (web_push_native::p256::SecretKey, [u8; 16], String) {
+    use base64ct::{Base64UrlUnpadded, Encoding};
+    use web_push_native::p256::elliptic_curve::sec1::ToEncodedPoint;
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).unwrap();
+    let secret = web_push_native::p256::SecretKey::from_slice(&bytes).unwrap();
+    let mut auth = [0u8; 16];
+    getrandom::fill(&mut auth).unwrap();
+    let p256dh = secret.public_key().to_encoded_point(false);
+    let json = serde_json::json!({
+        "endpoint": endpoint,
+        "keys": {
+            "p256dh": Base64UrlUnpadded::encode_string(p256dh.as_bytes()),
+            "auth": Base64UrlUnpadded::encode_string(&auth),
+        },
+    });
+    (secret, auth, json.to_string())
+}
+
+fn stored_push(config: &Config, device: &str) -> Option<crate::state::devices::Push> {
+    Devices::load(&config.devices).unwrap().devices[device]
+        .push
+        .clone()
+}
+
+#[test]
+fn a_device_sets_and_clears_only_its_own_https_subscription() {
+    let f = fixture();
+    let phone = pair(&f.config, "phone", &[Scope::Read]);
+    pair(&f.config, "other", &[Scope::Read]);
+    let typist = pair(&f.config, "typist", &[Scope::Input]);
+
+    let (status, body) = call(&f.config, "GET", "/v1/push", &phone, "");
+    assert_eq!(
+        (status, body.as_str()),
+        (200, r#"{"vapid":"the-servers-vapid-key"}"#)
+    );
+    assert!(
+        !super::push::key_path(&f.config.devices).exists(),
+        "the route never makes a key of its own"
+    );
+
+    let (_, _, subscription) = subscriber("https://ntfy.example/upAbc?up=1");
+    assert_eq!(
+        call(&f.config, "PUT", "/v1/push", &typist, &subscription).0,
+        403
+    );
+    assert_eq!(
+        call(&f.config, "PUT", "/v1/push", &phone, &subscription).0,
+        204
+    );
+    let stored = stored_push(&f.config, "phone").unwrap();
+    assert_eq!(stored.endpoint, "https://ntfy.example/upAbc?up=1");
+    assert_eq!(stored_push(&f.config, "other"), None);
+
+    let (_, _, plain) = subscriber("http://ntfy.example/upAbc");
+    let bad_key = subscription.replace("\"p256dh\":\"", "\"p256dh\":\"AA");
+    for refused in [plain.as_str(), bad_key.as_str(), "{}", "not json"] {
+        assert_eq!(
+            call(&f.config, "PUT", "/v1/push", &phone, refused).0,
+            400,
+            "{refused}"
+        );
+    }
+    assert_eq!(stored_push(&f.config, "phone"), Some(stored));
+
+    assert_eq!(call(&f.config, "DELETE", "/v1/push", &phone, "").0, 204);
+    assert_eq!(stored_push(&f.config, "phone"), None);
+    assert_eq!(call(&f.config, "POST", "/v1/snapshot", &phone, "").0, 405);
+}
+
+/// One request a push service received, and how it answered.
+struct Received {
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+}
+
+impl Received {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
+}
+
+/// A push service on loopback answering each request with the next of
+/// `statuses`; its URL, and the requests it received.
+fn push_service(statuses: Vec<u16>) -> (String, mpsc::Receiver<Received>) {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/push/abc", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        for (stream, status) in listener.incoming().zip(statuses) {
+            let mut stream = stream.unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut headers = Vec::new();
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let line = line.trim_end();
+                if line.is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = line.split_once(": ") {
+                    headers.push((name.to_string(), value.to_string()));
+                }
+            }
+            let received = Received {
+                headers,
+                body: Vec::new(),
+            };
+            let length: usize = received.header("content-length").unwrap().parse().unwrap();
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).unwrap();
+            write!(stream, "HTTP/1.1 {status} X\r\nContent-Length: 0\r\n\r\n").unwrap();
+            let _ = tx.send(Received { body, ..received });
+        }
+    });
+    (url, rx)
+}
+
+#[test]
+fn a_transition_is_pushed_encrypted_to_each_subscriber_until_its_service_drops_it() {
+    let mut f = fixture();
+    f.config.poll = Duration::from_millis(100);
+    let phone = pair(&f.config, "phone", &[Scope::Read]);
+    pair(&f.config, "typist", &[Scope::Input]);
+    pair(&f.config, "unsubscribed", &[Scope::Read]);
+    let (url, received) = push_service(vec![201, 410]);
+    let (typist_url, typist_received) = push_service(vec![201]);
+    let (secret, auth, subscription) = subscriber(&url);
+    let push = super::push::subscription(&subscription.replace("http://", "https://")).unwrap();
+    Devices::update(&f.config.devices, |d| {
+        for (device, endpoint) in [("phone", &url), ("typist", &typist_url)] {
+            d.devices.get_mut(device).unwrap().push = Some(crate::state::devices::Push {
+                endpoint: endpoint.clone(),
+                ..push.clone()
+            });
+        }
+        Ok(())
+    })
+    .unwrap();
+    let server = start(f.config.clone());
+    let vapid: serde_json::Value = serde_json::from_str(
+        &ureq::get(format!("http://{}/v1/push", server.0.addr()))
+            .header("Authorization", format!("Bearer {phone}"))
+            .call()
+            .unwrap()
+            .body_mut()
+            .read_to_string()
+            .unwrap(),
+    )
+    .unwrap();
+
+    feat_status(
+        &f.project,
+        "login",
+        Progress::Blocked,
+        Some("which DB?"),
+        None,
+    )
+    .unwrap();
+    let pushed = received.recv_timeout(Duration::from_secs(15)).unwrap();
+    assert_eq!(pushed.header("content-encoding"), Some("aes128gcm"));
+    let authorization = pushed.header("authorization").unwrap();
+    assert!(authorization.starts_with("vapid t="), "{authorization}");
+    assert!(
+        authorization.ends_with(&format!("k={}", vapid["vapid"].as_str().unwrap())),
+        "{authorization}"
+    );
+    let auth = web_push_native::Auth::clone_from_slice(&auth);
+    let message = web_push_native::decrypt(pushed.body, &secret, &auth).unwrap();
+    let message: serde_json::Value = serde_json::from_slice(&message).unwrap();
+    assert_eq!(
+        message,
+        serde_json::json!({
+            "project": f.project_name,
+            "scope": "login",
+            "kind": "blocked",
+            "agent": null,
+        })
+    );
+
+    let summary = paths::summary_path(&f.project, "login");
+    std::fs::create_dir_all(summary.parent().unwrap()).unwrap();
+    std::fs::write(&summary, "Adds login\n").unwrap();
+    feat_status(&f.project, "login", Progress::Ready, None, None).unwrap();
+    received.recv_timeout(Duration::from_secs(15)).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while stored_push(&f.config, "phone").is_some() {
+        assert!(Instant::now() < deadline, "a 410 drops the subscription");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        typist_received.try_recv().is_err(),
+        "a device without the read scope is never pushed to"
+    );
+    assert!(received.try_recv().is_err(), "one push per transition");
+    drop(server);
 }
