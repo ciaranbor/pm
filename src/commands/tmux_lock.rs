@@ -24,7 +24,14 @@ pub struct Lock {
 
 /// The `kind` lock of the server at `socket`, waiting for it.
 pub fn lock(socket: &str, kind: &str) -> Result<Lock> {
-    take(&path(socket, kind)?, socket, true).map(|lock| lock.expect("a blocking take holds"))
+    let path = path(socket, kind)?;
+    take(&path, socket, true)?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("lock file {} could not be made", path.display()),
+        )
+        .into()
+    })
 }
 
 /// The `kind` lock of the server at `socket`, unless another holds it.
@@ -43,11 +50,16 @@ pub fn remove(socket: &str, watch: Lock) -> Result<()> {
 }
 
 /// Remove the files of every server whose socket is gone and that no
-/// watcher holds.
+/// watcher holds. A file is locked only once its socket reads as gone, so a
+/// live server's watcher never finds its lock taken by a prune.
 pub fn prune() -> Result<()> {
     for entry in std::fs::read_dir(dir()?)? {
         let path = entry?.path();
         if !path.to_string_lossy().ends_with(".watch.lock") {
+            continue;
+        }
+        let gone = |socket: &str| !socket.is_empty() && !Path::new(socket).exists();
+        if !std::fs::read_to_string(&path).is_ok_and(|socket| gone(&socket)) {
             continue;
         }
         let Some(mut watch) = take(&path, "", false)? else {
@@ -55,7 +67,7 @@ pub fn prune() -> Result<()> {
         };
         let mut socket = String::new();
         watch.file.read_to_string(&mut socket)?;
-        if !socket.is_empty() && !Path::new(&socket).exists() {
+        if gone(&socket) {
             remove(&socket, watch)?;
         }
     }
