@@ -7,6 +7,8 @@ export type PmOptions = {
   /** Every running child is kept here so an unload can kill it. */
   children: Set<ChildProcess>
   command?: string
+  /** Kills the child with SIGKILL once aborted. */
+  signal?: AbortSignal
 }
 
 /** Run `pm <args>` with `stdin`; a `pm` that cannot be started is code -1. */
@@ -18,6 +20,9 @@ export function runPm(args: string[], stdin: string, options: PmOptions): Promis
       stdio: ["pipe", "pipe", "ignore"],
     })
     options.children.add(child)
+    const kill = () => child.kill("SIGKILL")
+    options.signal?.addEventListener("abort", kill, { once: true })
+    child.on("exit", () => options.signal?.removeEventListener("abort", kill))
     let out = ""
     child.stdout!.on("data", (d) => (out += d))
     child.on("error", () => {

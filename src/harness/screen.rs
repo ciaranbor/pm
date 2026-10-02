@@ -26,10 +26,21 @@ pub(in crate::harness) fn visible_text(line: &str) -> String {
             params.push(c);
         }
         if last == Some('m') {
-            for param in params.split(';') {
+            let mut params = params.split(';');
+            while let Some(param) = params.next() {
                 match param {
                     "2" => dim = true,
                     "" | "0" | "22" => dim = false,
+                    // An extended colour's own arguments: `5;n` or `2;r;g;b`.
+                    "38" | "48" | "58" => match params.next() {
+                        Some("5") => {
+                            params.next();
+                        }
+                        Some("2") => {
+                            params.nth(2);
+                        }
+                        _ => {}
+                    },
                     _ => {}
                 }
             }
@@ -51,5 +62,9 @@ mod tests {
         );
         assert_eq!(visible_text("\x1b[2mdim\x1b[22m plain"), " plain");
         assert_eq!(visible_text("\x1b[0;2mdim\x1b[0;1m bold"), " bold");
+        assert_eq!(
+            visible_text("\x1b[38;2;246;2;183mtrue\x1b[39m \x1b[38;5;2mindexed"),
+            "true indexed"
+        );
     }
 }

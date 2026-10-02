@@ -12,6 +12,8 @@ export const TURN_FAILED = "session.execution.failed"
 
 export const TURN_SUCCEEDED = "session.execution.succeeded"
 
+export const TURN_STARTED = "session.execution.started"
+
 export const TURN_END = new Set([
   TURN_SUCCEEDED,
   TURN_FAILED,
@@ -171,8 +173,11 @@ export function hookDecision(result: HookResult): { block: string } | { failure:
 
 export type LoopDeps = {
   agent: string
-  /** Block in `pm harness hooks stop` and return its answer. */
-  hook(): Promise<HookResult>
+  /**
+   * Block in `pm harness hooks stop` and return its answer; once `cancel`
+   * aborts, kill it with SIGKILL, which it cannot catch to record its end.
+   */
+  hook(cancel: AbortSignal): Promise<HookResult>
   prompt(sessionID: string, text: string): Promise<void>
   /** Resolves early when the plugin unloads. */
   sleep(ms: number): Promise<void>
@@ -190,6 +195,14 @@ export class Loop {
   private readonly deps: LoopDeps
   private readonly breaker = new Breaker()
   private readonly pumping = new Set<string>()
+  // The wait each session's hook is blocked in, while it is.
+  private readonly waits = new Map<string, AbortController>()
+  // Sessions the plugin is prompting, whose turn starts are its own.
+  private readonly prompting = new Set<string>()
+  // Sessions whose pump a turn the plugin did not prompt has cancelled,
+  // and a turn that ended before that pump returned.
+  private readonly cancelling = new Set<string>()
+  private readonly deferred = new Map<string, { turn: string; failure: string | null }>()
   private hookFailures = 0
   private subscriptionFailures = 0
   private unloaded = false
@@ -213,6 +226,19 @@ export class Loop {
     const failure = type === TURN_FAILED ? turnError(error) : null
     if (!this.unloaded && (failure !== null || type === TURN_SUCCEEDED)) this.deps.lastTurn(failure)
     return this.pump(sessionID, type, failure)
+  }
+
+  /**
+   * A turn started in `sessionID`. One the plugin prompted starts after
+   * the hook returned, so a wait still blocked means a turn the plugin did
+   * not prompt (the user's, or one opencode started itself): the hook is
+   * killed, or not asked if the pump is between asks, so the agent does
+   * not read as idle through it, and the turn's end waits again.
+   */
+  turnStarted(sessionID: string): void {
+    if (!this.pumping.has(sessionID) || this.prompting.has(sessionID)) return
+    this.cancelling.add(sessionID)
+    this.waits.get(sessionID)?.abort()
   }
 
   toolRan(tool: unknown, command: unknown, result: unknown): void {
@@ -245,10 +271,14 @@ export class Loop {
   }
 
   // One waiter per session: a turn ending while the hook is still blocked
-  // (a prompt the user typed) must not start a second one. `turn` is the
-  // event that ended a turn, or null when arming; `failure` is its error.
+  // must not start a second one. `turn` is the event that ended a turn, or
+  // null when arming; `failure` is its error.
   private async pump(sessionID: string, turn: string | null, failure: string | null = null): Promise<void> {
-    if (this.unloaded || this.stoppedFor || this.pumping.has(sessionID)) return
+    if (this.unloaded || this.stoppedFor) return
+    if (this.pumping.has(sessionID)) {
+      if (turn && this.cancelling.has(sessionID)) this.deferred.set(sessionID, { turn, failure })
+      return
+    }
     this.pumping.add(sessionID)
     const now = this.deps.now ?? Date.now
     try {
@@ -257,10 +287,20 @@ export class Loop {
         await this.deps.sleep(FAILURE_BACKOFF_MS)
       }
       for (;;) {
-        if (this.unloaded) return
+        if (this.unloaded || this.cancelling.has(sessionID)) return
         const asked = now()
-        const decision = hookDecision(await this.deps.hook())
-        if (this.unloaded) return
+        const wait = new AbortController()
+        this.waits.set(sessionID, wait)
+        let result: HookResult
+        try {
+          result = await this.deps.hook(wait.signal)
+        } finally {
+          this.waits.delete(sessionID)
+        }
+        // Not a failure, nor a turn the breaker counts: the turn that
+        // cancelled it ends in a wait of its own.
+        if (this.unloaded || wait.signal.aborted) return
+        const decision = hookDecision(result)
         if ("failure" in decision) {
           this.hookFailures += 1
           if (this.hookFailures >= MAX_FAILURES) {
@@ -275,15 +315,22 @@ export class Loop {
         this.hookFailures = 0
         const tripped = turn ? this.breaker.turnClosed(now() - asked) : null
         if (tripped) return await this.stop(sessionID, tripped)
+        this.prompting.add(sessionID)
         try {
           await this.deps.prompt(sessionID, decision.block)
         } catch (e) {
           await this.stop(sessionID, `the session could not be prompted (${String(e)})`)
+        } finally {
+          this.prompting.delete(sessionID)
         }
         return
       }
     } finally {
       this.pumping.delete(sessionID)
+      this.cancelling.delete(sessionID)
+      const deferred = this.deferred.get(sessionID)
+      this.deferred.delete(sessionID)
+      if (deferred) void this.pump(sessionID, deferred.turn, deferred.failure)
     }
   }
 

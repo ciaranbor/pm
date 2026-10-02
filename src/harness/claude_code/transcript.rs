@@ -7,85 +7,37 @@
 //! assistant entry (verified on 2.1.284–2.1.287). Bookkeeping entries
 //! (`system`, `attachment`, snapshots) may follow it, and subagent
 //! entries are marked `isSidechain`.
-//!
-//! Only the file's tail is read, and the answer is kept per file size and
-//! mtime, so the long-running tmux watcher rereads a transcript only once
-//! it has changed.
 
-use std::collections::HashMap;
-use std::io::{Read, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use std::time::SystemTime;
+use std::path::Path;
 
 use serde_json::Value;
 
+use crate::harness::transcript::{Cache, cached, last_entry};
+use crate::state::runtime::{Waiting, WaitingKind};
+
 const INTERRUPTED: &str = "[Request interrupted by user";
 
-/// The tail read first; doubled while it holds no complete user or
-/// assistant entry, up to [`MAX_TAIL`].
-const TAIL: u64 = 64 * 1024;
-const MAX_TAIL: u64 = 4 * 1024 * 1024;
+static CACHE: Cache<Waiting> = std::sync::Mutex::new(None);
 
-type Seen = (u64, SystemTime, Option<SystemTime>);
-
-static CACHE: Mutex<Option<HashMap<PathBuf, Seen>>> = Mutex::new(None);
-
-/// When the session whose transcript is at `path` was interrupted, if it
-/// has been and nothing has happened in it since: the transcript's mtime.
-pub(in crate::harness) fn interrupted(path: &Path) -> Option<SystemTime> {
-    let meta = std::fs::metadata(path).ok()?;
-    let (len, mtime) = (meta.len(), meta.modified().ok()?);
-    let mut cache = CACHE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let cache = cache.get_or_insert_with(HashMap::new);
-    if let Some(&(seen_len, seen_mtime, answer)) = cache.get(path)
-        && (seen_len, seen_mtime) == (len, mtime)
-    {
-        return answer;
-    }
-    let answer = last_turn_entry(path, len)
-        .filter(is_interrupt)
-        .map(|_| mtime);
-    cache.insert(path.to_path_buf(), (len, mtime, answer));
-    answer
+/// The interrupt the session whose transcript is at `path` is at, if
+/// nothing has happened in it since, dated by the transcript's mtime.
+pub(in crate::harness) fn turn_ended(path: &Path) -> Option<Waiting> {
+    cached(&CACHE, path, |len, mtime| {
+        last_entry(path, len, is_turn_entry)
+            .filter(is_interrupt)
+            .map(|_| Waiting {
+                since: mtime.into(),
+                ..Waiting::now(WaitingKind::Interrupted, None)
+            })
+    })
 }
 
-/// The last user or assistant entry of the main thread.
-fn last_turn_entry(path: &Path, len: u64) -> Option<Value> {
-    let mut file = std::fs::File::open(path).ok()?;
-    let mut tail = TAIL;
-    loop {
-        let start = len.saturating_sub(tail);
-        file.seek(SeekFrom::Start(start)).ok()?;
-        let mut bytes = Vec::new();
-        file.by_ref()
-            .take(len - start)
-            .read_to_end(&mut bytes)
-            .ok()?;
-        let text = String::from_utf8_lossy(&bytes);
-        // A tail that starts mid-file starts mid-line.
-        let whole = match text.split_once('\n') {
-            Some((_, rest)) if start > 0 => rest,
-            None if start > 0 => "",
-            _ => &text,
-        };
-        let found = whole
-            .lines()
-            .rev()
-            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-            .find(|entry| {
-                matches!(
-                    entry.get("type").and_then(Value::as_str),
-                    Some("user" | "assistant")
-                ) && entry.get("isSidechain").and_then(Value::as_bool) != Some(true)
-            });
-        if found.is_some() || start == 0 || tail >= MAX_TAIL {
-            return found;
-        }
-        tail *= 2;
-    }
+/// A user or assistant entry of the main thread.
+fn is_turn_entry(entry: &Value) -> bool {
+    matches!(
+        entry.get("type").and_then(Value::as_str),
+        Some("user" | "assistant")
+    ) && entry.get("isSidechain").and_then(Value::as_bool) != Some(true)
 }
 
 fn is_interrupt(entry: &Value) -> bool {
@@ -108,7 +60,7 @@ fn is_interrupt(entry: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use crate::harness::transcript::testing::{append, bulky};
     use tempfile::tempdir;
 
     fn user(text: &str) -> String {
@@ -131,23 +83,12 @@ mod tests {
         serde_json::json!({"type": "assistant", "isSidechain": true, "message": {}}).to_string()
     }
 
-    fn append(path: &Path, lines: &[String]) {
-        let mut file = std::fs::File::options()
-            .create(true)
-            .append(true)
-            .open(path)
-            .unwrap();
-        for line in lines {
-            writeln!(file, "{line}").unwrap();
-        }
-    }
-
     #[test]
     fn a_session_is_interrupted_until_its_next_turn() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("s.jsonl");
         append(&path, &[user("do it"), assistant()]);
-        assert_eq!(interrupted(&path), None);
+        assert_eq!(turn_ended(&path), None);
 
         append(
             &path,
@@ -158,31 +99,26 @@ mod tests {
                 r#"{"type":"file-history-snapshot"}"#.to_string(),
             ],
         );
-        assert!(interrupted(&path).is_some());
+        assert!(turn_ended(&path).is_some());
 
         append(&path, &[user("You have new messages")]);
-        assert_eq!(interrupted(&path), None);
+        assert_eq!(turn_ended(&path), None);
 
         append(&path, &[user("[Request interrupted by user for tool use]")]);
-        assert!(interrupted(&path).is_some());
+        assert!(turn_ended(&path).is_some());
         append(&path, &[assistant()]);
-        assert_eq!(interrupted(&path), None);
+        assert_eq!(turn_ended(&path), None);
     }
 
     #[test]
     fn an_interrupt_behind_a_long_entry_is_still_found() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("s.jsonl");
-        let bulky = serde_json::json!({
-            "type": "attachment",
-            "content": "x".repeat(3 * TAIL as usize),
-        })
-        .to_string();
         append(
             &path,
-            &[assistant(), user("[Request interrupted by user]"), bulky],
+            &[assistant(), user("[Request interrupted by user]"), bulky()],
         );
-        assert!(interrupted(&path).is_some());
-        assert_eq!(interrupted(&dir.path().join("missing.jsonl")), None);
+        assert!(turn_ended(&path).is_some());
+        assert_eq!(turn_ended(&dir.path().join("missing.jsonl")), None);
     }
 }

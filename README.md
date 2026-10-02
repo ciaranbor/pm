@@ -294,7 +294,8 @@ dialog, an API error, or the hook itself ended by its harness (Esc while it
 waits), which then says why in the harness's transcript. pm shows such an
 agent as `unarmed`, and [`pm msg send`](#messaging) re-arms it when it can.
 No hook reports a Claude Code agent interrupted mid-turn or a dialog it
-rejected; pm reads that from the tail of the session's transcript instead.
+rejected, nor a codex turn an API error ended; pm reads those from the tail
+of the session's transcript instead.
 A SIGTERM from any process other than
 the harness leaves the hook waiting.
 
@@ -814,6 +815,14 @@ unattended:
   attached to codex's background server run in the server's environment,
   not the agent's. `pm doctor` reports a running agent that has recorded no
   session id after a grace period; `pm agent restart` it.
+- **Typing into an idle agent queues the text.** While the agent waits in
+  the Stop hook, codex holds what you type as "Messages to be submitted
+  after next tool call" and submits it only once you press Esc. No hook
+  reports queued input, so pm can't see it until then.
+- **Removing a model row keeps the session's model.** `codex resume` with
+  no `-m` reuses the model the session last ran, so deleting an
+  `[agents.models]` row changes nothing on restart; set the row to the
+  model you want instead.
 - `pm harness probe --harness codex` checks the version (0.156.0 or newer).
 
 ### opencode agents
@@ -826,7 +835,9 @@ checks). What differs:
   `~/.config/opencode/plugins/`. It stops itself after five turns in a row
   that read no message (a failing model, an unreadable inbox) rather than
   run away; `pm doctor` reports it with the last error. Fix the cause, then
-  `pm agent restart <name>`.
+  `pm agent restart <name>`. A turn the plugin didn't prompt — one you
+  typed, or one opencode started itself — ends its wait, and the turn's
+  end starts the next one.
 - **A model row is required.** opencode silently swaps a model it can't
   resolve for its default, so pm refuses to spawn an opencode agent without
   an `[agents.models]` row and limits the agent to that row's provider and
