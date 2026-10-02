@@ -42,13 +42,13 @@ pub enum Commands {
     /// Feature management
     #[command(subcommand)]
     Feat(FeatCommands),
-    /// Agent management (spawn, list)
+    /// Agent management
     #[command(subcommand)]
     Agent(AgentCommands),
-    /// Inter-agent messaging (send, read, next, list, wait)
+    /// Inter-agent messaging
     #[command(subcommand)]
     Msg(MsgCommands),
-    /// Agent harness integration: hooks, bundled skills/agents, settings, sessions
+    /// Agent harness integration
     #[command(subcommand)]
     Harness(HarnessCommands),
     /// Hidden alias for `pm harness` kept for one release
@@ -87,7 +87,7 @@ pub enum Commands {
         #[arg(long)]
         project: Option<String>,
     },
-    /// Reinstall bundled assets (hooks, skills, agents) to projects
+    /// Reinstall pm's hooks and bundled assets
     Upgrade {
         /// Upgrade all registered projects instead of just the current one
         #[arg(long)]
@@ -196,7 +196,7 @@ pub enum WorkflowCommands {
 
 #[derive(Subcommand)]
 pub enum HarnessCommands {
-    /// Lifecycle hooks managed by pm (install, plus the handlers the harness calls)
+    /// Lifecycle hooks managed by pm
     #[command(subcommand)]
     Hooks(HarnessHooksCommands),
     /// Manage bundled skills (global `~/.agents/skills/`, projected per harness)
@@ -430,9 +430,7 @@ pub enum MsgCommands {
         /// Deliver to the parent scope (base branch's feature). Shorthand for --scope <base>.
         #[arg(long, conflicts_with = "scope")]
         upstream: bool,
-        /// Deliver to a different project (by registered name). Resolves the
-        /// target project's root from ~/.config/pm/projects/<name>.toml and
-        /// delivers there. Auto-spawn is disabled for cross-project messages.
+        /// Deliver to a different project (by registered name)
         #[arg(long, conflicts_with = "upstream")]
         project: Option<String>,
     },
@@ -555,7 +553,7 @@ pub enum FeatCommands {
         #[arg(long)]
         keep: bool,
     },
-    /// GitHub PR management (create, edit, ready)
+    /// GitHub PR management
     #[command(subcommand)]
     Pr(PrCommands),
     /// Set where the feature's work stands: wip, blocked (waiting on the

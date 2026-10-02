@@ -371,8 +371,6 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     let effective_scope = shorthand_scope.map(|s| s.to_string()).or(scope);
 
                     if let Some(ref proj_name) = target_project {
-                        // Cross-project delivery: resolve target project root,
-                        // deliver message, but do NOT auto-spawn.
                         let target_scope = effective_scope.as_deref().unwrap_or("main");
                         let pm_dir = paths::pm_dir(&project_root);
                         let sender_project_config =

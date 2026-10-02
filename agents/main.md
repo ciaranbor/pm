@@ -87,7 +87,7 @@ to commit them.
   - Change with user-facing behaviour to exercise: the `-qa-` variants, `implement-qa-review` and `research-implement-qa-review`
   - Pure exploration: `pm feat new <name> --workflow research-only --context "description"` or `pm agent spawn researcher --context "question"` (no feature needed)
   Always provide `--context` — without it the agent has no instructions.
-  `--context` requires `--workflow`.
+  Without `--workflow`, `feat new` uses the single-agent `solo` workflow.
 
 ## Resolving ambiguity
 
