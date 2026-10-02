@@ -38,9 +38,9 @@ const ATTENTION_KEY: &str = "@pm-attention-key";
 
 pub const TREE_FORMAT_OPTION: &str = "@pm_tree_format";
 
-/// tmux's own tree format with pm's badges added: a session's activity,
-/// attention and reason, a window's agent badge. Pane titles, usually a
-/// path, and theme colours (tmux 3.8) are left out.
+/// tmux's own tree format with pm's labelled badges added: a session's
+/// activity, attention and reason, a window's agent state. Pane titles,
+/// usually a path, and theme colours (tmux 3.8) are left out.
 pub const TREE_FORMAT: &str = concat!(
     "#{?pane_format,",
     "#{?pane_marked,#[reverse],}",
@@ -49,13 +49,13 @@ pub const TREE_FORMAT: &str = concat!(
     "#{?window_format,",
     "#{?window_marked_flag,#[reverse],}",
     "#{window_name}#{window_flags}",
-    "#{?@pm_agent_badge, #{@pm_agent_badge},}",
+    "#{?@pm_agent_label, #{@pm_agent_label},}",
     ",",
     "#{session_windows} windows",
     "#{?session_grouped, (group #{session_group}: #{session_group_list}),}",
     "#{?session_attached, (attached),}",
-    "#{?@pm_activity, #{@pm_activity},}",
-    "#{?@pm_badge, #{@pm_badge}#{?@pm_reason, #{@pm_reason},},}",
+    "#{?@pm_activity_label, #{@pm_activity_label},}",
+    "#{?@pm_label, #{@pm_label}#{?@pm_reason,  #{@pm_reason},},}",
     "}}",
 );
 

@@ -125,9 +125,9 @@ its turn). pm surfaces all of it in tmux:
   whose session is closed still alerts when it becomes blocked or ready (a
   PR approved through `pm feat sync`, say);
 - pm's tree (prefix `s` / `w`), tmux's own tree with each session's
-  activity (working, or how long it has been quiet), attention glyph and
-  reason, and each agent's badge. Enter on a session goes straight to the
-  pane of the agent it is waiting on;
+  activity (working, or how long it has been quiet), attention and
+  reason, and each agent's state, every glyph labelled. Enter on a
+  session goes straight to the pane of the agent it is waiting on;
 - each window's badge: the agent busy, asking, unarmed, waiting on
   background work, idle, dead or stopped, and an envelope for unread
   messages. A `main` session carries its main agent's badge.
@@ -654,10 +654,14 @@ Plugin options, set before `run-shell 'pm tmux init'`:
 | `@pm-attention-key` | `a` | the prefix key opening pm's tree with only the sessions needing attention, or a message when none does; `off` for none. A key your config binds is left alone; a key pm lets go of gets tmux's default binding back, if it has one |
 
 Badges are Nerd Font glyphs: an agent window's shows its [agent
-state](#attention-view), a feature session's the attention it needs, with
-the reason after it in pm's tree. A kind that means what a state means
-shares its glyph. Follow a badge with a space in your own formats: some
-terminals (Ghostty) draw a glyph small when the next cell isn't blank.
+state](#attention-view), a feature session's the attention it needs. A
+kind that means what a state means shares its glyph. The window list shows
+glyphs only; pm's tree, which has room, labels each one: a session line
+reads `<glyph> blocked  implementer: which DB?` (on `main`, its main
+agent's state), a window line `<glyph> idle <envelope> 2`, and a session's
+activity `<gear> working` or `quiet 2h`. Follow a badge with a space in
+your own formats: some terminals (Ghostty) draw a glyph small when the next
+cell isn't blank.
 
 | Glyph | Colour | Agent state | Attention |
 |---|---|---|---|
@@ -691,12 +695,15 @@ unset, text is escaped for formats, and each name is set at one scope only:
 | | `@pm_attention` | the attention kind; unset for `none`, and for a `ready` feature while an agent is busy |
 | | `@pm_reason` | the attention detail, or for `stalled` what the attention view shows; unset without one |
 | | `@pm_badge` | the kind's glyph, styled; unset for `none`; on `main`, its main agent's badge |
+| | `@pm_label` | `@pm_badge` with words, as pm's tree shows it: the kind after its glyph; on `main`, its main agent's `@pm_agent_label` |
 | | `@pm_activity` | the busy glyph while the scope is working, else how long it has been quiet (`2h`, styled); unset under 10 minutes, and on `main` while its badge already shows its main agent at work |
+| | `@pm_activity_label` | `@pm_activity` with words, as pm's tree shows it: `working` after the glyph, or `quiet 2h`; unset when it is |
 | | `@pm_alert_pending`, `@pm_alerted` | pm's own bookkeeping: a ready alert waiting for its team to go quiet, and the kinds already alerted on |
 | agent window | `@pm_agent` | the agent's name |
 | | `@pm_agent_state` | an [agent state](#attention-view) |
 | | `@pm_unread` | unread message count |
 | | `@pm_agent_badge` | the badge, styled; it resets with `#[default]`, so placed anywhere but the start of a format, follow it with your theme's style |
+| | `@pm_agent_label` | the badge with words, as pm's tree shows it: the state after its glyph, the unread count after the envelope |
 | global | `@pm_summary` | each kind's glyph and how many sessions have `@pm_attention`, styled and joined by ` · `; unset when none has |
 | | `@pm_count` | sessions with `@pm_attention` set, so it matches what `@pm-attention-key` opens; a feature whose session is closed is not counted (`pm status` lists it) |
 | | `@pm_features_alerted` | pm's own bookkeeping: the kinds each feature has alerted on, kept for a closed feature |

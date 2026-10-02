@@ -46,7 +46,9 @@ const PROGRESS: &str = "@pm_progress";
 const REASON: &str = "@pm_reason";
 const ATTENTION: &str = "@pm_attention";
 const BADGE: &str = "@pm_badge";
+const LABEL: &str = "@pm_label";
 const ACTIVITY: &str = "@pm_activity";
+const ACTIVITY_LABEL: &str = "@pm_activity_label";
 const ALERT_PENDING: &str = "@pm_alert_pending";
 const ALERTED: &str = "@pm_alerted";
 const SESSION_OPTIONS: &[&str] = &[
@@ -56,7 +58,9 @@ const SESSION_OPTIONS: &[&str] = &[
     REASON,
     ATTENTION,
     BADGE,
+    LABEL,
     ACTIVITY,
+    ACTIVITY_LABEL,
     ALERT_PENDING,
     ALERTED,
 ];
@@ -65,7 +69,8 @@ const AGENT: &str = "@pm_agent";
 const AGENT_STATE: &str = "@pm_agent_state";
 const UNREAD: &str = "@pm_unread";
 const AGENT_BADGE: &str = "@pm_agent_badge";
-pub(super) const WINDOW_OPTIONS: &[&str] = &[AGENT, AGENT_STATE, UNREAD, AGENT_BADGE];
+const AGENT_LABEL: &str = "@pm_agent_label";
+pub(super) const WINDOW_OPTIONS: &[&str] = &[AGENT, AGENT_STATE, UNREAD, AGENT_BADGE, AGENT_LABEL];
 
 const SUMMARY: &str = "@pm_summary";
 const COUNT: &str = "@pm_count";
@@ -317,6 +322,7 @@ fn session_values(
 ) -> Vec<(&'static str, Option<String>)> {
     let kind = feature.attention.kind;
     let needs = (kind != AttentionKind::None).then_some(kind);
+    let activity = activity(feature.working, feature.last_activity, now);
     vec![
         (PROJECT, Some(format_text(&feature.project))),
         (FEATURE, Some(format_text(&feature.name))),
@@ -324,10 +330,9 @@ fn session_values(
         (REASON, reason(&feature.attention)),
         (ATTENTION, judged.attention.map(|k| k.to_string())),
         (BADGE, needs.and_then(badge::attention)),
-        (
-            ACTIVITY,
-            activity(feature.working, feature.last_activity, now),
-        ),
+        (LABEL, needs.and_then(badge::attention_label)),
+        (ACTIVITY, activity.as_ref().map(Activity::badge)),
+        (ACTIVITY_LABEL, activity.as_ref().map(Activity::label)),
         (ALERTED, judged.alerted_list()),
     ]
 }
@@ -355,6 +360,7 @@ fn main_values(
         .iter()
         .find(|a| a.name == "main")
         .or(main.agents.first());
+    let activity = main_activity(main, lead, now);
     vec![
         (PROJECT, Some(format_text(project))),
         (FEATURE, None),
@@ -362,7 +368,9 @@ fn main_values(
         (REASON, reason(&main.attention)),
         (ATTENTION, judged.attention.map(|k| k.to_string())),
         (BADGE, lead.map(|a| badge::agent(a.state, a.unread))),
-        (ACTIVITY, main_activity(main, lead, now)),
+        (LABEL, lead.map(|a| badge::agent_label(a.state, a.unread))),
+        (ACTIVITY, activity.as_ref().map(Activity::badge)),
+        (ACTIVITY_LABEL, activity.as_ref().map(Activity::label)),
         (ALERTED, judged.alerted_list()),
     ]
 }
@@ -373,24 +381,51 @@ fn main_activity(
     main: &ScopeSnapshot,
     lead: Option<&AgentSnapshot>,
     now: DateTime<Utc>,
-) -> Option<String> {
+) -> Option<Activity> {
     let lead_shows_work =
         lead.is_some_and(|a| matches!(a.state, AgentState::Busy | AgentState::Background));
     activity(main.working, main.last_activity, now).filter(|_| !(main.working && lead_shows_work))
 }
 
-/// The busy glyph while the scope works, else how long it has been quiet,
-/// once that is long enough to matter.
+/// Whether a scope is working, or how long it has been quiet.
+#[derive(Debug, PartialEq)]
+enum Activity {
+    Working,
+    Quiet(String),
+}
+
+impl Activity {
+    /// The busy glyph, or the quiet spell (`2h`).
+    fn badge(&self) -> String {
+        match self {
+            Self::Working => badge::working(),
+            Self::Quiet(span) => badge::styled(QUIET_STYLE, span),
+        }
+    }
+
+    /// [`badge`](Self::badge) with words: `working`, or `quiet 2h`.
+    fn label(&self) -> String {
+        match self {
+            Self::Working => badge::working_label(),
+            Self::Quiet(span) => badge::styled(QUIET_STYLE, &format!("quiet {span}")),
+        }
+    }
+}
+
+const QUIET_STYLE: &str = "fg=colour245";
+
+/// Working while the scope works, else how long it has been quiet, once
+/// that is long enough to matter.
 fn activity(
     working: bool,
     last_activity: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
-) -> Option<String> {
+) -> Option<Activity> {
     if working {
-        return Some(badge::working());
+        return Some(Activity::Working);
     }
     let since = attention::quiet_since(working, last_activity, now)?;
-    Some(badge::styled("fg=colour245", &span(since, now)))
+    Some(Activity::Quiet(span(since, now)))
 }
 
 pub(super) fn window_values(agent: &AgentSnapshot) -> Vec<(&'static str, Option<String>)> {
@@ -399,6 +434,10 @@ pub(super) fn window_values(agent: &AgentSnapshot) -> Vec<(&'static str, Option<
         (AGENT_STATE, Some(agent.state.to_string())),
         (UNREAD, Some(agent.unread.to_string())),
         (AGENT_BADGE, Some(badge::agent(agent.state, agent.unread))),
+        (
+            AGENT_LABEL,
+            Some(badge::agent_label(agent.state, agent.unread)),
+        ),
     ]
 }
 
@@ -462,6 +501,7 @@ fn alert<'a>(session: &str, attention: &Attention, agents: &'a [AgentSnapshot]) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::tmux_init::TREE_FORMAT;
     use crate::commands::{feat_delete::feat_delete, feat_status::feat_status};
     use crate::messages;
     use crate::state::agent::AgentRegistry;
@@ -643,33 +683,78 @@ mod tests {
                 "which ##[fg=red]DB?",
                 "blocked",
                 "#[fg=red,bold]\u{f256}#[default]",
+                "#[fg=red,bold]\u{f256} blocked#[default]",
+                "",
                 "",
                 "",
                 "blocked",
             ]
         );
+        let idle_label = "#[fg=colour245]\u{f252} idle#[default]";
         assert_eq!(
             values(&now.windows, &implementer, WINDOW_OPTIONS),
             [
                 "implementer",
                 "idle",
                 "0",
-                "#[fg=colour245]\u{f252}#[default]"
+                "#[fg=colour245]\u{f252}#[default]",
+                idle_label,
             ]
         );
+        let busy_label = "#[fg=green]\u{f013} busy#[default] #[fg=yellow]\u{f0e0} 1#[default]";
         assert_eq!(
             values(&now.windows, &reviewer, WINDOW_OPTIONS),
             [
                 "reviewer",
                 "busy",
                 "1",
-                "#[fg=green]\u{f013} #[fg=yellow]\u{f0e0}#[default]"
+                "#[fg=green]\u{f013} #[fg=yellow]\u{f0e0}#[default]",
+                busy_label,
             ]
         );
         assert_eq!(
             values(&now.windows, &shell, WINDOW_OPTIONS),
-            ["", "", "", "mine"],
+            ["", "", "", "mine", ""],
             "a window that is no agent's"
+        );
+        let display = |target: &str, format: &str| {
+            tmux_out(&server, &["display", "-p", "-t", target, format])
+                .trim_end_matches('\n')
+                .to_string()
+        };
+        // `display` runs in a pane's context: each line of the tree is its
+        // branch of the format taken by hand.
+        let tree_line = |window| {
+            TREE_FORMAT
+                .replacen("#{?pane_format,", "#{?@pm_none,", 1)
+                .replacen(
+                    "#{?window_format,",
+                    if window {
+                        "#{?window_name,"
+                    } else {
+                        "#{?@pm_none,"
+                    },
+                    1,
+                )
+        };
+        let window_line = tree_line(true);
+        for (window, label) in [(&implementer, idle_label), (&reviewer, busy_label)] {
+            assert_eq!(
+                display(window, &window_line),
+                format!(
+                    "{} {label}",
+                    display(window, "#{window_name}#{window_flags}")
+                ),
+                "a window's line in pm's tree"
+            );
+        }
+        assert_eq!(
+            display(&session, &tree_line(false)),
+            format!(
+                "{} windows #[fg=red,bold]\u{f256} blocked#[default]  which ##[fg=red]DB?",
+                display(&session, "#{session_windows}"),
+            ),
+            "a session's line in pm's tree"
         );
         assert_eq!(
             [now.global.get(COUNT), now.global.get(SUMMARY)],
@@ -697,6 +782,8 @@ mod tests {
                 "",
                 "",
                 "",
+                "",
+                "",
                 ""
             ]
         );
@@ -706,12 +793,13 @@ mod tests {
                 "implementer",
                 "stopped",
                 "0",
-                "#[fg=colour245]\u{f04d}#[default]"
+                "#[fg=colour245]\u{f04d}#[default]",
+                "#[fg=colour245]\u{f04d} stopped#[default]",
             ]
         );
         assert_eq!(
             values(&now.windows, &reviewer, WINDOW_OPTIONS),
-            ["", "", "", ""],
+            ["", "", "", "", ""],
             "a window whose agent is gone from the registry"
         );
         assert_eq!([now.global.get(COUNT), now.global.get(SUMMARY)], ["0", ""]);
@@ -743,7 +831,8 @@ mod tests {
                 "main",
                 "idle",
                 "1",
-                "#[fg=colour245]\u{f252} #[fg=yellow]\u{f0e0}#[default]"
+                "#[fg=colour245]\u{f252} #[fg=yellow]\u{f0e0}#[default]",
+                "#[fg=colour245]\u{f252} idle#[default] #[fg=yellow]\u{f0e0} 1#[default]",
             ]
         );
         assert_eq!(
@@ -755,6 +844,8 @@ mod tests {
                 "",
                 "",
                 "#[fg=colour245]\u{f252} #[fg=yellow]\u{f0e0}#[default]",
+                "#[fg=colour245]\u{f252} idle#[default] #[fg=yellow]\u{f0e0} 1#[default]",
+                "",
                 "",
                 "",
                 ""
@@ -771,7 +862,7 @@ mod tests {
         let now = published(&server);
         assert_eq!(
             values(&now.windows, &orchestrator, WINDOW_OPTIONS),
-            ["", "", "", ""]
+            ["", "", "", "", ""]
         );
     }
 
@@ -815,7 +906,7 @@ mod tests {
         assert!(!now.sessions.iter().any(|s| s.target == search));
         assert_eq!(
             values(&now.sessions, &login, SESSION_OPTIONS),
-            ["", "", "", "", "", "", "", "", ""]
+            ["", "", "", "", "", "", "", "", "", "", ""]
         );
         assert_eq!([now.global.get(COUNT), now.global.get(SUMMARY)], ["0", ""]);
     }
@@ -850,7 +941,7 @@ mod tests {
         }
         assert_eq!(
             values(&now.windows, &window, WINDOW_OPTIONS),
-            ["", "", "", ""]
+            ["", "", "", "", ""]
         );
     }
 
@@ -1359,25 +1450,44 @@ mod tests {
             ..Options::default()
         };
         let activity = |snapshot: &Snapshot| {
-            sets(&commands(snapshot, &published, now), ACTIVITY)
-                .into_iter()
+            let commands = commands(snapshot, &published, now);
+            [ACTIVITY, ACTIVITY_LABEL]
+                .iter()
+                .flat_map(|name| sets(&commands, name))
                 .map(String::from)
                 .collect::<Vec<_>>()
         };
-        let gear = "#[fg=green]\u{f013}#[default]";
 
         assert!(
             activity(&main(AgentState::Busy, AgentState::Idle, true, 1)).is_empty(),
             "the main agent's badge shows it"
         );
         assert_eq!(
+            sets(
+                &commands(
+                    &main(AgentState::Busy, AgentState::Idle, true, 1),
+                    &published,
+                    now
+                ),
+                LABEL
+            ),
+            ["#[fg=green]\u{f013} busy#[default]"],
+            "main's label is its main agent's state"
+        );
+        assert_eq!(
             activity(&main(AgentState::Idle, AgentState::Busy, true, 1)),
-            [gear],
+            [
+                "#[fg=green]\u{f013}#[default]",
+                "#[fg=green]\u{f013} working#[default]"
+            ],
             "another agent of main's is working"
         );
         assert_eq!(
             activity(&main(AgentState::Idle, AgentState::Idle, false, 185)),
-            ["#[fg=colour245]3h#[default]"]
+            [
+                "#[fg=colour245]3h#[default]",
+                "#[fg=colour245]quiet 3h#[default]"
+            ]
         );
     }
 
@@ -1395,14 +1505,21 @@ mod tests {
     fn activity_shows_work_or_a_quiet_spell_long_enough_to_matter() {
         let now = Utc::now();
         let ago = |minutes| Some(now - chrono::Duration::minutes(minutes));
+        let drawn = |activity: Option<Activity>| activity.map(|a| [a.badge(), a.label()]);
         assert_eq!(
-            activity(true, ago(1), now).as_deref(),
-            Some("#[fg=green]\u{f013}#[default]")
+            drawn(activity(true, ago(1), now)),
+            Some([
+                "#[fg=green]\u{f013}#[default]".into(),
+                "#[fg=green]\u{f013} working#[default]".into()
+            ])
         );
         assert_eq!(activity(false, ago(9), now), None, "between turns");
         assert_eq!(
-            activity(false, ago(185), now).as_deref(),
-            Some("#[fg=colour245]3h#[default]")
+            drawn(activity(false, ago(185), now)),
+            Some([
+                "#[fg=colour245]3h#[default]".into(),
+                "#[fg=colour245]quiet 3h#[default]".into()
+            ])
         );
         assert_eq!(activity(false, None, now), None);
     }

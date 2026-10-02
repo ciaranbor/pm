@@ -11,22 +11,42 @@
 
 use super::super::attention::{AgentState, AttentionKind};
 
+/// nf-fa-envelope
+const ENVELOPE: &str = "\u{f0e0}";
+
 /// The badge of an agent in `state` with `unread` messages. It resets to
 /// the base style once, at the end.
 pub(super) fn agent(state: AgentState, unread: u32) -> String {
     let (style, glyph) = agent_mark(state);
     let mut badge = format!("#[{style}]{glyph}");
     if unread > 0 {
-        // nf-fa-envelope
-        badge.push_str(" #[fg=yellow]\u{f0e0}");
+        badge.push_str(&format!(" #[fg=yellow]{ENVELOPE}"));
     }
     badge + "#[default]"
+}
+
+/// [`agent`] with words, for where there is room: the state after its
+/// glyph, and the unread count after the envelope.
+pub(super) fn agent_label(state: AgentState, unread: u32) -> String {
+    let (style, glyph) = agent_mark(state);
+    let mut label = styled(style, &format!("{glyph} {state}"));
+    if unread > 0 {
+        label.push(' ');
+        label.push_str(&styled("fg=yellow", &format!("{ENVELOPE} {unread}")));
+    }
+    label
 }
 
 /// The badge of a scope needing `kind`; `None` needs nothing.
 pub(super) fn attention(kind: AttentionKind) -> Option<String> {
     let (style, glyph) = attention_mark(kind)?;
     Some(styled(style, glyph))
+}
+
+/// [`attention`] with the kind after its glyph.
+pub(super) fn attention_label(kind: AttentionKind) -> Option<String> {
+    let (style, glyph) = attention_mark(kind)?;
+    Some(styled(style, &format!("{glyph} {kind}")))
 }
 
 /// `count` scopes needing `kind`, as the summary lists them.
@@ -39,6 +59,12 @@ pub(super) fn attention_count(kind: AttentionKind, count: usize) -> Option<Strin
 pub(super) fn working() -> String {
     let (style, glyph) = agent_mark(AgentState::Busy);
     styled(style, glyph)
+}
+
+/// [`working`] with the word after its glyph.
+pub(super) fn working_label() -> String {
+    let (style, glyph) = agent_mark(AgentState::Busy);
+    styled(style, &format!("{glyph} working"))
 }
 
 /// `text` in `style`, then back to the surrounding style.
