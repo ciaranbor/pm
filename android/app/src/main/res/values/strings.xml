@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">pm</string>
+    <string name="channel_attention">Needs you</string>
+    <string name="channel_attention_description">A feature or agent became blocked, asking, ready, or died</string>
+</resources>
