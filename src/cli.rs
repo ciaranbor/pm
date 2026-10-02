@@ -23,6 +23,9 @@ pub enum Commands {
         /// Clone a remote repo instead of running git init
         #[arg(long)]
         git: Option<String>,
+        /// Don't spawn the `main` agent in the main session
+        #[arg(long)]
+        no_main: bool,
     },
     /// Register an existing git repo as a pm project
     Register {
@@ -34,6 +37,9 @@ pub enum Commands {
         /// Move the repo into the wrapper instead of symlinking
         #[arg(long, rename_all = "kebab-case")]
         r#move: bool,
+        /// Don't spawn the `main` agent in the main session
+        #[arg(long)]
+        no_main: bool,
     },
     /// List all registered projects
     List,
@@ -410,6 +416,10 @@ pub enum AgentCommands {
         /// Agent name(s)
         #[arg(required = true)]
         names: Vec<String>,
+        /// Restart an agent that is mid-turn, asking, or running background
+        /// work; it is sent a message telling it to resume
+        #[arg(long)]
+        force: bool,
         /// Target scope (feature name or "main"; defaults to current scope)
         #[arg(long)]
         scope: Option<String>,

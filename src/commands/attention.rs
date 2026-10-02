@@ -5,11 +5,11 @@
 //! once ([`Windows`]), takes the PR state `pm feat sync` last recorded, and
 //! never calls `gh` or a harness, so it is cheap enough to poll.
 //!
-//! An agent the window reads as busy is refined by its waiting marker
-//! ([`runtime`]) into asking, unarmed or background. A scope is working
-//! while a busy or background agent showed activity in the last
-//! [`WORKING_SECS`]; a busy agent silent longer, which is also what a user's
-//! undetectable interrupt looks like, reads quiet.
+//! An agent the window reads as busy is refined by its waiting marker, or
+//! an interrupt no hook reported ([`running_agents::waiting`]), into
+//! asking, unarmed or background. A scope is working while a busy or
+//! background agent showed activity in the last [`WORKING_SECS`]; a busy
+//! agent silent longer reads quiet.
 
 use std::path::Path;
 
@@ -29,7 +29,7 @@ use crate::state::runtime::{self, WaitingClass, WaitingKind};
 use crate::tmux;
 
 use super::feat_status_view::first_line;
-use super::running_agents::{Liveness, Windows, liveness};
+use super::running_agents::{self, Liveness, Windows, liveness};
 
 /// Bumped when a field changes meaning or goes away; added fields, kinds
 /// and states keep it.
@@ -381,6 +381,27 @@ pub fn project(project_root: &Path, tmux_server: Option<&str>) -> Result<Snapsho
     })
 }
 
+/// The agents of one scope of the project at `project_root`.
+pub fn scope_agents(
+    project_root: &Path,
+    scope: &str,
+    tmux_server: Option<&str>,
+) -> Result<Vec<AgentSnapshot>> {
+    let windows = Windows::read(tmux_server)?;
+    let project_config = ProjectConfig::load(&paths::pm_dir(project_root))?;
+    let config = resolve_harness_config(
+        &project_config.harness,
+        &GlobalConfig::load_or_default().harness,
+    );
+    let reader = ScopeReader {
+        project_root,
+        project: &project_config.project.name,
+        windows: &windows,
+        config: &config,
+    };
+    Ok(reader.read(scope)?.agents)
+}
+
 fn sort(features: &mut [FeatureSnapshot]) {
     features.sort_by(|a, b| {
         (a.attention.kind, &a.project, &a.name).cmp(&(b.attention.kind, &b.project, &b.name))
@@ -529,7 +550,7 @@ impl ScopeReader<'_> {
         now: DateTime<Utc>,
     ) -> (AgentState, Option<WaitingSnapshot>) {
         let grace = super::doctor::START_GRACE.as_secs() as i64;
-        let waiting = runtime::read_waiting(self.project_root, scope, agent)
+        let waiting = running_agents::waiting(self.project_root, scope, agent, harness)
             .filter(|w| w.kind != WaitingKind::Startup || (now - w.since).num_seconds() > grace)
             .map(|w| (w.kind, w.describe()))
             .or_else(|| {

@@ -70,13 +70,9 @@ branch. Bundled skills, agents, and workflows install once per machine
 ([Asset tiers](#asset-tiers)). pm projects your `main/.agents/` customs
 into `main/.claude/`, which is generated: gitignore it.
 
-In the `main` session, start the orchestrator:
-
-```sh
-pm agent spawn main
-```
-
-`main` dispatches features and keeps the project's
+Each also starts the orchestrator, the `main` agent, in that session
+(`--no-main` skips it; `pm agent spawn main` starts it later). `main`
+dispatches features and keeps the project's
 [information store](#information-store-and-summaries). Run one per project;
 several projects side by side is the normal case.
 
@@ -153,15 +149,18 @@ add work. Typing into a blocked feature's agent sets the feature back to
 it ([Agents as message processors](#agents-as-message-processors)), so
 `pm msg send <agent> "…"` from any pane also reaches it. You can split an
 agent's window to work beside it: pm watches and jumps to the pane it
-started the agent in, whichever pane is active. Restarting or stopping the
-agent closes the window, your panes with it.
+started the agent in, whichever pane is active. Restarting the agent
+replaces only that pane; stopping or deleting it closes only that pane,
+and the window, no longer named for the agent, keeps yours.
 
 Agents also message across projects: `pm msg send main --project tools
 "…"` reaches the `tools` project's orchestrator, so an agent can ask about
 another project or request something of it without you relaying it.
 
 When an agent misbehaves, `pm agent restart <name>` respawns it on the same
-conversation; `pm agent spawn <name>` adds one to the feature.
+conversation; `pm agent spawn <name>` adds one to the feature. A restart
+refuses an agent that is busy, asking, or running background work; with
+`--force` it interrupts it and leaves it a message to resume.
 
 ### Finish a feature
 
@@ -291,8 +290,9 @@ message to it waits until something prompts it: an interrupt, a rejected
 dialog, an API error, or the hook itself ended by its harness (Esc while it
 waits), which then says why in the harness's transcript. pm shows such an
 agent as `unarmed`, and [`pm msg send`](#messaging) re-arms it when it can.
-A Claude Code agent interrupted mid-turn is the one case no hook reports; it
-reads `busy`, and its scope goes quiet. A SIGTERM from any process other than
+No hook reports a Claude Code agent interrupted mid-turn or a dialog it
+rejected; pm reads that from the tail of the session's transcript instead.
+A SIGTERM from any process other than
 the harness leaves the hook waiting.
 
 A second hook, on UserPromptSubmit, sets a blocked feature back to `wip`
@@ -333,8 +333,9 @@ oldest, ending with `N more senders pending: b, c — pm msg read --from b`
 when others wait. History stays on disk. `pm msg send` never spawns an
 agent: it errors on an inactive recipient, and respawns one whose window
 died. To an `unarmed` recipient it types the prompt the Stop hook would
-have given, but only when that agent's input line is empty (and, in vim
-mode, in INSERT mode), so it never touches a draft or answers a dialog;
+have given, but only when that agent's input line is empty (in vim mode it
+presses `i` first to leave NORMAL mode), so it never touches a draft or
+answers a dialog;
 elsewhere the message waits. opencode agents never need it: pm's plugin
 waits again after every turn.
 

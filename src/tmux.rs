@@ -5,6 +5,7 @@ use crate::error::{PmError, Result};
 
 pub mod keys;
 pub mod options;
+pub mod panes;
 
 /// Single source of truth for the tmux session naming convention.
 /// Returns `"{project_name}/{scope}"`.
@@ -208,6 +209,12 @@ pub fn send_text(server: Option<&str>, target: &str, text: &str) -> Result<()> {
     Ok(())
 }
 
+/// Press one key, by tmux's name for it, in `target`.
+pub fn send_key(server: Option<&str>, target: &str, key: &str) -> Result<()> {
+    run_tmux(server, &["send-keys", "-t", target, key])?;
+    Ok(())
+}
+
 /// The visible screen of `target`'s pane, with the escape sequences that
 /// style it.
 pub fn capture_screen(server: Option<&str>, target: &str) -> Result<String> {
@@ -284,6 +291,9 @@ pub struct Process {
     started: String,
     /// The command line, its arguments separated by single spaces.
     pub command: String,
+    /// Whether it is in its terminal's foreground process group: for a
+    /// pane's shell, whether it is at its prompt rather than running a job.
+    pub foreground: bool,
 }
 
 /// A process can rewrite its own command line, so it is not part of what
@@ -303,6 +313,7 @@ impl Process {
             pid,
             started: String::new(),
             command: command.to_string(),
+            foreground: true,
         }
     }
 }
@@ -314,7 +325,7 @@ pub struct ProcessTable(Vec<(Process, u32)>);
 impl ProcessTable {
     pub fn read() -> Result<Self> {
         let table = Command::new("ps")
-            .args(["-A", "-o", "pid=,ppid=,lstart=,command="])
+            .args(["-A", "-o", "pid=,ppid=,pgid=,tpgid=,lstart=,command="])
             .output()?;
         Ok(Self(
             String::from_utf8_lossy(&table.stdout)
@@ -323,6 +334,8 @@ impl ProcessTable {
                     let mut fields = line.split_whitespace();
                     let pid = fields.next()?.parse().ok()?;
                     let ppid = fields.next()?.parse().ok()?;
+                    let pgid: i64 = fields.next()?.parse().ok()?;
+                    let tpgid: i64 = fields.next()?.parse().ok()?;
                     // `lstart` is always five fields: `Wed Oct  1 16:47:56 2026`.
                     let started: Vec<&str> = fields.by_ref().take(5).collect();
                     if started.len() < 5 {
@@ -332,6 +345,7 @@ impl ProcessTable {
                         pid,
                         started: started.join(" "),
                         command: fields.collect::<Vec<_>>().join(" "),
+                        foreground: pgid == tpgid,
                     };
                     Some((process, ppid))
                 })
@@ -377,22 +391,11 @@ pub fn mark_agent_pane(server: Option<&str>, window: &str) -> Result<()> {
 /// The processes running in a window's agent pane: the pane's own and its
 /// descendants, which is where a harness started from the pane's shell is.
 pub fn pane_processes(server: Option<&str>, target: &str) -> Result<Vec<Process>> {
-    let output = run_tmux(server, &["list-panes", "-t", target, "-F", &pane_format()])?;
+    let output = run_tmux_untrimmed(server, &["list-panes", "-t", target, "-F", &pane_format()])?;
     let Some(pane) = agent_panes_in(&output).into_iter().next() else {
         return Ok(Vec::new());
     };
     Ok(ProcessTable::read()?.tree(pane.pid))
-}
-
-/// The processes running in any pane of `window`.
-pub fn window_processes(server: Option<&str>, window: &str) -> Result<Vec<Process>> {
-    let pids = run_tmux(server, &["list-panes", "-t", window, "-F", "#{pane_pid}"])?;
-    let table = ProcessTable::read()?;
-    Ok(pids
-        .lines()
-        .filter_map(|pid| pid.trim().parse().ok())
-        .flat_map(|pid| table.tree(pid))
-        .collect())
 }
 
 /// A window's agent pane, as [`agent_panes`] lists it.
@@ -407,7 +410,8 @@ pub struct Pane {
     pub pid: u32,
 }
 
-/// What [`agent_panes_in`] reads of each pane.
+/// What [`agent_panes_in`] reads of each pane. Its last field is empty for
+/// an unmarked pane, so its output must not be trimmed.
 fn pane_format() -> String {
     format!(
         "#{{session_name}}\t#{{window_name}}\t#{{session_name}}:#{{window_index}}\t#{{pane_id}}\t#{{pane_pid}}\t#{{{AGENT_PANE}}}"
@@ -417,7 +421,7 @@ fn pane_format() -> String {
 /// The agent pane of every window on the server, from one `list-panes -a`.
 /// No server running lists none.
 pub fn agent_panes(server: Option<&str>) -> Result<Vec<Pane>> {
-    match run_tmux(server, &["list-panes", "-a", "-F", &pane_format()]) {
+    match run_tmux_untrimmed(server, &["list-panes", "-a", "-F", &pane_format()]) {
         Ok(output) => Ok(agent_panes_in(&output)),
         Err(PmError::Tmux(msg)) if no_server(&msg) => Ok(Vec::new()),
         Err(e) => Err(e),
@@ -518,28 +522,6 @@ mod tests {
     use super::*;
     use crate::testing::TestServer;
     use tempfile::tempdir;
-
-    #[test]
-    fn a_windows_processes_are_those_of_every_pane() {
-        let server = TestServer::new();
-        let dir = tempdir().unwrap();
-        let session = server.scope("window-processes");
-        create_session(server.name(), &session, dir.path()).unwrap();
-        let window = format!("{session}:0");
-        server.split_before(&window);
-        let pids = server.tmux_stdout(&["list-panes", "-t", &window, "-F", "#{pane_pid}"]);
-
-        let processes = window_processes(server.name(), &window).unwrap();
-
-        for pid in pids.lines() {
-            let pid: u32 = pid.parse().unwrap();
-            assert!(
-                processes.iter().any(|p| p.pid == pid),
-                "{pid}: {processes:?}"
-            );
-        }
-        assert_eq!(pids.lines().count(), 2);
-    }
 
     #[test]
     fn a_window_is_read_by_its_marked_pane_else_its_first() {

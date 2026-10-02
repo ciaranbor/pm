@@ -1,10 +1,12 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use crate::commands::agent_spawn::{agent_spawn, agent_spawn_in};
 use crate::commands::hooks_install;
 use crate::commands::skills::{self, GlobalStore};
 use crate::error::{PmError, Result};
 use crate::git;
 use crate::hooks;
+use crate::state::agent::AgentRegistry;
 use crate::state::paths;
 use crate::state::project::{AgentsConfig, ProjectConfig, ProjectEntry, ProjectInfo};
 use crate::tmux;
@@ -22,13 +24,15 @@ use crate::tmux;
 ///
 /// It also installs the global asset tier and the pm hooks.
 ///
+/// Returns the project root, made absolute.
+///
 /// The `tmux_server` parameter allows tests to use an isolated tmux server.
 pub fn init(
     path: &Path,
     projects_dir: &Path,
     git_url: Option<&str>,
     tmux_server: Option<&str>,
-) -> Result<()> {
+) -> Result<PathBuf> {
     init_in(
         path,
         projects_dir,
@@ -45,7 +49,7 @@ pub fn init_in(
     global: &GlobalStore,
     git_url: Option<&str>,
     tmux_server: Option<&str>,
-) -> Result<()> {
+) -> Result<PathBuf> {
     if path.exists() {
         return Err(PmError::PathAlreadyExists(path.to_path_buf()));
     }
@@ -133,7 +137,24 @@ pub fn init_in(
     let session_name = tmux::session_name(&name, "main");
     tmux::create_session(tmux_server, &session_name, &main_path)?;
 
-    Ok(())
+    Ok(path_buf)
+}
+
+/// Spawn the project's `main` agent in its main session: into the session's
+/// first window, the shell it was created with, unless `main` already has
+/// one of its own.
+pub fn spawn_main(project_root: &Path, tmux_server: Option<&str>) -> Result<String> {
+    let config = ProjectConfig::load(&paths::pm_dir(project_root))?;
+    let registered = AgentRegistry::load(&paths::agents_dir(project_root), "main")?
+        .get("main")
+        .is_some();
+    let (_, msg, _) = if registered {
+        agent_spawn(project_root, "main", "main", None, None, tmux_server)?
+    } else {
+        let first = format!("{}:0", tmux::session_name(&config.project.name, "main"));
+        agent_spawn_in(project_root, "main", "main", &first, tmux_server)?
+    };
+    Ok(msg)
 }
 
 #[cfg(test)]
@@ -338,6 +359,29 @@ mod tests {
         init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         assert!(tmux::has_session(server.name(), &tmux::session_name(&name, "main")).unwrap());
+    }
+
+    #[test]
+    fn main_is_spawned_into_the_main_sessions_first_window_once() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
+        init(&project_path, &projects_dir, None, server.name()).unwrap();
+        let session = tmux::session_name(&name, "main");
+
+        spawn_main(&project_path, server.name()).unwrap();
+        let again = spawn_main(&project_path, server.name()).unwrap();
+
+        assert!(again.contains("already active"), "{again}");
+        assert_eq!(
+            tmux::find_window(server.name(), &session, "main").unwrap(),
+            Some(format!("{session}:0"))
+        );
+        assert_eq!(tmux::list_windows(server.name(), &session).unwrap(), 1);
+        let registry = AgentRegistry::load(&paths::agents_dir(&project_path), "main").unwrap();
+        assert!(registry.get("main").unwrap().active);
     }
 
     #[test]

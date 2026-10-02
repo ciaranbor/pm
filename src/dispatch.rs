@@ -90,6 +90,18 @@ fn read_message_body(message: Option<String>) -> pm::error::Result<String> {
     }
 }
 
+/// Spawn a new project's `main` agent. The project is set up by now, so a
+/// failure is reported with the command that retries it, not returned.
+fn report_main_spawn(project_root: &std::path::Path, server: Option<&str>) {
+    match commands::init::spawn_main(project_root, server) {
+        Ok(msg) => println!("{msg}"),
+        Err(e) => eprintln!(
+            "warning: could not spawn the main agent: {e}; run `pm agent spawn main` in the \
+             main session"
+        ),
+    }
+}
+
 /// Print the per-agent results of a multi-name agent op (stop, delete,
 /// restart), aggregating errors. Continues on error: each result is
 /// printed individually and a single `PmError::Agent` is returned only
@@ -203,20 +215,33 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
     let server = tmux_server_from_env();
     let server = server.as_deref();
     match cli.command {
-        Commands::Init { path, git } => {
+        Commands::Init { path, git, no_main } => {
             let projects_dir = paths::global_projects_dir()?;
-            commands::init::init(&path, &projects_dir, git.as_deref(), server)
+            let root = commands::init::init(&path, &projects_dir, git.as_deref(), server)?;
+            if !no_main {
+                report_main_spawn(&root, server);
+            }
+            Ok(())
         }
-        Commands::Register { path, name, r#move } => {
+        Commands::Register {
+            path,
+            name,
+            r#move,
+            no_main,
+        } => {
             let projects_dir = paths::global_projects_dir()?;
-            commands::register::register(
+            let root = commands::register::register(
                 &path,
                 name.as_deref(),
                 &projects_dir,
                 r#move,
                 server,
                 None,
-            )
+            )?;
+            if !no_main {
+                report_main_spawn(&root, server);
+            }
+            Ok(())
         }
         Commands::List => {
             let projects_dir = paths::global_projects_dir()?;
@@ -363,12 +388,17 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     push();
                     report_agent_op_results(results, "delete")
                 }
-                AgentCommands::Restart { names, scope } => {
+                AgentCommands::Restart {
+                    names,
+                    force,
+                    scope,
+                } => {
                     let target_scope = resolve_scope_with_flag(&project_root, scope)?;
                     let mut restarted = commands::agent_restart::agent_restart_many(
                         &project_root,
                         &target_scope,
                         &names,
+                        force,
                         server,
                     );
                     let reported =

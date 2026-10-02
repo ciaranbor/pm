@@ -12,6 +12,15 @@
 //! The **activity stamp** is a file whose mtime is the agent's last sign of
 //! life: every pm hook invocation touches it.
 //!
+//! The **session paths** are what the current session reported at its
+//! start: its transcript, for a harness that records an interrupt only
+//! there ([`Harness::interrupted`](crate::harness::Harness::interrupted)),
+//! and the config dir its environment named, where its input settings are
+//! read ([`Harness::config_dir_env`](crate::harness::Harness::config_dir_env)).
+//! Every spawn forgets them until the new session starts. An interrupt read
+//! from the transcript has no marker to remove, so the one who acts on it
+//! claims it with a stamp instead, after which it no longer counts.
+//!
 //! They live in `<project>/.pm/runtime/<scope>/<agent>/` and last as long
 //! as the agent's registry entry. Every spawn rewrites what it hands the
 //! harness, so a deleted file is restored by the next spawn. The directory
@@ -29,6 +38,7 @@ use crate::state::paths;
 
 const WAITING_FILE: &str = "waiting.json";
 const ACTIVITY_FILE: &str = "activity";
+const INTERRUPT_CLAIM: &str = "interrupt-claimed-";
 
 fn root(project_root: &Path) -> PathBuf {
     paths::pm_dir(project_root).join("runtime")
@@ -180,6 +190,121 @@ pub fn clear_waiting(project_root: &Path, scope: &str, agent: &str) -> Result<bo
     }
 }
 
+/// A path the agent's current session reported at its start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionPath {
+    /// The session's transcript.
+    Transcript,
+    /// The harness's config dir, as the agent's environment named it.
+    ConfigDir,
+}
+
+impl SessionPath {
+    fn file(self) -> &'static str {
+        match self {
+            Self::Transcript => "transcript",
+            Self::ConfigDir => "config-dir",
+        }
+    }
+}
+
+/// Record `path` as the agent's current session's, or forget it (`None`).
+pub fn write_session_path(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    which: SessionPath,
+    path: Option<&Path>,
+) -> Result<()> {
+    let file = agent_dir(project_root, scope, agent)?.join(which.file());
+    match path {
+        Some(path) => write_atomic(&file, path.to_string_lossy().as_bytes()),
+        None => match std::fs::remove_file(file) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+            _ => Ok(()),
+        },
+    }
+}
+
+/// The agent's current session's `which`, once the session has started
+/// and reported one.
+pub fn read_session_path(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    which: SessionPath,
+) -> Option<PathBuf> {
+    let text =
+        std::fs::read_to_string(agent_file(project_root, scope, agent, which.file())).ok()?;
+    Some(PathBuf::from(text))
+}
+
+/// The file whose existence says the interrupt at `since` was claimed.
+fn interrupt_claim(project_root: &Path, scope: &str, agent: &str, since: DateTime<Utc>) -> PathBuf {
+    let stamp = since.timestamp_nanos_opt().unwrap_or_default();
+    agent_file(
+        project_root,
+        scope,
+        agent,
+        &format!("{INTERRUPT_CLAIM}{stamp}"),
+    )
+}
+
+/// Claim the interrupt at `since`, one no hook reported, for one caller
+/// only: true for the caller that claimed it. Earlier claims are dropped.
+pub fn claim_interrupt(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    since: DateTime<Utc>,
+) -> Result<bool> {
+    let dir = agent_dir(project_root, scope, agent)?;
+    let file = interrupt_claim(project_root, scope, agent, since);
+    match std::fs::File::options()
+        .write(true)
+        .create_new(true)
+        .open(&file)
+    {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
+        Err(e) => return Err(e.into()),
+    }
+    for entry in std::fs::read_dir(dir)?.flatten() {
+        let path = entry.path();
+        let stale = entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(INTERRUPT_CLAIM);
+        if stale && path != file {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    Ok(true)
+}
+
+/// Give up a claim [`claim_interrupt`] made.
+pub fn release_interrupt(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    since: DateTime<Utc>,
+) -> Result<()> {
+    match std::fs::remove_file(interrupt_claim(project_root, scope, agent, since)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+        _ => Ok(()),
+    }
+}
+
+/// Whether the interrupt at `since` has been claimed.
+pub fn interrupt_claimed(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    since: DateTime<Utc>,
+) -> bool {
+    interrupt_claim(project_root, scope, agent, since).exists()
+}
+
 /// Stamp the agent as active now.
 pub fn touch_activity(project_root: &Path, scope: &str, agent: &str) -> Result<()> {
     let file = agent_dir(project_root, scope, agent)?.join(ACTIVITY_FILE);
@@ -312,5 +437,22 @@ mod tests {
         assert!(Utc::now() - reviewer > chrono::Duration::minutes(59));
         assert!(Utc::now() - implementer < chrono::Duration::minutes(1));
         assert_eq!(scope_last_activity(root, "login"), Some(implementer));
+    }
+
+    #[test]
+    fn an_interrupt_is_claimed_once_until_given_back() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let first = Utc::now();
+        let later = first + chrono::Duration::seconds(5);
+
+        assert!(claim_interrupt(root, "login", "qa", first).unwrap());
+        assert!(!claim_interrupt(root, "login", "qa", first).unwrap());
+        assert!(interrupt_claimed(root, "login", "qa", first));
+
+        assert!(claim_interrupt(root, "login", "qa", later).unwrap());
+        release_interrupt(root, "login", "qa", later).unwrap();
+        assert!(!interrupt_claimed(root, "login", "qa", later));
+        assert!(claim_interrupt(root, "login", "qa", later).unwrap());
     }
 }

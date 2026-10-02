@@ -331,7 +331,7 @@ impl Smoke {
     fn init_with_feature(&self) -> PathBuf {
         let proj = self.proj();
         self.pm(self.home())
-            .args(["init", &proj.to_string_lossy()])
+            .args(["init", "--no-main", &proj.to_string_lossy()])
             .assert()
             .success();
         let main = proj.join("main");
@@ -482,6 +482,24 @@ fn spawn_builds_the_command_through_the_real_shell() {
     assert_eq!(Path::new(&rec.cwd), login);
 }
 
+/// Catches: `pm init` run outside tmux not reaching the new main session
+/// with its `main` agent, or starting it outside the main worktree.
+#[test]
+#[ignore]
+fn init_starts_main_in_the_main_session() {
+    let s = Smoke::new();
+    s.pm(s.home())
+        .args(["init", &s.proj().to_string_lossy()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Spawned agent 'main'"));
+
+    let records = s.argv_records("main", 1);
+    assert_eq!(records[0].agent_name, "main");
+    assert_eq!(Path::new(&records[0].cwd), s.proj().join("main"));
+    assert_eq!(s.window_names("proj/main"), ["main"]);
+}
+
 /// Catches: `agent spawn --scope` resolving the target from the caller's
 /// cwd instead of the flag, run from `main` as an orchestrator would.
 #[test]
@@ -501,7 +519,7 @@ fn spawn_from_main_into_a_feature_with_scope() {
 }
 
 /// Catches: `agent restart` run from one of the restarted agents' own
-/// windows killing that window, and so itself, before the other agents
+/// panes killing that pane, and so itself, before the other agents
 /// restart or anything is printed.
 #[test]
 #[ignore]
@@ -518,17 +536,14 @@ fn restart_from_inside_an_agents_own_window() {
     let old = s
         .find_window("proj/login", "reviewer")
         .expect("reviewer window");
-    let old = s.tmux_ok(&["display", "-p", "-t", &old, "#{window_id}"]);
+    let old = s.tmux_ok(&["display", "-p", "-t", &old, "#{pane_id}"]);
     // Stop the shim so the window's shell (which still exports
     // PM_AGENT_NAME) takes commands again.
     s.tmux_ok(&["send-keys", "-t", &old, "C-c", ""]);
     s.wait_for_shell(&old);
 
     let outcome = s.run_in(&old, "pm agent restart reviewer helper");
-    assert!(
-        !outcome.alive,
-        "old window survived the restart: {outcome:?}"
-    );
+    assert!(!outcome.alive, "old pane survived the restart: {outcome:?}");
     for agent in ["reviewer", "helper"] {
         assert!(
             outcome.log.contains(&format!("Restarted agent '{agent}'")),
@@ -847,7 +862,7 @@ fn interrupting_pm_mid_migration_kills_its_opencode_server() {
 
     let s = Smoke::new();
     s.pm(s.home())
-        .args(["init", &s.proj().to_string_lossy()])
+        .args(["init", "--no-main", &s.proj().to_string_lossy()])
         .assert()
         .success();
     let (server_pid, child_pid, moving) = (
@@ -932,7 +947,7 @@ fn feat_new_refuses_a_mixed_team_whose_harness_binaries_cannot_run() {
     let s = Smoke::new();
     let proj = s.proj();
     s.pm(s.home())
-        .args(["init", &proj.to_string_lossy()])
+        .args(["init", "--no-main", &proj.to_string_lossy()])
         .assert()
         .success();
     let main = proj.join("main");
@@ -986,7 +1001,7 @@ fn doctor_reports_an_unrunnable_claude_only_when_an_agent_is_on_it() {
     let s = Smoke::new();
     let proj = s.proj();
     s.pm(s.home())
-        .args(["init", &proj.to_string_lossy()])
+        .args(["init", "--no-main", &proj.to_string_lossy()])
         .assert()
         .success();
     let main = proj.join("main");
