@@ -194,11 +194,14 @@ fn agents(session_exists: bool, agents: &[AgentSnapshot]) -> String {
         .join(" ")
 }
 
+/// What a stalled scope is doing, which its attention has no detail for.
+pub(crate) const STALLED: &str = "every agent idle, no unread messages";
+
 fn detail(attention: &Attention) -> String {
     match (attention.kind, &attention.agent, &attention.detail) {
         (AttentionKind::Blocked, Some(agent), Some(reason)) => format!("{agent}: {reason}"),
         (AttentionKind::Blocked, Some(agent), None) => format!("{agent}: (no reason given)"),
-        (AttentionKind::Stalled, _, _) => "every agent idle, no unread messages".to_string(),
+        (AttentionKind::Stalled, _, _) => STALLED.to_string(),
         (_, _, Some(detail)) => detail.clone(),
         _ => String::new(),
     }
@@ -325,6 +328,7 @@ mod tests {
             state,
             unread: 0,
             window: None,
+            pane: None,
             waiting: None,
         }
     }

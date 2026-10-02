@@ -2,10 +2,11 @@
 //! doing ([`Liveness`]).
 //!
 //! An agent is idle only while it waits in pm's Stop hook. A window whose
-//! pane runs no process of the agent's harness ([`Harness::runs_as`]) is
-//! dead: the harness exited to the shell and nothing will wake it. Anything
-//! else is busy, a harness that yielded for background work included. A
-//! pane whose processes cannot be read counts as busy.
+//! agent pane ([`tmux::mark_agent_pane`]) runs no process of the agent's
+//! harness ([`Harness::runs_as`]) is dead: the harness exited to the shell
+//! and nothing will wake it. Anything else is busy, a harness that yielded
+//! for background work included. A pane whose processes cannot be read
+//! counts as busy.
 //!
 //! [`Windows`] reads every pane on the server and the process table once,
 //! so classifying any number of agents costs one `tmux` and one `ps` call.
@@ -95,7 +96,7 @@ pub fn is_idle(processes: &[Process]) -> bool {
     processes.iter().any(|p| runs_stop_hook(&p.command))
 }
 
-/// Every window on a tmux server with the processes of its first pane, read
+/// Every window on a tmux server with the processes of its agent pane, read
 /// at one moment.
 pub struct Windows {
     panes: Vec<Pane>,
@@ -106,7 +107,7 @@ pub struct Windows {
 impl Windows {
     pub fn read(tmux_server: Option<&str>) -> Result<Self> {
         Ok(Self {
-            panes: tmux::first_panes(tmux_server)?,
+            panes: tmux::agent_panes(tmux_server)?,
             table: ProcessTable::read().ok(),
         })
     }

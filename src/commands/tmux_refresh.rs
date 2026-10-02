@@ -31,10 +31,11 @@ use crate::tmux::options::{self, Command, Holder, Options, Scope, format_text};
 use chrono::{DateTime, Utc};
 
 use super::attention::{
-    self, AgentSnapshot, AgentState, Attention, AttentionKind, FeatureSnapshot, ScopeSnapshot,
-    Snapshot,
+    self, AgentSnapshot, Attention, AttentionKind, FeatureSnapshot, ScopeSnapshot, Snapshot,
 };
-use super::feat_status_view::span;
+use super::feat_status_view::{STALLED, span};
+
+mod badge;
 
 const PROJECT: &str = "@pm_project";
 const FEATURE: &str = "@pm_feature";
@@ -256,10 +257,7 @@ fn session_values(
         (PROGRESS, Some(feature.progress.to_string())),
         (REASON, reason(&feature.attention)),
         (ATTENTION, needs.map(|k| k.to_string())),
-        (
-            BADGE,
-            needs.map(|k| styled(attention_style(k), &k.to_string())),
-        ),
+        (BADGE, needs.and_then(badge::attention)),
         (
             ACTIVITY,
             activity(feature.working, feature.last_activity, now),
@@ -267,12 +265,14 @@ fn session_values(
     ]
 }
 
+/// The attention detail; a stalled scope has none of its own, so it gets
+/// what the status view says.
 fn reason(attention: &Attention) -> Option<String> {
-    attention
-        .detail
-        .as_deref()
-        .map(format_text)
-        .filter(|r| !r.is_empty())
+    let detail = match attention.kind {
+        AttentionKind::Stalled => Some(STALLED),
+        _ => attention.detail.as_deref(),
+    };
+    detail.map(format_text).filter(|r| !r.is_empty())
 }
 
 /// A main session has no feature or progress. Its badge is its main
@@ -297,7 +297,7 @@ fn main_values(
             ATTENTION,
             (kind != AttentionKind::None).then(|| kind.to_string()),
         ),
-        (BADGE, lead.map(|a| agent_badge(a.state, a.unread))),
+        (BADGE, lead.map(|a| badge::agent(a.state, a.unread))),
         (ACTIVITY, activity(main.working, main.last_activity, now)),
     ]
 }
@@ -310,13 +310,10 @@ fn activity(
     now: DateTime<Utc>,
 ) -> Option<String> {
     if working {
-        return Some(styled(
-            agent_style(AgentState::Busy),
-            agent_glyph(AgentState::Busy),
-        ));
+        return Some(badge::working());
     }
     let since = attention::quiet_since(working, last_activity, now)?;
-    Some(styled("fg=colour245", &span(since, now)))
+    Some(badge::styled("fg=colour245", &span(since, now)))
 }
 
 pub(super) fn window_values(agent: &AgentSnapshot) -> Vec<(&'static str, Option<String>)> {
@@ -324,19 +321,8 @@ pub(super) fn window_values(agent: &AgentSnapshot) -> Vec<(&'static str, Option<
         (AGENT, Some(format_text(&agent.name))),
         (AGENT_STATE, Some(agent.state.to_string())),
         (UNREAD, Some(agent.unread.to_string())),
-        (AGENT_BADGE, Some(agent_badge(agent.state, agent.unread))),
+        (AGENT_BADGE, Some(badge::agent(agent.state, agent.unread))),
     ]
-}
-
-/// Colours only the foreground, so the glyphs sit on the surrounding
-/// background, then resets to the window's base style once at the end.
-fn agent_badge(state: AgentState, unread: u32) -> String {
-    let mut badge = format!("#[{}]{}", agent_style(state), agent_glyph(state));
-    if unread > 0 {
-        // nf-fa-envelope
-        badge.push_str("#[fg=yellow]\u{f0e0}");
-    }
-    badge + "#[default]"
 }
 
 fn global_values(snapshot: &Snapshot) -> Vec<(&'static str, Option<String>)> {
@@ -355,59 +341,12 @@ fn global_values(snapshot: &Snapshot) -> Vec<(&'static str, Option<String>)> {
     kinds.sort();
     let summary: Vec<String> = kinds
         .chunk_by(|a, b| a == b)
-        .map(|run| {
-            styled(
-                attention_style(run[0]),
-                &format!("{} {}", run.len(), run[0]),
-            )
-        })
+        .filter_map(|run| badge::attention_count(run[0], run.len()))
         .collect();
     vec![
         (SUMMARY, Some(summary.join(" · ")).filter(|s| !s.is_empty())),
         (COUNT, Some(kinds.len().to_string())),
     ]
-}
-
-/// `text` in `style`, then back to the surrounding style. Named and
-/// 256-palette colours only, which every tmux release draws.
-fn styled(style: &str, text: &str) -> String {
-    format!("#[{style}]{text}#[default]")
-}
-
-fn attention_style(kind: AttentionKind) -> &'static str {
-    match kind {
-        AttentionKind::Blocked | AttentionKind::Asking => "fg=red,bold",
-        AttentionKind::Cleanup | AttentionKind::Unarmed => "fg=magenta",
-        AttentionKind::Ready => "fg=green,bold",
-        AttentionKind::Dead => "fg=red",
-        AttentionKind::Stalled => "fg=yellow",
-        AttentionKind::None => "default",
-    }
-}
-
-fn agent_style(state: AgentState) -> &'static str {
-    match state {
-        AgentState::Busy | AgentState::Background => "fg=green",
-        AgentState::Asking => "fg=red,bold",
-        AgentState::Unarmed => "fg=magenta",
-        AgentState::Dead => "fg=red",
-        AgentState::Idle | AgentState::Stopped | AgentState::Closed => "fg=colour245",
-    }
-}
-
-/// Nerd Font (v3) glyphs, one cell wide: nf-fa-gear, nf-fa-question_circle,
-/// nf-fa-bell_slash, nf-fa-spinner, nf-fa-hourglass_half, nf-md-skull,
-/// nf-fa-stop.
-fn agent_glyph(state: AgentState) -> &'static str {
-    match state {
-        AgentState::Busy => "\u{f013}",
-        AgentState::Asking => "\u{f059}",
-        AgentState::Unarmed => "\u{f1f6}",
-        AgentState::Background => "\u{f110}",
-        AgentState::Idle => "\u{f252}",
-        AgentState::Dead => "\u{f068c}",
-        AgentState::Stopped | AgentState::Closed => "\u{f04d}",
-    }
 }
 
 fn alert(session: &str, attention: &Attention) -> String {
@@ -421,6 +360,7 @@ fn alert(session: &str, attention: &Attention) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::attention::AgentState;
     use crate::commands::{feat_delete::feat_delete, feat_status::feat_status};
     use crate::messages;
     use crate::state::agent::AgentRegistry;
@@ -600,7 +540,7 @@ mod tests {
                 "blocked",
                 "which ##[fg=red]DB?",
                 "blocked",
-                "#[fg=red,bold]blocked#[default]",
+                "#[fg=red,bold]\u{f256}#[default]",
                 "",
             ]
         );
@@ -629,7 +569,7 @@ mod tests {
         );
         assert_eq!(
             [now.global.get(COUNT), now.global.get(SUMMARY)],
-            ["1", "#[fg=red,bold]1 blocked#[default]"]
+            ["1", "#[fg=red,bold]\u{f256} 1#[default]"]
         );
 
         feat_status(&project, "login", Progress::Wip, None, None).unwrap();
@@ -747,7 +687,7 @@ mod tests {
         assert_eq!(values(&now.sessions, &search, &[ATTENTION]), ["cleanup"]);
         assert_eq!(
             [now.global.get(COUNT), now.global.get(SUMMARY)],
-            ["1", "#[fg=magenta]1 cleanup#[default]"]
+            ["1", "#[fg=colour245]\u{f00e2} 1#[default]"]
         );
 
         feat_delete(&project, &projects_dir, "search", true, server.name()).unwrap();
@@ -820,13 +760,19 @@ mod tests {
         let session = tmux::session_name(&project_name, "login");
         server.spawn_idle_fake_agent(&project, &session, "login", "implementer");
         tmux_out(&server, &["set-option", "-s", "message-limit", "100000"]);
-        // The server logs each command it runs with the client that sent it.
-        let writers = || -> Vec<String> {
+        // The server logs each command it runs, newest first, with the
+        // client that sent it.
+        let log = || -> Vec<String> {
             tmux_out(&server, &["show-messages"])
                 .lines()
                 .filter(|l| l.contains("command: set-option") && l.contains(&session))
                 .filter_map(|l| l.split(' ').nth(1).map(str::to_string))
                 .collect()
+        };
+        let setup = log().len();
+        let writers = || {
+            let all = log();
+            all[..all.len() - setup].to_vec()
         };
 
         refresh(&projects_dir, server.name()).unwrap();
@@ -865,6 +811,7 @@ mod tests {
             state,
             unread: 0,
             window: Some("app/main:1".into()),
+            pane: None,
             waiting: Some(attention::WaitingSnapshot {
                 kind,
                 detail: detail.into(),
@@ -923,9 +870,19 @@ mod tests {
         assert_eq!(sets(&commands, ATTENTION), ["unarmed"]);
         assert_eq!(
             sets(&commands, SUMMARY),
-            ["#[fg=magenta]1 unarmed#[default]"]
+            ["#[fg=magenta]\u{f1f6} 1#[default]"]
         );
         assert!(displayed(&commands).is_empty());
+    }
+
+    #[test]
+    fn a_stalled_scope_carries_a_reason_though_its_attention_has_none() {
+        let stalled = Attention {
+            kind: AttentionKind::Stalled,
+            detail: None,
+            agent: None,
+        };
+        assert_eq!(reason(&stalled).as_deref(), Some(STALLED));
     }
 
     #[test]

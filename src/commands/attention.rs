@@ -112,6 +112,9 @@ pub struct AgentSnapshot {
     pub unread: u32,
     /// The window's tmux target, while it has one.
     pub window: Option<String>,
+    /// The agent's pane in that window, by id (`%N`).
+    #[serde(skip)]
+    pub pane: Option<String>,
     /// What an asking, unarmed or background agent is at.
     pub waiting: Option<WaitingSnapshot>,
 }
@@ -489,6 +492,7 @@ impl ScopeReader<'_> {
                     state,
                     unread: messages::unread_count(&messages_dir, scope, agent),
                     window: pane.map(|p| p.window.clone()),
+                    pane: pane.map(|p| p.id.clone()),
                     waiting,
                 }
             })
@@ -567,6 +571,7 @@ mod tests {
             state,
             unread,
             window: (state != AgentState::Dead).then(|| format!("app/login:{name}")),
+            pane: None,
             waiting: None,
         }
     }
@@ -668,6 +673,7 @@ mod tests {
                     session_exists: true,
                     agents: vec![AgentSnapshot {
                         window: Some("app/main:1".into()),
+                        pane: None,
                         ..waiting(
                             "main",
                             AgentState::Asking,
