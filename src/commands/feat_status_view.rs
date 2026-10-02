@@ -353,6 +353,7 @@ mod tests {
             session_exists: true,
             agents,
             working: false,
+            busy: false,
             last_activity,
         }
     }
@@ -392,6 +393,7 @@ mod tests {
                 agents: vec![scope_agent("main", AgentState::Asking)],
                 attention,
                 working: false,
+                busy: false,
                 last_activity: None,
             }),
         };

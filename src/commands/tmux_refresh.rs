@@ -44,8 +44,16 @@ const REASON: &str = "@pm_reason";
 const ATTENTION: &str = "@pm_attention";
 const BADGE: &str = "@pm_badge";
 const ACTIVITY: &str = "@pm_activity";
+const ALERT_PENDING: &str = "@pm_alert_pending";
 const SESSION_OPTIONS: &[&str] = &[
-    PROJECT, FEATURE, PROGRESS, REASON, ATTENTION, BADGE, ACTIVITY,
+    PROJECT,
+    FEATURE,
+    PROGRESS,
+    REASON,
+    ATTENTION,
+    BADGE,
+    ACTIVITY,
+    ALERT_PENDING,
 ];
 
 const AGENT: &str = "@pm_agent";
@@ -123,12 +131,20 @@ fn commands(snapshot: &Snapshot, published: &Options, now: DateTime<Utc>) -> Vec
         };
         sessions.insert(&feature.session);
         let scope = Scope::Session(&feature.session);
-        diff(&mut writes, scope, held, &session_values(feature, now));
-        if matches!(
-            feature.attention.kind,
-            AttentionKind::Blocked | AttentionKind::Ready | AttentionKind::Asking
-        ) && held.get(ATTENTION) != feature.attention.kind.to_string()
-        {
+        let kind = feature.attention.kind;
+        let became = held.get(ATTENTION) != kind.to_string();
+        // A feature that turns ready while its team is busy owes its alert
+        // until the team goes quiet.
+        let owed = kind == AttentionKind::Ready && (became || !held.get(ALERT_PENDING).is_empty());
+        let mut values = session_values(feature, now);
+        values.push((ALERT_PENDING, (owed && feature.busy).then(|| "1".into())));
+        diff(&mut writes, scope, held, &values);
+        let alerts_now = match kind {
+            AttentionKind::Blocked | AttentionKind::Asking => became,
+            AttentionKind::Ready => owed && !feature.busy,
+            _ => false,
+        };
+        if alerts_now {
             alerts.push(alert(&feature.session, &feature.attention));
         }
         agent_windows(&mut writes, &mut windows, published, &feature.agents);
@@ -331,9 +347,11 @@ fn global_values(snapshot: &Snapshot) -> Vec<(&'static str, Option<String>)> {
         .iter()
         .filter_map(|p| p.main.as_ref())
         .map(|m| m.attention.kind);
+    // A ready feature whose team is busy isn't waiting on the user yet.
     let mut kinds: Vec<AttentionKind> = snapshot
         .features
         .iter()
+        .filter(|f| !(f.attention.kind == AttentionKind::Ready && f.busy))
         .map(|f| f.attention.kind)
         .chain(mains)
         .filter(|k| *k != AttentionKind::None)
@@ -542,6 +560,7 @@ mod tests {
                 "blocked",
                 "#[fg=red,bold]\u{f256}#[default]",
                 "",
+                "",
             ]
         );
         assert_eq!(
@@ -584,7 +603,7 @@ mod tests {
         let now = published(&server);
         assert_eq!(
             values(&now.sessions, &session, SESSION_OPTIONS),
-            [project_name.as_str(), "login", "wip", "", "", "", ""]
+            [project_name.as_str(), "login", "wip", "", "", "", "", ""]
         );
         assert_eq!(
             values(&now.windows, &implementer, WINDOW_OPTIONS),
@@ -641,6 +660,7 @@ mod tests {
                 "",
                 "",
                 "#[fg=colour245]\u{f252} #[fg=yellow]\u{f0e0}#[default]",
+                "",
                 ""
             ],
             "main's own badge, whatever its attention"
@@ -699,7 +719,7 @@ mod tests {
         assert!(!now.sessions.iter().any(|s| s.target == search));
         assert_eq!(
             values(&now.sessions, &login, SESSION_OPTIONS),
-            ["", "", "", "", "", "", ""]
+            ["", "", "", "", "", "", "", ""]
         );
         assert_eq!([now.global.get(COUNT), now.global.get(SUMMARY)], ["0", ""]);
     }
@@ -798,6 +818,7 @@ mod tests {
                     agents,
                     attention,
                     working: false,
+                    busy: false,
                     last_activity: None,
                 }),
             }],
@@ -873,6 +894,78 @@ mod tests {
             ["#[fg=magenta]\u{f1f6} 1#[default]"]
         );
         assert!(displayed(&commands).is_empty());
+    }
+
+    fn ready_feature(busy: bool) -> Snapshot {
+        let mut feature = FeatureSnapshot {
+            project: "app".into(),
+            name: "login".into(),
+            attention: Attention {
+                kind: AttentionKind::None,
+                detail: None,
+                agent: None,
+            },
+            progress: Progress::Ready,
+            blocked_reason: None,
+            blocked_by: None,
+            summary: Some("Adds login".into()),
+            lifecycle: FeatureStatus::Review,
+            pr: None,
+            session: "app/login".into(),
+            session_exists: true,
+            agents: Vec::new(),
+            working: busy,
+            busy,
+            last_activity: None,
+        };
+        feature.attention = attention::attention(&feature);
+        Snapshot {
+            version: attention::VERSION,
+            projects: Vec::new(),
+            features: vec![feature],
+        }
+    }
+
+    #[test]
+    fn a_ready_feature_alerts_once_however_often_its_team_wakes() {
+        let dir = tempdir().unwrap();
+        let server = OwnServer::start("ready-busy");
+        tmux::create_session(server.name(), "app/login", dir.path()).unwrap();
+        let mut client = ControlClient::attach(server.name(), "app/login");
+        let now = Utc::now();
+        let mut badges = Vec::new();
+        let mut counts = Vec::new();
+        for busy in [true, false, true, false, false] {
+            let held = options::read(
+                server.name(),
+                SESSION_OPTIONS,
+                WINDOW_OPTIONS,
+                GLOBAL_OPTIONS,
+            )
+            .unwrap()
+            .unwrap();
+            options::run(server.name(), &commands(&ready_feature(busy), &held, now)).unwrap();
+            let held = options::read(
+                server.name(),
+                SESSION_OPTIONS,
+                WINDOW_OPTIONS,
+                GLOBAL_OPTIONS,
+            )
+            .unwrap()
+            .unwrap();
+            let login = held
+                .sessions
+                .iter()
+                .find(|s| s.target == "app/login")
+                .unwrap();
+            badges.push(login.get(BADGE).to_string());
+            counts.push(held.global.get(COUNT).to_string());
+        }
+
+        assert_eq!(client.messages(), ["pm: app/login ready: Adds login"]);
+        let ready = "#[fg=green,bold]\u{f058}#[default]";
+        assert_eq!(badges, [ready; 5]);
+        assert_eq!(counts, ["0", "1", "0", "1", "1"]);
     }
 
     #[test]

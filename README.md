@@ -646,6 +646,7 @@ unset, text is escaped for formats, and each name is set at one scope only:
 | | `@pm_reason` | the attention detail, or for `stalled` what the attention view shows; unset without one |
 | | `@pm_badge` | the kind's glyph, styled; unset for `none`; on `main`, its main agent's badge |
 | | `@pm_activity` | the busy glyph while the scope is working, else how long it has been quiet (`2h`, styled); unset under 10 minutes |
+| | `@pm_alert_pending` | set while a feature's ready alert waits for its team to go quiet; pm's own bookkeeping |
 | agent window | `@pm_agent` | the agent's name |
 | | `@pm_agent_state` | an [agent state](#attention-view) |
 | | `@pm_unread` | unread message count |
@@ -665,7 +666,7 @@ closed) and a detail. A feature gets the first of these that applies:
 | `blocked` | status `blocked` | `<agent>: <question>`, the agent that set it (in JSON, `agent` and `detail`) |
 | `asking` | an agent's harness shows a dialog: a question, a permission prompt, a plan to approve, or a startup prompt (folder or hook trust, login) still up a minute after spawn | `<agent>: <what it asks>` |
 | `cleanup` | lifecycle `merged` or `stale`: delete it | `PR merged` or `stale` |
-| `ready` | status `ready`, or PR `approved` | the summary's first line, or `PR approved` |
+| `ready` | status `ready`, or PR `approved`; while an agent is busy it is left out of `@pm_summary` and `@pm_count`, and its alert waits until none is | the summary's first line, or `PR approved` |
 | `dead` | an agent's window is gone from an open session, or its harness exited | `<agent>: window missing` or `<agent>: harness exited` |
 | `unarmed` | an agent sits at its prompt where no message wakes it ([why](#agents-as-message-processors)) | `<agent>: <cause>` |
 | `stalled` | status `wip`, agents running, all idle with no unread messages: the team stopped without saying why | `every agent idle, no unread messages` (`null` in JSON) |
