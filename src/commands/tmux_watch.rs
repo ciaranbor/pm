@@ -19,7 +19,9 @@
 //!
 //! A watcher exits when its server does or `@pm-auto-refresh` is `off`, and
 //! executes its binary afresh when that is replaced, so an upgrade reaches
-//! it.
+//! it. A watcher starting, afresh or after an upgrade, re-sets the formats
+//! pm owns ([`tmux_init`]), so a format change reaches a running
+//! server without a config reload.
 
 use std::fs::{File, TryLockError};
 use std::os::unix::process::CommandExt;
@@ -29,6 +31,7 @@ use std::time::{Duration, SystemTime};
 use crate::error::Result;
 use crate::tmux::{self, options};
 
+use super::tmux_init;
 use super::tmux_refresh::{lock_file, refresh};
 
 pub const AUTO_REFRESH: &str = "@pm-auto-refresh";
@@ -46,6 +49,8 @@ pub fn watch(projects_dir: &Path, tmux_server: Option<&str>) -> Result<()> {
         return Ok(());
     };
     let binary = Binary::current();
+    // Anything printed would land in a pane.
+    let _ = tmux_init::formats(tmux_server);
     loop {
         let Some(settings) = options::read_global(tmux_server, &[AUTO_REFRESH, INTERVAL])? else {
             return Ok(());
@@ -127,6 +132,7 @@ impl Binary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::tmux_init::{TREE_FORMAT, TREE_FORMAT_OPTION};
     use crate::commands::{feat_new, feat_status::feat_status, init};
     use crate::state::feature::Progress;
     use crate::testing::OwnServer;
@@ -200,6 +206,34 @@ mod tests {
         )
         .unwrap();
         first.recv_timeout(wait).expect("turned off").unwrap();
+    }
+
+    #[test]
+    fn a_starting_watcher_brings_pms_formats_up_to_date() {
+        let dir = tempdir().unwrap();
+        let server = OwnServer::start("watch-formats");
+        let (_, projects_dir) = project(&server, dir.path());
+        options::run(
+            server.name(),
+            &[
+                set(Scope::Global, TREE_FORMAT_OPTION, Some("stale")),
+                set(Scope::Global, "window-status-format", Some("#I #W")),
+                set(Scope::Global, AUTO_REFRESH, Some("off")),
+            ],
+        )
+        .unwrap();
+
+        watch(&projects_dir, server.name()).unwrap();
+        watch(&projects_dir, server.name()).unwrap();
+
+        assert_eq!(
+            options::show(server.name(), TREE_FORMAT_OPTION).unwrap(),
+            TREE_FORMAT
+        );
+        assert_eq!(
+            options::show(server.name(), "window-status-format").unwrap(),
+            "#I #{?@pm_agent_badge,#{@pm_agent_badge} ,}#W"
+        );
     }
 
     #[test]

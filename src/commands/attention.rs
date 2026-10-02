@@ -81,6 +81,9 @@ pub struct ScopeSnapshot {
     /// What the scope's agents need, by [`main_attention`]'s rule.
     pub attention: Attention,
     pub working: bool,
+    /// Whether a busy agent, not a background one, is working.
+    #[serde(skip)]
+    pub busy: bool,
     pub last_activity: Option<DateTime<Utc>>,
 }
 
@@ -102,6 +105,10 @@ pub struct FeatureSnapshot {
     pub session_exists: bool,
     pub agents: Vec<AgentSnapshot>,
     pub working: bool,
+    /// Whether a busy agent, not a background one, is working: the team
+    /// is still at it. A background agent may be a loop that never ends.
+    #[serde(skip)]
+    pub busy: bool,
     pub last_activity: Option<DateTime<Utc>>,
 }
 
@@ -409,6 +416,7 @@ fn project_features(
                 session_exists,
                 agents,
                 working,
+                busy,
                 last_activity,
                 ..
             } = reader.read(&name)?;
@@ -433,6 +441,7 @@ fn project_features(
                 session_exists,
                 agents,
                 working,
+                busy,
                 last_activity,
                 name,
             };
@@ -463,6 +472,7 @@ impl ScopeReader<'_> {
         let messages_dir = paths::messages_dir(self.project_root);
         let now = Utc::now();
         let mut working = false;
+        let mut busy = false;
         let mut last_activity = None;
         let agents: Vec<AgentSnapshot> = registry
             .agents
@@ -484,8 +494,9 @@ impl ScopeReader<'_> {
                     },
                 };
                 let active = runtime::last_activity(self.project_root, scope, agent);
-                working |= matches!(state, AgentState::Busy | AgentState::Background)
-                    && active.is_some_and(|t| (now - t).num_seconds() < WORKING_SECS);
+                let recent = active.is_some_and(|t| (now - t).num_seconds() < WORKING_SECS);
+                working |= recent && matches!(state, AgentState::Busy | AgentState::Background);
+                busy |= recent && state == AgentState::Busy;
                 last_activity = last_activity.max(active);
                 AgentSnapshot {
                     name: agent.clone(),
@@ -503,6 +514,7 @@ impl ScopeReader<'_> {
             attention: main_attention(&agents),
             agents,
             working,
+            busy,
             last_activity,
         })
     }
@@ -553,6 +565,7 @@ mod tests {
             session_exists: true,
             agents: Vec::new(),
             working: false,
+            busy: false,
             last_activity: None,
         }
     }
@@ -687,6 +700,7 @@ mod tests {
                         agent: Some("main".into()),
                     },
                     working: false,
+                    busy: false,
                     last_activity: Some("2026-10-02T09:30:00Z".parse().unwrap()),
                 }),
             }],
@@ -948,12 +962,15 @@ mod tests {
         let at = |minutes| Utc::now() - chrono::Duration::minutes(minutes);
         runtime::set_activity(&project, "login", "starting", at(1));
         let login = &super::project(&project, server.name()).unwrap().features[0];
-        assert!(login.working);
+        assert!(login.working && login.busy);
 
         runtime::set_activity(&project, "login", "starting", at(30));
         runtime::set_activity(&project, "login", "asking", at(25));
         let login = &super::project(&project, server.name()).unwrap().features[0];
-        assert!(!login.working, "a busy agent silent for 30 minutes");
+        assert!(
+            !login.working && !login.busy,
+            "a busy agent silent for 30 minutes"
+        );
         let quiet = Utc::now() - login.last_activity.unwrap();
         assert_eq!(quiet.num_minutes(), 25, "the latest of its agents");
     }

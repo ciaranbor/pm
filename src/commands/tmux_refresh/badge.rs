@@ -3,9 +3,11 @@
 //! (asking, dead, unarmed) is drawn as that state, so one glyph reads the
 //! same on a window and on its session.
 //!
-//! Glyphs are Nerd Font (v3), one cell wide. Styles colour only the
-//! foreground, so a glyph sits on the surrounding background, and use named
-//! and 256-palette colours only, which every tmux release draws.
+//! Glyphs are Nerd Font (v3), one cell wide. A glyph inside a badge is
+//! followed by a space: some terminals (Ghostty) draw an icon at full size
+//! only when the next cell is blank. Styles colour only the foreground, so
+//! a glyph sits on the surrounding background, and use named and
+//! 256-palette colours only, which every tmux release draws.
 
 use super::super::attention::{AgentState, AttentionKind};
 
@@ -16,7 +18,7 @@ pub(super) fn agent(state: AgentState, unread: u32) -> String {
     let mut badge = format!("#[{style}]{glyph}");
     if unread > 0 {
         // nf-fa-envelope
-        badge.push_str("#[fg=yellow]\u{f0e0}");
+        badge.push_str(" #[fg=yellow]\u{f0e0}");
     }
     badge + "#[default]"
 }

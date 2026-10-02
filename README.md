@@ -601,7 +601,7 @@ Plugin options, set before `run-shell 'pm tmux init'`:
 | Option | Default | Effect |
 |---|---|---|
 | `@pm-bin` | `pm` | the pm binary tmux runs |
-| `@pm-auto-refresh` | on | keep pm's options current with a background `pm tmux refresh` loop; pm pushes its own changes at once, so the loop only catches what happens outside pm |
+| `@pm-auto-refresh` | on | keep pm's options current with a background `pm tmux refresh` loop; pm pushes its own changes at once, so the loop only catches what happens outside pm. The loop also re-sets pm's formats when it starts or pm is upgraded, so a new pm reaches a running server without a config reload |
 | `@pm-refresh-interval` | `30` | seconds between refreshes |
 | `@pm-window-status` | on | put each agent window's badge just before the window name in `window-status-format` and `window-status-current-format`, keeping your theme's style for the name |
 | `@pm-bind-tree` | on | turn prefix `s` / `w` into pm's tree, sorted by name, when they run tmux's default `choose-tree` |
@@ -610,7 +610,8 @@ Plugin options, set before `run-shell 'pm tmux init'`:
 Badges are Nerd Font glyphs: an agent window's shows its [agent
 state](#attention-view), a feature session's the attention it needs, with
 the reason after it in pm's tree. A kind that means what a state means
-shares its glyph.
+shares its glyph. Follow a badge with a space in your own formats: some
+terminals (Ghostty) draw a glyph small when the next cell isn't blank.
 
 | Glyph | Colour | Agent state | Attention |
 |---|---|---|---|
@@ -644,7 +645,8 @@ unset, text is escaped for formats, and each name is set at one scope only:
 | | `@pm_attention` | the attention kind; unset for `none` |
 | | `@pm_reason` | the attention detail, or for `stalled` what the attention view shows; unset without one |
 | | `@pm_badge` | the kind's glyph, styled; unset for `none`; on `main`, its main agent's badge |
-| | `@pm_activity` | the busy glyph while the scope is working, else how long it has been quiet (`2h`, styled); unset under 10 minutes |
+| | `@pm_activity` | the busy glyph while the scope is working, else how long it has been quiet (`2h`, styled); unset under 10 minutes, and on `main` while its badge already shows its main agent at work |
+| | `@pm_alert_pending` | set while a feature's ready alert waits for its team to go quiet; pm's own bookkeeping |
 | agent window | `@pm_agent` | the agent's name |
 | | `@pm_agent_state` | an [agent state](#attention-view) |
 | | `@pm_unread` | unread message count |
@@ -664,7 +666,7 @@ closed) and a detail. A feature gets the first of these that applies:
 | `blocked` | status `blocked` | `<agent>: <question>`, the agent that set it (in JSON, `agent` and `detail`) |
 | `asking` | an agent's harness shows a dialog: a question, a permission prompt, a plan to approve, or a startup prompt (folder or hook trust, login) still up a minute after spawn | `<agent>: <what it asks>` |
 | `cleanup` | lifecycle `merged` or `stale`: delete it | `PR merged` or `stale` |
-| `ready` | status `ready`, or PR `approved` | the summary's first line, or `PR approved` |
+| `ready` | status `ready`, or PR `approved`; while an agent is busy it is left out of `@pm_summary` and `@pm_count`, and its alert waits until none is | the summary's first line, or `PR approved` |
 | `dead` | an agent's window is gone from an open session, or its harness exited | `<agent>: window missing` or `<agent>: harness exited` |
 | `unarmed` | an agent sits at its prompt where no message wakes it ([why](#agents-as-message-processors)) | `<agent>: <cause>` |
 | `stalled` | status `wip`, agents running, all idle with no unread messages: the team stopped without saying why | `every agent idle, no unread messages` (`null` in JSON) |
