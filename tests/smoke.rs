@@ -1071,6 +1071,10 @@ fn changes_made_from_an_agents_pane_reach_tmux_without_a_poll() {
         .expect("reviewer window");
     s.tmux_ok(&["send-keys", "-t", &window, "C-c", ""]);
     s.wait_for_shell(&window);
+    // The shim runs no SessionStart hook, so nothing clears the marker that
+    // would read the exited harness as still starting.
+    std::fs::remove_file(s.proj().join(".pm/runtime/login/reviewer/waiting.json"))
+        .expect("the spawn's startup marker");
     s.tmux_ok(&["set", "-g", "@pm-refresh-interval", "3600"]);
     s.tmux_ok(&["run-shell", "pm tmux init"]);
     let until = |what: &str, done: &dyn Fn() -> bool| {

@@ -7,11 +7,10 @@
 //!
 //! An agent the window reads as busy is refined by its waiting marker, or
 //! an interrupt no hook reported ([`running_agents::waiting`]), into
-//! asking, unarmed or background. One it reads as dead is busy while its
-//! startup marker is within the start grace: its harness may not have
-//! started yet. A scope is working while a busy or background agent showed
-//! activity in the last [`WORKING_SECS`]; a busy agent silent longer reads
-//! quiet.
+//! asking, unarmed or background. One it reads as dead is busy for a few
+//! seconds after its spawn: its harness may not have started yet. A scope
+//! is working while a busy or background agent showed activity in the last
+//! [`WORKING_SECS`]; a busy agent silent longer reads quiet.
 
 use std::path::Path;
 
@@ -39,6 +38,11 @@ pub const VERSION: u32 = 1;
 
 /// How recent a busy agent's activity must be for its scope to be working.
 pub const WORKING_SECS: i64 = 20 * 60;
+
+/// How long after its spawn an agent whose window runs no harness reads as
+/// starting rather than dead: long enough for the window's shell to start
+/// the harness, short enough that one that exits at once soon reads dead.
+const STARTING_SECS: i64 = 10;
 
 /// A scope quiet for less than this is shown as neither working nor quiet,
 /// so the gaps between turns don't flicker.
@@ -545,12 +549,12 @@ impl ScopeReader<'_> {
         })
     }
 
-    /// Whether `agent` was spawned within the start grace and its harness
-    /// has not started a session: its window may still run only the shell
-    /// it was typed into.
+    /// Whether `agent` was spawned in the last [`STARTING_SECS`] and its
+    /// harness has not started a session: its window may still run only the
+    /// shell its command was typed into.
     fn starting(&self, scope: &str, agent: &str, now: DateTime<Utc>) -> bool {
         runtime::read_waiting(self.project_root, scope, agent).is_some_and(|w| {
-            w.kind == WaitingKind::Startup && (now - w.since).num_seconds() <= start_grace()
+            w.kind == WaitingKind::Startup && (now - w.since).num_seconds() <= STARTING_SECS
         })
     }
 
@@ -576,10 +580,6 @@ impl ScopeReader<'_> {
         };
         (kind.class().into(), Some(WaitingSnapshot { kind, detail }))
     }
-}
-
-fn start_grace() -> i64 {
-    super::doctor::START_GRACE.as_secs() as i64
 }
 
 #[cfg(test)]
@@ -978,7 +978,7 @@ mod tests {
         mark("dead", WaitingKind::Question);
         mark("spawned", WaitingKind::Startup);
         let mut stale = runtime::Waiting::now(WaitingKind::Startup, None);
-        stale.since -= chrono::Duration::seconds(start_grace() + 1);
+        stale.since -= chrono::Duration::seconds(STARTING_SECS + 1);
         runtime::write_waiting(&project, "login", "never-started", &stale).unwrap();
         runtime::touch_activity(&project, "login", "asking").unwrap();
 
