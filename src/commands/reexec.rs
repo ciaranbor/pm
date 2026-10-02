@@ -3,7 +3,7 @@
 //! is at that path, executes it afresh with the same arguments.
 
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 /// The running executable, as it was when the process started.
@@ -36,8 +36,14 @@ impl Binary {
     /// exec, locks and listening sockets with them, so the new one takes
     /// them afresh.
     pub fn exec(&self) -> std::io::Error {
-        std::process::Command::new(&self.path)
-            .args(std::env::args_os().skip(1))
-            .exec()
+        exec(&self.path)
     }
+}
+
+/// Replace this process with the binary at `path`, run as this one was;
+/// see [`Binary::exec`].
+pub fn exec(path: &Path) -> std::io::Error {
+    std::process::Command::new(path)
+        .args(std::env::args_os().skip(1))
+        .exec()
 }

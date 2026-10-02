@@ -18,19 +18,21 @@
 //! process table.
 //!
 //! A watcher exits when its server does, taking the server's lock files
-//! ([`tmux_lock`]) with it, or when `@pm-auto-refresh` is `off`, and
+//! ([`tmux_lock`]) with it, or when `@pm-auto-refresh` is `off`. It
 //! executes its binary afresh when that is replaced, so an upgrade reaches
-//! it. A watcher starting, afresh or after an upgrade, re-sets the formats
-//! pm owns ([`tmux_init`]), so a format change reaches a running
+//! it, and executes another when the `pm` the server would start changes
+//! (`@pm-bin`, or the server's `PATH`), so it runs the one a watcher started
+//! now would. A watcher starting, afresh or after an upgrade, re-sets the
+//! formats pm owns ([`tmux_init`]), so a format change reaches a running
 //! server without a config reload.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::error::Result;
 use crate::tmux::{self, options};
 
-use super::reexec::Binary;
+use super::reexec::{self, Binary};
 use super::tmux_init;
 use super::tmux_lock::{self, Lock};
 use super::tmux_refresh::refresh;
@@ -50,6 +52,7 @@ pub fn watch(projects_dir: &Path, tmux_server: Option<&str>) -> Result<()> {
         return Ok(());
     };
     let binary = Binary::current();
+    let started_as = server_pm(tmux_server);
     // Anything printed would land in a pane.
     let _ = tmux_init::formats(tmux_server);
     let _ = tmux_lock::prune();
@@ -62,8 +65,14 @@ pub fn watch(projects_dir: &Path, tmux_server: Option<&str>) -> Result<()> {
         }
         // Anything printed would land in a pane; the next tick retries.
         let _ = refresh(projects_dir, tmux_server);
-        if let Some(binary) = binary.as_ref().filter(|b| b.replaced()) {
-            return Err(binary.exec().into());
+        if let Some(binary) = binary.as_ref() {
+            if binary.replaced() {
+                return Err(binary.exec().into());
+            }
+            let now = server_pm(tmux_server);
+            if let Some(path) = now.as_ref().filter(|_| now != started_as) {
+                return Err(reexec::exec(path).into());
+            }
         }
         let seconds = settings
             .get(INTERVAL)
@@ -85,6 +94,19 @@ fn take_watch(socket: &str) -> Result<Option<Lock>> {
         std::thread::sleep(Duration::from_millis(50));
     }
     Ok(None)
+}
+
+/// The `pm` the server would start as its watcher: `@pm-bin`, else `pm`
+/// on the server's `PATH`, symlinks followed. `None` when it can't be read
+/// or found.
+fn server_pm(tmux_server: Option<&str>) -> Option<PathBuf> {
+    let settings = options::read_global(tmux_server, &[tmux_init::BIN]).ok()??;
+    let bin = match settings.get(tmux_init::BIN) {
+        "" => "pm",
+        bin => bin,
+    };
+    let path = tmux::global_environment(tmux_server, "PATH").ok()?;
+    crate::fs_utils::resolve_binary(bin, path.as_deref().map(std::ffi::OsStr::new))
 }
 
 #[cfg(test)]
@@ -131,6 +153,50 @@ mod tests {
             .unwrap()
             .get("@pm_count")
             .to_string()
+    }
+
+    #[test]
+    fn the_pm_a_watcher_would_start_follows_the_servers_path_and_pm_bin() {
+        let server = OwnServer::start("watch-pm");
+        let dir = tempdir().unwrap();
+        let pm_in = |name: &str| {
+            let bin = dir.path().join(name);
+            std::fs::create_dir_all(&bin).unwrap();
+            let pm = bin.join("pm");
+            std::fs::write(&pm, "#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(&pm, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+                .unwrap();
+            (bin, pm.canonicalize().unwrap())
+        };
+        let (first_dir, first) = pm_in("first");
+        let (second_dir, second) = pm_in("second");
+        let path = |dirs: &[&Path]| {
+            let joined = std::env::join_paths(dirs).unwrap();
+            let joined = joined.to_str().unwrap().to_string();
+            options::run(
+                server.name(),
+                &[vec![
+                    "set-environment".into(),
+                    "-g".into(),
+                    "PATH".into(),
+                    joined,
+                ]],
+            )
+            .unwrap();
+        };
+
+        path(&[&first_dir, &second_dir]);
+        assert_eq!(server_pm(server.name()), Some(first));
+        path(&[&second_dir, &first_dir]);
+        assert_eq!(server_pm(server.name()), Some(second.clone()));
+        path(&[]);
+        assert_eq!(server_pm(server.name()), None);
+        options::run(
+            server.name(),
+            &[set(Scope::Global, tmux_init::BIN, second.to_str())],
+        )
+        .unwrap();
+        assert_eq!(server_pm(server.name()), Some(second));
     }
 
     #[test]

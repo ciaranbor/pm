@@ -102,17 +102,9 @@ fn run_in<E>(
     Ok(exit)
 }
 
-/// The file `binary` runs: itself when it names a path, else the first
-/// match on `PATH`, with symlinks followed.
+/// The file `binary` runs, as found on `PATH`.
 fn resolve(binary: &str) -> Option<PathBuf> {
-    let found = if binary.contains('/') {
-        PathBuf::from(binary)
-    } else {
-        std::env::split_paths(&std::env::var_os("PATH")?)
-            .map(|dir| dir.join(binary))
-            .find(|path| path.is_file())?
-    };
-    found.canonicalize().ok()
+    crate::fs_utils::resolve_binary(binary, std::env::var_os("PATH").as_deref())
 }
 
 fn stamp(path: &Path) -> Option<String> {

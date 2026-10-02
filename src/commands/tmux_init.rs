@@ -31,7 +31,7 @@ use super::tmux_watch::AUTO_REFRESH;
 mod attention_key;
 mod window_status;
 
-const BIN: &str = "@pm-bin";
+pub(super) const BIN: &str = "@pm-bin";
 const WINDOW_STATUS: &str = "@pm-window-status";
 const BIND_TREE: &str = "@pm-bind-tree";
 const ATTENTION_KEY: &str = "@pm-attention-key";
