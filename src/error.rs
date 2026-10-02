@@ -135,6 +135,9 @@ pub enum PmError {
 
     #[error("Could not determine home directory")]
     NoHomeDir,
+
+    #[error("{0}")]
+    Serve(String),
 }
 
 fn display_paths(paths: &[PathBuf]) -> String {

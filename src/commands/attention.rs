@@ -32,6 +32,8 @@ use crate::tmux;
 use super::feat_status_view::first_line;
 use super::running_agents::{self, Liveness, Windows, liveness};
 
+pub mod transition;
+
 /// Bumped when a field changes meaning or goes away; added fields, kinds
 /// and states keep it.
 pub const VERSION: u32 = 1;
@@ -244,16 +246,21 @@ fn of(kind: AttentionKind, detail: Option<String>, agent: Option<String>) -> Att
 /// The first of `agents` in `state`, as attention of `kind` naming it.
 fn agent_in(agents: &[AgentSnapshot], state: AgentState, kind: AttentionKind) -> Option<Attention> {
     let agent = agents.iter().find(|a| a.state == state)?;
+    Some(agent_attention(agent, kind))
+}
+
+/// Attention of `kind` naming `agent` and what it is at.
+fn agent_attention(agent: &AgentSnapshot, kind: AttentionKind) -> Attention {
     let what = match (&agent.waiting, agent.window.is_some()) {
         (Some(waiting), _) => waiting.detail.as_str(),
         (None, true) => "harness exited",
         (None, false) => "window missing",
     };
-    Some(of(
+    of(
         kind,
         Some(format!("{}: {what}", agent.name)),
         Some(agent.name.clone()),
-    ))
+    )
 }
 
 /// The attention a feature needs: the first kind that applies, in

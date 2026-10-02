@@ -204,6 +204,38 @@ without touching state; `pm open` brings them back. `pm delete`, by
 contrast, removes the project from pm, and with `--force` deletes its
 worktrees too — `main` included, unpushed history with it.
 
+### Remote access
+
+`pm serve` serves the attention view, read-only, to pm's phone app. It
+listens on `127.0.0.1` only (port 7764 by default); a transport puts it on
+your tailnet:
+
+```sh
+pm serve install            # a launchd LaunchAgent: runs at login, restarts, follows upgrades
+tailscale serve --bg 7764   # https://<this-mac>.<tailnet>.ts.net → 127.0.0.1:7764
+pm serve pair --name pixel  # scan the QR code in the app
+```
+
+The phone must be on the tailnet to reach it: with Tailscale off (another
+VPN, such as ProtonVPN, on instead) the app can't connect. Every request
+needs a paired device's bearer token, local ones included — through
+`tailscale serve` every request arrives on loopback. `pair` prints the
+token once, beside the QR code; `pm serve devices` lists the paired
+devices and `pm serve revoke <device>` withdraws one's token at once. pm
+does not rely on Tailscale's identity headers: a tagged device sends none.
+`pm serve` logs each request with its device to stderr, which the
+LaunchAgent sends to `serve.log` in the `serve/` dir of pm's config dir,
+beside the devices file; `pm state` syncs neither.
+
+The API, all `GET` under `/v1`, needing the `read` scope:
+
+| Path | Returns |
+|---|---|
+| `snapshot` | `pm feat status --all --json` ([Attention view](#attention-view)) |
+| `events` | server-sent events: `snapshot` (the snapshot, at connect and on each change), `transition` (`{project, scope, kind, detail, agent}` as a feature or `main` becomes blocked, asking or ready — alerted as tmux alerts — or an agent dies); a comment line every 25 s of silence |
+| `features/{project}/{feature}/summary` | the feature's summary, Markdown |
+| `agents/{project}/{scope}/{agent}/screen` | what the agent's pane shows now, plain text |
+
 ## Concepts
 
 ### Features and worktrees

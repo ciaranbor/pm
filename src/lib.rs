@@ -5,10 +5,12 @@ pub mod gh;
 pub mod git;
 pub mod harness;
 pub mod hooks;
+pub mod launchd;
 pub mod messages;
 pub mod notice;
 pub mod path_utils;
 pub mod state;
+pub mod tailscale;
 #[cfg(test)]
 pub mod testing;
 pub mod tmux;

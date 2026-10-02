@@ -504,6 +504,11 @@ pub fn capture_pane(server: Option<&str>, window: &str) -> Result<String> {
     )
 }
 
+/// What `pane` shows now, as plain text, wrapped lines joined.
+pub fn capture_visible(server: Option<&str>, pane: &str) -> Result<String> {
+    run_tmux_untrimmed(server, &["capture-pane", "-p", "-J", "-t", pane])
+}
+
 /// Select (focus) a specific window in a session.
 pub fn select_window(server: Option<&str>, target: &str) -> Result<()> {
     run_tmux(server, &["select-window", "-t", target])?;
