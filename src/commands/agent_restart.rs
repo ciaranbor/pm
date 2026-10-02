@@ -1,7 +1,9 @@
 use std::path::Path;
 
 use crate::commands::agent_spawn::{SpawnOutcome, notes_suffix};
-use crate::error::Result;
+use crate::commands::attention::{AgentState, scope_agents};
+use crate::error::{PmError, Result};
+use crate::messages;
 use crate::state::agent::AgentRegistry;
 use crate::state::paths;
 use crate::state::project::ProjectConfig;
@@ -14,13 +16,16 @@ use crate::tmux;
 /// across the restart (relayed via `agent_spawn` reading the registry).
 ///
 /// When `keep_old` is set the old window is renamed but left running and
-/// returned, for a caller whose own process lives in it.
+/// returned, for a caller whose own process lives in it. When `resume` is
+/// set the agent is first sent a message telling it to resume, which its
+/// respawned session reads at its first Stop hook.
 fn restart_one(
     project_root: &Path,
     feature: &str,
     agent_name: &str,
     tmux_server: Option<&str>,
     keep_old: bool,
+    resume: bool,
 ) -> Result<(String, Option<String>)> {
     crate::messages::validate_name(agent_name, "agent")?;
 
@@ -36,6 +41,16 @@ fn restart_one(
             "'{agent_name}' not found in scope '{feature}'"
         ))
     })?;
+
+    if resume {
+        messages::send(
+            &paths::messages_dir(project_root),
+            feature,
+            agent_name,
+            RESUME_SENDER,
+            resume_body(keep_old),
+        )?;
+    }
 
     // Renamed rather than killed first, so agent_spawn sees no window and
     // creates a fresh one.
@@ -70,7 +85,11 @@ fn restart_one(
         }
         None => None,
     };
-    Ok((restarted_line(agent_name, outcome, &notes), kept))
+    let mut line = restarted_line(agent_name, outcome, &notes);
+    if resume && !keep_old {
+        line.push_str("; it was interrupted mid-turn and is told to resume");
+    }
+    Ok((line, kept))
 }
 
 /// The report line for an agent that was stopped and respawned.
@@ -105,26 +124,48 @@ impl Restarted {
     }
 }
 
-/// Restart multiple agents. Continues on error. An agent whose window holds
-/// this process is restarted last and its old window left to
-/// [`Restarted::finish`]: killing it ends the restart.
+/// The sender of the message that tells an interrupted agent to resume.
+const RESUME_SENDER: &str = "no-reply-restart";
+
+/// Restart multiple agents. Continues on error. An agent whose turn the
+/// restart would cut short — busy, asking, or running background work — is
+/// refused unless `force`, and is then told to resume once it is back. An
+/// agent whose window holds this process is restarted last, always told to
+/// resume, and its old window left to [`Restarted::finish`]: killing it
+/// ends the restart.
 pub fn agent_restart_many(
     project_root: &Path,
     feature: &str,
     names: &[String],
+    force: bool,
     tmux_server: Option<&str>,
 ) -> Restarted {
     let caller = callers_agent(project_root, feature, names, tmux_server);
+    let states = scope_agents(project_root, feature, tmux_server).unwrap_or_default();
+    let interrupts = |name: &str| {
+        states
+            .iter()
+            .find(|a| a.name == name)
+            .is_some_and(|a| mid_turn(a.state))
+    };
     let mut results: Vec<Result<String>> = names
         .iter()
         .filter(|n| Some(*n) != caller)
         .map(|name| {
-            restart_one(project_root, feature, name, tmux_server, false).map(|(line, _)| line)
+            let resume = interrupts(name);
+            if resume && !force {
+                return Err(PmError::SafetyCheck(format!(
+                    "agent '{name}' is mid-turn; wait until it is idle, or pass --force to \
+                     interrupt it and have it resume"
+                )));
+            }
+            restart_one(project_root, feature, name, tmux_server, false, resume)
+                .map(|(line, _)| line)
         })
         .collect();
     let mut caller_window = None;
     if let Some(name) = caller {
-        match restart_one(project_root, feature, name, tmux_server, true) {
+        match restart_one(project_root, feature, name, tmux_server, true, true) {
             Ok((line, kept)) => {
                 caller_window = kept;
                 results.push(Ok(line));
@@ -135,6 +176,25 @@ pub fn agent_restart_many(
     Restarted {
         results,
         caller_window,
+    }
+}
+
+/// Whether a restart would cut short what an agent in `state` is doing.
+fn mid_turn(state: AgentState) -> bool {
+    matches!(
+        state,
+        AgentState::Busy | AgentState::Asking | AgentState::Background
+    )
+}
+
+fn resume_body(caller: bool) -> &'static str {
+    if caller {
+        "`pm agent restart` restarted you mid-turn, as you asked; the restart completed. \
+         Resume the task you were working on."
+    } else {
+        "`pm agent restart --force` restarted you mid-turn. Your last tool call or background \
+         task may not have completed: check its effect, then resume the task you were \
+         working on."
     }
 }
 
@@ -176,7 +236,8 @@ mod tests {
         agent_name: &str,
         tmux_server: Option<&str>,
     ) -> Result<String> {
-        restart_one(project_root, feature, agent_name, tmux_server, false).map(|(line, _)| line)
+        restart_one(project_root, feature, agent_name, tmux_server, false, false)
+            .map(|(line, _)| line)
     }
 
     fn setup_project(dir: &Path, server: &TestServer) -> (String, String) {
@@ -465,11 +526,60 @@ mod tests {
             dir.path(),
             &feature,
             &["reviewer".to_string(), "nonexistent".to_string()],
+            false,
             server.name(),
         )
         .results;
         assert_eq!(results.len(), 2);
         assert!(results[0].is_ok());
         assert!(results[1].is_err());
+    }
+
+    #[test]
+    fn a_mid_turn_agent_is_restarted_only_with_force_and_then_told_to_resume() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let session = tmux::session_name(&project_name, "login");
+        server.spawn_fake_agent(&project, &session, "login", "implementer");
+        server.spawn_idle_fake_agent(&project, &session, "login", "reviewer");
+        let messages_dir = paths::messages_dir(&project);
+        let told = |agent: &str| {
+            messages::list(&messages_dir, "login", agent, Some(RESUME_SENDER))
+                .unwrap()
+                .len()
+        };
+
+        let results = agent_restart_many(
+            &project,
+            "login",
+            &["implementer".to_string(), "reviewer".to_string()],
+            false,
+            server.name(),
+        )
+        .results;
+        let refused = results[0].as_ref().unwrap_err().to_string();
+        assert!(refused.contains("--force"), "{refused}");
+        assert!(results[1].is_ok(), "{:?}", results[1]);
+        assert_eq!((told("implementer"), told("reviewer")), (0, 0));
+        assert!(
+            tmux::pane_processes(server.name(), &format!("{session}:implementer"))
+                .unwrap()
+                .iter()
+                .any(|p| p.command.contains("999")),
+            "a refused agent keeps running"
+        );
+
+        let results = agent_restart_many(
+            &project,
+            "login",
+            &["implementer".to_string()],
+            true,
+            server.name(),
+        )
+        .results;
+        let line = results[0].as_ref().unwrap();
+        assert!(line.ends_with("is told to resume"), "{line}");
+        assert_eq!(told("implementer"), 1);
     }
 }

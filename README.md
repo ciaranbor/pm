@@ -161,7 +161,9 @@ Agents also message across projects: `pm msg send main --project tools
 another project or request something of it without you relaying it.
 
 When an agent misbehaves, `pm agent restart <name>` respawns it on the same
-conversation; `pm agent spawn <name>` adds one to the feature.
+conversation; `pm agent spawn <name>` adds one to the feature. A restart
+refuses an agent that is busy, asking, or running background work; with
+`--force` it interrupts it and leaves it a message to resume.
 
 ### Finish a feature
 

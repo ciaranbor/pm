@@ -363,12 +363,17 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     push();
                     report_agent_op_results(results, "delete")
                 }
-                AgentCommands::Restart { names, scope } => {
+                AgentCommands::Restart {
+                    names,
+                    force,
+                    scope,
+                } => {
                     let target_scope = resolve_scope_with_flag(&project_root, scope)?;
                     let mut restarted = commands::agent_restart::agent_restart_many(
                         &project_root,
                         &target_scope,
                         &names,
+                        force,
                         server,
                     );
                     let reported =

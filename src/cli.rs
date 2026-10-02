@@ -410,6 +410,10 @@ pub enum AgentCommands {
         /// Agent name(s)
         #[arg(required = true)]
         names: Vec<String>,
+        /// Restart an agent that is mid-turn, asking, or running background
+        /// work; it is sent a message telling it to resume
+        #[arg(long)]
+        force: bool,
         /// Target scope (feature name or "main"; defaults to current scope)
         #[arg(long)]
         scope: Option<String>,

@@ -381,6 +381,27 @@ pub fn project(project_root: &Path, tmux_server: Option<&str>) -> Result<Snapsho
     })
 }
 
+/// The agents of one scope of the project at `project_root`.
+pub fn scope_agents(
+    project_root: &Path,
+    scope: &str,
+    tmux_server: Option<&str>,
+) -> Result<Vec<AgentSnapshot>> {
+    let windows = Windows::read(tmux_server)?;
+    let project_config = ProjectConfig::load(&paths::pm_dir(project_root))?;
+    let config = resolve_harness_config(
+        &project_config.harness,
+        &GlobalConfig::load_or_default().harness,
+    );
+    let reader = ScopeReader {
+        project_root,
+        project: &project_config.project.name,
+        windows: &windows,
+        config: &config,
+    };
+    Ok(reader.read(scope)?.agents)
+}
+
 fn sort(features: &mut [FeatureSnapshot]) {
     features.sort_by(|a, b| {
         (a.attention.kind, &a.project, &a.name).cmp(&(b.attention.kind, &b.project, &b.name))
