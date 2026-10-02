@@ -651,7 +651,7 @@ Plugin options, set before `run-shell 'pm tmux init'`:
 | `@pm-refresh-interval` | `30` | seconds between refreshes |
 | `@pm-window-status` | on | put each agent window's badge just before the window name in `window-status-format` and `window-status-current-format`, keeping your theme's style for the name |
 | `@pm-bind-tree` | on | turn prefix `s` / `w` into pm's tree, sorted by name, when they run tmux's default `choose-tree` |
-| `@pm-attention-key` | `a` | the prefix key opening pm's tree with only the sessions needing attention, or a message when none does; `off` for none. A key your config binds is left alone |
+| `@pm-attention-key` | `a` | the prefix key opening pm's tree with only the sessions needing attention, or a message when none does; `off` for none. A key your config binds is left alone; a key pm lets go of gets tmux's default binding back, if it has one |
 
 Badges are Nerd Font glyphs: an agent window's shows its [agent
 state](#attention-view), a feature session's the attention it needs, with
