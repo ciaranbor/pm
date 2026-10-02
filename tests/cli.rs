@@ -116,8 +116,9 @@ fn asset_commands_install_into_the_global_tier() {
     assert!(home.join(".agents/skills/pm/SKILL.md").is_file());
     assert!(home.join(".claude/skills/pm/SKILL.md").is_file());
 
-    // Workflow commands work outside a project, listing the global tier.
-    pm_home().args(["workflow", "install"]).assert().success();
+    // `upgrade --all` installs the bundled workflows into the global tier;
+    // `workflow list` lists them from outside a project.
+    pm_home().args(["upgrade", "--all"]).assert().success();
     pm_home()
         .args(["workflow", "list"])
         .assert()

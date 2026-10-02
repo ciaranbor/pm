@@ -937,24 +937,6 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     }
                     Ok(())
                 }
-                WorkflowCommands::Install { name } => {
-                    let messages = commands::skills::workflows_install(name.as_deref())?;
-                    for m in messages {
-                        println!("{m}");
-                    }
-                    Ok(())
-                }
-                WorkflowCommands::Uninstall { name, all } => {
-                    if name.is_none() && !all {
-                        eprintln!("Provide a workflow name or use --all to uninstall all");
-                        std::process::exit(1);
-                    }
-                    let messages = commands::skills::workflows_uninstall(name.as_deref())?;
-                    for m in messages {
-                        println!("{m}");
-                    }
-                    Ok(())
-                }
                 WorkflowCommands::List => {
                     let out = commands::workflow::list_rows(project_root.as_deref())?;
                     // Print rows to stdout (the normal listing).

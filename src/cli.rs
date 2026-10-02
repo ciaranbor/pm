@@ -192,21 +192,6 @@ pub enum WorkflowCommands {
     /// List installed workflows (project tier first, then global) with
     /// their descriptions
     List,
-    /// (Re)install a bundled workflow into the global tier (bundled
-    /// workflows are pm-owned and rewritten on upgrade; to customise one,
-    /// copy it into <project>/.pm/workflows/ or to a new name)
-    Install {
-        /// Workflow name (installs all bundled workflows if omitted)
-        name: Option<String>,
-    },
-    /// Uninstall a bundled workflow from the global tier
-    Uninstall {
-        /// Workflow name (required unless --all is passed)
-        name: Option<String>,
-        /// Uninstall all bundled workflows
-        #[arg(long)]
-        all: bool,
-    },
 }
 
 #[derive(Subcommand)]
