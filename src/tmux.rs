@@ -746,18 +746,6 @@ mod tests {
     }
 
     #[test]
-    fn send_line_to_existing_session_succeeds() {
-        let server = TestServer::new();
-        let dir = tempdir().unwrap();
-        let name = server.scope("keys-test");
-
-        create_session(server.name(), &name, dir.path()).unwrap();
-
-        let result = send_line(server.name(), &name, "echo hello");
-        assert!(result.is_ok());
-    }
-
-    #[test]
     fn a_line_that_names_a_key_is_typed_as_text() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();

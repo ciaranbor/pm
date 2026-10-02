@@ -119,8 +119,8 @@ its turn). pm surfaces all of it in tmux:
 - the status line's summary (a glyph and count per kind), and an alert on
   every attached client when a feature becomes blocked or ready, or an
   agent — `main` included — starts asking (except on a client already
-  showing that agent's pane). A feature alerts once on each:
-  not again when its agent's question outranks its `ready` for a while, nor
+  showing that agent's pane). A feature alerts once per episode — not
+  again when its agent's question outranks its `ready` for a while, nor
   when its session is opened on a status it already had;
 - pm's tree (prefix `s` / `w`), tmux's own tree with each session's
   activity (working, or how long it has been quiet), attention glyph and

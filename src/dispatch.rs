@@ -262,17 +262,17 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             let mut changed = false;
             commands::open::open_all(&projects_dir, server, |name, outcome| {
                 any = true;
-                if let ProjectOpen::Opened(r) = outcome {
-                    changed |= r.changed();
-                }
                 match outcome {
-                    ProjectOpen::Opened(r) => println!(
-                        "{name}: restored {} session{}, respawned {} agent{}",
-                        r.sessions_restored,
-                        plural(r.sessions_restored),
-                        r.agents_respawned,
-                        plural(r.agents_respawned)
-                    ),
+                    ProjectOpen::Opened(r) => {
+                        changed |= r.changed();
+                        println!(
+                            "{name}: restored {} session{}, respawned {} agent{}",
+                            r.sessions_restored,
+                            plural(r.sessions_restored),
+                            r.agents_respawned,
+                            plural(r.agents_respawned)
+                        );
+                    }
                     ProjectOpen::RootMissing(root) => eprintln!(
                         "warning: {name}: skipped, root missing at {}",
                         root.display()
