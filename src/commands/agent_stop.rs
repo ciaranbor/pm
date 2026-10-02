@@ -6,8 +6,9 @@ use crate::state::paths;
 use crate::state::project::ProjectConfig;
 use crate::tmux;
 
-/// Stop a running agent: kill its tmux window and set `active = false` in the
-/// registry. Idempotent — succeeds even if the window is already gone.
+/// Stop a running agent: end it in its window ([`tmux::panes::end_agent`])
+/// and set `active = false` in the registry. Idempotent — succeeds even if
+/// the window is already gone.
 pub fn agent_stop(
     project_root: &Path,
     feature: &str,
@@ -33,9 +34,9 @@ pub fn agent_stop(
     entry.active = false;
     registry.save(&agents_dir, feature)?;
 
-    // Kill the tmux window if it exists (idempotent, must be last)
+    // Idempotent, and last: it may end this process.
     if let Some(target) = tmux::find_window(tmux_server, &session_name, agent_name)? {
-        let _ = tmux::kill_window(tmux_server, &target);
+        let _ = tmux::panes::end_agent(tmux_server, &target);
     }
 
     Ok(format!("Stopped agent '{agent_name}' in {feature}"))

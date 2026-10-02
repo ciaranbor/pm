@@ -143,9 +143,9 @@ pub struct SpawnParams<'a> {
     /// gets a fresh session id and the original is left untouched. Used by
     /// `pm agent fork`.
     pub fork_session: bool,
-    /// When `Some(target)`, the existing window at that target is renamed and
-    /// reused instead of creating a new one. Used during `feat new --context`
-    /// to reuse the default shell at window :0.
+    /// When `Some(target)`, the shell at that target — a window's active
+    /// pane, or a pane by id — runs the agent and its window is renamed,
+    /// instead of a new window being made.
     pub reuse_window: Option<&'a str>,
     pub tmux_server: Option<&'a str>,
 }
@@ -395,6 +395,46 @@ pub fn agent_spawn(
     context: Option<&str>,
     tmux_server: Option<&str>,
 ) -> Result<(SpawnOutcome, String, Vec<String>)> {
+    spawn_agent(
+        project_root,
+        feature,
+        agent_name,
+        agent_definition,
+        context,
+        None,
+        tmux_server,
+    )
+}
+
+/// Respawn a registered agent into `pane`, a pane whose shell is ready for
+/// it, instead of a window of its own.
+pub fn agent_respawn_in(
+    project_root: &Path,
+    feature: &str,
+    agent_name: &str,
+    pane: &str,
+    tmux_server: Option<&str>,
+) -> Result<(SpawnOutcome, String, Vec<String>)> {
+    spawn_agent(
+        project_root,
+        feature,
+        agent_name,
+        None,
+        None,
+        Some(pane),
+        tmux_server,
+    )
+}
+
+fn spawn_agent(
+    project_root: &Path,
+    feature: &str,
+    agent_name: &str,
+    agent_definition: Option<&str>,
+    context: Option<&str>,
+    pane: Option<&str>,
+    tmux_server: Option<&str>,
+) -> Result<(SpawnOutcome, String, Vec<String>)> {
     crate::messages::validate_name(agent_name, "agent")?;
     if let Some(def) = agent_definition {
         crate::messages::validate_name(def, "agent")?;
@@ -449,7 +489,7 @@ pub fn agent_spawn(
                 prompt,
                 resume_session: resume,
                 fork_session: false,
-                reuse_window: None,
+                reuse_window: pane,
                 tmux_server,
             },
             &config,
@@ -462,7 +502,11 @@ pub fn agent_spawn(
         // Window still exists → agent is running. No respawn, so skip
         // validation: a healthy agent shouldn't go unreachable just because its
         // def file moved since it started. Context is still queued.
-        if let Some(target) = tmux::find_window(tmux_server, &session_name, agent_name)? {
+        let window = match pane {
+            Some(_) => None,
+            None => tmux::find_window(tmux_server, &session_name, agent_name)?,
+        };
+        if let Some(target) = window {
             queue_context()?;
             let msg = if context.is_some() {
                 format!("Agent '{agent_name}' already active in {target} — sent context as message")

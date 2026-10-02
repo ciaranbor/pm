@@ -49,7 +49,7 @@ pub fn agent_delete(
     // Kill the tmux window if it exists (idempotent, must be last so
     // that on-disk state is fully consistent first).
     if let Some(target) = tmux::find_window(tmux_server, &session_name, agent_name)? {
-        let _ = tmux::kill_window(tmux_server, &target);
+        let _ = tmux::panes::end_agent(tmux_server, &target);
     }
 
     Ok(format!("Deleted agent '{agent_name}' from {feature}"))

@@ -5,6 +5,7 @@ use crate::error::{PmError, Result};
 
 pub mod keys;
 pub mod options;
+pub mod panes;
 
 /// Single source of truth for the tmux session naming convention.
 /// Returns `"{project_name}/{scope}"`.
@@ -384,17 +385,6 @@ pub fn pane_processes(server: Option<&str>, target: &str) -> Result<Vec<Process>
     Ok(ProcessTable::read()?.tree(pane.pid))
 }
 
-/// The processes running in any pane of `window`.
-pub fn window_processes(server: Option<&str>, window: &str) -> Result<Vec<Process>> {
-    let pids = run_tmux(server, &["list-panes", "-t", window, "-F", "#{pane_pid}"])?;
-    let table = ProcessTable::read()?;
-    Ok(pids
-        .lines()
-        .filter_map(|pid| pid.trim().parse().ok())
-        .flat_map(|pid| table.tree(pid))
-        .collect())
-}
-
 /// A window's agent pane, as [`agent_panes`] lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pane {
@@ -518,28 +508,6 @@ mod tests {
     use super::*;
     use crate::testing::TestServer;
     use tempfile::tempdir;
-
-    #[test]
-    fn a_windows_processes_are_those_of_every_pane() {
-        let server = TestServer::new();
-        let dir = tempdir().unwrap();
-        let session = server.scope("window-processes");
-        create_session(server.name(), &session, dir.path()).unwrap();
-        let window = format!("{session}:0");
-        server.split_before(&window);
-        let pids = server.tmux_stdout(&["list-panes", "-t", &window, "-F", "#{pane_pid}"]);
-
-        let processes = window_processes(server.name(), &window).unwrap();
-
-        for pid in pids.lines() {
-            let pid: u32 = pid.parse().unwrap();
-            assert!(
-                processes.iter().any(|p| p.pid == pid),
-                "{pid}: {processes:?}"
-            );
-        }
-        assert_eq!(pids.lines().count(), 2);
-    }
 
     #[test]
     fn a_window_is_read_by_its_marked_pane_else_its_first() {

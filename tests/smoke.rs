@@ -501,7 +501,7 @@ fn spawn_from_main_into_a_feature_with_scope() {
 }
 
 /// Catches: `agent restart` run from one of the restarted agents' own
-/// windows killing that window, and so itself, before the other agents
+/// panes killing that pane, and so itself, before the other agents
 /// restart or anything is printed.
 #[test]
 #[ignore]
@@ -518,17 +518,14 @@ fn restart_from_inside_an_agents_own_window() {
     let old = s
         .find_window("proj/login", "reviewer")
         .expect("reviewer window");
-    let old = s.tmux_ok(&["display", "-p", "-t", &old, "#{window_id}"]);
+    let old = s.tmux_ok(&["display", "-p", "-t", &old, "#{pane_id}"]);
     // Stop the shim so the window's shell (which still exports
     // PM_AGENT_NAME) takes commands again.
     s.tmux_ok(&["send-keys", "-t", &old, "C-c", ""]);
     s.wait_for_shell(&old);
 
     let outcome = s.run_in(&old, "pm agent restart reviewer helper");
-    assert!(
-        !outcome.alive,
-        "old window survived the restart: {outcome:?}"
-    );
+    assert!(!outcome.alive, "old pane survived the restart: {outcome:?}");
     for agent in ["reviewer", "helper"] {
         assert!(
             outcome.log.contains(&format!("Restarted agent '{agent}'")),

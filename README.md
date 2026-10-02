@@ -153,8 +153,9 @@ add work. Typing into a blocked feature's agent sets the feature back to
 it ([Agents as message processors](#agents-as-message-processors)), so
 `pm msg send <agent> "…"` from any pane also reaches it. You can split an
 agent's window to work beside it: pm watches and jumps to the pane it
-started the agent in, whichever pane is active. Restarting or stopping the
-agent closes the window, your panes with it.
+started the agent in, whichever pane is active. Restarting the agent
+replaces only that pane; stopping or deleting it closes only that pane,
+and the window, no longer named for the agent, keeps yours.
 
 Agents also message across projects: `pm msg send main --project tools
 "…"` reaches the `tools` project's orchestrator, so an agent can ask about
