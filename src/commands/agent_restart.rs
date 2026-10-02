@@ -141,22 +141,27 @@ pub fn agent_restart_many(
     tmux_server: Option<&str>,
 ) -> Restarted {
     let caller = callers_agent(project_root, feature, names, tmux_server);
-    let states = scope_agents(project_root, feature, tmux_server).unwrap_or_default();
-    let interrupts = |name: &str| {
-        states
+    // Unreadable states count as mid-turn: the guard fails closed.
+    let states = scope_agents(project_root, feature, tmux_server).map_err(|e| e.to_string());
+    let mid_turn_reason = |name: &str| match &states {
+        Ok(agents) => agents
             .iter()
             .find(|a| a.name == name)
-            .is_some_and(|a| mid_turn(a.state))
+            .filter(|a| mid_turn(a.state))
+            .map(|_| format!("agent '{name}' is mid-turn; wait until it is idle")),
+        Err(e) => Some(format!(
+            "could not tell whether agent '{name}' is mid-turn ({e})"
+        )),
     };
     let mut results: Vec<Result<String>> = names
         .iter()
         .filter(|n| Some(*n) != caller)
         .map(|name| {
-            let resume = interrupts(name);
-            if resume && !force {
+            let reason = mid_turn_reason(name);
+            let resume = reason.is_some();
+            if let Some(reason) = reason.filter(|_| !force) {
                 return Err(PmError::SafetyCheck(format!(
-                    "agent '{name}' is mid-turn; wait until it is idle, or pass --force to \
-                     interrupt it and have it resume"
+                    "{reason}, or pass --force to interrupt it and have it resume"
                 )));
             }
             restart_one(project_root, feature, name, tmux_server, false, resume)
