@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use super::agent_send::Sent;
 use crate::error::{PmError, Result};
 use crate::messages;
 use crate::state::paths;
@@ -9,15 +10,13 @@ use crate::state::paths;
 /// Loads `.last_read` from the agent's inbox, determines the target scope
 /// from the original message metadata, and sends the reply via the existing
 /// `agent_send` / `agent_send_cross_project` machinery.
-///
-/// Returns status lines suitable for printing.
 pub fn msg_reply(
     project_root: &Path,
     current_scope: &str,
     agent: &str,
     body: &str,
     tmux_server: Option<&str>,
-) -> Result<String> {
+) -> Result<Sent> {
     let messages_dir = paths::messages_dir(project_root);
     let last_read = messages::load_last_read(&messages_dir, current_scope, agent)?;
 
@@ -44,6 +43,7 @@ pub fn msg_reply(
             sender: agent,
             body,
         })
+        .map(|status| Sent { status, heal: None })
     } else {
         // Same-project reply: use sender_scope as target if set
         let target_scope = last_read.sender_scope.as_deref();
@@ -198,7 +198,8 @@ mod tests {
             "done, please review",
             server.name(),
         )
-        .unwrap();
+        .unwrap()
+        .status;
 
         // Should route to main scope
         assert!(result.contains("reviewer@main"));
@@ -237,7 +238,9 @@ mod tests {
             .unwrap();
 
         // Reply — should stay same-scope
-        let result = msg_reply(&root, &feature, "implementer", "got it", server.name()).unwrap();
+        let result = msg_reply(&root, &feature, "implementer", "got it", server.name())
+            .unwrap()
+            .status;
 
         // Same-scope: no @scope notation
         assert!(result.contains("Message 001 sent to 'reviewer'"));

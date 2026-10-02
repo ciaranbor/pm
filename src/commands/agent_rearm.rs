@@ -166,6 +166,7 @@ mod tests {
             server.name(),
         )
         .unwrap()
+        .status
     }
 
     fn screen(server: &TestServer, target: &str) -> String {

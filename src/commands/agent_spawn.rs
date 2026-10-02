@@ -616,14 +616,19 @@ impl SpawnAllResult {
     ) {
         let names: Vec<String> = self.launched.iter().map(|(_, n)| n.clone()).collect();
         let failed = launch_check::confirm(project_root, scope, &names, tmux_server);
-        self.record_failures(failed, scope);
+        self.record_failures(failed);
     }
 
-    fn record_failures(&mut self, failed: Vec<FailedLaunch>, scope: &str) {
+    /// The agents that had a new window created.
+    pub fn launched(&self) -> impl Iterator<Item = &str> {
+        self.launched.iter().map(|(_, name)| name.as_str())
+    }
+
+    fn record_failures(&mut self, failed: Vec<FailedLaunch>) {
         let mut exited: Vec<usize> = self
             .launched
             .iter()
-            .filter(|(_, name)| failed.iter().any(|f| f.agent == *name))
+            .filter(|(_, name)| failed.iter().any(|f| f.launch.agent == *name))
             .map(|(at, _)| *at)
             .collect();
         exited.sort_unstable_by(|a, b| b.cmp(a));
@@ -632,7 +637,7 @@ impl SpawnAllResult {
         }
         self.launched.clear();
         self.errors
-            .extend(failed.iter().map(|failure| failure.message(scope)));
+            .extend(failed.iter().map(|failure| failure.message()));
     }
 }
 
@@ -693,6 +698,7 @@ pub fn agent_spawn_all(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::commands::launch_check::Launch;
     use crate::state::feature::{FeatureState, FeatureStatus};
     use crate::testing::TestServer;
     use chrono::Utc;
@@ -875,13 +881,14 @@ pub(crate) mod tests {
 
         let mut result = agent_spawn_all(dir.path(), &feature, server.name()).unwrap();
         assert_eq!(result.spawned_count, 1);
-        result.record_failures(
-            vec![FailedLaunch {
+        result.record_failures(vec![FailedLaunch {
+            launch: Launch {
+                project_root: dir.path().to_path_buf(),
+                scope: feature.clone(),
                 agent: "tester".into(),
-                output: "  error: bad flag".into(),
-            }],
-            &feature,
-        );
+            },
+            output: "  error: bad flag".into(),
+        }]);
 
         assert_eq!(result.successes.len(), 1, "{:?}", result.successes);
         assert!(result.successes[0].contains("'reviewer' already active"));

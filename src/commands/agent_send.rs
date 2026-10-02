@@ -94,6 +94,24 @@ pub fn resolve_upstream(
     }
 }
 
+/// What a send did.
+#[derive(Debug)]
+pub struct Sent {
+    /// The lines saying what was sent, and any re-arm.
+    pub status: String,
+    pub heal: Option<Heal>,
+}
+
+/// A dead recipient window a send respawned, for its caller to confirm
+/// the launch of ([`launch_check`](super::launch_check)) before printing
+/// `report`.
+#[derive(Debug)]
+pub struct Heal {
+    pub scope: String,
+    pub agent: String,
+    pub report: String,
+}
+
 /// Send a message to an agent's inbox.
 ///
 /// `agent_send` is a near-pure queue: it never spawns a *new* agent. If the
@@ -108,8 +126,6 @@ pub fn resolve_upstream(
 ///
 /// `sender_scope` is the scope the sender is currently in, recorded in
 /// message metadata so the recipient knows where the message came from.
-///
-/// Returns status lines describing what happened.
 pub fn agent_send(
     project_root: &Path,
     sender_scope: &str,
@@ -118,7 +134,7 @@ pub fn agent_send(
     sender: &str,
     body: &str,
     tmux_server: Option<&str>,
-) -> Result<String> {
+) -> Result<Sent> {
     let feature = target_scope.unwrap_or(sender_scope);
 
     // The recipient must be an active agent. Messaging never conjures a new
@@ -161,16 +177,21 @@ pub fn agent_send(
     // (`AlreadyActive`) if the window is alive, a respawn/resume if it's
     // gone. Pass `None` for `agent_definition` so `agent_spawn` reads the
     // stored definition from the registry entry — preserving aliases. Only
-    // append the spawn line when a heal actually happened, keeping the
-    // common-case output byte-identical.
+    // report a heal when one actually happened, keeping the common-case
+    // output byte-identical.
     //
     // The message is already queued, so a heal failure (e.g. the tmux
     // socket is unreachable from a sandbox) is not a delivery failure: warn
     // and exit 0 rather than make the sender think the message was lost.
+    let mut heal = None;
     match super::agent_spawn::agent_spawn(project_root, feature, recipient, None, None, tmux_server)
     {
         Ok((outcome, spawn_msg, _)) if outcome.is_new_window() => {
-            status = format!("{status}\n{spawn_msg}");
+            heal = Some(Heal {
+                scope: feature.to_string(),
+                agent: recipient.to_string(),
+                report: spawn_msg,
+            });
         }
         Ok(_) => match super::agent_rearm::rearm(project_root, feature, recipient, tmux_server) {
             Ok(Some(waiting)) => {
@@ -188,7 +209,7 @@ pub fn agent_send(
         ),
     }
 
-    Ok(status)
+    Ok(Sent { status, heal })
 }
 
 /// Parameters for sending a message to an agent in a different project.
@@ -414,7 +435,7 @@ mod tests {
         // Create a fake active agent (window running sleep, not a shell)
         server.spawn_fake_agent(&root, &session_name, &feature, "reviewer");
 
-        let msg = agent_send(
+        let sent = agent_send(
             &root,
             &feature,
             None,
@@ -424,9 +445,11 @@ mod tests {
             server.name(),
         )
         .unwrap();
-        // Should just send the message, no spawn line
-        assert_eq!(msg, "Message 001 sent to 'reviewer' (from 'implementer')");
-        assert!(!msg.contains("Spawned"));
+        assert_eq!(
+            sent.status,
+            "Message 001 sent to 'reviewer' (from 'implementer')"
+        );
+        assert!(sent.heal.is_none());
     }
 
     #[test]
@@ -497,7 +520,7 @@ mod tests {
         let worktree = root.join("login");
         tmux::create_session(server.name(), &session_name, &worktree).unwrap();
 
-        let msg = agent_send(
+        let sent = agent_send(
             &root,
             &feature,
             None,
@@ -508,8 +531,13 @@ mod tests {
         )
         .unwrap();
         // Message queued and the dead window healed.
-        assert!(msg.contains("Message 001 sent to 'reviewer'"));
-        assert!(msg.contains("Spawned agent 'reviewer'"));
+        assert!(sent.status.contains("Message 001 sent to 'reviewer'"));
+        let heal = sent.heal.unwrap();
+        assert_eq!(
+            (heal.scope.as_str(), heal.agent.as_str()),
+            ("login", "reviewer")
+        );
+        assert!(heal.report.contains("Spawned agent 'reviewer'"));
 
         // The window now exists again.
         assert!(
@@ -557,7 +585,8 @@ mod tests {
             "heal-test message",
             Some(&bogus_server),
         )
-        .unwrap();
+        .unwrap()
+        .status;
         assert_eq!(
             status,
             "Message 001 sent to 'reviewer' (from 'implementer')"
@@ -677,7 +706,8 @@ mod tests {
             "second",
             server.name(),
         )
-        .unwrap();
+        .unwrap()
+        .status;
         assert!(msg.contains("Message 002"));
     }
 
@@ -728,7 +758,8 @@ mod tests {
             "please look at this",
             server.name(),
         )
-        .unwrap();
+        .unwrap()
+        .status;
 
         // Output should show cross-scope notation
         assert!(msg.contains("implementer@main"));
@@ -864,7 +895,7 @@ mod tests {
         tmux::create_session(server.name(), &main_session, &main_worktree).unwrap();
 
         // Cross-scope: login → main, recipient active but window dead.
-        let msg = agent_send(
+        let sent = agent_send(
             &root,
             "login",
             Some("main"),
@@ -876,8 +907,12 @@ mod tests {
         .unwrap();
 
         // Queued and healed.
-        assert!(msg.contains("implementer@main"));
-        assert!(msg.contains("Spawned") || msg.contains("Resumed"));
+        assert!(sent.status.contains("implementer@main"));
+        let heal = sent.heal.unwrap();
+        assert_eq!(
+            (heal.scope.as_str(), heal.agent.as_str()),
+            ("main", "implementer")
+        );
         assert!(
             tmux::find_window(server.name(), &main_session, "implementer")
                 .unwrap()
