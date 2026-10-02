@@ -176,12 +176,14 @@ that go through a GitHub PR instead.
 ### Around a reboot
 
 pm keeps running in tmux; there is nothing to restart day to day. After a
-reboot, `pm open` in each project recreates whatever sessions are missing,
-respawns every active agent on its conversation, runs the `restore`
+reboot, `pm open` recreates a project's missing sessions, respawns every
+active agent on its conversation, runs the `restore`
 [lifecycle hook](#lifecycle-hooks), and warns about drift `pm doctor`
-finds. `pm close` (`--all` for every project) tears the sessions down by
-choice, without touching state; `pm open` brings them back. `pm delete`,
-by contrast, removes the project from pm, and with `--force` deletes its
+finds; `pm open --all` does so for every registered project, skipping any
+whose root is gone, and attaches only if run from inside a project.
+`pm close` (`--all` for every project) tears the sessions down by choice,
+without touching state; `pm open` brings them back. `pm delete`, by
+contrast, removes the project from pm, and with `--force` deletes its
 worktrees too — `main` included, unpushed history with it.
 
 ## Concepts

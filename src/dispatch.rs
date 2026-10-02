@@ -136,6 +136,29 @@ fn tmux_server_from_env() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// The root of the project named `project`, or else of the one the cwd is in.
+fn project_root(
+    projects_dir: &std::path::Path,
+    project: Option<&str>,
+) -> pm::error::Result<std::path::PathBuf> {
+    match project {
+        Some(name) => Ok(pm::state::project::ProjectEntry::load(projects_dir, name)?.root_path()),
+        None => paths::find_project_root(&std::env::current_dir()?),
+    }
+}
+
+/// Leave the user in `session` rather than detached.
+fn connect(server: Option<&str>, session: &str) {
+    let tmux_env = std::env::var("TMUX").ok();
+    if let Err(e) = tmux::connect_session(server, session, tmux_env.as_deref()) {
+        eprintln!("warning: could not connect to {session}: {e}");
+    }
+}
+
+fn plural(n: usize) -> &'static str {
+    if n == 1 { "" } else { "s" }
+}
+
 /// Bring pm's tmux options up to date with a change this command made, in
 /// a background `pm tmux push` the command neither waits for nor fails on.
 fn push() {
@@ -197,9 +220,43 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             }
             Ok(())
         }
-        Commands::Open => {
-            let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+        Commands::Open { all: true, .. } => {
+            use commands::open::ProjectOpen;
             let projects_dir = paths::global_projects_dir()?;
+            let mut any = false;
+            commands::open::open_all(&projects_dir, server, |name, outcome| {
+                any = true;
+                match outcome {
+                    ProjectOpen::Opened(r) => println!(
+                        "{name}: restored {} session{}, respawned {} agent{}",
+                        r.sessions_restored,
+                        plural(r.sessions_restored),
+                        r.agents_respawned,
+                        plural(r.agents_respawned)
+                    ),
+                    ProjectOpen::RootMissing(root) => eprintln!(
+                        "warning: {name}: skipped, root missing at {}",
+                        root.display()
+                    ),
+                    ProjectOpen::Failed(e) => eprintln!("warning: {name}: {e}"),
+                }
+            })?;
+            if !any {
+                println!("No projects in registry");
+            }
+            let current = paths::find_project_root(&std::env::current_dir()?)
+                .and_then(|root| pm::state::project::ProjectConfig::load(&paths::pm_dir(&root)));
+            if let Ok(config) = current {
+                let main_session = tmux::session_name(&config.project.name, "main");
+                if tmux::has_session(server, &main_session).unwrap_or(false) {
+                    connect(server, &main_session);
+                }
+            }
+            Ok(())
+        }
+        Commands::Open { project, .. } => {
+            let projects_dir = paths::global_projects_dir()?;
+            let project_root = project_root(&projects_dir, project.as_deref())?;
             let result = commands::open::open(&project_root, &projects_dir, server)?;
             if result.sessions_restored == 0 && result.agents_respawned == 0 {
                 println!("Project sessions opened");
@@ -209,12 +266,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     result.sessions_restored, result.agents_respawned
                 );
             }
-            // Leaves the user in the project rather than detached.
-            let tmux_env = std::env::var("TMUX").ok();
-            if let Err(e) = tmux::connect_session(server, &result.main_session, tmux_env.as_deref())
-            {
-                eprintln!("warning: could not connect to {}: {e}", result.main_session);
-            }
+            connect(server, &result.main_session);
             Ok(())
         }
         Commands::Harness(cmd) | Commands::Claude(cmd) => dispatch_harness(cmd),
@@ -766,12 +818,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             yes,
         } => {
             let projects_dir = paths::global_projects_dir()?;
-            let project_root = if let Some(name) = &project {
-                let entry = pm::state::project::ProjectEntry::load(&projects_dir, name)?;
-                entry.root_path()
-            } else {
-                paths::find_project_root(&std::env::current_dir()?)?
-            };
+            let project_root = project_root(&projects_dir, project.as_deref())?;
             let project_name =
                 commands::delete::delete(&project_root, &projects_dir, force, yes, server)?;
             println!("Deleted project '{project_name}'");
@@ -780,12 +827,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
         }
         Commands::Status { project } => {
             let projects_dir = paths::global_projects_dir()?;
-            let project_root = if let Some(name) = project {
-                let entry = pm::state::project::ProjectEntry::load(&projects_dir, &name)?;
-                entry.root_path()
-            } else {
-                paths::find_project_root(&std::env::current_dir()?)?
-            };
+            let project_root = project_root(&projects_dir, project.as_deref())?;
             let lines = commands::status::status(&project_root, &projects_dir, server)?;
             for line in lines {
                 println!("{line}");
@@ -794,12 +836,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
         }
         Commands::Doctor { fix, project } => {
             let projects_dir = paths::global_projects_dir()?;
-            let project_root = if let Some(name) = project {
-                let entry = pm::state::project::ProjectEntry::load(&projects_dir, &name)?;
-                entry.root_path()
-            } else {
-                paths::find_project_root(&std::env::current_dir()?)?
-            };
+            let project_root = project_root(&projects_dir, project.as_deref())?;
             let lines =
                 commands::doctor::doctor(&project_root, &projects_dir, fix, server)?.lines();
             for line in lines {

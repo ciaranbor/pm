@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::commands::agent_spawn;
 use crate::commands::doctor::{self, IssueKind};
@@ -7,7 +7,7 @@ use crate::hooks;
 use crate::state::agent::{AgentRegistry, AgentType};
 use crate::state::feature::FeatureState;
 use crate::state::paths;
-use crate::state::project::ProjectConfig;
+use crate::state::project::{ProjectConfig, ProjectEntry};
 use crate::tmux;
 
 /// Result of an `open` operation, containing restore statistics.
@@ -109,7 +109,12 @@ fn collect_drift_warnings(
 ///
 /// Failures during diagnosis are themselves printed as warnings rather than
 /// aborting open — diagnostics are best-effort, recovery is the priority.
-fn warn_about_drift(project_root: &Path, projects_dir: &Path, tmux_server: Option<&str>) {
+fn warn_about_drift(
+    project_root: &Path,
+    project_name: &str,
+    projects_dir: &Path,
+    tmux_server: Option<&str>,
+) {
     let warnings = match collect_drift_warnings(project_root, projects_dir, tmux_server) {
         Ok(w) => w,
         Err(e) => {
@@ -122,7 +127,7 @@ fn warn_about_drift(project_root: &Path, projects_dir: &Path, tmux_server: Optio
         return;
     }
 
-    eprintln!("warning: pm doctor detected state drift:");
+    eprintln!("warning: pm doctor detected state drift in {project_name}:");
     for line in &warnings {
         eprintln!("{line}");
     }
@@ -197,6 +202,65 @@ pub fn open(
     projects_dir: &Path,
     tmux_server: Option<&str>,
 ) -> Result<OpenResult> {
+    let result = open_project(project_root, projects_dir, tmux_server)?;
+    if result.sessions_restored > 0 {
+        refresh_options(projects_dir, tmux_server);
+    }
+    Ok(result)
+}
+
+/// What `open_all` did with one registered project.
+pub enum ProjectOpen {
+    Opened(OpenResult),
+    /// The registered root is not on disk.
+    RootMissing(PathBuf),
+    Failed(PmError),
+}
+
+/// [`open`] every project registered in `projects_dir`, in registry order,
+/// passing each project's outcome to `report` as soon as it is known.
+///
+/// A project whose root is missing, or whose open fails, is reported and the
+/// sweep continues. Session options are published once, after the sweep,
+/// rather than once per project. The client is never switched or attached
+/// here; that is the caller's choice.
+pub fn open_all(
+    projects_dir: &Path,
+    tmux_server: Option<&str>,
+    mut report: impl FnMut(&str, &ProjectOpen),
+) -> Result<()> {
+    let mut restored = false;
+    for (name, entry) in ProjectEntry::list(projects_dir)? {
+        let root = entry.root_path();
+        let outcome = if !root.exists() {
+            ProjectOpen::RootMissing(root)
+        } else {
+            match open_project(&root, projects_dir, tmux_server) {
+                Ok(result) => ProjectOpen::Opened(result),
+                Err(e) => ProjectOpen::Failed(e),
+            }
+        };
+        restored |= matches!(&outcome, ProjectOpen::Opened(r) if r.sessions_restored > 0);
+        report(&name, &outcome);
+    }
+    if restored {
+        refresh_options(projects_dir, tmux_server);
+    }
+    Ok(())
+}
+
+/// Republish pm's session options, which die with their session.
+fn refresh_options(projects_dir: &Path, tmux_server: Option<&str>) {
+    if let Err(e) = super::tmux_refresh::refresh(projects_dir, tmux_server) {
+        eprintln!("warning: could not publish pm's tmux options: {e}");
+    }
+}
+
+fn open_project(
+    project_root: &Path,
+    projects_dir: &Path,
+    tmux_server: Option<&str>,
+) -> Result<OpenResult> {
     let pm_dir = paths::pm_dir(project_root);
     let config = ProjectConfig::load(&pm_dir)?;
     let project_name = &config.project.name;
@@ -204,7 +268,7 @@ pub fn open(
     // Run doctor's diagnostic checks and warn about state drift before doing
     // any restoration. This surfaces issues like orphaned features or missing
     // branches that `pm open` cannot fix on its own.
-    warn_about_drift(project_root, projects_dir, tmux_server);
+    warn_about_drift(project_root, project_name, projects_dir, tmux_server);
 
     // Backfill hook scripts for projects created before lifecycle hooks existed
     hooks::bootstrap(project_root)?;
@@ -293,13 +357,6 @@ pub fn open(
             tmux_server,
             true,
         )?;
-    }
-
-    // Session options die with their session.
-    if sessions_restored > 0
-        && let Err(e) = super::tmux_refresh::refresh(projects_dir, tmux_server)
-    {
-        eprintln!("warning: could not publish pm's tmux options: {e}");
     }
 
     Ok(OpenResult {
@@ -467,6 +524,108 @@ mod tests {
         // login session NOT recreated (no worktree present)
         assert!(!tmux::has_session(server.name(), &tmux::session_name(&name, "login")).unwrap());
         assert_eq!(result.sessions_restored, 1);
+    }
+
+    #[test]
+    fn open_all_reopens_every_project_and_skips_a_missing_root() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let projects_dir = dir.path().join("registry");
+        let alpha = server.scope("alpha");
+        let alpha_path = dir.path().join(&alpha);
+        init::init(&alpha_path, &projects_dir, None, server.name()).unwrap();
+        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
+            &alpha_path,
+            &projects_dir,
+            "login",
+            server.name(),
+        ))
+        .unwrap();
+        let beta = server.scope("beta");
+        init::init(&dir.path().join(&beta), &projects_dir, None, server.name()).unwrap();
+        ProjectEntry {
+            root: dir.path().join("gone").to_string_lossy().to_string(),
+            main_branch: "main".to_string(),
+            repo_url: None,
+            state_remote: None,
+        }
+        .save(&projects_dir, "ghost")
+        .unwrap();
+        let sessions = [
+            tmux::session_name(&alpha, "main"),
+            tmux::session_name(&alpha, "login"),
+            tmux::session_name(&beta, "main"),
+        ];
+        for s in &sessions {
+            tmux::kill_session(server.name(), s).unwrap();
+        }
+
+        let mut outcomes = Vec::new();
+        open_all(&projects_dir, server.name(), |name, outcome| {
+            let label = match outcome {
+                ProjectOpen::Opened(r) => format!("restored {}", r.sessions_restored),
+                ProjectOpen::RootMissing(_) => "root missing".to_string(),
+                ProjectOpen::Failed(_) => "failed".to_string(),
+            };
+            outcomes.push((name.to_string(), label));
+        })
+        .unwrap();
+
+        for s in &sessions {
+            assert!(
+                tmux::has_session(server.name(), s).unwrap(),
+                "{s} not reopened"
+            );
+        }
+        assert_eq!(
+            outcomes,
+            [
+                ("ghost".to_string(), "root missing".to_string()),
+                (alpha, "restored 2".to_string()),
+                (beta, "restored 1".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn open_all_continues_past_a_project_that_fails() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let projects_dir = dir.path().join("registry");
+        let broken = server.scope("broken");
+        let broken_path = dir.path().join(&broken);
+        init::init(&broken_path, &projects_dir, None, server.name()).unwrap();
+        tmux::kill_session(server.name(), &tmux::session_name(&broken, "main")).unwrap();
+        std::fs::remove_dir_all(paths::main_worktree(&broken_path)).unwrap();
+        let healthy = server.scope("healthy");
+        init::init(
+            &dir.path().join(&healthy),
+            &projects_dir,
+            None,
+            server.name(),
+        )
+        .unwrap();
+        tmux::kill_session(server.name(), &tmux::session_name(&healthy, "main")).unwrap();
+
+        let mut outcomes = Vec::new();
+        open_all(&projects_dir, server.name(), |name, outcome| {
+            let label = match outcome {
+                ProjectOpen::Opened(r) => format!("restored {}", r.sessions_restored),
+                ProjectOpen::RootMissing(_) => "root missing".to_string(),
+                ProjectOpen::Failed(_) => "failed".to_string(),
+            };
+            outcomes.push((name.to_string(), label));
+        })
+        .unwrap();
+
+        assert_eq!(
+            outcomes,
+            [
+                (broken, "failed".to_string()),
+                (healthy.clone(), "restored 1".to_string()),
+            ]
+        );
+        assert!(tmux::has_session(server.name(), &tmux::session_name(&healthy, "main")).unwrap());
     }
 
     #[test]
