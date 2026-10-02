@@ -144,6 +144,20 @@ fn take(path: &Path, socket: &str, wait: bool) -> Result<Option<Lock>> {
 mod tests {
     use super::*;
 
+    /// `attempt` until it yields, for up to 10s. A process another test
+    /// spawns holds a copy of every fd open at the spawn until it execs, so
+    /// a lock just released can read as held for a moment.
+    fn eventually<T>(mut attempt: impl FnMut() -> Option<T>) -> T {
+        let start = std::time::Instant::now();
+        loop {
+            if let Some(value) = attempt() {
+                return value;
+            }
+            assert!(start.elapsed() < std::time::Duration::from_secs(10));
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
     fn socket(name: &str) -> String {
         let dir = paths::global_config_dir().unwrap().join("sockets");
         std::fs::create_dir_all(&dir).unwrap();
@@ -163,9 +177,8 @@ mod tests {
         remove(&socket, first).unwrap();
 
         let _second = try_lock(&socket, "watch").unwrap().unwrap();
-        waiting
-            .try_lock()
-            .expect("the removed file is no longer the lock");
+        // The removed file is no longer the lock.
+        eventually(|| waiting.try_lock().ok());
         assert!(try_lock(&socket, "watch").unwrap().is_none());
     }
 
@@ -178,16 +191,17 @@ mod tests {
             drop(lock(socket, "refresh").unwrap());
             drop(try_lock(socket, "watch").unwrap().unwrap());
         }
-        let _watcher = try_lock(&held, "watch").unwrap().unwrap();
+        let _watcher = eventually(|| try_lock(&held, "watch").unwrap());
         std::fs::remove_file(&gone).unwrap();
         std::fs::remove_file(&held).unwrap();
 
-        prune().unwrap();
-
         let exists =
             |socket: &str| ["watch", "refresh"].map(|kind| path(socket, kind).unwrap().exists());
+        eventually(|| {
+            prune().unwrap();
+            (exists(&gone) == [false, false]).then_some(())
+        });
         assert_eq!(exists(&live), [true, true]);
-        assert_eq!(exists(&gone), [false, false]);
         assert_eq!(exists(&held), [true, true]);
     }
 }
