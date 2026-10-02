@@ -37,8 +37,16 @@ pub enum Commands {
     },
     /// List all registered projects
     List,
-    /// Open/reconstruct tmux sessions for the current project
-    Open,
+    /// Open/reconstruct a project's tmux sessions
+    Open {
+        /// Project name (defaults to current project from CWD)
+        #[arg(long, conflicts_with = "all")]
+        project: Option<String>,
+        /// Open every registered project (e.g. after a reboot); attaches only
+        /// to the current project's main session, if run from inside one
+        #[arg(long)]
+        all: bool,
+    },
     /// Feature management
     #[command(subcommand)]
     Feat(FeatCommands),
