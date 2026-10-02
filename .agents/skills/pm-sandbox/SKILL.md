@@ -6,7 +6,7 @@ description: Exercise a pm build by hand or end to end without touching the real
 # pm sandbox
 
 - `scripts/sandbox` provides an isolated `$HOME`, a private tmux server, and
-  the built `pm` plus recording `claude`/`codex` shims on `PATH`.
+  the built `pm` plus recording `claude`/`codex`/`opencode` shims on `PATH`.
   `scripts/sandbox --help` is the reference. Usual loop: `up`,
   `run [-C DIR] -- pm …` (`DIR` is relative to the sandbox `$HOME`),
   `status`, `down`.
@@ -25,7 +25,9 @@ description: Exercise a pm build by hand or end to end without touching the real
   server (`list-panes -a -F '#{pane_pid}'` and their descendants), or let
   `down` stop them.
 - `status` prints the harness invocations the shims recorded. Use
-  `up --real` only when the behaviour under test needs a real harness.
+  `up --real` only when the behaviour under test needs a real harness; a
+  `Harness` seam change needs every one (`AGENTS.md`, Sandbox and smoke
+  tests).
   Claude Code there authenticates with the user's long-lived token, which
   `--real` loads from outside the sandbox (`--help` says where); never copy
   it into the sandbox or print it.
