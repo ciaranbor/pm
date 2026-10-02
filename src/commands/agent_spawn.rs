@@ -281,6 +281,7 @@ fn spawn_session_with_config(
             true,
         )?
     };
+    tmux::mark_agent_pane(params.tmux_server, &window_target)?;
 
     // Register before the command is sent: the harness's SessionStart hook
     // reads the entry, and a hook that fires first would find no agent —

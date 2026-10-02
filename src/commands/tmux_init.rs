@@ -51,7 +51,7 @@ pub const TREE_FORMAT: &str = concat!(
     "#{?session_grouped, (group #{session_group}: #{session_group_list}),}",
     "#{?session_attached, (attached),}",
     "#{?@pm_activity, #{@pm_activity},}",
-    "#{?@pm_badge, #{@pm_badge}#{?@pm_reason,: #{@pm_reason},},}",
+    "#{?@pm_badge, #{@pm_badge}#{?@pm_reason, #{@pm_reason},},}",
     "}}",
 );
 

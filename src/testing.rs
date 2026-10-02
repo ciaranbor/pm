@@ -706,6 +706,30 @@ impl TestServer {
         assert!(status.success(), "tmux set-environment {key}");
     }
 
+    /// The id (`%N`) of the pane `target` names; a window names its active
+    /// pane.
+    pub fn pane_id(&self, target: &str) -> String {
+        self.tmux_stdout(&["display-message", "-p", "-t", target, "#{pane_id}"])
+    }
+
+    /// Split a new pane, running a shell, in front of `window`'s first pane,
+    /// so it becomes pane 0 and the active pane, as a user splitting an
+    /// agent's window might. Returns its id.
+    pub fn split_before(&self, window: &str) -> String {
+        let first = format!("{window}.0");
+        self.tmux_stdout(&["split-window", "-b", "-P", "-F", "#{pane_id}", "-t", &first])
+    }
+
+    pub fn tmux_stdout(&self, args: &[&str]) -> String {
+        let output = std::process::Command::new("tmux")
+            .args(["-L", self.name().unwrap()])
+            .args(args)
+            .output()
+            .expect("run tmux");
+        assert!(output.status.success(), "tmux {args:?}");
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
     pub fn wait_for_pane_text(&self, target: &str, needle: &str) {
         let mut last = String::new();
         for _ in 0..500 {
@@ -825,14 +849,16 @@ impl TestServer {
         feature: &str,
         agent_name: &str,
     ) -> String {
-        crate::tmux::new_window(
+        let target = crate::tmux::new_window(
             self.name(),
             session_name,
             &project_root.join(feature),
             Some(agent_name),
             true,
         )
-        .unwrap()
+        .unwrap();
+        crate::tmux::mark_agent_pane(self.name(), &target).unwrap();
+        target
     }
 
     fn register_fake_agent(&self, project_root: &std::path::Path, feature: &str, agent_name: &str) {

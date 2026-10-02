@@ -1,6 +1,6 @@
 //! `pm tmux jump`: what choosing an item in pm's tree does. A window or pane
 //! is switched to as chosen; a feature's or main's session goes to the
-//! window of the agent its attention names — the one that set `blocked`, one
+//! pane of the agent its attention names — the one that set `blocked`, one
 //! asking, or a dead agent whose window is still open — and otherwise to the
 //! session.
 
@@ -48,9 +48,9 @@ fn destination(snapshot: &Snapshot, target: &str) -> String {
         .find(|(s, _, _)| *s == session)
         .and_then(|(_, attention, agents)| {
             let agent = attention.agent.as_deref()?;
-            agents.iter().find(|a| a.name == agent)?.window.clone()
+            agents.iter().find(|a| a.name == agent)?.pane.clone()
         })
-        .map_or_else(|| target.to_string(), |window| format!("={window}"))
+        .unwrap_or_else(|| target.to_string())
 }
 
 #[cfg(test)]
@@ -83,7 +83,7 @@ mod tests {
             Some("reviewer"),
         )
         .unwrap();
-        assert_eq!(destination(&snapshot(), &item), format!("={reviewer}"));
+        assert_eq!(destination(&snapshot(), &item), server.pane_id(&reviewer));
 
         let window = format!("={session}:0.");
         assert_eq!(
@@ -106,7 +106,7 @@ mod tests {
 
         assert_eq!(
             destination(&snapshot, &format!("={session}:")),
-            format!("={reviewer}")
+            server.pane_id(&reviewer)
         );
         let main = format!("={}:", tmux::session_name(&project_name, "main"));
         assert_eq!(destination(&snapshot, &main), main);
@@ -128,7 +128,47 @@ mod tests {
 
         assert_eq!(
             destination(&snapshot, &format!("={session}:")),
-            format!("={window}")
+            server.pane_id(&window)
+        );
+    }
+
+    #[test]
+    fn an_agent_is_read_and_reached_through_its_own_pane_when_its_window_is_split() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project);
+        let session = tmux::session_name(&project_name, "login");
+        let window = server.spawn_idle_fake_agent(&project, &session, "login", "implementer");
+        let agent_pane = server.pane_id(&window);
+        let editor = server.split_before(&window);
+        assert_eq!(
+            server.pane_id(&window),
+            editor,
+            "the split is the active pane"
+        );
+        assert_eq!(server.pane_id(&format!("{window}.0")), editor);
+        feat_status(
+            &project,
+            "login",
+            Progress::Blocked,
+            Some("which DB?"),
+            Some("implementer"),
+        )
+        .unwrap();
+
+        let snapshot = attention::all(&projects_dir, server.name()).unwrap();
+
+        let agent = &snapshot.features[0].agents[0];
+        assert_eq!(agent.state, attention::AgentState::Idle);
+        assert_eq!(agent.window.as_deref(), Some(window.as_str()));
+        assert_eq!(destination(&snapshot, &format!("={session}:")), agent_pane);
+        let processes = tmux::pane_processes(server.name(), &window).unwrap();
+        assert!(
+            processes.iter().any(|p| p
+                .command
+                .contains(crate::commands::hooks_install::PM_HOOK_MARKER)),
+            "{processes:?}"
         );
     }
 }

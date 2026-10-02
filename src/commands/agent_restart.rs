@@ -152,7 +152,7 @@ fn callers_agent<'a>(
         let Ok(Some(window)) = tmux::find_window(tmux_server, &session_name, name) else {
             return false;
         };
-        tmux::pane_processes(tmux_server, &window)
+        tmux::window_processes(tmux_server, &window)
             .unwrap_or_default()
             .iter()
             .any(|p| p.pid == pid)

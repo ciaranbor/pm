@@ -46,8 +46,8 @@ be on the `PATH` the server started with; set `@pm-bin` to its full path
 otherwise. Init only adds to your config and is safe to re-run on a reload.
 It makes prefix `s` / `w` pm's tree, puts an agent badge in each window's
 status entry, and keeps pm's state current on the server. The summary of
-what needs you (`2 blocked · 1 ready`) goes where you put it; init leaves
-`status-right` alone, as it is your theme's:
+what needs you (each attention kind's glyph and count) goes where you put
+it; init leaves `status-right` alone, as it is your theme's:
 
 ```tmux
 set -g status-right '#{E:@pm_summary} %H:%M'
@@ -120,13 +120,13 @@ dialog (a permission prompt, a question, a plan to approve) or sits at its
 prompt where no message will wake it (you interrupted it, an API error ended
 its turn). pm surfaces all of it in tmux:
 
-- the status line's summary (`2 blocked · 1 ready`), and an alert on every
-  attached client when a feature becomes blocked or ready, or an agent —
-  `main` included — starts asking;
+- the status line's summary (a glyph and count per kind), and an alert on
+  every attached client when a feature becomes blocked or ready, or an
+  agent — `main` included — starts asking;
 - pm's tree (prefix `s` / `w`), tmux's own tree with each session's
-  activity (working, or how long it has been quiet), attention and reason,
-  and each agent's badge. Enter on a session goes straight to the agent it
-  is waiting on;
+  activity (working, or how long it has been quiet), attention glyph and
+  reason, and each agent's badge. Enter on a session goes straight to the
+  pane of the agent it is waiting on;
 - each window's badge: the agent busy, asking, unarmed, waiting on
   background work, idle, dead or stopped, and an envelope for unread
   messages. A `main` session carries its main agent's badge.
@@ -151,7 +151,10 @@ Type straight into an agent's window to answer a question, redirect, or
 add work. Typing into a blocked feature's agent sets the feature back to
 `wip`. Agents never sit idle: each waits for its next message and acts on
 it ([Agents as message processors](#agents-as-message-processors)), so
-`pm msg send <agent> "…"` from any pane also reaches it.
+`pm msg send <agent> "…"` from any pane also reaches it. You can split an
+agent's window to work beside it: pm watches and jumps to the pane it
+started the agent in, whichever pane is active. Restarting or stopping the
+agent closes the window, your panes with it.
 
 Agents also message across projects: `pm msg send main --project tools
 "…"` reaches the `tools` project's orchestrator, so an agent can ask about
@@ -597,11 +600,27 @@ Plugin options, set before `run-shell 'pm tmux init'`:
 | `@pm-bind-tree` | on | turn prefix `s` / `w` into pm's tree, sorted by name, when they run tmux's default `choose-tree` |
 | `@pm-attention-key` | unset | a prefix key opening pm's tree with only the sessions needing attention |
 
-The badge glyphs are `nf-fa-gear` (busy), `nf-fa-question_circle`
-(asking), `nf-fa-bell_slash` (unarmed), `nf-fa-spinner` (background),
-`nf-fa-hourglass_half` (idle), `nf-md-skull` (dead), `nf-fa-stop` (stopped),
-then `nf-fa-envelope` for unread messages. With `@pm-bind-tree off`, or to
-put the tree on another key:
+Badges are Nerd Font glyphs: an agent window's shows its [agent
+state](#attention-view), a feature session's the attention it needs, with
+the reason after it in pm's tree. A kind that means what a state means
+shares its glyph.
+
+| Glyph | Colour | Agent state | Attention |
+|---|---|---|---|
+| `nf-fa-hand` | red | | `blocked` |
+| `nf-fa-question_circle` | red | `asking` | `asking` |
+| `nf-md-broom` | grey | | `cleanup` |
+| `nf-fa-check_circle` | green | | `ready` |
+| `nf-md-skull` | red | `dead` | `dead` |
+| `nf-fa-bell_slash` | magenta | `unarmed` | `unarmed` |
+| `nf-fa-pause` | yellow | | `stalled` |
+| `nf-fa-gear` | green | `busy` | |
+| `nf-fa-spinner` | green | `background` | |
+| `nf-fa-hourglass_half` | grey | `idle` | |
+| `nf-fa-stop` | grey | `stopped`, `closed` | |
+| `nf-fa-envelope` | yellow | after the state: unread messages | |
+
+With `@pm-bind-tree off`, or to put the tree on another key:
 
 ```tmux
 bind T choose-tree -Zs -O name -F '#{E:@pm_tree_format}' "run-shell \"pm tmux jump --client '#{client_name}' '%%'\""
@@ -616,14 +635,14 @@ unset, text is escaped for formats, and each name is set at one scope only:
 | feature or main session | `@pm_project`, `@pm_feature` | names; a `main` session has no `@pm_feature` |
 | | `@pm_progress` | `wip`, `blocked` or `ready`; unset on `main` |
 | | `@pm_attention` | the attention kind; unset for `none` |
-| | `@pm_reason` | the attention detail; unset without one |
-| | `@pm_badge` | the kind, styled (`#[fg=red,bold]blocked#[default]`), unset for `none`; on `main`, its main agent's badge |
+| | `@pm_reason` | the attention detail, or for `stalled` what the attention view shows; unset without one |
+| | `@pm_badge` | the kind's glyph, styled; unset for `none`; on `main`, its main agent's badge |
 | | `@pm_activity` | the busy glyph while the scope is working, else how long it has been quiet (`2h`, styled); unset under 10 minutes |
 | agent window | `@pm_agent` | the agent's name |
 | | `@pm_agent_state` | an [agent state](#attention-view) |
 | | `@pm_unread` | unread message count |
 | | `@pm_agent_badge` | the badge, styled; it resets with `#[default]`, so placed anywhere but the start of a format, follow it with your theme's style |
-| global | `@pm_summary` | e.g. `2 blocked · 1 ready`, styled; unset when nothing needs attention |
+| global | `@pm_summary` | each kind's glyph and how many scopes need it, styled and joined by ` · `; unset when nothing needs attention |
 | | `@pm_count` | scopes (features and mains) needing attention |
 | | `@pm_tree_format` | pm's `choose-tree` line format, set by `pm tmux init` |
 

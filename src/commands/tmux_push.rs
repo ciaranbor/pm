@@ -69,6 +69,7 @@ impl AgentWindow {
             state,
             unread,
             window: None,
+            pane: None,
             waiting: None,
         };
         let scope = options::Scope::PaneWindow(&self.pane);

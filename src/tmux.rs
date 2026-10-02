@@ -345,66 +345,92 @@ impl ProcessTable {
     }
 }
 
-/// The processes running in a window's first pane: the pane's own and its
-/// descendants, which is where a harness started from the pane's shell is.
-pub fn pane_processes(server: Option<&str>, target: &str) -> Result<Vec<Process>> {
-    let panes = run_tmux(server, &["list-panes", "-t", target, "-F", "#{pane_pid}"])?;
-    let Some(root) = panes
-        .lines()
-        .next()
-        .and_then(|pid| pid.trim().parse::<u32>().ok())
-    else {
-        return Ok(Vec::new());
-    };
-    Ok(ProcessTable::read()?.tree(root))
+/// The pane option that marks the pane pm started an agent's harness in.
+/// A user may split an agent's window and run anything beside it, and tmux
+/// renumbers panes as they are split, so neither the active pane nor the
+/// first is necessarily the agent's.
+const AGENT_PANE: &str = "@pm_agent_pane";
+
+/// Mark the active pane of `window`, a window pm just made for an agent,
+/// as the agent's pane.
+pub fn mark_agent_pane(server: Option<&str>, window: &str) -> Result<()> {
+    run_tmux(server, &["set-option", "-p", "-t", window, AGENT_PANE, "1"])?;
+    Ok(())
 }
 
-/// A window's first pane, as [`first_panes`] lists it.
+/// The processes running in a window's agent pane: the pane's own and its
+/// descendants, which is where a harness started from the pane's shell is.
+pub fn pane_processes(server: Option<&str>, target: &str) -> Result<Vec<Process>> {
+    let output = run_tmux(server, &["list-panes", "-t", target, "-F", &pane_format()])?;
+    let Some(pane) = agent_panes_in(&output).into_iter().next() else {
+        return Ok(Vec::new());
+    };
+    Ok(ProcessTable::read()?.tree(pane.pid))
+}
+
+/// The processes running in any pane of `window`.
+pub fn window_processes(server: Option<&str>, window: &str) -> Result<Vec<Process>> {
+    let pids = run_tmux(server, &["list-panes", "-t", window, "-F", "#{pane_pid}"])?;
+    let table = ProcessTable::read()?;
+    Ok(pids
+        .lines()
+        .filter_map(|pid| pid.trim().parse().ok())
+        .flat_map(|pid| table.tree(pid))
+        .collect())
+}
+
+/// A window's agent pane, as [`agent_panes`] lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pane {
     pub session: String,
     pub window_name: String,
     /// The window's target, `session:index`.
     pub window: String,
+    /// The pane's id, `%N`.
+    pub id: String,
     pub pid: u32,
 }
 
-/// The first pane of every window on the server, from one `list-panes -a`.
+/// What [`agent_panes_in`] reads of each pane.
+fn pane_format() -> String {
+    format!(
+        "#{{session_name}}\t#{{window_name}}\t#{{session_name}}:#{{window_index}}\t#{{pane_id}}\t#{{pane_pid}}\t#{{{AGENT_PANE}}}"
+    )
+}
+
+/// The agent pane of every window on the server, from one `list-panes -a`.
 /// No server running lists none.
-pub fn first_panes(server: Option<&str>) -> Result<Vec<Pane>> {
-    let output = match run_tmux(
-        server,
-        &[
-            "list-panes",
-            "-a",
-            "-F",
-            "#{session_name}\t#{window_name}\t#{session_name}:#{window_index}\t#{pane_pid}",
-        ],
-    ) {
-        Ok(output) => output,
-        Err(PmError::Tmux(msg)) if no_server(&msg) => return Ok(Vec::new()),
-        Err(e) => return Err(e),
-    };
+pub fn agent_panes(server: Option<&str>) -> Result<Vec<Pane>> {
+    match run_tmux(server, &["list-panes", "-a", "-F", &pane_format()]) {
+        Ok(output) => Ok(agent_panes_in(&output)),
+        Err(PmError::Tmux(msg)) if no_server(&msg) => Ok(Vec::new()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Each window's marked pane in `output`, else its first, in window order.
+fn agent_panes_in(output: &str) -> Vec<Pane> {
     let mut panes: Vec<Pane> = Vec::new();
     for line in output.lines() {
-        let mut fields = line.split('\t');
-        let (Some(session), Some(window_name), Some(window), Some(pid)) =
-            (fields.next(), fields.next(), fields.next(), fields.next())
-        else {
+        let fields: Vec<&str> = line.split('\t').collect();
+        let [session, window_name, window, id, pid, marked] = fields[..] else {
             continue;
         };
         let Ok(pid) = pid.parse() else { continue };
-        if panes.iter().any(|p| p.window == window) {
-            continue;
-        }
-        panes.push(Pane {
+        let pane = Pane {
             session: session.to_string(),
             window_name: window_name.to_string(),
             window: window.to_string(),
+            id: id.to_string(),
             pid,
-        });
+        };
+        match panes.iter().position(|p| p.window == window) {
+            None => panes.push(pane),
+            Some(at) if !marked.is_empty() => panes[at] = pane,
+            Some(_) => {}
+        }
     }
-    Ok(panes)
+    panes
 }
 
 /// Whether a tmux error says there is no server to talk to (the message
@@ -476,6 +502,43 @@ mod tests {
     use super::*;
     use crate::testing::TestServer;
     use tempfile::tempdir;
+
+    #[test]
+    fn a_windows_processes_are_those_of_every_pane() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let session = server.scope("window-processes");
+        create_session(server.name(), &session, dir.path()).unwrap();
+        let window = format!("{session}:0");
+        server.split_before(&window);
+        let pids = server.tmux_stdout(&["list-panes", "-t", &window, "-F", "#{pane_pid}"]);
+
+        let processes = window_processes(server.name(), &window).unwrap();
+
+        for pid in pids.lines() {
+            let pid: u32 = pid.parse().unwrap();
+            assert!(
+                processes.iter().any(|p| p.pid == pid),
+                "{pid}: {processes:?}"
+            );
+        }
+        assert_eq!(pids.lines().count(), 2);
+    }
+
+    #[test]
+    fn a_window_is_read_by_its_marked_pane_else_its_first() {
+        let output = "s\tw\ts:1\t%1\t11\t\n\
+                      s\tw\ts:1\t%2\t12\t1\n\
+                      s\tw\ts:1\t%3\t13\t\n\
+                      s\tx\ts:2\t%4\t14\t\n\
+                      s\tx\ts:2\t%5\t15\t\n";
+        let panes = agent_panes_in(output);
+        let read: Vec<(&str, &str)> = panes
+            .iter()
+            .map(|p| (p.window.as_str(), p.id.as_str()))
+            .collect();
+        assert_eq!(read, [("s:1", "%2"), ("s:2", "%4")]);
+    }
 
     #[test]
     fn create_session_is_visible_in_list() {
