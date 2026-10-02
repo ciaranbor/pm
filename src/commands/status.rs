@@ -1,5 +1,5 @@
 //! `pm status`: project health — the header, the project's
-//! [`super::attention`] rows, then doctor's issues. PR state is what `pm
+//! [`super::attention`] rows, then doctor's issues and warnings. PR state is what `pm
 //! feat sync` last recorded: nothing here calls `gh`, so PR drift is left to
 //! `pm doctor`.
 
@@ -9,7 +9,7 @@ use crate::commands::{attention, doctor, feat_status_view};
 use crate::error::Result;
 
 /// Show a project dashboard: name, root, what each feature needs, and
-/// doctor issues.
+/// doctor's issues and warnings.
 pub fn status(
     project_root: &Path,
     projects_dir: &Path,
@@ -33,7 +33,11 @@ pub fn status(
         lines.push(String::new());
         lines.push("Issues:".to_string());
         lines.extend(report.issue_lines().map(str::to_string));
-        lines.extend(report.warnings().iter().cloned());
+    }
+    if !report.warnings().is_empty() {
+        lines.push(String::new());
+        lines.push("Warnings:".to_string());
+        lines.extend(report.warnings().iter().map(|w| format!("  {w}")));
     }
 
     Ok(lines)
@@ -133,6 +137,19 @@ mod tests {
         let lines = status(&project_path, &projects_dir, server.name()).unwrap();
         assert!(lines.iter().any(|l| l.contains("Issues:")));
         assert!(lines.iter().any(|l| l.contains("tmux session")));
+    }
+
+    #[test]
+    fn status_shows_warnings_without_issues() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
+        std::fs::write(projects_dir.join("bad.toml"), "root = ").unwrap();
+
+        let lines = status(&project_path, &projects_dir, server.name()).unwrap();
+        assert!(!lines.iter().any(|l| l.contains("Issues:")), "{lines:?}");
+        let warnings = lines.iter().position(|l| l == "Warnings:").unwrap();
+        assert!(lines[warnings + 1].contains("'bad'"), "{lines:?}");
     }
 
     #[test]
