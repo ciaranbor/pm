@@ -16,7 +16,7 @@ use crate::error::Result;
 use crate::harness::Harness;
 use crate::state::agent::{AgentEntry, AgentRegistry};
 use crate::state::paths;
-use crate::state::project::{HarnessConfig, harness_config};
+use crate::state::project::HarnessConfig;
 use crate::tmux::{self, Pane, Process, ProcessTable};
 
 use super::hooks_install::runs_stop_hook;
@@ -89,11 +89,6 @@ pub fn liveness(
     }
 }
 
-/// Whether `processes` include the current one.
-pub fn runs_this_process(processes: &[Process]) -> bool {
-    processes.iter().any(|p| p.pid == std::process::id())
-}
-
 /// Whether an agent's pane processes show it waiting in pm's Stop hook,
 /// between turns.
 pub fn is_idle(processes: &[Process]) -> bool {
@@ -133,39 +128,6 @@ impl Windows {
     }
 }
 
-/// The running agents of `scope` that are mid-turn, other than the one this
-/// process runs in. A dead agent is not among them: it has no turn to lose.
-pub fn busy_in_scope(
-    project_root: &Path,
-    project_name: &str,
-    scope: &str,
-    tmux_server: Option<&str>,
-) -> Vec<String> {
-    let Ok(registry) = AgentRegistry::load(&paths::agents_dir(project_root), scope) else {
-        return Vec::new();
-    };
-    let Ok(windows) = Windows::read(tmux_server) else {
-        return Vec::new();
-    };
-    let config = harness_config(Some(project_root));
-    let session = tmux::session_name(project_name, scope);
-    registry
-        .agents
-        .into_iter()
-        .filter(|(_, entry)| entry.active)
-        .filter(|(_, entry)| {
-            windows
-                .find(&session, &entry.window_name)
-                .is_some_and(|pane| {
-                    let processes = windows.processes(pane);
-                    !processes.as_deref().is_some_and(runs_this_process)
-                        && liveness(processes.as_deref(), entry.harness, &config) == Liveness::Busy
-                })
-        })
-        .map(|(name, _)| name)
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,11 +158,6 @@ mod tests {
         assert_eq!(state("busy"), Liveness::Busy);
         assert_eq!(state("idle"), Liveness::Idle);
         assert_eq!(state("dead"), Liveness::Dead);
-
-        assert_eq!(
-            busy_in_scope(&project, &project_name, "login", server.name()),
-            ["busy"]
-        );
     }
 
     #[test]

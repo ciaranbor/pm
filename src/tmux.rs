@@ -73,12 +73,6 @@ pub fn kill_session(server: Option<&str>, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Rename a tmux session.
-pub fn rename_session(server: Option<&str>, old_name: &str, new_name: &str) -> Result<()> {
-    run_tmux(server, &["rename-session", "-t", old_name, new_name])?;
-    Ok(())
-}
-
 /// List all tmux session names.
 pub fn list_sessions(server: Option<&str>) -> Result<Vec<String>> {
     let result = run_tmux(server, &["list-sessions", "-F", "#{session_name}"]);
@@ -383,10 +377,6 @@ impl ProcessTable {
         }
         found
     }
-
-    fn contains(&self, process: &Process) -> bool {
-        self.0.iter().any(|(live, _)| live == process)
-    }
 }
 
 /// The processes running in a window's first pane: the pane's own and its
@@ -455,26 +445,6 @@ pub fn first_panes(server: Option<&str>) -> Result<Vec<Pane>> {
 /// varies by platform).
 fn no_server(msg: &str) -> bool {
     msg.contains("no server running") || msg.contains("error connecting")
-}
-
-/// Wait until every one of `processes` has exited, for at most `limit`.
-/// Returns those still running.
-pub fn wait_for_exit(processes: &[Process], limit: std::time::Duration) -> Vec<Process> {
-    let started = std::time::Instant::now();
-    loop {
-        let Ok(table) = ProcessTable::read() else {
-            return processes.to_vec();
-        };
-        let left: Vec<Process> = processes
-            .iter()
-            .filter(|process| table.contains(process))
-            .cloned()
-            .collect();
-        if left.is_empty() || started.elapsed() >= limit {
-            return left;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
 }
 
 /// Get the current command running in the first pane of a window.
@@ -687,61 +657,6 @@ mod tests {
             false,
         );
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn a_killed_windows_processes_are_waited_for() {
-        let server = TestServer::new();
-        let dir = tempdir().unwrap();
-        let name = server.scope("exit-test");
-        create_session(server.name(), &name, dir.path()).unwrap();
-        let target = new_window(server.name(), &name, dir.path(), Some("agent"), true).unwrap();
-        // A child of the pane's shell, as a harness is.
-        send_keys(server.name(), &target, "sleep 999").unwrap();
-        let started = (0..500).any(|_| {
-            let running = pane_command(server.name(), &target).unwrap() == "sleep";
-            if !running {
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
-            running
-        });
-        assert!(started, "sleep never started in {target}");
-        let processes = pane_processes(server.name(), &target).unwrap();
-        assert!(processes.len() > 1, "{processes:?}");
-        assert_eq!(
-            wait_for_exit(&processes, std::time::Duration::from_millis(100)),
-            processes
-        );
-
-        kill_window(server.name(), &target).unwrap();
-
-        assert_eq!(
-            wait_for_exit(&processes, std::time::Duration::from_secs(10)),
-            Vec::<Process>::new()
-        );
-        kill_session(server.name(), &name).unwrap();
-    }
-
-    #[test]
-    fn a_reused_pid_does_not_count_as_the_process_still_running() {
-        let own = ProcessTable::read()
-            .unwrap()
-            .0
-            .into_iter()
-            .map(|(process, _)| process)
-            .find(|process| process.pid == std::process::id())
-            .unwrap();
-        let earlier = Process {
-            pid: own.pid,
-            started: "an earlier start".to_string(),
-            command: own.command.clone(),
-        };
-
-        assert_eq!(
-            wait_for_exit(std::slice::from_ref(&own), std::time::Duration::ZERO),
-            [own]
-        );
-        assert_eq!(wait_for_exit(&[earlier], std::time::Duration::ZERO), []);
     }
 
     #[test]

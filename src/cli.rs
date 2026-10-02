@@ -601,17 +601,6 @@ pub enum FeatCommands {
     /// The feature's summary for the orchestrator (kept in pm state, not the branch)
     #[command(subcommand)]
     Summary(SummaryCommands),
-    /// Rename a feature (branch, worktree, tmux session, state, agent sessions)
-    Rename {
-        /// New feature name
-        new_name: String,
-        /// Current feature name (detected from CWD if omitted)
-        #[arg(long)]
-        old_name: Option<String>,
-        /// Interrupt agents that are mid-turn, and tell them to resume
-        #[arg(long)]
-        force: bool,
-    },
     /// Check out a PR for review (fetch branch + worktree + tmux session)
     Review {
         /// PR number or GitHub PR URL
