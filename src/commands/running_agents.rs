@@ -34,13 +34,13 @@ pub struct RunningAgent {
     pub window: String,
 }
 
-/// The agents of `scope` that are running: active, with a window.
-/// Advisory — state that cannot be read names no agent.
+/// The agents of `scope` that are running: active, with a window in
+/// `windows`. Advisory — state that cannot be read names no agent.
 pub fn running_in_scope(
     project_root: &Path,
     project_name: &str,
     scope: &str,
-    tmux_server: Option<&str>,
+    windows: &Windows,
 ) -> Vec<RunningAgent> {
     let Ok(registry) = AgentRegistry::load(&paths::agents_dir(project_root), scope) else {
         return Vec::new();
@@ -51,7 +51,7 @@ pub fn running_in_scope(
         .into_iter()
         .filter(|(_, entry)| entry.active)
         .filter_map(|(name, entry)| {
-            let window = tmux::find_window(tmux_server, &session, &entry.window_name).ok()??;
+            let window = windows.find(&session, &entry.window_name)?.window.clone();
             Some(RunningAgent {
                 name,
                 entry,

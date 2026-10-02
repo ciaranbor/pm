@@ -10,7 +10,7 @@ use crate::harness::{Harness, InUse, SessionStore};
 use crate::state::paths;
 use crate::state::project::{GlobalConfig, HarnessConfig, ProjectConfig, harness_config_in};
 
-use super::running_agents::running_in_scope;
+use super::running_agents::{Windows, running_in_scope};
 
 pub struct MigrateParams<'a> {
     pub harness: Harness,
@@ -119,11 +119,14 @@ fn sessions_in_use(project_root: &Path, harness: Harness, tmux_server: Option<&s
         .filter_map(|name| name.strip_suffix(".toml").map(str::to_string))
         .collect();
     scopes.sort();
+    let Ok(windows) = Windows::read(tmux_server) else {
+        return Vec::new();
+    };
 
     scopes
         .iter()
         .flat_map(|scope| {
-            running_in_scope(project_root, &config.project.name, scope, tmux_server)
+            running_in_scope(project_root, &config.project.name, scope, &windows)
                 .into_iter()
                 .filter(|agent| {
                     agent.entry.harness == harness && !agent.entry.session_id.is_empty()
