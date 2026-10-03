@@ -10,8 +10,8 @@
 //! and kept beside the devices file; a device registers against its public
 //! half, so replacing the key strands every subscription.
 //!
-//! A worker thread sends, so a slow push service never holds up the
-//! poller. A push service answering 404 or 410 has dropped the
+//! Where a push may go is the [`policy`]'s to say. A worker thread sends,
+//! so a slow push service never holds up the poller. A push service answering 404 or 410 has dropped the
 //! subscription, and so does pm.
 
 use std::path::{Path, PathBuf};
@@ -30,6 +30,10 @@ use crate::fs_utils::write_atomic;
 use crate::state::devices::{Devices, Push, Scope};
 
 use super::log;
+
+pub mod policy;
+
+use policy::Policy;
 
 const KEY_NAME: &str = "vapid.pem";
 
@@ -71,7 +75,7 @@ pub(super) fn public_key(key: &ES256KeyPair) -> String {
 
 /// A subscription as the app sends it: the Web Push `PushSubscription`
 /// JSON shape. Checked before it is stored, so a push can't fail on it.
-pub(super) fn subscription(body: &str) -> std::result::Result<Push, String> {
+pub(super) fn subscription(body: &str, policy: &Policy) -> std::result::Result<Push, String> {
     #[derive(serde::Deserialize)]
     struct Keys {
         p256dh: String,
@@ -83,8 +87,8 @@ pub(super) fn subscription(body: &str) -> std::result::Result<Push, String> {
         keys: Keys,
     }
     let s: Subscription = serde_json::from_str(body).map_err(|e| e.to_string())?;
-    if !s.endpoint.starts_with("https://") || s.endpoint.parse::<http::Uri>().is_err() {
-        return Err("endpoint must be an https URL".into());
+    if let Some(refusal) = policy.refusal(&s.endpoint) {
+        return Err(refusal);
     }
     let push = Push {
         endpoint: s.endpoint,
@@ -127,17 +131,22 @@ pub(super) struct Pusher {
 }
 
 impl Pusher {
-    pub(super) fn start(devices: PathBuf, key: ES256KeyPair) -> Self {
+    pub(super) fn start(devices: PathBuf, key: ES256KeyPair, policy: Policy) -> Self {
         let (batches, rx) = mpsc::channel::<Vec<Transition>>();
         std::thread::spawn(move || {
-            let agent = ureq::Agent::new_with_config(
-                ureq::Agent::config_builder()
-                    .http_status_as_error(false)
-                    .timeout_global(Some(Duration::from_secs(30)))
-                    .build(),
+            let config = ureq::Agent::config_builder()
+                .http_status_as_error(false)
+                .timeout_global(Some(Duration::from_secs(30)))
+                .max_redirects(0)
+                .proxy(None)
+                .build();
+            let agent = ureq::Agent::with_parts(
+                config,
+                ureq::unversioned::transport::DefaultConnector::new(),
+                policy.resolver(),
             );
             for transitions in rx {
-                if let Err(e) = deliver(&agent, &devices, &key, &transitions) {
+                if let Err(e) = deliver(&agent, &devices, &key, &policy, &transitions) {
                     log(&format!("push: {e}"));
                 }
             }
@@ -156,6 +165,7 @@ fn deliver(
     agent: &ureq::Agent,
     devices: &Path,
     key: &ES256KeyPair,
+    policy: &Policy,
     transitions: &[Transition],
 ) -> Result<()> {
     let paired = Devices::load(devices)?;
@@ -167,6 +177,10 @@ fn deliver(
         else {
             continue;
         };
+        if let Some(refusal) = policy.refusal(&push.endpoint) {
+            log(&format!("{name} push: not sent: {refusal}"));
+            continue;
+        }
         for transition in transitions {
             match send(agent, key, push, transition) {
                 Ok(status) if (200..300).contains(&status) => {}

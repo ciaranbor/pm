@@ -245,6 +245,19 @@ over the tailnet when opened. A push service answering that a
 subscription is gone drops it. Deleting `vapid.pem` strands every
 subscription: the app subscribes again only once re-paired.
 
+A subscription must be https on a known push service — Google's
+(`fcm.googleapis.com`) or `ntfy.sh` — so a token can't aim `pm serve` at
+a service on the tailnet or the Mac. A self-hosted distributor's host goes
+in the global config, read as `pm serve` starts:
+
+```toml
+[serve]
+push_hosts = ["ntfy.example.org"]
+```
+
+Pushes go only to public addresses, whatever a host resolves to, and
+follow no redirect.
+
 The API is under `/v1`; every path needs the `read` scope, and only
 `push` takes anything but `GET`:
 

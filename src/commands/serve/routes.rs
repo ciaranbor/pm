@@ -139,7 +139,7 @@ fn push_route(
             let body = serde_json::json!({ "vapid": vapid });
             Ok(ok(JSON, body.to_string()))
         }
-        "PUT" => match push::subscription(body) {
+        "PUT" => match push::subscription(body, &config.push) {
             Ok(push) => {
                 set(Some(push))?;
                 Ok(no_content())

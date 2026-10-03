@@ -41,6 +41,7 @@ mod transcript;
 
 use events::Hub;
 use push::Pusher;
+pub use push::policy::Policy as PushPolicy;
 use routes::Reply;
 
 /// The most of a request body read; a push subscription is well under it.
@@ -61,6 +62,8 @@ pub struct Config {
     pub heartbeat: Duration,
     /// How often a stream watching an agent reads its conversation.
     pub transcript_poll: Duration,
+    /// Where a push may be sent.
+    pub push: PushPolicy,
 }
 
 impl Config {
@@ -72,6 +75,7 @@ impl Config {
             poll: Duration::from_secs(3),
             heartbeat: Duration::from_secs(25),
             transcript_poll: Duration::from_secs(1),
+            push: PushPolicy::new(&[]),
         }
     }
 }
@@ -100,7 +104,7 @@ impl Server {
         Ok(Arc::new(Self {
             http,
             vapid: push::public_key(&key),
-            pusher: Pusher::start(config.devices.clone(), key),
+            pusher: Pusher::start(config.devices.clone(), key, config.push.clone()),
             config,
             hub: Hub::new(&snapshot)?,
             watch: Mutex::new(Watch::start(&snapshot)),

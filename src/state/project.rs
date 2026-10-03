@@ -118,6 +118,17 @@ pub struct GlobalConfig {
     pub agents: AgentsConfig,
     #[serde(default, skip_serializing_if = "is_default")]
     pub harness: HarnessConfig,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub serve: ServeConfig,
+}
+
+/// `pm serve`'s settings; global only, as the server is the machine's.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ServeConfig {
+    /// Push-service hosts a device's subscription may name, beyond the
+    /// known ones (`commands::serve::PushPolicy`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub push_hosts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

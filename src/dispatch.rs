@@ -1141,10 +1141,15 @@ fn dispatch_serve(
     use pm::state::devices::Devices;
     let devices = Devices::path(&paths::global_config_dir()?);
     match command {
-        None => commands::serve::serve(
-            commands::serve::Config::new(paths::global_projects_dir()?, devices, server),
-            port,
-        ),
+        None => {
+            let mut config =
+                commands::serve::Config::new(paths::global_projects_dir()?, devices, server);
+            let hosts = GlobalConfig::load(&paths::global_config_dir()?)?
+                .serve
+                .push_hosts;
+            config.push = commands::serve::PushPolicy::new(&hosts);
+            commands::serve::serve(config, port)
+        }
         Some(ServeCommands::Pair { name, scope, url }) => {
             let pairing = commands::serve_pair::pair(&devices, &name, &scope, url.as_deref())?;
             println!("{}", pairing.qr()?);

@@ -550,7 +550,7 @@ fn a_device_sets_and_clears_only_its_own_https_subscription() {
         "the route never makes a key of its own"
     );
 
-    let (_, _, subscription) = subscriber("https://ntfy.example/upAbc?up=1");
+    let (_, _, subscription) = subscriber("https://ntfy.sh/upAbc?up=1");
     assert_eq!(
         call(&f.config, "PUT", "/v1/push", &typist, &subscription).0,
         403
@@ -560,12 +560,19 @@ fn a_device_sets_and_clears_only_its_own_https_subscription() {
         204
     );
     let stored = stored_push(&f.config, "phone").unwrap();
-    assert_eq!(stored.endpoint, "https://ntfy.example/upAbc?up=1");
+    assert_eq!(stored.endpoint, "https://ntfy.sh/upAbc?up=1");
     assert_eq!(stored_push(&f.config, "other"), None);
 
-    let (_, _, plain) = subscriber("http://ntfy.example/upAbc");
+    let (_, _, plain) = subscriber("http://ntfy.sh/upAbc");
+    let (_, _, unknown) = subscriber("https://tailnet-service.ts.net/up");
     let bad_key = subscription.replace("\"p256dh\":\"", "\"p256dh\":\"AA");
-    for refused in [plain.as_str(), bad_key.as_str(), "{}", "not json"] {
+    for refused in [
+        plain.as_str(),
+        unknown.as_str(),
+        bad_key.as_str(),
+        "{}",
+        "not json",
+    ] {
         assert_eq!(
             call(&f.config, "PUT", "/v1/push", &phone, refused).0,
             400,
@@ -597,12 +604,22 @@ impl Received {
 /// A push service on loopback answering each request with the next of
 /// `statuses`; its URL, and the requests it received.
 fn push_service(statuses: Vec<u16>) -> (String, mpsc::Receiver<Received>) {
+    push_service_answering(
+        statuses
+            .into_iter()
+            .map(|s| format!("HTTP/1.1 {s} X\r\nContent-Length: 0\r\n\r\n"))
+            .collect(),
+    )
+}
+
+/// [`push_service`], answering each request with the next raw response.
+fn push_service_answering(responses: Vec<String>) -> (String, mpsc::Receiver<Received>) {
     use std::io::Read;
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/push/abc", listener.local_addr().unwrap());
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        for (stream, status) in listener.incoming().zip(statuses) {
+        for (stream, response) in listener.incoming().zip(responses) {
             let mut stream = stream.unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut headers = Vec::new();
@@ -621,10 +638,12 @@ fn push_service(statuses: Vec<u16>) -> (String, mpsc::Receiver<Received>) {
                 headers,
                 body: Vec::new(),
             };
-            let length: usize = received.header("content-length").unwrap().parse().unwrap();
+            let length: usize = received
+                .header("content-length")
+                .map_or(0, |l| l.parse().unwrap());
             let mut body = vec![0; length];
             reader.read_exact(&mut body).unwrap();
-            write!(stream, "HTTP/1.1 {status} X\r\nContent-Length: 0\r\n\r\n").unwrap();
+            stream.write_all(response.as_bytes()).unwrap();
             let _ = tx.send(Received { body, ..received });
         }
     });
@@ -635,13 +654,14 @@ fn push_service(statuses: Vec<u16>) -> (String, mpsc::Receiver<Received>) {
 fn a_transition_is_pushed_encrypted_to_each_subscriber_until_its_service_drops_it() {
     let mut f = fixture();
     f.config.poll = Duration::from_millis(100);
+    f.config.push = PushPolicy::local();
     let phone = pair(&f.config, "phone", &[Scope::Read]);
     pair(&f.config, "typist", &[Scope::Input]);
     pair(&f.config, "unsubscribed", &[Scope::Read]);
     let (url, received) = push_service(vec![201, 410]);
     let (typist_url, typist_received) = push_service(vec![201]);
     let (secret, auth, subscription) = subscriber(&url);
-    let push = super::push::subscription(&subscription.replace("http://", "https://")).unwrap();
+    let push = super::push::subscription(&subscription, &PushPolicy::local()).unwrap();
     Devices::update(&f.config.devices, |d| {
         for (device, endpoint) in [("phone", &url), ("typist", &typist_url)] {
             d.devices.get_mut(device).unwrap().push = Some(crate::state::devices::Push {
@@ -709,4 +729,44 @@ fn a_transition_is_pushed_encrypted_to_each_subscriber_until_its_service_drops_i
     );
     assert!(received.try_recv().is_err(), "one push per transition");
     drop(server);
+}
+
+#[test]
+fn a_push_service_redirecting_is_not_followed() {
+    let mut f = fixture();
+    f.config.poll = Duration::from_millis(100);
+    f.config.push = PushPolicy::local();
+    pair(&f.config, "phone", &[Scope::Read]);
+    let (elsewhere, followed) = push_service(vec![201]);
+    let (url, received) = push_service_answering(vec![
+        format!("HTTP/1.1 303 X\r\nLocation: {elsewhere}\r\nContent-Length: 0\r\n\r\n"),
+        "HTTP/1.1 201 X\r\nContent-Length: 0\r\n\r\n".into(),
+    ]);
+    let (_, _, subscription) = subscriber(&url);
+    let push = super::push::subscription(&subscription, &PushPolicy::local()).unwrap();
+    Devices::update(&f.config.devices, |d| {
+        d.devices.get_mut("phone").unwrap().push = Some(push);
+        Ok(())
+    })
+    .unwrap();
+    let _server = start(f.config.clone());
+
+    feat_status(
+        &f.project,
+        "login",
+        Progress::Blocked,
+        Some("which DB?"),
+        None,
+    )
+    .unwrap();
+    received.recv_timeout(Duration::from_secs(15)).unwrap();
+    let summary = paths::summary_path(&f.project, "login");
+    std::fs::create_dir_all(summary.parent().unwrap()).unwrap();
+    std::fs::write(&summary, "Adds login\n").unwrap();
+    feat_status(&f.project, "login", Progress::Ready, None, None).unwrap();
+    received.recv_timeout(Duration::from_secs(15)).unwrap();
+    assert!(
+        followed.try_recv().is_err(),
+        "the redirect's target is never sent to"
+    );
 }
