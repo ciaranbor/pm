@@ -10,9 +10,10 @@
 //! and kept beside the devices file; a device registers against its public
 //! half, so replacing the key strands every subscription.
 //!
-//! Where a push may go is the [`policy`]'s to say. A worker thread sends,
-//! so a slow push service never holds up the poller. A push service answering 404 or 410 has dropped the
-//! subscription, and so does pm.
+//! Where a push may go is the [`policy`]'s to say; a stored subscription
+//! it refuses (made before a host left `push_hosts`) is dropped, as is one
+//! a push service answers 404 or 410 for. A worker thread sends, so a slow
+//! push service never holds up the poller.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
@@ -178,7 +179,10 @@ fn deliver(
             continue;
         };
         if let Some(refusal) = policy.refusal(&push.endpoint) {
-            log(&format!("{name} push: not sent: {refusal}"));
+            log(&format!(
+                "{name} push: subscription refused ({refusal}); dropped"
+            ));
+            forget(devices, name, push)?;
             continue;
         }
         for transition in transitions {

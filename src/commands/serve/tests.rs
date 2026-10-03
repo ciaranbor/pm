@@ -770,3 +770,35 @@ fn a_push_service_redirecting_is_not_followed() {
         "the redirect's target is never sent to"
     );
 }
+
+#[test]
+fn a_stored_subscription_the_policy_refuses_is_dropped() {
+    let mut f = fixture();
+    f.config.poll = Duration::from_millis(100);
+    pair(&f.config, "phone", &[Scope::Read]);
+    let (_, _, subscription) = subscriber("https://tailnet-service.ts.net/up");
+    let push = super::push::subscription(&subscription, &PushPolicy::local()).unwrap();
+    Devices::update(&f.config.devices, |d| {
+        d.devices.get_mut("phone").unwrap().push = Some(push);
+        Ok(())
+    })
+    .unwrap();
+    let _server = start(f.config.clone());
+
+    feat_status(
+        &f.project,
+        "login",
+        Progress::Blocked,
+        Some("which DB?"),
+        None,
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while stored_push(&f.config, "phone").is_some() {
+        assert!(
+            Instant::now() < deadline,
+            "a refused subscription is dropped"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
