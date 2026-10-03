@@ -3,14 +3,19 @@
 //! A launch is a command line typed into the window's shell, so a harness
 //! that exits at once — its CLI rejecting a flag pm passed from config —
 //! leaves the window open at a shell prompt, and the spawn that typed it has
-//! nothing to report but success. [`confirm_all`] watches each window with the
-//! snapshot's own dead-detection ([`liveness`]) until its harness has stayed
-//! up for a couple of seconds, or exits.
+//! nothing to report but success. [`confirm_all`] watches each window until
+//! its harness process ([`Harness::runs_as`]) has stayed up for a couple of
+//! seconds, or the window reads dead ([`liveness`]) after it ran.
 //!
-//! A window whose shell is at its prompt and has run no harness yet is
-//! either still starting its shell or ran a harness that exited between two
-//! looks; the two read the same, so it is judged dead only once the
-//! snapshot would stop reading it as starting.
+//! Until the harness process has been seen the launch is still starting,
+//! whatever the window shows: a new shell runs its startup files' commands,
+//! some as foreground jobs and some in itself, before it reads the typed
+//! line, which under load can take seconds. A harness rejecting its flags
+//! can exit in tens of milliseconds, too fast to be seen, so a launch also
+//! fails once its shell has sat waiting for input — asleep at its prompt,
+//! so it has read the typed line — for a moment without the harness seen.
+//! A window that settles neither way is judged by its liveness after a
+//! generous deadline.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -21,13 +26,20 @@ use crate::harness::Harness;
 use crate::state::agent::{AgentRegistry, AgentType};
 use crate::state::paths;
 use crate::state::project::{GlobalConfig, HarnessConfig, ProjectConfig, resolve_harness_config};
-use crate::tmux;
+use crate::tmux::{self, Process};
 
-use super::attention::STARTING_SECS;
-use super::running_agents::{Liveness, Windows, liveness};
+use super::running_agents::{Liveness, Windows, is_idle, liveness};
 
 /// How long a harness must run before its launch counts as a success.
 const STAY_UP: Duration = Duration::from_secs(2);
+
+/// How long a window may go without showing its harness before its launch
+/// is judged by its liveness.
+const START_WITHIN: Duration = Duration::from_secs(30);
+
+/// How long a shell must wait for input, its harness unseen, before the
+/// harness counts as having exited too fast to be seen.
+const SETTLE: Duration = Duration::from_millis(500);
 
 const POLL: Duration = Duration::from_millis(50);
 
@@ -122,12 +134,10 @@ pub fn confirm_scope(
 /// windows that cannot be read report none, so a launch that worked is
 /// never failed by the check.
 pub fn confirm_all(launches: &[Launch], tmux_server: Option<&str>) -> Vec<FailedLaunch> {
-    let start_deadline = Duration::from_secs(STARTING_SECS as u64);
-    confirm_within(launches, tmux_server, start_deadline)
+    confirm_within(launches, tmux_server, START_WITHIN)
 }
 
-/// [`confirm_all`], judging a window that never ran a harness dead after
-/// `start_deadline`.
+/// [`confirm_all`], with `start_deadline` in place of [`START_WITHIN`].
 fn confirm_within(
     launches: &[Launch],
     tmux_server: Option<&str>,
@@ -143,7 +153,10 @@ struct Watched<'a> {
     window_name: String,
     harness: Harness,
     harness_config: HarnessConfig,
+    /// When its harness process was first seen.
     up_since: Option<Instant>,
+    /// Since when, before that, its shell has been waiting for input.
+    reading_since: Option<Instant>,
 }
 
 fn watch(
@@ -181,6 +194,7 @@ fn watch(
             harness: entry.harness,
             harness_config: harness_config.clone(),
             up_since: None,
+            reading_since: None,
         });
     }
     let start = Instant::now();
@@ -193,20 +207,32 @@ fn watch(
             let Some(pane) = windows.find(&watched.session, &watched.window_name) else {
                 continue;
             };
-            let state = liveness(
-                windows.processes(pane).as_deref(),
-                watched.harness,
-                &watched.harness_config,
-            );
-            match (state, watched.up_since) {
-                (Liveness::Idle, _) => {}
-                (Liveness::Busy, Some(since)) if now - since >= STAY_UP => {}
-                (Liveness::Busy, since) => {
-                    watched.up_since = since.or(Some(now));
+            let Some(processes) = windows.processes(pane) else {
+                continue;
+            };
+            if is_idle(&processes) {
+                continue;
+            }
+            let running = processes
+                .iter()
+                .any(|p| watched.harness.runs_as(&p.command, &watched.harness_config));
+            let dead = liveness(Some(&processes), watched.harness, &watched.harness_config)
+                == Liveness::Dead;
+            let at_input = dead && reading_input(&processes);
+            watched.reading_since = at_input.then(|| watched.reading_since.unwrap_or(now));
+            let settled = watched
+                .reading_since
+                .is_some_and(|since| now - since >= SETTLE);
+            match watched.up_since {
+                Some(since) if !dead && now - since >= STAY_UP => {}
+                Some(_) if !dead => still.push(watched),
+                None if running => {
+                    watched.up_since = Some(now);
                     still.push(watched);
                 }
-                (Liveness::Dead, None) if now - start < start_deadline => still.push(watched),
-                (Liveness::Dead, _) => failed.push(FailedLaunch {
+                None if !settled && now - start < start_deadline => still.push(watched),
+                None if !dead => {}
+                _ => failed.push(FailedLaunch {
                     launch: watched.launch.clone(),
                     output: last_output(tmux_server, &pane.window),
                 }),
@@ -218,6 +244,14 @@ fn watch(
         }
     }
     Ok(failed)
+}
+
+/// Whether a pane's shell, the first of its `processes`, is at its prompt
+/// waiting for input, so has read every line typed into it.
+fn reading_input(processes: &[Process]) -> bool {
+    processes.split_first().is_some_and(|(shell, rest)| {
+        shell.foreground && shell.asleep && rest.iter().all(|p| !p.foreground)
+    })
 }
 
 /// The last non-empty lines of `window`'s agent pane, indented.
@@ -263,18 +297,36 @@ mod tests {
             ),
         )
         .unwrap();
-        server.spawn_dead_fake_agent(&project, &main, "main", "never");
+        let instant = server.spawn_dead_fake_agent(&project, &main, "main", "instant");
+        tmux::send_line(
+            server.name(),
+            &instant,
+            &format!("{} 0", fake_claude().display()),
+        )
+        .unwrap();
+        let slow = server.spawn_dead_fake_agent(&project, &main, "main", "slow");
+        tmux::send_line(
+            server.name(),
+            &slow,
+            &format!(
+                "sleep 0.3; end=$(($(date +%s) + 2)); \
+                 while [ \"$(date +%s)\" -lt $end ]; do :; done; {} 999",
+                fake_claude().display()
+            ),
+        )
+        .unwrap();
 
         let launches = [
             launch(&project, "login", "up"),
             launch(&project, "login", "quits"),
-            launch(&project, "main", "never"),
+            launch(&project, "main", "instant"),
+            launch(&project, "main", "slow"),
         ];
         let started = Instant::now();
-        let failed = confirm_within(&launches, server.name(), Duration::from_secs(3));
+        let failed = confirm_within(&launches, server.name(), Duration::from_secs(30));
 
         assert!(
-            started.elapsed() < Duration::from_secs(5),
+            started.elapsed() < Duration::from_secs(10),
             "{:?}",
             started.elapsed()
         );
@@ -282,7 +334,7 @@ mod tests {
             .iter()
             .map(|f| (f.launch.scope.as_str(), f.launch.agent.as_str()))
             .collect();
-        assert_eq!(names, [("login", "quits"), ("main", "never")]);
+        assert_eq!(names, [("login", "quits"), ("main", "instant")]);
         assert!(
             failed[0]
                 .output
