@@ -18,7 +18,9 @@
 //! agent goes idle and as it resumes; the user-prompt hook does as typed
 //! input resumes it. That write is ungated and never
 //! alerts; the next refresh corrects anything it gets wrong. Going idle
-//! also pushes, since an idle team is what makes a feature stalled.
+//! also pushes, since an idle team is what makes a feature stalled, and so
+//! does any prompt, since the session's options may still show the wait the
+//! prompt ended.
 
 use std::path::Path;
 use std::process::Child;

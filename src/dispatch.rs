@@ -1333,14 +1333,12 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
                 }
                 exit_unless_ok(code)
             }
-            HarnessHooksCommands::UserPrompt => exit_unless_ok(
-                commands::hooks_user_prompt::user_prompt(|unread, changed| {
+            HarnessHooksCommands::UserPrompt => {
+                exit_unless_ok(commands::hooks_user_prompt::user_prompt(|unread| {
                     publish(AgentState::Busy, unread);
-                    if changed {
-                        push();
-                    }
-                }),
-            ),
+                    push();
+                }))
+            }
             HarnessHooksCommands::Waiting { harness } => exit_unless_ok(
                 commands::hooks_waiting::waiting(harness, |state, unread| {
                     publish(state, unread);

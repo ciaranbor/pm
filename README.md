@@ -125,9 +125,10 @@ its turn). pm surfaces all of it in tmux:
   whose session is closed still alerts when it becomes blocked or ready (a
   PR approved through `pm feat sync`, say);
 - pm's tree (prefix `s` / `w`), tmux's own tree with each session's
-  activity (working, or how long it has been quiet), attention and
-  reason, and each agent's state, every glyph labelled. Enter on a
-  session goes straight to the pane of the agent it is waiting on;
+  activity (working, waiting on background work, or how long it has been
+  quiet), attention and reason, and each agent's state, every glyph
+  labelled. Enter on a session goes straight to the pane of the agent it
+  is waiting on;
 - each window's badge: the agent busy, asking, unarmed, waiting on
   background work, idle, dead or stopped, and an envelope for unread
   messages. A `main` session carries its main agent's badge.
@@ -706,9 +707,9 @@ kind that means what a state means shares its glyph. The window list shows
 glyphs only; pm's tree, which has room, labels each one: a session line
 reads `<glyph> blocked  implementer: which DB?` (on `main`, its main
 agent's state), a window line `<glyph> idle <envelope> 2`, and a session's
-activity `<gear> working` or `quiet 2h`. Follow a badge with a space in
-your own formats: some terminals (Ghostty) draw a glyph small when the next
-cell isn't blank.
+activity `<gear> working`, `<spinner> background 1d` or `quiet 2h`.
+Follow a badge with a space in your own formats: some terminals (Ghostty)
+draw a glyph small when the next cell isn't blank.
 
 | Glyph | Colour | Agent state | Attention |
 |---|---|---|---|
@@ -743,8 +744,8 @@ unset, text is escaped for formats, and each name is set at one scope only:
 | | `@pm_reason` | the attention detail, or for `stalled` what the attention view shows; unset without one |
 | | `@pm_badge` | the kind's glyph, styled; unset for `none`; on `main`, its main agent's badge |
 | | `@pm_label` | `@pm_badge` with words, as pm's tree shows it: the kind after its glyph; on `main`, its main agent's `@pm_agent_label` |
-| | `@pm_activity` | the busy glyph while the scope is working, else how long it has been quiet (`2h`, styled); unset under 10 minutes, and on `main` while its badge already shows its main agent at work |
-| | `@pm_activity_label` | `@pm_activity` with words, as pm's tree shows it: `working` after the glyph, or `quiet 2h`; unset when it is |
+| | `@pm_activity` | the busy glyph while the scope is working, else the background glyph and how long its oldest background wait has run (`1d`), else how long it has been quiet (`2h`, styled); unset under 10 minutes quiet, and on `main` while its badge already shows its main agent busy |
+| | `@pm_activity_label` | `@pm_activity` with words, as pm's tree shows it: `working` or `background 1d` after the glyph, or `quiet 2h`; unset when it is |
 | | `@pm_alert_pending`, `@pm_alerted` | pm's own bookkeeping: a ready alert waiting for its team to go quiet, and the kinds already alerted on |
 | agent window | `@pm_agent` | the agent's name |
 | | `@pm_agent_state` | an [agent state](#attention-view) |
@@ -779,10 +780,13 @@ order. An agent is `idle` (waiting for a message), `busy` (mid-turn),
 will wake it), `dead`, `stopped` (`pm agent stop`), or `closed` (its
 feature's session is closed; `pm open` respawns it). A dialog you reject
 can read `asking` until you next type, since Claude Code reports no
-rejection. A scope is working while a busy or background agent showed
-activity in the last 20 minutes; otherwise rows show how long it has been
-quiet. PR state is what `pm feat sync` last recorded: the view never calls
-GitHub, so it is cheap to poll.
+rejection. A scope is working while a busy agent showed activity in the
+last 20 minutes. Background work is not working: a scope with a
+`background` agent shows how long its oldest has waited (`background 1d`),
+since only the job's end wakes it, and pm can't tell a stuck job from a
+long one. Otherwise rows show how long it has been quiet. PR state is what
+`pm feat sync` last recorded: the view never calls GitHub, so it is cheap
+to poll.
 
 `pm feat status --json` (with `--all`, or a feature name) prints the same
 snapshot for tools to build on. `version` changes only when a field changes
@@ -803,6 +807,7 @@ know:
       "agents": [],
       "attention": { "kind": "none", "detail": null, "agent": null },
       "working": false,
+      "background_since": null,
       "last_activity": null
     }
   }],
@@ -823,9 +828,14 @@ know:
       "state": "asking",
       "unread": 0,
       "window": "app/login:1",
-      "waiting": { "kind": "question", "detail": "Postgres or SQLite?" }
+      "waiting": {
+        "kind": "question",
+        "detail": "Postgres or SQLite?",
+        "since": "2026-10-02T09:31:00Z"
+      }
     }],
     "working": false,
+    "background_since": null,
     "last_activity": "2026-10-02T09:30:00Z"
   }]
 }
@@ -839,9 +849,11 @@ and `root` empty if its registry entry is unreadable;
 agent's tmux target, `null` while it has none. `waiting` is what an
 `asking`, `unarmed` or `background` agent is at (`kind` one of `question`,
 `permission`, `plan`, `dialog`, `startup`, `interrupted`, `hook-ended`,
-`error`, `prompt`, `tripped`, `background`), else `null`. `last_activity` is
-the last time any of the scope's agents showed activity, `null` if none
-ever has.
+`error`, `prompt`, `tripped`, `background`), else `null`; its `since` is
+when that began, `null` for `tripped`. `background_since` is when the
+scope's longest-waiting `background` agent began waiting, `null` with none.
+`last_activity` is the last time any of the scope's agents showed
+activity, `null` if none ever has.
 
 ### Claude Code agents
 
