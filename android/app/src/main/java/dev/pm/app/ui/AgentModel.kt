@@ -59,19 +59,19 @@ class AgentModel(
             while (true) {
                 try {
                     val held = conversation
+                    var unstarted = false
                     if (held == null || held.after == null) {
                         val page = try {
                             client.transcript(project, scope, agent)
-                        } catch (e: PmError.Status) {
-                            if (e.code != 404 || e.message != NO_CONVERSATION_YET) throw e
-                            // The watch delivers the conversation as a reset once it starts.
+                        } catch (e: PmError.NoConversation) {
                             null
                         }
+                        unstarted = page == null
                         val conversation = if (page == null) Conversation()
                         else Conversation().replacedBy(Transcripts.items(page.items), page.before, page.after)
                         _chat.value = ChatState.Shown(conversation, live = false)
                     }
-                    watch()
+                    watch(unstarted)
                 } catch (e: PmError.Unsupported) {
                     _chat.value = ChatState.Unsupported
                     return@launch
@@ -84,12 +84,23 @@ class AgentModel(
         }
     }
 
-    private suspend fun watch() {
+    /**
+     * Follow the watched stream. With `unstarted` (the page read found no
+     * conversation), the session may have started between that read and
+     * the watch's first, which then sends no reset: once the stream's
+     * opening snapshot shows the watch has read, the page is read again.
+     */
+    private suspend fun watch(unstarted: Boolean) {
         val after = conversation?.after
+        var recheck = unstarted
         client.events(watch = "$project/$scope/$agent", after = after).collect { event ->
             val shown = _chat.value as? ChatState.Shown ?: return@collect
             if (event.name != "transcript") {
                 if (!shown.live) _chat.value = shown.copy(live = true)
+                if (recheck) {
+                    recheck = false
+                    viewModelScope.launch { recheckStarted() }
+                }
                 return@collect
             }
             val update = runCatching { json.decodeFromString(TranscriptEvent.serializer(), event.data) }.getOrNull() ?: return@collect
@@ -102,6 +113,18 @@ class AgentModel(
             }
             _chat.value = ChatState.Shown(next, live = true)
         }
+    }
+
+    private suspend fun recheckStarted() {
+        val page = try {
+            client.transcript(project, scope, agent)
+        } catch (e: PmError) {
+            return
+        }
+        val shown = _chat.value as? ChatState.Shown ?: return
+        if (shown.conversation.after != null) return
+        val read = Conversation().replacedBy(Transcripts.items(page.items), page.before, page.after)
+        _chat.value = shown.copy(conversation = read.appended(shown.conversation.items, page.after))
     }
 
     fun stop() {
@@ -167,7 +190,6 @@ class AgentModel(
 
     private companion object {
         const val MAX_EMPTY_PAGES = 20
-        const val NO_CONVERSATION_YET = "the agent has no conversation yet"
         val json = Json { ignoreUnknownKeys = true }
     }
 }

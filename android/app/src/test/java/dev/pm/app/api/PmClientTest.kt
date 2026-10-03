@@ -36,6 +36,7 @@ class PmClientTest {
         reply(404, """{"error":"no such endpoint"}""")
         reply(404, """{"error":"no such agent"}""")
         reply(401, """{"error":"a paired device's bearer token is required"}""")
+        reply(404, """{"error":"the agent has no conversation yet"}""")
 
         val unsupported = runCatching { client.transcript("app", "login", "implementer") }.exceptionOrNull()
         assertTrue("$unsupported", unsupported is PmError.Unsupported)
@@ -43,6 +44,8 @@ class PmClientTest {
         assertTrue("$missing", missing is PmError.Status && missing.code == 404 && missing.message == "no such agent")
         val revoked = runCatching { client.snapshot() }.exceptionOrNull()
         assertTrue("$revoked", revoked is PmError.Unauthorized)
+        val unstarted = runCatching { client.transcript("app", "login", "reviewer") }.exceptionOrNull()
+        assertTrue("$unstarted", unstarted is PmError.NoConversation)
 
         val first = server.takeRequest()
         assertEquals("Bearer tok", first.headers["Authorization"])

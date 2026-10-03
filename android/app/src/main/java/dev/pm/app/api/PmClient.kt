@@ -42,6 +42,9 @@ sealed class PmError(message: String) : Exception(message) {
     /** The server has no such endpoint: it predates what was asked of it. */
     class Unsupported : PmError("the server doesn't serve this yet")
 
+    /** The agent's session hasn't started, or its transcript is gone. */
+    class NoConversation : PmError("the agent has no conversation yet")
+
     class Status(val code: Int, message: String) : PmError(message)
 }
 
@@ -148,6 +151,7 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
         return when {
             response.code == 401 -> PmError.Unauthorized()
             response.code == 404 && message == NO_SUCH_ENDPOINT -> PmError.Unsupported()
+            response.code == 404 && message == NO_CONVERSATION -> PmError.NoConversation()
             else -> PmError.Status(response.code, message ?: "HTTP ${response.code}")
         }
     }
@@ -161,6 +165,7 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
     private companion object {
         val JSON = "application/json".toMediaType()
         const val NO_SUCH_ENDPOINT = "no such endpoint"
+        const val NO_CONVERSATION = "the agent has no conversation yet"
         val json = Json { ignoreUnknownKeys = true }
     }
 }
