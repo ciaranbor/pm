@@ -8,14 +8,14 @@
 //! to any of its agents resets it.
 //!
 //! Any prompt, pm's own included, also means the agent is working again, so
-//! it clears the agent's waiting marker ([`runtime`]), stamps its activity,
-//! and has its window published busy, as the Stop hook does as a turn
-//! resumes.
+//! it clears the agent's waiting marker ([`runtime`]), claims a turn end its
+//! transcript recorded (an interrupt), stamps its activity, and has its
+//! window published busy and its session pushed. The interrupt is claimed
+//! rather than left for the harness to bury under the prompt: the push may
+//! read the transcript before the prompt reaches it.
 //!
 //! The harness adds the hook's stdout to the model's context and may refuse
 //! the prompt on a non-zero exit, so it prints nothing and always exits 0.
-//! It runs on every prompt, so it does one state read and at most one write
-//! beyond the marker and the stamp.
 
 use std::io::Read;
 use std::path::Path;
@@ -23,23 +23,24 @@ use std::path::Path;
 use crate::commands::agent_spawn::SPAWN_PROMPT;
 use crate::commands::feat_status::feat_status;
 use crate::commands::hooks_stop;
+use crate::commands::running_agents;
 use crate::error::Result;
 use crate::messages;
+use crate::state::agent::AgentRegistry;
 use crate::state::feature::{FeatureState, Progress};
 use crate::state::paths;
 use crate::state::runtime;
 
 /// Run the hook. Always exit code 0, whatever happened. `on_prompt` gets
-/// the agent's unread message count, and whether the feature was set back
-/// to `wip` or the agent's marker cleared.
-pub fn user_prompt(on_prompt: impl FnOnce(u32, bool)) -> i32 {
-    if let Ok(Some((unread, changed))) = user_prompt_inner() {
-        on_prompt(unread, changed);
+/// the agent's unread message count.
+pub fn user_prompt(on_prompt: impl FnOnce(u32)) -> i32 {
+    if let Ok(Some(unread)) = user_prompt_inner() {
+        on_prompt(unread);
     }
     0
 }
 
-fn user_prompt_inner() -> Result<Option<(u32, bool)>> {
+fn user_prompt_inner() -> Result<Option<u32>> {
     let Some(agent) = std::env::var("PM_AGENT_NAME")
         .ok()
         .filter(|a| !a.is_empty())
@@ -57,17 +58,25 @@ fn user_prompt_inner() -> Result<Option<(u32, bool)>> {
     let cwd = std::env::current_dir()?;
     let project_root = paths::find_project_root(&cwd)?;
     let scope = paths::resolve_scope_from(&project_root, &cwd)?;
-    let changed = on_prompt(&project_root, &scope, &agent, &prompt)?;
+    on_prompt(&project_root, &scope, &agent, &prompt)?;
     let unread = messages::unread_count(&paths::messages_dir(&project_root), &scope, &agent);
-    Ok(Some((unread, changed)))
+    Ok(Some(unread))
 }
 
-/// Any prompt to `agent`: clear its marker, and unblock its feature if the
-/// prompt is the user's. Returns whether either changed.
-fn on_prompt(project_root: &Path, scope: &str, agent: &str, prompt: &str) -> Result<bool> {
+/// Any prompt to `agent`: unblock its feature if the prompt is the user's,
+/// then clear its marker and claim its transcript's turn end.
+fn on_prompt(project_root: &Path, scope: &str, agent: &str, prompt: &str) -> Result<()> {
+    on_user_prompt(project_root, scope, prompt)?;
     runtime::touch_activity(project_root, scope, agent)?;
-    let cleared = runtime::clear_waiting(project_root, scope, agent)?;
-    Ok(on_user_prompt(project_root, scope, prompt)? || cleared)
+    runtime::clear_waiting(project_root, scope, agent)?;
+    let registry = AgentRegistry::load(&paths::agents_dir(project_root), scope)?;
+    if let Some(entry) = registry.get(agent)
+        && let Some(ended) = running_agents::waiting(project_root, scope, agent, entry.harness)
+        && let Some(id) = ended.entry
+    {
+        runtime::claim_turn_end(project_root, scope, agent, &id)?;
+    }
+    Ok(())
 }
 
 /// Set `scope` back to `wip` if it is a blocked feature and `prompt` is the
@@ -186,16 +195,58 @@ mod tests {
         let interrupted = Waiting::now(WaitingKind::Interrupted, None);
 
         runtime::write_waiting(&project, "main", "main", &interrupted).unwrap();
-        assert!(on_prompt(&project, "main", "main", "go on").unwrap());
+        on_prompt(&project, "main", "main", "go on").unwrap();
         assert_eq!(runtime::read_waiting(&project, "main", "main"), None);
-        assert!(!on_prompt(&project, "main", "main", "go on").unwrap());
 
         runtime::write_waiting(&project, "login", "implementer", &interrupted).unwrap();
-        assert!(on_prompt(&project, "login", "implementer", SPAWN_PROMPT).unwrap());
+        on_prompt(&project, "login", "implementer", SPAWN_PROMPT).unwrap();
         assert_eq!(
             runtime::read_waiting(&project, "login", "implementer"),
             None
         );
         assert_eq!(state(&project).progress, Progress::Blocked);
+    }
+
+    #[test]
+    fn a_prompt_ends_an_interrupt_the_transcript_still_shows() {
+        use crate::commands::running_agents::waiting;
+        use crate::harness::Harness;
+        use crate::state::agent::{AgentEntry, AgentType};
+        use crate::state::runtime::{SessionPath, WaitingKind};
+        let dir = tempdir().unwrap();
+        let project = blocked_feature(dir.path());
+        let mut registry = AgentRegistry::default();
+        registry.register(
+            "implementer",
+            AgentEntry {
+                agent_type: AgentType::Agent,
+                session_id: String::new(),
+                window_name: "implementer".into(),
+                active: true,
+                agent_definition: None,
+                harness: Harness::ClaudeCode,
+                spawned_at: None,
+            },
+        );
+        registry
+            .save(&paths::agents_dir(&project), "login")
+            .unwrap();
+        let transcript = dir.path().join("session.jsonl");
+        let interrupt =
+            r#"{"type":"user","uuid":"u1","message":{"content":"[Request interrupted by user]"}}"#;
+        std::fs::write(&transcript, format!("{interrupt}\n")).unwrap();
+        runtime::write_session_path(
+            &project,
+            "login",
+            "implementer",
+            SessionPath::Transcript,
+            Some(&transcript),
+        )
+        .unwrap();
+        let at = || waiting(&project, "login", "implementer", Harness::ClaudeCode).map(|w| w.kind);
+        assert_eq!(at(), Some(WaitingKind::Interrupted));
+
+        on_prompt(&project, "login", "implementer", "keep going").unwrap();
+        assert_eq!(at(), None, "busy before the prompt reaches the transcript");
     }
 }

@@ -3,8 +3,9 @@
 //!
 //! - `PermissionRequest` fires the moment any tool dialog opens,
 //!   `AskUserQuestion` and `ExitPlanMode` included, and never for an
-//!   auto-approved tool. It carries no `tool_use_id`, so one marker stands
-//!   for every open dialog.
+//!   auto-approved tool, including one the auto-mode classifier approves,
+//!   which fires no `Notification` either (verified on 2.1.288). It carries
+//!   no `tool_use_id`, so one marker stands for every open dialog.
 //! - `PostToolUse` fires when a dialog is approved or answered; rejecting
 //!   one ends the turn with no event at all, so the marker stays until the
 //!   user next types (UserPromptSubmit), but the transcript records the

@@ -9,8 +9,10 @@
 //! an interrupt no hook reported ([`running_agents::waiting`]), into
 //! asking, unarmed or background. One it reads as dead is busy for a few
 //! seconds after its spawn: its harness may not have started yet. A scope
-//! is working while a busy or background agent showed activity in the last
-//! [`WORKING_SECS`]; a busy agent silent longer reads quiet.
+//! is working while a busy agent showed activity in the last
+//! [`WORKING_SECS`]; a busy agent silent longer reads quiet. Background
+//! work is not working: a scope with a background agent dates from its
+//! oldest wait, however quiet it is ([`activity`]).
 
 use std::path::Path;
 
@@ -50,14 +52,34 @@ pub(crate) const STARTING_SECS: i64 = 10;
 /// so the gaps between turns don't flicker.
 pub const QUIET_SECS: i64 = 10 * 60;
 
-/// How long a scope that isn't working has been quiet, once that is
-/// [`QUIET_SECS`] or more.
-pub fn quiet_since(
+/// What a scope is doing, as the views show it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Activity {
+    Working,
+    /// Waiting on background work since then.
+    Background(DateTime<Utc>),
+    /// Quiet since then, for [`QUIET_SECS`] or more.
+    Quiet(DateTime<Utc>),
+}
+
+/// A scope's activity as of `now`: working, else waiting on background
+/// work, else quiet once that is long enough to matter; `None` between
+/// turns.
+pub fn activity(
     working: bool,
+    background_since: Option<DateTime<Utc>>,
     last_activity: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
-) -> Option<DateTime<Utc>> {
-    last_activity.filter(|t| !working && (now - *t).num_seconds() >= QUIET_SECS)
+) -> Option<Activity> {
+    if working {
+        return Some(Activity::Working);
+    }
+    if let Some(since) = background_since {
+        return Some(Activity::Background(since));
+    }
+    last_activity
+        .filter(|t| (now - *t).num_seconds() >= QUIET_SECS)
+        .map(Activity::Quiet)
 }
 
 #[derive(Debug, Serialize)]
@@ -89,9 +111,8 @@ pub struct ScopeSnapshot {
     /// What the scope's agents need, by [`main_attention`]'s rule.
     pub attention: Attention,
     pub working: bool,
-    /// Whether a busy agent, not a background one, is working.
-    #[serde(skip)]
-    pub busy: bool,
+    /// When the longest-waiting background agent's wait began.
+    pub background_since: Option<DateTime<Utc>>,
     pub last_activity: Option<DateTime<Utc>>,
 }
 
@@ -113,10 +134,8 @@ pub struct FeatureSnapshot {
     pub session_exists: bool,
     pub agents: Vec<AgentSnapshot>,
     pub working: bool,
-    /// Whether a busy agent, not a background one, is working: the team
-    /// is still at it. A background agent may be a loop that never ends.
-    #[serde(skip)]
-    pub busy: bool,
+    /// When the longest-waiting background agent's wait began.
+    pub background_since: Option<DateTime<Utc>>,
     pub last_activity: Option<DateTime<Utc>>,
 }
 
@@ -138,6 +157,8 @@ pub struct AgentSnapshot {
 pub struct WaitingSnapshot {
     pub kind: WaitingKind,
     pub detail: String,
+    /// When the wait began; `None` for a loop that stopped itself.
+    pub since: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -458,7 +479,7 @@ fn project_features(
                 session_exists,
                 agents,
                 working,
-                busy,
+                background_since,
                 last_activity,
                 ..
             } = reader.read(&name)?;
@@ -483,7 +504,7 @@ fn project_features(
                 session_exists,
                 agents,
                 working,
-                busy,
+                background_since,
                 last_activity,
                 name,
             };
@@ -514,7 +535,7 @@ impl ScopeReader<'_> {
         let messages_dir = paths::messages_dir(self.project_root);
         let now = Utc::now();
         let mut working = false;
-        let mut busy = false;
+        let mut background_since: Option<DateTime<Utc>> = None;
         let mut last_activity = None;
         let agents: Vec<AgentSnapshot> = registry
             .agents
@@ -540,8 +561,12 @@ impl ScopeReader<'_> {
                 };
                 let active = runtime::last_activity(self.project_root, scope, agent);
                 let recent = active.is_some_and(|t| (now - t).num_seconds() < WORKING_SECS);
-                working |= recent && matches!(state, AgentState::Busy | AgentState::Background);
-                busy |= recent && state == AgentState::Busy;
+                working |= recent && state == AgentState::Busy;
+                if state == AgentState::Background
+                    && let Some(since) = waiting.as_ref().and_then(|w| w.since)
+                {
+                    background_since = Some(background_since.map_or(since, |b| b.min(since)));
+                }
                 last_activity = last_activity.max(active);
                 AgentSnapshot {
                     name: agent.clone(),
@@ -559,7 +584,7 @@ impl ScopeReader<'_> {
             attention: main_attention(&agents),
             agents,
             working,
-            busy,
+            background_since,
             last_activity,
         })
     }
@@ -585,15 +610,23 @@ impl ScopeReader<'_> {
         let grace = super::doctor::START_GRACE.as_secs() as i64;
         let waiting = running_agents::waiting(self.project_root, scope, agent, harness)
             .filter(|w| w.kind != WaitingKind::Startup || (now - w.since).num_seconds() > grace)
-            .map(|w| (w.kind, w.describe()))
+            .map(|w| WaitingSnapshot {
+                kind: w.kind,
+                detail: w.describe(),
+                since: Some(w.since),
+            })
             .or_else(|| {
                 let reason = harness.loop_stopped(self.project_root, scope, agent)?;
-                Some((WaitingKind::Tripped, format!("loop stopped: {reason}")))
+                Some(WaitingSnapshot {
+                    kind: WaitingKind::Tripped,
+                    detail: format!("loop stopped: {reason}"),
+                    since: None,
+                })
             });
-        let Some((kind, detail)) = waiting else {
+        let Some(waiting) = waiting else {
             return (AgentState::Busy, None);
         };
-        (kind.class().into(), Some(WaitingSnapshot { kind, detail }))
+        (waiting.kind.class().into(), Some(waiting))
     }
 }
 
@@ -619,7 +652,7 @@ mod tests {
             session_exists: true,
             agents: Vec::new(),
             working: false,
-            busy: false,
+            background_since: None,
             last_activity: None,
         }
     }
@@ -648,6 +681,7 @@ mod tests {
             waiting: Some(WaitingSnapshot {
                 kind,
                 detail: detail.into(),
+                since: None,
             }),
             ..agent(name, state, 0)
         }
@@ -723,6 +757,27 @@ mod tests {
     }
 
     #[test]
+    fn activity_is_work_then_background_work_then_a_quiet_spell_long_enough_to_matter() {
+        let now = Utc::now();
+        let ago = |minutes| Some(now - chrono::Duration::minutes(minutes));
+        let background = ago(1500);
+        assert_eq!(
+            activity(true, background, ago(1), now),
+            Some(Activity::Working)
+        );
+        assert_eq!(
+            activity(false, background, ago(185), now),
+            Some(Activity::Background(background.unwrap()))
+        );
+        assert_eq!(activity(false, None, ago(9), now), None, "between turns");
+        assert_eq!(
+            activity(false, None, ago(185), now),
+            Some(Activity::Quiet(ago(185).unwrap()))
+        );
+        assert_eq!(activity(false, None, None, now), None);
+    }
+
+    #[test]
     fn the_json_keeps_the_documented_shape() {
         let mut f = feature(Progress::Blocked, FeatureStatus::Wip);
         f.blocked_reason = Some("which DB?".into());
@@ -741,12 +796,12 @@ mod tests {
                     agents: vec![AgentSnapshot {
                         window: Some("app/main:1".into()),
                         pane: None,
-                        ..waiting(
-                            "main",
-                            AgentState::Asking,
-                            WaitingKind::Plan,
-                            "plan approval",
-                        )
+                        waiting: Some(WaitingSnapshot {
+                            kind: WaitingKind::Plan,
+                            detail: "plan approval".into(),
+                            since: Some("2026-10-02T09:25:00Z".parse().unwrap()),
+                        }),
+                        ..agent("main", AgentState::Asking, 0)
                     }],
                     attention: Attention {
                         kind: AttentionKind::Asking,
@@ -754,7 +809,7 @@ mod tests {
                         agent: Some("main".into()),
                     },
                     working: false,
-                    busy: false,
+                    background_since: Some("2026-10-01T08:00:00Z".parse().unwrap()),
                     last_activity: Some("2026-10-02T09:30:00Z".parse().unwrap()),
                 }),
             }],
@@ -777,7 +832,11 @@ mod tests {
                             "state": "asking",
                             "unread": 0,
                             "window": "app/main:1",
-                            "waiting": { "kind": "plan", "detail": "plan approval" }
+                            "waiting": {
+                                "kind": "plan",
+                                "detail": "plan approval",
+                                "since": "2026-10-02T09:25:00Z"
+                            }
                         }],
                         "attention": {
                             "kind": "asking",
@@ -785,6 +844,7 @@ mod tests {
                             "agent": "main"
                         },
                         "working": false,
+                        "background_since": "2026-10-01T08:00:00Z",
                         "last_activity": "2026-10-02T09:30:00Z"
                     }
                 }],
@@ -808,6 +868,7 @@ mod tests {
                         "waiting": null
                     }],
                     "working": false,
+                    "background_since": null,
                     "last_activity": null
                 }]
             })
@@ -1024,17 +1085,42 @@ mod tests {
         let at = |minutes| Utc::now() - chrono::Duration::minutes(minutes);
         runtime::set_activity(&project, "login", "starting", at(1));
         let login = &super::project(&project, server.name()).unwrap().features[0];
-        assert!(login.working && login.busy);
+        assert!(login.working);
 
         runtime::set_activity(&project, "login", "starting", at(30));
         runtime::set_activity(&project, "login", "asking", at(25));
         let login = &super::project(&project, server.name()).unwrap().features[0];
-        assert!(
-            !login.working && !login.busy,
-            "a busy agent silent for 30 minutes"
-        );
+        assert!(!login.working, "a busy agent silent for 30 minutes");
         let quiet = Utc::now() - login.last_activity.unwrap();
         assert_eq!(quiet.num_minutes(), 25, "the latest of its agents");
+    }
+
+    #[test]
+    fn background_work_is_not_working_and_dates_from_the_oldest_wait() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let session = tmux::session_name(&project_name, "login");
+        let started = |agent: &str, hours| {
+            server.spawn_fake_agent(&project, &session, "login", agent);
+            let mut waiting = runtime::Waiting::now(WaitingKind::Background, None);
+            waiting.since -= chrono::Duration::hours(hours);
+            runtime::write_waiting(&project, "login", agent, &waiting).unwrap();
+            runtime::touch_activity(&project, "login", agent).unwrap();
+            waiting.since
+        };
+        let oldest = started("build", 30);
+        started("eval", 2);
+
+        let login = &super::project(&project, server.name()).unwrap().features[0];
+        assert!(!login.working);
+        assert_eq!(login.background_since, Some(oldest));
+        assert_eq!(login.attention.kind, AttentionKind::None, "not stalled");
+
+        server.spawn_fake_agent(&project, &session, "login", "implementer");
+        runtime::touch_activity(&project, "login", "implementer").unwrap();
+        let login = &super::project(&project, server.name()).unwrap().features[0];
+        assert!(login.working, "a busy agent is");
     }
 
     #[test]

@@ -30,8 +30,8 @@ use crate::tmux::options::{self, Command, Holder, Options, Scope, format_text};
 use chrono::{DateTime, Utc};
 
 use super::attention::{
-    self, AgentSnapshot, AgentState, Attention, AttentionKind, FeatureSnapshot, ScopeSnapshot,
-    Snapshot,
+    self, Activity, AgentSnapshot, AgentState, Attention, AttentionKind, FeatureSnapshot,
+    ScopeSnapshot, Snapshot,
 };
 use super::feat_status_view::{STALLED, span};
 use super::tmux_lock;
@@ -322,7 +322,14 @@ fn session_values(
 ) -> Vec<(&'static str, Option<String>)> {
     let kind = feature.attention.kind;
     let needs = (kind != AttentionKind::None).then_some(kind);
-    let activity = activity(feature.working, feature.last_activity, now);
+    let [activity, activity_label] = attention::activity(
+        feature.working,
+        feature.background_since,
+        feature.last_activity,
+        now,
+    )
+    .map(|a| drawn(a, now).map(Some))
+    .unwrap_or_default();
     vec![
         (PROJECT, Some(format_text(&feature.project))),
         (FEATURE, Some(format_text(&feature.name))),
@@ -331,8 +338,8 @@ fn session_values(
         (ATTENTION, judged.attention.map(|k| k.to_string())),
         (BADGE, needs.and_then(badge::attention)),
         (LABEL, needs.and_then(badge::attention_label)),
-        (ACTIVITY, activity.as_ref().map(Activity::badge)),
-        (ACTIVITY_LABEL, activity.as_ref().map(Activity::label)),
+        (ACTIVITY, activity),
+        (ACTIVITY_LABEL, activity_label),
         (ALERTED, judged.alerted_list()),
     ]
 }
@@ -360,7 +367,9 @@ fn main_values(
         .iter()
         .find(|a| a.name == "main")
         .or(main.agents.first());
-    let activity = main_activity(main, lead, now);
+    let [activity, activity_label] = main_activity(main, lead, now)
+        .map(|a| drawn(a, now).map(Some))
+        .unwrap_or_default();
     vec![
         (PROJECT, Some(format_text(project))),
         (FEATURE, None),
@@ -369,64 +378,48 @@ fn main_values(
         (ATTENTION, judged.attention.map(|k| k.to_string())),
         (BADGE, lead.map(|a| badge::agent(a.state, a.unread))),
         (LABEL, lead.map(|a| badge::agent_label(a.state, a.unread))),
-        (ACTIVITY, activity.as_ref().map(Activity::badge)),
-        (ACTIVITY_LABEL, activity.as_ref().map(Activity::label)),
+        (ACTIVITY, activity),
+        (ACTIVITY_LABEL, activity_label),
         (ALERTED, judged.alerted_list()),
     ]
 }
 
 /// A main scope's activity, without the busy glyph its `lead`'s badge
-/// already shows.
+/// already shows. Background work still shows, for its age.
 fn main_activity(
     main: &ScopeSnapshot,
     lead: Option<&AgentSnapshot>,
     now: DateTime<Utc>,
 ) -> Option<Activity> {
-    let lead_shows_work =
-        lead.is_some_and(|a| matches!(a.state, AgentState::Busy | AgentState::Background));
-    activity(main.working, main.last_activity, now).filter(|_| !(main.working && lead_shows_work))
+    let lead_busy = lead.is_some_and(|a| a.state == AgentState::Busy);
+    attention::activity(main.working, main.background_since, main.last_activity, now)
+        .filter(|a| !(*a == Activity::Working && lead_busy))
 }
 
-/// Whether a scope is working, or how long it has been quiet.
-#[derive(Debug, PartialEq)]
-enum Activity {
-    Working,
-    Quiet(String),
-}
-
-impl Activity {
-    /// The busy glyph, or the quiet spell (`2h`).
-    fn badge(&self) -> String {
-        match self {
-            Self::Working => badge::working(),
-            Self::Quiet(span) => badge::styled(QUIET_STYLE, span),
+/// `activity` as `@pm_activity` and `@pm_activity_label`: the busy glyph,
+/// the background glyph and wait (`1d`), or the quiet spell (`2h`); then
+/// the same with words.
+fn drawn(activity: Activity, now: DateTime<Utc>) -> [String; 2] {
+    match activity {
+        Activity::Working => [badge::working(), badge::working_label()],
+        Activity::Background(since) => {
+            let span = span(since, now);
+            [
+                badge::background(&span),
+                badge::background(&format!("background {span}")),
+            ]
         }
-    }
-
-    /// [`badge`](Self::badge) with words: `working`, or `quiet 2h`.
-    fn label(&self) -> String {
-        match self {
-            Self::Working => badge::working_label(),
-            Self::Quiet(span) => badge::styled(QUIET_STYLE, &format!("quiet {span}")),
+        Activity::Quiet(since) => {
+            let span = span(since, now);
+            [
+                badge::styled(QUIET_STYLE, &span),
+                badge::styled(QUIET_STYLE, &format!("quiet {span}")),
+            ]
         }
     }
 }
 
 const QUIET_STYLE: &str = "fg=colour245";
-
-/// Working while the scope works, else how long it has been quiet, once
-/// that is long enough to matter.
-fn activity(
-    working: bool,
-    last_activity: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
-) -> Option<Activity> {
-    if working {
-        return Some(Activity::Working);
-    }
-    let since = attention::quiet_since(working, last_activity, now)?;
-    Some(Activity::Quiet(span(since, now)))
-}
 
 pub(super) fn window_values(agent: &AgentSnapshot) -> Vec<(&'static str, Option<String>)> {
     vec![
@@ -1039,7 +1032,7 @@ mod tests {
                     agents,
                     attention,
                     working: false,
-                    busy: false,
+                    background_since: None,
                     last_activity: None,
                 }),
             }],
@@ -1057,6 +1050,7 @@ mod tests {
             waiting: Some(attention::WaitingSnapshot {
                 kind,
                 detail: detail.into(),
+                since: None,
             }),
         }
     }
@@ -1139,7 +1133,7 @@ mod tests {
             session_exists: true,
             agents,
             working: busy,
-            busy,
+            background_since: None,
             last_activity: None,
         };
         feature.attention = attention::attention(&feature);
@@ -1271,6 +1265,7 @@ mod tests {
                 waiting: Some(attention::WaitingSnapshot {
                     kind: WaitingKind::Permission,
                     detail: "permission".into(),
+                    since: None,
                 }),
                 ..agent_in(AgentState::Asking)
             }]
@@ -1408,6 +1403,7 @@ mod tests {
             waiting: Some(attention::WaitingSnapshot {
                 kind: WaitingKind::Permission,
                 detail: "permission".into(),
+                since: None,
             }),
             ..agent_in(AgentState::Asking)
         }];
@@ -1489,6 +1485,17 @@ mod tests {
                 "#[fg=colour245]quiet 3h#[default]"
             ]
         );
+        let mut waiting = main(AgentState::Background, AgentState::Idle, false, 185);
+        waiting.projects[0].main.as_mut().unwrap().background_since =
+            Some(now - chrono::Duration::hours(26));
+        assert_eq!(
+            activity(&waiting),
+            [
+                "#[fg=green]\u{f110} 1d#[default]",
+                "#[fg=green]\u{f110} background 1d#[default]"
+            ],
+            "the main agent's badge doesn't show how long"
+        );
     }
 
     #[test]
@@ -1502,26 +1509,30 @@ mod tests {
     }
 
     #[test]
-    fn activity_shows_work_or_a_quiet_spell_long_enough_to_matter() {
+    fn activity_is_drawn_with_its_glyph_and_age() {
         let now = Utc::now();
-        let ago = |minutes| Some(now - chrono::Duration::minutes(minutes));
-        let drawn = |activity: Option<Activity>| activity.map(|a| [a.badge(), a.label()]);
+        let ago = |minutes| now - chrono::Duration::minutes(minutes);
         assert_eq!(
-            drawn(activity(true, ago(1), now)),
-            Some([
-                "#[fg=green]\u{f013}#[default]".into(),
-                "#[fg=green]\u{f013} working#[default]".into()
-            ])
+            drawn(Activity::Working, now),
+            [
+                "#[fg=green]\u{f013}#[default]",
+                "#[fg=green]\u{f013} working#[default]"
+            ]
         );
-        assert_eq!(activity(false, ago(9), now), None, "between turns");
         assert_eq!(
-            drawn(activity(false, ago(185), now)),
-            Some([
-                "#[fg=colour245]3h#[default]".into(),
-                "#[fg=colour245]quiet 3h#[default]".into()
-            ])
+            drawn(Activity::Background(ago(1500)), now),
+            [
+                "#[fg=green]\u{f110} 1d#[default]",
+                "#[fg=green]\u{f110} background 1d#[default]"
+            ]
         );
-        assert_eq!(activity(false, None, now), None);
+        assert_eq!(
+            drawn(Activity::Quiet(ago(185)), now),
+            [
+                "#[fg=colour245]3h#[default]",
+                "#[fg=colour245]quiet 3h#[default]"
+            ]
+        );
     }
 
     #[test]

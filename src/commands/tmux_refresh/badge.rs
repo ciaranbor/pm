@@ -67,6 +67,13 @@ pub(super) fn working_label() -> String {
     styled(style, &format!("{glyph} working"))
 }
 
+/// The background glyph and `text`, for a scope waiting on background
+/// work.
+pub(super) fn background(text: &str) -> String {
+    let (style, glyph) = agent_mark(AgentState::Background);
+    styled(style, &format!("{glyph} {text}"))
+}
+
 /// `text` in `style`, then back to the surrounding style.
 pub(super) fn styled(style: &str, text: &str) -> String {
     format!("#[{style}]{text}#[default]")

@@ -14,7 +14,7 @@ use crate::state::paths;
 use crate::state::runtime;
 
 use super::attention::{
-    self, AgentSnapshot, Attention, AttentionKind, FeatureSnapshot, ProjectSnapshot,
+    self, Activity, AgentSnapshot, Attention, AttentionKind, FeatureSnapshot, ProjectSnapshot,
 };
 
 /// Summary lines shown in a single feature's view.
@@ -99,7 +99,8 @@ pub fn all(projects_dir: &Path, json: bool, tmux_server: Option<&str>) -> Result
 /// One row per feature, in the snapshot's order, and one for each of
 /// `projects`' main scopes that needs attention, ranked among them: name
 /// (with its project when `with_project`), what it needs (its progress when
-/// nothing), its agents, how long it has been quiet, and the detail.
+/// nothing), its agents, how long it has waited on background work or been
+/// quiet, and the detail.
 pub fn rows(
     features: &[FeatureSnapshot],
     projects: &[ProjectSnapshot],
@@ -113,10 +114,15 @@ pub fn rows(
             name.to_string()
         }
     };
-    let quiet = |working, last_activity| {
-        attention::quiet_since(working, last_activity, now)
-            .map(|since| format!("quiet {}", span(since, now)))
-            .unwrap_or_default()
+    let quiet = |working, background_since, last_activity| match attention::activity(
+        working,
+        background_since,
+        last_activity,
+        now,
+    ) {
+        Some(Activity::Background(since)) => format!("background {}", span(since, now)),
+        Some(Activity::Quiet(since)) => format!("quiet {}", span(since, now)),
+        Some(Activity::Working) | None => String::new(),
     };
     let features = features.iter().map(|f| {
         let label = match f.attention.kind {
@@ -129,7 +135,7 @@ pub fn rows(
                 name(&f.project, &f.name),
                 label,
                 agents(f.session_exists, &f.agents),
-                quiet(f.working, f.last_activity),
+                quiet(f.working, f.background_since, f.last_activity),
                 detail(&f.attention),
             ],
         )
@@ -144,7 +150,7 @@ pub fn rows(
                     name(&p.name, "main"),
                     kind.to_string(),
                     agents(main.session_exists, &main.agents),
-                    quiet(main.working, main.last_activity),
+                    quiet(main.working, main.background_since, main.last_activity),
                     detail(&main.attention),
                 ],
             )
@@ -353,7 +359,7 @@ mod tests {
             session_exists: true,
             agents,
             working: false,
-            busy: false,
+            background_since: None,
             last_activity,
         }
     }
@@ -393,7 +399,7 @@ mod tests {
                 agents: vec![scope_agent("main", AgentState::Asking)],
                 attention,
                 working: false,
-                busy: false,
+                background_since: None,
                 last_activity: None,
             }),
         };

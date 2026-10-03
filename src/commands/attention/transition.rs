@@ -82,7 +82,7 @@ pub struct Verdict {
 /// team is busy isn't waiting on the user yet.
 pub fn needs_user(feature: &FeatureSnapshot) -> Option<AttentionKind> {
     let kind = feature.attention.kind;
-    let waiting = !(kind == AttentionKind::Ready && feature.busy);
+    let waiting = !(kind == AttentionKind::Ready && feature.working);
     (kind != AttentionKind::None && waiting).then_some(kind)
 }
 
@@ -99,14 +99,14 @@ pub fn judge_feature(previous: Option<&Judged>, feature: &FeatureSnapshot) -> Ve
     let owed = kind == AttentionKind::Ready && (new || previous.is_some_and(|p| p.owed));
     let alert = match kind {
         AttentionKind::Blocked | AttentionKind::Asking => new,
-        AttentionKind::Ready => owed && !feature.busy,
+        AttentionKind::Ready => owed && !feature.working,
         _ => false,
     };
     if alert {
         judged.record(kind);
     }
     judged.attention = needs_user(feature);
-    judged.owed = owed && feature.busy;
+    judged.owed = owed && feature.working;
     Verdict { judged, alert }
 }
 
@@ -266,6 +266,7 @@ mod tests {
             waiting: (state == AgentState::Asking).then(|| WaitingSnapshot {
                 kind: WaitingKind::Permission,
                 detail: "permission".into(),
+                since: None,
             }),
         }
     }
@@ -289,7 +290,7 @@ mod tests {
             session_exists: true,
             agents: vec![agent(state)],
             working: busy,
-            busy,
+            background_since: None,
             last_activity: None,
         };
         f.attention = attention(&f);
@@ -308,7 +309,7 @@ mod tests {
                 attention: super::super::main_attention(&agents),
                 agents,
                 working: false,
-                busy: false,
+                background_since: None,
                 last_activity: None,
             }
         });
