@@ -222,17 +222,44 @@ pm serve pair --name pixel  # scan the QR code in the app
 ```
 
 The phone must be on the tailnet to reach it: with Tailscale off (another
-VPN, such as ProtonVPN, on instead) the app can't connect. Every request
+VPN, such as ProtonVPN, on instead) the app can't connect, and shows the
+last snapshot it read. Every request
 needs a paired device's bearer token, local ones included — through
 `tailscale serve` every request arrives on loopback. `pair` prints the
 token once, beside the QR code; `pm serve devices` lists the paired
-devices and `pm serve revoke <device>` withdraws one's token at once. pm
+devices and `pm serve revoke <device>` withdraws one's token, and its push
+subscription, at once. pm
 does not rely on Tailscale's identity headers: a tagged device sends none.
 `pm serve` logs each request with its device to stderr, which the
 LaunchAgent sends to `serve.log` in the `serve/` dir of pm's config dir,
-beside the devices file; `pm state` syncs neither.
+beside the devices file and the server's VAPID key (`vapid.pem`); `pm
+state` syncs none of them.
 
-The API, all `GET` under `/v1`, needing the `read` scope:
+Notifications don't need the tailnet. A device subscribes through
+[UnifiedPush](https://unifiedpush.org) — the ntfy app using ntfy.sh, or
+Google's push service built into pm's app — and registers the
+subscription with `pm serve`, which sends each `transition` event to it
+as an encrypted Web Push (RFC 8030/8291, signed with the VAPID key). A
+push carries only `{project, scope, kind, agent}`; the app fetches the rest
+over the tailnet when opened. A push service answering that a
+subscription is gone drops it. Deleting `vapid.pem` strands every
+subscription: the app subscribes again only once re-paired.
+
+A subscription must be https on a known push service — Google's
+(`fcm.googleapis.com`) or `ntfy.sh` — so a token can't aim `pm serve` at
+a service on the tailnet or the Mac. A self-hosted distributor's host goes
+in the global config, read as `pm serve` starts:
+
+```toml
+[serve]
+push_hosts = ["ntfy.example.org"]
+```
+
+Pushes go only to public addresses, whatever a host resolves to, and
+follow no redirect.
+
+The API is under `/v1`; every path needs the `read` scope, and only
+`push` takes anything but `GET`:
 
 | Path | Returns |
 |---|---|
@@ -242,6 +269,7 @@ The API, all `GET` under `/v1`, needing the `read` scope:
 | `agents/{project}/{scope}/{agent}/screen` | what the agent's pane shows now, plain text |
 | `agents/{project}/{scope}/{agent}/transcript?before={cursor}&limit={n}` | the agent's conversation, a page back from `before` (the end when absent); `limit` 1–200, default 50 |
 | `agents/{project}/{scope}/{agent}/transcript/result?ref={full}` | a tool result's whole output, plain text |
+| `push` | `GET`: `{"vapid": <public key>}`, to subscribe against; `PUT` a Web Push subscription (`{"endpoint": <https URL>, "keys": {"p256dh", "auth"}}`) to push to this device; `DELETE` to stop |
 
 #### Transcript contract (version 1)
 
@@ -287,6 +315,30 @@ When the agent's session changes (restart, fork), it sends `"reset": true`
 with the new conversation's latest page and its `before`: the client
 replaces what it shows. Claude Code deletes transcripts after 30 days by
 default; an agent whose transcript is gone has no conversation (404).
+
+#### The Android app
+
+The app lives in `android/` (Kotlin, Jetpack Compose). Build the debug APK
+— needing JDK 17+ and the Android SDK, platform 37 — and sideload it:
+
+```sh
+android/gradlew -p android assembleDebug
+adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+Without `adb`, copy the APK to the phone and open it, allowing installs
+from that source. In the app, scan the code `pm serve pair` prints, or
+paste its `url`, `device` and `token` lines. It asks to post
+notifications, then subscribes through the phone's default UnifiedPush
+distributor, else any installed one, else Google's; Settings switches
+between them. For notifications off the tailnet without Google, install
+ntfy from F-Droid (its default server is ntfy.sh) before pairing.
+
+The app is read-only: projects, then a project's `main` and features, then
+a scope's agents, each marked with the glyphs and colours of the tmux
+badges ([tmux integration](#tmux-integration)); an agent's
+conversation, from its harness's transcript, and its screen; a feature's
+summary. A tapped notification opens the scope, or the agent it names.
 
 ## Concepts
 

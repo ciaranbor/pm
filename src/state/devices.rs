@@ -3,6 +3,12 @@
 //! a plain hash is as good as a slow one, and the file leaking gives away no
 //! token. The file is machine-local, under the config dir's `serve/`, which
 //! the registry's `.gitignore` block names, and readable only by the user.
+//!
+//! A device's Web Push subscription lives on its entry, so revoking the
+//! device drops it. Every change goes through [`Devices::update`], which
+//! holds a lock across the read and the write: `pm serve` registers
+//! subscriptions while `pair` and `revoke` run, and a change made from a
+//! stale read could bring a revoked device back.
 
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
@@ -18,6 +24,7 @@ use crate::fs_utils::write_atomic;
 /// The config-dir-relative dir `pm serve` keeps its machine-local files in.
 pub const DIR_NAME: &str = "serve";
 const FILE_NAME: &str = "devices.toml";
+const LOCK_NAME: &str = "devices.lock";
 
 /// What a device's token lets it do.
 #[derive(
@@ -48,6 +55,17 @@ pub struct Device {
     pub token_sha256: String,
     pub scopes: Vec<Scope>,
     pub paired: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub push: Option<Push>,
+}
+
+/// Where a device's push service takes its messages, and the keys they are
+/// encrypted to (RFC 8291), base64url as the device sent them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Push {
+    pub endpoint: String,
+    pub p256dh: String,
+    pub auth: String,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -71,10 +89,27 @@ impl Devices {
         }
     }
 
-    pub fn save(&self, path: &Path) -> Result<()> {
+    fn save(&self, path: &Path) -> Result<()> {
         write_atomic(path, toml::to_string(self)?.as_bytes())?;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
         Ok(())
+    }
+
+    /// Apply `change` to the devices in `path` and save them, holding the
+    /// devices' lock throughout. Nothing is saved when `change` fails.
+    pub fn update<T>(path: &Path, change: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        let dir = path.parent().unwrap_or(Path::new("."));
+        std::fs::create_dir_all(dir)?;
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(dir.join(LOCK_NAME))?;
+        lock.lock()?;
+        let mut devices = Self::load(path)?;
+        let out = change(&mut devices)?;
+        devices.save(path)?;
+        Ok(out)
     }
 
     /// Pair a device named `name` with `scopes`, returning its token, the
@@ -101,6 +136,7 @@ impl Devices {
                 token_sha256: digest(&token),
                 scopes,
                 paired: Utc::now(),
+                push: None,
             },
         );
         Ok(token)

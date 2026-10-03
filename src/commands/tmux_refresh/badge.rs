@@ -1,7 +1,8 @@
 //! The styled glyphs pm publishes: an agent's state, and the attention a
 //! scope needs. An attention kind that means what an agent state means
 //! (asking, dead, unarmed) is drawn as that state, so one glyph reads the
-//! same on a window and on its session.
+//! same on a window and on its session. The phone app draws the same
+//! marks (`android/…/model/Attention.kt`); change both together.
 //!
 //! Glyphs are Nerd Font (v3), one cell wide. A glyph inside a badge is
 //! followed by a space: some terminals (Ghostty) draw an icon at full size

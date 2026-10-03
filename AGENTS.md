@@ -136,6 +136,7 @@ cargo test                     # run all tests
 cargo clippy --all-targets     # lint, tests included
 cargo fmt                      # format
 cargo run -- <args>            # test local changes (development only)
+android/gradlew -p android lint test assembleDebug  # when android/ changes; no cargo step builds it
 ```
 
 **Important:** Use `pm` (the installed binary) for pm commands; use `cargo

@@ -1,6 +1,8 @@
 //! What each request gets. The token is checked before anything else, so
 //! a request without a valid one learns nothing, not even which paths
 //! exist; a valid token without the endpoint's scope is refused after.
+//! Every endpoint needs the read scope; the only writes are a device's own
+//! push subscription, which reads nothing it couldn't already.
 //! Path segments name only what the registry and pm state list, so none
 //! reaches the filesystem as a path of its own.
 
@@ -9,14 +11,14 @@ use std::path::PathBuf;
 use crate::commands::attention;
 use crate::error::Result;
 use crate::state::agent::AgentRegistry;
-use crate::state::devices::{Devices, Scope};
+use crate::state::devices::{Devices, Push, Scope};
 use crate::state::feature::FeatureState;
 use crate::state::paths;
 use crate::state::project::ProjectEntry;
 use crate::tmux;
 
-use super::Config;
 use super::transcript::{Agent, DEFAULT_LIMIT, MAX_LIMIT, TranscriptWatch, page_json};
+use super::{Config, push};
 
 pub(super) enum Reply {
     Body {
@@ -48,7 +50,7 @@ const JSON: &str = "application/json";
 const MARKDOWN: &str = "text/markdown; charset=utf-8";
 const TEXT: &str = "text/plain; charset=utf-8";
 
-fn error(status: u16, message: &str) -> Reply {
+pub(super) fn error(status: u16, message: &str) -> Reply {
     Reply::Body {
         status,
         content_type: JSON,
@@ -64,13 +66,25 @@ fn ok(content_type: &'static str, body: String) -> Reply {
     }
 }
 
-pub(super) fn route(
-    config: &Config,
-    method: &str,
-    path: &str,
-    query: &str,
-    authorization: Option<&str>,
-) -> Handled {
+/// One request, as `route` reads it.
+pub(super) struct Request<'a> {
+    pub method: &'a str,
+    pub path: &'a str,
+    pub query: &'a str,
+    pub authorization: Option<&'a str>,
+    pub body: &'a str,
+}
+
+/// Answer `request`; `vapid` is the public key the server signs pushes
+/// with.
+pub(super) fn route(config: &Config, vapid: &str, request: &Request<'_>) -> Handled {
+    let Request {
+        method,
+        path,
+        query,
+        authorization,
+        body,
+    } = *request;
     let token = authorization.and_then(bearer);
     let devices = match Devices::load(&config.devices) {
         Ok(devices) => devices,
@@ -87,16 +101,64 @@ pub(super) fn route(
             reply: error(401, "a paired device's bearer token is required"),
         };
     };
-    let reply = if method != "GET" {
-        error(405, "only GET is served")
-    } else if !paired.scopes.contains(&Scope::Read) {
+    let reply = if !paired.scopes.contains(&Scope::Read) {
         error(403, "this device's token lacks the read scope")
     } else {
-        get(config, path, &Query::parse(query)).unwrap_or_else(|e| error(500, &e.to_string()))
+        let served = match (method, path) {
+            (_, "/v1/push") => push_route(config, vapid, method, device, body),
+            ("GET", _) => get(config, path, &Query::parse(query)),
+            _ => Ok(error(405, "only GET is served here")),
+        };
+        served.unwrap_or_else(|e| error(500, &e.to_string()))
     };
     Handled {
         device: Some(device.to_string()),
         reply,
+    }
+}
+
+/// `/v1/push`: the server's VAPID public key, and the device's own
+/// subscription to set or clear.
+fn push_route(
+    config: &Config,
+    vapid: &str,
+    method: &str,
+    device: &str,
+    body: &str,
+) -> Result<Reply> {
+    let set = |push: Option<Push>| {
+        Devices::update(&config.devices, |paired| {
+            if let Some(d) = paired.devices.get_mut(device) {
+                d.push = push;
+            }
+            Ok(())
+        })
+    };
+    match method {
+        "GET" => {
+            let body = serde_json::json!({ "vapid": vapid });
+            Ok(ok(JSON, body.to_string()))
+        }
+        "PUT" => match push::subscription(body, &config.push) {
+            Ok(push) => {
+                set(Some(push))?;
+                Ok(no_content())
+            }
+            Err(e) => Ok(error(400, &e)),
+        },
+        "DELETE" => {
+            set(None)?;
+            Ok(no_content())
+        }
+        _ => Ok(error(405, "GET, PUT and DELETE are served here")),
+    }
+}
+
+fn no_content() -> Reply {
+    Reply::Body {
+        status: 204,
+        content_type: JSON,
+        body: String::new(),
     }
 }
 

@@ -12,7 +12,9 @@
 //! sends it to every event stream when it changed, and judges it against
 //! the last ([`Watch`]) for transitions: the rule tmux alerts by, plus an
 //! agent dying. The first snapshot, read as the server starts, is the
-//! baseline, so a restart reports nothing that was already so. The poller
+//! baseline, so a restart reports nothing that was already so. Each
+//! transition also goes to every subscribed device as a Web Push
+//! (`push`), which reaches a phone off the tailnet. The poller
 //! also re-executes the binary once it is replaced ([`Binary`]), so an
 //! upgrade reaches a server launchd keeps running.
 //!
@@ -33,11 +35,17 @@ use super::attention::{self, transition::Watch};
 use super::reexec::Binary;
 
 mod events;
+mod push;
 mod routes;
 mod transcript;
 
 use events::Hub;
+use push::Pusher;
+pub use push::policy::Policy as PushPolicy;
 use routes::Reply;
+
+/// The most of a request body read; a push subscription is well under it.
+const MAX_BODY: u64 = 16 * 1024;
 
 pub const DEFAULT_PORT: u16 = 7764;
 
@@ -54,6 +62,8 @@ pub struct Config {
     pub heartbeat: Duration,
     /// How often a stream watching an agent reads its conversation.
     pub transcript_poll: Duration,
+    /// Where a push may be sent.
+    pub push: PushPolicy,
 }
 
 impl Config {
@@ -65,6 +75,7 @@ impl Config {
             poll: Duration::from_secs(3),
             heartbeat: Duration::from_secs(25),
             transcript_poll: Duration::from_secs(1),
+            push: PushPolicy::new(&[]),
         }
     }
 }
@@ -73,21 +84,27 @@ pub struct Server {
     http: tiny_http::Server,
     config: Config,
     hub: Hub,
+    pusher: Pusher,
+    /// The public half of the key `pusher` signs with.
+    vapid: String,
     /// What the last snapshot was judged to be, for the next.
     watch: Mutex<Watch>,
     stopped: AtomicBool,
 }
 
 impl Server {
-    /// Listen on loopback `port` (0 picks a free one) and read the baseline
-    /// snapshot.
+    /// Listen on loopback `port` (0 picks a free one), read the baseline
+    /// snapshot, and load the VAPID key, made if there is none.
     pub fn bind(config: Config, port: u16) -> Result<Arc<Self>> {
         let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
         let http = tiny_http::Server::http(addr)
             .map_err(|e| PmError::Serve(format!("cannot listen on {addr}: {e}")))?;
         let snapshot = attention::all(&config.projects_dir, config.tmux_server.as_deref())?;
+        let key = push::vapid_key(&push::key_path(&config.devices))?;
         Ok(Arc::new(Self {
             http,
+            vapid: push::public_key(&key),
+            pusher: Pusher::start(config.devices.clone(), key, config.push.clone()),
             config,
             hub: Hub::new(&snapshot)?,
             watch: Mutex::new(Watch::start(&snapshot)),
@@ -127,7 +144,10 @@ impl Server {
             );
             let mut watch = self.watch.lock().unwrap_or_else(|e| e.into_inner());
             match read.and_then(|snapshot| self.hub.update(&watch, &snapshot)) {
-                Ok(next) => *watch = next,
+                Ok((next, transitions)) => {
+                    *watch = next;
+                    self.pusher.send(transitions);
+                }
                 Err(e) => log(&format!("snapshot unreadable: {e}")),
             }
             drop(watch);
@@ -140,7 +160,7 @@ impl Server {
         }
     }
 
-    fn handle(&self, request: tiny_http::Request) {
+    fn handle(&self, mut request: tiny_http::Request) {
         let authorization = request
             .headers()
             .iter()
@@ -152,13 +172,28 @@ impl Server {
             .split_once('?')
             .map_or((request.url(), ""), |(path, query)| (path, query));
         let (path, query) = (path.to_string(), query.to_string());
-        let handled = routes::route(
-            &self.config,
-            &method,
-            &path,
-            &query,
-            authorization.as_deref(),
+        let mut body = String::new();
+        let read = std::io::Read::read_to_string(
+            &mut std::io::Read::take(request.as_reader(), MAX_BODY),
+            &mut body,
         );
+        let handled = match read {
+            Ok(_) => routes::route(
+                &self.config,
+                &self.vapid,
+                &routes::Request {
+                    method: &method,
+                    path: &path,
+                    query: &query,
+                    authorization: authorization.as_deref(),
+                    body: &body,
+                },
+            ),
+            Err(_) => routes::Handled {
+                device: None,
+                reply: routes::error(400, "the body is not UTF-8"),
+            },
+        };
         let device = handled.device.as_deref().unwrap_or("-");
         log(&format!(
             "{device} {method} {path} {}",

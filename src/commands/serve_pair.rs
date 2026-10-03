@@ -49,9 +49,7 @@ pub fn pair(devices: &Path, device: &str, scopes: &[Scope], url: Option<&str>) -
                 )
             })?,
     };
-    let mut paired = Devices::load(devices)?;
-    let token = paired.pair(device, scopes)?;
-    paired.save(devices)?;
+    let token = Devices::update(devices, |paired| paired.pair(device, scopes))?;
     Ok(Pairing {
         url,
         device: device.to_string(),
