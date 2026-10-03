@@ -308,6 +308,9 @@ pub struct Process {
     /// Whether it is in its terminal's foreground process group: for a
     /// pane's shell, whether it is at its prompt rather than running a job.
     pub foreground: bool,
+    /// Whether it was asleep: for a pane's shell at its prompt with no job
+    /// in the foreground, whether it is waiting for input.
+    pub asleep: bool,
 }
 
 /// A process can rewrite its own command line, so it is not part of what
@@ -328,6 +331,7 @@ impl Process {
             started: String::new(),
             command: command.to_string(),
             foreground: true,
+            asleep: false,
         }
     }
 }
@@ -339,7 +343,7 @@ pub struct ProcessTable(Vec<(Process, u32)>);
 impl ProcessTable {
     pub fn read() -> Result<Self> {
         let table = Command::new("ps")
-            .args(["-A", "-o", "pid=,ppid=,pgid=,tpgid=,lstart=,command="])
+            .args(["-A", "-o", "pid=,ppid=,pgid=,tpgid=,stat=,lstart=,command="])
             .output()?;
         Ok(Self(
             String::from_utf8_lossy(&table.stdout)
@@ -350,6 +354,8 @@ impl ProcessTable {
                     let ppid = fields.next()?.parse().ok()?;
                     let pgid: i64 = fields.next()?.parse().ok()?;
                     let tpgid: i64 = fields.next()?.parse().ok()?;
+                    // `S` sleeping, `I` idle (macOS: asleep over 20 s).
+                    let asleep = fields.next()?.starts_with(['S', 'I']);
                     // `lstart` is always five fields: `Wed Oct  1 16:47:56 2026`.
                     let started: Vec<&str> = fields.by_ref().take(5).collect();
                     if started.len() < 5 {
@@ -360,6 +366,7 @@ impl ProcessTable {
                         started: started.join(" "),
                         command: fields.collect::<Vec<_>>().join(" "),
                         foreground: pgid == tpgid,
+                        asleep,
                     };
                     Some((process, ppid))
                 })
