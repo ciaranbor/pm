@@ -172,29 +172,41 @@ pub fn attach_session(server: Option<&str>, name: &str) -> Result<()> {
 /// another server included, attaches a fresh client.
 pub fn connect_session(server: Option<&str>, session: &str, tmux_env: Option<&str>) -> Result<()> {
     match tmux_env {
-        Some(env) if is_client_of(server, session, env) => switch_client(server, session),
+        Some(env) if names_server(server, env) => switch_client(server, session),
         _ => attach_session(server, session),
     }
 }
 
-/// Whether `tmux_env` (a `$TMUX` value: `socket,pid,session`) names the
-/// socket of the server holding `session`.
-fn is_client_of(server: Option<&str>, session: &str, tmux_env: &str) -> bool {
+/// Whether `tmux_env` (a `$TMUX` value: `socket,pid,session`) names
+/// `server`'s socket.
+fn names_server(server: Option<&str>, tmux_env: &str) -> bool {
     let ours = tmux_env.split(',').next().unwrap_or_default();
-    let Ok(theirs) = run_tmux(
-        server,
-        &[
-            "display-message",
-            "-p",
-            "-t",
-            &exact(session),
-            "#{socket_path}",
-        ],
-    ) else {
+    let Ok(Some(theirs)) = socket_path(server) else {
         return false;
     };
     let canonical = |p: &str| std::fs::canonicalize(p).unwrap_or_else(|_| p.into());
     canonical(ours) == canonical(&theirs)
+}
+
+/// The session holding the pane this process runs in, when that pane is on
+/// `server`: a pane id names a pane only on its own server.
+pub fn own_session(server: Option<&str>) -> Option<String> {
+    let tmux_env = std::env::var("TMUX").ok();
+    let pane = std::env::var("TMUX_PANE").ok();
+    session_of_pane(server, tmux_env.as_deref()?, pane.as_deref()?)
+}
+
+/// The session of `pane`, if `tmux_env` names `server`.
+fn session_of_pane(server: Option<&str>, tmux_env: &str, pane: &str) -> Option<String> {
+    if !names_server(server, tmux_env) || !pane.starts_with('%') {
+        return None;
+    }
+    run_tmux(
+        server,
+        &["display-message", "-p", "-t", pane, "#{session_name}"],
+    )
+    .ok()
+    .filter(|s| !s.is_empty())
 }
 
 /// Create a new window in an existing tmux session. Returns the new window's target
@@ -817,24 +829,19 @@ mod tests {
     }
 
     #[test]
-    fn a_client_is_of_the_server_whose_socket_its_tmux_env_names() {
+    fn a_pane_has_a_session_only_on_the_server_tmux_env_names() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let name = server.scope("client-of");
+        let name = server.scope("own");
         create_session(server.name(), &name, dir.path()).unwrap();
-        let socket = run_tmux(
-            server.name(),
-            &["display-message", "-p", "-t", &name, "#{socket_path}"],
-        )
-        .unwrap();
+        let pane = server.pane_id(&format!("{name}:0"));
+        let socket = socket_path(server.name()).unwrap().unwrap();
 
-        assert!(is_client_of(server.name(), &name, &format!("{socket},1,0")));
+        let env = format!("{socket},1,0");
+        assert_eq!(session_of_pane(server.name(), &env, &pane), Some(name));
         let other = std::path::Path::new(&socket).with_file_name("pm-elsewhere");
-        assert!(!is_client_of(
-            server.name(),
-            &name,
-            &format!("{},1,0", other.display())
-        ));
+        let env = format!("{},1,0", other.display());
+        assert_eq!(session_of_pane(server.name(), &env, &pane), None);
     }
 
     #[test]

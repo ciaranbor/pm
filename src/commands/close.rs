@@ -32,6 +32,13 @@ pub fn close(project_root: &Path, tmux_server: Option<&str>) -> Result<(String, 
         }
     }
 
+    // Killing the session this runs in ends this process, so it goes last.
+    let own = tmux::own_session(tmux_server);
+    if let Some(at) = doomed.iter().position(|s| Some(s) == own.as_ref()) {
+        let own = doomed.remove(at);
+        doomed.push(own);
+    }
+
     tmux::clients::move_off(tmux_server, &doomed, None)?;
     for session in &doomed {
         tmux::kill_session(tmux_server, session)?;
@@ -56,7 +63,11 @@ pub fn close_all(tmux_server: Option<&str>) -> Result<Vec<String>> {
 
 /// `close_all` with an injectable registry dir (for tests).
 pub fn close_all_with_dir(projects_dir: &Path, tmux_server: Option<&str>) -> Result<Vec<String>> {
-    let projects = ProjectEntry::list(projects_dir)?;
+    let mut projects = ProjectEntry::list(projects_dir)?;
+    // The project this runs in goes last, as its sessions do in `close`.
+    if let Some(own) = tmux::own_session(tmux_server) {
+        projects.sort_by_key(|(name, _)| own.starts_with(&format!("{name}/")));
+    }
 
     if projects.is_empty() {
         return Ok(vec!["No projects in registry".to_string()]);

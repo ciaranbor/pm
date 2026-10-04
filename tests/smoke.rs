@@ -637,6 +637,52 @@ fn delete_force_from_inside_main_session() {
     assert!(!proj.exists(), "project root left behind");
 }
 
+/// Catches: `pm close` run from a feature session, whose kill ends the
+/// caller, leaving the sessions it had not reached open.
+#[test]
+#[ignore]
+fn close_from_inside_a_feature_session() {
+    let s = Smoke::new();
+    s.init_with_feature();
+    s.pm(&s.proj().join("main"))
+        .args(["feat", "new", "api"])
+        .assert()
+        .success();
+
+    let outcome = s.run_in("proj/api:0", "pm close");
+    assert!(!outcome.alive, "{outcome:?}");
+
+    let sessions = s.sessions();
+    assert!(
+        !sessions.iter().any(|n| n.starts_with("proj/")),
+        "sessions: {sessions:?}"
+    );
+}
+
+/// Catches: `pm close --all` run from a project closed before the others,
+/// whose kill ends the caller before it reaches them.
+#[test]
+#[ignore]
+fn close_all_from_inside_a_project_that_is_not_last() {
+    let s = Smoke::new();
+    s.init_with_feature();
+    s.pm(s.home())
+        .args(["init", "--no-main", &s.home().join("zzz").to_string_lossy()])
+        .assert()
+        .success();
+
+    let outcome = s.run_in("proj/main:0", "pm close --all");
+    assert!(!outcome.alive, "{outcome:?}");
+
+    let sessions = s.sessions();
+    assert!(
+        !sessions
+            .iter()
+            .any(|n| n.starts_with("proj/") || n.starts_with("zzz/")),
+        "sessions: {sessions:?}"
+    );
+}
+
 /// Catches: `pm open` rebuilding sessions and respawning registered agents
 /// from the registry alone, outside any tmux client.
 #[test]
