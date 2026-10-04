@@ -3,6 +3,7 @@ use std::process::Command;
 
 use crate::error::{PmError, Result};
 
+pub mod clients;
 pub mod keys;
 pub mod options;
 pub mod panes;
@@ -272,15 +273,6 @@ pub fn find_or_create_window(
     } else {
         new_window(server, session, start_dir, Some(name), true)
     }
-}
-
-/// Get the session name that the current tmux client is attached to.
-/// Uses `#{client_session}` rather than `#{session_name}` so it returns
-/// where the client is *currently viewing*, not the session of the pane
-/// running this command.
-/// Returns `None` if there is no attached client (e.g. running outside tmux).
-pub fn current_session(server: Option<&str>) -> Option<String> {
-    run_tmux(server, &["display-message", "-p", "#{client_session}"]).ok()
 }
 
 /// Shell-quote a string for safe use in send_line (single-quote wrapping with escaping).

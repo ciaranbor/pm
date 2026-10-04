@@ -166,7 +166,11 @@ pub fn delete(
             let session_name = tmux::session_name(&project_name, name);
             if tmux::has_session(tmux_server, &session_name)? {
                 let main_session = tmux::session_name(&project_name, "main");
-                let _ = tmux::switch_client(tmux_server, &main_session);
+                tmux::clients::move_off(
+                    tmux_server,
+                    std::slice::from_ref(&session_name),
+                    Some(&main_session),
+                )?;
                 tmux::kill_session(tmux_server, &session_name)?;
             }
         }
@@ -194,6 +198,7 @@ pub fn delete(
     // session, the kill terminates this process) ---
     let main_session = tmux::session_name(&project_name, "main");
     if tmux::has_session(tmux_server, &main_session)? {
+        tmux::clients::move_off(tmux_server, std::slice::from_ref(&main_session), None)?;
         tmux::kill_session(tmux_server, &main_session)?;
     }
 
@@ -244,8 +249,36 @@ fn remove_main_checkout(main_repo: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use crate::commands::feat_new;
-    use crate::testing::TestServer;
+    use crate::testing::{ControlClient, OwnServer, TestServer};
     use tempfile::tempdir;
+
+    #[test]
+    fn delete_moves_only_the_clients_viewing_the_project_off_it() {
+        let dir = tempdir().unwrap();
+        let (project, name) =
+            TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
+        let own = OwnServer::start("delete-clients");
+        let login = tmux::session_name(&name, "login");
+        for session in ["elsewhere", &tmux::session_name(&name, "main"), &login] {
+            tmux::create_session(own.name(), session, dir.path()).unwrap();
+        }
+        // The bystander attaches last, so it is the client tmux takes to be
+        // current.
+        let _viewer = ControlClient::attach(own.name(), &login);
+        let _bystander = ControlClient::attach(own.name(), "elsewhere");
+        let clients = tmux::clients::list(own.name()).unwrap();
+        let bystander = clients.iter().find(|c| c.session == "elsewhere").unwrap();
+        let bystander = bystander.name.clone();
+
+        let projects_dir = TestServer::registry_dir(&project);
+        delete(&project, &projects_dir, false, true, own.name()).unwrap();
+
+        let clients = tmux::clients::list(own.name()).unwrap();
+        assert_eq!(clients.len(), 2, "a client was detached: {clients:?}");
+        let stayed = clients.iter().find(|c| c.name == bystander).unwrap();
+        assert_eq!(stayed.session, "elsewhere");
+        assert!(clients.iter().all(|c| !c.session.starts_with(&name)));
+    }
 
     #[test]
     fn delete_empty_project_removes_all_resources() {

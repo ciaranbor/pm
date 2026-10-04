@@ -322,15 +322,12 @@ pub(crate) fn cleanup_feature_with_timing(
     run!(tlog, "kill-session", params.best_effort, {
         let session_name = tmux::session_name(params.project_name, params.name);
         if tmux::has_session(params.tmux_server, &session_name)? {
-            // Only switch the client away if it's currently attached to the
-            // session being deleted. Otherwise we'd disrupt the user's
-            // active session.
-            if let Some(current) = tmux::current_session(params.tmux_server)
-                && current == session_name
-            {
-                let base_session = tmux::session_name(params.project_name, params.base_scope);
-                let _ = tmux::switch_client(params.tmux_server, &base_session);
-            }
+            let base_session = tmux::session_name(params.project_name, params.base_scope);
+            tmux::clients::move_off(
+                params.tmux_server,
+                std::slice::from_ref(&session_name),
+                Some(&base_session),
+            )?;
             tmux::kill_session(params.tmux_server, &session_name)?;
         }
         Ok(())
@@ -511,7 +508,7 @@ pub fn feat_delete(
 mod tests {
     use super::*;
     use crate::commands::{feat_new, init};
-    use crate::testing::TestServer;
+    use crate::testing::{ControlClient, OwnServer, TestServer};
     use crate::tmux as tmux_mod;
     use tempfile::tempdir;
 
@@ -577,6 +574,45 @@ mod tests {
         // Messages removed
         assert!(!messages_dir.join("login").exists());
         assert!(!runtime.exists());
+    }
+
+    #[test]
+    fn feat_delete_moves_only_the_clients_viewing_the_feature_to_its_base() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, name) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let own = OwnServer::start("feat-delete-clients");
+        for scope in ["main", "login", "other"] {
+            tmux::create_session(own.name(), &tmux::session_name(&name, scope), dir.path())
+                .unwrap();
+        }
+        // The bystander attaches last, so it is the client tmux takes to be
+        // current.
+        let _viewer = ControlClient::attach(own.name(), &tmux::session_name(&name, "login"));
+        let _bystander = ControlClient::attach(own.name(), &tmux::session_name(&name, "other"));
+
+        feat_delete(
+            &project,
+            &TestServer::registry_dir(&project),
+            "login",
+            false,
+            own.name(),
+        )
+        .unwrap();
+
+        let mut viewing: Vec<String> = tmux_mod::clients::list(own.name())
+            .unwrap()
+            .into_iter()
+            .map(|c| c.session)
+            .collect();
+        viewing.sort();
+        assert_eq!(
+            viewing,
+            [
+                tmux::session_name(&name, "main"),
+                tmux::session_name(&name, "other")
+            ]
+        );
     }
 
     /// `main`'s unread messages, oldest first.
