@@ -45,39 +45,3 @@ data class Pairing(val url: String, val device: String, val token: String) {
         fun encode(pairing: Pairing): String = json.encodeToString(serializer(), pairing)
     }
 }
-
-/** What a push carries (`commands/serve/push.rs`): a transition, without its detail. */
-@Serializable
-data class PushedTransition(
-    val project: String,
-    val scope: String,
-    val kind: String,
-    val agent: String? = null,
-) {
-    val kindOf: AttentionKind
-        get() = AttentionKind.of(kind)
-
-    /** The notification's line, as the tmux alert words it. */
-    val title: String
-        get() {
-            val where = "$project/$scope"
-            return when (kindOf) {
-                AttentionKind.Blocked -> "$where is blocked"
-                AttentionKind.Asking ->
-                    if (agent != null) "$where: $agent is asking" else "$where is asking"
-                AttentionKind.Ready -> "$where is ready"
-                AttentionKind.Dead ->
-                    if (agent != null) "$where: $agent died" else "$where: an agent died"
-                else -> "$where: $kind"
-            }
-        }
-
-    companion object {
-        private val json = Json { ignoreUnknownKeys = true }
-
-        fun parse(bytes: ByteArray): PushedTransition? = runCatching {
-            json.decodeFromString(serializer(), bytes.decodeToString())
-        }
-            .getOrNull()
-    }
-}

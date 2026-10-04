@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">pm</string>
-    <string name="channel_attention">Needs you</string>
-    <string name="channel_attention_description">A feature or agent became blocked, asking, ready, or died</string>
+    <string name="channel_needs_input">Needs input</string>
+    <string name="channel_needs_input_description">A feature is blocked on you, or an agent is asking</string>
+    <string name="channel_ready">Ready for review</string>
+    <string name="channel_ready_description">A feature is done, waiting for you to merge or delete it</string>
+    <string name="channel_died">Agent died</string>
+    <string name="channel_died_description">An agent\'s session ended unexpectedly</string>
 </resources>

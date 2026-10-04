@@ -4,12 +4,14 @@ import android.content.Context
 import dev.pm.app.data.Repository
 import dev.pm.app.data.Store
 import dev.pm.app.data.defaultNetworkChanges
+import dev.pm.app.push.Notifications
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.shareIn
+import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 
 /** The app's long-lived objects, made once per process. */
@@ -26,4 +28,12 @@ class AppContainer(context: Context) {
             .shareIn(scope, SharingStarted.WhileSubscribed())
 
     val repository = Repository(Store(context.applicationContext), http, scope, networkChanges)
+
+    init {
+        scope.launch {
+            repository.received.collect {
+                if (it.understood) Notifications.reconcile(context.applicationContext, it)
+            }
+        }
+    }
 }

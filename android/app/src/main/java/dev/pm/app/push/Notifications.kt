@@ -1,20 +1,22 @@
 package dev.pm.app.push
 
-import android.Manifest
 import android.app.Activity
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.os.Build
+import android.net.Uri
+import android.provider.Settings
+import android.service.notification.StatusBarNotification
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import androidx.core.content.ContextCompat
+import androidx.core.os.bundleOf
 import dev.pm.app.MainActivity
 import dev.pm.app.R
+import dev.pm.app.model.AttentionKind
 import dev.pm.app.model.PushedTransition
+import dev.pm.app.model.Snapshot
 import org.unifiedpush.android.connector.UnifiedPush
 
 /** Where a notification leads: the scope, and the agent when one is named. */
@@ -39,53 +41,180 @@ data class Target(val project: String, val scope: String, val agent: String?) {
 }
 
 object Notifications {
-    private const val CHANNEL = "attention"
+    /** Channel ids are permanent: once created, only the user changes a channel's importance. */
+    private enum class Channel(
+        val id: String,
+        val title: Int,
+        val description: Int,
+        val importance: Int,
+    ) {
+        NeedsInput(
+            "needs-input",
+            R.string.channel_needs_input,
+            R.string.channel_needs_input_description,
+            NotificationManager.IMPORTANCE_HIGH,
+        ),
+        Ready(
+            "ready",
+            R.string.channel_ready,
+            R.string.channel_ready_description,
+            NotificationManager.IMPORTANCE_DEFAULT,
+        ),
+        Died(
+            "agent-died",
+            R.string.channel_died,
+            R.string.channel_died_description,
+            NotificationManager.IMPORTANCE_HIGH,
+        );
 
-    fun createChannel(context: Context) {
-        val channel =
-            NotificationChannel(
-                    CHANNEL,
-                    context.getString(R.string.channel_attention),
-                    NotificationManager.IMPORTANCE_HIGH,
-                )
-                .apply { description = context.getString(R.string.channel_attention_description) }
-        context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        companion object {
+            fun of(kind: AttentionKind): Channel =
+                when (kind) {
+                    AttentionKind.Blocked,
+                    AttentionKind.Asking -> NeedsInput
+                    AttentionKind.Dead -> Died
+                    else -> Ready
+                }
+        }
     }
 
-    /** A notification of `transition`; a later one for the same scope replaces it. */
-    fun show(context: Context, transition: PushedTransition) {
+    /** The single channel of earlier versions. */
+    private const val RETIRED_CHANNEL = "attention"
+    private const val GROUP = "dev.pm.app.attention"
+    private const val SUMMARY_ID = 0
+    /** Every alert's id; its tag, the encoded [PushedTransition.key], tells them apart. */
+    private const val ALERT_ID = 1
+    private const val EXTRA_TRANSITION = "dev.pm.app.transition"
+
+    fun createChannels(context: Context) {
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.deleteNotificationChannel(RETIRED_CHANNEL)
+        manager.createNotificationChannels(
+            Channel.entries.map {
+                NotificationChannel(it.id, context.getString(it.title), it.importance).apply {
+                    description = context.getString(it.description)
+                }
+            }
+        )
+    }
+
+    /**
+     * An alert of `transition`, replacing one with the same [PushedTransition.key], under a summary
+     * that alerts for the group on `transition`'s channel.
+     */
+    fun show(
+        context: Context,
+        transition: PushedTransition,
+        now: Long = System.currentTimeMillis(),
+    ) {
         if (!allowed(context)) return
-        val target = Target(transition.project, transition.scope, transition.agent)
+        val tag = PushedTransition.encode(transition.key)
+        val channel = Channel.of(transition.kindOf)
         val intent =
-            target
+            Target(transition.project, transition.scope, transition.agent)
                 .into(Intent(context, MainActivity::class.java))
+                .setData(Uri.fromParts("pm", tag, null))
                 .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        val id = "${transition.project}/${transition.scope}".hashCode()
         val open =
             PendingIntent.getActivity(
                 context,
-                id,
+                0,
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
-        val notification =
-            NotificationCompat.Builder(context, CHANNEL)
+        val alert =
+            NotificationCompat.Builder(context, channel.id)
                 .setSmallIcon(R.drawable.ic_notification)
-                .setContentTitle(transition.title)
-                .setContentText("Open to see the details over your tailnet")
+                .setContentTitle(transition.where)
+                .setContentText(transition.text)
+                .setWhen(now)
+                .setShowWhen(true)
                 .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setContentIntent(open)
                 .setAutoCancel(true)
+                .setGroup(GROUP)
+                .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_SUMMARY)
+                .addExtras(bundleOf(EXTRA_TRANSITION to PushedTransition.encode(transition)))
                 .build()
+        // What's showing is read before posting: a post reaches the active list asynchronously.
+        val others = newestFirst(alerts(context).filter { (sbn, _) -> sbn.tag != tag })
         @Suppress("MissingPermission")
-        NotificationManagerCompat.from(context).notify(id, notification)
+        NotificationManagerCompat.from(context).notify(tag, ALERT_ID, alert)
+        summarize(context, channel.id, listOf(transition) + others, silent = false)
     }
 
+    /** Withdraw each alert `snapshot` shows is over, and bring the summary up to date. */
+    fun reconcile(context: Context, snapshot: Snapshot) {
+        val alerts = alerts(context)
+        val over = alerts.filter { (_, transition) -> !transition.holds(snapshot) }
+        val manager = NotificationManagerCompat.from(context)
+        over.forEach { (sbn, _) -> manager.cancel(sbn.tag, ALERT_ID) }
+        val left = newestFirst(alerts - over.toSet())
+        val summary = active(context).find { it.id == SUMMARY_ID && it.tag == null } ?: return
+        when {
+            left.isEmpty() -> manager.cancel(SUMMARY_ID)
+            // A dismissed alert leaves the summary counting it.
+            left.size != summary.notification.number ->
+                summarize(context, summary.notification.channelId, left, silent = true)
+        }
+    }
+
+    /** The group's summary, led by the newest alert: what the group's alert shows. */
+    private fun summarize(
+        context: Context,
+        channel: String,
+        alerts: List<PushedTransition>,
+        silent: Boolean,
+    ) {
+        val newest = alerts.first()
+        val style = NotificationCompat.InboxStyle()
+        alerts.forEach { style.addLine("${it.where}: ${it.text}") }
+        val summary =
+            NotificationCompat.Builder(context, channel)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle(newest.where)
+                .setContentText(newest.text)
+                .setStyle(style)
+                .setNumber(alerts.size)
+                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                .setAutoCancel(true)
+                .setGroup(GROUP)
+                .setGroupSummary(true)
+                .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_SUMMARY)
+                .setSilent(silent)
+                .build()
+        @Suppress("MissingPermission")
+        NotificationManagerCompat.from(context).notify(SUMMARY_ID, summary)
+    }
+
+    /** The alerts showing, with what each announced. */
+    private fun alerts(context: Context): List<Pair<StatusBarNotification, PushedTransition>> =
+        active(context).mapNotNull { sbn ->
+            if (sbn.id != ALERT_ID) return@mapNotNull null
+            val encoded =
+                sbn.notification.extras.getString(EXTRA_TRANSITION) ?: return@mapNotNull null
+            PushedTransition.parse(encoded)?.let { sbn to it }
+        }
+
+    private fun newestFirst(
+        alerts: List<Pair<StatusBarNotification, PushedTransition>>
+    ): List<PushedTransition> =
+        alerts.sortedByDescending { (sbn, _) -> sbn.notification.`when` }.map { it.second }
+
+    private fun active(context: Context): List<StatusBarNotification> =
+        context.getSystemService(NotificationManager::class.java).activeNotifications.toList()
+
+    /**
+     * Whether Android lets pm post: the app's notification toggle, which POST_NOTIFICATIONS drives
+     * on 13 and later.
+     */
     fun allowed(context: Context): Boolean =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
-                PackageManager.PERMISSION_GRANTED
+        NotificationManagerCompat.from(context).areNotificationsEnabled()
+
+    /** Android's notification settings for pm, where a denied permission is granted. */
+    fun settings(context: Context): Intent =
+        Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+            .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
 
     /**
      * Subscribe through a distributor against the server's `vapid` key: the user's default one,
