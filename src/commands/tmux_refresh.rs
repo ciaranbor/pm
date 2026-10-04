@@ -530,15 +530,6 @@ mod tests {
         names.iter().map(|n| holder.get(n)).collect()
     }
 
-    fn tmux_out(server: &TestServer, args: &[&str]) -> String {
-        let out = std::process::Command::new("tmux")
-            .args(["-L", server.name().unwrap()])
-            .args(args)
-            .output()
-            .unwrap();
-        String::from_utf8_lossy(&out.stdout).into_owned()
-    }
-
     #[test]
     fn options_are_published_and_cleared_once_their_value_goes_away() {
         let _serial = serial();
@@ -625,9 +616,7 @@ mod tests {
             "a window that is no agent's"
         );
         let display = |target: &str, format: &str| {
-            tmux_out(&server, &["display", "-p", "-t", target, format])
-                .trim_end_matches('\n')
-                .to_string()
+            server.tmux_stdout(&["display", "-p", "-t", target, format])
         };
         // `display` runs in a pane's context: each line of the tree is its
         // branch of the format taken by hand.
@@ -907,11 +896,12 @@ mod tests {
         let projects_dir = TestServer::registry_dir(&project);
         let session = tmux::session_name(&project_name, "login");
         server.spawn_idle_fake_agent(&project, &session, "login", "implementer");
-        tmux_out(&server, &["set-option", "-s", "message-limit", "100000"]);
+        server.tmux_stdout(&["set-option", "-s", "message-limit", "100000"]);
         // The server logs each command it runs, newest first, with the
         // client that sent it.
         let log = || -> Vec<String> {
-            tmux_out(&server, &["show-messages"])
+            server
+                .tmux_stdout(&["show-messages"])
                 .lines()
                 .filter(|l| l.contains("command: set-option") && l.contains(&session))
                 .filter_map(|l| l.split(' ').nth(1).map(str::to_string))
