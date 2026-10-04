@@ -1392,7 +1392,7 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
             Ok(())
         }
         HarnessCommands::Import { tarball, harness } => {
-            let messages = commands::harness_import::import(
+            let report = commands::harness_import::import(
                 harness,
                 &tarball,
                 &[],
@@ -1400,7 +1400,7 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
                 &paths::home_dir()?,
                 &GlobalConfig::load_or_default().harness,
             )?;
-            for msg in messages {
+            for msg in report.messages {
                 println!("{msg}");
             }
             Ok(())

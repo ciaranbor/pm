@@ -96,6 +96,8 @@ pub fn restore_with(params: &RestoreParams<'_>) -> Result<Vec<String>> {
         }
     }
 
+    // Printed last, where they are not lost among the rest.
+    let mut warnings = Vec::new();
     for tarball in params.imports {
         match super::harness_import::import(
             None,
@@ -105,8 +107,20 @@ pub fn restore_with(params: &RestoreParams<'_>) -> Result<Vec<String>> {
             params.home,
             &params.global.harness,
         ) {
-            Ok(messages) => all_messages.extend(messages),
-            Err(e) => all_messages.push(format!("{}: import failed: {e}", tarball.display())),
+            Ok(report) => {
+                all_messages.extend(report.messages);
+                warnings.extend(report.missed.iter().map(|missed| {
+                    format!(
+                        "warning: sessions of {missed} in {} were not imported: \
+                         its agents will not resume them",
+                        tarball.display()
+                    )
+                }));
+            }
+            Err(e) => warnings.push(format!(
+                "warning: {}: import failed: {e}",
+                tarball.display()
+            )),
         }
     }
 
@@ -118,6 +132,7 @@ pub fn restore_with(params: &RestoreParams<'_>) -> Result<Vec<String>> {
             params.tmux_server,
         ));
     }
+    all_messages.extend(warnings);
 
     Ok(all_messages)
 }
@@ -743,6 +758,64 @@ mod tests {
             msgs.iter()
                 .any(|m| m.contains("warning: failed to recreate worktree for 'ghost-feat'")),
             "expected warning for missing branch but got: {msgs:?}"
+        );
+    }
+
+    #[test]
+    fn restore_lists_sessions_it_could_not_import_last() {
+        use crate::commands::harness_export::tests::{
+            run_export, setup_claude_sessions, setup_project,
+        };
+
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("projects");
+        let server = TestServer::new();
+        let name = server.scope("importwarn");
+        let project_path = dir.path().join(&name);
+        super::super::init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+        let _ = crate::tmux::kill_session(server.name(), &tmux::session_name(&name, "main"));
+
+        // Exported from a machine where `ghost` is registered; it is not here.
+        let source = tempdir().unwrap();
+        std::fs::create_dir_all(source.path().join("ghost")).unwrap();
+        let source_main = setup_project(
+            &source.path().join("ghost"),
+            "ghost",
+            &source.path().join("registry"),
+        );
+        setup_claude_sessions(&source.path().join("home"), &source_main);
+        let (tarball, _) = run_export(
+            crate::harness::Harness::ClaudeCode,
+            None,
+            &source.path().join("registry"),
+            &source.path().join("export.tar.gz"),
+            &source.path().join("home"),
+        )
+        .unwrap();
+        let home = tempdir().unwrap();
+
+        let msgs = restore_with(&RestoreParams {
+            projects_dir: &projects_dir,
+            projects: &[],
+            imports: std::slice::from_ref(&tarball),
+            home: home.path(),
+            global: &GlobalConfig::default(),
+            tmux_server: server.name(),
+        })
+        .unwrap();
+
+        assert!(
+            msgs.iter()
+                .any(|m| m.starts_with(&format!("{name}: restored"))),
+            "{msgs:?}"
+        );
+        assert_eq!(
+            msgs.last().unwrap(),
+            &format!(
+                "warning: sessions of 'ghost' (not registered locally) in {} were not \
+                 imported: its agents will not resume them",
+                tarball.display()
+            )
         );
     }
 

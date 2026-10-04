@@ -64,12 +64,26 @@ fn is_single_name(value: &str) -> bool {
         && components.next().is_none()
 }
 
+/// What [`import`] did, as human-readable status messages.
+#[derive(Debug, Default)]
+pub struct ImportReport {
+    pub messages: Vec<String>,
+    /// The exported worktrees whose sessions were not installed, each
+    /// with the reason; also in `messages`.
+    pub missed: Vec<String>,
+}
+
+impl ImportReport {
+    fn miss(&mut self, label: &str, why: &str) {
+        self.messages.push(format!("Skipping '{label}': {why}"));
+        self.missed.push(format!("'{label}' ({why})"));
+    }
+}
+
 /// Import the sessions of `tarball` into the store reached from `home`:
 /// those of the harness that exported it, which must be `harness` when one
 /// is given, for the registered `projects` (every one when empty). `global`
 /// is the global tier's `[harness.*]` settings.
-///
-/// Returns human-readable status messages.
 pub fn import(
     harness: Option<Harness>,
     tarball: &Path,
@@ -77,7 +91,7 @@ pub fn import(
     projects_dir: &Path,
     home: &Path,
     global: &HarnessConfig,
-) -> Result<Vec<String>> {
+) -> Result<ImportReport> {
     if !tarball.exists() {
         return Err(PmError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
@@ -130,18 +144,18 @@ pub fn import(
         .map(|(name, info)| Ok((name.as_str(), worktrees(&export_root, name, info)?)))
         .collect::<Result<Vec<_>>>()?;
 
-    let mut messages = Vec::new();
+    let mut report = ImportReport::default();
     for (name, worktrees) in exported {
         if !projects.is_empty() && !projects.iter().any(|p| p == name) {
             continue;
         }
         let Ok(local) = ProjectEntry::load(projects_dir, name) else {
-            messages.push(format!("Skipping '{name}': not registered locally"));
+            report.miss(name, "not registered locally");
             continue;
         };
         let root = local.root_path();
         if !paths::main_worktree(&root).is_dir() {
-            messages.push(format!("Skipping '{name}': not restored here"));
+            report.miss(name, "not restored here");
             continue;
         }
         let config = harness_config_in(Some(&root), global);
@@ -155,34 +169,38 @@ pub fn import(
                 Some(feature) => {
                     let label = format!("{name}/{feature}");
                     if !FeatureState::exists(&paths::features_dir(&root), feature) {
-                        messages.push(format!("Skipping '{label}': not a feature here"));
+                        report.miss(&label, "not a feature here");
                         continue;
                     }
                     let to = root.join(feature);
                     if !to.is_dir() {
-                        messages.push(format!("Skipping '{label}': no worktree here"));
+                        report.miss(&label, "no worktree here");
                         continue;
                     }
                     (label, to)
                 }
             };
             if !wt.sessions.exists() {
-                messages.push(format!(
-                    "Skipping '{label}': session data not found in tarball"
-                ));
+                report.miss(&label, "session data not found in tarball");
                 continue;
             }
             match harness.import_sessions(&store, &wt.sessions, wt.from, &to)? {
-                ImportOutcome::Skipped(why) => messages.push(format!("Skipping '{label}': {why}")),
+                ImportOutcome::Skipped(why) => {
+                    report.messages.push(format!("Skipping '{label}': {why}"))
+                }
                 ImportOutcome::Imported { detail, notes } => {
-                    messages.extend(notes.iter().map(|note| format!("  {label}: {note}")));
-                    messages.push(format!("Imported '{label}' ({detail})"));
+                    report
+                        .messages
+                        .extend(notes.iter().map(|note| format!("  {label}: {note}")));
+                    report
+                        .messages
+                        .push(format!("Imported '{label}' ({detail})"));
                 }
             }
         }
     }
 
-    Ok(messages)
+    Ok(report)
 }
 
 /// One worktree's sessions in an export.
@@ -277,6 +295,7 @@ mod tests {
             home,
             &HarnessConfig::default(),
         )
+        .map(|report| report.messages)
     }
 
     /// A machine holding Claude Code sessions for project `myapp`, and the
@@ -335,7 +354,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(msgs, ["Imported 'myapp' (same path)"]);
+        assert_eq!(msgs, ["Imported 'myapp' (1 session(s))"]);
         let imported = claude_sessions_of(home.path(), &source.main);
         assert!(imported.join("session.jsonl").exists());
     }
@@ -358,7 +377,7 @@ mod tests {
 
         assert_eq!(
             msgs.last().map(String::as_str),
-            Some("Imported 'myapp' (path rewritten)")
+            Some("Imported 'myapp' (1 session(s), path rewritten)")
         );
         let imported = claude_sessions_of(home.path(), &local_main);
         let content = std::fs::read_to_string(imported.join("session.jsonl")).unwrap();
@@ -374,15 +393,21 @@ mod tests {
         let home = tempdir().unwrap();
         let registry = tempdir().unwrap();
 
-        let msgs = run_import(
-            Harness::ClaudeCode,
+        let report = import(
+            Some(Harness::ClaudeCode),
             &source.tarball,
+            &[],
             registry.path(),
             home.path(),
+            &HarnessConfig::default(),
         )
         .unwrap();
 
-        assert_eq!(msgs, ["Skipping 'myapp': not registered locally"]);
+        assert_eq!(
+            report.messages,
+            ["Skipping 'myapp': not registered locally"]
+        );
+        assert_eq!(report.missed, ["'myapp' (not registered locally)"]);
         assert!(!home.path().join(".claude").exists());
     }
 
@@ -406,7 +431,10 @@ mod tests {
 
         assert_eq!(
             msgs,
-            ["Skipping 'myapp': Claude sessions already exist locally"]
+            [
+                "Skipping 'myapp': all 1 session(s) already exist locally; kept the local \
+                 sessions-index.json; the exported one differs"
+            ]
         );
         assert_eq!(
             std::fs::read_to_string(existing.join("session.jsonl")).unwrap(),
@@ -458,8 +486,8 @@ mod tests {
         assert_eq!(
             msgs,
             [
-                "Imported 'myapp' (path rewritten)",
-                "Imported 'myapp/login' (path rewritten)",
+                "Imported 'myapp' (1 session(s), path rewritten)",
+                "Imported 'myapp/login' (1 session(s), path rewritten)",
                 "Skipping 'myapp/gone': no worktree here",
                 "Skipping 'myapp/unknown': not a feature here",
             ]
@@ -496,7 +524,7 @@ mod tests {
         let registry = tempdir().unwrap();
         register(&source_root, "myapp", registry.path());
         let msgs = run_import(Harness::ClaudeCode, &tarball, registry.path(), home.path()).unwrap();
-        assert_eq!(msgs, ["Imported 'myapp/login' (same path)"]);
+        assert_eq!(msgs, ["Imported 'myapp/login' (1 session(s))"]);
     }
 
     #[test]
@@ -572,7 +600,7 @@ mod tests {
 
         assert_eq!(
             msgs.last().map(String::as_str),
-            Some("Imported 'myapp' (path rewritten)")
+            Some("Imported 'myapp' (1 session(s), path rewritten)")
         );
         let content = std::fs::read_to_string(
             claude_sessions_of(home.path(), &local_main).join("session.jsonl"),
@@ -838,7 +866,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(msgs, ["Imported 'myapp' (1 session(s))"]);
+        assert_eq!(msgs.messages, ["Imported 'myapp' (1 session(s))"]);
         let calls = fake_opencode_calls(local_opencode.path());
         assert_eq!(calls.len(), 1, "{calls:?}");
         assert_eq!(
