@@ -14,6 +14,22 @@ pub fn session_name(project_name: &str, scope: &str) -> String {
     format!("{project_name}/{scope}")
 }
 
+/// `target` as a `-t` argument that names its session exactly. tmux
+/// resolves a bare session name exactly, then as a prefix, then as a
+/// pattern, so `proj/api` would find `proj/api-v2` once `proj/api` is gone.
+/// `=` asks for the exact name; the `:` it needs after a session name holding
+/// a `/` is added to one given alone. Ids (`%N`, `@N`, `$N`) and targets
+/// already exact pass through.
+fn exact(target: &str) -> String {
+    if target.starts_with(['%', '@', '$', '=']) {
+        target.to_string()
+    } else if target.contains(':') {
+        format!("={target}")
+    } else {
+        format!("={target}:")
+    }
+}
+
 fn run_tmux(server: Option<&str>, args: &[&str]) -> Result<String> {
     run_tmux_untrimmed(server, args).map(|out| out.trim().to_string())
 }
@@ -64,7 +80,7 @@ pub fn create_session(server: Option<&str>, name: &str, start_dir: &Path) -> Res
 
 /// Check if a tmux session exists.
 pub fn has_session(server: Option<&str>, name: &str) -> Result<bool> {
-    let result = run_tmux(server, &["has-session", "-t", name]);
+    let result = run_tmux(server, &["has-session", "-t", &exact(name)]);
     match result {
         Ok(_) => Ok(true),
         Err(PmError::Tmux(_)) => Ok(false),
@@ -74,7 +90,7 @@ pub fn has_session(server: Option<&str>, name: &str) -> Result<bool> {
 
 /// Kill a tmux session.
 pub fn kill_session(server: Option<&str>, name: &str) -> Result<()> {
-    run_tmux(server, &["kill-session", "-t", name])?;
+    run_tmux(server, &["kill-session", "-t", &exact(name)])?;
     Ok(())
 }
 
@@ -96,13 +112,16 @@ pub fn list_sessions(server: Option<&str>) -> Result<Vec<String>> {
 
 /// Switch the current tmux client to a session.
 pub fn switch_client(server: Option<&str>, name: &str) -> Result<()> {
-    run_tmux(server, &["switch-client", "-t", name])?;
+    run_tmux(server, &["switch-client", "-t", &exact(name)])?;
     Ok(())
 }
 
 /// Switch `client` to `target`, keeping its window zoom.
 pub fn switch_client_of(server: Option<&str>, client: &str, target: &str) -> Result<()> {
-    run_tmux(server, &["switch-client", "-c", client, "-Z", "-t", target])?;
+    run_tmux(
+        server,
+        &["switch-client", "-c", client, "-Z", "-t", &exact(target)],
+    )?;
     Ok(())
 }
 
@@ -138,7 +157,8 @@ pub fn attach_session(server: Option<&str>, name: &str) -> Result<()> {
     if let Some(s) = server {
         cmd.args(["-L", s]);
     }
-    cmd.args(["attach-session", "-t", name]).env_remove("TMUX");
+    cmd.args(["attach-session", "-t", &exact(name)])
+        .env_remove("TMUX");
     let status = cmd.status()?;
     if status.success() {
         Ok(())
@@ -163,7 +183,13 @@ fn is_client_of(server: Option<&str>, session: &str, tmux_env: &str) -> bool {
     let ours = tmux_env.split(',').next().unwrap_or_default();
     let Ok(theirs) = run_tmux(
         server,
-        &["display-message", "-p", "-t", session, "#{socket_path}"],
+        &[
+            "display-message",
+            "-p",
+            "-t",
+            &exact(session),
+            "#{socket_path}",
+        ],
     ) else {
         return false;
     };
@@ -182,13 +208,14 @@ pub fn new_window(
     detached: bool,
 ) -> Result<String> {
     let dir_lossy = start_dir.to_string_lossy();
+    let session = exact(session);
     let mut args = vec!["new-window"];
     if detached {
         args.push("-d");
     }
     args.extend_from_slice(&[
         "-t",
-        session,
+        &session,
         "-P",
         "-F",
         "#{session_name}:#{window_index}",
@@ -206,7 +233,13 @@ pub fn new_window(
 pub fn list_windows(server: Option<&str>, session: &str) -> Result<usize> {
     let output = run_tmux(
         server,
-        &["list-windows", "-t", session, "-F", "#{window_index}"],
+        &[
+            "list-windows",
+            "-t",
+            &exact(session),
+            "-F",
+            "#{window_index}",
+        ],
     )?;
     Ok(output.lines().count())
 }
@@ -214,7 +247,7 @@ pub fn list_windows(server: Option<&str>, session: &str) -> Result<usize> {
 /// Type `text` into `target` as literal keys, then press Enter: a command
 /// line for a shell.
 pub fn send_line(server: Option<&str>, target: &str, text: &str) -> Result<()> {
-    run_tmux(server, &["send-keys", "-t", target, "-l", text])?;
+    run_tmux(server, &["send-keys", "-t", &exact(target), "-l", text])?;
     send_key(server, target, "Enter")
 }
 
@@ -222,21 +255,21 @@ pub fn send_line(server: Option<&str>, target: &str, text: &str) -> Result<()> {
 /// makes it submit: codex takes an Enter arriving right after a burst of
 /// keys as part of a paste, a newline.
 pub fn send_text(server: Option<&str>, target: &str, text: &str) -> Result<()> {
-    run_tmux(server, &["send-keys", "-t", target, "-l", text])?;
+    run_tmux(server, &["send-keys", "-t", &exact(target), "-l", text])?;
     std::thread::sleep(std::time::Duration::from_millis(300));
     send_key(server, target, "Enter")
 }
 
 /// Press one key, by tmux's name for it (`Enter`, `C-c`), in `target`.
 pub fn send_key(server: Option<&str>, target: &str, key: &str) -> Result<()> {
-    run_tmux(server, &["send-keys", "-t", target, key])?;
+    run_tmux(server, &["send-keys", "-t", &exact(target), key])?;
     Ok(())
 }
 
 /// The visible screen of `target`'s pane, with the escape sequences that
 /// style it.
 pub fn capture_screen(server: Option<&str>, target: &str) -> Result<String> {
-    run_tmux(server, &["capture-pane", "-p", "-e", "-t", target])
+    run_tmux(server, &["capture-pane", "-p", "-e", "-t", &exact(target)])
 }
 
 /// Find a window by name in a session. Returns the window target (e.g. "session:1") if found.
@@ -246,7 +279,7 @@ pub fn find_window(server: Option<&str>, session: &str, name: &str) -> Result<Op
         &[
             "list-windows",
             "-t",
-            session,
+            &exact(session),
             "-F",
             "#{window_name}\t#{session_name}:#{window_index}",
         ],
@@ -282,13 +315,13 @@ pub fn shell_quote(s: &str) -> String {
 
 /// Rename a window in a tmux session.
 pub fn rename_window(server: Option<&str>, target: &str, new_name: &str) -> Result<()> {
-    run_tmux(server, &["rename-window", "-t", target, new_name])?;
+    run_tmux(server, &["rename-window", "-t", &exact(target), new_name])?;
     Ok(())
 }
 
 /// Kill a specific tmux window.
 pub fn kill_window(server: Option<&str>, target: &str) -> Result<()> {
-    run_tmux(server, &["kill-window", "-t", target])?;
+    run_tmux(server, &["kill-window", "-t", &exact(target)])?;
     Ok(())
 }
 
@@ -400,7 +433,10 @@ const AGENT_PANE: &str = "@pm_agent_pane";
 /// Mark the active pane of `window`, a window pm just made for an agent,
 /// as the agent's pane.
 pub fn mark_agent_pane(server: Option<&str>, window: &str) -> Result<()> {
-    run_tmux(server, &["set-option", "-p", "-t", window, AGENT_PANE, "1"])?;
+    run_tmux(
+        server,
+        &["set-option", "-p", "-t", &exact(window), AGENT_PANE, "1"],
+    )?;
     Ok(())
 }
 
@@ -415,7 +451,10 @@ pub fn pane_processes(server: Option<&str>, target: &str) -> Result<Vec<Process>
 
 /// `window`'s agent pane, as [`agent_panes`] reads it.
 fn agent_pane(server: Option<&str>, window: &str) -> Result<Option<Pane>> {
-    let output = run_tmux_untrimmed(server, &["list-panes", "-t", window, "-F", &pane_format()])?;
+    let output = run_tmux_untrimmed(
+        server,
+        &["list-panes", "-t", &exact(window), "-F", &pane_format()],
+    )?;
     Ok(agent_panes_in(&output).into_iter().next())
 }
 
@@ -503,7 +542,7 @@ pub fn pane_command(server: Option<&str>, window: &str) -> Result<String> {
             "display-message",
             "-p",
             "-t",
-            &pane,
+            &exact(&pane),
             "#{pane_current_command}",
         ],
     )
@@ -515,18 +554,18 @@ pub fn capture_pane(server: Option<&str>, window: &str) -> Result<String> {
     let pane = agent_pane_target(server, window)?;
     run_tmux(
         server,
-        &["capture-pane", "-p", "-J", "-S", "-", "-t", &pane],
+        &["capture-pane", "-p", "-J", "-S", "-", "-t", &exact(&pane)],
     )
 }
 
 /// What `pane` shows now, as plain text, wrapped lines joined.
 pub fn capture_visible(server: Option<&str>, pane: &str) -> Result<String> {
-    run_tmux_untrimmed(server, &["capture-pane", "-p", "-J", "-t", pane])
+    run_tmux_untrimmed(server, &["capture-pane", "-p", "-J", "-t", &exact(pane)])
 }
 
 /// Select (focus) a specific window in a session.
 pub fn select_window(server: Option<&str>, target: &str) -> Result<()> {
-    run_tmux(server, &["select-window", "-t", target])?;
+    run_tmux(server, &["select-window", "-t", &exact(target)])?;
     Ok(())
 }
 
@@ -538,7 +577,7 @@ pub fn active_window_name(server: Option<&str>, session: &str) -> Result<Option<
         &[
             "list-windows",
             "-t",
-            session,
+            &exact(session),
             "-F",
             "#{window_active}\t#{window_name}",
         ],
@@ -727,6 +766,20 @@ mod tests {
             false,
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn a_session_is_found_only_by_its_exact_name() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let gone = server.scope("proj/api");
+        let survivor = server.scope("proj/api-v2");
+        create_session(server.name(), &survivor, dir.path()).unwrap();
+
+        assert!(!has_session(server.name(), &gone).unwrap());
+        assert!(kill_session(server.name(), &gone).is_err());
+        assert!(send_line(server.name(), &format!("{gone}:0"), "true").is_err());
+        assert!(has_session(server.name(), &survivor).unwrap());
     }
 
     #[test]

@@ -82,7 +82,7 @@ pub const DEFAULT_RESTORE: &str = concat!(
 # npm install
 #
 # # Start dev server in a split pane
-# tmux split-window -h -t \"$PM_SESSION\" -c \"$PM_WORKTREE\" 'npm run dev'
+# tmux split-window -h -t \"=$PM_SESSION:\" -c \"$PM_WORKTREE\" 'npm run dev'
 #
 # # Copy a gitignored secret from the main worktree into a feature
 # [ -n \"$PM_FEATURE\" ] && cp \"$PM_MAIN_WORKTREE/.env\" \"$PM_WORKTREE/\"

@@ -5,25 +5,34 @@
 
 use std::path::Path;
 
-use super::{agent_panes_in, pane_format, run_tmux, run_tmux_untrimmed};
+use super::{agent_panes_in, exact, pane_format, run_tmux, run_tmux_untrimmed};
 use crate::error::Result;
 
 /// The id (`%N`) of `window`'s agent pane: its marked pane, else its first.
 pub fn agent_pane(server: Option<&str>, window: &str) -> Result<Option<String>> {
-    let output = run_tmux_untrimmed(server, &["list-panes", "-t", window, "-F", &pane_format()])?;
+    let output = run_tmux_untrimmed(
+        server,
+        &["list-panes", "-t", &exact(window), "-F", &pane_format()],
+    )?;
     Ok(agent_panes_in(&output).into_iter().next().map(|p| p.id))
 }
 
 /// Whether `window` has panes other than its agent's.
 pub fn is_split(server: Option<&str>, window: &str) -> Result<bool> {
-    let output = run_tmux(server, &["list-panes", "-t", window, "-F", "#{pane_id}"])?;
+    let output = run_tmux(
+        server,
+        &["list-panes", "-t", &exact(window), "-F", "#{pane_id}"],
+    )?;
     Ok(output.lines().count() > 1)
 }
 
 /// Kill whatever runs in `pane` and start its shell again, in `dir`.
 pub fn respawn(server: Option<&str>, pane: &str, dir: &Path) -> Result<()> {
     let dir = dir.to_string_lossy();
-    run_tmux(server, &["respawn-pane", "-k", "-t", pane, "-c", &dir])?;
+    run_tmux(
+        server,
+        &["respawn-pane", "-k", "-t", &exact(pane), "-c", &dir],
+    )?;
     Ok(())
 }
 
@@ -37,7 +46,7 @@ pub fn split(server: Option<&str>, pane: &str, dir: &Path) -> Result<String> {
         &[
             "split-window",
             "-t",
-            pane,
+            &exact(pane),
             "-c",
             &dir,
             "-P",
@@ -48,7 +57,7 @@ pub fn split(server: Option<&str>, pane: &str, dir: &Path) -> Result<String> {
 }
 
 pub fn kill(server: Option<&str>, pane: &str) -> Result<()> {
-    run_tmux(server, &["kill-pane", "-t", pane])?;
+    run_tmux(server, &["kill-pane", "-t", &exact(pane)])?;
     Ok(())
 }
 
@@ -60,7 +69,14 @@ pub fn end_agent(server: Option<&str>, window: &str) -> Result<()> {
         Some(pane) if is_split(server, window)? => {
             run_tmux(
                 server,
-                &["set-option", "-w", "-t", window, "automatic-rename", "on"],
+                &[
+                    "set-option",
+                    "-w",
+                    "-t",
+                    &exact(window),
+                    "automatic-rename",
+                    "on",
+                ],
             )?;
             kill(server, &pane)
         }
