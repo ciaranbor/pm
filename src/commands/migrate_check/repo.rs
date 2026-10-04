@@ -26,6 +26,15 @@ impl Remote {
             heads: git::remote_heads(repo, "origin").map_err(|e| e.to_string()),
         }))
     }
+
+    /// Whether every commit of local `branch` is on `origin`'s `base`.
+    pub(super) fn base_holds(&self, repo: &Path, branch: &str, base: &str) -> Result<bool> {
+        let Some(tip) = self.heads.as_ref().ok().and_then(|heads| heads.get(base)) else {
+            return Ok(false);
+        };
+        Ok(git::has_commit(repo, tip)
+            && git::branch_merged_into(repo, &format!("refs/heads/{branch}"), tip)?)
+    }
 }
 
 /// How a local branch stands against `origin`.

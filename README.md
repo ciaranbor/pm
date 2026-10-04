@@ -736,7 +736,9 @@ code travels through each repo's own remote, and agents' conversations
 through a `pm harness export` tarball.
 
 `pm migrate check [--project <name>…]` says what a move would lose or fail
-on: unpushed branches and uncommitted work in any worktree, state repos
+on: unpushed branches (a feature branch with no commits of its own needs
+no push: `pm restore` creates it from the feature's base) and uncommitted
+work in any worktree, state repos
 without a remote or with changes not pushed, registry entries `pm restore`
 can't clone or pull from, agents still running, and the machine-local
 things to redo by hand (harness installs and logins, `pm serve` devices,
@@ -776,14 +778,15 @@ leaves nothing behind, and with the registry already on that remote it
 pulls again. Where it can't fast-forward — this machine registered
 projects too — it takes the remote's registry and keeps the projects only
 this machine has; one the remote also has is set aside in the config dir's
-`registry-before-pull/`. `pm restore` without `--project` restores every registered
-project. It
-starts agents only after the `--import` tarballs are in, so each resumes its
-conversation; `pm harness import <tarball>` imports one later, into
-projects already restored, and infers the harness from the tarball. An
-import rewrites the recorded paths when the home directory differs. `pm
-harness migrate --from <old path>` does the same for a project moved on one
-machine.
+`registry-before-pull/`. `pm restore` without `--project` restores every
+registered project. It starts agents only after the `--import` tarballs
+are in, so each resumes its conversation, and lists last any worktree
+whose sessions it could not import; `pm harness import <tarball>` imports
+one later, into projects already restored, and infers the harness from the
+tarball. An import adds only what the machine lacks, never replacing a
+session or memory file it has, and rewrites the recorded paths when the
+home directory differs. `pm harness migrate --from <old path>` does the
+same for a project moved on one machine.
 
 The registry repo syncs your global custom workflows but never the bundled
 ones or machine-local files (the harness probe cache, tmux lock files): its

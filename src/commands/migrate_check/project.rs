@@ -163,14 +163,15 @@ impl Project<'_> {
         &'b self,
         name: &'b str,
         worktree: Option<&'b Path>,
-        feature: bool,
+        base: Option<&'b str>,
     ) -> Branch<'b> {
         Branch {
             root: self.root,
             main: self.main,
             name,
             worktree,
-            feature,
+            feature: base.is_some(),
+            base,
         }
     }
 
@@ -193,7 +194,7 @@ impl Project<'_> {
         let remote = Remote::of(self.main)?;
         let main_branch = &self.entry.main_branch;
         let mut checked = worktree::check(
-            &self.branch(main_branch, Some(self.main), false),
+            &self.branch(main_branch, Some(self.main), None),
             remote.as_ref(),
         )?;
         if origin.is_none() {
@@ -219,7 +220,7 @@ impl Project<'_> {
             let base = state.base.as_str();
             if base != main_branch && !branches.contains(&base) && !bases.contains(&base) {
                 bases.push(base);
-                let checked = worktree::check(&self.branch(base, None, false), remote.as_ref())?;
+                let checked = worktree::check(&self.branch(base, None, None), remote.as_ref())?;
                 lines.push((format!("{base} (base)"), checked, false));
                 self.notes.push(Finding::note(
                     base,
@@ -241,7 +242,11 @@ impl Project<'_> {
             let path = self.root.join(&state.worktree);
             let present = path.is_dir();
             let checked = worktree::check(
-                &self.branch(&state.branch, present.then_some(path.as_path()), true),
+                &self.branch(
+                    &state.branch,
+                    present.then_some(path.as_path()),
+                    Some(state.base_branch(main_branch)),
+                ),
                 remote.as_ref(),
             )?;
             let subject = if present {
@@ -253,6 +258,15 @@ impl Project<'_> {
             lines.push((subject, checked, in_flight));
         }
         for (subject, checked, in_flight) in lines {
+            if let Some(base) = &checked.from_base {
+                self.notes.push(Finding::note(
+                    &subject,
+                    format!(
+                        "not on origin, but has no commits of its own: `pm restore` creates it \
+                         from {base}"
+                    ),
+                ));
+            }
             if checked.behind {
                 self.notes.push(Finding::note(
                     &subject,
@@ -414,6 +428,48 @@ mod tests {
         assert!(!main.fix.as_ref().unwrap().contains("add -A"));
         assert!(main.detail.iter().any(|d| d.contains("notes.txt")));
         assert_eq!(found.len(), 3, "{found:#?}");
+    }
+
+    #[test]
+    fn a_branch_on_no_remote_blocks_only_with_commits_of_its_own() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (root, name) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let main = paths::main_worktree(&root);
+        let repo = bare(&dir.path().join("repo.git"));
+        git::add_remote(&main, "origin", &repo).unwrap();
+        git::push(&main, "origin", "main").unwrap();
+        let entry = ProjectEntry {
+            root: path_utils::to_portable(&root),
+            main_branch: "main".to_string(),
+            repo_url: Some(repo),
+            state_remote: None,
+        };
+        let login_findings = || {
+            findings(&name, &entry, None, &HarnessConfig::default())
+                .unwrap()
+                .0
+                .into_iter()
+                .filter(|f| f.subject == "login/")
+                .collect::<Vec<_>>()
+        };
+
+        let found = login_findings();
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(found[0].severity, Severity::Note);
+        assert_eq!(
+            found[0].what,
+            "not on origin, but has no commits of its own: `pm restore` creates it from main"
+        );
+
+        let login = root.join("login");
+        std::fs::write(login.join("a.txt"), "a").unwrap();
+        git::add_all(&login).unwrap();
+        git::commit_with_message(&login, "a").unwrap();
+        let found = login_findings();
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(found[0].severity, Severity::Blocker);
+        assert_eq!(found[0].what, "not on origin");
     }
 
     #[test]

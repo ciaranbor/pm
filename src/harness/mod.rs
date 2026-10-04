@@ -891,20 +891,28 @@ pub enum ImportOutcome {
 /// `imported` of `total` sessions were new to the store; the rest were
 /// already there and left untouched.
 pub(crate) fn per_session_outcome(imported: usize, total: usize) -> ImportOutcome {
+    match session_counts(imported, total) {
+        Ok(detail) => ImportOutcome::Imported {
+            detail,
+            notes: Vec::new(),
+        },
+        Err(why) => ImportOutcome::Skipped(why),
+    }
+}
+
+/// [`per_session_outcome`]'s wording: the detail when any session was new,
+/// else why there was nothing to import.
+pub(crate) fn session_counts(imported: usize, total: usize) -> std::result::Result<String, String> {
     if total == 0 {
-        return ImportOutcome::Skipped("no sessions in the export".to_string());
+        return Err("no sessions in the export".to_string());
     }
     if imported == 0 {
-        return ImportOutcome::Skipped(format!("all {total} session(s) already exist locally"));
+        return Err(format!("all {total} session(s) already exist locally"));
     }
-    let detail = match total - imported {
+    Ok(match total - imported {
         0 => format!("{imported} session(s)"),
         present => format!("{imported} session(s), {present} already present"),
-    };
-    ImportOutcome::Imported {
-        detail,
-        notes: Vec::new(),
-    }
+    })
 }
 
 /// What a projection wrote (or, in dry-run, would write), as paths

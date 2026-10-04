@@ -18,9 +18,10 @@ use std::path::{Path, PathBuf};
 
 use crate::error::Result;
 use crate::fs_utils::copy_dir_recursive;
-use crate::harness::{ImportOutcome, InUse};
+use crate::harness::{ImportOutcome, InUse, session_counts};
 
 const INDEX_FILE: &str = "sessions-index.json";
+const MEMORY_DIR: &str = "memory";
 
 /// The store key of the directory at `path`: `/Users/foo/my_app` becomes
 /// `-Users-foo-my-app`.
@@ -248,28 +249,98 @@ pub(crate) fn export(base: &Path, dir: &Path, staging: &Path) -> Result<Option<S
     Ok(Some(key))
 }
 
+/// What [`merge`] wrote, and what it found already there.
+#[derive(Default)]
+struct Merged {
+    /// Every file written, for the path rewrite.
+    copied: Vec<PathBuf>,
+    sessions: usize,
+    sessions_present: usize,
+    memory: usize,
+    /// Memory files and session indexes the target already had with other
+    /// contents.
+    kept: Vec<String>,
+}
+
+/// Copy into `target` every file under `staging` that `target` lacks,
+/// recording at `rel` below the store key.
+fn merge(staging: &Path, target: &Path, rel: &Path, out: &mut Merged) -> Result<()> {
+    let mut names: Vec<_> = std::fs::read_dir(staging)?
+        .map(|entry| entry.map(|e| e.file_name()))
+        .collect::<std::io::Result<_>>()?;
+    names.sort();
+    let top = rel.as_os_str().is_empty();
+    let in_memory = rel.starts_with(MEMORY_DIR);
+    for name in names {
+        let (from, to, rel) = (staging.join(&name), target.join(&name), rel.join(&name));
+        if from.is_dir() {
+            merge(&from, &to, &rel, out)?;
+            continue;
+        }
+        let session = top && to.extension().is_some_and(|ext| ext == "jsonl");
+        if to.exists() {
+            if session {
+                out.sessions_present += 1;
+            } else if (in_memory || (top && name == INDEX_FILE))
+                && std::fs::read(&from)? != std::fs::read(&to)?
+            {
+                out.kept.push(rel.to_string_lossy().into_owned());
+            }
+            continue;
+        }
+        std::fs::create_dir_all(target)?;
+        std::fs::copy(&from, &to)?;
+        out.copied.push(to);
+        if session {
+            out.sessions += 1;
+        } else if in_memory {
+            out.memory += 1;
+        }
+    }
+    Ok(())
+}
+
 /// Install the sessions in `staging`, exported from `from`, as the sessions
-/// of `to`. A directory that already has sessions is left alone. `from` is
-/// another machine's path: it is what the transcripts hold, and names
-/// nothing here.
+/// of `to`: every session, subagent transcript and memory file the store
+/// lacks. A file the store already has is kept as it is. `from` is another
+/// machine's path: it is what the transcripts hold, and names nothing here.
 pub(crate) fn import(base: &Path, staging: &Path, from: &Path, to: &Path) -> Result<ImportOutcome> {
     let to = &recorded(to);
     let target = base.join("projects").join(path_to_key(to));
-    if target.exists() {
+    let (old, new) = (from.to_string_lossy(), to.to_string_lossy());
+    let mut merged = Merged::default();
+    merge(staging, &target, Path::new(""), &mut merged)?;
+    if from != to {
+        for file in &merged.copied {
+            rewrite_paths(file, &old, &new)?;
+        }
+    }
+
+    let notes: Vec<String> = merged
+        .kept
+        .iter()
+        .map(|file| format!("kept the local {file}; the exported one differs"))
+        .collect();
+    let counts = session_counts(merged.sessions, merged.sessions + merged.sessions_present);
+    if merged.copied.is_empty() {
+        let why = counts.err().unwrap_or_default();
         return Ok(ImportOutcome::Skipped(
-            "Claude sessions already exist locally".to_string(),
+            std::iter::once(why)
+                .chain(notes)
+                .collect::<Vec<_>>()
+                .join("; "),
         ));
     }
-    copy_dir_recursive(staging, &target)?;
-    let detail = if from == to {
-        "same path"
-    } else {
-        rewrite_paths(&target, &from.to_string_lossy(), &to.to_string_lossy())?;
-        "path rewritten"
-    };
+    let mut detail = vec![counts.unwrap_or_else(|why| why)];
+    if merged.memory > 0 {
+        detail.push(format!("{} memory file(s)", merged.memory));
+    }
+    if from != to {
+        detail.push("path rewritten".to_string());
+    }
     Ok(ImportOutcome::Imported {
-        detail: detail.to_string(),
-        notes: Vec::new(),
+        detail: detail.join(", "),
+        notes,
     })
 }
 
@@ -559,7 +630,7 @@ mod tests {
         assert_eq!(
             outcome,
             ImportOutcome::Imported {
-                detail: "path rewritten".to_string(),
+                detail: "1 session(s), path rewritten".to_string(),
                 notes: Vec::new(),
             }
         );
@@ -574,6 +645,67 @@ mod tests {
             local_transcript
         );
         assert_eq!(std::fs::read_dir(&local_store).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn import_adds_what_the_store_lacks_and_keeps_what_it_has() {
+        let base = tempdir().unwrap();
+        let staging = tempdir().unwrap();
+        let (from, to) = (Path::new("/there/repo"), Path::new("/here/repo"));
+        let write = |dir: &Path, rel: &str, text: &str| {
+            let path = dir.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        let exported = "{\"cwd\":\"/there/repo\"}\n";
+        for rel in [
+            "kept.jsonl",
+            "new.jsonl",
+            "new/subagents/agent-1.jsonl",
+            "kept/subagents/agent-2.jsonl",
+        ] {
+            write(staging.path(), rel, exported);
+        }
+        write(staging.path(), "memory/MEMORY.md", "theirs\n");
+        write(staging.path(), "memory/idea.md", "idea\n");
+        let store = base.path().join("projects").join("-here-repo");
+        let local = "{\"cwd\":\"/here/repo\",\"turn\":9}\n";
+        write(&store, "kept.jsonl", local);
+        write(&store, "memory/MEMORY.md", "mine\n");
+
+        let outcome = import(base.path(), staging.path(), from, to).unwrap();
+
+        assert_eq!(
+            outcome,
+            ImportOutcome::Imported {
+                detail: "1 session(s), 1 already present, 1 memory file(s), path rewritten"
+                    .to_string(),
+                notes: vec![
+                    "kept the local memory/MEMORY.md; the exported one differs".to_string()
+                ],
+            }
+        );
+        let read = |rel: &str| std::fs::read_to_string(store.join(rel)).unwrap();
+        assert_eq!(read("kept.jsonl"), local);
+        assert_eq!(read("memory/MEMORY.md"), "mine\n");
+        assert_eq!(read("memory/idea.md"), "idea\n");
+        for rel in [
+            "new.jsonl",
+            "new/subagents/agent-1.jsonl",
+            "kept/subagents/agent-2.jsonl",
+        ] {
+            assert_eq!(read(rel), "{\"cwd\":\"/here/repo\"}\n", "{rel}");
+        }
+
+        assert_eq!(
+            import(base.path(), staging.path(), from, to).unwrap(),
+            ImportOutcome::Skipped(
+                "all 2 session(s) already exist locally; kept the local memory/MEMORY.md; \
+                 the exported one differs"
+                    .to_string()
+            )
+        );
+        assert_eq!(read("new.jsonl"), "{\"cwd\":\"/here/repo\"}\n");
     }
 
     #[test]

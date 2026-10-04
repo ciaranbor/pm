@@ -96,6 +96,8 @@ pub fn restore_with(params: &RestoreParams<'_>) -> Result<Vec<String>> {
         }
     }
 
+    // Printed last, where they are not lost among the rest.
+    let mut warnings = Vec::new();
     for tarball in params.imports {
         match super::harness_import::import(
             None,
@@ -105,8 +107,20 @@ pub fn restore_with(params: &RestoreParams<'_>) -> Result<Vec<String>> {
             params.home,
             &params.global.harness,
         ) {
-            Ok(messages) => all_messages.extend(messages),
-            Err(e) => all_messages.push(format!("{}: import failed: {e}", tarball.display())),
+            Ok(report) => {
+                all_messages.extend(report.messages);
+                warnings.extend(report.missed.iter().map(|missed| {
+                    format!(
+                        "warning: sessions of {missed} in {} were not imported: \
+                         its agents will not resume them",
+                        tarball.display()
+                    )
+                }));
+            }
+            Err(e) => warnings.push(format!(
+                "warning: {}: import failed: {e}",
+                tarball.display()
+            )),
         }
     }
 
@@ -118,8 +132,86 @@ pub fn restore_with(params: &RestoreParams<'_>) -> Result<Vec<String>> {
             params.tmux_server,
         ));
     }
+    all_messages.extend(warnings);
 
     Ok(all_messages)
+}
+
+/// Recreate the worktrees of `features`. A branch that is neither local nor
+/// on origin had no commits of its own (`pm migrate check` blocks on one
+/// that had), so it is created at its base: a feature stacked on another
+/// whose branch is created here waits for that one.
+fn recreate_worktrees(
+    name: &str,
+    root: &Path,
+    main: &Path,
+    main_branch: &str,
+    mut features: Vec<&(String, FeatureState)>,
+) -> Vec<String> {
+    let mut messages = Vec::new();
+    let exists = |reference: String| git::ref_exists(main, &reference).unwrap_or(false);
+    loop {
+        let before = features.len();
+        features.retain(|(feat_name, state)| {
+            let branch = &state.branch;
+            let mut created_from = None;
+            if !exists(format!("refs/heads/{branch}"))
+                && !exists(format!("refs/remotes/origin/{branch}"))
+            {
+                let base = state.base_branch(main_branch);
+                let Some(start) = [
+                    format!("refs/heads/{base}"),
+                    format!("refs/remotes/origin/{base}"),
+                ]
+                .into_iter()
+                .find(|start| exists(start.clone())) else {
+                    return true;
+                };
+                if let Err(e) = git::create_branch_untracked(main, branch, &start) {
+                    messages.push(format!(
+                        "{name}: warning: failed to create branch '{branch}' for '{feat_name}': {e}"
+                    ));
+                    return false;
+                }
+                created_from = Some(base);
+            }
+            // With no local branch, `git worktree add` creates one from
+            // origin/<branch>.
+            let wt_path = root.join(&state.worktree);
+            match git::add_worktree(main, &wt_path, branch) {
+                Ok(()) => {
+                    messages.push(match created_from {
+                        None => format!("{name}: recreated worktree for feature '{feat_name}'"),
+                        Some(base) => format!(
+                            "{name}: recreated worktree for feature '{feat_name}' on a new branch \
+                             '{branch}' from '{base}' ('{branch}' is not on origin)"
+                        ),
+                    });
+                    if let Err(e) = super::seed::seed_feature_assets(root, &wt_path) {
+                        messages.push(format!(
+                            "{name}: warning: could not seed '{feat_name}': {e}"
+                        ));
+                    }
+                }
+                Err(e) => messages.push(format!(
+                    "{name}: warning: failed to recreate worktree for '{feat_name}': {e}"
+                )),
+            }
+            false
+        });
+        if features.is_empty() || features.len() == before {
+            break;
+        }
+    }
+    for (feat_name, state) in features {
+        messages.push(format!(
+            "{name}: warning: failed to recreate worktree for '{feat_name}': neither its branch \
+             '{}' nor its base '{}' exists here or on origin",
+            state.branch,
+            state.base_branch(main_branch)
+        ));
+    }
+    messages
 }
 
 /// Result of restoring a single project's repo, state and worktrees.
@@ -266,36 +358,19 @@ fn restore_project(
         }
         match FeatureState::list(&features_dir) {
             Ok(features) => {
-                for (feat_name, feat_state) in &features {
-                    if !feat_state.status.is_active() {
-                        continue;
-                    }
-                    let wt_path = root.join(&feat_state.worktree);
-                    if wt_path.exists() {
-                        continue;
-                    }
-                    // git worktree add has DWIM mode: if the local branch
-                    // doesn't exist but origin/<branch> does (common after
-                    // clone on a fresh machine), git auto-creates the local
-                    // branch from the remote tracking ref.
-                    match git::add_worktree(&main_worktree, &wt_path, &feat_state.branch) {
-                        Ok(()) => {
-                            messages.push(format!(
-                                "{name}: recreated worktree for feature '{feat_name}'"
-                            ));
-                            if let Err(e) = super::seed::seed_feature_assets(&root, &wt_path) {
-                                messages.push(format!(
-                                    "{name}: warning: could not seed '{feat_name}': {e}"
-                                ));
-                            }
-                        }
-                        Err(e) => {
-                            messages.push(format!(
-                                "{name}: warning: failed to recreate worktree for '{feat_name}': {e}"
-                            ));
-                        }
-                    }
-                }
+                let missing: Vec<_> = features
+                    .iter()
+                    .filter(|(_, state)| {
+                        state.status.is_active() && !root.join(&state.worktree).exists()
+                    })
+                    .collect();
+                messages.extend(recreate_worktrees(
+                    name,
+                    &root,
+                    &main_worktree,
+                    &entry.main_branch,
+                    missing,
+                ));
             }
             Err(e) => {
                 messages.push(format!("{name}: warning: could not list features: {e}"));
@@ -717,14 +792,14 @@ mod tests {
         let project_path = dir.path().join(&name);
         super::super::init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
-        // Register a feature with a branch that doesn't exist
+        // Neither its branch nor its base exists.
         let features_dir = paths::features_dir(&project_path);
         let now = Utc::now();
         let feat_state = FeatureState {
             status: FeatureStatus::Wip,
             branch: "nonexistent-branch".to_string(),
             worktree: "ghost-feat".to_string(),
-            base: "main".to_string(),
+            base: "gone-base".to_string(),
             pr: String::new(),
             context: String::new(),
             workflow: None,
@@ -743,6 +818,125 @@ mod tests {
             msgs.iter()
                 .any(|m| m.contains("warning: failed to recreate worktree for 'ghost-feat'")),
             "expected warning for missing branch but got: {msgs:?}"
+        );
+    }
+
+    #[test]
+    fn restore_creates_a_branch_on_no_remote_from_its_base_stacked_ones_after_theirs() {
+        use crate::state::feature::{FeatureState, FeatureStatus};
+        use chrono::Utc;
+
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("projects");
+        let server = TestServer::new();
+        let name = server.scope("wtbase");
+        let project_path = dir.path().join(&name);
+        super::super::init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+        let main = paths::main_worktree(&project_path);
+        let origin = dir.path().join("origin.git");
+        git::run_git(dir.path(), &["init", "--bare", &origin.to_string_lossy()]).unwrap();
+        git::add_remote(&main, "origin", &origin.to_string_lossy()).unwrap();
+        git::push(&main, "origin", "main").unwrap();
+        git::fetch_remote(&main, "origin").unwrap();
+        let main_tip = git::branch_commit(&main, "main").unwrap().unwrap();
+
+        // `api` stacks on `web`, and sorts first; neither branch exists.
+        let now = Utc::now();
+        for (feature, base) in [("api", "web"), ("web", "main")] {
+            FeatureState {
+                status: FeatureStatus::Wip,
+                branch: feature.to_string(),
+                worktree: feature.to_string(),
+                base: base.to_string(),
+                pr: String::new(),
+                context: String::new(),
+                workflow: None,
+                created: now,
+                last_active: now,
+                progress: Default::default(),
+                blocked_reason: None,
+                blocked_by: None,
+            }
+            .save(&paths::features_dir(&project_path), feature)
+            .unwrap();
+        }
+        let _ = crate::tmux::kill_session(server.name(), &tmux::session_name(&name, "main"));
+
+        let msgs = restore_with_dir(&projects_dir, server.name()).unwrap();
+
+        for (feature, base) in [("web", "main"), ("api", "web")] {
+            let created = format!(
+                "{name}: recreated worktree for feature '{feature}' on a new branch \
+                 '{feature}' from '{base}' ('{feature}' is not on origin)"
+            );
+            assert!(msgs.contains(&created), "{created} not in {msgs:?}");
+            assert_eq!(
+                git::current_branch(&project_path.join(feature)).unwrap(),
+                feature
+            );
+            assert_eq!(
+                git::branch_commit(&main, feature).unwrap().as_deref(),
+                Some(main_tip.as_str())
+            );
+            assert_eq!(git::tracking_branch(&main, feature).unwrap(), None);
+        }
+    }
+
+    #[test]
+    fn restore_lists_sessions_it_could_not_import_last() {
+        use crate::commands::harness_export::tests::{
+            run_export, setup_claude_sessions, setup_project,
+        };
+
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("projects");
+        let server = TestServer::new();
+        let name = server.scope("importwarn");
+        let project_path = dir.path().join(&name);
+        super::super::init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+        let _ = crate::tmux::kill_session(server.name(), &tmux::session_name(&name, "main"));
+
+        // Exported from a machine where `ghost` is registered; it is not here.
+        let source = tempdir().unwrap();
+        std::fs::create_dir_all(source.path().join("ghost")).unwrap();
+        let source_main = setup_project(
+            &source.path().join("ghost"),
+            "ghost",
+            &source.path().join("registry"),
+        );
+        setup_claude_sessions(&source.path().join("home"), &source_main);
+        let (tarball, _) = run_export(
+            crate::harness::Harness::ClaudeCode,
+            None,
+            &source.path().join("registry"),
+            &source.path().join("export.tar.gz"),
+            &source.path().join("home"),
+        )
+        .unwrap();
+        let home = tempdir().unwrap();
+
+        let msgs = restore_with(&RestoreParams {
+            projects_dir: &projects_dir,
+            projects: &[],
+            imports: std::slice::from_ref(&tarball),
+            home: home.path(),
+            global: &GlobalConfig::default(),
+            tmux_server: server.name(),
+        })
+        .unwrap();
+
+        assert!(
+            msgs.iter()
+                .any(|m| m.starts_with(&format!("{name}: restored"))),
+            "{msgs:?}"
+        );
+        assert_eq!(
+            msgs.last().unwrap(),
+            &format!(
+                "warning: sessions of 'ghost' (not registered locally) in {} were not \
+                 imported: its agents will not resume them",
+                tarball.display()
+            )
         );
     }
 

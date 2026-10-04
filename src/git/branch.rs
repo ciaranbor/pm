@@ -15,6 +15,13 @@ pub fn create_branch_from(repo: &Path, name: &str, start_point: &str) -> Result<
     Ok(())
 }
 
+/// Create branch `name` at `start_point` with no upstream, even when the
+/// start point is a remote-tracking branch.
+pub fn create_branch_untracked(repo: &Path, name: &str, start_point: &str) -> Result<()> {
+    run_git(repo, &["branch", "--no-track", name, start_point])?;
+    Ok(())
+}
+
 /// Check if a branch exists in the repo.
 pub fn branch_exists(repo: &Path, name: &str) -> Result<bool> {
     let result = run_git(
