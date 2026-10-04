@@ -366,14 +366,15 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             Ok(())
         }
         Commands::Harness(cmd) | Commands::Claude(cmd) => dispatch_harness(cmd),
-        Commands::Close { all } => {
+        Commands::Close { project, all } => {
             if all {
                 let messages = commands::close::close_all(server)?;
                 for m in messages {
                     println!("{m}");
                 }
             } else {
-                let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+                let projects_dir = paths::global_projects_dir()?;
+                let project_root = project_root(&projects_dir, project.as_deref())?;
                 let (project_name, killed) = commands::close::close(&project_root, server)?;
                 println!(
                     "Closed project {project_name} (killed {killed} session{})",

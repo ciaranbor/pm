@@ -20,28 +20,30 @@ pub fn close(project_root: &Path, tmux_server: Option<&str>) -> Result<(String, 
     let features_dir = paths::features_dir(project_root);
     let features = FeatureState::list(&features_dir)?;
 
-    let mut killed = 0;
-
-    // Kill feature sessions first, switching the client to main if needed
-    let main_session = format!("{project_name}/main");
-    for (name, _) in &features {
-        let session_name = format!("{project_name}/{name}");
-        if tmux::has_session(tmux_server, &session_name)? {
-            let _ = tmux::switch_client(tmux_server, &main_session);
-            tmux::kill_session(tmux_server, &session_name)?;
-            killed += 1;
+    let scopes = features
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .chain(["main"]);
+    let mut doomed = Vec::new();
+    for scope in scopes {
+        let session = tmux::session_name(project_name, scope);
+        if tmux::has_session(tmux_server, &session)? {
+            doomed.push(session);
         }
     }
 
-    // Kill main session last — switch to an external session first if possible
-    if tmux::has_session(tmux_server, &main_session)? {
-        let all_sessions = tmux::list_sessions(tmux_server).unwrap_or_default();
-        if let Some(external) = all_sessions.iter().find(|s| s.as_str() != main_session) {
-            let _ = tmux::switch_client(tmux_server, external);
-        }
-        tmux::kill_session(tmux_server, &main_session)?;
-        killed += 1;
+    // Killing the session this runs in ends this process, so it goes last.
+    let own = tmux::own_session(tmux_server);
+    if let Some(at) = doomed.iter().position(|s| Some(s) == own.as_ref()) {
+        let own = doomed.remove(at);
+        doomed.push(own);
     }
+
+    tmux::clients::move_off(tmux_server, &doomed, None)?;
+    for session in &doomed {
+        tmux::kill_session(tmux_server, session)?;
+    }
+    let killed = doomed.len();
 
     Ok((project_name.clone(), killed))
 }
@@ -61,7 +63,11 @@ pub fn close_all(tmux_server: Option<&str>) -> Result<Vec<String>> {
 
 /// `close_all` with an injectable registry dir (for tests).
 pub fn close_all_with_dir(projects_dir: &Path, tmux_server: Option<&str>) -> Result<Vec<String>> {
-    let projects = ProjectEntry::list(projects_dir)?;
+    let mut projects = ProjectEntry::list(projects_dir)?;
+    // The project this runs in goes last, as its sessions do in `close`.
+    if let Some(own) = tmux::own_session(tmux_server) {
+        projects.sort_by_key(|(name, _)| own.starts_with(&format!("{name}/")));
+    }
 
     if projects.is_empty() {
         return Ok(vec!["No projects in registry".to_string()]);
@@ -94,8 +100,38 @@ pub fn close_all_with_dir(projects_dir: &Path, tmux_server: Option<&str>) -> Res
 mod tests {
     use super::*;
     use crate::commands::feat_new;
-    use crate::testing::TestServer;
+    use crate::testing::{ControlClient, OwnServer, TestServer};
     use tempfile::tempdir;
+
+    #[test]
+    fn close_moves_only_the_clients_viewing_the_project() {
+        let dir = tempdir().unwrap();
+        let (project, name) =
+            TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
+        let own = OwnServer::start("close-clients");
+        for session in [
+            "elsewhere".into(),
+            format!("{name}/main"),
+            format!("{name}/login"),
+        ] {
+            tmux::create_session(own.name(), &session, dir.path()).unwrap();
+        }
+        // The bystander attaches last, so it is the client tmux takes to be
+        // current.
+        let _viewer = ControlClient::attach(own.name(), &format!("{name}/login"));
+        let _bystander = ControlClient::attach(own.name(), "elsewhere");
+        let clients = tmux::clients::list(own.name()).unwrap();
+        let bystander = clients.iter().find(|c| c.session == "elsewhere").unwrap();
+        let bystander = bystander.name.clone();
+
+        close(&project, own.name()).unwrap();
+
+        let clients = tmux::clients::list(own.name()).unwrap();
+        assert_eq!(clients.len(), 2, "a client was detached: {clients:?}");
+        let stayed = clients.iter().find(|c| c.name == bystander).unwrap();
+        assert_eq!(stayed.session, "elsewhere");
+        assert!(clients.iter().all(|c| !c.session.starts_with(&name)));
+    }
 
     #[test]
     fn close_kills_all_sessions() {

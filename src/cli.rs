@@ -69,8 +69,11 @@ pub enum Commands {
     /// Hidden alias for `pm harness` kept for one release
     #[command(subcommand, hide = true)]
     Claude(HarnessCommands),
-    /// Close all tmux sessions for the current project (counterpart to `pm open`)
+    /// Close all tmux sessions for a project (counterpart to `pm open`)
     Close {
+        /// Project name (defaults to current project from CWD)
+        #[arg(long, conflicts_with = "all")]
+        project: Option<String>,
         /// Close every registered project's sessions, not just the current one
         #[arg(long)]
         all: bool,
