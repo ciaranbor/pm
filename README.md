@@ -256,7 +256,7 @@ as an encrypted Web Push (RFC 8030/8291, signed with the VAPID key). A
 push carries only `{project, scope, kind, agent}`; the app fetches the rest
 over the tailnet when opened. A push service answering that a
 subscription is gone drops it. Deleting `vapid.pem` strands every
-subscription: the app subscribes again only once re-paired.
+subscription until the app is next opened and subscribes again.
 
 A subscription must be https on a known push service — Google's
 (`fcm.googleapis.com`) or `ntfy.sh` — so a token can't aim `pm serve` at
@@ -342,10 +342,12 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 Without `adb`, copy the APK to the phone and open it, allowing installs
 from that source. In the app, scan the code `pm serve pair` prints, or
 paste its `url`, `device` and `token` lines. It asks to post
-notifications, then subscribes through the phone's default UnifiedPush
-distributor, else any installed one, else Google's; Settings switches
-between them. For notifications off the tailnet without Google, install
-ntfy from F-Droid (its default server is ntfy.sh) before pairing.
+notifications. Each time it opens and reaches the server, it registers
+through the UnifiedPush distributor it used before — or, if that one is
+gone, the phone's default, else any installed one, else Google's — and
+sends the server its subscription; Settings switches between them. For
+notifications off the tailnet without Google, install ntfy from F-Droid
+(its default server is ntfy.sh) before pairing.
 
 The app is read-only: projects, then a project's `main` and features, then
 a scope's agents, each marked with the glyphs and colours of the tmux

@@ -26,9 +26,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mikepenz.markdown.m3.Markdown
-import dev.pm.app.api.PmClient
-import dev.pm.app.api.PmError
 import dev.pm.app.data.Connection
 import dev.pm.app.model.Pairing
 import dev.pm.app.push.Notifications
@@ -61,28 +60,25 @@ fun ConnectionBanner(connection: Connection, readAt: Long?, retry: () -> Unit) {
 }
 
 @Composable
-fun SummaryScreen(client: PmClient?, project: String, feature: String) {
-    var summary by remember { mutableStateOf<Result<String>?>(null) }
-    LaunchedEffect(project, feature) {
-        summary = client?.let { runCatching { it.summary(project, feature) } }
-            ?: Result.failure(IllegalStateException("not paired"))
-    }
-    val shown = summary
-    when {
-        shown == null -> Centered { CircularProgressIndicator() }
-        shown.isSuccess -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-            Markdown(shown.getOrThrow())
+fun SummaryScreen(model: SummaryModel) {
+    val state by model.uiState.collectAsStateWithLifecycle()
+    when (val shown = state) {
+        SummaryState.Loading -> Centered { CircularProgressIndicator() }
+        is SummaryState.Shown -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+            Markdown(shown.markdown)
         }
-        else -> Centered {
-            val e = shown.exceptionOrNull()
-            Text(
-                when {
-                    e is PmError.Status && e.code == 404 -> "No summary yet."
-                    e is PmError.Unreachable -> "Server unreachable: connect Tailscale to open the summary."
-                    else -> "Couldn't load the summary: ${e?.message}"
-                },
-                textAlign = TextAlign.Center,
-            )
+        SummaryState.Missing -> Centered { Text("No summary yet.", textAlign = TextAlign.Center) }
+        SummaryState.Unreachable -> Retryable("Server unreachable: connect Tailscale to open the summary.", model::retry)
+        is SummaryState.Failed -> Retryable("Couldn't load the summary: ${shown.reason}", model::retry)
+    }
+}
+
+@Composable
+private fun Retryable(text: String, retry: () -> Unit) {
+    Centered {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(text, textAlign = TextAlign.Center)
+            OutlinedButton(onClick = retry) { Text("Retry") }
         }
     }
 }
