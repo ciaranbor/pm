@@ -204,6 +204,12 @@ pub enum MigrateCommands {
         /// A registered project to check (repeatable; default: every one)
         #[arg(long = "project", value_name = "NAME")]
         projects: Vec<String>,
+        /// Also list the files behind each count and why each item matters
+        #[arg(long, short)]
+        verbose: bool,
+        /// Print the report as JSON
+        #[arg(long, conflicts_with = "verbose")]
+        json: bool,
     },
 }
 

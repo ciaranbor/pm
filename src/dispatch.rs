@@ -986,7 +986,11 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             push();
             Ok(())
         }
-        Commands::Migrate(MigrateCommands::Check { projects }) => {
+        Commands::Migrate(MigrateCommands::Check {
+            projects,
+            verbose,
+            json,
+        }) => {
             let (config_dir, home, projects_dir) = commands::migrate_check::resolve()?;
             let report = commands::migrate_check::check(&commands::migrate_check::CheckParams {
                 projects_dir: &projects_dir,
@@ -997,8 +1001,13 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                 probe: Probe::Fresh,
                 global_harness: &GlobalConfig::load_or_default().harness,
             })?;
-            for line in report.lines() {
-                println!("{line}");
+            if json {
+                println!("{:#}", report.json());
+            } else {
+                let style = commands::migrate_check::Style::detect();
+                for line in report.lines(style, verbose) {
+                    println!("{line}");
+                }
             }
             if report.blockers() > 0 {
                 std::process::exit(1);

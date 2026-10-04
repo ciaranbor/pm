@@ -6,74 +6,132 @@
 //!
 //! A finding is a blocker (work that would be lost, or a step that would
 //! fail), a manual step (something machine-local nothing pm syncs carries),
-//! or a note. Every blocker names the command that clears it.
+//! or a note. Each subject — a worktree, `.pm/`, a registry entry, the
+//! running agents — gets one blocker naming all its problems, so the report
+//! reads as one line per thing. A blocker names the [`Step`]s of the plan
+//! that clear it, and carries its own command only where no plan step does
+//! (the git commands of one worktree). Project paths are written relative
+//! to the project root, the directory every command is run from.
 
+mod agents;
+mod line;
 mod machine;
+mod plan;
 mod project;
+mod registry;
+mod render;
 mod repo;
 mod worktree;
 
 use std::path::{Path, PathBuf};
+
+use serde::Serialize;
 
 use crate::commands::running_agents::Windows;
 use crate::error::Result;
 use crate::harness::{Harness, Probe};
 use crate::state::paths;
 use crate::state::project::{HarnessConfig, ProjectEntry};
-use crate::{git, path_utils, tmux};
+use crate::{path_utils, tmux};
 
-use repo::Remote;
+pub use plan::{PlanStep, Step};
+pub use render::Style;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Severity {
     Blocker,
     Manual,
     Note,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Finding {
     pub severity: Severity,
+    /// What it is about, as the report names it (`login/`, `.pm/`,
+    /// `agents`); empty for the section's own repo.
+    pub subject: String,
+    /// The problems, in a few words.
     pub what: String,
-    /// The command that clears a blocker.
+    /// Specifics and explanations, shown with `--verbose`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub detail: Vec<String>,
+    /// A command no plan step covers, run from the section's root.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fix: Option<String>,
+    /// The plan steps that clear a blocker.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<Step>,
+    /// A feature with active agents and uncommitted work: better finished
+    /// and merged before the move than committed half done.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub in_flight: bool,
 }
 
 impl Finding {
-    fn blocker(what: String, fix: String) -> Self {
+    fn blocker(subject: &str, what: String, fix: Option<String>, steps: &[Step]) -> Self {
         Self {
             severity: Severity::Blocker,
+            subject: subject.to_string(),
             what,
-            fix: Some(fix),
+            detail: Vec::new(),
+            fix,
+            steps: steps.to_vec(),
+            in_flight: false,
         }
     }
 
-    fn manual(what: String) -> Self {
+    fn manual(subject: &str, what: String, detail: Option<String>) -> Self {
         Self {
             severity: Severity::Manual,
+            subject: subject.to_string(),
             what,
+            detail: detail.into_iter().collect(),
             fix: None,
+            steps: Vec::new(),
+            in_flight: false,
         }
     }
 
-    fn note(what: String) -> Self {
+    fn note(subject: &str, what: String) -> Self {
         Self {
             severity: Severity::Note,
+            subject: subject.to_string(),
             what,
+            detail: Vec::new(),
             fix: None,
+            steps: Vec::new(),
+            in_flight: false,
         }
     }
 }
+
+/// The subject of a machine manual step done on this host before leaving
+/// it; every other manual step is done on the new host.
+const THIS_HOST: &str = "this host";
 
 /// The harnesses agents run on, each with the `[harness.*]` settings in
 /// effect where it was found.
 type Harnesses = Vec<(Harness, HarnessConfig)>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SectionKind {
+    Registry,
+    Project,
+    Machine,
+}
+
+#[derive(Debug, Serialize)]
 pub struct Section {
-    pub title: String,
+    pub kind: SectionKind,
+    pub name: String,
+    /// Where it lives, `~/…` when under home; empty for the machine.
+    pub path: String,
     pub findings: Vec<Finding>,
 }
 
+#[derive(Debug, Serialize)]
 pub struct Report {
     pub sections: Vec<Section>,
 }
@@ -89,40 +147,18 @@ impl Report {
         self.sections.iter().flat_map(|s| &s.findings)
     }
 
-    pub fn lines(&self) -> Vec<String> {
-        let mut out = Vec::new();
-        for section in &self.sections {
-            out.push(section.title.clone());
-            if section.findings.is_empty() {
-                out.push("  ok".to_string());
-            }
-            for f in &section.findings {
-                let tag = match f.severity {
-                    Severity::Blocker => "BLOCKER",
-                    Severity::Manual => "manual ",
-                    Severity::Note => "note   ",
-                };
-                out.push(format!("  {tag} {}", f.what));
-                if let Some(fix) = &f.fix {
-                    out.push(format!("          fix: {fix}"));
-                }
-            }
-        }
-        let manual = self
-            .findings()
-            .filter(|f| f.severity == Severity::Manual)
-            .count();
-        out.push(String::new());
-        out.push(match self.blockers() {
-            0 => format!("Ready to migrate: no blockers; {manual} manual steps above."),
-            n => format!(
-                "Not ready: {n} blocker{}. Clear them in this order — stop agents, commit and \
-                 push repos, `pm state push` in each project, `pm state backfill`, then `pm \
-                 state push --global` — and run this check again.",
-                if n == 1 { "" } else { "s" }
-            ),
-        });
-        out
+    /// The report as text: `verbose` adds file names and explanations.
+    pub fn lines(&self, style: Style, verbose: bool) -> Vec<String> {
+        render::lines(self, style, verbose)
+    }
+
+    pub fn json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "ready": self.blockers() == 0,
+            "blockers": self.blockers(),
+            "plan": plan::plan(self),
+            "sections": self.sections,
+        })
     }
 }
 
@@ -143,10 +179,6 @@ pub struct CheckParams<'a> {
 /// it and needs no quoting, else the quoted absolute path.
 fn shell_path(path: &Path) -> String {
     let portable = path_utils::to_portable(path);
-    let plain = |s: &str| {
-        s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || "/._-~+@".contains(c))
-    };
     if plain(&portable) {
         portable
     } else {
@@ -154,18 +186,48 @@ fn shell_path(path: &Path) -> String {
     }
 }
 
+fn plain(s: &str) -> bool {
+    s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || "/._-~+@".contains(c))
+}
+
+/// A path as a shell argument for a command run from `root`: relative when
+/// under it, else as [`shell_path`] writes it.
+fn rel_path(root: &Path, path: &Path) -> String {
+    let canonical = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let rel = path
+        .strip_prefix(root)
+        .ok()
+        .map(Path::to_path_buf)
+        .or_else(|| {
+            canonical(path)
+                .strip_prefix(canonical(root))
+                .ok()
+                .map(Path::to_path_buf)
+        });
+    match rel {
+        Some(rel) if rel.as_os_str().is_empty() => ".".to_string(),
+        Some(rel) if plain(&rel.to_string_lossy()) => rel.to_string_lossy().into_owned(),
+        Some(rel) => tmux::shell_quote(&rel.to_string_lossy()),
+        None => shell_path(path),
+    }
+}
+
 pub fn check(params: &CheckParams<'_>) -> Result<Report> {
     let registry = ProjectEntry::scan(params.projects_dir)?;
-    let mut global = registry_findings(params.config_dir)?;
+    let mut global = registry::findings(params.config_dir)?;
     for bad in &registry.malformed {
-        global.push(Finding::blocker(
-            format!(
-                "unreadable registry entry {} ({}): `pm harness export --all` refuses to run",
-                shell_path(&bad.path),
-                bad.error
-            ),
-            format!("fix or remove {}", shell_path(&bad.path)),
-        ));
+        let mut finding = Finding::blocker(
+            &shell_path(&bad.path),
+            "unreadable registry entry: fix or remove it".to_string(),
+            None,
+            &[Step::Repair],
+        );
+        finding.detail.push(bad.error.to_string());
+        finding
+            .detail
+            .push("`pm harness export --all` refuses to run while it is there".to_string());
+        global.push(finding);
     }
 
     let selected: Vec<(String, Option<ProjectEntry>)> = if params.projects.is_empty() {
@@ -195,25 +257,32 @@ pub fn check(params: &CheckParams<'_>) -> Result<Report> {
         .filter(|name| !selected.iter().any(|(s, _)| s == name))
         .collect();
     if !others.is_empty() {
-        global.push(Finding::note(format!(
-            "not checked, but in the registry the new host pulls: {}; pass the same `--project` \
-             flags to `pm restore` to restore only these",
-            others.join(", ")
-        )));
+        global.push(Finding::note(
+            "",
+            format!(
+                "not checked, but in the registry the new host pulls: {}; `pm restore` with the \
+                 same `--project` flags restores only these",
+                others.join(", ")
+            ),
+        ));
     }
 
     let windows = Windows::read(params.tmux_server).ok();
     let mut harnesses: Harnesses = Vec::new();
     let mut sections = vec![Section {
-        title: format!("global registry ({})", shell_path(params.config_dir)),
+        kind: SectionKind::Registry,
+        name: "global registry".to_string(),
+        path: shell_path(params.config_dir),
         findings: global,
     }];
     for (name, entry) in &selected {
         let (findings, used) = match entry {
             None => (
                 vec![Finding::blocker(
-                    format!("'{name}' is not a registered project"),
-                    "`pm list` names the registered projects".to_string(),
+                    "",
+                    "not a registered project; `pm list` names them".to_string(),
+                    None,
+                    &[Step::Repair],
                 )],
                 Vec::new(),
             ),
@@ -224,80 +293,28 @@ pub fn check(params: &CheckParams<'_>) -> Result<Report> {
                 harnesses.push((harness, config));
             }
         }
-        let title = match entry {
-            Some(entry) => format!("project {name} ({})", entry.root),
-            None => format!("project {name}"),
-        };
-        sections.push(Section { title, findings });
+        sections.push(Section {
+            kind: SectionKind::Project,
+            name: name.clone(),
+            path: entry.as_ref().map(|e| e.root.clone()).unwrap_or_default(),
+            findings,
+        });
     }
 
-    let mut machine = Vec::new();
-    let mut exported: Vec<Harness> = Vec::new();
-    for (harness, _) in &harnesses {
-        if !exported.contains(harness) {
-            exported.push(*harness);
-        }
-    }
-    for harness in &exported {
-        machine.push(Finding::manual(format!(
-            "{harness} conversations travel only in an export: `pm close --all`, then `pm \
-             harness export --all --harness {harness} -o pm-{harness}.tar.gz`, then `pm \
-             restore --import pm-{harness}.tar.gz` on the new host"
-        )));
-    }
-    machine.extend(machine::findings(
-        params.home,
-        params.config_dir,
-        &harnesses,
-        params.probe,
-    ));
+    let machine = machine::findings(&machine::Machine {
+        home: params.home,
+        config_dir: params.config_dir,
+        harnesses: &harnesses,
+        projects: params.projects,
+        probe: params.probe,
+    })?;
     sections.push(Section {
-        title: "this machine (manual steps on the new host)".to_string(),
+        kind: SectionKind::Machine,
+        name: "this machine".to_string(),
+        path: String::new(),
         findings: machine,
     });
     Ok(Report { sections })
-}
-
-/// The global registry repo: present, with a remote, clean, and pushed.
-fn registry_findings(config_dir: &Path) -> Result<Vec<Finding>> {
-    if !git::is_git_repo(config_dir) {
-        return Ok(vec![Finding::blocker(
-            "the global registry is not a git repo, so the new host can't pull it".to_string(),
-            "pm state init --global --remote <new empty repo url>".to_string(),
-        )]);
-    }
-    let push = "pm state push --global";
-    let mut out = Vec::new();
-    let remote = Remote::of(config_dir)?;
-    if remote.is_none() {
-        out.push(Finding::blocker(
-            "the global registry has no remote".to_string(),
-            format!("pm state remote --global <new empty repo url>, then {push}"),
-        ));
-    }
-    out.extend(repo::state_dirty_finding(
-        config_dir,
-        "global registry",
-        push,
-    )?);
-    if let Some(url) = git::remote_url(config_dir, "origin")? {
-        out.push(Finding::manual(format!(
-            "on the new host, pull the registry from exactly this remote: `pm state init \
-             --global --remote {url}`"
-        )));
-    }
-    if let Some(remote) = &remote {
-        let branch = git::current_branch(config_dir)?;
-        out.extend(repo::branch_finding(
-            config_dir,
-            remote,
-            &branch,
-            "global registry",
-            push,
-            Some("pm state pull --global"),
-        )?);
-    }
-    Ok(out)
 }
 
 /// The pm config dir, home, and registry for a check of this machine.

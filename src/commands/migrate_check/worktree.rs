@@ -1,4 +1,4 @@
-//! A worktree's work that a clone would not carry: uncommitted changes,
+//! A branch and its worktree: commits not on origin, uncommitted changes,
 //! untracked files pm would not write again, a rebase left half done, and
 //! harness settings files git does not track.
 
@@ -9,12 +9,19 @@ use crate::error::Result;
 use crate::git;
 use crate::harness::Harness;
 
-use super::{Finding, repo, shell_path};
+use super::line::{Line, count};
+use super::repo::{self, Remote, Sync};
+use super::{Finding, Step, rel_path};
 
 /// A harness's per-worktree settings files (permissions and the like) that
 /// git does not track, so a clone lacks them: main's, and a feature's that
 /// differs from main's (a restored feature is seeded from main).
-pub(super) fn settings_findings(harness: Harness, worktrees: &[PathBuf]) -> Result<Vec<Finding>> {
+pub(super) fn settings_findings(
+    root: &Path,
+    project: &str,
+    harness: Harness,
+    worktrees: &[PathBuf],
+) -> Result<Vec<Finding>> {
     let mut out = Vec::new();
     let Some((main, _)) = worktrees.split_first() else {
         return Ok(out);
@@ -32,10 +39,16 @@ pub(super) fn settings_findings(harness: Harness, worktrees: &[PathBuf]) -> Resu
             {
                 continue;
             }
-            out.push(Finding::manual(format!(
-                "{} is not tracked by git, so the new host won't have it: carry it by hand",
-                shell_path(&worktree.join(&rel))
-            )));
+            out.push(Finding::manual(
+                project,
+                format!(
+                    "copy {} (git doesn't track it)",
+                    rel_path(root, &worktree.join(&rel))
+                ),
+                Some(format!(
+                    "{harness}'s settings for that worktree: the new host's clone won't have them"
+                )),
+            ));
         }
     }
     Ok(out)
@@ -64,27 +77,141 @@ fn regenerated(feature: bool) -> Vec<String> {
     out
 }
 
-/// A worktree's uncommitted work and git operations left half done;
-/// `push` publishes its branch.
-pub(super) fn worktree_findings(
-    worktree: &Path,
-    label: &str,
-    push: &str,
-    feature: bool,
-) -> Result<Vec<Finding>> {
-    let mut out = Vec::new();
-    if git::rebase_in_progress(worktree).unwrap_or(false) {
-        let arg = shell_path(worktree);
-        out.push(Finding::blocker(
-            format!("{label}: a rebase is in progress"),
-            format!("git -C {arg} rebase --continue (or --abort)"),
-        ));
+/// A code branch to check: where its repo is, and its worktree if one is
+/// checked out here.
+pub(super) struct Branch<'a> {
+    pub root: &'a Path,
+    /// The main worktree, which holds the repo.
+    pub main: &'a Path,
+    pub name: &'a str,
+    pub worktree: Option<&'a Path>,
+    /// A feature's worktree, seeded with main's canonical skills.
+    pub feature: bool,
+}
+
+/// What a branch's line found, beside the line itself.
+pub(super) struct Checked {
+    pub line: Line,
+    /// Uncommitted or untracked work in the worktree.
+    pub dirty: bool,
+    /// origin is ahead and the branch has nothing more.
+    pub behind: bool,
+}
+
+/// The problems of `branch` and its worktree, and the git commands, run
+/// from the root, that put its work on `remote`.
+pub(super) fn check(branch: &Branch<'_>, remote: Option<&Remote>) -> Result<Checked> {
+    let dir = rel_path(branch.root, branch.worktree.unwrap_or(branch.main));
+    let mut line = Line::in_dir(&dir);
+    let push = format!("push -u origin {}", branch.name);
+    let mut dirty = false;
+    if let Some(worktree) = branch.worktree {
+        // Committing or pushing mid-rebase fails or loses the rebase: the
+        // rebase is the whole fix, and the next check gives the push.
+        if git::rebase_in_progress(worktree).unwrap_or(false) {
+            line.problem("rebase in progress");
+            line.git("rebase --continue");
+            line.detail("resolve and `git add` any conflicts first, or `git rebase --abort`");
+            line.step(Step::Repair);
+            return Ok(Checked {
+                line,
+                dirty: true,
+                behind: false,
+            });
+        }
+        let (tracked, untracked) = repo::changes(worktree, &regenerated(branch.feature))?;
+        dirty = !tracked.is_empty() || !untracked.is_empty();
+        if !tracked.is_empty() {
+            line.problem(format!("{} modified", tracked.len()));
+            line.files("modified", &tracked);
+        }
+        if !untracked.is_empty() {
+            line.problem(format!("{} untracked", untracked.len()));
+            line.files("untracked", &untracked);
+            line.detail("untracked files may be secrets or scratch: add what belongs in the repo, delete or .gitignore the rest");
+            line.git("add <file>…");
+        }
+        if dirty {
+            line.git(if tracked.is_empty() {
+                "commit"
+            } else {
+                "commit -a"
+            });
+        }
     }
-    out.extend(repo::dirty_findings(
-        worktree,
-        label,
-        push,
-        &regenerated(feature),
-    )?);
-    Ok(out)
+    let Some(remote) = remote else {
+        if line.has_git() {
+            line.step(Step::Branches);
+        }
+        return Ok(Checked {
+            line,
+            dirty,
+            behind: false,
+        });
+    };
+    let mut behind = false;
+    let mut repair = false;
+    match repo::upstream(branch.main, remote, branch.name)? {
+        Sync::NoLocal => {}
+        Sync::Pushed => {
+            if dirty {
+                line.git(&push);
+            }
+        }
+        Sync::Behind => {
+            behind = true;
+            if dirty {
+                line.git(format!("pull --rebase origin {}", branch.name));
+                line.git(&push);
+            }
+        }
+        Sync::NotOnRemote => {
+            line.problem("not on origin");
+            line.git(&push);
+        }
+        Sync::Ahead(n) => {
+            line.problem(count(n, "commit") + " not pushed");
+            line.git(&push);
+        }
+        Sync::Diverged => {
+            line.problem("diverged from origin");
+            match branch.worktree {
+                Some(_) => line.git(format!("pull --rebase origin {}", branch.name)),
+                None => line.command(repo::rebase_onto_origin(
+                    branch.root,
+                    branch.main,
+                    branch.name,
+                )?),
+            }
+            line.git(&push);
+        }
+        Sync::Unfetched => {
+            line.problem("origin has commits not fetched here");
+            line.command(format!(
+                "git -C {} fetch origin",
+                rel_path(branch.root, branch.main)
+            ));
+            line.detail("fetch, then run this check again");
+            line.step(Step::Repair);
+            repair = true;
+        }
+        Sync::Unreachable(why) => {
+            line.problem("origin unreachable");
+            line.detail(why);
+            line.command(format!(
+                "git -C {} ls-remote origin",
+                rel_path(branch.root, branch.main)
+            ));
+            line.step(Step::Repair);
+            repair = true;
+        }
+    }
+    if dirty || (!repair && !line.is_empty()) {
+        line.step(Step::Branches);
+    }
+    Ok(Checked {
+        line,
+        dirty,
+        behind,
+    })
 }
