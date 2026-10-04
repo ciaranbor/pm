@@ -1,20 +1,23 @@
 package dev.pm.app.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -24,6 +27,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -32,45 +39,104 @@ import com.mikepenz.markdown.m3.Markdown
 import dev.pm.app.data.Connection
 import dev.pm.app.model.Pairing
 import dev.pm.app.push.Notifications
-import java.text.DateFormat
-import java.util.Date
+import java.time.Instant
 
-/** How the app stands with the server, over the content it qualifies. */
+/** How long ago `then` (epoch ms) was, in words. */
+fun ago(then: Long, now: Instant): String {
+    val mins = (now.toEpochMilli() - then).coerceAtLeast(0) / 60_000
+    return when {
+        mins < 1 -> "just now"
+        mins < 60 -> "$mins min ago"
+        mins < 24 * 60 -> "${mins / 60} h ago"
+        else -> "${mins / (24 * 60)} d ago"
+    }
+}
+
+/**
+ * How the app stands with the server, over the content it qualifies, with what to do about it;
+ * nothing while live.
+ */
 @Composable
-fun ConnectionBanner(
+fun StatusStrip(
     connection: Connection,
     readAt: Long?,
+    now: Instant,
     retry: () -> Unit,
+    pairAgain: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val text =
+    val updated = readAt?.let { " · last update ${ago(it, now)}" }.orEmpty()
+    val (title, hint, action) =
         when (connection) {
             Connection.Live,
             Connection.Unpaired -> return
-            Connection.Connecting -> "Connecting…"
-            is Connection.Unreachable -> {
-                val age =
-                    readAt
-                        ?.let {
-                            " · showing what was known at ${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(it))}"
-                        }
-                        .orEmpty()
-                "Server unreachable: connect Tailscale to open$age"
-            }
-            Connection.Unauthorized -> "This phone's token was revoked; pair again in Settings."
+            Connection.Connecting -> Triple("Connecting…$updated", null, null)
+            is Connection.Unreachable ->
+                Triple("Offline$updated", "Can't reach pm serve. Tailscale off?", "Retry" to retry)
+            Connection.Unauthorized ->
+                Triple(
+                    "Not paired$updated",
+                    "The Mac revoked this phone's token.",
+                    "Pair again" to pairAgain,
+                )
         }
-    Text(
-        text,
-        style = MaterialTheme.typography.labelMedium,
-        textAlign = TextAlign.Center,
-        color = MaterialTheme.colorScheme.onSecondaryContainer,
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
         modifier =
             modifier
                 .fillMaxWidth()
                 .background(MaterialTheme.colorScheme.secondaryContainer)
-                .clickable(onClick = retry)
-                .padding(8.dp),
-    )
+                .padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp)
+                .heightIn(min = 40.dp),
+    ) {
+        Column(
+            Modifier.weight(1f).semantics(mergeDescendants = true) {
+                liveRegion = LiveRegionMode.Polite
+            }
+        ) {
+            Text(
+                title,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+            if (hint != null) {
+                Text(
+                    hint,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+            }
+        }
+        if (action != null) TextButton(onClick = action.second) { Text(action.first) }
+    }
+}
+
+/** A screen with nothing to show yet: why, and the one thing to do about it. */
+@Composable
+fun EmptyState(
+    title: String,
+    hint: String,
+    action: String,
+    onAction: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Centered(modifier) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(title, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
+            Text(
+                hint,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+            OutlinedButton(onClick = onAction, modifier = Modifier.padding(top = 8.dp)) {
+                Text(action)
+            }
+        }
+    }
 }
 
 @Composable
@@ -86,7 +152,7 @@ fun SummaryScreen(model: SummaryModel, modifier: Modifier = Modifier) {
             Centered(modifier) { Text("No summary yet.", textAlign = TextAlign.Center) }
         SummaryState.Unreachable ->
             Retryable(
-                "Server unreachable: connect Tailscale to open the summary.",
+                "Can't reach pm serve. Tailscale off?",
                 model::retry,
                 modifier,
             )
@@ -180,19 +246,30 @@ fun SettingsScreen(
         }
         val all = Notifications.distributors(context)
         if (all.isEmpty()) Text("No distributor is available on this phone.")
-        all.forEach { name ->
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier =
-                    Modifier.fillMaxWidth().clickable(enabled = pairing != null) {
-                        choosing = name
-                    },
-            ) {
-                RadioButton(selected = name == distributor, onClick = null)
-                Text(
-                    if (name == context.packageName) "Google (built in)" else name,
-                    modifier = Modifier.padding(start = 8.dp),
-                )
+        Column(Modifier.selectableGroup()) {
+            all.forEach { name ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier =
+                        Modifier.fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .selectable(
+                                selected = name == distributor,
+                                enabled = pairing != null,
+                                role = Role.RadioButton,
+                                onClick = { choosing = name },
+                            ),
+                ) {
+                    RadioButton(
+                        selected = name == distributor,
+                        onClick = null,
+                        enabled = pairing != null,
+                    )
+                    Text(
+                        if (name == context.packageName) "Google (built in)" else name,
+                        modifier = Modifier.padding(start = 8.dp),
+                    )
+                }
             }
         }
         problem?.let { Text(it, color = MaterialTheme.colorScheme.error) }

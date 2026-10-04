@@ -369,14 +369,18 @@ sends the server its subscription; Settings switches between them. For
 notifications off the tailnet without Google, install ntfy from F-Droid
 (its default server is ntfy.sh) before pairing.
 
-The app is read-only: projects, then a project's `main` and features, then
-a scope's agents, each marked with the glyphs and colours of the tmux
-badges ([tmux integration](#tmux-integration)); an agent's
-conversation, from its harness's transcript, and its screen; a feature's
-summary. Notifications come on a channel per kind (needs input, ready for
-review, agent died), each tuned in Android's settings; a tapped one opens
-the scope, or the agent it names, and opening the app withdraws those a
-snapshot shows are over.
+The app is read-only. It opens on what needs you: every scope across
+projects whose attention isn't `none`, ranked by kind as the attention
+view ranks it, then the longest quiet first; a row opens the agent its
+attention names, else the scope. Below come the projects, most urgent
+first, then a project's `main` and features, then a scope's agents, each
+marked with the glyphs and colours of the tmux badges ([tmux
+integration](#tmux-integration)); an agent's conversation, from its
+harness's transcript, and its screen; a feature's summary. Notifications
+come on a channel per kind (needs input, ready for review, agent died),
+each tuned in Android's settings; a tapped one opens the scope, or the
+agent it names, and opening the app withdraws those a snapshot shows are
+over.
 
 ## Concepts
 

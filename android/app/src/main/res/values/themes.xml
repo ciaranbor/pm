@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The window behind Compose's first frame: the theme's background, so launch doesn't flash.
+         values-v31 takes it from the wallpaper's palette, as the dynamic scheme does. -->
+    <style name="Theme.Pm" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window</item>
+    </style>
+</resources>

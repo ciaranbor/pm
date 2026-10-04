@@ -1,8 +1,8 @@
 package dev.pm.app.ui
 
-import androidx.compose.ui.test.assert
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -16,10 +16,12 @@ import dev.pm.app.model.Item
 import dev.pm.app.model.Pairing
 import dev.pm.app.model.ToolResult
 import dev.pm.app.push.Target
+import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
 import okhttp3.OkHttpClient
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -53,33 +55,83 @@ class UiTest {
         }
 
         compose.waitUntil(5_000) { model.snapshot.value != null }
-        compose.onNodeWithText("app/login").assertIsDisplayed()
-        compose.onNodeWithText("implementer").assertIsDisplayed()
+        compose.onNodeWithText("login").assertIsDisplayed()
+        compose.onNodeWithText("app").assertIsDisplayed()
+        compose
+            .onNodeWithContentDescription("implementer, asking: Postgres or SQLite?, 2 unread")
+            .assertIsDisplayed()
         assertTrue(shown)
 
         compose.onNodeWithContentDescription("Back").performClick()
-        compose.onNodeWithText("main").assertIsDisplayed()
-        compose.onNodeWithText("search").assertIsDisplayed()
+        compose.onNodeWithContentDescription("main", substring = true).assertIsDisplayed()
+        compose.onNodeWithContentDescription("search", substring = true).assertIsDisplayed()
     }
 
     @Test
-    fun the_unreachable_banner_says_how_old_the_snapshot_is_and_retries_on_tap() {
-        var retries = 0
+    fun a_need_on_the_start_screen_opens_the_agent_it_names_with_its_scope_behind() {
+        val store = Store(ApplicationProvider.getApplicationContext())
+        store.pairing = Pairing("http://127.0.0.1:9", "pixel", "tok")
+        store.cacheSnapshot(SNAPSHOT)
+        val model = AppViewModel(Repository(store, OkHttpClient(), scope)) {}
+        compose.setContent { PmTheme { App(model, null, targetShown = {}) } }
+        compose.waitUntil(5_000) { model.snapshot.value != null }
+
+        compose
+            .onNodeWithContentDescription(
+                "app/login, blocked, which DB?, implementer asking, 2 unread"
+            )
+            .performClick()
+        compose.onNodeWithText("app › login").assertIsDisplayed()
+        compose.onNodeWithText("Chat").assertIsDisplayed()
+
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.onNodeWithText("login").assertIsDisplayed()
+        compose.onNodeWithContentDescription("More").performClick()
+        compose.onNodeWithText("Summary").assertIsDisplayed()
+    }
+
+    @Test
+    fun a_revoked_phone_with_nothing_cached_is_offered_pairing_rather_than_a_spinner() {
+        val connection = MutableStateFlow<Connection>(Connection.Unauthorized)
         compose.setContent {
             PmTheme {
-                ConnectionBanner(
-                    Connection.Unreachable("refused"),
-                    readAt = 0L,
+                val state by connection.collectAsState()
+                Shown(null, state, retry = {}, pairAgain = {}) {}
+            }
+        }
+        compose.onNodeWithText("Pair again").assertIsDisplayed()
+        connection.value = Connection.Unreachable("refused")
+        compose.onNodeWithText("Retry").assertIsDisplayed()
+    }
+
+    @Test
+    fun the_status_strip_says_how_old_the_snapshot_is_and_offers_the_fix() {
+        var retries = 0
+        var pairings = 0
+        val now = Instant.parse("2026-10-02T10:00:00Z")
+        val connection = MutableStateFlow<Connection>(Connection.Unreachable("refused"))
+        compose.setContent {
+            PmTheme {
+                val state by connection.collectAsState()
+                StatusStrip(
+                    state,
+                    readAt = now.toEpochMilli() - 12 * 60_000,
+                    now = now,
                     retry = { retries++ },
+                    pairAgain = { pairings++ },
                 )
             }
         }
-        compose
-            .onNodeWithText("Server unreachable", substring = true)
-            .assertIsDisplayed()
-            .assert(hasText("showing what was known at", substring = true))
-            .performClick()
+        compose.onNodeWithText("Offline · last update 12 min ago").assertIsDisplayed()
+        compose.onNodeWithText("Retry").performClick()
         assertEquals(1, retries)
+
+        connection.value = Connection.Unauthorized
+        compose.onNodeWithText("Pair again").performClick()
+        assertEquals(1, pairings)
+
+        connection.value = Connection.Live
+        compose.onNodeWithText("last update", substring = true).assertDoesNotExist()
     }
 
     @Test

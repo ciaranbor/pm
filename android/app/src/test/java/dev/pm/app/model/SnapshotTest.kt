@@ -43,6 +43,45 @@ class SnapshotTest {
     }
 
     @Test
+    fun needs_rank_every_projects_scopes_by_kind_then_longest_quiet() {
+        fun feature(project: String, name: String, kind: String, last: String?) =
+            """{"project": "$project", "name": "$name", "attention": {"kind": "$kind"},
+                "last_activity": ${last?.let { "\"$it\"" } ?: "null"}}"""
+        val snapshot =
+            Snapshot.parse(
+                """{"version": 1,
+                    "projects": [
+                      {"name": "a", "main": {"attention": {"kind": "dead", "agent": "main"}}},
+                      {"name": "b", "main": {"attention": {"kind": "none"}}}],
+                    "features": [
+                      ${feature("a", "fresh", "ready", "2026-10-02T11:00:00Z")},
+                      ${feature("b", "unknown-age", "ready", null)},
+                      ${feature("b", "old", "ready", "2026-10-01T11:00:00Z")},
+                      ${feature("b", "idle", "none", null)},
+                      ${feature("b", "q", "asking", null)}]}"""
+            )
+        assertEquals(
+            listOf("b/q", "b/old", "a/fresh", "b/unknown-age", "a/main"),
+            snapshot.needsYou().map { "${it.project}/${it.scope}" },
+        )
+        assertEquals(listOf("b", "a"), snapshot.projectsByUrgency().map { it.name })
+    }
+
+    @Test
+    fun a_need_names_its_agent_only_while_the_scope_still_has_it() {
+        val needs = Snapshot.parse(json).needsYou()
+        assertEquals("implementer", needs.first { it.scope == "login" }.agent?.name)
+        val gone =
+            Snapshot.parse(
+                    """{"version": 1, "features": [{"project": "a", "name": "f",
+                        "attention": {"kind": "blocked", "agent": "qa"}, "agents": []}]}"""
+                )
+                .needsYou()
+                .single()
+        assertNull(gone.agent)
+    }
+
+    @Test
     fun a_newer_version_is_flagged() {
         assertFalse(Snapshot.parse("""{"version": 2, "projects": [], "features": []}""").understood)
     }
