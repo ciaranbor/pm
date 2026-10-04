@@ -736,7 +736,9 @@ code travels through each repo's own remote, and agents' conversations
 through a `pm harness export` tarball.
 
 `pm migrate check [--project <name>…]` says what a move would lose or fail
-on: unpushed branches and uncommitted work in any worktree, state repos
+on: unpushed branches (a feature branch with no commits of its own needs
+no push: `pm restore` creates it from the feature's base) and uncommitted
+work in any worktree, state repos
 without a remote or with changes not pushed, registry entries `pm restore`
 can't clone or pull from, agents still running, and the machine-local
 things to redo by hand (harness installs and logins, `pm serve` devices,

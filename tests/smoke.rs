@@ -1285,6 +1285,12 @@ fn a_project_moves_to_a_fresh_machine_and_its_agent_resumes() {
         .success();
     s.pm(s.home()).args(["close", "--all"]).assert().success();
 
+    // A branch with no commits of its own is created from its base on the
+    // new host; one with work blocks until it is pushed.
+    s.git(
+        &login,
+        &["commit", "-q", "--allow-empty", "-m", "login work"],
+    );
     s.pm(s.home())
         .args(["migrate", "check", "--project", "proj"])
         .assert()

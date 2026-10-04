@@ -87,6 +87,9 @@ pub(super) struct Branch<'a> {
     pub worktree: Option<&'a Path>,
     /// A feature's worktree, seeded with main's canonical skills.
     pub feature: bool,
+    /// A feature's base, which `pm restore` creates the branch from when
+    /// origin lacks it.
+    pub base: Option<&'a str>,
 }
 
 /// What a branch's line found, beside the line itself.
@@ -96,6 +99,9 @@ pub(super) struct Checked {
     pub dirty: bool,
     /// origin is ahead and the branch has nothing more.
     pub behind: bool,
+    /// Not on origin, with no commits of its own: the base it is created
+    /// from on the new host.
+    pub from_base: Option<String>,
 }
 
 /// The problems of `branch` and its worktree, and the git commands, run
@@ -117,6 +123,7 @@ pub(super) fn check(branch: &Branch<'_>, remote: Option<&Remote>) -> Result<Chec
                 line,
                 dirty: true,
                 behind: false,
+                from_base: None,
             });
         }
         let (tracked, untracked) = repo::changes(worktree, &regenerated(branch.feature))?;
@@ -147,9 +154,11 @@ pub(super) fn check(branch: &Branch<'_>, remote: Option<&Remote>) -> Result<Chec
             line,
             dirty,
             behind: false,
+            from_base: None,
         });
     };
     let mut behind = false;
+    let mut from_base = None;
     let mut repair = false;
     match repo::upstream(branch.main, remote, branch.name)? {
         Sync::NoLocal => {}
@@ -165,10 +174,15 @@ pub(super) fn check(branch: &Branch<'_>, remote: Option<&Remote>) -> Result<Chec
                 line.git(&push);
             }
         }
-        Sync::NotOnRemote => {
-            line.problem("not on origin");
-            line.git(&push);
-        }
+        Sync::NotOnRemote => match branch.base {
+            Some(base) if !dirty && remote.base_holds(branch.main, branch.name, base)? => {
+                from_base = Some(base.to_string());
+            }
+            _ => {
+                line.problem("not on origin");
+                line.git(&push);
+            }
+        },
         Sync::Ahead(n) => {
             line.problem(count(n, "commit") + " not pushed");
             line.git(&push);
@@ -213,5 +227,6 @@ pub(super) fn check(branch: &Branch<'_>, remote: Option<&Remote>) -> Result<Chec
         line,
         dirty,
         behind,
+        from_base,
     })
 }
