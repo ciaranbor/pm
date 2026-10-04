@@ -620,7 +620,10 @@ fn parse_version(output: &str) -> Option<(u32, u32, u32)> {
 
 /// The installed version's raw string, or why opencode could not be asked.
 /// `--version` starts no server, so it needs no `--standalone`.
-fn installed_version(cfg: &OpenCodeConfig, probe: Probe) -> std::result::Result<String, String> {
+pub(super) fn installed_version(
+    cfg: &OpenCodeConfig,
+    probe: Probe,
+) -> std::result::Result<String, String> {
     let unrunnable = || format!("`{}` could not be run", binary(cfg));
     let exit = probe::run(binary(cfg), "--version", probe, || {
         let mut command = Command::new(binary(cfg));
@@ -659,6 +662,22 @@ pub(super) fn unusable_reason(cfg: &OpenCodeConfig, probe: Probe) -> Option<Stri
             "installed opencode is `{found}`; pm's never-idle plugin needs {} or later",
             min_version_string()
         )),
+    }
+}
+
+/// The manual step that gives a new machine's opencode its credentials:
+/// the variables pm config names for its providers' keys, and opencode's
+/// own login for any provider pm config does not define.
+pub(super) fn credentials_step(cfg: &OpenCodeConfig) -> String {
+    let variables = providers::key_variables(&cfg.providers);
+    let own = "`opencode auth login` for providers pm config does not define";
+    if variables.is_empty() {
+        own.to_string()
+    } else {
+        format!(
+            "set {} in the environment agents start in, and {own}",
+            variables.join(", ")
+        )
     }
 }
 

@@ -36,6 +36,22 @@ fi
   printf 'argc=%s\n' "$#"
   printf '%s\n' "$0" "$@"
   printf 'cwd=%s\nPM_AGENT_NAME=%s\n' "$PWD" "$PM_AGENT_NAME"
+  if [ "$name" = claude ]; then
+    # Whether the session `--resume` names is in the store, under the key of
+    # the resolved cwd, as Claude Code looks it up.
+    key=$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')
+    prev=""
+    for a in "$@"; do
+      if [ "$prev" = --resume ]; then
+        if [ -f "$HOME/.claude/projects/$key/$a.jsonl" ]; then
+          echo "resumed=found"
+        else
+          echo "resumed=missing"
+        fi
+      fi
+      prev=$a
+    done
+  fi
   if [ "$name" = opencode ]; then
     printf 'PM_OPENCODE_SESSION=%s\n' "$PM_OPENCODE_SESSION"
     printf 'OPENCODE_CONFIG=%s\nOPENCODE_CONFIG_CONTENT=%s\n' \

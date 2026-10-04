@@ -190,8 +190,12 @@ struct InitConfig<'a> {
     init_success_msg: String,
     /// Message returned when the repo already exists.
     already_init_msg: &'a str,
-    /// Error message when the repo already has a remote configured.
-    already_has_remote_error: &'a str,
+    /// The command that pulls this repo, for the hint when `--remote`
+    /// names a different remote than the one it has.
+    pull_hint: &'a str,
+    /// Whether `--remote` naming the repo's own remote takes the remote's
+    /// content when a fast-forward can't, instead of refusing.
+    reset_when_diverged: bool,
     /// Called before the first commit (e.g. to write a .gitignore).
     pre_init: Option<PreInitHook<'a>>,
     /// Called after a remote URL is successfully configured.
@@ -201,19 +205,51 @@ struct InitConfig<'a> {
 }
 
 /// Unified init logic for both project-level and global-registry state repos.
+/// Returns the report, and whether the repo was reset to its remote's
+/// content (rather than fast-forwarded or left alone).
 fn init_repo_managed(
     cfg: InitConfig,
     interactive: bool,
     remote_url: Option<&str>,
-) -> Result<String> {
+) -> Result<(String, bool)> {
     let dir = cfg.dir;
     let label = cfg.label;
 
     if dir.join(".git").exists() {
         // Already initialised — if --remote given, configure it if possible
         if let Some(url) = remote_url {
-            if git::has_remote(dir, "origin")? {
-                return Err(PmError::Git(cfg.already_has_remote_error.to_string()));
+            if let Some(current) = git::remote_url(dir, "origin")? {
+                if current != url {
+                    return Err(PmError::Git(format!(
+                        "{label} repo already has remote {current}; to use {url} instead, run \
+                         `git -C {} remote set-url origin {url}`, then `{}`",
+                        crate::tmux::shell_quote(&dir.to_string_lossy()),
+                        cfg.pull_hint
+                    )));
+                }
+                let ctx = RepoContext {
+                    dir,
+                    label,
+                    init_hint: "",
+                    remote_hint: "",
+                };
+                let header = format!("{} with remote {url}", cfg.already_init_msg);
+                return match pull_repo(&ctx) {
+                    Ok(pulled) => Ok((format!("{header}\n{pulled}"), false)),
+                    // A fast-forward can't work: local and remote both have
+                    // commits, or share none (a repo `pm register` made
+                    // here before the first pull).
+                    Err(_) if cfg.reset_when_diverged => {
+                        let taken = take_remote(dir, label)?;
+                        Ok((format!("{header}\n{taken}"), true))
+                    }
+                    Err(e) => Err(PmError::Git(format!(
+                        "{e}\n{label} repo and {url} have both changed; reconcile them with \
+                         `git -C {} pull --no-rebase origin`, then `{}` again",
+                        crate::tmux::shell_quote(&dir.to_string_lossy()),
+                        cfg.pull_hint
+                    ))),
+                };
             }
             let mut result = cfg.already_init_msg.to_string();
             let remote_msg = apply_remote_and_pull(dir, url, label, false)?;
@@ -224,7 +260,7 @@ fn init_repo_managed(
             {
                 eprintln!("warning: {label} post-remote hook failed: {e}");
             }
-            return Ok(result);
+            return Ok((result, true));
         }
         // If interactive and no remote, offer remote setup
         if interactive && !git::has_remote(dir, "origin")? {
@@ -235,14 +271,16 @@ fn init_repo_managed(
                 result.push('\n');
                 result.push_str(&remote_msg);
             }
-            return Ok(result);
+            return Ok((result, false));
         }
-        return Ok(cfg.already_init_msg.to_string());
+        return Ok((cfg.already_init_msg.to_string(), false));
     }
 
     if !dir.exists() {
         return Err(PmError::Git(cfg.dir_missing_error.to_string()));
     }
+
+    let before = entry_names(dir)?;
 
     // Run pre-init hook (e.g. write .gitignore for global registry)
     if let Some(pre) = cfg.pre_init {
@@ -265,7 +303,13 @@ fn init_repo_managed(
 
     // Explicit remote URL takes precedence over interactive prompt
     if let Some(url) = remote_url {
-        let remote_msg = apply_remote_and_pull(dir, url, label, true)?;
+        let remote_msg = match apply_remote_and_pull(dir, url, label, true) {
+            Ok(msg) => msg,
+            Err(e) => {
+                remove_entries_since(dir, &before);
+                return Err(e);
+            }
+        };
         result.push('\n');
         result.push_str(&remote_msg);
         if let Some(post) = cfg.post_remote
@@ -281,7 +325,31 @@ fn init_repo_managed(
         result.push_str(&remote_msg);
     }
 
-    Ok(result)
+    Ok((result, remote_url.is_some()))
+}
+
+/// The names of the entries of `dir`.
+fn entry_names(dir: &Path) -> Result<Vec<std::ffi::OsString>> {
+    Ok(std::fs::read_dir(dir)?
+        .flatten()
+        .map(|e| e.file_name())
+        .collect())
+}
+
+/// Undo a failed init: remove whatever it created in `dir`, the repo
+/// included, leaving the entries named in `before`.
+fn remove_entries_since(dir: &Path, before: &[std::ffi::OsString]) {
+    for name in entry_names(dir).unwrap_or_default() {
+        if before.contains(&name) {
+            continue;
+        }
+        let path = dir.join(&name);
+        let _ = if path.is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -328,14 +396,15 @@ fn init_inner(project_root: &Path, interactive: bool, remote_url: Option<&str>) 
         init_commit_msg: "init state repo",
         init_success_msg: "Initialised state repo in .pm/".to_string(),
         already_init_msg: "State repo already initialised",
-        already_has_remote_error: "state repo already initialised with a remote (remove it first to reset)",
+        pull_hint: "pm state pull",
+        reset_when_diverged: false,
         pre_init: None,
         post_remote: Some(Box::new(|| persist_state_remote_to_registry(project_root))),
         prompt_remote: Some(Box::new(|dir: &Path| {
             prompt_remote_setup(project_root, dir)
         })),
     };
-    init_repo_managed(cfg, interactive, remote_url)
+    init_repo_managed(cfg, interactive, remote_url).map(|(result, _)| result)
 }
 
 /// Set the remote URL for the state repo.
@@ -425,14 +494,28 @@ pub fn global_init_with_remote(remote_url: Option<&str>) -> Result<String> {
 }
 
 fn global_init_at(dir: &Path, interactive: bool, remote_url: Option<&str>) -> Result<String> {
+    // On a fresh machine the registry is pulled before any project exists.
+    let created = remote_url.is_some() && !dir.exists();
+    if created {
+        std::fs::create_dir_all(dir)?;
+    }
+    let local_projects = match remote_url {
+        Some(_) => registered_here(dir)?,
+        None => Vec::new(),
+    };
+    let dir_missing_error = format!(
+        "{} does not exist — run `pm init` first to create a project, or pass --remote",
+        dir.display()
+    );
     let cfg = InitConfig {
         dir,
         label: "global registry",
-        dir_missing_error: "~/.config/pm/ does not exist — run `pm init` first to create a project",
+        dir_missing_error: &dir_missing_error,
         init_commit_msg: "init global registry repo",
         init_success_msg: format!("Initialised global registry repo in {}", dir.display()),
         already_init_msg: "Global registry repo already initialised",
-        already_has_remote_error: "global registry repo already initialised with a remote (remove it first to reset)",
+        pull_hint: "pm state pull --global",
+        reset_when_diverged: true,
         pre_init: Some(Box::new(|dir: &Path| {
             super::state_gitignore::write_global_gitignore(dir, false)?;
             Ok(())
@@ -442,7 +525,115 @@ fn global_init_at(dir: &Path, interactive: bool, remote_url: Option<&str>) -> Re
             prompt_remote_setup_common(dir, "global registry", "pm-global-registry")
         })),
     };
-    init_repo_managed(cfg, interactive, remote_url)
+    let (mut result, reset) = match init_repo_managed(cfg, interactive, remote_url) {
+        Ok(done) => done,
+        Err(e) => {
+            if created {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+            return Err(e);
+        }
+    };
+    // Only a reset can drop an entry registered here; a fast-forward that
+    // removes one is the remote deleting it.
+    let (kept, set_aside) = if reset {
+        keep_registry_entries(dir, local_projects)?
+    } else {
+        Default::default()
+    };
+    if !kept.is_empty() {
+        result.push_str(&format!(
+            "\nKept projects registered only on this machine: {} (`pm state push --global` \
+             shares them)",
+            kept.join(", ")
+        ));
+    }
+    if !set_aside.is_empty() {
+        result.push_str(&format!(
+            "\nThe remote's entries replaced this machine's for {}; this machine's are in {}",
+            set_aside.join(", "),
+            set_aside_dir(dir).display()
+        ));
+    }
+    Ok(result)
+}
+
+/// The config-dir-relative dir that registry entries a pull replaced are
+/// kept in; machine-local, so the registry repo ignores it.
+pub(crate) const SET_ASIDE_DIR_NAME: &str = "registry-before-pull";
+
+fn set_aside_dir(dir: &Path) -> std::path::PathBuf {
+    dir.join(SET_ASIDE_DIR_NAME)
+}
+
+/// The registry entries under the config dir `dir` that did not come from
+/// its remote: an entry the last fetch of the remote held is the remote's
+/// to keep or delete.
+fn registered_here(dir: &Path) -> Result<Vec<(std::ffi::OsString, Vec<u8>)>> {
+    let mut entries = registry_entries(dir);
+    if dir.join(".git").exists()
+        && git::has_remote(dir, "origin")?
+        && let Some(remote_ref) = remote_branch(dir)?
+    {
+        let pulled = git::tree_files(dir, &remote_ref, paths::PROJECTS_DIR_NAME)?;
+        entries.retain(|(file, _)| {
+            let path = Path::new(paths::PROJECTS_DIR_NAME).join(file);
+            !pulled.iter().any(|p| Path::new(p) == path)
+        });
+    }
+    Ok(entries)
+}
+
+/// The registry entries under the config dir `dir`: file name and content.
+fn registry_entries(dir: &Path) -> Vec<(std::ffi::OsString, Vec<u8>)> {
+    let Ok(entries) = std::fs::read_dir(dir.join(paths::PROJECTS_DIR_NAME)) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "toml"))
+        .filter_map(|e| Some((e.file_name(), std::fs::read(e.path()).ok()?)))
+        .collect()
+}
+
+/// Write back each of `entries` that taking the remote's registry removed,
+/// so a project registered on this machine before it pulled the registry
+/// stays registered. Where both have an entry the remote's wins, and this
+/// machine's differing one is set aside in [`set_aside_dir`]. Returns the
+/// names written back and the names set aside.
+fn keep_registry_entries(
+    dir: &Path,
+    entries: Vec<(std::ffi::OsString, Vec<u8>)>,
+) -> Result<(Vec<String>, Vec<String>)> {
+    let projects = dir.join(paths::PROJECTS_DIR_NAME);
+    let (mut kept, mut set_aside) = (Vec::new(), Vec::new());
+    let name = |file: &std::ffi::OsString| {
+        Path::new(file)
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string()
+    };
+    for (file, content) in entries {
+        let path = projects.join(&file);
+        match std::fs::read(&path) {
+            Ok(remote) if remote == content => {}
+            Ok(_) => {
+                let aside = set_aside_dir(dir);
+                std::fs::create_dir_all(&aside)?;
+                std::fs::write(aside.join(&file), content)?;
+                set_aside.push(name(&file));
+            }
+            Err(_) => {
+                std::fs::create_dir_all(&projects)?;
+                std::fs::write(&path, content)?;
+                kept.push(name(&file));
+            }
+        }
+    }
+    kept.sort();
+    set_aside.sort();
+    Ok((kept, set_aside))
 }
 
 /// Set the remote URL for the global registry repo.
@@ -486,49 +677,67 @@ pub(crate) fn apply_remote_and_pull(
     fresh: bool,
 ) -> Result<String> {
     git::add_remote(dir, "origin", url)?;
-    git::fetch_remote(dir, "origin")?;
-
-    // Find the remote's branch (e.g. origin/main).
-    let remote_branches = git::list_remote_branches(dir)?;
-
-    if remote_branches.is_empty() {
-        // Remote is empty — nothing to pull, just set up the remote.
-        return Ok(format!("Set {label} remote to {url} (remote is empty)"));
+    // A remote that can't be fetched is not kept, so a retry with the URL
+    // fixed starts from where this one did.
+    if let Err(e) = git::fetch_remote(dir, "origin") {
+        let _ = git::remove_remote(dir, "origin");
+        return Err(PmError::Git(format!(
+            "could not fetch {label} from {url}, so nothing was changed: {e}"
+        )));
     }
 
-    // Pick the remote branch — prefer origin/main, then origin/master,
-    // fall back to the first listed branch.
-    let remote_ref = remote_branches
+    if !fresh {
+        // Existing repo connecting to a remote for the first time: local
+        // and remote have independent root commits, so ff-only pull can't
+        // work.
+        let taken = take_remote(dir, label)?;
+        return Ok(format!("Set {label} remote to {url}; {taken}"));
+    }
+    match remote_branch(dir)? {
+        None => Ok(format!("Set {label} remote to {url} (remote is empty)")),
+        Some(remote_ref) => {
+            let local_branch = remote_ref.strip_prefix("origin/").unwrap_or(&remote_ref);
+            git::reset_to_remote_branch(dir, local_branch, &remote_ref)?;
+            Ok(format!("Set {label} remote to {url} and pulled"))
+        }
+    }
+}
+
+/// The fetched remote branch to work on: `origin/main`, else
+/// `origin/master`, else the first; `None` when the remote is empty.
+fn remote_branch(dir: &Path) -> Result<Option<String>> {
+    let remote_branches = git::list_remote_branches(dir)?;
+    Ok(remote_branches
         .iter()
         .find(|b| *b == "origin/main")
         .or_else(|| remote_branches.iter().find(|b| *b == "origin/master"))
         .or_else(|| remote_branches.first())
-        .cloned()
-        .unwrap(); // safe: we checked non-empty above
+        .cloned())
+}
 
-    // Work on a local branch named after the remote's, tracking it, so a
-    // later `push` updates that branch rather than creating a second one.
+/// Replace the repo's content with its fetched remote's, on a local branch
+/// named after the remote's and tracking it, so a later `push` updates that
+/// branch rather than creating a second one. Dirty state is committed
+/// first, so it stays in the reflog.
+fn take_remote(dir: &Path, label: &str) -> Result<String> {
+    let ctx = RepoContext {
+        dir,
+        label,
+        init_hint: "",
+        remote_hint: "",
+    };
+    commit_if_dirty(&ctx)?;
+    git::fetch_remote(dir, "origin")?;
+    let Some(remote_ref) = remote_branch(dir)? else {
+        return Ok("the remote is empty".to_string());
+    };
+    eprintln!(
+        "warning: resetting {label} to remote — local state is overwritten \
+         (previous commits are preserved in git reflog)"
+    );
     let local_branch = remote_ref.strip_prefix("origin/").unwrap_or(&remote_ref);
-
-    if !fresh {
-        // Existing repo connecting to a remote for the first time.
-        // Commit dirty state so it's preserved in the reflog, then reset
-        // to the remote branch. On first connect, local and remote will
-        // have independent root commits, so ff-only pull can't work.
-        commit_if_dirty(&RepoContext {
-            dir,
-            label,
-            init_hint: "",
-            remote_hint: "",
-        })?;
-
-        eprintln!(
-            "warning: resetting {label} to remote — local state is overwritten \
-             (previous commits are preserved in git reflog)"
-        );
-    }
     git::reset_to_remote_branch(dir, local_branch, &remote_ref)?;
-    Ok(format!("Set {label} remote to {url} and pulled"))
+    Ok("took the remote's content".to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -1251,6 +1460,192 @@ mod tests {
             global.join("remote-file.txt").exists(),
             "remote content should have been pulled"
         );
+    }
+
+    #[test]
+    fn global_init_with_remote_pulls_the_registry_onto_a_fresh_machine() {
+        let dir = tempdir().unwrap();
+        let global = dir.path().join("config-pm");
+        let bare = dir.path().join("registry-remote.git");
+        create_populated_bare(&bare);
+
+        global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        assert!(global.join("remote-file.txt").exists());
+
+        let without = dir.path().join("other");
+        assert!(global_init_at(&without, false, None).is_err());
+    }
+
+    /// A machine that already pulled the registry from `bare`; the old
+    /// machine then pushes a new project entry from its own clone.
+    fn pulled_registry_and_a_later_push(dir: &Path, bare: &Path) -> std::path::PathBuf {
+        let global = dir.join("new-host");
+        create_populated_bare(bare);
+        global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        let old = dir.join("old-host");
+        git::clone_repo(&bare.to_string_lossy(), &old).unwrap();
+        std::fs::create_dir_all(old.join("projects")).unwrap();
+        std::fs::write(old.join("projects/pushed.toml"), "root = \"~/pushed\"\n").unwrap();
+        git::add_all(&old).unwrap();
+        git::commit_with_message(&old, "pushed").unwrap();
+        git::push(&old, "origin", "main").unwrap();
+        global
+    }
+
+    #[test]
+    fn global_init_with_the_same_remote_again_keeps_what_was_registered_meanwhile() {
+        let dir = tempdir().unwrap();
+        let bare = dir.path().join("registry.git");
+        let global = pulled_registry_and_a_later_push(dir.path(), &bare);
+        // Registered here meanwhile, as `pm init` on the new host does.
+        std::fs::create_dir_all(global.join("projects")).unwrap();
+        std::fs::write(global.join("projects/local.toml"), "root = \"~/local\"\n").unwrap();
+
+        global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        assert!(global.join("projects/pushed.toml").exists());
+        assert!(global.join("projects/local.toml").exists());
+    }
+
+    #[test]
+    fn global_init_with_the_same_remote_again_drops_an_entry_the_remote_deleted() {
+        let dir = tempdir().unwrap();
+        let bare = dir.path().join("registry.git");
+        let global = pulled_registry_and_a_later_push(dir.path(), &bare);
+        global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        assert!(global.join("projects/pushed.toml").exists());
+
+        let old = dir.path().join("old-host");
+        git::run_git(&old, &["rm", "-q", "projects/pushed.toml"]).unwrap();
+        git::commit_with_message(&old, "pm delete pushed").unwrap();
+        git::push(&old, "origin", "main").unwrap();
+
+        let msg = global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        assert!(!global.join("projects/pushed.toml").exists(), "{msg}");
+        assert!(!msg.contains("Kept"), "{msg}");
+    }
+
+    #[test]
+    fn global_init_takes_the_remote_into_a_registry_set_up_here_first() {
+        // As `pm register` on the new host left it: a repo with the right
+        // remote, never pulled, and an entry for a project cloned here.
+        let dir = tempdir().unwrap();
+        let global = dir.path().join("config-pm");
+        std::fs::create_dir_all(global.join("projects")).unwrap();
+        global_init_at(&global, false, None).unwrap();
+        let bare = dir.path().join("registry.git");
+        create_populated_bare(&bare);
+        git::add_remote(&global, "origin", &bare.to_string_lossy()).unwrap();
+        std::fs::write(global.join("projects/here.toml"), "root = \"~/here\"\n").unwrap();
+
+        let msg = global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        assert!(global.join("remote-file.txt").exists(), "{msg}");
+        assert!(global.join("projects/here.toml").exists(), "{msg}");
+    }
+
+    #[test]
+    fn global_init_taking_the_remote_drops_what_it_deleted_and_keeps_what_is_new_here() {
+        let dir = tempdir().unwrap();
+        let bare = dir.path().join("registry.git");
+        let global = pulled_registry_and_a_later_push(dir.path(), &bare);
+        global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        // Registered and committed here, so the next pull can't fast-forward.
+        std::fs::write(global.join("projects/here.toml"), "root = \"~/here\"\n").unwrap();
+        git::add_all(&global).unwrap();
+        git::commit_with_message(&global, "here").unwrap();
+
+        let old_host = dir.path().join("old-host");
+        git::run_git(&old_host, &["rm", "-q", "projects/pushed.toml"]).unwrap();
+        git::commit_with_message(&old_host, "pm delete pushed").unwrap();
+        git::push(&old_host, "origin", "main").unwrap();
+
+        let msg = global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        assert!(!global.join("projects/pushed.toml").exists(), "{msg}");
+        assert!(global.join("projects/here.toml").exists(), "{msg}");
+    }
+
+    #[test]
+    fn global_init_with_another_remote_says_how_to_repoint() {
+        let dir = tempdir().unwrap();
+        let bare = dir.path().join("registry.git");
+        let global = pulled_registry_and_a_later_push(dir.path(), &bare);
+
+        let err = global_init_at(&global, false, Some("git@example.com:other.git"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(&*bare.to_string_lossy()), "{err}");
+        assert!(
+            err.contains("remote set-url origin git@example.com:other.git"),
+            "{err}"
+        );
+        assert!(err.contains("pm state pull --global"), "{err}");
+    }
+
+    #[test]
+    fn global_init_with_remote_keeps_projects_registered_before_the_pull() {
+        let dir = tempdir().unwrap();
+        let global = dir.path().join("config-pm");
+        std::fs::create_dir_all(global.join("projects")).unwrap();
+        std::fs::write(global.join("projects/local.toml"), "root = \"~/local\"\n").unwrap();
+        global_init_at(&global, false, None).unwrap();
+        let bare = dir.path().join("registry-remote.git");
+        create_populated_bare(&bare);
+
+        let msg = global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        assert!(global.join("remote-file.txt").exists());
+        assert!(global.join("projects/local.toml").exists());
+        assert!(msg.contains("only on this machine: local"), "{msg}");
+    }
+
+    #[test]
+    fn global_init_with_an_unreachable_remote_leaves_nothing_behind() {
+        let dir = tempdir().unwrap();
+        let bad = dir.path().join("typo.giT").to_string_lossy().to_string();
+
+        let fresh = dir.path().join("fresh");
+        let err = global_init_at(&fresh, false, Some(&bad)).unwrap_err();
+        assert!(err.to_string().contains(&bad), "{err}");
+        assert!(!fresh.exists());
+
+        let existing = dir.path().join("existing");
+        std::fs::create_dir_all(existing.join("projects")).unwrap();
+        std::fs::write(existing.join("projects/local.toml"), "root = \"~/l\"\n").unwrap();
+        global_init_at(&existing, false, Some(&bad)).unwrap_err();
+        let mut left: Vec<_> = std::fs::read_dir(&existing)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["projects"]);
+
+        // The retry with the URL fixed just works.
+        let bare = dir.path().join("registry.git");
+        create_populated_bare(&bare);
+        global_init_at(&existing, false, Some(&bare.to_string_lossy())).unwrap();
+        assert!(existing.join("remote-file.txt").exists());
+        assert!(existing.join("projects/local.toml").exists());
+    }
+
+    #[test]
+    fn global_init_sets_aside_a_local_entry_the_remote_replaces() {
+        let dir = tempdir().unwrap();
+        let bare = dir.path().join("registry.git");
+        pulled_registry_and_a_later_push(dir.path(), &bare);
+        let old_host = dir.path().join("old-host");
+        let global = dir.path().join("third-host");
+        std::fs::create_dir_all(global.join("projects")).unwrap();
+        std::fs::write(global.join("projects/pushed.toml"), "root = \"~/mine\"\n").unwrap();
+
+        let msg = global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(global.join("projects/pushed.toml")).unwrap(),
+            std::fs::read_to_string(old_host.join("projects/pushed.toml")).unwrap()
+        );
+        let aside = set_aside_dir(&global).join("pushed.toml");
+        assert_eq!(
+            std::fs::read_to_string(aside).unwrap(),
+            "root = \"~/mine\"\n"
+        );
+        assert!(msg.contains("replaced this machine's for pushed"), "{msg}");
     }
 
     #[test]

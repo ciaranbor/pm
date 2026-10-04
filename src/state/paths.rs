@@ -5,7 +5,7 @@ use crate::error::{PmError, Result};
 pub(crate) const PM_DIR_NAME: &str = ".pm";
 const FEATURES_DIR_NAME: &str = "features";
 const CONFIG_DIR_NAME: &str = "pm";
-const PROJECTS_DIR_NAME: &str = "projects";
+pub(crate) const PROJECTS_DIR_NAME: &str = "projects";
 
 pub(crate) const WORKFLOWS_DIR_NAME: &str = "workflows";
 

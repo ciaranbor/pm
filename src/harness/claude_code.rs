@@ -118,6 +118,18 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>) -> String {
     parts.join(" ")
 }
 
+/// The installed version's raw string, or `None` when `claude` can't be run.
+pub(super) fn installed_version(probe: Probe) -> Option<String> {
+    let exit = run_probe("--version", probe).ok()?;
+    exit.success.then(|| exit.stdout.trim().to_string())
+}
+
+/// The manual step that gives a new machine's Claude Code its credentials,
+/// which live outside anything pm syncs (the login keychain or
+/// `~/.claude.json`).
+pub(super) const CREDENTIALS_STEP: &str =
+    "log in to Claude Code (run `claude`, then /login, or `claude setup-token`)";
+
 pub(super) fn unusable_reason(probe: Probe) -> Option<String> {
     let runs = run_probe("--version", probe).is_ok_and(|exit| exit.success);
     (!runs).then(|| "`claude` could not be run; install Claude Code".to_string())

@@ -41,6 +41,7 @@ pub mod hooks_waiting;
 pub mod init;
 pub mod launch_check;
 pub mod list;
+pub mod migrate_check;
 pub mod msg_list;
 pub mod msg_reply;
 pub mod open;

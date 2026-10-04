@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::process::Command;
 
 use crate::error::{PmError, Result};
 
@@ -8,6 +9,30 @@ use super::run_git;
 pub fn has_uncommitted_changes(worktree: &Path) -> Result<bool> {
     let output = run_git(worktree, &["status", "--porcelain"])?;
     Ok(output.lines().any(|l| !l.starts_with("??")))
+}
+
+/// Every changed and untracked, non-ignored file in a worktree, as `git
+/// status --porcelain` names them (`XY path`), an untracked directory's
+/// files one by one.
+pub fn changed_paths(worktree: &Path) -> Result<Vec<String>> {
+    let output = Command::new("git")
+        .args([
+            "-C",
+            &worktree.to_string_lossy(),
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+        ])
+        .output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(PmError::Git(stderr));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect())
 }
 
 /// List untracked, non-ignored files in a worktree.
@@ -85,6 +110,20 @@ pub fn ref_exists(repo: &Path, refspec: &str) -> Result<bool> {
         Err(PmError::Git(_)) => Ok(false),
         Err(e) => Err(e),
     }
+}
+
+/// The files under `path` in the tree of commit `rev` (`git ls-tree -r
+/// --name-only`), relative to the repo root.
+pub fn tree_files(repo: &Path, rev: &str, path: &str) -> Result<Vec<String>> {
+    let output = run_git(
+        repo,
+        &["ls-tree", "-r", "-z", "--name-only", rev, "--", path],
+    )?;
+    Ok(output
+        .split('\0')
+        .filter(|l| !l.is_empty())
+        .map(|l| l.to_string())
+        .collect())
 }
 
 /// Tracked files under `path` (`git ls-files -- <path>`), relative to the

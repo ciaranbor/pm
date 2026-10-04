@@ -111,8 +111,19 @@ pub enum Commands {
         #[arg(long, alias = "check")]
         dry_run: bool,
     },
-    /// Restore all projects on a fresh machine from the global registry
-    Restore,
+    /// Restore projects on a fresh machine from the global registry
+    Restore {
+        /// A registered project to restore (repeatable; default: every one)
+        #[arg(long = "project", value_name = "NAME")]
+        projects: Vec<String>,
+        /// A `pm harness export` tarball whose sessions to import before
+        /// agents are started (repeatable: one per harness)
+        #[arg(long = "import", value_name = "TARBALL")]
+        imports: Vec<PathBuf>,
+    },
+    /// Moving projects to another machine
+    #[command(subcommand)]
+    Migrate(MigrateCommands),
     /// Pull latest pm source, rebuild, and upgrade all projects
     SelfUpdate,
     /// Git-backed state management (.pm/ backup and sync)
@@ -182,6 +193,18 @@ pub enum StateCommands {
     },
     /// Backfill repo_url and state_remote in global registry from existing projects
     Backfill,
+}
+
+#[derive(Subcommand)]
+pub enum MigrateCommands {
+    /// Report what moving projects to another machine would lose or fail
+    /// on, with the command that fixes each; read-only, and exits non-zero
+    /// while anything blocks
+    Check {
+        /// A registered project to check (repeatable; default: every one)
+        #[arg(long = "project", value_name = "NAME")]
+        projects: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -325,9 +348,9 @@ pub enum HarnessCommands {
     Import {
         /// Path to the tarball created by `pm harness export`
         tarball: PathBuf,
-        /// Harness whose sessions to import
-        #[arg(long, default_value = "claude-code")]
-        harness: Harness,
+        /// Harness whose sessions to import (default: the one that exported them)
+        #[arg(long)]
+        harness: Option<Harness>,
     },
     /// List the harnesses pm can spawn
     List,

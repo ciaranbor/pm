@@ -58,6 +58,29 @@ pub fn main_branch(repo: &Path) -> Result<String> {
     default_branch(repo).or_else(|_| head_branch(repo))
 }
 
+/// The commit local branch `branch` points at; `None` when there is no
+/// such branch.
+pub fn branch_commit(repo: &Path, branch: &str) -> Result<Option<String>> {
+    match run_git(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}^{{commit}}"),
+        ],
+    ) {
+        Ok(sha) => Ok(Some(sha)),
+        Err(PmError::Git(_)) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Whether the repo holds commit `sha`.
+pub fn has_commit(repo: &Path, sha: &str) -> bool {
+    run_git(repo, &["cat-file", "-e", &format!("{sha}^{{commit}}")]).is_ok()
+}
+
 /// Check if a branch is fully merged into the given target branch.
 /// Uses `merge-base --is-ancestor` which handles worktree edge cases
 /// and doesn't require parsing branch listings.

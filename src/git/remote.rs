@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 
@@ -37,6 +38,37 @@ pub fn fetch_remote(repo: &Path, remote: &str) -> Result<()> {
     Ok(())
 }
 
+/// The branches `remote` holds and the commit each points at, asked of the
+/// remote itself (`git ls-remote --heads`) rather than read from the last
+/// fetch, and without prompting for credentials.
+pub fn remote_heads(repo: &Path, remote: &str) -> Result<BTreeMap<String, String>> {
+    let output = Command::new("git")
+        .args([
+            "-C",
+            &repo.to_string_lossy(),
+            "ls-remote",
+            "--heads",
+            remote,
+        ])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(std::process::Stdio::null())
+        .output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(PmError::Git(stderr));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let (sha, name) = line.split_once('\t')?;
+            Some((
+                name.strip_prefix("refs/heads/")?.to_string(),
+                sha.to_string(),
+            ))
+        })
+        .collect())
+}
+
 /// Hard-reset the current branch to a given ref (e.g. `origin/main`).
 pub fn reset_hard(repo: &Path, refspec: &str) -> Result<()> {
     run_git(repo, &["reset", "--hard", refspec])?;
@@ -52,6 +84,12 @@ pub fn list_remote_branches(repo: &Path) -> Result<Vec<String>> {
         .map(|l| l.trim().to_string())
         .filter(|l| !l.is_empty() && !l.contains("->"))
         .collect())
+}
+
+/// Remove a remote from a repo.
+pub fn remove_remote(repo: &Path, name: &str) -> Result<()> {
+    run_git(repo, &["remote", "remove", name])?;
+    Ok(())
 }
 
 /// Add a remote to a repo.

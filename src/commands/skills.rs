@@ -424,6 +424,33 @@ fn project_into(
     Ok(Some(line))
 }
 
+/// The global tier's skills and agent definitions pm does not bundle,
+/// relative to the canonical store (`skills/<name>`, `agents/<file>`): the
+/// user's own, which nothing pm syncs carries to another machine.
+pub fn global_customs_in(store: &GlobalStore) -> Vec<String> {
+    let mut out = Vec::new();
+    for kind in [BundledKind::Skill, BundledKind::Agent] {
+        let Ok(entries) = std::fs::read_dir(store.dir(kind)) else {
+            continue;
+        };
+        let mut names: Vec<String> = entries
+            .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+            .filter(|name| !name.starts_with('.'))
+            .filter(|name| {
+                let item = match kind {
+                    BundledKind::Agent => name.strip_suffix(".md").unwrap_or(name),
+                    _ => name,
+                };
+                !items_of_kind(kind).any(|i| i.name == item)
+            })
+            .collect();
+        names.sort_unstable();
+        let sub = kind.store_subdir().unwrap_or_default();
+        out.extend(names.into_iter().map(|name| format!("{sub}/{name}")));
+    }
+    out
+}
+
 /// Whether `rel` (relative to a store root, e.g. `agents/reviewer.md`) is a
 /// file pm bundles.
 fn is_bundled_asset(rel: &Path) -> bool {
