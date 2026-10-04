@@ -17,9 +17,12 @@ fn run_tmux(server: Option<&str>, args: &[&str]) -> Result<String> {
     run_tmux_untrimmed(server, args).map(|out| out.trim().to_string())
 }
 
-/// `tmux`, aimed at `server`.
+/// `tmux`, aimed at `server`. `-u` because a client that doesn't think its
+/// terminal is UTF-8 — no UTF-8 locale and no `$TMUX`, as under launchd —
+/// prints tabs and non-ASCII in its output as `_`.
 fn tmux_command(server: Option<&str>) -> Command {
     let mut cmd = Command::new("tmux");
+    cmd.arg("-u");
     if let Some(s) = server {
         cmd.args(["-L", s]);
     }
@@ -583,6 +586,26 @@ mod tests {
             .map(|p| (p.window.as_str(), p.id.as_str()))
             .collect();
         assert_eq!(read, [("s:1", "%2"), ("s:2", "%4")]);
+    }
+
+    #[test]
+    fn panes_are_listed_when_the_caller_has_no_utf8_locale() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let session = server.scope("no-locale");
+        create_session(server.name(), &session, dir.path()).unwrap();
+
+        let output = tmux_command(server.name())
+            .env_remove("LANG")
+            .env_remove("LC_ALL")
+            .env_remove("LC_CTYPE")
+            .env_remove("TMUX")
+            .args(["list-panes", "-a", "-F", &pane_format()])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let panes = agent_panes_in(&String::from_utf8_lossy(&output.stdout));
+        assert!(panes.iter().any(|p| p.session == session), "{panes:?}");
     }
 
     #[test]

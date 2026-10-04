@@ -581,6 +581,33 @@ fn restart_from_inside_an_agents_own_window() {
         .stdout(predicate::str::contains("reviewer (active"));
 }
 
+/// Catches: tmux output parsed under launchd's environment — no UTF-8
+/// locale and no `$TMUX` — where tmux prints tabs as `_` and every live
+/// session reads as closed.
+#[test]
+#[ignore]
+fn status_sees_live_sessions_without_a_utf8_locale() {
+    let s = Smoke::new();
+    s.init_with_feature();
+    let out = s
+        .pm(&s.proj().join("main"))
+        .arg("status")
+        .env_remove("LANG")
+        .env_remove("LC_ALL")
+        .env_remove("LC_CTYPE")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let out = String::from_utf8_lossy(&out);
+    let login = out
+        .lines()
+        .find(|l| l.trim_start().starts_with("login"))
+        .unwrap_or_else(|| panic!("no login row: {out}"));
+    assert!(!login.contains("no session"), "{out}");
+}
+
 /// Catches: `pm delete --force` run from the project's own main session,
 /// which must remove every piece of state before the kill ends the caller.
 #[test]
