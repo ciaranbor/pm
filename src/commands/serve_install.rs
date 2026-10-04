@@ -2,10 +2,11 @@
 //! LaunchAgent, started at login and restarted if it exits, so it survives
 //! reboots of an always-on Mac. launchd gives its jobs a bare `PATH`, so
 //! the agent carries the installing shell's, where `tmux` and `git` are
-//! found; `PM_TMUX_SERVER`, when set, goes with it. Its output goes to
-//! `serve.log` beside the devices file. The port is `[serve] port`, read as
-//! the server starts, so the plist names none. Installing again repairs an
-//! install.
+//! found; `PM_TMUX_SERVER`, when set, goes with it. It gets a UTF-8 `LANG`
+//! too (the installing shell's, if UTF-8), which launchd leaves unset. Its
+//! output goes to `serve.log` beside the devices file. The port is
+//! `[serve] port`, read as the server starts, so the plist names none.
+//! Installing again repairs an install.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -53,10 +54,11 @@ pub fn install(tmux_server: Option<&str>) -> Result<Installed> {
     let log = state::log_path(&config_dir);
     std::fs::create_dir_all(log.parent().expect("a file in a dir"))?;
     let path_env = std::env::var("PATH").unwrap_or_default();
+    let lang = utf8_lang(std::env::var("LANG").ok());
     let plist = plist_path(&paths::home_dir()?);
     write_atomic(
         &plist,
-        render(&exe, &path_env, tmux_server, &log).as_bytes(),
+        render(&exe, &path_env, &lang, tmux_server, &log).as_bytes(),
     )?;
     launchd::bootout(LABEL)?;
     let began = chrono::Utc::now();
@@ -90,9 +92,22 @@ pub fn uninstall() -> Result<bool> {
     }
 }
 
-fn render(exe: &Path, path_env: &str, tmux_server: Option<&str>, log: &Path) -> String {
+/// `lang` when it names UTF-8, else a UTF-8 locale every Mac has.
+fn utf8_lang(lang: Option<String>) -> String {
+    lang.filter(|l| {
+        let l = l.to_ascii_lowercase();
+        l.contains("utf-8") || l.contains("utf8")
+    })
+    .unwrap_or_else(|| "en_US.UTF-8".into())
+}
+
+fn render(exe: &Path, path_env: &str, lang: &str, tmux_server: Option<&str>, log: &Path) -> String {
     let string = |s: &str| format!("<string>{}</string>", escape(s));
-    let mut env = format!("<key>PATH</key>{}", string(path_env));
+    let mut env = format!(
+        "<key>PATH</key>{}<key>LANG</key>{}",
+        string(path_env),
+        string(lang)
+    );
     if let Some(server) = tmux_server {
         env.push_str(&format!("<key>PM_TMUX_SERVER</key>{}", string(server)));
     }
@@ -137,6 +152,18 @@ fn escape(s: &str) -> String {
         .replace('>', "&gt;")
 }
 
+#[cfg(test)]
+mod lang_tests {
+    use super::utf8_lang;
+
+    #[test]
+    fn the_agent_keeps_a_utf8_lang_and_replaces_any_other() {
+        assert_eq!(utf8_lang(Some("de_DE.utf8".into())), "de_DE.utf8");
+        assert_eq!(utf8_lang(Some("C".into())), "en_US.UTF-8");
+        assert_eq!(utf8_lang(None), "en_US.UTF-8");
+    }
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
@@ -149,6 +176,7 @@ mod tests {
         let plist = render(
             exe,
             "/opt/<brew>/bin:/usr/bin",
+            "en_IE.UTF-8",
             Some("work"),
             Path::new("/logs/serve.log"),
         );
@@ -174,7 +202,11 @@ mod tests {
         );
         assert_eq!(
             parsed["EnvironmentVariables"],
-            serde_json::json!({ "PATH": "/opt/<brew>/bin:/usr/bin", "PM_TMUX_SERVER": "work" })
+            serde_json::json!({
+                "PATH": "/opt/<brew>/bin:/usr/bin",
+                "LANG": "en_IE.UTF-8",
+                "PM_TMUX_SERVER": "work"
+            })
         );
         assert_eq!(parsed["StandardErrorPath"], "/logs/serve.log");
         assert_eq!(parsed["KeepAlive"], true);
