@@ -212,14 +212,27 @@ worktrees too — `main` included, unpushed history with it.
 ### Remote access
 
 `pm serve` serves the attention view, read-only, to pm's phone app. It
-listens on `127.0.0.1` only (port 7764 by default); a transport puts it on
-your tailnet:
+listens on `127.0.0.1` only (port 7764 by default, `[serve] port`
+otherwise); `tailscale serve` puts it on your tailnet. One command sets it
+up on a Mac:
 
 ```sh
-pm serve install            # a launchd LaunchAgent: runs at login, restarts, follows upgrades
-tailscale serve --bg 7764   # https://<this-mac>.<tailnet>.ts.net → 127.0.0.1:7764
-pm serve pair --name pixel  # scan the QR code in the app
+pm serve install --pair pixel   # LaunchAgent, `tailscale serve`, then a QR code to scan in the app
+pm serve status                 # whether it runs, and what reaches it
 ```
+
+The LaunchAgent runs it at login, restarts it, and it follows upgrades.
+Install runs `tailscale serve --bg <port>` itself (`--no-tailscale` not
+to) when the tailnet has MagicDNS and HTTPS certificates on and nothing
+serves its port 443 here; otherwise it changes nothing and says what to
+do, as `pm doctor` does while a device is paired. Running it again repairs
+an install; `pm serve uninstall` removes it and leaves `tailscale serve`
+as it is. Elsewhere than macOS, run `pm serve` under your service manager
+and `tailscale serve --bg 7764` yourself.
+
+Nothing on the phone is urgent, so the server reads pm's state once a
+minute, and every few seconds only while the app is open. A change pm
+makes itself reaches it within a few seconds.
 
 The phone must be on the tailnet to reach it: with Tailscale off (another
 VPN, such as ProtonVPN, on instead) the app can't connect, and shows the
@@ -231,9 +244,9 @@ devices and `pm serve revoke <device>` withdraws one's token, and its push
 subscription, at once. pm
 does not rely on Tailscale's identity headers: a tagged device sends none.
 `pm serve` logs each request with its device to stderr, which the
-LaunchAgent sends to `serve.log` in the `serve/` dir of pm's config dir,
-beside the devices file and the server's VAPID key (`vapid.pem`); `pm
-state` syncs none of them.
+LaunchAgent sends to `serve.log` (`pm serve logs`) in the `serve/` dir of
+pm's config dir, beside the devices file and the server's VAPID key
+(`vapid.pem`); `pm state` syncs none of them.
 
 Notifications don't need the tailnet. A device subscribes through
 [UnifiedPush](https://unifiedpush.org) — the ntfy app using ntfy.sh, or

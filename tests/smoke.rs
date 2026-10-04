@@ -1056,6 +1056,69 @@ fn the_tmux_plugin_runs_from_the_servers_own_environment() {
     );
 }
 
+/// Catches: install reaching launchd through `launchctl` on the PATH (the
+/// sandbox's recording shim, which keeps it off the user's own launchd
+/// domain) and writing the plist under the sandbox's HOME.
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore]
+fn serve_install_loads_its_agent_through_launchctl() {
+    let s = Smoke::new();
+    let plist = s.home().join("Library/LaunchAgents/dev.pm.serve.plist");
+
+    s.pm(s.home())
+        .args(["serve", "install", "--no-tailscale"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(plist.display().to_string()))
+        .stdout(predicate::str::contains("tailscale is not connected"));
+
+    let calls = std::fs::read_to_string(s.home().join("log/launchctl.argv")).unwrap();
+    // SAFETY: getuid cannot fail.
+    let domain = format!("gui/{}", unsafe { libc::getuid() });
+    assert!(
+        calls.contains(&format!("bootstrap {domain} {}", plist.display())),
+        "{calls}"
+    );
+    assert!(plist.exists());
+}
+
+/// Catches: the background push a pm command starts waking `pm serve`
+/// through the wake FIFO in the real config dir, which the command finds
+/// only from its own environment. What the server does when woken is a
+/// lib test's.
+#[test]
+#[ignore]
+fn a_change_pm_makes_wakes_the_server() {
+    use std::io::Read;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::OpenOptionsExt;
+    let s = Smoke::new();
+    s.init_with_feature();
+    let fifo = s.projects_dir().with_file_name("serve").join("wake");
+    std::fs::create_dir_all(fifo.parent().unwrap()).unwrap();
+    let path = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+    // Safety: `path` is a valid NUL-terminated string for the call.
+    assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+    let mut server = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(&fifo)
+        .unwrap();
+
+    s.pm(&s.proj().join("login"))
+        .args(["feat", "status", "blocked", "-m", "which DB?"])
+        .assert()
+        .success();
+
+    let start = Instant::now();
+    let mut byte = [0];
+    while !matches!(server.read(&mut byte), Ok(1)) {
+        assert!(start.elapsed() < WAIT, "the push never woke the server");
+        std::thread::sleep(POLL);
+    }
+}
+
 /// Catches: a push missing the server the command runs against —
 /// `PM_TMUX_SERVER` for the background refresh the Stop hook and `pm feat
 /// status` start from an agent's pane, that and `$TMUX_PANE` for the hook's

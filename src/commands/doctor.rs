@@ -593,6 +593,7 @@ fn run(
     let mut warnings = baseline_capability_warnings(project_root, depth.probe())?;
     warnings.extend(global_config_warning());
     warnings.extend(registry_warnings(projects_dir)?);
+    warnings.extend(serve_warnings(depth));
 
     let findings = diagnose(project_root, projects_dir, tmux_server, depth)?;
     let feature_count = FeatureState::list(&paths::features_dir(project_root))?.len();
@@ -671,6 +672,22 @@ fn global_config_warning_in(config_dir: &Path) -> Option<String> {
     Some(format!(
         "global config — {path} could not be read ({err}); max_features, [agents.models] and [agents.permissions] from it are all being ignored"
     ))
+}
+
+/// `pm serve` ([`serve_status`](crate::commands::serve_status)). Tailscale
+/// is asked only at full depth.
+fn serve_warnings(depth: Depth) -> Vec<String> {
+    let (Ok(home), Ok(config_dir), Ok(exe)) = (
+        paths::home_dir(),
+        paths::global_config_dir(),
+        std::env::current_exe(),
+    ) else {
+        return Vec::new();
+    };
+    let port = crate::commands::serve::configured_port(&config_dir);
+    crate::commands::serve_status::Facts::read(&home, &config_dir, port).warnings(&exe, |port| {
+        (depth == Depth::Full).then(|| crate::tailscale::check(port))
+    })
 }
 
 /// Warn about each registry entry that can't be read; all-project commands

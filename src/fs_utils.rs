@@ -153,7 +153,7 @@ fn remove_abandoned_temps(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn process_alive(pid: u32) -> bool {
+pub fn process_alive(pid: u32) -> bool {
     let Ok(pid) = libc::pid_t::try_from(pid) else {
         return false;
     };

@@ -53,9 +53,10 @@ Usage: scripts/sandbox [COMMAND] [OPTIONS] [-- CMD...]
 
 Inside the sandbox, `pm` is the built binary and `claude`/`codex`/`opencode`
 are shims that record their invocation under $HOME/log and hold the window
-open. `run` and `shell` unset TMUX (the caller's names the real server);
-windows on the sandbox server get their own TMUX from tmux, as in
-production.
+open; so are `launchctl` (always: launchd's domain is the user's) and
+`tailscale` (not connected). `run` and `shell` unset TMUX (the caller's
+names the real server); windows on the sandbox server get their own TMUX
+from tmux, as in production.
 Example:
   scripts/sandbox up
   scripts/sandbox run -- pm init proj
@@ -180,6 +181,28 @@ up() {
       chmod +x "$home/bin/$h"
     done
   fi
+  # launchd's gui/<uid> domain is the user's, not the sandbox's: a real
+  # `launchctl` would boot out the user's own `pm serve`. The shim records each
+  # call and keeps which labels are loaded; `tailscale` reads as installed
+  # but not connected, so nothing changes the user's tailnet.
+  cat > "$home/bin/launchctl" <<'SHIM'
+#!/bin/sh
+echo "$*" >> "$HOME/log/launchctl.argv"
+loaded="$HOME/log/launchctl.loaded"
+touch "$loaded"
+case $1 in
+  print) grep -qxF "${2##*/}" "$loaded" ;;
+  bootstrap) basename "$3" .plist >> "$loaded" ;;
+  bootout) grep -vxF "${2##*/}" "$loaded" > "$loaded.tmp"; mv "$loaded.tmp" "$loaded" ;;
+esac
+SHIM
+  cat > "$home/bin/tailscale" <<'SHIM'
+#!/bin/sh
+echo "$*" >> "$HOME/log/tailscale.argv"
+echo "tailscale (sandbox shim): not connected" >&2
+exit 1
+SHIM
+  chmod +x "$home/bin/launchctl" "$home/bin/tailscale"
   # A stale socket under this name (pid reuse) would point tmux at a dead
   # server.
   stmux kill-server 2>/dev/null || true

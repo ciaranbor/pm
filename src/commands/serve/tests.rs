@@ -26,11 +26,14 @@ fn fixture() -> Fixture {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
     let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
-    let config = Config::new(
+    let mut config = Config::new(
         TestServer::registry_dir(&project),
         Devices::path(dir.path()),
         server.name(),
     );
+    config.idle_poll = Duration::from_millis(100);
+    config.watched_poll = Duration::from_millis(100);
+    config.min_gap = Duration::ZERO;
     Fixture {
         _dir: dir,
         server,
@@ -213,7 +216,6 @@ fn start(config: Config) -> Running {
 #[test]
 fn an_event_stream_sends_changes_transitions_and_heartbeats() {
     let mut f = fixture();
-    f.config.poll = Duration::from_millis(100);
     f.config.heartbeat = Duration::from_millis(500);
     let token = pair(&f.config, "reader", &[Scope::Read]);
     feat_status(
@@ -653,7 +655,6 @@ fn push_service_answering(responses: Vec<String>) -> (String, mpsc::Receiver<Rec
 #[test]
 fn a_transition_is_pushed_encrypted_to_each_subscriber_until_its_service_drops_it() {
     let mut f = fixture();
-    f.config.poll = Duration::from_millis(100);
     f.config.push = PushPolicy::local();
     let phone = pair(&f.config, "phone", &[Scope::Read]);
     pair(&f.config, "typist", &[Scope::Input]);
@@ -734,7 +735,6 @@ fn a_transition_is_pushed_encrypted_to_each_subscriber_until_its_service_drops_i
 #[test]
 fn a_push_service_redirecting_is_not_followed() {
     let mut f = fixture();
-    f.config.poll = Duration::from_millis(100);
     f.config.push = PushPolicy::local();
     pair(&f.config, "phone", &[Scope::Read]);
     let (elsewhere, followed) = push_service(vec![201]);
@@ -773,8 +773,7 @@ fn a_push_service_redirecting_is_not_followed() {
 
 #[test]
 fn a_stored_subscription_the_policy_refuses_is_dropped() {
-    let mut f = fixture();
-    f.config.poll = Duration::from_millis(100);
+    let f = fixture();
     pair(&f.config, "phone", &[Scope::Read]);
     let (_, _, subscription) = subscriber("https://tailnet-service.ts.net/up");
     let push = super::push::subscription(&subscription, &PushPolicy::local()).unwrap();
@@ -801,4 +800,87 @@ fn a_stored_subscription_the_policy_refuses_is_dropped() {
         );
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// The kind of the next transition `events` sends.
+fn next_transition(events: &mpsc::Receiver<String>) -> String {
+    until(events, |l| l == "event: transition");
+    let data = until(events, |l| l.starts_with("data: "));
+    let transition: serde_json::Value =
+        serde_json::from_str(data[0].strip_prefix("data: ").unwrap()).unwrap();
+    transition["kind"].as_str().unwrap().to_string()
+}
+
+/// Wait until `server` has read `n` snapshots since it started.
+fn until_reads(server: &Running, n: usize) {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while server.0.reads.load(std::sync::atomic::Ordering::SeqCst) < n {
+        assert!(Instant::now() < deadline, "never read {n} snapshots");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// `server` with an event stream open, once it has read the snapshot the
+/// stream opening woke it for.
+fn watched(server: &Running, token: &str) -> mpsc::Receiver<String> {
+    let events = connect(server.0.addr(), "/v1/events", token);
+    until(&events, |l| l.starts_with("data: "));
+    until_reads(server, 1);
+    events
+}
+
+#[test]
+fn a_wake_reads_a_change_pm_made_without_waiting_for_the_poll() {
+    let mut f = fixture();
+    f.config.idle_poll = Duration::from_secs(600);
+    f.config.watched_poll = Duration::from_secs(600);
+    let token = pair(&f.config, "reader", &[Scope::Read]);
+    let server = start(f.config.clone());
+    let events = watched(&server, &token);
+
+    block(&f);
+    wake(&f.config.devices);
+
+    assert_eq!(next_transition(&events), "blocked");
+}
+
+#[test]
+fn an_open_stream_polls_often_for_what_pm_did_not_do() {
+    let mut f = fixture();
+    f.config.idle_poll = Duration::from_secs(600);
+    let token = pair(&f.config, "reader", &[Scope::Read]);
+    let server = start(f.config.clone());
+    let events = watched(&server, &token);
+
+    block(&f);
+
+    assert_eq!(next_transition(&events), "blocked");
+}
+
+#[test]
+fn wakes_closer_together_than_the_gap_make_one_read() {
+    let mut f = fixture();
+    f.config.idle_poll = Duration::from_secs(600);
+    f.config.watched_poll = Duration::from_secs(600);
+    f.config.min_gap = Duration::from_secs(2);
+    let token = pair(&f.config, "reader", &[Scope::Read]);
+    let server = start(f.config.clone());
+    let events = watched(&server, &token);
+
+    block(&f);
+    wake(&f.config.devices);
+    // Past the wake's settling, so without the gap it would read `blocked`.
+    std::thread::sleep(Duration::from_millis(500));
+    let summary = paths::summary_path(&f.project, "login");
+    std::fs::create_dir_all(summary.parent().unwrap()).unwrap();
+    std::fs::write(&summary, "Adds login\n").unwrap();
+    feat_status(&f.project, "login", Progress::Ready, None, None).unwrap();
+    wake(&f.config.devices);
+
+    assert_eq!(next_transition(&events), "ready", "blocked was never read");
+    assert_eq!(server.0.reads.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+fn block(f: &Fixture) {
+    feat_status(&f.project, "login", Progress::Blocked, Some("why?"), None).unwrap();
 }
