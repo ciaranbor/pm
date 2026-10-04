@@ -1,12 +1,12 @@
 package dev.pm.app.model
 
 import dev.pm.app.SNAPSHOT
+import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.time.Instant
 
 class SnapshotTest {
     private val json = SNAPSHOT
@@ -33,7 +33,11 @@ class SnapshotTest {
     fun counts_each_projects_attention_most_urgent_first() {
         val counts = Snapshot.parse(json).attentionCounts("app")
         assertEquals(
-            listOf(AttentionKind.Blocked to 1, AttentionKind.Ready to 1, AttentionKind.Unknown to 1),
+            listOf(
+                AttentionKind.Blocked to 1,
+                AttentionKind.Ready to 1,
+                AttentionKind.Unknown to 1,
+            ),
             counts,
         )
     }

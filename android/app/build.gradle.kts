@@ -1,9 +1,24 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.roborazzi)
+    alias(libs.plugins.ktfmt)
 }
+
+val commitMinutes =
+    providers
+        .exec {
+            commandLine("git", "log", "-1", "--format=%ct", "HEAD")
+            isIgnoreExitValue = true
+        }
+        .standardOutput
+        .asText
+        .map { it.trim().toLongOrNull()?.let { seconds -> (seconds / 60).toInt() } ?: 1 }
+
+val releaseSigning = providers.gradleProperty("pmReleaseSigning").map { file(it) }
 
 android {
     namespace = "dev.pm.app"
@@ -13,13 +28,38 @@ android {
         applicationId = "dev.pm.app"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
+        versionCode = commitMinutes.get()
         versionName = "0.1.0"
     }
 
-    buildFeatures {
-        compose = true
+    signingConfigs {
+        if (releaseSigning.isPresent) {
+            val path = releaseSigning.get()
+            val signing = Properties().apply { path.reader().use(::load) }
+            fun required(key: String) =
+                signing.getProperty(key) ?: error("pmReleaseSigning file $path lacks $key")
+            create("release") {
+                storeFile = path.parentFile.resolve(required("storeFile"))
+                storePassword = required("storePassword")
+                keyAlias = required("keyAlias")
+                keyPassword = required("keyPassword")
+            }
+        }
     }
+
+    buildTypes {
+        debug { ndk { abiFilters += listOf("arm64-v8a", "x86_64") } }
+        release {
+            optimization {
+                enable = true
+                keepRules { files.add(file("keep-rules.pro")) }
+            }
+            ndk { abiFilters += "arm64-v8a" }
+            signingConfig = signingConfigs.findByName("release")
+        }
+    }
+
+    buildFeatures { compose = true }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -33,7 +73,9 @@ android {
     }
 
     lint {
-        warningsAsErrors = false
+        warningsAsErrors = true
+        // Release ships arm64 only, to keep ML Kit's native scanner to one ABI.
+        disable += "ChromeOsAbiSupport"
         abortOnError = true
     }
 }
@@ -61,7 +103,6 @@ dependencies {
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.material3)
-    implementation(libs.compose.material.icons)
     debugImplementation(libs.compose.ui.tooling)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
@@ -75,6 +116,8 @@ dependencies {
     implementation(libs.unifiedpush.connector)
     implementation(libs.unifiedpush.fcm)
 
+    lintChecks(libs.compose.lint.checks)
+
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
@@ -85,6 +128,6 @@ dependencies {
     debugImplementation(libs.compose.ui.test.manifest)
 }
 
-roborazzi {
-    outputDir.set(file("src/test/screenshots"))
-}
+roborazzi { outputDir.set(file("src/test/screenshots")) }
+
+ktfmt { kotlinLangStyle() }

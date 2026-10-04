@@ -331,13 +331,32 @@ default; an agent whose transcript is gone has no conversation (404).
 
 #### The Android app
 
-The app lives in `android/` (Kotlin, Jetpack Compose). Build the debug APK
-— needing JDK 17+ and the Android SDK, platform 37 — and sideload it:
+The app lives in `android/` (Kotlin, Jetpack Compose). Building needs JDK
+17+ and the Android SDK with platform 37. The build finds the SDK through
+`ANDROID_HOME` or `sdk.dir` in `android/local.properties`; with neither, it
+writes the latter for `~/Library/Android/sdk`, where Android Studio installs
+it on macOS.
+
+Build the release APK and sideload it:
 
 ```sh
-android/gradlew -p android assembleDebug
-adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+android/gradlew -p android assembleRelease
+adb install -r android/app/build/outputs/apk/release/app-release.apk
 ```
+
+The release build is shrunk by R8 and carries only `arm64-v8a` code (the
+debug build adds `x86_64` for an emulator). It is signed only when the
+Gradle property `pmReleaseSigning` (in `~/.gradle/gradle.properties`, or
+`ORG_GRADLE_PROJECT_pmReleaseSigning`) names a properties file with
+`storeFile`, `storePassword`, `keyAlias` and `keyPassword`; otherwise it
+builds `app-release-unsigned.apk`, which a phone refuses. Keep that file
+and the keystore out of the repo, and back both up: an APK signed with
+another key installs only after an uninstall, which drops the app's
+pairing. For the same reason, installing the release build over the debug
+one (`assembleDebug`, signed with the SDK's debug key) needs one
+`adb uninstall dev.pm.app` and a new pairing. The version code is the
+minute of the last commit, so a build of an earlier commit cannot replace a
+later one.
 
 Without `adb`, copy the APK to the phone and open it, allowing installs
 from that source. In the app, scan the code `pm serve pair` prints, or

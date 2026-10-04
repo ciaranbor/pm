@@ -15,4 +15,5 @@ class PmApp : Application() {
     }
 }
 
-val Context.container: AppContainer get() = (applicationContext as PmApp).container
+val Context.container: AppContainer
+    get() = (applicationContext as PmApp).container

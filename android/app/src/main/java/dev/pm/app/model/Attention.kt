@@ -18,7 +18,8 @@ enum class AttentionKind(val wire: String) {
     Unknown("");
 
     companion object {
-        fun of(wire: String): AttentionKind = entries.find { it.wire == wire && it != Unknown } ?: Unknown
+        fun of(wire: String): AttentionKind =
+            entries.find { it.wire == wire && it != Unknown } ?: Unknown
     }
 }
 
@@ -36,48 +37,71 @@ enum class AgentState(val wire: String) {
     Unknown("");
 
     companion object {
-        fun of(wire: String): AgentState = entries.find { it.wire == wire && it != Unknown } ?: Unknown
+        fun of(wire: String): AgentState =
+            entries.find { it.wire == wire && it != Unknown } ?: Unknown
     }
 }
 
 /** The glyphs pm's tmux badges draw, by the Nerd Font icon each names. */
-enum class Glyph { Gear, QuestionCircle, BellSlash, Spinner, Hourglass, Skull, Stop, Hand, Broom, CheckCircle, Pause, Unknown }
+enum class Glyph {
+    Gear,
+    QuestionCircle,
+    BellSlash,
+    Spinner,
+    Hourglass,
+    Skull,
+    Stop,
+    Hand,
+    Broom,
+    CheckCircle,
+    Pause,
+    Unknown,
+}
 
 /** The badge colours pm's tmux badges use. */
-enum class Tone { Red, Green, Magenta, Yellow, Grey }
+enum class Tone {
+    Red,
+    Green,
+    Magenta,
+    Yellow,
+    Grey,
+}
 
 /** A badge: a glyph in a colour; `strong` where tmux draws it bold. */
 data class Mark(val glyph: Glyph, val tone: Tone, val strong: Boolean = false)
 
 /**
- * The marks of pm's tmux badges (`tmux_refresh/badge.rs`), so a glyph means
- * the same on the phone as in tmux. An attention kind that means an agent
- * state (asking, dead, unarmed) is drawn as that state.
+ * The marks of pm's tmux badges (`tmux_refresh/badge.rs`), so a glyph means the same on the phone
+ * as in tmux. An attention kind that means an agent state (asking, dead, unarmed) is drawn as that
+ * state.
  */
 object Marks {
-    fun agent(state: AgentState): Mark = when (state) {
-        AgentState.Busy -> Mark(Glyph.Gear, Tone.Green)
-        AgentState.Asking -> Mark(Glyph.QuestionCircle, Tone.Red, strong = true)
-        AgentState.Unarmed -> Mark(Glyph.BellSlash, Tone.Magenta)
-        AgentState.Background -> Mark(Glyph.Spinner, Tone.Green)
-        AgentState.Idle -> Mark(Glyph.Hourglass, Tone.Grey)
-        AgentState.Dead -> Mark(Glyph.Skull, Tone.Red)
-        AgentState.Stopped, AgentState.Closed -> Mark(Glyph.Stop, Tone.Grey)
-        AgentState.Unknown -> Mark(Glyph.Unknown, Tone.Grey)
-    }
+    fun agent(state: AgentState): Mark =
+        when (state) {
+            AgentState.Busy -> Mark(Glyph.Gear, Tone.Green)
+            AgentState.Asking -> Mark(Glyph.QuestionCircle, Tone.Red, strong = true)
+            AgentState.Unarmed -> Mark(Glyph.BellSlash, Tone.Magenta)
+            AgentState.Background -> Mark(Glyph.Spinner, Tone.Green)
+            AgentState.Idle -> Mark(Glyph.Hourglass, Tone.Grey)
+            AgentState.Dead -> Mark(Glyph.Skull, Tone.Red)
+            AgentState.Stopped,
+            AgentState.Closed -> Mark(Glyph.Stop, Tone.Grey)
+            AgentState.Unknown -> Mark(Glyph.Unknown, Tone.Grey)
+        }
 
     /** `null` for [AttentionKind.None]: nothing needed, no badge. */
-    fun attention(kind: AttentionKind): Mark? = when (kind) {
-        AttentionKind.Blocked -> Mark(Glyph.Hand, Tone.Red, strong = true)
-        AttentionKind.Asking -> agent(AgentState.Asking)
-        AttentionKind.Cleanup -> Mark(Glyph.Broom, Tone.Grey)
-        AttentionKind.Ready -> Mark(Glyph.CheckCircle, Tone.Green, strong = true)
-        AttentionKind.Dead -> agent(AgentState.Dead)
-        AttentionKind.Unarmed -> agent(AgentState.Unarmed)
-        AttentionKind.Stalled -> Mark(Glyph.Pause, Tone.Yellow)
-        AttentionKind.Unknown -> Mark(Glyph.Unknown, Tone.Grey)
-        AttentionKind.None -> null
-    }
+    fun attention(kind: AttentionKind): Mark? =
+        when (kind) {
+            AttentionKind.Blocked -> Mark(Glyph.Hand, Tone.Red, strong = true)
+            AttentionKind.Asking -> agent(AgentState.Asking)
+            AttentionKind.Cleanup -> Mark(Glyph.Broom, Tone.Grey)
+            AttentionKind.Ready -> Mark(Glyph.CheckCircle, Tone.Green, strong = true)
+            AttentionKind.Dead -> agent(AgentState.Dead)
+            AttentionKind.Unarmed -> agent(AgentState.Unarmed)
+            AttentionKind.Stalled -> Mark(Glyph.Pause, Tone.Yellow)
+            AttentionKind.Unknown -> Mark(Glyph.Unknown, Tone.Grey)
+            AttentionKind.None -> null
+        }
 }
 
 /** What a scope's activity line shows. */
@@ -89,9 +113,9 @@ sealed interface Activity {
 }
 
 /**
- * pm's rule (`attention::quiet_since`): working while an agent showed
- * activity recently; otherwise quiet once that was [QUIET] or longer ago,
- * and nothing in between, so the gaps between turns don't flicker.
+ * pm's rule (`attention::quiet_since`): working while an agent showed activity recently; otherwise
+ * quiet once that was [QUIET] or longer ago, and nothing in between, so the gaps between turns
+ * don't flicker.
  */
 fun activity(working: Boolean, lastActivity: String?, now: Instant): Activity? {
     if (working) return Activity.Working
@@ -104,8 +128,9 @@ fun activity(working: Boolean, lastActivity: String?, now: Instant): Activity? {
 val QUIET: Duration = Duration.ofMinutes(10)
 
 /** Seconds rounded down to their largest unit, as pm's `span`. */
-fun span(secs: Long): String = when {
-    secs < 3600 -> "${secs / 60}m"
-    secs < 86400 -> "${secs / 3600}h"
-    else -> "${secs / 86400}d"
-}
+fun span(secs: Long): String =
+    when {
+        secs < 3600 -> "${secs / 60}m"
+        secs < 86400 -> "${secs / 3600}h"
+        else -> "${secs / 86400}d"
+    }

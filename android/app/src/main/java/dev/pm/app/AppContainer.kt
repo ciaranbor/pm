@@ -20,8 +20,10 @@ class AppContainer(context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     /** One network callback, however many streams follow it. */
-    val networkChanges: Flow<Unit> = context.applicationContext.defaultNetworkChanges()
-        .shareIn(scope, SharingStarted.WhileSubscribed())
+    val networkChanges: Flow<Unit> =
+        context.applicationContext
+            .defaultNetworkChanges()
+            .shareIn(scope, SharingStarted.WhileSubscribed())
 
     val repository = Repository(Store(context.applicationContext), http, scope, networkChanges)
 }

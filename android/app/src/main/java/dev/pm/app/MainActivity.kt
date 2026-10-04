@@ -27,9 +27,16 @@ class MainActivity : ComponentActivity() {
         setContent {
             PmTheme {
                 val model = viewModel {
-                    AppViewModel(container.repository) { Notifications.unsubscribe(applicationContext) }
+                    AppViewModel(container.repository) {
+                        Notifications.unsubscribe(applicationContext)
+                    }
                 }
-                App(model, target, targetShown = { target = null }, networkChanges = container.networkChanges)
+                App(
+                    model,
+                    target,
+                    targetShown = { target = null },
+                    networkChanges = container.networkChanges,
+                )
             }
         }
     }

@@ -5,10 +5,9 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 /**
- * The attention snapshot `pm serve` sends (`pm feat status --all --json`;
- * README, "Attention view"). Kinds and states stay strings on the wire: a
- * newer server may send values this app doesn't know, which read as
- * [AttentionKind.Unknown] / [AgentState.Unknown] rather than failing.
+ * The attention snapshot `pm serve` sends (`pm feat status --all --json`; README, "Attention
+ * view"). Kinds and states stay strings on the wire: a newer server may send values this app
+ * doesn't know, which read as [AttentionKind.Unknown] / [AgentState.Unknown] rather than failing.
  */
 @Serializable
 data class Snapshot(
@@ -17,14 +16,18 @@ data class Snapshot(
     val features: List<FeatureSnapshot> = emptyList(),
 ) {
     /** Whether the server speaks a snapshot version this app was built for. */
-    val understood: Boolean get() = version == VERSION
+    val understood: Boolean
+        get() = version == VERSION
 
     fun project(name: String): ProjectSnapshot? = projects.find { it.name == name }
 
-    fun featuresOf(project: String): List<FeatureSnapshot> = features.filter { it.project == project }
+    fun featuresOf(project: String): List<FeatureSnapshot> = features.filter {
+        it.project == project
+    }
 
-    fun feature(project: String, name: String): FeatureSnapshot? =
-        features.find { it.project == project && it.name == name }
+    fun feature(project: String, name: String): FeatureSnapshot? = features.find {
+        it.project == project && it.name == name
+    }
 
     /** The agents of `scope` (a feature, or `main`) in `project`. */
     fun agents(project: String, scope: String): List<AgentSnapshot> =
@@ -33,10 +36,13 @@ data class Snapshot(
 
     /** How many of `project`'s scopes need each kind, most urgent first. */
     fun attentionCounts(project: String): List<Pair<AttentionKind, Int>> {
-        val kinds = featuresOf(project).map { it.attention.kindOf } +
-            listOfNotNull(project(project)?.main?.attention?.kindOf)
-        return kinds.filter { it != AttentionKind.None }
-            .groupingBy { it }.eachCount()
+        val kinds =
+            featuresOf(project).map { it.attention.kindOf } +
+                listOfNotNull(project(project)?.main?.attention?.kindOf)
+        return kinds
+            .filter { it != AttentionKind.None }
+            .groupingBy { it }
+            .eachCount()
             .toList()
             .sortedBy { it.first.ordinal }
     }
@@ -98,11 +104,11 @@ data class AgentSnapshot(
     val window: String? = null,
     val waiting: Waiting? = null,
 ) {
-    val stateOf: AgentState get() = AgentState.of(state)
+    val stateOf: AgentState
+        get() = AgentState.of(state)
 }
 
-@Serializable
-data class Waiting(val kind: String = "", val detail: String = "")
+@Serializable data class Waiting(val kind: String = "", val detail: String = "")
 
 @Serializable
 data class Attention(
@@ -110,5 +116,6 @@ data class Attention(
     val detail: String? = null,
     val agent: String? = null,
 ) {
-    val kindOf: AttentionKind get() = AttentionKind.of(kind)
+    val kindOf: AttentionKind
+        get() = AttentionKind.of(kind)
 }

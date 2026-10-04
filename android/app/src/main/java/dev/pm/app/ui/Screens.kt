@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -20,7 +21,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.foundation.layout.Row
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -36,47 +36,71 @@ import java.util.Date
 
 /** How the app stands with the server, over the content it qualifies. */
 @Composable
-fun ConnectionBanner(connection: Connection, readAt: Long?, retry: () -> Unit) {
-    val text = when (connection) {
-        Connection.Live, Connection.Unpaired -> return
-        Connection.Connecting -> "Connecting…"
-        is Connection.Unreachable -> {
-            val age = readAt?.let { " · showing what was known at ${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(it))}" }.orEmpty()
-            "Server unreachable: connect Tailscale to open$age"
+fun ConnectionBanner(
+    connection: Connection,
+    readAt: Long?,
+    retry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val text =
+        when (connection) {
+            Connection.Live,
+            Connection.Unpaired -> return
+            Connection.Connecting -> "Connecting…"
+            is Connection.Unreachable -> {
+                val age =
+                    readAt
+                        ?.let {
+                            " · showing what was known at ${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(it))}"
+                        }
+                        .orEmpty()
+                "Server unreachable: connect Tailscale to open$age"
+            }
+            Connection.Unauthorized -> "This phone's token was revoked; pair again in Settings."
         }
-        Connection.Unauthorized -> "This phone's token was revoked; pair again in Settings."
-    }
     Text(
         text,
         style = MaterialTheme.typography.labelMedium,
         textAlign = TextAlign.Center,
         color = MaterialTheme.colorScheme.onSecondaryContainer,
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.secondaryContainer)
-            .clickable(onClick = retry)
-            .padding(8.dp),
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.secondaryContainer)
+                .clickable(onClick = retry)
+                .padding(8.dp),
     )
 }
 
 @Composable
-fun SummaryScreen(model: SummaryModel) {
+fun SummaryScreen(model: SummaryModel, modifier: Modifier = Modifier) {
     val state by model.uiState.collectAsStateWithLifecycle()
     when (val shown = state) {
-        SummaryState.Loading -> Centered { CircularProgressIndicator() }
-        is SummaryState.Shown -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-            Markdown(shown.markdown)
-        }
-        SummaryState.Missing -> Centered { Text("No summary yet.", textAlign = TextAlign.Center) }
-        SummaryState.Unreachable -> Retryable("Server unreachable: connect Tailscale to open the summary.", model::retry)
-        is SummaryState.Failed -> Retryable("Couldn't load the summary: ${shown.reason}", model::retry)
+        SummaryState.Loading -> Centered(modifier) { CircularProgressIndicator() }
+        is SummaryState.Shown ->
+            Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+                Markdown(shown.markdown)
+            }
+        SummaryState.Missing ->
+            Centered(modifier) { Text("No summary yet.", textAlign = TextAlign.Center) }
+        SummaryState.Unreachable ->
+            Retryable(
+                "Server unreachable: connect Tailscale to open the summary.",
+                model::retry,
+                modifier,
+            )
+        is SummaryState.Failed ->
+            Retryable("Couldn't load the summary: ${shown.reason}", model::retry, modifier)
     }
 }
 
 @Composable
-private fun Retryable(text: String, retry: () -> Unit) {
-    Centered {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+private fun Retryable(text: String, retry: () -> Unit, modifier: Modifier = Modifier) {
+    Centered(modifier) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
             Text(text, textAlign = TextAlign.Center)
             OutlinedButton(onClick = retry) { Text("Retry") }
         }
@@ -90,6 +114,7 @@ fun SettingsScreen(
     vapid: suspend () -> String?,
     pair: () -> Unit,
     unpair: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     var distributor by remember { mutableStateOf(Notifications.current(context)) }
@@ -99,7 +124,8 @@ fun SettingsScreen(
         val chosen = choosing ?: return@LaunchedEffect
         val key = vapid()
         if (key == null) {
-            problem = "Connect to the server first: it gives the key a subscription is made against."
+            problem =
+                "Connect to the server first: it gives the key a subscription is made against."
         } else {
             Notifications.use(context, chosen, key)
             distributor = chosen
@@ -107,20 +133,26 @@ fun SettingsScreen(
         }
         choosing = null
     }
-    Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(
+        modifier.verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
         Text("Server", style = MaterialTheme.typography.titleMedium)
         if (pairing == null) {
             Text("Not paired.")
             OutlinedButton(onClick = pair) { Text("Pair") }
         } else {
             Text(pairing.url)
-            Text("This phone is “${pairing.device}”. " + when (connection) {
-                Connection.Live -> "Connected."
-                Connection.Connecting -> "Connecting…"
-                is Connection.Unreachable -> "Unreachable: ${connection.reason}"
-                Connection.Unauthorized -> "Its token was revoked."
-                Connection.Unpaired -> ""
-            })
+            Text(
+                "This phone is “${pairing.device}”. " +
+                    when (connection) {
+                        Connection.Live -> "Connected."
+                        Connection.Connecting -> "Connecting…"
+                        is Connection.Unreachable -> "Unreachable: ${connection.reason}"
+                        Connection.Unauthorized -> "Its token was revoked."
+                        Connection.Unpaired -> ""
+                    }
+            )
             OutlinedButton(onClick = pair) { Text("Pair again") }
             OutlinedButton(onClick = unpair) { Text("Forget this server") }
         }
@@ -131,16 +163,26 @@ fun SettingsScreen(
                 "Install ntfy (set to use ntfy.sh) to receive them without Google; otherwise Google's push service is used.",
             style = MaterialTheme.typography.bodySmall,
         )
-        if (!Notifications.allowed(context)) Text("Notifications are off for pm in Android's settings.", color = MaterialTheme.colorScheme.error)
+        if (!Notifications.allowed(context))
+            Text(
+                "Notifications are off for pm in Android's settings.",
+                color = MaterialTheme.colorScheme.error,
+            )
         val all = Notifications.distributors(context)
         if (all.isEmpty()) Text("No distributor is available on this phone.")
         all.forEach { name ->
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth().clickable(enabled = pairing != null) { choosing = name },
+                modifier =
+                    Modifier.fillMaxWidth().clickable(enabled = pairing != null) {
+                        choosing = name
+                    },
             ) {
                 RadioButton(selected = name == distributor, onClick = null)
-                Text(if (name == context.packageName) "Google (built in)" else name, modifier = Modifier.padding(start = 8.dp))
+                Text(
+                    if (name == context.packageName) "Google (built in)" else name,
+                    modifier = Modifier.padding(start = 8.dp),
+                )
             }
         }
         problem?.let { Text(it, color = MaterialTheme.colorScheme.error) }

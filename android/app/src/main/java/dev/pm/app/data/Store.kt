@@ -6,9 +6,8 @@ import dev.pm.app.model.Pairing
 import java.io.File
 
 /**
- * What the app keeps on the phone: the pairing, the last snapshot (shown
- * while the server can't be reached), and the push subscription, kept until
- * the server has it.
+ * What the app keeps on the phone: the pairing, the last snapshot (shown while the server can't be
+ * reached), and the push subscription, kept until the server has it.
  */
 class Store(context: Context) {
     private val prefs = context.getSharedPreferences("pm", Context.MODE_PRIVATE)
@@ -24,7 +23,9 @@ class Store(context: Context) {
 
     /** The last snapshot's JSON and when it was read (epoch ms). */
     fun cachedSnapshot(): Pair<String, Long>? =
-        snapshotFile.takeIf { it.exists() }?.let { runCatching { it.readText() to it.lastModified() }.getOrNull() }
+        snapshotFile
+            .takeIf { it.exists() }
+            ?.let { runCatching { it.readText() to it.lastModified() }.getOrNull() }
 
     fun cacheSnapshot(json: String) {
         val tmp = File(snapshotFile.parentFile, "${snapshotFile.name}.tmp")
@@ -50,7 +51,10 @@ class Store(context: Context) {
         set(value) {
             prefs.edit {
                 if (value == null) {
-                    remove(ENDPOINT); remove(P256DH); remove(AUTH); remove(SENT)
+                    remove(ENDPOINT)
+                    remove(P256DH)
+                    remove(AUTH)
+                    remove(SENT)
                 } else {
                     putString(ENDPOINT, value.endpoint)
                     putString(P256DH, value.p256dh)
@@ -69,4 +73,9 @@ class Store(context: Context) {
     }
 }
 
-data class Subscription(val endpoint: String, val p256dh: String, val auth: String, val sent: Boolean)
+data class Subscription(
+    val endpoint: String,
+    val p256dh: String,
+    val auth: String,
+    val sent: Boolean,
+)

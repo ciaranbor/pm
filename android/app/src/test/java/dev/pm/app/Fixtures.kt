@@ -1,5 +1,6 @@
 package dev.pm.app
 
+import java.util.concurrent.CountDownLatch
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
@@ -7,10 +8,12 @@ import mockwebserver3.MockResponse
 import mockwebserver3.MockResponseBody
 import mockwebserver3.SocketEffect
 import okio.BufferedSink
-import java.util.concurrent.CountDownLatch
 
-/** README's example snapshot, with a field, kind, state and version detail this app doesn't know. */
-val SNAPSHOT = """
+/**
+ * README's example snapshot, with a field, kind, state and version detail this app doesn't know.
+ */
+val SNAPSHOT =
+    """
     {
       "version": 1,
       "projects": [{
@@ -38,36 +41,42 @@ val SNAPSHOT = """
         "agents": [], "working": true, "last_activity": null
       }]
     }
-""".trimIndent()
+    """
+        .trimIndent()
 
 /**
- * Server-sent events that stay open after `events` until [release], as
- * `pm serve`'s stream does between heartbeats.
+ * Server-sent events that stay open after `events` until [release], as `pm serve`'s stream does
+ * between heartbeats.
  */
 class OpenStream {
     private val held = CountDownLatch(1)
 
-    fun response(vararg events: Pair<String, String>): MockResponse = MockResponse.Builder()
-        .addHeader("Content-Type", "text/event-stream")
-        .body(object : MockResponseBody {
-            override val contentLength = -1L
+    fun response(vararg events: Pair<String, String>): MockResponse =
+        MockResponse.Builder()
+            .addHeader("Content-Type", "text/event-stream")
+            .body(
+                object : MockResponseBody {
+                    override val contentLength = -1L
 
-            override fun writeTo(sink: BufferedSink) {
-                events.forEach { (name, data) -> sink.writeUtf8("event: $name\ndata: ${data.replace("\n", "")}\n\n") }
-                sink.flush()
-                held.await()
-            }
-        })
-        .onResponseEnd(SocketEffect.CloseSocket())
-        .build()
+                    override fun writeTo(sink: BufferedSink) {
+                        events.forEach { (name, data) ->
+                            sink.writeUtf8("event: $name\ndata: ${data.replace("\n", "")}\n\n")
+                        }
+                        sink.flush()
+                        held.await()
+                    }
+                }
+            )
+            .onResponseEnd(SocketEffect.CloseSocket())
+            .build()
 
     /** End the stream: the server closes it, as `pm serve` stopping would. */
     fun release() = held.countDown()
 }
 
 /**
- * Run what is due on the test scheduler, without advancing its clock,
- * until `condition` holds: real I/O resumes coroutines on it from other threads.
+ * Run what is due on the test scheduler, without advancing its clock, until `condition` holds: real
+ * I/O resumes coroutines on it from other threads.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 fun TestScope.eventually(condition: () -> Boolean) {
