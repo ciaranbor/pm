@@ -9,6 +9,7 @@
 
 use std::io::{self, Write};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
@@ -20,6 +21,8 @@ use super::transcript::TranscriptWatch;
 
 pub(super) struct Hub {
     inner: Mutex<Inner>,
+    /// How many streams are open.
+    open: AtomicUsize,
 }
 
 struct Inner {
@@ -35,7 +38,13 @@ impl Hub {
                 snapshot: serde_json::to_string(snapshot)?,
                 streams: Vec::new(),
             }),
+            open: AtomicUsize::new(0),
         })
+    }
+
+    /// Whether a stream is open: someone is looking.
+    pub(super) fn watched(&self) -> bool {
+        self.open.load(Ordering::SeqCst) > 0
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -93,6 +102,8 @@ pub(super) fn stream(
     mut watch: Option<(TranscriptWatch, Duration)>,
 ) -> io::Result<()> {
     let (first, events) = hub.subscribe();
+    hub.open.fetch_add(1, Ordering::SeqCst);
+    let _open = Open(&hub.open);
     let mut failing: Option<String> = None;
     // The watch's first read precedes the response, so a client that has
     // the opening snapshot knows the watch has begun.
@@ -138,6 +149,15 @@ pub(super) fn stream(
         }
         out.flush()?;
         wrote = Instant::now();
+    }
+}
+
+/// A stream counted open until it ends.
+struct Open<'a>(&'a AtomicUsize);
+
+impl Drop for Open<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
     }
 }
 

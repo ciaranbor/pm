@@ -129,6 +129,10 @@ pub struct ServeConfig {
     /// known ones (`commands::serve::PushPolicy`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub push_hosts: Vec<String>,
+    /// The loopback port `pm serve` listens on (`commands::serve::DEFAULT_PORT`
+    /// when unset).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

@@ -8,24 +8,34 @@
 //! trusted for being local. Each request runs on a thread of its own; the
 //! event streams hold theirs for as long as the client stays.
 //!
-//! One poller thread reads the [`attention`] snapshot every few seconds,
-//! sends it to every event stream when it changed, and judges it against
-//! the last ([`Watch`]) for transitions: the rule tmux alerts by, plus an
-//! agent dying. The first snapshot, read as the server starts, is the
-//! baseline, so a restart reports nothing that was already so. Each
-//! transition also goes to every subscribed device as a Web Push
-//! (`push`), which reaches a phone off the tailnet. The poller
-//! also re-executes the binary once it is replaced ([`Binary`]), so an
-//! upgrade reaches a server launchd keeps running.
+//! One poller thread reads the [`attention`] snapshot, sends it to every
+//! event stream when it changed, and judges it against the last ([`Watch`])
+//! for transitions: the rule tmux alerts by, plus an agent dying. The first
+//! snapshot, read as the server starts, is the baseline, so a restart
+//! reports nothing that was already so. Each transition also goes to every
+//! subscribed device as a Web Push (`push`), which reaches a phone off the
+//! tailnet. The poller also re-executes the binary once it is replaced
+//! ([`Binary`]), so an upgrade reaches a server launchd keeps running.
 //!
-//! Every request is logged to stderr with the device whose token it
-//! carried; launchd sends that to `serve.log` in the devices' dir.
+//! Nothing on the phone is urgent, so the poller is sparing: it reads the
+//! snapshot every minute, and every few seconds only while an event stream
+//! is open — the app on screen. A change pm makes itself needn't wait for
+//! either: the background push pm commands start as they finish (`pm tmux
+//! push`) also wakes the poller ([`wake`]), so the minute only bounds what
+//! pm cannot see happen, such as a harness exiting. A stream opening wakes
+//! it too, so the app reads a fresh snapshot. Reads stay a few seconds
+//! apart however often it is woken: busy agents push on every turn.
+//!
+//! One server runs per pm config dir, holding a lock ([`state`]); another
+//! waits for it to exit. Every request is logged to stderr with the device
+//! whose token it carried; launchd sends that to `serve.log` in the
+//! devices' dir.
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{SecondsFormat, Utc};
 
@@ -37,17 +47,30 @@ use super::reexec::Binary;
 mod events;
 mod push;
 mod routes;
+pub mod state;
 mod transcript;
+mod wake;
 
 use events::Hub;
 use push::Pusher;
 pub use push::policy::Policy as PushPolicy;
 use routes::Reply;
+use wake::Waker;
+pub use wake::wake;
 
 /// The most of a request body read; a push subscription is well under it.
 const MAX_BODY: u64 = 16 * 1024;
 
 pub const DEFAULT_PORT: u16 = 7764;
+
+/// The port to listen on: `[serve] port` in the global config at
+/// `config_dir`, else [`DEFAULT_PORT`].
+pub fn configured_port(config_dir: &std::path::Path) -> u16 {
+    crate::state::project::GlobalConfig::load(config_dir)
+        .ok()
+        .and_then(|c| c.serve.port)
+        .unwrap_or(DEFAULT_PORT)
+}
 
 /// What a server serves, and how often it looks.
 #[derive(Debug, Clone)]
@@ -56,8 +79,12 @@ pub struct Config {
     /// The paired devices' file ([`Devices::path`](crate::state::devices::Devices::path)).
     pub devices: PathBuf,
     pub tmux_server: Option<String>,
-    /// How often the snapshot is read for changes.
-    pub poll: Duration,
+    /// How often the snapshot is read while no event stream is open.
+    pub idle_poll: Duration,
+    /// How often while one is.
+    pub watched_poll: Duration,
+    /// The least time between two reads, however often the server is woken.
+    pub min_gap: Duration,
     /// How long an event stream may go without sending anything.
     pub heartbeat: Duration,
     /// How often a stream watching an agent reads its conversation.
@@ -72,7 +99,9 @@ impl Config {
             projects_dir,
             devices,
             tmux_server: tmux_server.map(str::to_string),
-            poll: Duration::from_secs(3),
+            idle_poll: Duration::from_secs(60),
+            watched_poll: Duration::from_secs(5),
+            min_gap: Duration::from_secs(5),
             heartbeat: Duration::from_secs(25),
             transcript_poll: Duration::from_secs(1),
             push: PushPolicy::new(&[]),
@@ -90,6 +119,10 @@ pub struct Server {
     /// What the last snapshot was judged to be, for the next.
     watch: Mutex<Watch>,
     stopped: AtomicBool,
+    waker: Waker,
+    /// How many snapshots the poller has read.
+    #[cfg(test)]
+    reads: std::sync::atomic::AtomicUsize,
 }
 
 impl Server {
@@ -101,7 +134,9 @@ impl Server {
             .map_err(|e| PmError::Serve(format!("cannot listen on {addr}: {e}")))?;
         let snapshot = attention::all(&config.projects_dir, config.tmux_server.as_deref())?;
         let key = push::vapid_key(&push::key_path(&config.devices))?;
+        let waker = Waker::open(&config.devices)?;
         Ok(Arc::new(Self {
+            waker,
             http,
             vapid: push::public_key(&key),
             pusher: Pusher::start(config.devices.clone(), key, config.push.clone()),
@@ -109,6 +144,8 @@ impl Server {
             hub: Hub::new(&snapshot)?,
             watch: Mutex::new(Watch::start(&snapshot)),
             stopped: AtomicBool::new(false),
+            #[cfg(test)]
+            reads: std::sync::atomic::AtomicUsize::new(0),
         }))
     }
 
@@ -132,16 +169,36 @@ impl Server {
     pub fn stop(&self) {
         self.stopped.store(true, Ordering::SeqCst);
         self.http.unblock();
+        self.waker.notify();
     }
 
     fn poll(&self) {
         let binary = Binary::current();
+        let mut last = Instant::now();
         while !self.stopped.load(Ordering::SeqCst) {
-            std::thread::sleep(self.config.poll);
+            let every = if self.hub.watched() {
+                self.config.watched_poll
+            } else {
+                self.config.idle_poll
+            };
+            self.waker.wait(every);
+            // Wakes meanwhile are drained into this read.
+            while let Some(left) =
+                (last + self.config.min_gap).checked_duration_since(Instant::now())
+                && !self.stopped.load(Ordering::SeqCst)
+            {
+                self.waker.wait(left);
+            }
+            if self.stopped.load(Ordering::SeqCst) {
+                return;
+            }
+            last = Instant::now();
             let read = attention::all(
                 &self.config.projects_dir,
                 self.config.tmux_server.as_deref(),
             );
+            #[cfg(test)]
+            self.reads.fetch_add(1, Ordering::SeqCst);
             let mut watch = self.watch.lock().unwrap_or_else(|e| e.into_inner());
             match read.and_then(|snapshot| self.hub.update(&watch, &snapshot)) {
                 Ok((next, transitions)) => {
@@ -214,6 +271,7 @@ impl Server {
                 request.respond(response)
             }
             Reply::Events(watch) => {
+                self.waker.notify();
                 let mut writer = request.into_writer();
                 let watch = watch.map(|w| (*w, self.config.transcript_poll));
                 events::stream(&mut writer, &self.hub, self.config.heartbeat, watch)
@@ -231,11 +289,24 @@ fn log(line: &str) {
     eprintln!("{now} {line}");
 }
 
-/// Serve on loopback `port` until the process ends.
-pub fn serve(config: Config, port: u16) -> Result<()> {
+/// Serve on loopback `port` until the process ends, once no other server
+/// of the config dir `config_dir` runs.
+pub fn serve(config: Config, config_dir: &std::path::Path, port: u16) -> Result<()> {
+    let lock = match state::lock(config_dir)? {
+        Some(lock) => lock,
+        None => {
+            let holder = state::State::load(config_dir).map_or("?".into(), |s| s.pid.to_string());
+            log(&format!(
+                "waiting for the running server (pid {holder}) to exit"
+            ));
+            state::wait(config_dir)?
+        }
+    };
     let server = Server::bind(config, port)?;
+    state::State::now(server.addr().port()).save(config_dir)?;
     log(&format!("listening on http://{}", server.addr()));
     server.run();
+    drop(lock);
     Ok(())
 }
 

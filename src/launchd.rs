@@ -36,6 +36,21 @@ fn loaded(target: &str) -> Result<bool> {
         .success())
 }
 
+/// A loaded agent `label`: its pid while it runs. `None` when not loaded.
+pub fn job(label: &str) -> Result<Option<Option<u32>>> {
+    let output = Command::new("launchctl")
+        .args(["print", &format!("{}/{label}", domain())])
+        .output()?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    Ok(Some(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("pid = ")?.parse().ok()),
+    ))
+}
+
 /// Stop and unload the agent `label`; one not loaded is left as it is.
 /// `bootout` may return while the job is still going, and a `bootstrap` of
 /// the same label then fails, so this waits a few seconds for it to go.

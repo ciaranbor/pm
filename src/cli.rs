@@ -125,14 +125,15 @@ pub enum Commands {
     #[command(subcommand)]
     Tmux(TmuxCommands),
     /// Serve pm state read-only over HTTP for the phone app, on 127.0.0.1;
-    /// reach it through `tailscale serve`
+    /// `pm serve install` sets it up to run at login, reached through
+    /// `tailscale serve`
     #[command(args_conflicts_with_subcommands = true)]
     Serve {
         #[command(subcommand)]
         command: Option<ServeCommands>,
-        /// Loopback port to listen on
-        #[arg(long, default_value_t = pm::commands::serve::DEFAULT_PORT)]
-        port: u16,
+        /// Loopback port to listen on (default: `[serve] port`, else 7764)
+        #[arg(long)]
+        port: Option<u16>,
     },
     /// Generate shell completion scripts
     #[command(hide = true)]
@@ -232,14 +233,33 @@ pub enum ServeCommands {
         /// The device's name
         device: String,
     },
-    /// Run `pm serve` as a launchd LaunchAgent, at login and across restarts
+    /// Run `pm serve` as a launchd LaunchAgent (macOS), at login and across
+    /// restarts, and set up `tailscale serve` for it when the tailnet
+    /// allows. Run it again to repair an install
     Install {
-        /// Loopback port to listen on
-        #[arg(long, default_value_t = pm::commands::serve::DEFAULT_PORT)]
-        port: u16,
+        /// Loopback port to listen on, saved as `[serve] port`
+        #[arg(long)]
+        port: Option<u16>,
+        /// Leave `tailscale serve` as it is
+        #[arg(long)]
+        no_tailscale: bool,
+        /// Also pair a device with this name, printing its QR code
+        #[arg(long, value_name = "DEVICE")]
+        pair: Option<String>,
     },
     /// Remove the LaunchAgent `install` wrote
     Uninstall,
+    /// Whether the server runs, and what reaches it
+    Status,
+    /// Print the end of the server's log
+    Logs {
+        /// How many lines
+        #[arg(short = 'n', long, default_value_t = 50)]
+        lines: usize,
+        /// Keep printing what is appended
+        #[arg(short, long)]
+        follow: bool,
+    },
 }
 
 #[derive(Subcommand)]
