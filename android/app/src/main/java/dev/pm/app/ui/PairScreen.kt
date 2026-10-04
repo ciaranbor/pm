@@ -42,17 +42,23 @@ import dev.pm.app.model.Pairing
 import java.util.concurrent.Executors
 
 @Composable
-fun PairScreen(paired: (Pairing) -> Unit) {
+fun PairScreen(paired: (Pairing) -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     var granted by remember {
-        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+                PackageManager.PERMISSION_GRANTED
+        )
     }
-    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted = it }
+    val ask =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+            granted = it
+        }
     var pasted by remember { mutableStateOf("") }
     var problem by remember { mutableStateOf<String?>(null) }
 
     Column(
-        Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
+        modifier.verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("Pair with pm serve", style = MaterialTheme.typography.headlineSmall)
@@ -60,27 +66,35 @@ fun PairScreen(paired: (Pairing) -> Unit) {
         if (granted) {
             Scanner(onPairing = paired, onOther = { problem = "That QR code is not a pm pairing." })
         } else {
-            Button(onClick = { ask.launch(Manifest.permission.CAMERA) }) { Text("Scan the QR code") }
+            Button(onClick = { ask.launch(Manifest.permission.CAMERA) }) {
+                Text("Scan the QR code")
+            }
         }
         problem?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        Text("Or paste the pairing JSON, or url, device and token as `pair` prints them:", style = MaterialTheme.typography.bodySmall)
+        Text(
+            "Or paste the pairing JSON, or url, device and token as `pair` prints them:",
+            style = MaterialTheme.typography.bodySmall,
+        )
         OutlinedTextField(
             value = pasted,
             onValueChange = { pasted = it },
             modifier = Modifier.fillMaxWidth(),
             minLines = 3,
         )
-        TextButton(onClick = {
-            val pairing = Pairing.parse(pasted)
-            if (pairing == null) problem = "That is not a pairing." else paired(pairing)
-        }) { Text("Pair") }
+        TextButton(
+            onClick = {
+                val pairing = Pairing.parse(pasted)
+                if (pairing == null) problem = "That is not a pairing." else paired(pairing)
+            }
+        ) {
+            Text("Pair")
+        }
     }
 }
 
 /**
- * A camera preview reading QR codes. pm draws its code for a dark terminal,
- * light on dark, which a scanner may not read the right way round; every
- * other frame is inverted before it is scanned.
+ * A camera preview reading QR codes. pm draws its code for a dark terminal, light on dark, which a
+ * scanner may not read the right way round; every other frame is inverted before it is scanned.
  */
 @Composable
 private fun Scanner(onPairing: (Pairing) -> Unit, onOther: () -> Unit) {
@@ -88,7 +102,9 @@ private fun Scanner(onPairing: (Pairing) -> Unit, onOther: () -> Unit) {
     val owner = LocalLifecycleOwner.current
     val executor = remember { Executors.newSingleThreadExecutor() }
     val scanner = remember {
-        BarcodeScanning.getClient(BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build())
+        BarcodeScanning.getClient(
+            BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
+        )
     }
     var done by remember { mutableStateOf(false) }
     val preview = remember { PreviewView(context) }
@@ -96,31 +112,39 @@ private fun Scanner(onPairing: (Pairing) -> Unit, onOther: () -> Unit) {
     DisposableEffect(owner) {
         val future = ProcessCameraProvider.getInstance(context)
         var frame = 0L
-        future.addListener({
-            val provider = future.get()
-            val shown = Preview.Builder().build().also { it.surfaceProvider = preview.surfaceProvider }
-            val analysis = ImageAnalysis.Builder()
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .build()
-            analysis.setAnalyzer(executor) { proxy ->
-                val image = grey(proxy, invert = frame++ % 2 == 1L)
-                scanner.process(image)
-                    .addOnSuccessListener { codes ->
-                        val text = codes.firstNotNullOfOrNull { it.rawValue } ?: return@addOnSuccessListener
-                        if (done) return@addOnSuccessListener
-                        val pairing = Pairing.parse(text)
-                        if (pairing == null) {
-                            onOther()
-                        } else {
-                            done = true
-                            onPairing(pairing)
+        future.addListener(
+            {
+                val provider = future.get()
+                val shown =
+                    Preview.Builder().build().also { it.surfaceProvider = preview.surfaceProvider }
+                val analysis =
+                    ImageAnalysis.Builder()
+                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                        .build()
+                analysis.setAnalyzer(executor) { proxy ->
+                    val image = grey(proxy, invert = frame++ % 2 == 1L)
+                    scanner
+                        .process(image)
+                        .addOnSuccessListener { codes ->
+                            val text =
+                                codes.firstNotNullOfOrNull { it.rawValue }
+                                    ?: return@addOnSuccessListener
+                            if (done) return@addOnSuccessListener
+                            val pairing = Pairing.parse(text)
+                            if (pairing == null) {
+                                onOther()
+                            } else {
+                                done = true
+                                onPairing(pairing)
+                            }
                         }
-                    }
-                    .addOnCompleteListener { proxy.close() }
-            }
-            provider.unbindAll()
-            provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, shown, analysis)
-        }, ContextCompat.getMainExecutor(context))
+                        .addOnCompleteListener { proxy.close() }
+                }
+                provider.unbindAll()
+                provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, shown, analysis)
+            },
+            ContextCompat.getMainExecutor(context),
+        )
         onDispose {
             runCatching { future.get().unbindAll() }
             scanner.close()
@@ -130,7 +154,9 @@ private fun Scanner(onPairing: (Pairing) -> Unit, onOther: () -> Unit) {
     AndroidView(factory = { preview }, modifier = Modifier.fillMaxWidth().aspectRatio(1f))
 }
 
-/** The frame's luminance as an NV21 image, inverted on request; colour plays no part in a QR code. */
+/**
+ * The frame's luminance as an NV21 image, inverted on request; colour plays no part in a QR code.
+ */
 private fun grey(proxy: ImageProxy, invert: Boolean): InputImage {
     val plane = proxy.planes[0]
     val width = proxy.width
@@ -141,6 +167,13 @@ private fun grey(proxy: ImageProxy, invert: Boolean): InputImage {
         buffer.position(row * plane.rowStride)
         buffer.get(nv21, row * width, width)
     }
-    if (invert) for (i in 0 until width * height) nv21[i] = (255 - (nv21[i].toInt() and 0xFF)).toByte()
-    return InputImage.fromByteArray(nv21, width, height, proxy.imageInfo.rotationDegrees, InputImage.IMAGE_FORMAT_NV21)
+    if (invert)
+        for (i in 0 until width * height) nv21[i] = (255 - (nv21[i].toInt() and 0xFF)).toByte()
+    return InputImage.fromByteArray(
+        nv21,
+        width,
+        height,
+        proxy.imageInfo.rotationDegrees,
+        InputImage.IMAGE_FORMAT_NV21,
+    )
 }

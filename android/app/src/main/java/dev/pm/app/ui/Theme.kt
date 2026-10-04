@@ -5,6 +5,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.ui.graphics.Color
 import dev.pm.app.model.Tone
 
@@ -18,6 +19,7 @@ fun PmTheme(content: @Composable () -> Unit) {
 
 /** A badge tone as a colour that reads on the current background. */
 @Composable
+@ReadOnlyComposable
 fun Tone.color(): Color {
     val dark = isSystemInDarkTheme()
     return when (this) {

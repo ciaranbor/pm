@@ -1,12 +1,12 @@
 package dev.pm.app.ui
 
+import androidx.lifecycle.viewModelScope
 import dev.pm.app.OpenStream
 import dev.pm.app.SNAPSHOT
 import dev.pm.app.api.PmClient
 import dev.pm.app.eventually
 import dev.pm.app.model.Item
 import dev.pm.app.model.Pairing
-import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel
@@ -48,7 +48,10 @@ class AgentModelTest {
         Dispatchers.resetMain()
     }
 
-    /** Runs `body`, then ends the model's coroutines, waiting out each call in flight to resume on Main. */
+    /**
+     * Runs `body`, then ends the model's coroutines, waiting out each call in flight to resume on
+     * Main.
+     */
     private fun modelTest(body: suspend TestScope.() -> Unit): TestResult = runTest {
         body()
         model.viewModelScope.cancel()
@@ -57,17 +60,27 @@ class AgentModelTest {
 
     private fun page(ids: List<String>, before: String?, after: String?): MockResponse {
         val items = ids.joinToString(",") { """{"id":"$it","kind":"user","text":"$it"}""" }
-        val cursors = listOf("before" to before, "after" to after).joinToString(",") { (k, v) -> "\"$k\":${v?.let { "\"$it\"" } ?: "null"}" }
+        val cursors =
+            listOf("before" to before, "after" to after).joinToString(",") { (k, v) ->
+                "\"$k\":${v?.let { "\"$it\"" } ?: "null"}"
+            }
         return MockResponse.Builder().body("""{"items":[$items],$cursors}""").build()
     }
 
-    private val shown get() = model.chat.value as? ChatState.Shown
+    private val shown
+        get() = model.chat.value as? ChatState.Shown
 
-    private val ids get() = shown?.conversation?.items?.map { it.id }
+    private val ids
+        get() = shown?.conversation?.items?.map { it.id }
 
     @Test
     fun a_conversation_that_starts_as_the_watch_opens_is_read_again() = modelTest {
-        server.enqueue(MockResponse.Builder().code(404).body("""{"error":"the agent has no conversation yet"}""").build())
+        server.enqueue(
+            MockResponse.Builder()
+                .code(404)
+                .body("""{"error":"the agent has no conversation yet"}""")
+                .build()
+        )
         server.enqueue(stream.response("snapshot" to SNAPSHOT))
         server.enqueue(page(listOf("1"), before = null, after = "c1"))
         model.start()
@@ -92,7 +105,8 @@ class AgentModelTest {
     @Test
     fun a_reset_replaces_the_conversation() = modelTest {
         server.enqueue(page(listOf("1", "2"), before = null, after = "c2"))
-        val reset = """{"project":"app","scope":"login","agent":"implementer","reset":true,
+        val reset =
+            """{"project":"app","scope":"login","agent":"implementer","reset":true,
             "items":[{"id":"a","kind":"assistant","text":"fresh"}],"before":null,"after":"x1"}"""
         server.enqueue(stream.response("snapshot" to SNAPSHOT, "transcript" to reset))
         model.start()

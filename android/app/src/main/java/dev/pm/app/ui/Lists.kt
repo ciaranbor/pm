@@ -29,8 +29,13 @@ import dev.pm.app.model.activity
 import java.time.Instant
 
 @Composable
-fun ProjectsList(snapshot: Snapshot, now: Instant, open: (String) -> Unit) {
-    LazyColumn {
+fun ProjectsList(
+    snapshot: Snapshot,
+    now: Instant,
+    open: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    LazyColumn(modifier) {
         items(snapshot.projects.sortedBy { it.name }, key = { it.name }) { project ->
             ListItem(
                 modifier = Modifier.clickable { open(project.name) },
@@ -38,22 +43,41 @@ fun ProjectsList(snapshot: Snapshot, now: Instant, open: (String) -> Unit) {
                 supportingContent = {
                     val counts = snapshot.attentionCounts(project.name)
                     when {
-                        project.skipped != null -> Text("unreadable: ${project.skipped}", color = MaterialTheme.colorScheme.error)
-                        counts.isEmpty() -> Text("${snapshot.featuresOf(project.name).size} features, nothing needs you")
-                        else -> FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            counts.forEach { (kind, count) ->
-                                val mark = Marks.attention(kind) ?: return@forEach
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    MarkIcon(mark, kind.wire)
-                                    Text(" $count ${kind.wire}", style = MaterialTheme.typography.labelMedium)
+                        project.skipped != null ->
+                            Text(
+                                "unreadable: ${project.skipped}",
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        counts.isEmpty() ->
+                            Text(
+                                "${snapshot.featuresOf(project.name).size} features, nothing needs you"
+                            )
+                        else ->
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                counts.forEach { (kind, count) ->
+                                    val mark = Marks.attention(kind) ?: return@forEach
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        MarkIcon(mark, kind.wire)
+                                        Text(
+                                            " $count ${kind.wire}",
+                                            style = MaterialTheme.typography.labelMedium,
+                                        )
+                                    }
                                 }
                             }
-                        }
                     }
                 },
                 trailingContent = {
                     val main = project.main
-                    if (main != null) ActivityLabel(activity(main.working || snapshot.featuresOf(project.name).any { it.working }, null, now))
+                    if (main != null)
+                        ActivityLabel(
+                            activity(
+                                main.working ||
+                                    snapshot.featuresOf(project.name).any { it.working },
+                                null,
+                                now,
+                            )
+                        )
                 },
             )
             HorizontalDivider()
@@ -63,9 +87,15 @@ fun ProjectsList(snapshot: Snapshot, now: Instant, open: (String) -> Unit) {
 
 /** A project's main scope, then its features, most urgent first. */
 @Composable
-fun ScopesList(snapshot: Snapshot, project: String, now: Instant, open: (String) -> Unit) {
+fun ScopesList(
+    snapshot: Snapshot,
+    project: String,
+    now: Instant,
+    open: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val main = snapshot.project(project)?.main
-    LazyColumn {
+    LazyColumn(modifier) {
         if (main != null) {
             item(key = "main") {
                 ScopeRow(
@@ -109,18 +139,30 @@ private fun ScopeRow(
     activity: @Composable () -> Unit,
     open: () -> Unit,
 ) {
-    Column(Modifier.fillMaxWidth().clickable(onClick = open).padding(horizontal = 16.dp, vertical = 10.dp)) {
+    Column(
+        Modifier.fillMaxWidth()
+            .clickable(onClick = open)
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+    ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
             AttentionBadge(attention.kindOf, attention.kind)
         }
         val detail = attention.detail?.takeIf { attention.kind != "none" } ?: line
         if (detail != null) {
-            Text(detail, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(
+                detail,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         Spacer(Modifier.padding(top = 4.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.weight(1f)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.weight(1f),
+            ) {
                 if (closed) Text("no session", style = MaterialTheme.typography.labelMedium)
                 else agents.forEach { AgentBadge(it) }
             }
@@ -138,11 +180,12 @@ fun AgentsList(
     now: Instant,
     openAgent: (String) -> Unit,
     openSummary: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val feature = snapshot.feature(project, scope)
     val main = snapshot.project(project)?.main?.takeIf { scope == Snapshot.MAIN }
     val agents = snapshot.agents(project, scope)
-    LazyColumn {
+    LazyColumn(modifier) {
         item(key = "header") {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 val attention = feature?.attention ?: main?.attention
@@ -151,10 +194,13 @@ fun AgentsList(
                 if (feature != null) {
                     Text(
                         listOfNotNull(
-                            "status ${feature.progress}",
-                            feature.lifecycle.takeIf { it.isNotEmpty() }?.let { "lifecycle $it" },
-                            feature.pr?.let { "PR $it" },
-                        ).joinToString(" · "),
+                                "status ${feature.progress}",
+                                feature.lifecycle
+                                    .takeIf { it.isNotEmpty() }
+                                    ?.let { "lifecycle $it" },
+                                feature.pr?.let { "PR $it" },
+                            )
+                            .joinToString(" · "),
                         style = MaterialTheme.typography.bodySmall,
                     )
                     feature.summary?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
@@ -163,7 +209,8 @@ fun AgentsList(
                 } else if (main != null) {
                     ActivityLabel(activity(main.working, main.lastActivity, now))
                 }
-                if (feature == null && main == null) Text("This scope is no longer in the snapshot.")
+                if (feature == null && main == null)
+                    Text("This scope is no longer in the snapshot.")
             }
             HorizontalDivider()
         }
@@ -173,7 +220,11 @@ fun AgentsList(
                 leadingContent = { MarkIcon(Marks.agent(agent.stateOf), agent.state) },
                 headlineContent = { Text(agent.name) },
                 supportingContent = {
-                    Text(listOfNotNull(agent.state, agent.waiting?.detail).joinToString(": "), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        listOfNotNull(agent.state, agent.waiting?.detail).joinToString(": "),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 },
                 trailingContent = { if (agent.unread > 0) AgentBadge(agent, showName = false) },
             )

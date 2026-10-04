@@ -31,8 +31,7 @@ import org.robolectric.RobolectricTestRunner
 
 @RunWith(RobolectricTestRunner::class)
 class UiTest {
-    @get:Rule
-    val compose = createComposeRule()
+    @get:Rule val compose = createComposeRule()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -67,9 +66,16 @@ class UiTest {
     fun the_unreachable_banner_says_how_old_the_snapshot_is_and_retries_on_tap() {
         var retries = 0
         compose.setContent {
-            PmTheme { ConnectionBanner(Connection.Unreachable("refused"), readAt = 0L, retry = { retries++ }) }
+            PmTheme {
+                ConnectionBanner(
+                    Connection.Unreachable("refused"),
+                    readAt = 0L,
+                    retry = { retries++ },
+                )
+            }
         }
-        compose.onNodeWithText("Server unreachable", substring = true)
+        compose
+            .onNodeWithText("Server unreachable", substring = true)
             .assertIsDisplayed()
             .assert(hasText("showing what was known at", substring = true))
             .performClick()
@@ -78,10 +84,15 @@ class UiTest {
 
     @Test
     fun a_tool_card_opens_to_its_result_and_loads_the_rest_on_request() {
-        val tool = Item.Tool("t", null, "Bash", "cargo test", ToolResult("first lines", error = false, truncated = true, full = "r1"))
-        compose.setContent {
-            PmTheme { ToolCard(tool) { ref -> Result.success("all of $ref") } }
-        }
+        val tool =
+            Item.Tool(
+                "t",
+                null,
+                "Bash",
+                "cargo test",
+                ToolResult("first lines", error = false, truncated = true, full = "r1"),
+            )
+        compose.setContent { PmTheme { ToolCard(tool) { ref -> Result.success("all of $ref") } } }
         compose.onNodeWithText("first lines").assertDoesNotExist()
         compose.onNodeWithText("Bash").performClick()
         compose.onNodeWithText("first lines").assertIsDisplayed()
@@ -89,4 +100,3 @@ class UiTest {
         compose.onNodeWithText("all of r1").assertIsDisplayed()
     }
 }
-

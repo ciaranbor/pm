@@ -1,14 +1,15 @@
 package dev.pm.app.data
 
+import kotlin.random.Random
+import kotlin.time.Duration.Companion.seconds
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.random.Random
-import kotlin.time.Duration.Companion.seconds
 
 class BackoffTest {
     private class Fixed(private val value: Double) : Random() {
         override fun nextBits(bitCount: Int) = 0
+
         override fun nextDouble() = value
     }
 

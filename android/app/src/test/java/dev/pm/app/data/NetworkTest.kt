@@ -25,17 +25,23 @@ class NetworkTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
 
-    private fun capabilities(validated: Boolean): NetworkCapabilities = ShadowNetworkCapabilities.newInstance().also {
-        if (validated) shadowOf(it).addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-    }
+    private fun capabilities(validated: Boolean): NetworkCapabilities =
+        ShadowNetworkCapabilities.newInstance().also {
+            if (validated) shadowOf(it).addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        }
 
-    /** The app's own repository registers a callback too; this is the one the test's collector added. */
+    /**
+     * The app's own repository registers a callback too; this is the one the test's collector
+     * added.
+     */
     private lateinit var callback: ConnectivityManager.NetworkCallback
 
     private fun TestScope.follow(): () -> Int {
         val before = shadowOf(connectivity).networkCallbacks.toSet()
         var changes = 0
-        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { context.defaultNetworkChanges().collect { changes++ } }
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            context.defaultNetworkChanges().collect { changes++ }
+        }
         callback = (shadowOf(connectivity).networkCallbacks - before).single()
         return {
             runCurrent()
@@ -43,7 +49,8 @@ class NetworkTest {
         }
     }
 
-    private fun validated(network: Network) = callback.onCapabilitiesChanged(network, capabilities(validated = true))
+    private fun validated(network: Network) =
+        callback.onCapabilitiesChanged(network, capabilities(validated = true))
 
     @Test
     fun emits_once_for_each_different_network_once_it_is_validated() = runTest {

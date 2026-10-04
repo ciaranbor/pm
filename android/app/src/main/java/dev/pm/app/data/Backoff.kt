@@ -5,8 +5,8 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * Waits between reconnects: doubling from `first` up to `max`, each with
- * up to half taken off at random so that retries don't fall in step.
+ * Waits between reconnects: doubling from `first` up to `max`, each with up to half taken off at
+ * random so that retries don't fall in step.
  */
 class Backoff(
     private val first: Duration = 2.seconds,

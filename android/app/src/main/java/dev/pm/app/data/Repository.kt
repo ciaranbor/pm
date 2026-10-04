@@ -22,7 +22,9 @@ import okhttp3.OkHttpClient
 /** How the app stands with `pm serve`. */
 sealed interface Connection {
     data object Unpaired : Connection
+
     data object Connecting : Connection
+
     data object Live : Connection
 
     /** Not reachable: a normal state off the tailnet, shown with the cached snapshot. */
@@ -33,10 +35,9 @@ sealed interface Connection {
 }
 
 /**
- * The snapshot and how fresh it is. While the app is in the foreground it
- * holds the event stream open, reconnecting with backoff, and at once when
- * `networkChanges` emits; each snapshot it receives is cached, so an
- * unreachable server shows the last one known.
+ * The snapshot and how fresh it is. While the app is in the foreground it holds the event stream
+ * open, reconnecting with backoff, and at once when `networkChanges` emits; each snapshot it
+ * receives is cached, so an unreachable server shows the last one known.
  */
 class Repository(
     private val store: Store,
@@ -63,16 +64,22 @@ class Repository(
     private val _readAt = MutableStateFlow<Long?>(null)
     val readAt: StateFlow<Long?> = _readAt.asStateFlow()
 
-    private val _connection = MutableStateFlow<Connection>(if (_pairing.value == null) Connection.Unpaired else Connection.Connecting)
+    private val _connection =
+        MutableStateFlow<Connection>(
+            if (_pairing.value == null) Connection.Unpaired else Connection.Connecting
+        )
     val connection: StateFlow<Connection> = _connection.asStateFlow()
 
     private var stream: Job? = null
 
     /** Reading the cached snapshot; a newer one, or a change of pairing, supersedes it. */
     private var cacheLoad: Job? = scope.launch {
-        val cached = withContext(disk) {
-            store.cachedSnapshot()?.let { (json, at) -> runCatching { Snapshot.parse(json) }.getOrNull()?.let { it to at } }
-        }
+        val cached =
+            withContext(disk) {
+                store.cachedSnapshot()?.let { (json, at) ->
+                    runCatching { Snapshot.parse(json) }.getOrNull()?.let { it to at }
+                }
+            }
         if (cached != null && _snapshot.value == null) {
             _snapshot.value = cached.first
             _readAt.value = cached.second
@@ -80,9 +87,7 @@ class Repository(
     }
 
     init {
-        scope.launch {
-            networkChanges.collect { if (stream != null) retry() }
-        }
+        scope.launch { networkChanges.collect { if (stream != null) retry() } }
     }
 
     /** Hold the event stream open until [stop]. */
@@ -127,7 +132,9 @@ class Repository(
     }
 
     private suspend fun accept(json: String) {
-        val snapshot = withContext(Dispatchers.Default) { runCatching { Snapshot.parse(json) }.getOrNull() } ?: return
+        val snapshot =
+            withContext(Dispatchers.Default) { runCatching { Snapshot.parse(json) }.getOrNull() }
+                ?: return
         cacheLoad?.cancel()
         _snapshot.value = snapshot
         _readAt.value = System.currentTimeMillis()
@@ -156,9 +163,7 @@ class Repository(
     fun unpair() {
         val client = _client.value
         forget()
-        scope.launch {
-            runCatching { client?.unregisterPush() }
-        }
+        scope.launch { runCatching { client?.unregisterPush() } }
         store.pairing = null
         _pairing.value = null
         _connection.value = Connection.Unpaired
