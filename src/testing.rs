@@ -426,6 +426,21 @@ impl OwnServer {
     pub fn name(&self) -> Option<&str> {
         Some(&self.0)
     }
+
+    pub fn tmux_stdout(&self, args: &[&str]) -> String {
+        tmux_stdout(self.name(), args)
+    }
+}
+
+/// `tmux args` on `server`, which must succeed, and its trimmed stdout.
+fn tmux_stdout(server: Option<&str>, args: &[&str]) -> String {
+    let output = std::process::Command::new("tmux")
+        .args(["-L", server.unwrap()])
+        .args(args)
+        .output()
+        .expect("run tmux");
+    assert!(output.status.success(), "tmux {args:?}");
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
 impl Drop for OwnServer {
@@ -744,13 +759,7 @@ impl TestServer {
     }
 
     pub fn tmux_stdout(&self, args: &[&str]) -> String {
-        let output = std::process::Command::new("tmux")
-            .args(["-L", self.name().unwrap()])
-            .args(args)
-            .output()
-            .expect("run tmux");
-        assert!(output.status.success(), "tmux {args:?}");
-        String::from_utf8_lossy(&output.stdout).trim().to_string()
+        tmux_stdout(self.name(), args)
     }
 
     /// Poll a window's agent pane's scrollback until `needle` appears (the shell echoes

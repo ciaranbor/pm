@@ -113,6 +113,29 @@ mod tests {
     }
 
     #[test]
+    fn a_client_browsing_a_doomed_session_in_the_tree_is_not_viewing_it() {
+        let server = OwnServer::start("clients-tree");
+        let dir = tempdir().unwrap();
+        sessions(&server, dir.path(), &["p/main", "p/api", "p/web"]);
+        let _on_api = ControlClient::attach(server.name(), "p/api");
+        let mut browser = ControlClient::attach(server.name(), "p/web");
+        // pm's tree order: by name, p/api two lines above p/web.
+        server.tmux_stdout(&["choose-tree", "-Zs", "-O", "name", "-t", "=p/web:"]);
+        for _ in 0..2 {
+            crate::tmux::send_key(server.name(), "p/web", "Up").unwrap();
+        }
+        browser.sync();
+
+        move_off(server.name(), &["p/api".into()], Some("p/main")).unwrap();
+
+        let mut seen = viewing(&server);
+        seen.sort();
+        assert_eq!(seen, ["p/main", "p/web"]);
+        let mode = server.tmux_stdout(&["display-message", "-p", "-t", "=p/web:", "#{pane_mode}"]);
+        assert_eq!(mode, "tree-mode");
+    }
+
+    #[test]
     fn a_client_without_a_surviving_preference_returns_to_its_last_session() {
         let server = OwnServer::start("clients-last");
         let dir = tempdir().unwrap();
