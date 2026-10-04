@@ -709,39 +709,57 @@ interactive hook-trust step per machine), and [opencode](#opencode-agents)
 
 `.pm/` holds a project's state (features, agents, messages, config,
 summaries, docs); the pm config dir holds the project registry, global
-config, notices, and your global workflows. Both can be git-backed.
+config, notices, and your global workflows. Both can be git-backed. Your
+code travels through each repo's own remote, and agents' conversations
+through a `pm harness export` tarball.
 
-On the old machine, once, each against a new, empty repo (`init --remote`
-resets local state to a remote that already has commits):
+`pm migrate check [--project <name>…]` says what a move would lose or fail
+on, with the command that fixes each item: unpushed branches and
+uncommitted work in any worktree, state repos without a remote or with
+changes not pushed, registry entries `pm restore` can't clone or pull from,
+agents still running, and the machine-local things to redo by hand (harness
+installs and logins, `pm serve` devices, your tmux config, your own global
+skills). It only reads, and exits non-zero while anything blocks.
+
+On the old machine, once, each against a new, empty repo:
 
 ```sh
 pm state init --global --remote <registry-url>   # the registry
-pm state init --remote <state-url>               # in each project
+pm state init --remote <state-url>               # in each project (or `pm state remote` for an existing .pm/ repo)
 pm state backfill                                # record repo and state URLs in the registry
 ```
 
 Then, at each move, from a shell outside pm's tmux sessions:
 
 ```sh
-pm close --all                  # stop agents so nothing is written after the push
-pm state push --global          # and pm state push in each project
-pm harness export --all -o pm-claude-code.tar.gz   # conversations live in the harness, not .pm/
+pm close --all                  # stop agents; they stay active, so the new machine resumes them
+pm state push                   # in each project, then:
+pm state push --global
+pm migrate check --project <name>…   # until it passes
+pm harness export --all --harness <h> -o pm-<h>.tar.gz   # once per harness your agents use
 ```
 
-On the new machine, with pm installed:
+On the new machine, with pm (`cargo install --path .`), git with access to
+your remotes, `gh`, tmux and your harnesses installed:
 
 ```sh
 pm state init --global --remote <registry-url>
-pm restore                      # clone repos, pull state, recreate worktrees and sessions
-pm harness import pm-claude-code.tar.gz   # after restore, so the worktrees exist
+pm restore --project <name>… --import pm-claude-code.tar.gz   # clone, pull state, recreate worktrees, import, then start agents
 ```
 
-`pm harness export|import` take `--harness` (default `claude-code`); run
-them once per harness your agents use, with a file per harness. An export
-holds the sessions of main and every feature worktree; an import skips a
-feature with no worktree here.
-`pm harness migrate --from <old path>` does the same for a project moved on
-one machine.
+`pm state init --global --remote` is safe to repeat: one that can't fetch
+leaves nothing behind, and with the registry already on that remote it
+pulls again. Where it can't fast-forward — this machine registered
+projects too — it takes the remote's registry and keeps the projects only
+this machine has; one the remote also has is set aside in the config dir's
+`registry-before-pull/`. `pm restore` without `--project` restores every registered
+project. It
+starts agents only after the `--import` tarballs are in, so each resumes its
+conversation; `pm harness import <tarball>` imports one later, into
+projects already restored, and infers the harness from the tarball. An
+import rewrites the recorded paths when the home directory differs. `pm
+harness migrate --from <old path>` does the same for a project moved on one
+machine.
 
 The registry repo syncs your global custom workflows but never the bundled
 ones or machine-local files (the harness probe cache, tmux lock files): its

@@ -1,53 +1,144 @@
-use crate::error::Result;
+//! `pm restore`: rebuild registered projects on a fresh machine from the
+//! global registry. Each project is cloned, its `.pm/` state pulled, and its
+//! active features' worktrees recreated before any agent starts; sessions
+//! from `--import` tarballs go in next, so that `pm open` resumes every
+//! agent's conversation instead of starting it before the conversation
+//! exists here.
+
+use std::path::{Path, PathBuf};
+
+use crate::error::{PmError, Result};
 use crate::git;
 use crate::state::feature::FeatureState;
 use crate::state::paths;
-use crate::state::project::ProjectEntry;
+use crate::state::project::{GlobalConfig, ProjectEntry};
 
-/// Result of restoring a single project.
-struct ProjectResult {
-    messages: Vec<String>,
+/// What to restore, and from where.
+pub struct RestoreParams<'a> {
+    pub projects_dir: &'a Path,
+    /// Registered names to restore; empty restores every one.
+    pub projects: &'a [String],
+    /// `pm harness export` tarballs to import before agents start.
+    pub imports: &'a [PathBuf],
+    pub home: &'a Path,
+    pub global: &'a GlobalConfig,
+    pub tmux_server: Option<&'a str>,
 }
 
-/// Restore all projects from the global registry on a fresh machine.
-///
-/// For each registry entry:
-/// 1. If the project dir doesn't exist and `repo_url` is set: `pm init --git <url> <path>`
-/// 2. If `state_remote` is set and .pm/ has no remote: set the remote and pull
-/// 3. Run `pm open` to recreate tmux sessions
-///
-/// The `tmux_server` parameter allows tests to use an isolated tmux server.
-pub fn restore(tmux_server: Option<&str>) -> Result<Vec<String>> {
+/// Restore projects from the global registry on a fresh machine.
+pub fn restore(
+    projects: &[String],
+    imports: &[PathBuf],
+    tmux_server: Option<&str>,
+) -> Result<Vec<String>> {
     let projects_dir = paths::global_projects_dir()?;
-    restore_with_dir(&projects_dir, tmux_server)
+    restore_with(&RestoreParams {
+        projects_dir: &projects_dir,
+        projects,
+        imports,
+        home: &paths::home_dir()?,
+        global: &GlobalConfig::load_or_default(),
+        tmux_server,
+    })
 }
 
 /// Testable inner function that takes an explicit projects directory.
-pub fn restore_with_dir(
-    projects_dir: &std::path::Path,
-    tmux_server: Option<&str>,
-) -> Result<Vec<String>> {
-    let projects = ProjectEntry::list(projects_dir)?;
+#[cfg(test)]
+fn restore_with_dir(projects_dir: &Path, tmux_server: Option<&str>) -> Result<Vec<String>> {
+    restore_with(&RestoreParams {
+        projects_dir,
+        projects: &[],
+        imports: &[],
+        home: &paths::home_dir()?,
+        global: &GlobalConfig::default(),
+        tmux_server,
+    })
+}
+
+pub fn restore_with(params: &RestoreParams<'_>) -> Result<Vec<String>> {
+    let mut projects = ProjectEntry::list(params.projects_dir)?;
+    if !params.projects.is_empty() {
+        let unknown: Vec<&str> = params
+            .projects
+            .iter()
+            .filter(|name| !projects.iter().any(|(n, _)| n == *name))
+            .map(String::as_str)
+            .collect();
+        if !unknown.is_empty() {
+            return Err(PmError::ProjectNotFound(unknown.join(", ")));
+        }
+        projects.retain(|(name, _)| params.projects.contains(name));
+    }
+    for tarball in params.imports {
+        if !tarball.is_file() {
+            return Err(PmError::ExportImport(format!(
+                "tarball not found: {}",
+                tarball.display()
+            )));
+        }
+    }
 
     if projects.is_empty() {
         return Ok(vec!["No projects in registry".to_string()]);
     }
 
     let mut all_messages = Vec::new();
-
+    let mut restored = Vec::new();
     for (name, entry) in &projects {
-        let result = restore_project(name, entry, projects_dir, tmux_server);
-        match result {
+        match restore_project(name, entry, params.projects_dir, params.tmux_server) {
             Ok(pr) => {
                 all_messages.extend(pr.messages);
+                if pr.ready {
+                    restored.push((name, entry.root_path()));
+                }
             }
-            Err(e) => {
-                all_messages.push(format!("{name}: error: {e}"));
-            }
+            Err(e) => all_messages.push(format!("{name}: error: {e}")),
         }
     }
 
+    for tarball in params.imports {
+        match super::harness_import::import(
+            None,
+            tarball,
+            params.projects,
+            params.projects_dir,
+            params.home,
+            &params.global.harness,
+        ) {
+            Ok(messages) => all_messages.extend(messages),
+            Err(e) => all_messages.push(format!("{}: import failed: {e}", tarball.display())),
+        }
+    }
+
+    for (name, root) in &restored {
+        all_messages.push(open_project(
+            name,
+            root,
+            params.projects_dir,
+            params.tmux_server,
+        ));
+    }
+
     Ok(all_messages)
+}
+
+/// Result of restoring a single project's repo, state and worktrees.
+struct ProjectResult {
+    messages: Vec<String>,
+    /// Whether the project is on disk, so its sessions can be opened.
+    ready: bool,
+}
+
+/// Recreate a project's tmux sessions and respawn its active agents.
+fn open_project(name: &str, root: &Path, projects_dir: &Path, tmux_server: Option<&str>) -> String {
+    match super::open::open(root, projects_dir, tmux_server) {
+        Ok(result) if result.sessions_restored > 0 || result.agents_respawned > 0 => format!(
+            "{name}: restored {} sessions, respawned {} agents",
+            result.sessions_restored, result.agents_respawned
+        ),
+        Ok(_) => format!("{name}: sessions opened"),
+        Err(e) => format!("{name}: open failed: {e}"),
+    }
 }
 
 fn restore_project(
@@ -84,7 +175,10 @@ fn restore_project(
             messages.push(format!(
                 "{name}: skipped (directory does not exist and no repo_url)"
             ));
-            return Ok(ProjectResult { messages });
+            return Ok(ProjectResult {
+                messages,
+                ready: false,
+            });
         }
     } else {
         messages.push(format!("{name}: directory exists"));
@@ -166,6 +260,10 @@ fn restore_project(
     let features_dir = paths::features_dir(&root);
     let main_worktree = paths::main_worktree(&root);
     if main_worktree.exists() {
+        // Harness projections are not tracked, so a clone has none.
+        if let Err(e) = super::skills::project_assets(&root, false) {
+            messages.push(format!("{name}: warning: could not project assets: {e}"));
+        }
         match FeatureState::list(&features_dir) {
             Ok(features) => {
                 for (feat_name, feat_state) in &features {
@@ -185,6 +283,11 @@ fn restore_project(
                             messages.push(format!(
                                 "{name}: recreated worktree for feature '{feat_name}'"
                             ));
+                            if let Err(e) = super::seed::seed_feature_assets(&root, &wt_path) {
+                                messages.push(format!(
+                                    "{name}: warning: could not seed '{feat_name}': {e}"
+                                ));
+                            }
                         }
                         Err(e) => {
                             messages.push(format!(
@@ -200,24 +303,10 @@ fn restore_project(
         }
     }
 
-    // Step 3: Open the project (recreate tmux sessions)
-    match super::open::open(&root, projects_dir, tmux_server) {
-        Ok(result) => {
-            if result.sessions_restored > 0 || result.agents_respawned > 0 {
-                messages.push(format!(
-                    "{name}: restored {} sessions, respawned {} agents",
-                    result.sessions_restored, result.agents_respawned
-                ));
-            } else {
-                messages.push(format!("{name}: sessions opened"));
-            }
-        }
-        Err(e) => {
-            messages.push(format!("{name}: open failed: {e}"));
-        }
-    }
-
-    Ok(ProjectResult { messages })
+    Ok(ProjectResult {
+        messages,
+        ready: true,
+    })
 }
 
 #[cfg(test)]
@@ -483,6 +572,11 @@ mod tests {
         super::super::init::init(&project_path, &projects_dir, None, server.name()).unwrap();
 
         let main_worktree = paths::main_worktree(&project_path);
+        let skill = main_worktree.join(".agents/skills/demo");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(skill.join("SKILL.md"), "---\nname: demo\n---\n").unwrap();
+        git::add_all(&main_worktree).unwrap();
+        git::commit_with_message(&main_worktree, "demo skill").unwrap();
 
         // Create a feature branch and worktree
         git::create_branch(&main_worktree, "feat-login").unwrap();
@@ -522,8 +616,45 @@ mod tests {
                 .any(|m| m.contains("recreated worktree for feature 'login'")),
             "expected worktree recreation message but got: {msgs:?}"
         );
-        // Worktree directory should exist again
+        // Worktree directory should exist again, with the harness
+        // projection a new feature gets.
         assert!(wt_path.exists());
+        assert!(wt_path.join(".claude/skills/demo/SKILL.md").exists());
+    }
+
+    #[test]
+    fn restore_only_the_named_projects() {
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("projects");
+        let server = TestServer::new();
+        for name in ["wanted", "other"] {
+            ProjectEntry {
+                root: dir.path().join(name).to_string_lossy().to_string(),
+                main_branch: "main".to_string(),
+                repo_url: None,
+                state_remote: None,
+            }
+            .save(&projects_dir, name)
+            .unwrap();
+        }
+        let global = GlobalConfig::default();
+        let restore = |names: &[&str]| {
+            let projects: Vec<String> = names.iter().map(|n| n.to_string()).collect();
+            restore_with(&RestoreParams {
+                projects_dir: &projects_dir,
+                projects: &projects,
+                imports: &[],
+                home: dir.path(),
+                global: &global,
+                tmux_server: server.name(),
+            })
+        };
+
+        assert_eq!(
+            restore(&["wanted"]).unwrap(),
+            ["wanted: skipped (directory does not exist and no repo_url)"]
+        );
+        assert!(restore(&["nope"]).is_err());
     }
 
     #[test]

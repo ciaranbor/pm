@@ -138,6 +138,36 @@ impl Harness {
         }
     }
 
+    /// The installed binary's `--version` answer, trimmed; `None` when it
+    /// can't be run.
+    pub fn installed_version(self, config: &HarnessConfig, probe: Probe) -> Option<String> {
+        match self {
+            Harness::ClaudeCode => claude_code::installed_version(probe),
+            Harness::Codex => codex::installed_version(probe),
+            Harness::OpenCode => opencode::installed_version(&config.opencode, probe).ok(),
+        }
+    }
+
+    /// The oldest release pm runs agents on; `None` when pm needs none in
+    /// particular.
+    pub fn min_version(self) -> Option<String> {
+        match self {
+            Harness::ClaudeCode => None,
+            Harness::Codex => Some(codex::min_version_string()),
+            Harness::OpenCode => Some(opencode::min_version_string()),
+        }
+    }
+
+    /// The manual step that gives a new machine this harness's credentials,
+    /// which no pm export carries.
+    pub fn credentials_step(self, config: &HarnessConfig) -> String {
+        match self {
+            Harness::ClaudeCode => claude_code::CREDENTIALS_STEP.to_string(),
+            Harness::Codex => codex::CREDENTIALS_STEP.to_string(),
+            Harness::OpenCode => opencode::credentials_step(&config.opencode),
+        }
+    }
+
     /// Why no agent can run on this harness as installed: its binary can't
     /// be run, or is older than the release pm's command line or never-idle
     /// loop needs. `None` when it can.

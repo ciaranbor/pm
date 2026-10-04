@@ -31,12 +31,12 @@ fn recorded_harness(info: &serde_json::Value) -> &str {
         .unwrap_or(Harness::ClaudeCode.as_str())
 }
 
-/// The root of whichever harness's export was extracted into `staging`.
-fn find_export(staging: &Path) -> Option<PathBuf> {
+/// Whichever harness's export was extracted into `staging`, and its root.
+fn find_export(staging: &Path) -> Option<(Harness, PathBuf)> {
     Harness::SUPPORTED
         .iter()
-        .map(|harness| staging.join(export_root(*harness)))
-        .find(|root| root.join(MANIFEST).exists())
+        .map(|harness| (*harness, staging.join(export_root(*harness))))
+        .find(|(_, root)| root.join(MANIFEST).exists())
 }
 
 /// Refuse an extracted tree holding anything but directories and files of
@@ -64,13 +64,16 @@ fn is_single_name(value: &str) -> bool {
         && components.next().is_none()
 }
 
-/// Import `harness`'s sessions from `tarball` into the store reached from
-/// `home`. `global` is the global tier's `[harness.*]` settings.
+/// Import the sessions of `tarball` into the store reached from `home`:
+/// those of the harness that exported it, which must be `harness` when one
+/// is given, for the registered `projects` (every one when empty). `global`
+/// is the global tier's `[harness.*]` settings.
 ///
 /// Returns human-readable status messages.
 pub fn import(
-    harness: Harness,
+    harness: Option<Harness>,
     tarball: &Path,
+    projects: &[String],
     projects_dir: &Path,
     home: &Path,
     global: &HarnessConfig,
@@ -97,9 +100,10 @@ pub fn import(
 
     refuse_links(staging.path(), staging.path())?;
 
-    let export_root = find_export(staging.path()).ok_or_else(|| {
+    let (exported, export_root) = find_export(staging.path()).ok_or_else(|| {
         PmError::ExportImport("invalid export: manifest.json not found".to_string())
     })?;
+    let harness = harness.unwrap_or(exported);
     let manifest: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(export_root.join(MANIFEST))?)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
@@ -121,18 +125,25 @@ pub fn import(
 
     // Every entry is checked before anything is imported, so a refused
     // export leaves the store untouched.
-    let projects = manifest
+    let exported = manifest
         .iter()
         .map(|(name, info)| Ok((name.as_str(), worktrees(&export_root, name, info)?)))
         .collect::<Result<Vec<_>>>()?;
 
     let mut messages = Vec::new();
-    for (name, worktrees) in projects {
+    for (name, worktrees) in exported {
+        if !projects.is_empty() && !projects.iter().any(|p| p == name) {
+            continue;
+        }
         let Ok(local) = ProjectEntry::load(projects_dir, name) else {
             messages.push(format!("Skipping '{name}': not registered locally"));
             continue;
         };
         let root = local.root_path();
+        if !paths::main_worktree(&root).is_dir() {
+            messages.push(format!("Skipping '{name}': not restored here"));
+            continue;
+        }
         let config = harness_config_in(Some(&root), global);
         let store = SessionStore {
             home,
@@ -259,8 +270,9 @@ mod tests {
         home: &Path,
     ) -> Result<Vec<String>> {
         import(
-            harness,
+            Some(harness),
             tarball,
+            &[],
             projects_dir,
             home,
             &HarnessConfig::default(),
@@ -815,9 +827,11 @@ mod tests {
         let registry = tempdir().unwrap();
         let local_opencode = tempdir().unwrap();
         let local_main = setup_project(project.path(), "myapp", registry.path());
+        // No harness given: the tarball says it holds opencode sessions.
         let msgs = import(
-            Harness::OpenCode,
+            None,
             &tarball,
+            &[],
             registry.path(),
             project.path(),
             &opencode(fake_opencode(local_opencode.path(), "", 0)),

@@ -10,7 +10,7 @@ use pm::commands::harness_export::ExportParams;
 use pm::commands::harness_migrate::MigrateParams;
 use pm::commands::tmux_push::AgentWindow;
 use pm::error::PmError;
-use pm::harness::Harness;
+use pm::harness::{Harness, Probe};
 use pm::state::paths;
 use pm::state::project::GlobalConfig;
 use pm::tmux;
@@ -978,12 +978,31 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             }
             Ok(())
         }
-        Commands::Restore => {
-            let messages = commands::restore::restore(server)?;
+        Commands::Restore { projects, imports } => {
+            let messages = commands::restore::restore(&projects, &imports, server)?;
             for msg in messages {
                 println!("{msg}");
             }
             push();
+            Ok(())
+        }
+        Commands::Migrate(MigrateCommands::Check { projects }) => {
+            let (config_dir, home, projects_dir) = commands::migrate_check::resolve()?;
+            let report = commands::migrate_check::check(&commands::migrate_check::CheckParams {
+                projects_dir: &projects_dir,
+                config_dir: &config_dir,
+                home: &home,
+                projects: &projects,
+                tmux_server: server,
+                probe: Probe::Fresh,
+                global_harness: &GlobalConfig::load_or_default().harness,
+            })?;
+            for line in report.lines() {
+                println!("{line}");
+            }
+            if report.blockers() > 0 {
+                std::process::exit(1);
+            }
             Ok(())
         }
         Commands::SelfUpdate => {
@@ -1367,6 +1386,7 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
             let messages = commands::harness_import::import(
                 harness,
                 &tarball,
+                &[],
                 &paths::global_projects_dir()?,
                 &paths::home_dir()?,
                 &GlobalConfig::load_or_default().harness,

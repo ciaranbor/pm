@@ -260,13 +260,9 @@ fn env_references(text: &str) -> Vec<&str> {
         .collect()
 }
 
-/// One remark per provider whose key cannot be found by `is_set`: no
-/// variable of its `env` list (any one of them serves), or one an
-/// `{env:NAME}` names.
-pub(super) fn unset_key_notes<'a>(
-    providers: impl IntoIterator<Item = (&'a String, &'a toml::Table)>,
-    is_set: impl Fn(&str) -> bool,
-) -> Vec<String> {
+/// The variables a provider entry takes its key from: its `env` list, then
+/// every `{env:NAME}` in its values.
+fn entry_key_variables(entry: &toml::Table) -> (Vec<&str>, Vec<&str>) {
     fn references<'a>(value: &'a toml::Value, out: &mut Vec<&'a str>) {
         match value {
             toml::Value::String(text) => out.extend(env_references(text)),
@@ -276,21 +272,46 @@ pub(super) fn unset_key_notes<'a>(
         }
     }
 
+    let listed: Vec<&str> = entry
+        .get("env")
+        .and_then(toml::Value::as_array)
+        .map(|names| names.iter().filter_map(toml::Value::as_str).collect())
+        .unwrap_or_default();
+    let mut referenced = Vec::new();
+    entry
+        .values()
+        .for_each(|value| references(value, &mut referenced));
+    (listed, referenced)
+}
+
+/// Every variable any configured provider takes its key from, sorted.
+pub(super) fn key_variables(providers: &Providers) -> Vec<String> {
+    let mut names: Vec<String> = providers
+        .values()
+        .flat_map(|entry| {
+            let (listed, referenced) = entry_key_variables(entry);
+            listed.into_iter().chain(referenced).map(str::to_string)
+        })
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+/// One remark per provider whose key cannot be found by `is_set`: no
+/// variable of its `env` list (any one of them serves), or one an
+/// `{env:NAME}` names.
+pub(super) fn unset_key_notes<'a>(
+    providers: impl IntoIterator<Item = (&'a String, &'a toml::Table)>,
+    is_set: impl Fn(&str) -> bool,
+) -> Vec<String> {
     let mut notes = Vec::new();
     for (id, entry) in providers {
-        let listed: Vec<&str> = entry
-            .get("env")
-            .and_then(toml::Value::as_array)
-            .map(|names| names.iter().filter_map(toml::Value::as_str).collect())
-            .unwrap_or_default();
+        let (listed, referenced) = entry_key_variables(entry);
         let mut unset = Vec::new();
         if !listed.iter().any(|name| is_set(name)) {
             unset.extend(listed);
         }
-        let mut referenced = Vec::new();
-        entry
-            .values()
-            .for_each(|value| references(value, &mut referenced));
         unset.extend(referenced.into_iter().filter(|name| !is_set(name)));
         unset.sort_unstable();
         unset.dedup();

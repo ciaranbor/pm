@@ -346,6 +346,10 @@ fn version_problem(found: Option<&str>) -> Option<String> {
     }
 }
 
+/// The manual step that gives a new machine's codex its credentials,
+/// which live in `$CODEX_HOME/auth.json`.
+pub(super) const CREDENTIALS_STEP: &str = "log in to codex (`codex login`)";
+
 pub(super) fn min_version_string() -> String {
     let (a, b, c) = MIN_VERSION;
     format!("{a}.{b}.{c}")

@@ -6,7 +6,7 @@
 //! between machines. Two kinds of file share the dir but are not state to
 //! sync: machine-local files (the harness probe cache, keyed by binary path
 //! and mtime; the per-tmux-server lock files; `pm serve`'s paired devices
-//! and log) and the bundled workflows, which `pm upgrade` rewrites every
+//! and log; registry entries a pull set aside) and the bundled workflows, which `pm upgrade` rewrites every
 //! release — committing that churn would make every machine's registry
 //! dirty after each upgrade. So `.gitignore`
 //! carries a marker-delimited block naming both, regenerated wherever
@@ -45,6 +45,7 @@ const MACHINE_LOCAL: &[&str] = &[
     probe::CACHE_DIR_NAME,
     tmux_lock::DIR_NAME,
     devices::DIR_NAME,
+    super::state_cmd::SET_ASIDE_DIR_NAME,
 ];
 
 const BLOCK_START: &str = "# >>> managed by pm — regenerated, edit outside this block >>>";

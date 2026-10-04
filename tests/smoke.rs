@@ -32,6 +32,9 @@ struct Record {
     argv: Vec<String>,
     cwd: String,
     agent_name: String,
+    /// For a claude `--resume`: `found` when the session was in the store
+    /// as the shim started, else `missing`.
+    resumed: Option<String>,
 }
 
 /// Result of a command run inside a tmux window. `exit: None, alive: false`
@@ -403,10 +406,15 @@ fn parse_record(text: &str) -> Option<Record> {
     }
     let cwd = lines.next()?.strip_prefix("cwd=")?.to_string();
     let agent_name = lines.next()?.strip_prefix("PM_AGENT_NAME=")?.to_string();
+    let resumed = lines
+        .next()
+        .and_then(|l| l.strip_prefix("resumed="))
+        .map(str::to_string);
     Some(Record {
         argv,
         cwd,
         agent_name,
+        resumed,
     })
 }
 
@@ -1174,4 +1182,165 @@ fn changes_made_from_an_agents_pane_reach_tmux_without_a_poll() {
     until("the push from feat status", &|| {
         session("@pm_reason") == "which DB?"
     });
+}
+
+/// Catches: the move to a new machine end to end — `pm migrate check`
+/// gating on unpushed work, `pm state init --global --remote` on a machine
+/// with no config dir, after a mistyped remote, and again where `pm init`
+/// already registered a project and the registry was already pulled, and
+/// `pm restore --import`
+/// putting a conversation in place before it respawns the agent that
+/// resumes it.
+#[test]
+#[ignore]
+fn a_project_moves_to_a_fresh_machine_and_its_agent_resumes() {
+    let s = Smoke::new();
+    let login = s.init_with_feature();
+    let main = s.proj().join("main");
+    s.pm(&login)
+        .args(["agent", "spawn", "reviewer"])
+        .assert()
+        .success();
+    s.argv_records("reviewer", 1);
+
+    // The reviewer has a conversation, recorded under its resolved cwd.
+    let agents = s.proj().join(".pm/agents/login.toml");
+    let text = std::fs::read_to_string(&agents).unwrap();
+    std::fs::write(
+        &agents,
+        text.replace("session_id = \"\"", "session_id = \"sess-1\""),
+    )
+    .unwrap();
+    let resolved = login.canonicalize().unwrap();
+    let key: String = resolved
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let store = s.home().join(".claude/projects").join(key);
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::write(
+        store.join("sess-1.jsonl"),
+        format!("{{\"cwd\":\"{}\"}}\n", resolved.display()),
+    )
+    .unwrap();
+
+    let remotes = s.home().join("remotes");
+    let remote = |name: &str| {
+        let path = remotes.join(name);
+        s.git(s.home(), &["init", "-q", "--bare", &path.to_string_lossy()]);
+        path.to_string_lossy().to_string()
+    };
+    let (repo, state, registry) = (
+        remote("proj.git"),
+        remote("state.git"),
+        remote("registry.git"),
+    );
+    s.git(&main, &["remote", "add", "origin", &repo]);
+    s.git(&main, &["push", "-q", "-u", "origin", "main"]);
+
+    s.pm(&main)
+        .args(["state", "remote", &state])
+        .assert()
+        .success();
+    s.pm(&main).args(["state", "push"]).assert().success();
+    s.pm(s.home())
+        .args(["state", "init", "--global", "--remote", &registry])
+        .assert()
+        .success();
+    s.pm(s.home())
+        .args(["state", "backfill"])
+        .assert()
+        .success();
+    s.pm(s.home())
+        .args(["state", "push", "--global"])
+        .assert()
+        .success();
+    s.pm(s.home()).args(["close", "--all"]).assert().success();
+
+    s.pm(s.home())
+        .args(["migrate", "check", "--project", "proj"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("branch login is not on origin"));
+    s.git(&main, &["push", "-q", "-u", "origin", "login"]);
+    s.pm(s.home())
+        .args(["migrate", "check", "--project", "proj"])
+        .assert()
+        .success();
+
+    let tarball = s.home().join("pm-claude-code.tar.gz");
+    s.pm(s.home())
+        .args([
+            "harness",
+            "export",
+            "--all",
+            "-o",
+            &tarball.to_string_lossy(),
+        ])
+        .assert()
+        .success();
+
+    // The new machine: nothing of pm's, nor the conversation, at the same
+    // paths.
+    std::fs::remove_dir_all(s.proj()).unwrap();
+    std::fs::remove_dir_all(s.projects_dir().parent().unwrap()).unwrap();
+    std::fs::remove_dir_all(s.home().join(".claude/projects")).unwrap();
+
+    // Set up before the move: a project of its own, and the registry
+    // pulled once already, so pulling it again must not fail.
+    s.pm(s.home())
+        .args([
+            "init",
+            "--no-main",
+            &s.home().join("other").to_string_lossy(),
+        ])
+        .assert()
+        .success();
+    // A mistyped URL first: it fails and leaves nothing a retry trips on.
+    let typo = remotes.join("registry-typo.git");
+    s.pm(s.home())
+        .args([
+            "state",
+            "init",
+            "--global",
+            "--remote",
+            &typo.to_string_lossy(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("nothing was changed"));
+    for _ in 0..2 {
+        s.pm(s.home())
+            .args(["state", "init", "--global", "--remote", &registry])
+            .assert()
+            .success();
+    }
+    s.pm(s.home())
+        .args([
+            "restore",
+            "--project",
+            "proj",
+            "--import",
+            &tarball.to_string_lossy(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "recreated worktree for feature 'login'",
+        ))
+        .stdout(predicate::str::contains("Imported 'proj/login'"));
+
+    let records = s.argv_records("reviewer", 2);
+    let resumed = records.last().unwrap();
+    assert!(
+        resumed.argv.windows(2).any(|w| w == ["--resume", "sess-1"]),
+        "{resumed:?}"
+    );
+    assert_eq!(resumed.resumed.as_deref(), Some("found"), "{resumed:?}");
+    s.pm(s.home())
+        .arg("list")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("other"));
 }
