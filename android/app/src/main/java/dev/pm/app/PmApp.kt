@@ -11,7 +11,7 @@ class PmApp : Application() {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
-        Notifications.createChannel(this)
+        Notifications.createChannels(this)
     }
 }
 

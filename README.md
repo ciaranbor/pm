@@ -373,7 +373,10 @@ The app is read-only: projects, then a project's `main` and features, then
 a scope's agents, each marked with the glyphs and colours of the tmux
 badges ([tmux integration](#tmux-integration)); an agent's
 conversation, from its harness's transcript, and its screen; a feature's
-summary. A tapped notification opens the scope, or the agent it names.
+summary. Notifications come on a channel per kind (needs input, ready for
+review, agent died), each tuned in Android's settings; a tapped one opens
+the scope, or the agent it names, and opening the app withdraws those a
+snapshot shows are over.
 
 ## Concepts
 

@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mikepenz.markdown.m3.Markdown
 import dev.pm.app.data.Connection
@@ -119,6 +120,11 @@ fun SettingsScreen(
     val context = LocalContext.current
     var distributor by remember { mutableStateOf(Notifications.current(context)) }
     var problem by remember { mutableStateOf<String?>(null) }
+    var allowed by remember { mutableStateOf(Notifications.allowed(context)) }
+    LifecycleResumeEffect(context) {
+        allowed = Notifications.allowed(context)
+        onPauseOrDispose {}
+    }
     var choosing by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(choosing) {
         val chosen = choosing ?: return@LaunchedEffect
@@ -163,11 +169,15 @@ fun SettingsScreen(
                 "Install ntfy (set to use ntfy.sh) to receive them without Google; otherwise Google's push service is used.",
             style = MaterialTheme.typography.bodySmall,
         )
-        if (!Notifications.allowed(context))
+        if (!allowed) {
             Text(
                 "Notifications are off for pm in Android's settings.",
                 color = MaterialTheme.colorScheme.error,
             )
+            OutlinedButton(onClick = { context.startActivity(Notifications.settings(context)) }) {
+                Text("Open notification settings")
+            }
+        }
         val all = Notifications.distributors(context)
         if (all.isEmpty()) Text("No distributor is available on this phone.")
         all.forEach { name ->

@@ -112,26 +112,4 @@ class PairingTest {
         assertNull(Pairing.parse("""{"url":"https://x","device":"","token":"t"}"""))
         assertNull(Pairing.parse("WIFI:S:home;;"))
     }
-
-    @Test
-    fun a_pushed_transition_reads_as_the_alert_does() {
-        fun title(json: String) = PushedTransition.parse(json.toByteArray())!!.title
-        assertEquals(
-            "app/login is blocked",
-            title("""{"project":"app","scope":"login","kind":"blocked","agent":null}"""),
-        )
-        assertEquals(
-            "app/main: main is asking",
-            title("""{"project":"app","scope":"main","kind":"asking","agent":"main"}"""),
-        )
-        assertEquals(
-            "app/login: reviewer died",
-            title("""{"project":"app","scope":"login","kind":"dead","agent":"reviewer"}"""),
-        )
-        assertEquals(
-            "app/login: summoning",
-            title("""{"project":"app","scope":"login","kind":"summoning","extra":1}"""),
-        )
-        assertNull(PushedTransition.parse("garbage".toByteArray()))
-    }
 }

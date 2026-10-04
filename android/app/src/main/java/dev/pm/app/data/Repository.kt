@@ -9,10 +9,14 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
@@ -59,6 +63,12 @@ class Repository(
 
     private val _snapshot = MutableStateFlow<Snapshot?>(null)
     val snapshot: StateFlow<Snapshot?> = _snapshot.asStateFlow()
+
+    private val _received =
+        MutableSharedFlow<Snapshot>(extraBufferCapacity = 1, onBufferOverflow = DROP_OLDEST)
+
+    /** Each snapshot read from the server as it arrives; never the cached one. */
+    val received: SharedFlow<Snapshot> = _received.asSharedFlow()
 
     /** When the shown snapshot was read, epoch ms. */
     private val _readAt = MutableStateFlow<Long?>(null)
@@ -138,6 +148,7 @@ class Repository(
         cacheLoad?.cancel()
         _snapshot.value = snapshot
         _readAt.value = System.currentTimeMillis()
+        _received.tryEmit(snapshot)
         scope.launch(disk) { store.cacheSnapshot(json) }
     }
 
