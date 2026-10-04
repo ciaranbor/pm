@@ -2,7 +2,7 @@ package dev.pm.app.push
 
 import android.util.Log
 import dev.pm.app.model.PushedTransition
-import dev.pm.app.repository
+import dev.pm.app.container
 import org.unifiedpush.android.connector.FailedReason
 import org.unifiedpush.android.connector.data.PushEndpoint
 import org.unifiedpush.android.connector.data.PushMessage
@@ -15,7 +15,7 @@ class PushService : UnifiedPushService() {
             Log.w(TAG, "the distributor gave no Web Push keys; pm serve only sends encrypted pushes")
             return
         }
-        repository.subscribed(endpoint.url, keys.pubKey, keys.auth)
+        container.repository.subscribed(endpoint.url, keys.pubKey, keys.auth)
     }
 
     override fun onMessage(message: PushMessage, instance: String) {
@@ -32,7 +32,7 @@ class PushService : UnifiedPushService() {
     }
 
     override fun onUnregistered(instance: String) {
-        repository.unsubscribed()
+        container.repository.unsubscribed()
     }
 
     private companion object {

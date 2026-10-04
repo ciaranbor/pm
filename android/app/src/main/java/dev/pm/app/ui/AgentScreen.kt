@@ -129,7 +129,7 @@ private fun ItemRow(model: AgentModel, item: Item) {
         }
         is Item.Assistant -> SelectionContainer { Markdown(item.text) }
         is Item.Thinking -> Collapsible(title = "thinking", body = item.text, italic = true)
-        is Item.Tool -> ToolCard(model, item)
+        is Item.Tool -> ToolCard(item, model::fullResult)
         is Item.Continuation -> SystemRow("pm: ${item.text.lineSequence().firstOrNull().orEmpty()}")
         is Item.Compaction -> SystemRow("context compacted")
         is Item.Event -> SystemRow(item.text)
@@ -166,7 +166,7 @@ private fun Collapsible(title: String, body: String, italic: Boolean = false) {
 
 /** A tool call, collapsed to its name and input; open, it shows the result. */
 @Composable
-private fun ToolCard(model: AgentModel, tool: Item.Tool) {
+internal fun ToolCard(tool: Item.Tool, fullResult: suspend (ref: String) -> Result<String>) {
     var open by rememberSaveable(tool.id) { mutableStateOf(false) }
     var full by remember(tool.id) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -204,7 +204,7 @@ private fun ToolCard(model: AgentModel, tool: Item.Tool) {
                 val ref = result.full
                 if (result.truncated && ref != null && full == null) {
                     TextButton(onClick = {
-                        scope.launch { full = model.fullResult(ref).getOrElse { "Couldn't load it: ${it.message}" } }
+                        scope.launch { full = fullResult(ref).getOrElse { "Couldn't load it: ${it.message}" } }
                     }) { Text("Show all") }
                 }
             }

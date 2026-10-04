@@ -1,19 +1,18 @@
 package dev.pm.app
 
 import android.app.Application
-import dev.pm.app.data.Repository
-import dev.pm.app.data.Store
+import android.content.Context
 import dev.pm.app.push.Notifications
 
 class PmApp : Application() {
-    lateinit var repository: Repository
+    lateinit var container: AppContainer
         private set
 
     override fun onCreate() {
         super.onCreate()
-        repository = Repository(Store(this))
+        container = AppContainer(this)
         Notifications.createChannel(this)
     }
 }
 
-val android.content.Context.repository: Repository get() = (applicationContext as PmApp).repository
+val Context.container: AppContainer get() = (applicationContext as PmApp).container

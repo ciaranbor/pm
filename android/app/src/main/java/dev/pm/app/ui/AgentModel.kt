@@ -7,11 +7,14 @@ import dev.pm.app.api.PmError
 import dev.pm.app.model.Conversation
 import dev.pm.app.model.TranscriptEvent
 import dev.pm.app.model.Transcripts
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlin.time.Duration.Companion.seconds
@@ -28,13 +31,15 @@ sealed interface ChatState {
 
 /**
  * One agent's conversation, kept current while its view is open: the
- * latest page, then a watched event stream from where that page ended.
+ * latest page, then a watched event stream from where that page ended,
+ * reopened at once when `networkChanges` emits.
  */
 class AgentModel(
     private val client: PmClient,
     private val project: String,
     private val scope: String,
     private val agent: String,
+    private val networkChanges: Flow<Unit> = emptyFlow(),
 ) : ViewModel() {
     private val _chat = MutableStateFlow<ChatState>(ChatState.Loading)
     val chat: StateFlow<ChatState> = _chat.asStateFlow()
@@ -43,6 +48,7 @@ class AgentModel(
     val screen: StateFlow<Result<String>?> = _screen.asStateFlow()
 
     private var watching: Job? = null
+    private var reconnecting: Job? = null
     private var screenPolling: Job? = null
     private var screenShown = false
     private var started = false
@@ -54,33 +60,44 @@ class AgentModel(
     fun start() {
         started = true
         if (screenShown && screenPolling?.isActive != true) pollScreen()
-        if (watching?.isActive == true) return
-        watching = viewModelScope.launch {
-            while (true) {
-                try {
-                    val held = conversation
-                    var unstarted = false
-                    if (held == null || held.after == null) {
-                        val page = try {
-                            client.transcript(project, scope, agent)
-                        } catch (e: PmError.NoConversation) {
-                            null
-                        }
-                        unstarted = page == null
-                        val conversation = if (page == null) Conversation()
-                        else Conversation().replacedBy(Transcripts.items(page.items), page.before, page.after)
-                        _chat.value = ChatState.Shown(conversation, live = false)
-                    }
-                    watch(unstarted)
-                } catch (e: PmError.Unsupported) {
-                    _chat.value = ChatState.Unsupported
-                    return@launch
-                } catch (e: PmError) {
-                    val shown = _chat.value
-                    _chat.value = if (shown is ChatState.Shown) shown.copy(live = false) else ChatState.Failed(e.message ?: "failed")
+        if (watching?.isActive != true) watching = viewModelScope.launch { follow() }
+        if (reconnecting?.isActive != true) {
+            reconnecting = viewModelScope.launch {
+                networkChanges.collect {
+                    watching?.cancel()
+                    watching = viewModelScope.launch { follow() }
                 }
-                delay(3.seconds)
             }
+        }
+    }
+
+    private suspend fun follow() {
+        while (true) {
+            try {
+                val held = conversation
+                var unstarted = false
+                if (held == null || held.after == null) {
+                    val page = try {
+                        client.transcript(project, scope, agent)
+                    } catch (e: PmError.NoConversation) {
+                        null
+                    }
+                    unstarted = page == null
+                    val conversation = if (page == null) Conversation()
+                    else Conversation().replacedBy(Transcripts.items(page.items), page.before, page.after)
+                    _chat.value = ChatState.Shown(conversation, live = false)
+                }
+                watch(unstarted)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: PmError.Unsupported) {
+                _chat.value = ChatState.Unsupported
+                return
+            } catch (e: Exception) {
+                val shown = _chat.value
+                _chat.value = if (shown is ChatState.Shown) shown.copy(live = false) else ChatState.Failed(e.message ?: e.javaClass.simpleName)
+            }
+            delay(3.seconds)
         }
     }
 
@@ -118,7 +135,9 @@ class AgentModel(
     private suspend fun recheckStarted() {
         val page = try {
             client.transcript(project, scope, agent)
-        } catch (e: PmError) {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
             return
         }
         val shown = _chat.value as? ChatState.Shown ?: return
@@ -131,6 +150,8 @@ class AgentModel(
         started = false
         watching?.cancel()
         watching = null
+        reconnecting?.cancel()
+        reconnecting = null
         screenPolling?.cancel()
         screenPolling = null
     }
