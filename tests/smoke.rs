@@ -1262,7 +1262,7 @@ fn a_project_moves_to_a_fresh_machine_and_its_agent_resumes() {
         .args(["migrate", "check", "--project", "proj"])
         .assert()
         .failure()
-        .stdout(predicate::str::contains("branch login is not on origin"));
+        .stdout(predicate::str::is_match(r"login/ +not on origin").unwrap());
     s.git(&main, &["push", "-q", "-u", "origin", "login"]);
     s.pm(s.home())
         .args(["migrate", "check", "--project", "proj"])

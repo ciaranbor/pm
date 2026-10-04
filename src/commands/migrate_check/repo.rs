@@ -7,7 +7,8 @@ use std::path::Path;
 use crate::error::Result;
 use crate::git;
 
-use super::{Finding, shell_path};
+use super::line::{Line, count};
+use super::{Finding, Step, rel_path};
 
 /// The branches `origin` holds, read once per repo; `Err` carries why the
 /// remote could not be asked.
@@ -29,7 +30,7 @@ impl Remote {
 
 /// How a local branch stands against `origin`.
 #[derive(Debug, PartialEq, Eq)]
-enum Sync {
+pub(super) enum Sync {
     Pushed,
     /// `origin` has commits the branch lacks and nothing more: the new host
     /// gets origin's.
@@ -41,6 +42,8 @@ enum Sync {
     Unfetched,
     /// No such local branch: nothing here to lose.
     NoLocal,
+    /// `origin` could not be asked, and why.
+    Unreachable(String),
 }
 
 fn sync(repo: &Path, branch: &str, heads: &BTreeMap<String, String>) -> Result<Sync> {
@@ -64,157 +67,121 @@ fn sync(repo: &Path, branch: &str, heads: &BTreeMap<String, String>) -> Result<S
     })
 }
 
-/// The command that brings origin's commits into `branch` of `repo`, run
-/// where the branch is checked out: in its worktree, or in one added for
-/// it beside the repo.
-fn rebase_onto_origin(repo: &Path, branch: &str) -> Result<String> {
-    let pull = |at: &Path| format!("git -C {} pull --rebase origin {branch}", shell_path(at));
+/// The command, run from `root`, that brings origin's commits into
+/// `branch` of `repo` where it is checked out: in its worktree, or in one
+/// added for it beside the repo.
+pub(super) fn rebase_onto_origin(root: &Path, repo: &Path, branch: &str) -> Result<String> {
+    let pull = |at: &Path| {
+        format!(
+            "git -C {} pull --rebase origin {branch}",
+            rel_path(root, at)
+        )
+    };
     Ok(match git::find_worktree_for_branch(repo, branch)? {
         Some(worktree) => pull(&worktree),
         None => {
             let at = repo.parent().unwrap_or(repo).join(branch.replace('/', "-"));
             format!(
                 "git -C {} worktree add {} {branch} && {}",
-                shell_path(repo),
-                shell_path(&at),
+                rel_path(root, repo),
+                rel_path(root, &at),
                 pull(&at)
             )
         }
     })
 }
 
-/// The finding for `branch` of `repo` against `remote`, `label` naming it
-/// in the report and `push` the command that publishes it; `None` when
-/// nothing would be lost. `reconcile` merges origin's commits in when both
-/// sides moved; `None` rebases the branch where it is checked out.
-pub(super) fn branch_finding(
-    repo: &Path,
-    remote: &Remote,
-    branch: &str,
-    label: &str,
-    push: &str,
-    reconcile: Option<&str>,
-) -> Result<Option<Finding>> {
-    let heads = match &remote.heads {
-        Ok(heads) => heads,
-        Err(why) => {
-            return Ok(Some(Finding::blocker(
-                format!("{label}: origin could not be reached ({why})"),
-                format!(
-                    "check access with `git -C {} ls-remote origin`",
-                    shell_path(repo)
-                ),
-            )));
-        }
-    };
-    let repo_arg = shell_path(repo);
-    Ok(match sync(repo, branch, heads)? {
-        Sync::Pushed | Sync::NoLocal => None,
-        Sync::Behind => Some(Finding::note(format!(
-            "{label}: origin is ahead of the local branch; the new host gets origin's"
-        ))),
-        Sync::NotOnRemote => Some(Finding::blocker(
-            format!("{label}: branch {branch} is not on origin"),
-            push.to_string(),
-        )),
-        Sync::Ahead(n) => Some(Finding::blocker(
-            format!(
-                "{label}: {n} commit{} not pushed",
-                if n == 1 { "" } else { "s" }
-            ),
-            push.to_string(),
-        )),
-        Sync::Diverged => {
-            let reconcile = match reconcile {
-                Some(command) => command.to_string(),
-                None => rebase_onto_origin(repo, branch)?,
-            };
-            Some(Finding::blocker(
-                format!("{label}: branch {branch} and origin have diverged"),
-                format!("{reconcile}, then {push}"),
-            ))
-        }
-        Sync::Unfetched => Some(Finding::blocker(
-            format!("{label}: origin has commits this clone has not fetched"),
-            format!("git -C {repo_arg} fetch origin, then run this check again"),
-        )),
-    })
-}
-
-/// Up to a few of `paths`, and how many more there are.
-fn sample(paths: &[String]) -> String {
-    const SHOWN: usize = 5;
-    let mut listed: Vec<String> = paths.iter().take(SHOWN).cloned().collect();
-    if paths.len() > SHOWN {
-        listed.push(format!("{} more", paths.len() - SHOWN));
+/// How `branch` of `repo` stands against `remote`.
+pub(super) fn upstream(repo: &Path, remote: &Remote, branch: &str) -> Result<Sync> {
+    match &remote.heads {
+        Ok(heads) => sync(repo, branch, heads),
+        Err(why) => Ok(Sync::Unreachable(why.clone())),
     }
-    listed.join(", ")
 }
 
-/// Findings for work in `worktree` that is not committed: changes to
-/// tracked files, fixed by committing them and running `push`, and
-/// untracked files, which may be secrets or scratch, so the fix never adds
-/// them wholesale. Untracked files under a `regenerated` prefix are pm's to
-/// write again on the new host, so they are not reported.
-pub(super) fn dirty_findings(
+/// The paths in `worktree` with changes to tracked files, and its
+/// untracked files outside the `regenerated` prefixes pm writes again on
+/// the new host.
+pub(super) fn changes(
     worktree: &Path,
-    label: &str,
-    push: &str,
     regenerated: &[String],
-) -> Result<Vec<Finding>> {
-    let changed = git::changed_paths(worktree)?;
-    let (untracked, tracked): (Vec<&String>, Vec<&String>) =
-        changed.iter().partition(|l| l.starts_with("??"));
-    let untracked: Vec<&String> = untracked
-        .into_iter()
-        .filter(|l| {
-            let path = l.get(3..).unwrap_or(l);
-            !regenerated
-                .iter()
-                .any(|prefix| path.starts_with(prefix.as_str()))
-        })
-        .collect();
-    let paths = |lines: Vec<&String>| -> Vec<String> {
-        lines
+) -> Result<(Vec<String>, Vec<String>)> {
+    let mut tracked = Vec::new();
+    let mut untracked = Vec::new();
+    for line in git::changed_paths(worktree)? {
+        let path = line.get(3..).unwrap_or(&line).to_string();
+        if !line.starts_with("??") {
+            tracked.push(path);
+        } else if !regenerated.iter().any(|p| path.starts_with(p.as_str())) {
+            untracked.push(path);
+        }
+    }
+    Ok((tracked, untracked))
+}
+
+/// Adds a state repo's problems to `line`: anything uncommitted or not on
+/// `remote`, all of which `push` (commit everything, then push) clears;
+/// `pull` merges in origin's commits when both sides moved. `dir` is the
+/// repo as written from the root, and `subject` the line's. Returns a note
+/// when origin is merely ahead.
+pub(super) fn state_repo(
+    line: &mut Line,
+    repo: &Path,
+    dir: &str,
+    subject: &str,
+    remote: Option<&Remote>,
+    push: Step,
+    pull: &str,
+) -> Result<Option<Finding>> {
+    let changed = git::changed_paths(repo)?;
+    if !changed.is_empty() {
+        line.problem(count(changed.len(), "change") + " not committed");
+        let paths: Vec<String> = changed
             .iter()
             .map(|l| l.get(3..).unwrap_or(l).to_string())
-            .collect()
-    };
-    let arg = shell_path(worktree);
-    let mut out = Vec::new();
-    if !tracked.is_empty() {
-        out.push(Finding::blocker(
-            format!("{label}: uncommitted changes ({})", sample(&paths(tracked))),
-            format!("git -C {arg} commit -a && {push}"),
-        ));
+            .collect();
+        line.files("changed", &paths);
+        line.step(push);
     }
-    if !untracked.is_empty() {
-        out.push(Finding::blocker(
-            format!(
-                "{label}: untracked files don't travel ({})",
-                sample(&paths(untracked))
-            ),
-            format!(
-                "git -C {arg} add <file>… && git -C {arg} commit && {push} for what belongs in \
-                 the repo; delete or .gitignore the rest"
-            ),
-        ));
-    }
-    Ok(out)
-}
-
-/// One finding for any uncommitted or untracked file in a state repo,
-/// whose push commits everything (`git add -A`).
-pub(super) fn state_dirty_finding(dir: &Path, label: &str, push: &str) -> Result<Option<Finding>> {
-    let changed = git::changed_paths(dir)?;
-    if changed.is_empty() {
+    let Some(remote) = remote else {
         return Ok(None);
+    };
+    let branch = git::current_branch(repo)?;
+    match upstream(repo, remote, &branch)? {
+        Sync::Pushed | Sync::NoLocal => {}
+        Sync::Behind => {
+            return Ok(Some(Finding::note(
+                subject,
+                "origin is ahead of the local branch; the new host gets origin's".to_string(),
+            )));
+        }
+        Sync::NotOnRemote => {
+            line.problem("not on origin");
+            line.step(push);
+        }
+        Sync::Ahead(n) => {
+            line.problem(count(n, "commit") + " not pushed");
+            line.step(push);
+        }
+        Sync::Diverged => {
+            line.problem("diverged from origin");
+            line.command(pull);
+            line.step(push);
+        }
+        Sync::Unfetched => {
+            line.problem("origin has commits not fetched here");
+            line.command(format!("git -C {dir} fetch origin"));
+            line.detail("fetch, then run this check again");
+            line.step(Step::Repair);
+        }
+        Sync::Unreachable(why) => {
+            line.problem("origin unreachable");
+            line.detail(why);
+            line.command(format!("git -C {dir} ls-remote origin"));
+            line.step(Step::Repair);
+        }
     }
-    let paths: Vec<String> = changed.iter().map(|l| l.trim().to_string()).collect();
-    Ok(Some(Finding::blocker(
-        format!("{label}: changes not committed ({})", sample(&paths)),
-        push.to_string(),
-    )))
+    Ok(None)
 }
 
 #[cfg(test)]

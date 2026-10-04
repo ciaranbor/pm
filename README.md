@@ -714,12 +714,14 @@ code travels through each repo's own remote, and agents' conversations
 through a `pm harness export` tarball.
 
 `pm migrate check [--project <name>…]` says what a move would lose or fail
-on, with the command that fixes each item: unpushed branches and
-uncommitted work in any worktree, state repos without a remote or with
-changes not pushed, registry entries `pm restore` can't clone or pull from,
-agents still running, and the machine-local things to redo by hand (harness
-installs and logins, `pm serve` devices, your tmux config, your own global
-skills). It only reads, and exits non-zero while anything blocks.
+on: unpushed branches and uncommitted work in any worktree, state repos
+without a remote or with changes not pushed, registry entries `pm restore`
+can't clone or pull from, agents still running, and the machine-local
+things to redo by hand (harness installs and logins, `pm serve` devices,
+your tmux config, your own global skills), with the plan that clears it.
+A feature with active agents and uncommitted work is marked in flight:
+finishing and merging it before the move beats committing work in
+progress. It only reads, and exits non-zero while anything blocks.
 
 On the old machine, once, each against a new, empty repo:
 
