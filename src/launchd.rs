@@ -11,8 +11,17 @@ fn domain() -> String {
     format!("gui/{}", unsafe { libc::getuid() })
 }
 
+/// `launchctl` acts on the user's real login domain, so a test build
+/// refuses to run it.
+fn command() -> Command {
+    if cfg!(test) {
+        panic!("tests must not run launchctl");
+    }
+    Command::new("launchctl")
+}
+
 fn launchctl(args: &[&str]) -> Result<()> {
-    let output = Command::new("launchctl").args(args).output()?;
+    let output = command().args(args).output()?;
     if output.status.success() {
         return Ok(());
     }
@@ -29,16 +38,12 @@ pub fn bootstrap(plist: &Path) -> Result<()> {
 }
 
 fn loaded(target: &str) -> Result<bool> {
-    Ok(Command::new("launchctl")
-        .args(["print", target])
-        .output()?
-        .status
-        .success())
+    Ok(command().args(["print", target]).output()?.status.success())
 }
 
 /// A loaded agent `label`: its pid while it runs. `None` when not loaded.
 pub fn job(label: &str) -> Result<Option<Option<u32>>> {
-    let output = Command::new("launchctl")
+    let output = command()
         .args(["print", &format!("{}/{label}", domain())])
         .output()?;
     if !output.status.success() {

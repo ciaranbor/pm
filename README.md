@@ -221,7 +221,8 @@ pm serve install --pair pixel   # LaunchAgent, `tailscale serve`, then a QR code
 pm serve status                 # whether it runs, and what reaches it
 ```
 
-The LaunchAgent runs it at login, restarts it, and it follows upgrades.
+The LaunchAgent runs it at login, restarts it, and it follows upgrades:
+`pm upgrade` rewrites an outdated plist, keeping what install chose.
 Install runs `tailscale serve --bg <port>` itself (`--no-tailscale` not
 to) when the tailnet has MagicDNS and HTTPS certificates on and nothing
 serves its port 443 here; otherwise it changes nothing and says what to

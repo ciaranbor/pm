@@ -5,6 +5,7 @@ use crate::state::paths;
 use crate::state::project::ProjectEntry;
 
 use super::hooks_install;
+use super::serve_install::{self, Refresh};
 use super::skills;
 
 /// Upgrade a single project: reinstall hooks, bootstrap state, migrate any
@@ -256,19 +257,37 @@ pub fn upgrade_all_dry_run_with_dir(projects_dir: &Path) -> Result<Vec<String>> 
     Ok(lines)
 }
 
-/// Install (or preview installing) the shared global asset tier. A failure
-/// here — no resolvable home, say — is reported as a line rather than
-/// aborting the per-project work that follows.
+/// Install (or preview installing) the shared global asset tier, and
+/// refresh the `pm serve` LaunchAgent if one is installed. A failure here —
+/// no resolvable home, say — is reported as a line rather than aborting the
+/// per-project work that follows.
 fn install_global_lines(dry_run: bool) -> Vec<String> {
     let result = if dry_run {
         skills::install_global_dry_run()
     } else {
         skills::install_global()
     };
-    match result {
+    let mut lines = match result {
         Ok(lines) => lines,
         Err(e) => vec![format!("global assets: error: {e}")],
+    };
+    let refreshed = paths::home_dir().and_then(|home| {
+        serve_install::refresh(
+            &home,
+            &paths::global_config_dir()?,
+            dry_run,
+            serve_install::reload,
+        )
+    });
+    match refreshed {
+        Ok(Refresh::NotInstalled | Refresh::Current) => {}
+        Ok(Refresh::Updated) if dry_run => {
+            lines.push("Would update pm serve LaunchAgent".to_string())
+        }
+        Ok(Refresh::Updated) => lines.push("updated pm serve LaunchAgent".to_string()),
+        Err(e) => lines.push(format!("pm serve LaunchAgent: error: {e}")),
     }
+    lines
 }
 
 /// Upgrade either the current project (default) or all projects (--all).
