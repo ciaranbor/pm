@@ -6,7 +6,8 @@
 #                   PATH if writable, else ~/.local/bin)
 #   PM_DOWNLOAD_URL where the release's assets are (a test seam)
 #
-# Safe to re-run: it replaces pm in place and upgrades every project.
+# The binary is checked against the release's SHA256SUMS. Safe to re-run:
+# it replaces pm in place and upgrades every project (`pm upgrade --all`).
 set -eu
 
 repo="https://github.com/ciaranbor/pm"

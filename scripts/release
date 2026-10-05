@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cut a pm release: README, "Releasing", has the flow.
+# Cut a pm release: docs/releasing.md has the flow.
 set -euo pipefail
 
 usage() {

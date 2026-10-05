@@ -312,7 +312,7 @@ fn spawn_session_with_config(
         registry.save(&agents_dir, params.feature)?;
         // Replaces whatever an earlier spawn left; the session's start
         // clears it, so one that outlives the start grace is a dialog
-        // before the session (README, "Attention view").
+        // before the session (README, "Follow what needs you").
         let startup = runtime::Waiting::now(runtime::WaitingKind::Startup, None);
         runtime::write_waiting(params.project_root, params.feature, name, &startup)?;
         for which in [

@@ -6,9 +6,10 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 /**
- * The attention snapshot `pm serve` sends (`pm feat status --all --json`; README, "Attention
- * view"). Kinds and states stay strings on the wire: a newer server may send values this app
- * doesn't know, which read as [AttentionKind.Unknown] / [AgentState.Unknown] rather than failing.
+ * The attention snapshot `pm serve` sends (`pm feat status --all --json`; docs/remote-api.md,
+ * "Attention snapshot"). Kinds and states stay strings on the wire: a newer server may send
+ * values this app doesn't know, which read as [AttentionKind.Unknown] / [AgentState.Unknown]
+ * rather than failing.
  */
 @Serializable
 data class Snapshot(

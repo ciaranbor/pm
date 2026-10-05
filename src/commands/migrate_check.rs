@@ -1,6 +1,6 @@
 //! `pm migrate check`: what moving projects to another machine with the
-//! README's "Moving to another machine" steps would lose or fail on, for the
-//! selected projects and the global registry. It only reads: it never
+//! docs/migration.md steps would lose or fail on, for the selected
+//! projects and the global registry. It only reads: it never
 //! pushes, commits, fetches or changes pm state, and it asks each remote
 //! what it holds (`git ls-remote`) rather than trusting the last fetch.
 //!
