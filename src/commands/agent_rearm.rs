@@ -6,9 +6,12 @@
 //! against typing into something other than an empty prompt: the marker
 //! must say unarmed (never asking — the keys would answer the dialog — nor
 //! a loop that stopped itself on purpose), the window must run its harness
-//! and not the hook, and the harness must read its input line as empty,
-//! once any key it names to make the line take text has been pressed (vim
-//! NORMAL mode). A draft is never cleared; when any check fails the message
+//! and not the hook, the pane must not be in use ([`tmux::panes::in_use`]:
+//! in a mode, or in front of an attached client — never cancelled, since
+//! either is the user's), and the harness must read its input line as empty
+//! and taking text. No key is pressed to change the harness's own mode: a
+//! box in vim NORMAL mode, like a dialog, reads as unknown and is left
+//! alone. A draft is never cleared; when any check fails the message
 //! just stays queued and the agent stays visibly unarmed. Removing the
 //! marker is the claim to type, so of two concurrent senders only one does;
 //! the prompt's UserPromptSubmit would clear it anyway. A turn's end read
@@ -23,10 +26,9 @@ use crate::harness::Harness;
 use crate::state::agent::AgentRegistry;
 use crate::state::paths;
 use crate::state::project::{GlobalConfig, ProjectConfig, resolve_harness_config};
-use crate::state::runtime::{self, Waiting, WaitingClass, WaitingKind};
+use crate::state::runtime::{self, SessionPath, Waiting, WaitingClass, WaitingKind};
 use crate::tmux;
 
-use super::agent_input::input_line_ready;
 use super::hooks_stop;
 use super::running_agents::{Liveness, Windows, liveness, waiting};
 
@@ -88,8 +90,8 @@ pub fn rearm(
     }
 }
 
-/// Type the agent's messages prompt into `pane` if its input line is empty.
-/// Returns whether it typed.
+/// Type the agent's messages prompt into `pane` if it is not in use and its
+/// input line is empty. Returns whether it typed.
 fn type_prompt(
     project_root: &Path,
     scope: &str,
@@ -98,7 +100,13 @@ fn type_prompt(
     pane: &str,
     tmux_server: Option<&str>,
 ) -> Result<bool> {
-    if !input_line_ready(project_root, scope, agent, harness, pane, tmux_server)? {
+    if tmux::panes::in_use(tmux_server, pane)? {
+        return Ok(false);
+    }
+    let home = paths::home_dir()?;
+    let config_dir = runtime::read_session_path(project_root, scope, agent, SessionPath::ConfigDir);
+    let screen = tmux::capture_screen(tmux_server, pane)?;
+    if harness.input_is_empty(&screen, &home, config_dir.as_deref()) != Some(true) {
         return Ok(false);
     }
     let prompt = hooks_stop::continuation(project_root, scope, agent)?;
@@ -110,7 +118,7 @@ fn type_prompt(
 mod tests {
     use super::*;
     use crate::commands::agent_send::agent_send;
-    use crate::testing::TestServer;
+    use crate::testing::{ControlClient, TestServer};
     use tempfile::tempdir;
 
     const PROMPT: &str = "You have new messages from reviewer. Run `pm msg read` to read them.";
@@ -155,6 +163,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let (project, target) = at_prompt(&server, dir.path(), WaitingKind::HookEnded);
         let users = server.split_before(&target);
+        let session = server.tmux_stdout(&["display-message", "-p", "-t", &target, "#S"]);
+        let _viewing_the_users_pane = ControlClient::attach(server.name(), &session);
 
         let status = send(&server, &project);
 
@@ -169,6 +179,57 @@ mod tests {
         server.wait_for_pane_text(&target, &format!("❯ {PROMPT}"));
         let users = server.tmux_stdout(&["capture-pane", "-p", "-t", &users]);
         assert!(!users.contains("You have new messages"), "{users}");
+    }
+
+    /// Send the agent a message and check it is left alone, still unarmed.
+    fn assert_left_alone(server: &TestServer, project: &Path) {
+        let status = send(server, project);
+
+        assert_eq!(
+            status,
+            "Message 001 sent to 'implementer' (from 'reviewer')"
+        );
+        assert_eq!(
+            runtime::read_waiting(project, "login", "implementer").map(|w| w.kind),
+            Some(WaitingKind::HookEnded)
+        );
+    }
+
+    fn a_pane_in_a_mode_is_left_in_it_untyped(enter: &str) {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (project, target) = at_prompt(&server, dir.path(), WaitingKind::HookEnded);
+        let pane = server.pane_id(&target);
+        server.tmux_stdout(&[enter, "-t", &pane]);
+        server.split_before(&target);
+        let session = server.tmux_stdout(&["display-message", "-p", "-t", &target, "#S"]);
+        let _viewing_another_pane = ControlClient::attach(server.name(), &session);
+
+        assert_left_alone(&server, &project);
+
+        assert!(tmux::paste::in_mode(server.name(), &pane).unwrap());
+    }
+
+    #[test]
+    fn a_pane_in_copy_mode_is_left_in_it_untyped() {
+        a_pane_in_a_mode_is_left_in_it_untyped("copy-mode");
+    }
+
+    #[test]
+    fn a_pane_in_tree_mode_is_left_in_it_untyped() {
+        a_pane_in_a_mode_is_left_in_it_untyped("choose-tree");
+    }
+
+    #[test]
+    fn a_pane_a_client_is_viewing_is_left_untyped() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (project, target) = at_prompt(&server, dir.path(), WaitingKind::HookEnded);
+        server.tmux_stdout(&["select-window", "-t", &target]);
+        let session = server.tmux_stdout(&["display-message", "-p", "-t", &target, "#S"]);
+        let _viewing = ControlClient::attach(server.name(), &session);
+
+        assert_left_alone(&server, &project);
     }
 
     #[test]
@@ -288,10 +349,19 @@ mod tests {
     }
 
     #[test]
-    fn a_vim_key_the_prompt_takes_as_text_is_erased_and_the_agent_left_alone() {
+    fn a_box_in_vim_normal_mode_is_pressed_no_key() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, target) = at_prompt(&server, dir.path(), WaitingKind::Prompt);
+        let (project, name) = server.setup_project_with_feature(dir.path(), "login");
+        let (_, received) = server.spawn_recording_agent(
+            &project,
+            &tmux::session_name(&name, "login"),
+            "login",
+            "implementer",
+            Harness::ClaudeCode,
+        );
+        let waiting = Waiting::now(WaitingKind::HookEnded, None);
+        runtime::write_waiting(&project, "login", "implementer", &waiting).unwrap();
         let config_dir = dir.path().join("claude-config");
         std::fs::create_dir_all(&config_dir).unwrap();
         std::fs::write(config_dir.join(".claude.json"), r#"{"editorMode":"vim"}"#).unwrap();
@@ -304,25 +374,9 @@ mod tests {
         )
         .unwrap();
 
-        let status = send(&server, &project);
+        assert_left_alone(&server, &project);
 
-        assert_eq!(
-            status,
-            "Message 001 sent to 'implementer' (from 'reviewer')"
-        );
-        assert_eq!(
-            runtime::read_waiting(&project, "login", "implementer").map(|w| w.kind),
-            Some(WaitingKind::Prompt)
-        );
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        while screen(&server, &target).contains("❯ i") {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "{}",
-                screen(&server, &target)
-            );
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        assert!(!screen(&server, &target).contains("You have new messages"));
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(std::fs::read(&received).unwrap_or_default(), b"");
     }
 }
