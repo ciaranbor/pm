@@ -1327,6 +1327,9 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
                     push();
                 }),
             ),
+            HarnessHooksCommands::Dialog { harness } => {
+                exit_unless_ok(commands::hooks_dialog::dialog(harness, push))
+            }
         },
         HarnessCommands::Pull { name, dry_run } => {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;

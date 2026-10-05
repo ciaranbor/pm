@@ -42,6 +42,11 @@ impl Agent {
         Ok(registry.get(&self.name).cloned())
     }
 
+    /// The harness the agent runs on; `None` once it is gone.
+    pub(super) fn harness(&self) -> Result<Option<crate::harness::Harness>> {
+        Ok(self.entry()?.map(|entry| entry.harness))
+    }
+
     /// The conversation of the session `entry` records.
     fn locate(&self, entry: &AgentEntry) -> Result<Option<Conversation>> {
         entry.conversation(&self.root, &self.scope, &self.name)

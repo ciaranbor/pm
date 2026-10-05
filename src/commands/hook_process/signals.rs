@@ -9,7 +9,7 @@ use std::time::Duration;
 
 /// A caught signal and the pid that sent it (`si_pid`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Caught {
+pub(crate) struct Caught {
     pub signal: libc::c_int,
     pub sender: libc::pid_t,
 }
@@ -27,7 +27,7 @@ impl std::fmt::Display for Caught {
 
 const RECORD: usize = 8;
 
-pub(super) struct Signals {
+pub(crate) struct Signals {
     read: libc::c_int,
     write: libc::c_int,
 }

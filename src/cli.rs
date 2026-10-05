@@ -461,6 +461,11 @@ pub enum HarnessHooksCommands {
         /// The harness whose hook payload arrives on stdin
         harness: pm::harness::Harness,
     },
+    /// Dialog hook handler — waits for a dialog's answer from `pm serve` (not for direct use)
+    Dialog {
+        /// The harness whose dialog payload arrives on stdin
+        harness: pm::harness::Harness,
+    },
 }
 
 #[derive(Subcommand)]

@@ -18,17 +18,7 @@
 //! codex agents block every turn.
 //!
 //! The wait ends without a decision once the harness that ran the hook is
-//! gone, since a hook blocked in its wait outlives a harness that dies
-//! without killing it: codex never kills it, and Claude Code kills the
-//! hook's process group on a clean exit but not when it is SIGKILLed.
-//! Two signals, either sufficient: our parent pid changes (the installed
-//! command execs pm, so the harness is our parent and its death reparents
-//! us), or the peer of our stdout closes (an install that predates the
-//! `exec` leaves an intermediate `/bin/sh` as our parent, which is orphaned
-//! instead, so the parent never changes; codex and the opencode plugin read
-//! stdout through a pipe, Claude Code through a socketpair, and `poll`
-//! reports a closed peer of either as `POLLHUP`/`POLLERR`). Neither fires
-//! while the harness is alive, so a live agent's hook keeps blocking.
+//! gone ([`hook_process`](super::hook_process) has how that is told).
 //!
 //! The hook keeps the agent's waiting marker ([`runtime`]): it clears it as a
 //! turn ends, writes `background` when it yields, and `hook-ended` when its
@@ -46,8 +36,6 @@
 //! the same way when a turn it did not prompt starts, and waits again once
 //! that turn ends.
 
-mod signals;
-
 use std::io::Read;
 use std::time::Duration;
 
@@ -59,7 +47,7 @@ use crate::messages;
 use crate::state::runtime::{self, Waiting, WaitingKind};
 use crate::state::{agent as registry, paths};
 
-use signals::{Caught, Signals};
+use crate::commands::hook_process::{Caller, Signals};
 
 const REASON_START: &str = "You have new messages";
 const REASON_END: &str = ". Run `pm msg read` to read them.";
@@ -178,50 +166,6 @@ fn hook_ended(
         let unread = messages::unread_count(&paths::messages_dir(project_root), scope, agent);
         on_turn(AgentState::Unarmed, unread);
     }
-}
-
-/// The harness process that ran this hook, as it was when the hook started.
-struct Caller {
-    parent: libc::pid_t,
-}
-
-impl Caller {
-    fn current() -> Self {
-        // SAFETY: getppid() takes no arguments and cannot fail.
-        Self {
-            parent: unsafe { libc::getppid() },
-        }
-    }
-
-    /// Whether `caught` should end the wait. A SIGTERM must come from the
-    /// harness: it is what `kill`, `pkill` and `killall` send by default, so
-    /// a stray one must not leave the agent unarmed. SIGINT and SIGHUP are
-    /// what a terminal sends, and macOS reports a terminal's signal as sent
-    /// by whichever process wrote to it, so they end the wait from anyone.
-    fn sent(&self, caught: &Caught) -> bool {
-        caught.signal != libc::SIGTERM || caught.sender == self.parent
-    }
-
-    /// See the module docs for why both checks are needed.
-    fn alive(&self) -> bool {
-        // SAFETY: as above.
-        let parent = unsafe { libc::getppid() };
-        parent == self.parent && !peer_closed(libc::STDOUT_FILENO)
-    }
-}
-
-/// Whether the reading end of `fd` — a pipe or socket — has been closed.
-/// False for anything `poll` reports no hang-up on (a tty, a file,
-/// `/dev/null`) and for a closed `fd`, so a hook run by hand keeps waiting.
-fn peer_closed(fd: libc::c_int) -> bool {
-    let mut pfd = libc::pollfd {
-        fd,
-        events: libc::POLLOUT,
-        revents: 0,
-    };
-    // SAFETY: one valid pollfd, count 1, zero timeout.
-    let ready = unsafe { libc::poll(&mut pfd, 1, 0) };
-    ready > 0 && pfd.revents & (libc::POLLHUP | libc::POLLERR) != 0
 }
 
 /// Why a wait ended without a decision.
@@ -868,19 +812,6 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["decision"], "block");
         assert!(!runtime::yield_requested(&root, "login", "reviewer"));
-    }
-
-    #[test]
-    fn peer_closed_tracks_the_reading_end() {
-        let mut fds = [0; 2];
-        // SAFETY: fds has room for the two descriptors pipe() writes.
-        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
-        let [read, write] = fds;
-        assert!(!peer_closed(write));
-        // SAFETY: closing descriptors this test owns.
-        unsafe { libc::close(read) };
-        assert!(peer_closed(write));
-        unsafe { libc::close(write) };
     }
 
     // --- busy parsing ----------------------------------------------------

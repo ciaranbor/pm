@@ -1040,6 +1040,7 @@ mod tests {
                 kind,
                 detail: detail.into(),
                 since: None,
+                dialog: None,
             }),
         }
     }
@@ -1349,6 +1350,7 @@ mod tests {
                     kind: WaitingKind::Permission,
                     detail: "permission".into(),
                     since: None,
+                    dialog: None,
                 }),
                 ..agent_in(AgentState::Asking)
             }]
@@ -1492,6 +1494,7 @@ mod tests {
                 kind: WaitingKind::Permission,
                 detail: "permission".into(),
                 since: None,
+                dialog: None,
             }),
             ..agent_in(AgentState::Asking)
         }];

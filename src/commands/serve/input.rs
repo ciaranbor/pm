@@ -1,5 +1,6 @@
 //! The write endpoints: text, an interrupt and keys for an agent, typed
-//! into its pane ([`agent_input`]). Typed text is confirmed by finding it in the agent's
+//! into its pane ([`agent_input`]), and a dialog's answer
+//! ([`super::dialog`]). Typed text is confirmed by finding it in the agent's
 //! conversation; text queued mid-turn is answered at once, and the client
 //! sees it arrive on its watch.
 
@@ -78,6 +79,7 @@ pub(super) fn post(
                 detail: "interrupt".into(),
             })
         }
+        "dialog" => super::dialog::post(agent, body),
         "keys" => {
             let keys: Vec<String> = match parse(body, "keys").and_then(|v| {
                 serde_json::from_value(v).map_err(|_| "keys is a list of key names".to_string())

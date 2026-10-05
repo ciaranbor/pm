@@ -1,5 +1,6 @@
 package dev.pm.app.api
 
+import dev.pm.app.model.DialogAnswer
 import dev.pm.app.model.Pairing
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
@@ -8,6 +9,7 @@ import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -148,5 +150,42 @@ class PmClientTest {
             server.takeRequest().url.encodedPath,
         )
         assertEquals("""{"keys":["Down","Enter"]}""", server.takeRequest().body?.utf8())
+    }
+
+    @Test
+    fun a_dialog_is_read_and_answered_and_none_is_null() = runBlocking {
+        reply(
+            200,
+            """{"id":"d1","kind":"question","since":"2026-10-05T12:00:00Z","questions":[
+                {"question":"Which DB?","header":"DB","options":[{"label":"SQLite","description":""}],
+                 "multi_select":true,"custom":true}],
+                "choices":[{"id":"answer","label":"Submit answers","takes_message":false}]}""",
+        )
+        reply(200, """{"answered":true}""")
+        reply(409, """{"error":"the dialog is no longer up","refused":"answered"}""")
+        reply(404, """{"error":"no dialog of the agent's can be answered"}""")
+
+        val dialog = client.dialog("app", "login", "implementer")!!
+        assertEquals("d1", dialog.id)
+        assertTrue(dialog.questions.single().multiSelect)
+        val answer = DialogAnswer("d1", "answer", mapOf("Which DB?" to listOf("SQLite")))
+        client.answerDialog("app", "login", "implementer", answer)
+        val late = runCatching {
+            client.answerDialog("app", "login", "implementer", answer)
+        }
+            .exceptionOrNull()
+        assertTrue("$late", late is PmError.Refused && late.code == "answered")
+        assertNull(client.dialog("app", "login", "implementer"))
+
+        assertEquals(
+            "/v1/agents/app/login/implementer/dialog",
+            server.takeRequest().url.encodedPath,
+        )
+        val posted = server.takeRequest()
+        assertEquals("POST", posted.method)
+        assertEquals(
+            """{"id":"d1","choice":"answer","answers":{"Which DB?":["SQLite"]}}""",
+            posted.body?.utf8(),
+        )
     }
 }

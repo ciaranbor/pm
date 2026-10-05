@@ -1,7 +1,8 @@
 //! What each request gets. The token is checked before anything else, so
 //! a request without a valid one learns nothing, not even which paths
 //! exist; a paired device's token may do everything. The writes are a
-//! device's own push subscription and an agent's input (`input`).
+//! device's own push subscription, an agent's input (`input`) and a
+//! dialog's answer (`dialog`).
 //! Path segments name only what the registry and pm state list, so none
 //! reaches the filesystem as a path of its own.
 
@@ -316,6 +317,12 @@ fn get(config: &Config, path: &str, query: &Query) -> Result<Reply> {
                     Ok(error(404, "the feature has no summary"))
                 }
                 Err(e) => Err(e.into()),
+            }
+        }
+        ["agents", project, scope, agent, "dialog"] => {
+            match find_agent(config, project, scope, agent)? {
+                Ok(agent) => super::dialog::get(&agent),
+                Err(reply) => Ok(reply),
             }
         }
         ["agents", project, scope, agent, "screen"] => {

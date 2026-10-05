@@ -30,6 +30,9 @@
 //! from the transcript has no marker to remove, so the one who acts on it
 //! claims it with a stamp instead, after which it no longer counts.
 //!
+//! The **dialog record** is a dialog that can be answered remotely
+//! ([`DialogRecord`]).
+//!
 //! They live in `<project>/.pm/runtime/<scope>/<agent>/` and last as long
 //! as the agent's registry entry. Every spawn rewrites what it hands the
 //! harness, so a deleted file is restored by the next spawn. The directory
@@ -44,6 +47,9 @@ use serde::{Deserialize, Serialize};
 use crate::error::Result;
 use crate::fs_utils::write_atomic;
 use crate::state::paths;
+
+mod dialog;
+pub use dialog::*;
 
 const WAITING_FILE: &str = "waiting.json";
 const ACTIVITY_FILE: &str = "activity";

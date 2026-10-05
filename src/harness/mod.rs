@@ -32,7 +32,9 @@ use crate::error::{PmError, Result};
 use crate::fs_utils;
 use crate::state::paths;
 use crate::state::project::{AgentsConfig, HarnessConfig, layered};
-use crate::state::runtime::{self, SessionPath, Waiting, WaitingClass};
+use crate::state::runtime::{
+    self, Answer, Dialog, DialogRecord, SessionPath, Waiting, WaitingClass,
+};
 
 use transcript::items::{Page, Tail};
 use transcript::jsonl::{self, Parse};
@@ -456,6 +458,40 @@ impl Harness {
             Harness::ClaudeCode => claude_code::waiting::event(payload),
             Harness::Codex => codex::waiting::event(payload),
             Harness::OpenCode => opencode::waiting::event(payload),
+        }
+    }
+
+    /// The hook events whose payloads open a dialog the user can answer
+    /// remotely ([`dialog`](Self::dialog)), for `pm harness hooks dialog`.
+    /// Empty for a harness whose loop is a plugin, which calls it itself,
+    /// and for codex, which runs its hooks before showing a dialog, so a
+    /// hook waiting on the phone would hide the terminal's.
+    pub fn dialog_events(self) -> &'static [&'static str] {
+        match self {
+            Harness::ClaudeCode => &["PermissionRequest"],
+            Harness::Codex | Harness::OpenCode => &[],
+        }
+    }
+
+    /// The dialog a payload of `pm harness hooks dialog` opens, with what
+    /// [`dialog_decision`](Self::dialog_decision) will need; `None` when
+    /// none the user can answer remotely.
+    pub fn dialog(self, payload: &serde_json::Value) -> Option<(Dialog, serde_json::Value)> {
+        match self {
+            Harness::ClaudeCode => claude_code::dialog::dialog(payload),
+            Harness::Codex => None,
+            Harness::OpenCode => opencode::dialog::dialog(payload),
+        }
+    }
+
+    /// What the dialog hook prints for `answer`, which `record` accepts: the
+    /// decision its harness, or plugin, applies.
+    pub fn dialog_decision(self, record: &DialogRecord, answer: &Answer) -> serde_json::Value {
+        match self {
+            Harness::ClaudeCode => claude_code::dialog::decision(record, answer),
+            // Never opens one.
+            Harness::Codex => serde_json::Value::Null,
+            Harness::OpenCode => opencode::dialog::decision(answer),
         }
     }
 

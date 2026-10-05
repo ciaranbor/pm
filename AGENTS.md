@@ -64,7 +64,8 @@ Design decisions you can't recover by reading the tree. Preserve them.
   enqueues, then spawns or no-ops — ungated, being also the heal path;
   `msg send` never spawns, errors on an inactive recipient, heals a dead
   window, re-arms an unarmed one only at an empty prompt. Remote input is
-  typed into the pane like local input — never a pm message or continuation.
+  typed into the pane like local input — never a pm message or continuation;
+  a dialog's answer is the harness's own decision via its hook — never keys.
 
 ### Workflows vs agents
 
@@ -73,9 +74,8 @@ Design decisions you can't recover by reading the tree. Preserve them.
 - **Workflows** (`workflows/<name>/workflow.md` + `config.toml`) define the
   per-feature topology: the team, who receives the brief, who hands off to
   whom, who reports to the user.
-- One definition can play different routing roles in different features.
-  The `pm-workflow` skill is the bridge: every agent runs `pm workflow show`
-  at the start of every task.
+- One definition can play different routing roles in different features;
+  every agent runs `pm workflow show` (the `pm-workflow` skill) each task.
 - Definitions resolve only from the canonical `.agents/agents/` stores
   (project, then global). A harness's own dir is a projection, never a
   source — a def hand-written only in `.claude/agents/` does not resolve.

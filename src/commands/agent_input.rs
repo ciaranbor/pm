@@ -2,7 +2,8 @@
 //! text, an interrupt, or keys, typed into its pane as if at the keyboard
 //! (`pm serve`'s write endpoints). Text is never sent as a continuation, so
 //! its UserPromptSubmit resets a blocked feature and the transcript records
-//! the user's words as the user's.
+//! the user's words as the user's. A dialog a hook can see is answered
+//! through its harness instead ([`super::hooks_dialog`]).
 //!
 //! Keys reach whatever the pane shows, so each send first checks the agent
 //! is active, its pane runs its harness, and the pane is out of copy mode.

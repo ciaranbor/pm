@@ -91,7 +91,10 @@ pub fn harness_problems(
         let (status, others): (Vec<_>, Vec<_>) = hooks_install::pm_events(harness)
             .into_iter()
             .filter(untrusted)
-            .partition(|(_, markers)| markers.contains(&hooks_install::PM_WAITING_MARKER));
+            .partition(|(_, markers)| {
+                markers.contains(&hooks_install::PM_WAITING_MARKER)
+                    || markers.contains(&hooks_install::PM_DIALOG_MARKER)
+            });
         for (event, _) in others {
             push(
                 if event == hooks_install::USER_PROMPT_EVENT {
@@ -132,6 +135,17 @@ pub fn harness_problems(
                 format!(
                     "pm status hooks ({}) not installed in {shown}, so an agent waiting on you \
                      reads as busy (run `pm harness hooks install`)",
+                    missing.join(", ")
+                ),
+            );
+        }
+        let missing = hooks_install::missing_dialog_hooks(harness, root.as_ref());
+        if !missing.is_empty() {
+            push(
+                ProblemKind::StatusHooksMissing,
+                format!(
+                    "pm dialog hook ({}) not installed in {shown}, so a dialog can be answered \
+                     at the terminal only (run `pm harness hooks install`)",
                     missing.join(", ")
                 ),
             );

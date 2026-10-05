@@ -26,7 +26,7 @@ through `tailscale serve` every request arrives on loopback. `pair` prints
 the token once, beside the QR code. pm does not rely on Tailscale's
 identity headers: a tagged device sends none. `pm serve` logs each request
 with its device to stderr — for input, the keys pressed or the SHA-256 of
-the text, never the text — which the LaunchAgent sends to `serve.log`
+the text, for a dialog's answer its choice, never the text — which the LaunchAgent sends to `serve.log`
 (`pm serve logs`) in the `serve/` dir of pm's config dir, beside the devices
 file and the server's VAPID key (`vapid.pem`); `pm state` syncs none of
 them.
@@ -74,6 +74,7 @@ The API is under `/v1`; every path needs a paired device's token:
 | `agents/{project}/{scope}/{agent}/input` | `POST {"text"}` (up to 128 KB): typed into the agent's input line and submitted; `{"delivery": "sent", "confirmed"}` once submitted (`confirmed`: seen in the conversation within 5 s), or `{"delivery": "queued"}` when the agent is mid-turn and takes it as a step ends |
 | `agents/{project}/{scope}/{agent}/interrupt` | `POST`: presses Escape, ending the agent's turn; refused while it waits for a message |
 | `agents/{project}/{scope}/{agent}/keys` | `POST {"keys": [...]}`: presses each of `Escape Enter Tab BTab Up Down Left Right Space BSpace C-c 0`–`9`; refused while it waits for a message |
+| `agents/{project}/{scope}/{agent}/dialog` | `GET`: the dialog on the agent's screen, when it can be answered remotely (below), else `404`; `POST {"id", "choice", "answers"?, "message"?}`: answers it, `{"answered": true}` once its harness has the answer |
 
 Input is typed into the agent's pane as if at its keyboard, so it is the
 user's prompt: it resets a blocked feature, and the conversation shows it as
@@ -81,10 +82,32 @@ user's prompt: it resets a blocked feature, and the conversation shows it as
 Claude Code and codex hold what is typed there, so the hook lets the turn
 end for them to submit it. An `input` the agent can't take now is refused
 with `409` and `{"error", "refused"}`: `asking` (a dialog is up; answer it
-with `keys`), `not-at-prompt` (a draft in its input line, or no input line
-on screen), `not-running`, `no-window`, `inactive`, or for `interrupt` and
-`keys`, `idle` (between turns, where a key would only end pm's Stop hook).
-Text is never merged into a draft typed at the Mac.
+through `dialog`, or with `keys`), `not-at-prompt` (a draft in its input
+line, or no input line on screen), `not-running`, `no-window`, `inactive`,
+or for `interrupt` and `keys`, `idle` (between turns, where a key would only
+end pm's Stop hook). Text is never merged into a draft typed at the Mac.
+
+A question, a permission prompt or a plan approval on a Claude Code
+agent's screen, and a permission ask on an opencode agent's, can be
+answered through `dialog`. The answer goes back as the harness's own
+decision, the way one given at the terminal does — pm's dialog hook
+([harnesses](harnesses.md)) holds the harness's decision point open and
+hands it the answer — never as keys. The terminal's dialog stays up
+meanwhile and the first answer wins: one already answered, at the terminal
+or by another device, gets `409` with `refused: "answered"`, one whose hook
+has ended `"gone"`. A dialog's `choices` are those its harness's CLI
+offers (`id`, `label`, and `takes_message` for one that takes a `message`
+for the agent); a question dialog's `questions` are answered by the
+`answer` choice with `answers`, question text → an option's label or the
+user's own words (a list for a multi-select). The snapshot names an
+answerable dialog by its id (`waiting.dialog`). Of several dialogs open at
+once only the latest can be answered remotely. Everything else — every
+codex dialog, an opencode question, a startup dialog (trust, login), an
+MCP server's request, an error — is answered at the terminal: codex runs
+its hooks before it shows a dialog, so a hook waiting on the phone would
+hide the terminal's, and opencode's question form has no reply a plugin
+can give. An opencode agent approves its own permission asks unless
+`[harness.opencode] auto = false`.
 
 ## Transcript contract (version 1)
 
@@ -231,7 +254,8 @@ agent's tmux target, `null` while it has none. `waiting` is what an
 `asking`, `unarmed` or `background` agent is at (`kind` one of `question`,
 `permission`, `plan`, `dialog`, `startup`, `interrupted`, `hook-ended`,
 `error`, `prompt`, `tripped`, `background`), else `null`; its `since` is
-when that began, `null` for `tripped`. `background_since` is when the
+when that began, `null` for `tripped`. `dialog` is the id of a dialog that
+can be answered remotely, present only then. `background_since` is when the
 scope's longest-waiting `background` agent began waiting, `null` with none.
 `last_activity` is the last time any of the scope's agents showed
 activity, `null` if none ever has.

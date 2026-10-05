@@ -267,6 +267,7 @@ mod tests {
                 kind: WaitingKind::Permission,
                 detail: "permission".into(),
                 since: None,
+                dialog: None,
             }),
         }
     }
