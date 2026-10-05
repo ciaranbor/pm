@@ -34,10 +34,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.google.mlkit.vision.barcode.BarcodeScannerOptions
-import com.google.mlkit.vision.barcode.BarcodeScanning
-import com.google.mlkit.vision.barcode.common.Barcode
-import com.google.mlkit.vision.common.InputImage
 import dev.pm.app.model.Pairing
 import java.util.concurrent.Executors
 
@@ -92,26 +88,17 @@ fun PairScreen(paired: (Pairing) -> Unit, modifier: Modifier = Modifier) {
     }
 }
 
-/**
- * A camera preview reading QR codes. pm draws its code for a dark terminal, light on dark, which a
- * scanner may not read the right way round; every other frame is inverted before it is scanned.
- */
+/** A camera preview reading QR codes. */
 @Composable
 private fun Scanner(onPairing: (Pairing) -> Unit, onOther: () -> Unit) {
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
     val executor = remember { Executors.newSingleThreadExecutor() }
-    val scanner = remember {
-        BarcodeScanning.getClient(
-            BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
-        )
-    }
     var done by remember { mutableStateOf(false) }
     val preview = remember { PreviewView(context) }
 
     DisposableEffect(owner) {
         val future = ProcessCameraProvider.getInstance(context)
-        var frame = 0L
         future.addListener(
             {
                 val provider = future.get()
@@ -122,23 +109,18 @@ private fun Scanner(onPairing: (Pairing) -> Unit, onOther: () -> Unit) {
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .build()
                 analysis.setAnalyzer(executor) { proxy ->
-                    val image = grey(proxy, invert = frame++ % 2 == 1L)
-                    scanner
-                        .process(image)
-                        .addOnSuccessListener { codes ->
-                            val text =
-                                codes.firstNotNullOfOrNull { it.rawValue }
-                                    ?: return@addOnSuccessListener
-                            if (done) return@addOnSuccessListener
-                            val pairing = Pairing.parse(text)
-                            if (pairing == null) {
-                                onOther()
-                            } else {
-                                done = true
-                                onPairing(pairing)
-                            }
+                    val text = proxy.use { QrDecoder.decode(luminance(it), it.width, it.height) }
+                    if (text == null || done) return@setAnalyzer
+                    val pairing = Pairing.parse(text)
+                    ContextCompat.getMainExecutor(context).execute {
+                        if (done) return@execute
+                        if (pairing == null) {
+                            onOther()
+                        } else {
+                            done = true
+                            onPairing(pairing)
                         }
-                        .addOnCompleteListener { proxy.close() }
+                    }
                 }
                 provider.unbindAll()
                 provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, shown, analysis)
@@ -147,33 +129,21 @@ private fun Scanner(onPairing: (Pairing) -> Unit, onOther: () -> Unit) {
         )
         onDispose {
             runCatching { future.get().unbindAll() }
-            scanner.close()
             executor.shutdown()
         }
     }
     AndroidView(factory = { preview }, modifier = Modifier.fillMaxWidth().aspectRatio(1f))
 }
 
-/**
- * The frame's luminance as an NV21 image, inverted on request; colour plays no part in a QR code.
- */
-private fun grey(proxy: ImageProxy, invert: Boolean): InputImage {
+/** The frame's luminance plane, row by row without padding; colour plays no part in a QR code. */
+private fun luminance(proxy: ImageProxy): ByteArray {
     val plane = proxy.planes[0]
     val width = proxy.width
-    val height = proxy.height
-    val nv21 = ByteArray(width * height * 3 / 2) { 128.toByte() }
+    val pixels = ByteArray(width * proxy.height)
     val buffer = plane.buffer
-    for (row in 0 until height) {
+    for (row in 0 until proxy.height) {
         buffer.position(row * plane.rowStride)
-        buffer.get(nv21, row * width, width)
+        buffer.get(pixels, row * width, width)
     }
-    if (invert)
-        for (i in 0 until width * height) nv21[i] = (255 - (nv21[i].toInt() and 0xFF)).toByte()
-    return InputImage.fromByteArray(
-        nv21,
-        width,
-        height,
-        proxy.imageInfo.rotationDegrees,
-        InputImage.IMAGE_FORMAT_NV21,
-    )
+    return pixels
 }

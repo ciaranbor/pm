@@ -9,36 +9,25 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mikepenz.markdown.m3.Markdown
 import dev.pm.app.data.Connection
-import dev.pm.app.model.Pairing
-import dev.pm.app.push.Notifications
 import java.time.Instant
 
 /** How long ago `then` (epoch ms) was, in words. */
@@ -171,107 +160,5 @@ internal fun Retryable(text: String, retry: () -> Unit, modifier: Modifier = Mod
             Text(text, textAlign = TextAlign.Center)
             OutlinedButton(onClick = retry) { Text("Retry") }
         }
-    }
-}
-
-@Composable
-fun SettingsScreen(
-    pairing: Pairing?,
-    connection: Connection,
-    vapid: suspend () -> String?,
-    pair: () -> Unit,
-    unpair: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val context = LocalContext.current
-    var distributor by remember { mutableStateOf(Notifications.current(context)) }
-    var problem by remember { mutableStateOf<String?>(null) }
-    var allowed by remember { mutableStateOf(Notifications.allowed(context)) }
-    LifecycleResumeEffect(context) {
-        allowed = Notifications.allowed(context)
-        onPauseOrDispose {}
-    }
-    var choosing by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(choosing) {
-        val chosen = choosing ?: return@LaunchedEffect
-        val key = vapid()
-        if (key == null) {
-            problem =
-                "Connect to the server first: it gives the key a subscription is made against."
-        } else {
-            Notifications.use(context, chosen, key)
-            distributor = chosen
-            problem = null
-        }
-        choosing = null
-    }
-    Column(
-        modifier.verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("Server", style = MaterialTheme.typography.titleMedium)
-        if (pairing == null) {
-            Text("Not paired.")
-            OutlinedButton(onClick = pair) { Text("Pair") }
-        } else {
-            Text(pairing.url)
-            Text(
-                "This phone is “${pairing.device}”. " +
-                    when (connection) {
-                        Connection.Live -> "Connected."
-                        Connection.Connecting -> "Connecting…"
-                        is Connection.Unreachable -> "Unreachable: ${connection.reason}"
-                        Connection.Unauthorized -> "Its token was revoked."
-                        Connection.Unpaired -> ""
-                    }
-            )
-            OutlinedButton(onClick = pair) { Text("Pair again") }
-            OutlinedButton(onClick = unpair) { Text("Forget this server") }
-        }
-
-        Text("Notifications", style = MaterialTheme.typography.titleMedium)
-        Text(
-            "pm serve pushes through a UnifiedPush distributor, which reaches the phone without Tailscale. " +
-                "Install ntfy (set to use ntfy.sh) to receive them without Google; otherwise Google's push service is used.",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        if (!allowed) {
-            Text(
-                "Notifications are off for pm in Android's settings.",
-                color = MaterialTheme.colorScheme.error,
-            )
-            OutlinedButton(onClick = { context.startActivity(Notifications.settings(context)) }) {
-                Text("Open notification settings")
-            }
-        }
-        val all = Notifications.distributors(context)
-        if (all.isEmpty()) Text("No distributor is available on this phone.")
-        Column(Modifier.selectableGroup()) {
-            all.forEach { name ->
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier =
-                        Modifier.fillMaxWidth()
-                            .heightIn(min = 48.dp)
-                            .selectable(
-                                selected = name == distributor,
-                                enabled = pairing != null,
-                                role = Role.RadioButton,
-                                onClick = { choosing = name },
-                            ),
-                ) {
-                    RadioButton(
-                        selected = name == distributor,
-                        onClick = null,
-                        enabled = pairing != null,
-                    )
-                    Text(
-                        if (name == context.packageName) "Google (built in)" else name,
-                        modifier = Modifier.padding(start = 8.dp),
-                    )
-                }
-            }
-        }
-        problem?.let { Text(it, color = MaterialTheme.colorScheme.error) }
     }
 }

@@ -66,6 +66,9 @@ pub struct State {
     pub exe: PathBuf,
     pub started: DateTime<Utc>,
     pub port: u16,
+    /// Empty when written by a pm that predates the field.
+    #[serde(default)]
+    pub version: String,
 }
 
 impl State {
@@ -76,6 +79,7 @@ impl State {
             exe: std::env::current_exe().unwrap_or_default(),
             started: Utc::now(),
             port,
+            version: crate::version::VERSION.to_string(),
         }
     }
 

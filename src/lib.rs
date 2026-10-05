@@ -15,3 +15,4 @@ pub mod tailscale;
 #[cfg(test)]
 pub mod testing;
 pub mod tmux;
+pub mod version;

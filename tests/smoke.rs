@@ -1458,3 +1458,93 @@ fn a_project_moves_to_a_fresh_machine_and_its_agent_resumes() {
         .success()
         .stdout(predicate::str::contains("other"));
 }
+
+/// A static file server of `dir` on loopback, for as long as the test runs;
+/// its URL.
+fn serve_dir(dir: &Path) -> String {
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr().to_ip().unwrap());
+    let dir = dir.to_path_buf();
+    std::thread::spawn(move || {
+        for request in server.incoming_requests() {
+            let file = dir.join(request.url().trim_start_matches('/'));
+            let _ = match std::fs::read(&file) {
+                Ok(bytes) => request.respond(tiny_http::Response::from_data(bytes)),
+                Err(_) => request.respond(tiny_http::Response::empty(404)),
+            };
+        }
+    });
+    url
+}
+
+/// Catches: the install script against a real HOME and PATH — a first
+/// install into `~/.local/bin` off PATH, a re-run finding that pm on PATH
+/// and upgrading in place, and a checksum mismatch installing nothing.
+#[test]
+#[ignore]
+fn the_install_script_installs_reinstalls_and_refuses_a_bad_checksum() {
+    use sha2::Digest;
+    let s = Smoke::new();
+    let release = tempfile::tempdir().unwrap();
+    let asset = format!("pm-{}", pm::version::TARGET);
+    let binary = std::fs::read(env!("CARGO_BIN_EXE_pm")).unwrap();
+    std::fs::write(release.path().join(&asset), &binary).unwrap();
+    let sums = |bytes: &[u8]| {
+        let digest: String = sha2::Sha256::digest(bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        std::fs::write(
+            release.path().join("SHA256SUMS"),
+            format!("{digest}  {asset}\n"),
+        )
+        .unwrap();
+    };
+    sums(&binary);
+    let url = serve_dir(release.path());
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/install.sh");
+    let installed = s.home().join(".local/bin/pm");
+    let install = |path: &str| {
+        let mut cmd = Command::from_std(s.run_cmd(s.home(), "env"));
+        cmd.args([
+            &format!("PATH={path}"),
+            &format!("PM_DOWNLOAD_URL={url}"),
+            "sh",
+            script,
+        ]);
+        cmd
+    };
+
+    install("/usr/bin:/bin")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "Installed pm {}",
+            env!("CARGO_PKG_VERSION")
+        )))
+        .stdout(predicate::str::contains("run-shell 'pm tmux init'"))
+        .stderr(predicate::str::contains("is not on your PATH"));
+    assert_eq!(std::fs::read(&installed).unwrap(), binary);
+
+    let on_path = format!("{}:/usr/bin:/bin", installed.parent().unwrap().display());
+    install(&on_path)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(installed.display().to_string()))
+        .stdout(predicate::str::contains("No registered projects"))
+        .stdout(predicate::str::contains("run-shell").not())
+        .stderr(predicate::str::contains("not on your PATH").not());
+    assert_eq!(std::fs::read(&installed).unwrap(), binary);
+
+    sums(b"something else");
+    install(&on_path)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("does not match SHA256SUMS"));
+    assert_eq!(std::fs::read(&installed).unwrap(), binary);
+    let left: Vec<_> = std::fs::read_dir(installed.parent().unwrap())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(left, ["pm"]);
+}

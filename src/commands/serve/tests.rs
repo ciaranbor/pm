@@ -211,7 +211,7 @@ fn start(config: Config) -> Running {
 }
 
 #[test]
-fn an_event_stream_sends_changes_transitions_and_heartbeats() {
+fn an_event_stream_sends_changes_transitions_and_heartbeats_and_every_reply_its_version() {
     let mut f = fixture();
     f.config.heartbeat = Duration::from_millis(500);
     let token = pair(&f.config, "reader");
@@ -225,10 +225,21 @@ fn an_event_stream_sends_changes_transitions_and_heartbeats() {
     .unwrap();
     let server = start(f.config.clone());
 
+    let version = format!("Pm-Version: {}", crate::version::VERSION);
+    let refused = until(&connect(server.0.addr(), "/v1/snapshot", "nope"), |l| {
+        l.is_empty()
+    });
+    assert!(refused[0].contains("401"), "{refused:#?}");
+    assert!(
+        refused.iter().any(|l| l.eq_ignore_ascii_case(&version)),
+        "{refused:#?}"
+    );
+
     let events = connect(server.0.addr(), "/v1/events", &token);
     let opening = until(&events, |l| l.starts_with("data: "));
     assert_eq!(opening[0], "HTTP/1.1 200 OK");
     assert!(opening.contains(&"Content-Type: text/event-stream".to_string()));
+    assert!(opening.contains(&version), "{opening:#?}");
     assert!(opening.contains(&"event: snapshot".to_string()));
 
     let summary = paths::summary_path(&f.project, "login");

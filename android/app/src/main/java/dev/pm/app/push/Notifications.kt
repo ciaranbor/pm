@@ -13,12 +13,14 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.Person
 import androidx.core.app.RemoteInput
+import androidx.core.net.toUri
 import androidx.core.os.bundleOf
 import dev.pm.app.MainActivity
 import dev.pm.app.R
 import dev.pm.app.model.AttentionKind
 import dev.pm.app.model.PushedTransition
 import dev.pm.app.model.Snapshot
+import dev.pm.app.update.Update
 import org.unifiedpush.android.connector.UnifiedPush
 
 /** Where a notification leads: the scope, and the agent when one is named. */
@@ -67,6 +69,12 @@ object Notifications {
             R.string.channel_died,
             R.string.channel_died_description,
             NotificationManager.IMPORTANCE_HIGH,
+        ),
+        AppUpdate(
+            "app-update",
+            R.string.channel_update,
+            R.string.channel_update_description,
+            NotificationManager.IMPORTANCE_DEFAULT,
         );
 
         companion object {
@@ -87,6 +95,7 @@ object Notifications {
     /** Every alert's id; its tag, the encoded [PushedTransition.key], tells them apart. */
     private const val ALERT_ID = 1
     private const val EXTRA_TRANSITION = "dev.pm.app.transition"
+    private const val UPDATE_ID = 2
 
     fun createChannels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java)
@@ -235,6 +244,32 @@ object Notifications {
     fun replyingTo(intent: Intent): PushedTransition? =
         intent.getStringExtra(EXTRA_TRANSITION)?.let(PushedTransition::parse)
 
+    /** Offer `update`: tapped, the browser downloads its APK, which Android installs over pm. */
+    fun update(context: Context, update: Update) {
+        if (!allowed(context)) return
+        val open =
+            PendingIntent.getActivity(
+                context,
+                0,
+                download(update),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+        val notification =
+            NotificationCompat.Builder(context, Channel.AppUpdate.id)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle(context.getString(R.string.update_title, update.version))
+                .setContentText(context.getString(R.string.update_text))
+                .setContentIntent(open)
+                .setAutoCancel(true)
+                .build()
+        @Suppress("MissingPermission")
+        NotificationManagerCompat.from(context).notify(UPDATE_ID, notification)
+    }
+
+    /** What opens `update`'s APK in the browser. */
+    fun download(update: Update): Intent =
+        Intent(Intent.ACTION_VIEW, update.apk.toUri()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
     /** Withdraw each alert `snapshot` shows is over, and bring the summary up to date. */
     fun reconcile(context: Context, snapshot: Snapshot) {
         val alerts = alerts(context)
@@ -310,16 +345,19 @@ object Notifications {
 
     /**
      * Subscribe through a distributor against the server's `vapid` key: the user's default one,
-     * else an installed one (ntfy), else the embedded FCM distributor, which needs Google Play
-     * services. Registration is asynchronous; the endpoint arrives at [PushService.onNewEndpoint].
+     * else an installed one (ntfy), else the google build's embedded one, Google's push service,
+     * which needs Google Play services. With none, nothing is registered and [PollWorker] notifies
+     * instead. Registration is asynchronous; the endpoint arrives at [PushService.onNewEndpoint].
      */
     fun subscribe(activity: Activity, vapid: String) {
         UnifiedPush.tryUseCurrentOrDefaultDistributor(activity) { found ->
             if (!found) {
                 val installed = UnifiedPush.getDistributors(activity)
                 val chosen =
-                    installed.firstOrNull { it != activity.packageName } ?: installed.firstOrNull()
-                chosen?.let { UnifiedPush.saveDistributor(activity, it) }
+                    installed.firstOrNull { it != activity.packageName }
+                        ?: installed.firstOrNull()
+                        ?: return@tryUseCurrentOrDefaultDistributor
+                UnifiedPush.saveDistributor(activity, chosen)
             }
             UnifiedPush.register(activity, messageForDistributor = "pm", vapid = vapid)
         }

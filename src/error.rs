@@ -142,6 +142,9 @@ pub enum PmError {
     #[error("{0}")]
     Serve(String),
 
+    #[error("self-update: {0}")]
+    SelfUpdate(String),
+
     #[error("Transcript unreadable: {0}")]
     Transcript(String),
 }

@@ -54,12 +54,21 @@ pub(super) fn findings(m: &Machine<'_>) -> Result<Vec<Finding>> {
         })
         .collect();
 
+    let version = crate::version::VERSION;
+    let script = format!(
+        "curl -fsSL {} | PM_VERSION={} sh",
+        crate::commands::self_update::INSTALL_SCRIPT,
+        crate::version::base(version)
+    );
     out.push(Finding::manual(
         "",
-        format!(
-            "install pm {}: `cargo install --path .` at the commit it was built from",
-            env!("CARGO_PKG_VERSION")
-        ),
+        if crate::version::is_dev(version) {
+            format!(
+                "install pm {version}: `cargo install --path .` at the commit it was built from, or its release: `{script}`"
+            )
+        } else {
+            format!("install pm {version}: `{script}`")
+        },
         None,
     ));
 

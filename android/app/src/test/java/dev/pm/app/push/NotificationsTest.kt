@@ -42,6 +42,7 @@ class NotificationsTest {
                 "needs-input" to NotificationManager.IMPORTANCE_HIGH,
                 "ready" to NotificationManager.IMPORTANCE_DEFAULT,
                 "agent-died" to NotificationManager.IMPORTANCE_HIGH,
+                "app-update" to NotificationManager.IMPORTANCE_DEFAULT,
             ),
             manager.notificationChannels.associate { it.id to it.importance },
         )

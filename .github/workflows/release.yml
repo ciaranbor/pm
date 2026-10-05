@@ -1,0 +1,148 @@
+# Publishes a release when `scripts/release` pushes its tag: the pm binaries,
+# the signed Android APK, install.sh, and SHA256SUMS over them all.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: version
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          cargo=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)
+          if [ "$version" != "$cargo" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml's version $cargo"
+            exit 1
+          fi
+          scripts/release --notes "$version" > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::CHANGELOG.md has no notes for $version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          case $version in
+            *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+      - uses: actions/upload-artifact@v7
+        with:
+          name: notes
+          path: notes.md
+
+  build:
+    needs: verify
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          # The oldest supported runner, for the oldest glibc the binary needs.
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build
+        env:
+          PM_RELEASE: "1"
+        run: |
+          cargo build --release --locked --target ${{ matrix.target }}
+          mkdir dist
+          cp target/${{ matrix.target }}/release/pm dist/pm-${{ matrix.target }}
+          dist/pm-${{ matrix.target }} --version
+          test "$(dist/pm-${{ matrix.target }} --version)" = "pm ${{ needs.verify.outputs.version }}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pm-${{ matrix.target }}
+          path: dist/
+
+  android:
+    needs: verify
+    runs-on: ubuntu-latest
+    env:
+      # The certificate every pm APK is signed with; phones refuse an update
+      # signed with any other.
+      SIGNER_SHA256: 088ab70bc5d231494e285b9255ab6b73551abc23c0556e5ec0e5cee20123abec
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Write the signing key
+        env:
+          PM_KEYSTORE_B64: ${{ secrets.PM_KEYSTORE_B64 }}
+          PM_KEYSTORE_PASSWORD: ${{ secrets.PM_KEYSTORE_PASSWORD }}
+          PM_KEY_ALIAS: ${{ secrets.PM_KEY_ALIAS }}
+          PM_KEY_PASSWORD: ${{ secrets.PM_KEY_PASSWORD }}
+        run: |
+          if [ -z "$PM_KEYSTORE_B64" ]; then
+            echo "::error::the signing secrets are not set: run scripts/release --setup-secrets"
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$PM_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/pm-release.jks"
+          {
+            echo "storeFile=pm-release.jks"
+            printf 'storePassword=%s\n' "$PM_KEYSTORE_PASSWORD"
+            printf 'keyAlias=%s\n' "$PM_KEY_ALIAS"
+            printf 'keyPassword=%s\n' "$PM_KEY_PASSWORD"
+          } > "$RUNNER_TEMP/pm-release.properties"
+      - name: Build
+        run: android/gradlew -p android assembleGoogleRelease -PpmRelease -PpmReleaseSigning="$RUNNER_TEMP/pm-release.properties"
+      - name: Check the signer
+        run: |
+          apksigner=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n1)/apksigner
+          mkdir dist
+          cp android/app/build/outputs/apk/google/release/app-google-release.apk dist/pm-android-arm64-v8a.apk
+          "$apksigner" verify --print-certs dist/pm-android-arm64-v8a.apk | tee certs.txt
+          grep -q "certificate SHA-256 digest: $SIGNER_SHA256" certs.txt || {
+            echo "::error::the APK is not signed with pm's key"
+            exit 1
+          }
+      - name: Remove the signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/pm-release.jks" "$RUNNER_TEMP/pm-release.properties"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pm-android
+          path: dist/
+
+  publish:
+    needs: [verify, build, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.verify.outputs.version }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+        run: |
+          mv dist/notes.md notes.md
+          cp install.sh dist/
+          (cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS)
+          flags=()
+          [ "$PRERELEASE" = true ] && flags+=(--prerelease)
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "pm $VERSION" \
+            --notes-file notes.md "${flags[@]}" dist/*

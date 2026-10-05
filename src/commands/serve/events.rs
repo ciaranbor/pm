@@ -110,11 +110,15 @@ pub(super) fn stream(
     let opening = watch
         .as_mut()
         .and_then(|(watch, _)| transcript_event(watch, &mut failing));
-    out.write_all(
-        b"HTTP/1.1 200 OK\r\n\
-          Content-Type: text/event-stream\r\n\
-          Cache-Control: no-cache\r\n\
-          Connection: close\r\n\r\n",
+    write!(
+        out,
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: text/event-stream\r\n\
+         Cache-Control: no-cache\r\n\
+         {}: {}\r\n\
+         Connection: close\r\n\r\n",
+        super::VERSION_HEADER,
+        crate::version::VERSION,
     )?;
     out.write_all(first.as_bytes())?;
     if let Some(opening) = opening {

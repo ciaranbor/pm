@@ -18,6 +18,20 @@ fn completions_generates_bash_output() {
         .stdout(predicate::str::contains("_pm"));
 }
 
+#[test]
+fn version_is_the_cargo_version_with_build_metadata_off_a_release() {
+    let out = pm().arg("--version").assert().success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let version = stdout.trim().strip_prefix("pm ").unwrap();
+    let pattern =
+        regex::Regex::new(r"^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$").unwrap();
+    assert!(pattern.is_match(version), "{stdout}");
+    assert!(
+        version.starts_with(&format!("{}+", env!("CARGO_PKG_VERSION"))),
+        "{version} is not Cargo.toml's version with build metadata"
+    );
+}
+
 fn pm() -> Command {
     let mut pm = Command::cargo_bin("pm").unwrap();
     pm.envs(no_tmux())

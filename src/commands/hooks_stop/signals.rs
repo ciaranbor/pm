@@ -55,7 +55,12 @@ extern "C" fn on_signal(signal: libc::c_int, info: *mut libc::siginfo_t, _: *mut
     let sender = if info.is_null() {
         0
     } else {
-        unsafe { (*info).si_pid }
+        // libc exposes the field through an accessor on Linux.
+        #[cfg(target_os = "linux")]
+        let pid = unsafe { (*info).si_pid() };
+        #[cfg(not(target_os = "linux"))]
+        let pid = unsafe { (*info).si_pid };
+        pid
     };
     let mut record = [0u8; RECORD];
     record[..4].copy_from_slice(&signal.to_ne_bytes());

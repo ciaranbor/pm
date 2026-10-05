@@ -968,6 +968,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             let project_root = project_root(&projects_dir, project.as_deref())?;
             let lines =
                 commands::doctor::doctor(&project_root, &projects_dir, fix, server)?.lines();
+            println!("pm {}", pm::version::VERSION);
             for line in lines {
                 println!("{line}");
             }
@@ -1019,8 +1020,8 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             }
             Ok(())
         }
-        Commands::SelfUpdate => {
-            let lines = commands::self_update::self_update()?;
+        Commands::SelfUpdate { force } => {
+            let lines = commands::self_update::self_update(force)?;
             for line in lines {
                 println!("{line}");
             }

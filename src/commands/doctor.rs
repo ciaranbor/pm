@@ -685,9 +685,11 @@ fn serve_warnings(depth: Depth) -> Vec<String> {
         return Vec::new();
     };
     let port = crate::commands::serve::configured_port(&config_dir);
-    crate::commands::serve_status::Facts::read(&home, &config_dir, port).warnings(&exe, |port| {
-        (depth == Depth::Full).then(|| crate::tailscale::check(port))
-    })
+    crate::commands::serve_status::Facts::read(&home, &config_dir, port).warnings(
+        &exe,
+        crate::version::VERSION,
+        |port| (depth == Depth::Full).then(|| crate::tailscale::check(port)),
+    )
 }
 
 /// Warn about each registry entry that can't be read; all-project commands
