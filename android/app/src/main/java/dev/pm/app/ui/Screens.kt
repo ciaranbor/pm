@@ -162,7 +162,7 @@ fun SummaryScreen(model: SummaryModel, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun Retryable(text: String, retry: () -> Unit, modifier: Modifier = Modifier) {
+internal fun Retryable(text: String, retry: () -> Unit, modifier: Modifier = Modifier) {
     Centered(modifier) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,

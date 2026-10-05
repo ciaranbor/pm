@@ -8,6 +8,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.CircularProgressIndicator
@@ -67,6 +68,16 @@ sealed interface Route : NavKey {
 
     @Serializable data class Summary(val project: String, val feature: String) : Route
 
+    /** A tool's whole output, by its result's `full` reference. */
+    @Serializable
+    data class Output(
+        val project: String,
+        val scope: String,
+        val agent: String,
+        val ref: String,
+        val tool: String,
+    ) : Route
+
     @Serializable data object Settings : Route
 
     /** The top bar's title, and the line under it that says where it is. */
@@ -80,6 +91,7 @@ sealed interface Route : NavKey {
                 is Scope -> scope to project
                 is Agent -> agent to "$project › $scope"
                 is Summary -> "Summary" to "$project › $feature"
+                is Output -> "$tool output" to "$project › $scope › $agent"
             }
 }
 
@@ -185,7 +197,7 @@ fun App(
             )
         },
     ) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize()) {
+        Column(Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize()) {
             if (snapshot != null && top != Route.Pair && top != Route.Settings)
                 StatusStrip(connection, readAt, now, model::retry, pairAgain)
             if (snapshot?.understood == false) {
@@ -271,12 +283,36 @@ fun App(
                                     key.scope,
                                     key.agent,
                                     networkChanges,
+                                    openResult = { tool, ref ->
+                                        backStack.add(
+                                            Route.Output(
+                                                key.project,
+                                                key.scope,
+                                                key.agent,
+                                                ref,
+                                                tool,
+                                            )
+                                        )
+                                    },
                                 )
                             }
                         }
                         entry<Route.Summary> { key ->
                             SummaryScreen(
                                 viewModel { SummaryModel(client, key.project, key.feature) }
+                            )
+                        }
+                        entry<Route.Output> { key ->
+                            ToolOutputScreen(
+                                viewModel {
+                                    ToolOutputModel(
+                                        client,
+                                        key.project,
+                                        key.scope,
+                                        key.agent,
+                                        key.ref,
+                                    )
+                                }
                             )
                         }
                         entry<Route.Settings> {

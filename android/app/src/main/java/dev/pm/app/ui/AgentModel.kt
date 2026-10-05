@@ -199,10 +199,6 @@ class AgentModel(
         }
     }
 
-    suspend fun fullResult(ref: String): Result<String> = runCatching {
-        client.toolResult(project, scope, agent, ref)
-    }
-
     /** Read the agent's screen every few seconds while its tab shows. */
     fun watchScreen(on: Boolean) {
         screenShown = on
