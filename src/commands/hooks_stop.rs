@@ -2,7 +2,14 @@
 //!
 //! Decision: queued messages → `block`; else a running background task or
 //! active cron → `{}` (let it stop, so the running work can finish); else
-//! block on `agent_wait` until a message arrives. `{}` is the documented
+//! block on `agent_wait` until a message arrives. A yield request
+//! ([`runtime`]), there as the hook starts or arriving while it waits,
+//! also gets `{}` when no message is queued: Claude Code and codex hold
+//! text typed while the hook runs until it returns, then submit it as the
+//! user's prompt, which ends in this hook again. A request whose text the
+//! conversation already holds — taken in mid-turn — is dropped instead. A
+//! `block` takes the request too: the harness submits what it holds with
+//! the continuation. `{}` is the documented
 //! "allow" for Stop: a `decision` other than `block` fails schema validation.
 //! Recurring crons stay active between fires, so an agent with one is
 //! message-delivered only at fire boundaries. Codex's Stop payload carries
@@ -46,11 +53,11 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use crate::commands::agent_wait;
 use crate::commands::attention::AgentState;
+use crate::commands::{agent_input, agent_wait};
 use crate::messages;
-use crate::state::paths;
 use crate::state::runtime::{self, Waiting, WaitingKind};
+use crate::state::{agent as registry, paths};
 
 use signals::{Caught, Signals};
 
@@ -248,6 +255,8 @@ fn wait_and_decide(
 ) -> crate::error::Result<Decided> {
     let block = |on_turn: &mut dyn FnMut(AgentState, u32), senders: &[String]| {
         let _ = runtime::touch_activity(project_root, feature, agent);
+        // The harness submits text it holds with the continuation.
+        let _ = runtime::take_yield_request(project_root, feature, agent);
         let unread = messages::unread_count(&paths::messages_dir(project_root), feature, agent);
         on_turn(AgentState::Busy, unread);
         Decided::Answer(block_decision(senders))
@@ -264,14 +273,31 @@ fn wait_and_decide(
         on_turn(AgentState::Background, 0);
         return Ok(Decided::Answer(allow_decision()));
     }
-    on_turn(AgentState::Idle, 0);
-    let mut ended = None;
-    let waited =
-        agent_wait::agent_wait_while(project_root, feature, agent, None, poll_interval, |d| {
-            ended = pause(d);
-            ended.is_none()
-        })?;
-    if waited.is_none() {
+    if let Some(answer) = yielded(project_root, feature, agent, on_turn)? {
+        return Ok(answer);
+    }
+    let waited = loop {
+        on_turn(AgentState::Idle, 0);
+        let mut ended = None;
+        let mut yield_requested = false;
+        let waited =
+            agent_wait::agent_wait_while(project_root, feature, agent, None, poll_interval, |d| {
+                ended = pause(d);
+                yield_requested =
+                    ended.is_none() && runtime::yield_requested(project_root, feature, agent);
+                ended.is_none() && !yield_requested
+            })?;
+        if !yield_requested {
+            break waited.ok_or(ended);
+        }
+        if !unread_senders(project_root, feature, agent)?.is_empty() {
+            break Ok(0);
+        }
+        if let Some(answer) = yielded(project_root, feature, agent, on_turn)? {
+            return Ok(answer);
+        }
+    };
+    if let Err(ended) = waited {
         let ended = ended.unwrap_or(Ended::HarnessGone);
         if let Ended::By(why) = &ended {
             hook_ended(project_root, feature, agent, why.clone(), on_turn);
@@ -280,6 +306,40 @@ fn wait_and_decide(
     }
     let senders = unread_senders(project_root, feature, agent)?;
     Ok(block(on_turn, &senders))
+}
+
+/// Take a yield request (`runtime::request_yield`), so the harness can
+/// submit the text typed into it: the answer that lets the turn end, the
+/// agent busy with the text. `None` when there is none, or its text is
+/// already in the conversation — taken in mid-turn — so nothing is held.
+fn yielded(
+    project_root: &std::path::Path,
+    feature: &str,
+    agent: &str,
+    on_turn: &mut dyn FnMut(AgentState, u32),
+) -> crate::error::Result<Option<Decided>> {
+    let Some(request) = runtime::take_yield_request(project_root, feature, agent)? else {
+        return Ok(None);
+    };
+    // Best-effort: the request is real, so an unreadable conversation yields.
+    let said = || -> crate::error::Result<bool> {
+        let Some(after) = &request.after else {
+            return Ok(false);
+        };
+        Ok(
+            match registry::conversation(project_root, feature, agent)? {
+                Some(conversation) => {
+                    agent_input::said(&conversation, after, &request.text_sha256)?
+                }
+                None => false,
+            },
+        )
+    };
+    if said().unwrap_or(false) {
+        return Ok(None);
+    }
+    on_turn(AgentState::Busy, 0);
+    Ok(Some(Decided::Answer(allow_decision())))
 }
 
 /// Senders with unread messages, oldest first — the order bare `pm msg read`
@@ -631,6 +691,183 @@ mod tests {
             runtime::read_waiting(&root, "login", "qa").map(|w| w.kind),
             Some(WaitingKind::Background)
         );
+    }
+
+    fn request(root: &std::path::Path, after: Option<String>) {
+        let request = runtime::YieldRequest {
+            text_sha256: agent_input::sha256("deploy it"),
+            after,
+        };
+        runtime::request_yield(root, "login", "reviewer", &request).unwrap();
+    }
+
+    #[test]
+    fn a_request_for_text_already_taken_in_mid_turn_is_dropped_and_the_hook_waits() {
+        use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        let mut registry = AgentRegistry::default();
+        registry.register(
+            "reviewer",
+            AgentEntry {
+                agent_type: AgentType::Agent,
+                session_id: "s1".into(),
+                window_name: "reviewer".into(),
+                active: true,
+                agent_definition: None,
+                harness: crate::harness::Harness::ClaudeCode,
+                spawned_at: None,
+            },
+        );
+        registry.save(&paths::agents_dir(&root), "login").unwrap();
+        let transcript = dir.path().join("s1.jsonl");
+        let line = |uuid: &str, text: &str| {
+            json!({"type": "user", "uuid": uuid, "promptSource": "typed",
+                   "message": {"role": "user", "content": text}})
+            .to_string()
+                + "\n"
+        };
+        std::fs::write(&transcript, line("u1", "earlier")).unwrap();
+        runtime::write_session_path(
+            &root,
+            "login",
+            "reviewer",
+            runtime::SessionPath::Transcript,
+            Some(&transcript),
+        )
+        .unwrap();
+        let after = registry::conversation(&root, "login", "reviewer")
+            .unwrap()
+            .unwrap()
+            .page(None, 1)
+            .unwrap()
+            .after;
+        request(&root, Some(after));
+        let mut file = std::fs::File::options()
+            .append(true)
+            .open(&transcript)
+            .unwrap();
+        std::io::Write::write_all(&mut file, line("u2", "deploy it\n").as_bytes()).unwrap();
+        let mut polls = 0;
+
+        let result = wait_and_decide(
+            false,
+            &root,
+            "login",
+            "reviewer",
+            Some(Duration::from_millis(10)),
+            &mut |_, _| {},
+            |_| {
+                polls += 1;
+                (polls > 3).then(|| Ended::By("ended by SIGTERM".to_string()))
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result, Decided::Ended(Ended::By("ended by SIGTERM".into())));
+        assert!(!runtime::yield_requested(&root, "login", "reviewer"));
+    }
+
+    #[test]
+    fn a_request_yields_when_the_conversation_cannot_be_read() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        std::fs::create_dir_all(paths::agents_dir(&root)).unwrap();
+        std::fs::write(paths::agents_dir(&root).join("login.toml"), "not = [toml").unwrap();
+        request(&root, Some("0".into()));
+
+        let result = wait_and_decide(
+            false,
+            &root,
+            "login",
+            "reviewer",
+            Some(Duration::from_secs(30)),
+            &mut |_, _| {},
+            |_| None,
+        )
+        .unwrap()
+        .answer();
+
+        assert_eq!(result, "{}");
+    }
+
+    #[test]
+    fn a_yield_request_lets_the_turn_end_with_the_agent_busy() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        request(&root, None);
+        let mut turns = Vec::new();
+
+        let result = wait_and_decide(
+            false,
+            &root,
+            "login",
+            "reviewer",
+            Some(Duration::from_secs(30)),
+            &mut |state, unread| turns.push((state, unread)),
+            |_| None,
+        )
+        .unwrap()
+        .answer();
+
+        assert_eq!(result, "{}");
+        assert_eq!(turns, [(AgentState::Busy, 0)]);
+        assert!(!runtime::yield_requested(&root, "login", "reviewer"));
+        assert_eq!(runtime::read_waiting(&root, "login", "reviewer"), None);
+    }
+
+    #[test]
+    fn a_yield_requested_while_waiting_ends_the_wait() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        let mut polls = 0;
+        let mut turns = Vec::new();
+
+        let result = wait_and_decide(
+            false,
+            &root,
+            "login",
+            "reviewer",
+            Some(Duration::from_millis(10)),
+            &mut |state, unread| turns.push((state, unread)),
+            |_| {
+                polls += 1;
+                if polls == 3 {
+                    request(&root, None);
+                }
+                None
+            },
+        )
+        .unwrap()
+        .answer();
+
+        assert_eq!(result, "{}");
+        assert_eq!(turns, [(AgentState::Idle, 0), (AgentState::Busy, 0)]);
+        assert!(!runtime::yield_requested(&root, "login", "reviewer"));
+    }
+
+    #[test]
+    fn messages_take_priority_over_a_yield_request() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        send(&root);
+        request(&root, None);
+
+        let result = wait_and_decide(
+            false,
+            &root,
+            "login",
+            "reviewer",
+            None,
+            &mut |_, _| {},
+            |_| None,
+        )
+        .unwrap()
+        .answer();
+
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["decision"], "block");
+        assert!(!runtime::yield_requested(&root, "login", "reviewer"));
     }
 
     #[test]

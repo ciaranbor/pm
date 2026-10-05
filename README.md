@@ -211,7 +211,8 @@ worktrees too — `main` included, unpushed history with it.
 
 ### Remote access
 
-`pm serve` serves the attention view, read-only, to pm's phone app. It
+`pm serve` serves the attention view to pm's phone app, and types what
+you send from it into agents' panes. It
 listens on `127.0.0.1` only (port 7764 by default, `[serve] port`
 otherwise); `tailscale serve` puts it on your tailnet. One command sets it
 up on a Mac:
@@ -242,9 +243,11 @@ needs a paired device's bearer token, local ones included — through
 `tailscale serve` every request arrives on loopback. `pair` prints the
 token once, beside the QR code; `pm serve devices` lists the paired
 devices and `pm serve revoke <device>` withdraws one's token, and its push
-subscription, at once. pm
+subscription, at once. A paired device reads everything and can type
+into agents. pm
 does not rely on Tailscale's identity headers: a tagged device sends none.
-`pm serve` logs each request with its device to stderr, which the
+`pm serve` logs each request with its device to stderr — for input, the
+keys pressed or the SHA-256 of the text, never the text — which the
 LaunchAgent sends to `serve.log` (`pm serve logs`) in the `serve/` dir of
 pm's config dir, beside the devices file and the server's VAPID key
 (`vapid.pem`); `pm state` syncs none of them.
@@ -272,8 +275,7 @@ push_hosts = ["ntfy.example.org"]
 Pushes go only to public addresses, whatever a host resolves to, and
 follow no redirect.
 
-The API is under `/v1`; every path needs the `read` scope, and only
-`push` takes anything but `GET`:
+The API is under `/v1`; every path needs a paired device's token:
 
 | Path | Returns |
 |---|---|
@@ -284,6 +286,20 @@ The API is under `/v1`; every path needs the `read` scope, and only
 | `agents/{project}/{scope}/{agent}/transcript?before={cursor}&limit={n}` | the agent's conversation, a page back from `before` (the end when absent); `limit` 1–200, default 50 |
 | `agents/{project}/{scope}/{agent}/transcript/result?ref={full}` | a tool result's whole output, plain text |
 | `push` | `GET`: `{"vapid": <public key>}`, to subscribe against; `PUT` a Web Push subscription (`{"endpoint": <https URL>, "keys": {"p256dh", "auth"}}`) to push to this device; `DELETE` to stop |
+| `agents/{project}/{scope}/{agent}/input` | `POST {"text"}` (up to 128 KB): typed into the agent's input line and submitted; `{"delivery": "sent", "confirmed"}` once submitted (`confirmed`: seen in the conversation within 5 s), or `{"delivery": "queued"}` when the agent is mid-turn and takes it as a step ends |
+| `agents/{project}/{scope}/{agent}/interrupt` | `POST`: presses Escape, ending the agent's turn; refused while it waits for a message |
+| `agents/{project}/{scope}/{agent}/keys` | `POST {"keys": [...]}`: presses each of `Escape Enter Tab BTab Up Down Left Right Space BSpace C-c 0`–`9`; refused while it waits for a message |
+
+Input is typed into the agent's pane as if at its keyboard, so it is the
+user's prompt: it resets a blocked feature, and the conversation shows it as
+`user`. An agent between turns waiting in pm's Stop hook gets it too:
+Claude Code and codex hold what is typed there, so the hook lets the turn
+end for them to submit it. An `input` the agent can't take now is refused
+with `409` and `{"error", "refused"}`: `asking` (a dialog is up; answer it
+with `keys`), `not-at-prompt` (a draft in its input line, or no input line
+on screen), `not-running`, `no-window`, `inactive`, or for `interrupt` and
+`keys`, `idle` (between turns, where a key would only end pm's Stop hook). Text is
+never merged into a draft typed at the Mac.
 
 #### Transcript contract (version 1)
 
@@ -369,18 +385,23 @@ sends the server its subscription; Settings switches between them. For
 notifications off the tailnet without Google, install ntfy from F-Droid
 (its default server is ntfy.sh) before pairing.
 
-The app is read-only. It opens on what needs you: every scope across
+The app opens on what needs you: every scope across
 projects whose attention isn't `none`, ranked by kind as the attention
 view ranks it, then the longest quiet first; a row opens the agent its
 attention names, else the scope. Below come the projects, most urgent
 first, then a project's `main` and features, then a scope's agents, each
 marked with the glyphs and colours of the tmux badges ([tmux
 integration](#tmux-integration)); an agent's conversation, from its
-harness's transcript, and its screen; a feature's summary. Notifications
+harness's transcript, and its screen; a feature's summary. The
+conversation takes a message to the agent, and
+shows whether it was queued, sent and seen; a busy agent can be
+interrupted; the screen has keys for answering a dialog, which the message
+box can't. Notifications
 come on a channel per kind (needs input, ready for review, agent died),
 each tuned in Android's settings; a tapped one opens the scope, or the
 agent it names, and opening the app withdraws those a snapshot shows are
-over.
+over. One naming an agent blocked on you or ready for review takes a reply
+inline; a reply that couldn't be sent shows why, with its text.
 
 ## Concepts
 
@@ -466,7 +487,9 @@ just the first message.
 Exception: while a Claude Code background task or session cron is running
 and nothing is queued, the hook lets the turn end so that work isn't
 stalled; its completion wakes the agent, which reads `background` until
-then. Codex and opencode agents block every turn. The wait has a one-year
+then. Codex and opencode agents block every turn. It also lets the turn
+end for text sent from the phone app that Claude Code or codex holds
+behind the hook ([Remote access](#remote-access)). The wait has a one-year
 timeout, so it never times out in practice.
 
 An agent whose turn ends any other way never re-enters the hook, so a

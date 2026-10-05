@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import dev.pm.app.api.PmClient
 import dev.pm.app.api.PmError
 import dev.pm.app.model.Conversation
+import dev.pm.app.model.Item
 import dev.pm.app.model.TranscriptEvent
 import dev.pm.app.model.Transcripts
 import kotlin.time.Duration.Companion.seconds
@@ -31,6 +32,24 @@ sealed interface ChatState {
     data class Failed(val reason: String) : ChatState
 }
 
+/** Text the user sent the agent, and how far it got. */
+sealed interface Outbox {
+    val text: String
+
+    data class Sending(override val text: String) : Outbox
+
+    /** The agent is mid-turn: its harness holds the text until a step ends. */
+    data class Queued(override val text: String) : Outbox
+
+    /** Submitted, but not seen in the conversation yet. */
+    data class Sent(override val text: String) : Outbox
+
+    /** In the conversation. */
+    data class Seen(override val text: String) : Outbox
+
+    data class Failed(override val text: String, val reason: String) : Outbox
+}
+
 /**
  * One agent's conversation, kept current while its view is open: the latest page, then a watched
  * event stream from where that page ended, reopened at once when `networkChanges` emits.
@@ -47,6 +66,19 @@ class AgentModel(
 
     private val _screen = MutableStateFlow<Result<String>?>(null)
     val screen: StateFlow<Result<String>?> = _screen.asStateFlow()
+
+    private val _outbox = MutableStateFlow<Outbox?>(null)
+    val outbox: StateFlow<Outbox?> = _outbox.asStateFlow()
+
+    /** Why the last interrupt or key press failed; cleared by the next. */
+    private val _notice = MutableStateFlow<String?>(null)
+    val notice: StateFlow<String?> = _notice.asStateFlow()
+
+    /**
+     * Items the stream appended since the last send began: only these can be what was sent. A page
+     * read, or a reset, may hold the same words said before ("yes").
+     */
+    private val arrivedSinceSend = mutableListOf<Item>()
 
     private var watching: Job? = null
     private var reconnecting: Job? = null
@@ -140,6 +172,67 @@ class AgentModel(
                     shown.conversation.appended(items, update.after)
                 }
             _chat.value = ChatState.Shown(next, live = true)
+            if (!update.reset) {
+                arrivedSinceSend += items
+                seen()
+            }
+        }
+    }
+
+    /** Type `text` into the agent; [outbox] follows it until it is seen in the conversation. */
+    fun send(text: String) {
+        if (_outbox.value is Outbox.Sending) return
+        arrivedSinceSend.clear()
+        _outbox.value = Outbox.Sending(text)
+        viewModelScope.launch {
+            _outbox.value =
+                try {
+                    val delivered = client.sendText(project, scope, agent, text)
+                    when {
+                        delivered.queued -> Outbox.Queued(text)
+                        delivered.confirmed == true -> Outbox.Seen(text)
+                        else -> Outbox.Sent(text)
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Outbox.Failed(text, e.message ?: e.javaClass.simpleName)
+                }
+            seen()
+        }
+    }
+
+    /** Mark what was sent seen once the stream has brought it since the send. */
+    private fun seen() {
+        val waiting = _outbox.value
+        if (waiting !is Outbox.Queued && waiting !is Outbox.Sent) return
+        val want = waiting.text.trim()
+        if (arrivedSinceSend.any { it is Item.User && it.text.trim() == want }) {
+            _outbox.value = Outbox.Seen(waiting.text)
+        }
+    }
+
+    /** Forget a failed or finished send. */
+    fun dismissOutbox() {
+        if (_outbox.value !is Outbox.Sending) _outbox.value = null
+    }
+
+    fun interrupt() = act { client.interrupt(project, scope, agent) }
+
+    fun press(keys: List<String>) = act { client.pressKeys(project, scope, agent, keys) }
+
+    private fun act(action: suspend () -> Unit) {
+        _notice.value = null
+        viewModelScope.launch {
+            try {
+                action()
+                if (screenShown)
+                    _screen.value = runCatching { client.screen(project, scope, agent) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _notice.value = e.message ?: e.javaClass.simpleName
+            }
         }
     }
 

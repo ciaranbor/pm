@@ -9,6 +9,14 @@
 //! running Stop hook or an exited harness says more, so a stale marker
 //! never hides either.
 //!
+//! The **yield request** asks the agent's next Stop hook to let its turn
+//! end (`{}`) rather than wait, for text typed into a harness that holds
+//! typing queued behind a running hook, so the harness submits it. `pm
+//! serve` writes it before typing, naming the text and where the agent's
+//! conversation ended then; the Stop hook takes it. UserPromptSubmit can't
+//! clear it: Claude Code runs that hook as text is queued, not as it is
+//! submitted (verified on 2.1.289).
+//!
 //! The **activity stamp** is a file whose mtime is the agent's last sign of
 //! life: every pm hook invocation touches it.
 //!
@@ -40,6 +48,7 @@ use crate::state::paths;
 const WAITING_FILE: &str = "waiting.json";
 const ACTIVITY_FILE: &str = "activity";
 const TURN_END_CLAIM: &str = "turn-end-claimed-";
+const YIELD_REQUEST: &str = "yield-requested";
 
 fn root(project_root: &Path) -> PathBuf {
     paths::pm_dir(project_root).join("runtime")
@@ -194,6 +203,67 @@ pub fn clear_waiting(project_root: &Path, scope: &str, agent: &str) -> Result<bo
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(e.into()),
     }
+}
+
+/// Text typed into an agent that asks its next Stop hook to yield.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct YieldRequest {
+    /// The SHA-256 of the text, trimmed, in hex.
+    pub text_sha256: String,
+    /// Where the agent's conversation ended as the text was typed; `None`
+    /// when it had none.
+    pub after: Option<String>,
+}
+
+/// Ask the agent's next Stop hook to yield ([`take_yield_request`]),
+/// replacing any request already made: a harness submits what it holds in
+/// order, so the latest text is the one still held if any is.
+pub fn request_yield(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    request: &YieldRequest,
+) -> Result<()> {
+    let file = agent_dir(project_root, scope, agent)?.join(YIELD_REQUEST);
+    write_atomic(&file, serde_json::to_string(request)?.as_bytes())
+}
+
+/// Whether a yield is requested.
+pub fn yield_requested(project_root: &Path, scope: &str, agent: &str) -> bool {
+    agent_file(project_root, scope, agent, YIELD_REQUEST).exists()
+}
+
+/// Remove the yield request, returning it, so of two callers only one
+/// takes it. One that can't be read is removed and taken as asking with
+/// nothing known of its text.
+pub fn take_yield_request(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+) -> Result<Option<YieldRequest>> {
+    let file = agent_file(project_root, scope, agent, YIELD_REQUEST);
+    // Renamed away first, so a request written meanwhile is a new file.
+    static TAKES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let taken = file.with_file_name(format!(
+        "{YIELD_REQUEST}.taken-{}-{}",
+        std::process::id(),
+        TAKES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    match std::fs::rename(&file, &taken) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    }
+    let text = std::fs::read_to_string(&taken);
+    let _ = std::fs::remove_file(&taken);
+    Ok(Some(
+        text.ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or(YieldRequest {
+                text_sha256: String::new(),
+                after: None,
+            }),
+    ))
 }
 
 /// A path the agent's current session reported at its start.

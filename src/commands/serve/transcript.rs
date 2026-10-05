@@ -17,8 +17,8 @@ use std::time::SystemTime;
 use serde::Serialize;
 
 use crate::error::Result;
+use crate::harness::Conversation;
 use crate::harness::transcript::items::{Item, Page, Tail, VERSION};
-use crate::harness::{AgentSession, Conversation};
 use crate::state::agent::{AgentEntry, AgentRegistry};
 use crate::state::paths;
 
@@ -44,16 +44,7 @@ impl Agent {
 
     /// The conversation of the session `entry` records.
     fn locate(&self, entry: &AgentEntry) -> Result<Option<Conversation>> {
-        let worktree = self.root.join(&self.scope);
-        let home = paths::home_dir()?;
-        Ok(entry.harness.conversation(&AgentSession {
-            project_root: &self.root,
-            scope: &self.scope,
-            name: &self.name,
-            session_id: &entry.session_id,
-            worktree: &worktree,
-            home: &home,
-        }))
+        entry.conversation(&self.root, &self.scope, &self.name)
     }
 
     /// The conversation of the agent's current session; `None` while it

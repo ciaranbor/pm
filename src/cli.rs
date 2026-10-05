@@ -3,7 +3,6 @@ use clap_complete::Shell;
 use std::path::PathBuf;
 
 use pm::harness::Harness;
-use pm::state::devices::Scope;
 
 #[derive(Parser)]
 #[command(
@@ -138,7 +137,7 @@ pub enum Commands {
     /// tmux integration: pm state published on the tmux server
     #[command(subcommand)]
     Tmux(TmuxCommands),
-    /// Serve pm state read-only over HTTP for the phone app, on 127.0.0.1;
+    /// Serve pm state, and input to agents, over HTTP for the phone app, on 127.0.0.1;
     /// `pm serve install` sets it up to run at login, reached through
     /// `tailscale serve`
     #[command(args_conflicts_with_subcommands = true)]
@@ -250,9 +249,6 @@ pub enum ServeCommands {
         /// The device's name, used to revoke it and in the request log
         #[arg(long, default_value = "phone")]
         name: String,
-        /// What the token may do (repeatable or comma-separated)
-        #[arg(long, value_enum, value_delimiter = ',', default_value = "read")]
-        scope: Vec<Scope>,
         /// The URL the device reaches the server at (default: this machine's
         /// tailnet name over HTTPS, as `tailscale serve` serves it)
         #[arg(long)]

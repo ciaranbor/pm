@@ -2,7 +2,7 @@
 //! `<config dir>/projects/<path_to_key(cwd)>/<session id>.jsonl`.
 //!
 //! The format is Claude Code's internal one and changes without notice;
-//! what follows was verified on 2.1.284–2.1.287. A line pm does not
+//! what follows was verified on 2.1.284–2.1.289. A line pm does not
 //! recognise reads as nothing, never as an error.
 //!
 //! - A `user` line whose content is a string is a prompt: typed
@@ -11,6 +11,11 @@
 //!   notification (`origin.kind: "task-notification"`), or the summary a
 //!   compaction leaves (`isCompactSummary`). Other `isMeta` prompts (a
 //!   skill's text) are context, not conversation.
+//!   A long paste in a prompt is wrapped in `<pasted_content id=…>` tags,
+//!   which are dropped.
+//! - What the user typed while a turn ran is taken in at a step's end and
+//!   recorded only as an `attachment` line (`queued_command`, origin
+//!   `human`); one submitted after the turn is a `user` line like any.
 //! - A `user` line whose content is blocks carries `tool_result`s, keyed by
 //!   `tool_use_id`, or an interrupt (`[Request interrupted by user…]`).
 //! - Each `assistant` line holds one content block; one API message spans
@@ -64,6 +69,7 @@ pub(in crate::harness) fn parse(line: &Value, offset: u64) -> Vec<Entry> {
     match line.get("type").and_then(Value::as_str) {
         Some("user") => user(line, &item),
         Some("assistant") => assistant(line, id, at),
+        Some("attachment") => queued(line, &item),
         Some("system") => match line.get("subtype").and_then(Value::as_str) {
             Some("informational" | "scheduled_task_fire") => {
                 match line.get("content").and_then(Value::as_str) {
@@ -128,9 +134,52 @@ fn user(line: &Value, item: &dyn Fn(Body) -> Vec<Entry>) -> Vec<Entry> {
         }),
         _ if text.trim().is_empty() => Vec::new(),
         _ => item(Body::User {
-            text: tag(&text, "command-name").map_or(text.clone(), str::to_string),
+            text: tag(&text, "command-name").map_or_else(|| unpasted(&text), str::to_string),
         }),
     }
+}
+
+/// What the user typed while a turn ran, which the turn takes in at a step's
+/// end; it is recorded only as this attachment.
+fn queued(line: &Value, item: &dyn Fn(Body) -> Vec<Entry>) -> Vec<Entry> {
+    let attachment = line.get("attachment").unwrap_or(&Value::Null);
+    let human = attachment.pointer("/origin/kind").and_then(Value::as_str) == Some("human");
+    match attachment.get("prompt").and_then(Value::as_str) {
+        Some(text)
+            if human && attachment["type"] == "queued_command" && !text.trim().is_empty() =>
+        {
+            item(Body::User {
+                text: unpasted(text),
+            })
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// `text` with each paste Claude Code wrapped in `<pasted_content id=…>`
+/// tags (a long one) put back as it was typed.
+fn unpasted(text: &str) -> String {
+    const OPEN: &str = "<pasted_content id=";
+    const CLOSE: &str = "</pasted_content id=";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(OPEN) {
+        let Some(open_end) = rest[start..].find('>').map(|i| start + i + 1) else {
+            break;
+        };
+        let id = &rest[start + OPEN.len()..open_end - 1];
+        let close = format!("{CLOSE}{id}>");
+        let Some(close_at) = rest[open_end..].find(&close).map(|i| open_end + i) else {
+            break;
+        };
+        out.push_str(&rest[..start]);
+        let inner = &rest[open_end..close_at];
+        let inner = inner.strip_prefix('\n').unwrap_or(inner);
+        out.push_str(inner.strip_suffix('\n').unwrap_or(inner));
+        rest = &rest[close_at + close.len()..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn assistant(line: &Value, id: &str, at: Option<chrono::DateTime<chrono::Utc>>) -> Vec<Entry> {
@@ -246,6 +295,28 @@ mod tests {
         assert!(result.text.starts_with("--- from no-reply-brief"));
         assert!(!result.error);
         assert_eq!(page.before, None, "the whole file was read");
+    }
+
+    #[test]
+    fn what_the_user_typed_mid_turn_or_pasted_reads_as_typed() {
+        let fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/transcripts/claude-code-input.jsonl"
+        );
+        let page = jsonl::page(Path::new(fixture), None, 100, parse).unwrap();
+        let texts: Vec<&str> = page
+            .items
+            .iter()
+            .map(|item| match &item.body {
+                Body::User { text } => text.as_str(),
+                other => panic!("not the user's: {other:?}"),
+            })
+            .collect();
+        let mut pasted = String::from("Count the lines below and reply with just the number.");
+        for i in 1..=40 {
+            pasted.push_str(&format!("\nline {i} of the log"));
+        }
+        assert_eq!(texts, ["say hi", pasted.as_str()]);
     }
 
     #[test]

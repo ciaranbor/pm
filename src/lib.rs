@@ -4,6 +4,7 @@ pub mod fs_utils;
 pub mod gh;
 pub mod git;
 pub mod harness;
+pub mod hash;
 pub mod hooks;
 pub mod launchd;
 pub mod messages;

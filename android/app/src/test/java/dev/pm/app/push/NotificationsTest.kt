@@ -10,6 +10,7 @@ import dev.pm.app.SNAPSHOT
 import dev.pm.app.model.PushedTransition
 import dev.pm.app.model.Snapshot
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -59,7 +60,7 @@ class NotificationsTest {
         val byChannel = alerts().associate { it.notification.channelId to it.notification }
         assertEquals(setOf("needs-input", "ready"), byChannel.keys)
         val blocked = byChannel.getValue("needs-input")
-        assertEquals("app/login", blocked.extras.getString(Notification.EXTRA_TITLE))
+        assertEquals("app/login: implementer", blocked.extras.getString(Notification.EXTRA_TITLE))
         assertEquals(
             "implementer is blocked on you",
             blocked.extras.getCharSequence(Notification.EXTRA_TEXT).toString(),
@@ -127,5 +128,59 @@ class NotificationsTest {
 
         Notifications.reconcile(context, snapshot)
         assertEquals(1, summary()!!.notification.number)
+    }
+
+    private fun replyAction(notification: Notification) =
+        NotificationCompat.getActionCount(notification).let { count ->
+            (0 until count)
+                .map { NotificationCompat.getAction(notification, it)!! }
+                .singleOrNull { it.remoteInputs?.isNotEmpty() == true }
+        }
+
+    @Test
+    fun an_agent_waiting_on_the_user_is_answered_inline_but_a_dialog_is_not() {
+        Notifications.createChannels(context)
+        Notifications.show(
+            context,
+            PushedTransition("app", "login", "blocked", "implementer"),
+            now = 1,
+        )
+        Notifications.show(context, PushedTransition("app", "search", "asking", "qa"), now = 2)
+        Notifications.show(context, PushedTransition("app", "auth", "ready"), now = 3)
+
+        val byScope =
+            alerts().associate { PushedTransition.parse(it.tag)!!.where to it.notification }
+        val blocked = byScope.getValue("app/login")
+        val reply = replyAction(blocked)!!
+        assertEquals(ReplyReceiver.KEY_TEXT, reply.remoteInputs!!.single().resultKey)
+        assertEquals(NotificationCompat.Action.SEMANTIC_ACTION_REPLY, reply.semanticAction)
+        val style =
+            NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(blocked)!!
+        assertEquals("implementer", style.messages.single().person!!.name)
+        assertNull(replyAction(byScope.getValue("app/search")))
+        assertNull("a ready scope names no agent", replyAction(byScope.getValue("app/auth")))
+    }
+
+    @Test
+    fun a_reply_that_failed_shows_its_text_and_can_be_sent_again() {
+        Notifications.createChannels(context)
+        val blocked = PushedTransition("app", "login", "blocked", "implementer")
+        Notifications.show(context, blocked, now = 1)
+
+        Notifications.replied(context, blocked, "use postgres", "tailnet unreachable", now = 2)
+        val failed = alerts().single().notification
+        val lines =
+            NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(failed)!!
+                .messages
+                .map { it.text.toString() }
+        assertEquals(
+            listOf("implementer is blocked on you", "Not sent (tailnet unreachable): use postgres"),
+            lines,
+        )
+        assertNotNull(replyAction(failed))
+
+        Notifications.replied(context, blocked, "use postgres", null, now = 3)
+        val sent = alerts().single().notification
+        assertNull(replyAction(sent))
     }
 }

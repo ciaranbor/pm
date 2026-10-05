@@ -29,6 +29,10 @@
             </intent-filter>
         </activity>
 
+        <receiver
+            android:name=".push.ReplyReceiver"
+            android:exported="false" />
+
         <service
             android:name=".push.PushService"
             android:exported="false">

@@ -96,4 +96,31 @@ class PmClientTest {
         assertEquals("app/login/implementer", request.url.queryParameter("watch"))
         assertEquals("c9", request.url.queryParameter("after"))
     }
+
+    @Test
+    fun input_is_posted_and_its_refusals_told_apart() = runBlocking {
+        reply(200, """{"delivery":"sent","confirmed":true}""")
+        reply(200, "{}")
+        reply(409, """{"error":"the agent's input line is not empty","refused":"not-at-prompt"}""")
+
+        assertEquals(
+            Delivered("sent", confirmed = true),
+            client.sendText("app", "login", "implementer", "hi"),
+        )
+        client.interrupt("app", "login", "implementer")
+        val refused = runCatching {
+            client.pressKeys("app", "login", "implementer", listOf("Down", "Enter"))
+        }
+            .exceptionOrNull()
+        assertTrue("$refused", refused is PmError.Refused && refused.code == "not-at-prompt")
+
+        val sent = server.takeRequest()
+        assertEquals("POST", sent.method)
+        assertEquals("""{"text":"hi"}""", sent.body?.utf8())
+        assertEquals(
+            "/v1/agents/app/login/implementer/interrupt",
+            server.takeRequest().url.encodedPath,
+        )
+        assertEquals("""{"keys":["Down","Enter"]}""", server.takeRequest().body?.utf8())
+    }
 }

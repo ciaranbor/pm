@@ -1,8 +1,7 @@
 //! What each request gets. The token is checked before anything else, so
 //! a request without a valid one learns nothing, not even which paths
-//! exist; a valid token without the endpoint's scope is refused after.
-//! Every endpoint needs the read scope; the only writes are a device's own
-//! push subscription, which reads nothing it couldn't already.
+//! exist; a paired device's token may do everything. The writes are a
+//! device's own push subscription and an agent's input (`input`).
 //! Path segments name only what the registry and pm state list, so none
 //! reaches the filesystem as a path of its own.
 
@@ -11,14 +10,14 @@ use std::path::PathBuf;
 use crate::commands::attention;
 use crate::error::Result;
 use crate::state::agent::AgentRegistry;
-use crate::state::devices::{Devices, Push, Scope};
+use crate::state::devices::{Devices, Push};
 use crate::state::feature::FeatureState;
 use crate::state::paths;
 use crate::state::project::ProjectEntry;
 use crate::tmux;
 
 use super::transcript::{Agent, DEFAULT_LIMIT, MAX_LIMIT, TranscriptWatch, page_json};
-use super::{Config, push};
+use super::{Config, input, push};
 
 pub(super) enum Reply {
     Body {
@@ -44,6 +43,8 @@ pub(super) struct Handled {
     /// The device whose token the request carried.
     pub device: Option<String>,
     pub reply: Reply,
+    /// What a write did, for the request log.
+    pub detail: Option<String>,
 }
 
 const JSON: &str = "application/json";
@@ -55,6 +56,14 @@ pub(super) fn error(status: u16, message: &str) -> Reply {
         status,
         content_type: JSON,
         body: serde_json::json!({ "error": message }).to_string(),
+    }
+}
+
+pub(super) fn json(status: u16, body: serde_json::Value) -> Reply {
+    Reply::Body {
+        status,
+        content_type: JSON,
+        body: body.to_string(),
     }
 }
 
@@ -92,29 +101,59 @@ pub(super) fn route(config: &Config, vapid: &str, request: &Request<'_>) -> Hand
             return Handled {
                 device: None,
                 reply: error(500, &format!("devices unreadable: {e}")),
+                detail: None,
             };
         }
     };
-    let Some((device, paired)) = token.and_then(|t| devices.authenticate(t.trim())) else {
+    let Some((device, _)) = token.and_then(|t| devices.authenticate(t.trim())) else {
         return Handled {
             device: None,
             reply: error(401, "a paired device's bearer token is required"),
+            detail: None,
         };
     };
-    let reply = if !paired.scopes.contains(&Scope::Read) {
-        error(403, "this device's token lacks the read scope")
-    } else {
-        let served = match (method, path) {
-            (_, "/v1/push") => push_route(config, vapid, method, device, body),
-            ("GET", _) => get(config, path, &Query::parse(query)),
-            _ => Ok(error(405, "only GET is served here")),
-        };
-        served.unwrap_or_else(|e| error(500, &e.to_string()))
+    let mut detail = None;
+    let served = match (method, path) {
+        (_, "/v1/push") => push_route(config, vapid, method, device, body),
+        ("GET", _) => get(config, path, &Query::parse(query)),
+        ("POST", _) if path.starts_with("/v1/agents/") => post(config, path, body).map(|written| {
+            detail = Some(written.detail).filter(|d| !d.is_empty());
+            written.reply
+        }),
+        _ => Ok(error(405, "only GET is served here")),
     };
+    let reply = served.unwrap_or_else(|e| error(500, &e.to_string()));
     Handled {
         device: Some(device.to_string()),
         reply,
+        detail,
     }
+}
+
+/// `POST /v1/agents/{project}/{scope}/{agent}/{action}`: input for an agent.
+fn post(config: &Config, path: &str, body: &str) -> Result<input::Written> {
+    let segments = segments(path);
+    let segments: Vec<&str> = segments.iter().map(String::as_str).collect();
+    let ["agents", project, scope, agent, action] = segments[..] else {
+        return Ok(input::Written {
+            reply: error(404, "no such endpoint"),
+            detail: String::new(),
+        });
+    };
+    match find_agent(config, project, scope, agent)? {
+        Ok(agent) => input::post(&agent, action, body, config.tmux_server.as_deref()),
+        Err(reply) => Ok(input::Written {
+            reply,
+            detail: String::new(),
+        }),
+    }
+}
+
+/// `path`'s segments after `/v1/`, decoded; none for another path.
+fn segments(path: &str) -> Vec<String> {
+    path.strip_prefix("/v1/")
+        .map(|rest| rest.split('/').map(decode).collect())
+        .unwrap_or_default()
 }
 
 /// `/v1/push`: the server's VAPID public key, and the device's own
@@ -194,10 +233,7 @@ impl Query {
 }
 
 fn get(config: &Config, path: &str, query: &Query) -> Result<Reply> {
-    let segments: Option<Vec<String>> = path
-        .strip_prefix("/v1/")
-        .map(|rest| rest.split('/').map(decode).collect());
-    let segments = segments.unwrap_or_default();
+    let segments = segments(path);
     let segments: Vec<&str> = segments.iter().map(String::as_str).collect();
     let server = config.tmux_server.as_deref();
     match segments[..] {

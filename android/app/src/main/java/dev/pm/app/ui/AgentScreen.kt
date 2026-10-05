@@ -42,6 +42,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.pm.app.R
 import dev.pm.app.api.PmClient
+import dev.pm.app.model.AgentState
 import dev.pm.app.model.Conversation
 import java.time.LocalDate
 import java.time.ZoneId
@@ -53,6 +54,7 @@ fun AgentScreen(
     project: String,
     scope: String,
     agent: String,
+    state: AgentState?,
     networkChanges: Flow<Unit>,
     openResult: (tool: String, ref: String) -> Unit,
     modifier: Modifier = Modifier,
@@ -64,14 +66,32 @@ fun AgentScreen(
     }
     var tab by rememberSaveable { mutableIntStateOf(0) }
     LaunchedEffect(tab) { model.watchScreen(tab == 1) }
-    Column(modifier.fillMaxSize()) {
+    val outbox by model.outbox.collectAsStateWithLifecycle()
+    val notice by model.notice.collectAsStateWithLifecycle()
+    Column(modifier.fillMaxSize().imePadding()) {
         PrimaryTabRow(selectedTabIndex = tab) {
             Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Chat") })
             Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Screen") })
         }
+        Box(Modifier.weight(1f)) {
+            when (tab) {
+                0 -> Chat(model, openResult)
+                else -> Screen(model)
+            }
+        }
         when (tab) {
-            0 -> Chat(model, openResult)
-            else -> Screen(model)
+            0 -> Composer(state, outbox, notice, send = model::send, interrupt = model::interrupt)
+            else -> {
+                notice?.let {
+                    Text(
+                        it,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.padding(horizontal = 8.dp),
+                    )
+                }
+                KeyBar(state, press = model::press)
+            }
         }
     }
 }
@@ -141,7 +161,7 @@ internal fun ChatView(
         snapshotFlow { list.firstVisibleItemIndex }.collect { if (it == 0) askOlder() }
     }
 
-    Column(modifier.fillMaxSize().imePadding()) {
+    Column(modifier.fillMaxSize()) {
         if (!live) {
             Text(
                 "Not live: reconnecting",

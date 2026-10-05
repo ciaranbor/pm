@@ -9,7 +9,7 @@ use qrcode::render::unicode::Dense1x2;
 use serde::Serialize;
 
 use crate::error::{PmError, Result};
-use crate::state::devices::{Devices, Scope};
+use crate::state::devices::Devices;
 use crate::tailscale;
 
 #[derive(Serialize)]
@@ -35,10 +35,10 @@ impl Pairing {
     }
 }
 
-/// Pair `device` with `scopes` in the devices file at `devices`. `url`
+/// Pair `device` in the devices file at `devices`. `url`
 /// defaults to this machine's tailnet name over HTTPS, as `tailscale serve`
 /// serves it.
-pub fn pair(devices: &Path, device: &str, scopes: &[Scope], url: Option<&str>) -> Result<Pairing> {
+pub fn pair(devices: &Path, device: &str, url: Option<&str>) -> Result<Pairing> {
     let url = match url {
         Some(url) => url.trim_end_matches('/').to_string(),
         None => tailscale::dns_name()
@@ -49,7 +49,7 @@ pub fn pair(devices: &Path, device: &str, scopes: &[Scope], url: Option<&str>) -
                 )
             })?,
     };
-    let token = Devices::update(devices, |paired| paired.pair(device, scopes))?;
+    let token = Devices::update(devices, |paired| paired.pair(device))?;
     Ok(Pairing {
         url,
         device: device.to_string(),

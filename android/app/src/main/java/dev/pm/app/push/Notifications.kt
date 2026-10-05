@@ -11,6 +11,8 @@ import android.provider.Settings
 import android.service.notification.StatusBarNotification
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.app.Person
+import androidx.core.app.RemoteInput
 import androidx.core.os.bundleOf
 import dev.pm.app.MainActivity
 import dev.pm.app.R
@@ -110,6 +112,53 @@ object Notifications {
         if (!allowed(context)) return
         val tag = PushedTransition.encode(transition.key)
         val channel = Channel.of(transition.kindOf)
+        val alert = alert(context, transition, now).build()
+        // What's showing is read before posting: a post reaches the active list asynchronously.
+        val others = newestFirst(alerts(context).filter { (sbn, _) -> sbn.tag != tag })
+        @Suppress("MissingPermission")
+        NotificationManagerCompat.from(context).notify(tag, ALERT_ID, alert)
+        summarize(context, channel.id, listOf(transition) + others, silent = false)
+    }
+
+    /**
+     * Show what came of the user's inline reply `text` to `transition`'s alert, silently: the reply
+     * under the agent's message, or, when `failure` says why it wasn't sent, the text with the
+     * reason, and the reply action again.
+     */
+    fun replied(
+        context: Context,
+        transition: PushedTransition,
+        text: String,
+        failure: String?,
+        now: Long = System.currentTimeMillis(),
+    ) {
+        if (!allowed(context)) return
+        val alert = alert(context, transition, now, reply = Reply(text, failure))
+        @Suppress("MissingPermission")
+        NotificationManagerCompat.from(context)
+            .notify(
+                PushedTransition.encode(transition.key),
+                ALERT_ID,
+                alert.setSilent(true).build(),
+            )
+    }
+
+    /** The user's inline reply, and why it wasn't sent, if it wasn't. */
+    private data class Reply(val text: String, val failure: String?)
+
+    /**
+     * `transition`'s alert. One naming an agent that waits on the user — blocked on them, or ready
+     * for review — is a conversation with that agent, answered inline ([ReplyReceiver]). An agent
+     * asking has a dialog up, which typed text can't answer, so it gets none.
+     */
+    private fun alert(
+        context: Context,
+        transition: PushedTransition,
+        now: Long,
+        reply: Reply? = null,
+    ): NotificationCompat.Builder {
+        val tag = PushedTransition.encode(transition.key)
+        val channel = Channel.of(transition.kindOf)
         val intent =
             Target(transition.project, transition.scope, transition.agent)
                 .into(Intent(context, MainActivity::class.java))
@@ -122,6 +171,7 @@ object Notifications {
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
+        val encoded = PushedTransition.encode(transition)
         val alert =
             NotificationCompat.Builder(context, channel.id)
                 .setSmallIcon(R.drawable.ic_notification)
@@ -134,14 +184,56 @@ object Notifications {
                 .setAutoCancel(true)
                 .setGroup(GROUP)
                 .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_SUMMARY)
-                .addExtras(bundleOf(EXTRA_TRANSITION to PushedTransition.encode(transition)))
+                .addExtras(bundleOf(EXTRA_TRANSITION to encoded))
+        val agent = transition.agent
+        val waiting =
+            transition.kindOf == AttentionKind.Blocked || transition.kindOf == AttentionKind.Ready
+        if (agent == null || !waiting) return alert
+        val them = Person.Builder().setName(agent).setKey(agent).build()
+        val you = Person.Builder().setName(context.getString(R.string.reply_you)).build()
+        val style =
+            NotificationCompat.MessagingStyle(you)
+                .setConversationTitle(transition.where)
+                .setGroupConversation(false)
+                .addMessage(transition.text, now, them)
+        if (reply != null) {
+            val line =
+                reply.failure?.let { context.getString(R.string.reply_not_sent, it, reply.text) }
+                    ?: reply.text
+            style.addMessage(line, now, null as Person?)
+        }
+        alert.setStyle(style)
+        if (reply != null && reply.failure == null) return alert
+        val remote =
+            RemoteInput.Builder(ReplyReceiver.KEY_TEXT)
+                .setLabel(context.getString(R.string.reply_label, agent))
                 .build()
-        // What's showing is read before posting: a post reaches the active list asynchronously.
-        val others = newestFirst(alerts(context).filter { (sbn, _) -> sbn.tag != tag })
-        @Suppress("MissingPermission")
-        NotificationManagerCompat.from(context).notify(tag, ALERT_ID, alert)
-        summarize(context, channel.id, listOf(transition) + others, silent = false)
+        val send =
+            PendingIntent.getBroadcast(
+                context,
+                tag.hashCode(),
+                Intent(context, ReplyReceiver::class.java)
+                    .setData(Uri.fromParts("pm-reply", tag, null))
+                    .putExtra(EXTRA_TRANSITION, encoded),
+                // Mutable, the only one: RemoteInput writes the reply into it.
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
+            )
+        return alert.addAction(
+            NotificationCompat.Action.Builder(
+                    R.drawable.ic_send,
+                    context.getString(R.string.reply_action),
+                    send,
+                )
+                .addRemoteInput(remote)
+                .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY)
+                .setShowsUserInterface(false)
+                .build()
+        )
     }
+
+    /** The transition a reply intent answers. */
+    fun replyingTo(intent: Intent): PushedTransition? =
+        intent.getStringExtra(EXTRA_TRANSITION)?.let(PushedTransition::parse)
 
     /** Withdraw each alert `snapshot` shows is over, and bring the summary up to date. */
     fun reconcile(context: Context, snapshot: Snapshot) {

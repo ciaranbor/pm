@@ -23,9 +23,10 @@ use crate::harness::Harness;
 use crate::state::agent::AgentRegistry;
 use crate::state::paths;
 use crate::state::project::{GlobalConfig, ProjectConfig, resolve_harness_config};
-use crate::state::runtime::{self, SessionPath, Waiting, WaitingClass, WaitingKind};
+use crate::state::runtime::{self, Waiting, WaitingClass, WaitingKind};
 use crate::tmux;
 
+use super::agent_input::input_line_ready;
 use super::hooks_stop;
 use super::running_agents::{Liveness, Windows, liveness, waiting};
 
@@ -87,8 +88,7 @@ pub fn rearm(
     }
 }
 
-/// Type the agent's messages prompt into `pane` if its input line is empty,
-/// first pressing any key its harness names to make the line take text.
+/// Type the agent's messages prompt into `pane` if its input line is empty.
 /// Returns whether it typed.
 fn type_prompt(
     project_root: &Path,
@@ -98,37 +98,12 @@ fn type_prompt(
     pane: &str,
     tmux_server: Option<&str>,
 ) -> Result<bool> {
-    let home = paths::home_dir()?;
-    let config_dir = runtime::read_session_path(project_root, scope, agent, SessionPath::ConfigDir);
-    let config_dir = config_dir.as_deref();
-    let mut screen = tmux::capture_screen(tmux_server, pane)?;
-    if let Some((key, undo)) = harness.text_mode_key(&screen, &home, config_dir) {
-        tmux::send_key(tmux_server, pane, key)?;
-        let takes_text = |s: &str| harness.input_is_empty(s, &home, config_dir).is_some();
-        screen = redrawn(tmux_server, pane, takes_text)?;
-        if !takes_text(&screen) {
-            tmux::send_key(tmux_server, pane, undo)?;
-            return Ok(false);
-        }
-    }
-    if harness.input_is_empty(&screen, &home, config_dir) != Some(true) {
+    if !input_line_ready(project_root, scope, agent, harness, pane, tmux_server)? {
         return Ok(false);
     }
     let prompt = hooks_stop::continuation(project_root, scope, agent)?;
     tmux::send_text(tmux_server, pane, &prompt)?;
     Ok(true)
-}
-
-/// `pane`'s screen once `done` holds for it, or as it is after a second.
-fn redrawn(tmux_server: Option<&str>, pane: &str, done: impl Fn(&str) -> bool) -> Result<String> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
-    loop {
-        let screen = tmux::capture_screen(tmux_server, pane)?;
-        if done(&screen) || std::time::Instant::now() >= deadline {
-            return Ok(screen);
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
 }
 
 #[cfg(test)]
@@ -324,7 +299,7 @@ mod tests {
             &project,
             "login",
             "implementer",
-            SessionPath::ConfigDir,
+            runtime::SessionPath::ConfigDir,
             Some(&config_dir),
         )
         .unwrap();

@@ -1,5 +1,6 @@
-//! `pm serve`: a read-only HTTP API over pm state for the phone app,
-//! reached through a transport (`tailscale serve`) that forwards to it.
+//! `pm serve`: an HTTP API over pm state for the phone app, which reads it
+//! and types input into agents, reached through a transport (`tailscale
+//! serve`) that forwards to it.
 //! README, "Remote access", has the user-facing setup.
 //!
 //! It listens on 127.0.0.1 only, never another address: whatever reaches
@@ -45,6 +46,7 @@ use super::attention::{self, transition::Watch};
 use super::reexec::Binary;
 
 mod events;
+mod input;
 mod push;
 mod routes;
 pub mod state;
@@ -58,8 +60,9 @@ use routes::Reply;
 use wake::Waker;
 pub use wake::wake;
 
-/// The most of a request body read; a push subscription is well under it.
-const MAX_BODY: u64 = 16 * 1024;
+/// The most of a request body read: the longest text a device may send,
+/// as JSON, with room for its escapes.
+const MAX_BODY: u64 = 2 * input::MAX_TEXT as u64 + 1024;
 
 pub const DEFAULT_PORT: u16 = 7764;
 
@@ -231,10 +234,15 @@ impl Server {
         let (path, query) = (path.to_string(), query.to_string());
         let mut body = String::new();
         let read = std::io::Read::read_to_string(
-            &mut std::io::Read::take(request.as_reader(), MAX_BODY),
+            &mut std::io::Read::take(request.as_reader(), MAX_BODY + 1),
             &mut body,
         );
         let handled = match read {
+            Ok(_) if body.len() as u64 > MAX_BODY => routes::Handled {
+                device: None,
+                reply: routes::error(413, "the body is too long"),
+                detail: None,
+            },
             Ok(_) => routes::route(
                 &self.config,
                 &self.vapid,
@@ -249,11 +257,17 @@ impl Server {
             Err(_) => routes::Handled {
                 device: None,
                 reply: routes::error(400, "the body is not UTF-8"),
+                detail: None,
             },
         };
         let device = handled.device.as_deref().unwrap_or("-");
+        let detail = handled
+            .detail
+            .as_deref()
+            .map(|d| format!(" {d}"))
+            .unwrap_or_default();
         log(&format!(
-            "{device} {method} {path} {}",
+            "{device} {method} {path} {}{detail}",
             handled.reply.status()
         ));
         let _ = match handled.reply {

@@ -282,6 +282,10 @@ fun App(
                                     key.project,
                                     key.scope,
                                     key.agent,
+                                    snapshot
+                                        ?.agents(key.project, key.scope)
+                                        ?.find { it.name == key.agent }
+                                        ?.stateOf,
                                     networkChanges,
                                     openResult = { tool, ref ->
                                         backStack.add(

@@ -48,8 +48,7 @@ Design decisions you can't recover by reading the tree. Preserve them.
 - That prompt instructs a bare `pm msg read`, so a bare read must never
   error when several senders have unread messages: it takes the oldest
   sender's (README has the selection rule).
-- The hook yields (`{}`) only for a reported running background task or
-  active cron with nothing queued; its completion wakes the agent.
+- With nothing queued the hook yields (`{}`) only to background work or held input.
 - Only the harness or a terminal ends the hook undecided — never pm state.
 - A waiting marker only refines busy; a running Stop hook or dead harness wins.
 - Hooks are installed once per machine for **every supported harness**;
@@ -64,7 +63,8 @@ Design decisions you can't recover by reading the tree. Preserve them.
   brief only `brief_agents` (none is an error); `agent spawn --context`
   enqueues, then spawns or no-ops — ungated, being also the heal path;
   `msg send` never spawns, errors on an inactive recipient, heals a dead
-  window, re-arms an unarmed one only at an empty prompt.
+  window, re-arms an unarmed one only at an empty prompt. Remote input is
+  typed into the pane like local input — never a pm message or continuation.
 
 ### Workflows vs agents
 
