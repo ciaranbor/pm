@@ -54,12 +54,16 @@ tmux runs it with the server's environment, not your shell's, so `pm` must
 be on the `PATH` the server started with; set `@pm-bin` to its full path
 otherwise. Init only adds to your config and is safe to re-run on a reload.
 It makes prefix `s` / `w` pm's tree, puts an agent badge in each window's
-status entry, and keeps pm's state current on the server. The summary of
-what needs you (each attention kind's glyph and count) goes where you put
-it; init leaves `status-right` alone, as it is your theme's:
+status entry, starts `status-right` with the summary of what needs you
+(each attention kind's glyph, count and name), shows pm's announcements in
+the middle of the status line, and keeps pm's state current on the server.
+To place the summary or the announcements yourself, turn init's placement
+off (`@pm-status-right`, `@pm-status-format`) or name the option in your
+own format, which init then leaves alone:
 
 ```tmux
-set -g status-right '#{E:@pm_summary} %H:%M'
+set -g status-right '#{?@pm_summary,#{E:@pm_summary} ,}%H:%M'
+set -ag 'status-format[0]' '#[nolist align=centre norange default]#{?@pm_announcement_hidden,#{@pm_announcement_window},#{@pm_announcement}}'
 ```
 
 ## Using pm
@@ -126,12 +130,13 @@ dialog (a permission prompt, a question, a plan to approve) or sits at its
 prompt where no message will wake it (you interrupted it, an API error ended
 its turn). pm surfaces all of it in tmux:
 
-- the status line's summary (a glyph and count per kind), and an alert on
-  every attached client when a feature becomes blocked or ready, or an
-  agent — `main` included — starts asking (except on a client already
-  showing that agent's pane). A feature alerts once per episode — not
-  again when its agent's question outranks its `ready` for a while, nor
-  when its session is opened or closed on a status it already had. One
+- the status line's summary (a glyph, count and name per kind), and an
+  announcement in the middle of the status line, for tmux's
+  `display-time`, when a feature becomes blocked or ready, or an agent —
+  `main` included — starts asking (except in that agent's own window). A
+  feature alerts once per episode — not again when its agent's question
+  outranks its `ready` for a while, nor when its session is opened or
+  closed on a status it already had. One
   whose session is closed still alerts when it becomes blocked or ready (a
   PR approved through `pm feat sync`, say);
 - pm's tree (prefix `s` / `w`), tmux's own tree with each session's
@@ -864,6 +869,8 @@ Plugin options, set before `run-shell 'pm tmux init'`:
 | `@pm-auto-refresh` | on | keep pm's options current with a background `pm tmux refresh` loop; pm pushes its own changes at once, so the loop only catches what happens outside pm. The loop also re-sets pm's formats when it starts or pm is upgraded, so a new pm reaches a running server without a config reload; it switches to another pm when `@pm-bin` or the server's `PATH` comes to name one |
 | `@pm-refresh-interval` | `30` | seconds between refreshes |
 | `@pm-window-status` | on | put each agent window's badge just before the window name in `window-status-format` and `window-status-current-format`, keeping your theme's style for the name |
+| `@pm-status-right` | on | start `status-right` with `@pm_summary`, unless it already names it. `status-right-length` cuts the right end, so on a long line your theme's last items go first; raise the length or turn this off |
+| `@pm-status-format` | on | end `status-format[0]` with pm's announcement, centred between the window list and `status-right`, unless it already names `@pm_announcement`. With `status-justify centre` it sits beside the window list; with `status off` nothing shows it |
 | `@pm-bind-tree` | on | turn prefix `s` / `w` into pm's tree, sorted by name, when they run tmux's default `choose-tree` |
 | `@pm-attention-key` | `a` | the prefix key opening pm's tree with only the sessions needing attention, or a message when none does; `off` for none. A key your config binds is left alone; a key pm lets go of gets tmux's default binding back, if it has one |
 
@@ -918,7 +925,10 @@ unset, text is escaped for formats, and each name is set at one scope only:
 | | `@pm_unread` | unread message count |
 | | `@pm_agent_badge` | the badge, styled; it resets with `#[default]`, so placed anywhere but the start of a format, follow it with your theme's style |
 | | `@pm_agent_label` | the badge with words, as pm's tree shows it: the state after its glyph, the unread count after the envelope |
-| global | `@pm_summary` | each kind's glyph and how many sessions have `@pm_attention`, styled and joined by ` · `; unset when none has |
+| | `@pm_announcement_hidden`, `@pm_announcement_window` | pm's own bookkeeping: the window of an agent whose ask is announced, and the announcement without that ask, shown there instead |
+| global | `@pm_summary` | each kind's glyph, how many sessions have `@pm_attention`, and the kind (`2 blocked`), styled and joined by ` · `; unset when none has |
+| | `@pm_announcement` | the latest announcement (`pm: app/login ready: …`), escaped for formats; unset `display-time` after it is made (tmux's 750 ms when `display-time` is 0). Show it with `#{@pm_announcement}`, never `#{E:…}`, so a `%` in it survives |
+| | `@pm_announcement_id` | pm's own bookkeeping: which announcement is up, so an older one's expiry leaves a newer one |
 | | `@pm_count` | sessions with `@pm_attention` set, so it matches what `@pm-attention-key` opens; a feature whose session is closed is not counted (`pm status` lists it) |
 | | `@pm_features_alerted` | pm's own bookkeeping: the kinds each feature has alerted on, kept for a closed feature |
 | | `@pm_tree_format` | pm's `choose-tree` line format, set by `pm tmux init` |

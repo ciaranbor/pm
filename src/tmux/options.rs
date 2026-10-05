@@ -50,8 +50,6 @@ impl Holder {
 #[derive(Debug, Default)]
 pub struct Client {
     pub name: String,
-    /// The active pane of the window it shows, by id (`%N`).
-    pub pane: String,
 }
 
 impl Client {
@@ -59,7 +57,6 @@ impl Client {
     pub fn named(name: &str) -> Self {
         Self {
             name: name.to_string(),
-            pane: String::new(),
         }
     }
 }
@@ -99,7 +96,7 @@ pub fn read(
         &[
             "list-clients",
             "-F",
-            "C\t#{client_name}\t#{pane_id}",
+            "C\t#{client_name}",
             ";",
             "list-sessions",
             "-F",
@@ -126,7 +123,6 @@ pub fn read(
         if kind == Some("C") {
             options.clients.push(Client {
                 name: fields.next().unwrap_or_default().to_string(),
-                pane: fields.next().unwrap_or_default().to_string(),
             });
             continue;
         }
@@ -236,14 +232,13 @@ pub fn run_shell_background(shell_command: &str) -> Command {
     ["run-shell", "-b", shell_command].map(String::from).into()
 }
 
-/// Show `text` on `client`'s status line.
-pub fn display(client: &str, text: &str) -> Command {
-    vec![
-        "display-message".into(),
-        "-c".into(),
-        client.into(),
-        format_text(text),
-    ]
+/// Run the tmux command `command` on the server `seconds` from now,
+/// without waiting for it. Formats in `command` are expanded now; a `##{…}`
+/// is left to expand when it runs.
+pub fn run_shell_later(seconds: &str, command: &str) -> Command {
+    ["run-shell", "-b", "-C", "-d", seconds, command]
+        .map(String::from)
+        .into()
 }
 
 /// Redraw `client`'s status line; a mode open in the client, such as tree

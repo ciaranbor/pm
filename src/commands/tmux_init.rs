@@ -12,27 +12,34 @@
 //! binds them.
 //!
 //! A config reload runs it again, so every step is idempotent: the
-//! window-list badge goes in once, and one an earlier pm placed elsewhere
-//! is moved; pm's tree binding is recognised and rebuilt from the flags under
-//! it (which also picks up a changed `@pm-bin`); pm's attention binding is
-//! recognised and unbound from a key `@pm-attention-key` no longer names;
-//! and a second watcher exits at once ([`tmux_watch`](super::tmux_watch)).
+//! window-list badge, the summary in `status-right` and the announcement in
+//! `status-format[0]` (`status_line`) each go in once, and a badge an
+//! earlier pm placed elsewhere is moved; pm's tree binding is recognised
+//! and rebuilt from the flags under it (which also picks up a changed
+//! `@pm-bin`); pm's attention binding is recognised and unbound from a key
+//! `@pm-attention-key` no longer names; and a second watcher exits at once
+//! ([`tmux_watch`](super::tmux_watch)).
 //!
 //! It runs as a `run-shell` job, often while the config is still loading
 //! and no session exists yet, so it reads global options only.
 
 use crate::error::{PmError, Result};
 use crate::tmux::keys::{self, Binding};
-use crate::tmux::options::{self, Command, Scope};
+use crate::tmux::options::{self, Command, Holder, Scope};
 use crate::tmux::shell_quote;
 
 use super::tmux_watch::AUTO_REFRESH;
 
 mod attention_key;
+mod status_line;
 mod window_status;
 
 pub(super) const BIN: &str = "@pm-bin";
 const WINDOW_STATUS: &str = "@pm-window-status";
+const STATUS_RIGHT: &str = "@pm-status-right";
+const STATUS_FORMAT: &str = "@pm-status-format";
+/// The settings [`format_commands`] reads.
+const FORMAT_SETTINGS: &[&str] = &[WINDOW_STATUS, STATUS_RIGHT, STATUS_FORMAT];
 const BIND_TREE: &str = "@pm-bind-tree";
 const ATTENTION_KEY: &str = "@pm-attention-key";
 
@@ -68,7 +75,11 @@ const WINDOW_FORMATS: &[&str] = &["window-status-format", "window-status-current
 pub fn init(tmux_server: Option<&str>) -> Result<()> {
     let settings = options::read_global(
         tmux_server,
-        &[BIN, AUTO_REFRESH, WINDOW_STATUS, BIND_TREE, ATTENTION_KEY],
+        &[
+            &[BIN, AUTO_REFRESH, BIND_TREE, ATTENTION_KEY],
+            FORMAT_SETTINGS,
+        ]
+        .concat(),
     )?
     .ok_or_else(|| PmError::Tmux("no tmux server running".into()))?;
     let bin = match settings.get(BIN) {
@@ -76,7 +87,7 @@ pub fn init(tmux_server: Option<&str>) -> Result<()> {
         bin => shell_quote(bin),
     };
 
-    let mut commands = format_commands(tmux_server, settings.get(WINDOW_STATUS) != "off")?;
+    let mut commands = format_commands(tmux_server, &settings)?;
     let template = jump_template(&bin);
     let bind_tree = settings.get(BIND_TREE) != "off";
     let table = keys::prefix_table(tmux_server)?;
@@ -108,32 +119,43 @@ pub fn init(tmux_server: Option<&str>) -> Result<()> {
 /// binary has without a config reload. Bindings are left to init: they
 /// read the tree format through `@pm_tree_format`. No server, no change.
 pub(super) fn formats(tmux_server: Option<&str>) -> Result<()> {
-    let Some(settings) = options::read_global(tmux_server, &[WINDOW_STATUS])? else {
+    let Some(settings) = options::read_global(tmux_server, FORMAT_SETTINGS)? else {
         return Ok(());
     };
-    let commands = format_commands(tmux_server, settings.get(WINDOW_STATUS) != "off")?;
+    let commands = format_commands(tmux_server, &settings)?;
     options::run(tmux_server, &commands)
 }
 
-/// pm's tree format, and the window-list badge in or out per `badges`.
-fn format_commands(tmux_server: Option<&str>, badges: bool) -> Result<Vec<Command>> {
+/// A format as init wants it, given whether pm's addition is on.
+type Placement = fn(&str, bool) -> String;
+
+/// pm's tree format, and the window-list badge, the summary and the
+/// announcement each in or out per its setting in `settings`. A format
+/// already as wanted is not written, so a rerun redraws nothing.
+fn format_commands(tmux_server: Option<&str>, settings: &Holder) -> Result<Vec<Command>> {
     let mut commands = vec![options::set(
         Scope::Global,
         TREE_FORMAT_OPTION,
         Some(TREE_FORMAT),
     )];
-    for name in WINDOW_FORMATS {
+    let placements: [(&str, &str, Placement); 4] = [
+        (WINDOW_FORMATS[0], WINDOW_STATUS, window_status::wanted),
+        (WINDOW_FORMATS[1], WINDOW_STATUS, window_status::wanted),
+        ("status-right", STATUS_RIGHT, status_line::status_right),
+        (
+            "status-format[0]",
+            STATUS_FORMAT,
+            status_line::status_format,
+        ),
+    ];
+    for (name, setting, wanted) in placements {
         let format = options::show(tmux_server, name)?;
-        commands.extend(window_status(name, &format, badges));
+        let wanted = wanted(&format, settings.get(setting) != "off");
+        if wanted != format {
+            commands.push(options::set(Scope::Global, name, Some(&wanted)));
+        }
     }
     Ok(commands)
-}
-
-/// The change to the window-list format `name`, now `format`, that
-/// places pm's badge ([`window_status`]), or with `badges` off removes it.
-fn window_status(name: &str, format: &str, badges: bool) -> Option<Command> {
-    let wanted = window_status::wanted(format, badges);
-    (wanted != format).then(|| options::set(Scope::Global, name, Some(&wanted)))
 }
 
 fn tree_format() -> String {
@@ -264,7 +286,8 @@ mod tests {
 
         assert_eq!(
             options::show(server.name(), "status-right").unwrap(),
-            "mine %H:%M"
+            format!("{SUMMARY}mine %H:%M"),
+            "the summary placed once"
         );
         let template = jump_template(&shell_quote(&bin));
         assert_eq!(
@@ -516,6 +539,51 @@ mod tests {
                 show("window-status-current-format")
             ),
             (default, THEME_CURRENT.to_string())
+        );
+    }
+
+    use status_line::{ANNOUNCEMENT, SUMMARY};
+
+    #[test]
+    fn the_summary_and_announcement_go_in_once_unless_placed_and_come_off_when_turned_off() {
+        let server = OwnServer::start("init-status");
+        tmux(&server, &["set", "-g", AUTO_REFRESH, "off"]);
+        let show = |name: &str| options::show(server.name(), name).unwrap();
+        let theme = "#[fg=a] %Y-%m-%d #[fg=b] #h ";
+        tmux(&server, &["set", "-g", "status-right", theme]);
+        let default_format = show("status-format[0]");
+
+        init(server.name()).unwrap();
+        init(server.name()).unwrap();
+        assert_eq!(show("status-right"), format!("{SUMMARY}{theme}"));
+        assert_eq!(
+            show("status-format[0]"),
+            format!("{default_format}{ANNOUNCEMENT}")
+        );
+
+        let users_right = "#{@pm_summary} %H:%M";
+        let users_format = "#[align=left]#{W:#I }#[align=right]#{@pm_announcement}";
+        tmux(&server, &["set", "-g", "status-right", users_right]);
+        tmux(&server, &["set", "-g", "status-format[0]", users_format]);
+        init(server.name()).unwrap();
+        assert_eq!(
+            [show("status-right"), show("status-format[0]")],
+            [users_right, users_format],
+            "the user placed both"
+        );
+
+        let custom = "#[align=left]#{W:#I }";
+        tmux(&server, &["set", "-g", "status-right", theme]);
+        tmux(&server, &["set", "-g", "status-format[0]", custom]);
+        init(server.name()).unwrap();
+        assert_eq!(show("status-format[0]"), format!("{custom}{ANNOUNCEMENT}"));
+
+        tmux(&server, &["set", "-g", STATUS_RIGHT, "off"]);
+        tmux(&server, &["set", "-g", STATUS_FORMAT, "off"]);
+        init(server.name()).unwrap();
+        assert_eq!(
+            [show("status-right"), show("status-format[0]")],
+            [theme, custom]
         );
     }
 

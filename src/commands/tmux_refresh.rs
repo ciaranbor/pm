@@ -72,10 +72,28 @@ const AGENT_BADGE: &str = "@pm_agent_badge";
 const AGENT_LABEL: &str = "@pm_agent_label";
 pub(super) const WINDOW_OPTIONS: &[&str] = &[AGENT, AGENT_STATE, UNREAD, AGENT_BADGE, AGENT_LABEL];
 
+const ANNOUNCEMENT_HIDDEN: &str = "@pm_announcement_hidden";
+const ANNOUNCEMENT_WINDOW: &str = "@pm_announcement_window";
+/// What a refresh reads of each window: an agent's options, and the
+/// announcement pair, which an announcement rather than the window's agent
+/// sets and clears.
+const WINDOW_READ: &[&str] = &[
+    AGENT,
+    AGENT_STATE,
+    UNREAD,
+    AGENT_BADGE,
+    AGENT_LABEL,
+    ANNOUNCEMENT_HIDDEN,
+];
+
 const SUMMARY: &str = "@pm_summary";
 const COUNT: &str = "@pm_count";
 const FEATURES_ALERTED: &str = "@pm_features_alerted";
-const GLOBAL_OPTIONS: &[&str] = &[SUMMARY, COUNT, FEATURES_ALERTED];
+const ANNOUNCEMENT: &str = "@pm_announcement";
+const ANNOUNCEMENT_ID: &str = "@pm_announcement_id";
+/// tmux's own option: how long a message shows, in milliseconds.
+const DISPLAY_TIME: &str = "display-time";
+const GLOBAL_READ: &[&str] = &[SUMMARY, COUNT, FEATURES_ALERTED, DISPLAY_TIME];
 
 /// What separates [`FEATURES_ALERTED`] entries: a unit separator, which no
 /// session name holds, where a space may be in a project's name.
@@ -88,8 +106,7 @@ pub fn refresh(projects_dir: &Path, tmux_server: Option<&str>) -> Result<()> {
         return Ok(());
     };
     let _lock = tmux_lock::lock(&socket, "refresh")?;
-    let Some(published) =
-        options::read(tmux_server, SESSION_OPTIONS, WINDOW_OPTIONS, GLOBAL_OPTIONS)?
+    let Some(published) = options::read(tmux_server, SESSION_OPTIONS, WINDOW_READ, GLOBAL_READ)?
     else {
         return Ok(());
     };
@@ -107,7 +124,8 @@ fn write(tmux_server: Option<&str>, commands: &[Command]) -> Result<()> {
 }
 
 /// What turns `published` into `snapshot`, as of `now`: the changed
-/// options, then an alert and a redraw for each client.
+/// options, the announcement of any alerts ([`announce`]), then a redraw
+/// for each client.
 fn commands(snapshot: &Snapshot, published: &Options, now: DateTime<Utc>) -> Vec<Command> {
     let mut writes = Vec::new();
     let mut alerts = Vec::new();
@@ -241,17 +259,7 @@ fn commands(snapshot: &Snapshot, published: &Options, now: DateTime<Utc>) -> Vec
         &global_values(needing, &record),
     );
 
-    for client in &published.clients {
-        let texts: Vec<&str> = alerts
-            .iter()
-            .filter(|a| a.pane.is_none_or(|p| p != client.pane))
-            .map(|a| a.text.as_str())
-            .collect();
-        if !texts.is_empty() {
-            let text = format!("pm: {}", texts.join(" · "));
-            writes.push(options::display(&client.name, &text));
-        }
-    }
+    writes.extend(announce(&alerts, published, now));
     if !writes.is_empty() {
         writes.extend(
             published
@@ -471,7 +479,8 @@ fn global_values(
 
 struct Alert<'a> {
     text: String,
-    /// The pane of the agent asking, whose viewers it doesn't need to reach.
+    /// The pane of the agent asking, whose window's viewers it doesn't need
+    /// to reach.
     pane: Option<&'a str>,
 }
 
@@ -491,6 +500,82 @@ fn alert<'a>(session: &str, attention: &Attention, agents: &'a [AgentSnapshot]) 
     }
 }
 
+/// What a status line shows `alerts` with, for as long as tmux shows a
+/// message (`display-time`), as of `now`: the text in [`ANNOUNCEMENT`];
+/// on each asking agent's window, [`ANNOUNCEMENT_HIDDEN`] and the text
+/// without that ask in [`ANNOUNCEMENT_WINDOW`]; and a server-side timer
+/// clearing them unless a newer announcement, with another
+/// [`ANNOUNCEMENT_ID`], has replaced them. The pair an earlier
+/// announcement set comes off first. No alerts, no change.
+fn announce(alerts: &[Alert], published: &Options, now: DateTime<Utc>) -> Vec<Command> {
+    if alerts.is_empty() {
+        return Vec::new();
+    }
+    let joined = |pane: Option<&str>| -> String {
+        let texts: Vec<&str> = alerts
+            .iter()
+            .filter(|a| pane.is_none() || a.pane != pane)
+            .map(|a| a.text.as_str())
+            .collect();
+        if texts.is_empty() {
+            String::new()
+        } else {
+            format_text(&format!("pm: {}", texts.join(" · ")))
+        }
+    };
+    let id = now.timestamp_micros().to_string();
+    let mut writes = Vec::new();
+    for held in published
+        .windows
+        .iter()
+        .filter(|w| !w.get(ANNOUNCEMENT_HIDDEN).is_empty())
+    {
+        for name in [ANNOUNCEMENT_HIDDEN, ANNOUNCEMENT_WINDOW] {
+            writes.push(options::set(Scope::Window(&held.target), name, None));
+        }
+    }
+    writes.push(options::set(
+        Scope::Global,
+        ANNOUNCEMENT,
+        Some(&joined(None)),
+    ));
+    writes.push(options::set(Scope::Global, ANNOUNCEMENT_ID, Some(&id)));
+    let mut clear = format!("set -gqu {ANNOUNCEMENT} ; set -gqu {ANNOUNCEMENT_ID}");
+    let panes: std::collections::BTreeSet<&str> = alerts.iter().filter_map(|a| a.pane).collect();
+    for pane in panes {
+        let window = Scope::PaneWindow(pane);
+        writes.push(options::set(window, ANNOUNCEMENT_HIDDEN, Some("1")));
+        writes.push(options::set(
+            window,
+            ANNOUNCEMENT_WINDOW,
+            Some(&joined(Some(pane))),
+        ));
+        for name in [ANNOUNCEMENT_HIDDEN, ANNOUNCEMENT_WINDOW] {
+            clear.push_str(&format!(" ; set -wqu -t {pane} {name}"));
+        }
+    }
+    // The format is expanded when the timer is set, so the guard is
+    // escaped to be read when it fires.
+    let guard = format!("if -F \"##{{==:##{{{ANNOUNCEMENT_ID}}},{id}}}\" \"{clear}\"");
+    writes.push(options::run_shell_later(
+        &display_seconds(published.global.get(DISPLAY_TIME)),
+        &guard,
+    ));
+    writes
+}
+
+/// `display_time`, tmux's milliseconds, as seconds. `0`, which keeps a
+/// message up until a key is pressed, has no equivalent on the status line
+/// and takes tmux's default instead.
+fn display_seconds(display_time: &str) -> String {
+    let millis = display_time
+        .parse::<u32>()
+        .ok()
+        .filter(|ms| *ms > 0)
+        .unwrap_or(750);
+    format!("{:.3}", f64::from(millis) / 1000.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -501,13 +586,13 @@ mod tests {
     use crate::state::feature::{FeatureState, FeatureStatus, Progress};
     use crate::state::paths;
     use crate::state::runtime::WaitingKind;
-    use crate::testing::{ControlClient, OwnServer, TestServer, server_socket_exists};
+    use crate::testing::{OwnServer, TestServer, server_socket_exists};
     use crate::tmux;
     use crate::tmux::options::Client;
     use std::sync::{Mutex, MutexGuard};
     use tempfile::tempdir;
 
-    /// A refresh writes server-wide options and alerts every client, so
+    /// A refresh writes server-wide options, announcements included, so
     /// these tests take turns on the shared server.
     fn serial() -> MutexGuard<'static, ()> {
         static SERIAL: Mutex<()> = Mutex::new(());
@@ -515,14 +600,9 @@ mod tests {
     }
 
     fn published(server: &TestServer) -> Options {
-        options::read(
-            server.name(),
-            SESSION_OPTIONS,
-            WINDOW_OPTIONS,
-            GLOBAL_OPTIONS,
-        )
-        .unwrap()
-        .unwrap()
+        options::read(server.name(), SESSION_OPTIONS, WINDOW_READ, GLOBAL_READ)
+            .unwrap()
+            .unwrap()
     }
 
     fn values<'a>(holders: &'a [Holder], target: &str, names: &[&str]) -> Vec<&'a str> {
@@ -654,7 +734,7 @@ mod tests {
         );
         assert_eq!(
             [now.global.get(COUNT), now.global.get(SUMMARY)],
-            ["1", "#[fg=red,bold]\u{f256} 1#[default]"]
+            ["1", "#[fg=red,bold]\u{f256} 1 blocked#[default]"]
         );
 
         feat_status(&project, "login", Progress::Wip, None, None).unwrap();
@@ -790,7 +870,7 @@ mod tests {
         assert_eq!(values(&now.sessions, &search, &[ATTENTION]), ["cleanup"]);
         assert_eq!(
             [now.global.get(COUNT), now.global.get(SUMMARY)],
-            ["1", "#[fg=colour245]\u{f00e2} 1#[default]"]
+            ["1", "#[fg=colour245]\u{f00e2} 1 cleanup#[default]"]
         );
 
         feat_delete(&project, &projects_dir, "search", true, server.name()).unwrap();
@@ -858,9 +938,10 @@ mod tests {
         )
         .unwrap();
         let session = tmux::session_name("app", "login");
-        let mut client = ControlClient::attach(server.name(), &session);
+        let mut announced = Announcements::held(&server);
 
         refresh(&projects_dir, server.name()).unwrap();
+        announced.take();
         feat_status(
             &project,
             "login",
@@ -870,16 +951,20 @@ mod tests {
         )
         .unwrap();
         refresh(&projects_dir, server.name()).unwrap();
+        announced.take();
         refresh(&projects_dir, server.name()).unwrap();
+        announced.take();
         let summary = paths::summary_path(&project, "login");
         std::fs::create_dir_all(summary.parent().unwrap()).unwrap();
         std::fs::write(&summary, "Adds login\n").unwrap();
         feat_status(&project, "login", Progress::Ready, None, None).unwrap();
         refresh(&projects_dir, server.name()).unwrap();
+        announced.take();
         refresh(&projects_dir, server.name()).unwrap();
+        announced.take();
 
         assert_eq!(
-            client.messages(),
+            announced.texts,
             [
                 format!("pm: {session} blocked: which DB?"),
                 format!("pm: {session} ready: Adds login"),
@@ -968,12 +1053,38 @@ mod tests {
             .collect()
     }
 
-    fn displayed(commands: &[Command]) -> Vec<&str> {
-        commands
-            .iter()
-            .filter(|c| c[0] == "display-message")
-            .map(|c| c[3].as_str())
-            .collect()
+    fn announced(commands: &[Command]) -> Vec<&str> {
+        sets(commands, ANNOUNCEMENT)
+    }
+
+    /// The announcements made on a server, each recorded once: its
+    /// display time is long enough that none is cleared meanwhile.
+    struct Announcements<'a> {
+        server: &'a OwnServer,
+        last_id: String,
+        texts: Vec<String>,
+    }
+
+    impl<'a> Announcements<'a> {
+        fn held(server: &'a OwnServer) -> Self {
+            server.tmux_stdout(&["set", "-g", DISPLAY_TIME, "600000"]);
+            Self {
+                server,
+                last_id: String::new(),
+                texts: Vec::new(),
+            }
+        }
+
+        /// Record the announcement up now, if it is a new one.
+        fn take(&mut self) {
+            let held = options::read_global(self.server.name(), &[ANNOUNCEMENT, ANNOUNCEMENT_ID])
+                .unwrap()
+                .unwrap();
+            if held.get(ANNOUNCEMENT_ID) != self.last_id {
+                self.last_id = held.get(ANNOUNCEMENT_ID).to_string();
+                self.texts.push(held.get(ANNOUNCEMENT).to_string());
+            }
+        }
     }
 
     #[test]
@@ -999,10 +1110,10 @@ mod tests {
         assert_eq!(sets(&commands, BADGE), ["#[fg=red,bold]\u{f059}#[default]"]);
         assert_eq!(sets(&commands, COUNT), ["1"]);
         assert_eq!(
-            displayed(&commands),
+            announced(&commands),
             ["pm: app/main asking: main: plan approval"]
         );
-        assert!(displayed(&super::commands(&asking, &published("asking"), now)).is_empty());
+        assert!(announced(&super::commands(&asking, &published("asking"), now)).is_empty());
 
         let unarmed = main_scope(vec![main_agent(
             AgentState::Unarmed,
@@ -1013,9 +1124,9 @@ mod tests {
         assert_eq!(sets(&commands, ATTENTION), ["unarmed"]);
         assert_eq!(
             sets(&commands, SUMMARY),
-            ["#[fg=magenta]\u{f1f6} 1#[default]"]
+            ["#[fg=magenta]\u{f1f6} 1 unarmed#[default]"]
         );
-        assert!(displayed(&commands).is_empty());
+        assert!(announced(&commands).is_empty());
     }
 
     fn feature_scope(progress: Progress, busy: bool, agents: Vec<AgentSnapshot>) -> Snapshot {
@@ -1048,28 +1159,104 @@ mod tests {
         }
     }
 
+    /// What pm's announcement shows on the status line of `window`.
+    fn shown(server: &OwnServer, window: &str) -> String {
+        server.tmux_stdout(&[
+            "display",
+            "-p",
+            "-t",
+            window,
+            "#{?@pm_announcement_hidden,#{@pm_announcement_window},#{@pm_announcement}}",
+        ])
+    }
+
     #[test]
-    fn an_ask_is_not_alerted_to_a_client_already_on_the_asking_pane() {
-        let mut agent = main_agent(AgentState::Asking, WaitingKind::Plan, "plan approval");
-        agent.pane = Some("%5".into());
-        let client = |name: &str, pane: &str| Client {
-            name: name.into(),
-            pane: pane.into(),
+    fn an_announcement_shows_everywhere_but_an_ask_not_on_the_asking_agents_window() {
+        let dir = tempdir().unwrap();
+        let server = OwnServer::start("announce");
+        Announcements::held(&server);
+        published_session(&server, dir.path(), "app/login");
+        published_session(&server, dir.path(), "app/main");
+        let asking = tmux::new_window(server.name(), "app/main", dir.path(), None, true).unwrap();
+        let elsewhere = "app/login:0";
+        let mut agent = main_agent(AgentState::Asking, WaitingKind::Plan, "50% of #1 %H");
+        agent.window = Some(asking.clone());
+        agent.pane = Some(server.tmux_stdout(&["display", "-p", "-t", &asking, "#{pane_id}"]));
+        let snapshot = Snapshot {
+            features: ready_feature(false).features,
+            ..main_scope(vec![agent])
         };
-        let published = Options {
-            clients: vec![client("on-it", "%5"), client("elsewhere", "%6")],
-            sessions: vec![Holder::session("app/main", &[(PROJECT, "app")])],
-            ..Options::default()
+        publish(&server, &snapshot);
+
+        let ready = "app/login ready: Adds login";
+        assert_eq!(
+            shown(&server, elsewhere),
+            format!("pm: {ready} · app/main asking: main: 50% of ##1 %H"),
+            "a # escaped for the status line, a % left alone"
+        );
+        assert_eq!(shown(&server, &asking), format!("pm: {ready}"));
+
+        let held = publish_announcement(&server, &[later("later")]);
+        assert_eq!(
+            [shown(&server, elsewhere), shown(&server, &asking)],
+            ["pm: later", "pm: later"],
+            "the next announcement shows on the asking window too"
+        );
+        assert!(
+            held.windows
+                .iter()
+                .all(|w| w.get(ANNOUNCEMENT_HIDDEN).is_empty())
+        );
+    }
+
+    fn later(text: &str) -> Alert<'static> {
+        Alert {
+            text: text.into(),
+            pane: None,
+        }
+    }
+
+    /// Announce `alerts` on `server`, returning what is published after.
+    fn publish_announcement(server: &OwnServer, alerts: &[Alert]) -> Options {
+        let read = || {
+            options::read(server.name(), &[], WINDOW_READ, GLOBAL_READ)
+                .unwrap()
+                .unwrap()
         };
+        options::run(server.name(), &announce(alerts, &read(), Utc::now())).unwrap();
+        read()
+    }
 
-        let commands = commands(&main_scope(vec![agent]), &published, Utc::now());
+    #[test]
+    fn an_announcement_is_cleared_after_the_display_time_unless_a_newer_one_replaced_it() {
+        let dir = tempdir().unwrap();
+        let server = OwnServer::start("announce-expiry");
+        tmux::create_session(server.name(), "app/main", dir.path()).unwrap();
+        let window = "app/main:0";
+        let asking = tmux::new_window(server.name(), "app/main", dir.path(), None, true).unwrap();
+        let pane = server.tmux_stdout(&["display", "-p", "-t", &asking, "#{pane_id}"]);
+        server.tmux_stdout(&["set", "-g", DISPLAY_TIME, "1000"]);
+        let wait = |ms| std::thread::sleep(std::time::Duration::from_millis(ms));
 
-        let alerted: Vec<&str> = commands
-            .iter()
-            .filter(|c| c[0] == "display-message")
-            .map(|c| c[2].as_str())
-            .collect();
-        assert_eq!(alerted, ["elsewhere"]);
+        publish_announcement(&server, &[later("first")]);
+        wait(500);
+        let ask = Alert {
+            text: "asking".into(),
+            pane: Some(&pane),
+        };
+        publish_announcement(&server, &[later("second"), ask]);
+        wait(700);
+        assert_eq!(
+            [shown(&server, window), shown(&server, &asking)],
+            ["pm: second · asking", "pm: second"],
+            "the first one's timer has fired"
+        );
+        wait(800);
+        assert_eq!([shown(&server, window), shown(&server, &asking)], ["", ""]);
+        assert_eq!(
+            server.tmux_stdout(&["show", "-wqv", "-t", &asking, ANNOUNCEMENT_HIDDEN]),
+            ""
+        );
     }
 
     fn ready_feature(busy: bool) -> Snapshot {
@@ -1080,29 +1267,20 @@ mod tests {
     /// published after.
     fn publish(server: &OwnServer, snapshot: &Snapshot) -> Options {
         let read = || {
-            options::read(
-                server.name(),
-                SESSION_OPTIONS,
-                WINDOW_OPTIONS,
-                GLOBAL_OPTIONS,
-            )
-            .unwrap()
-            .unwrap()
+            options::read(server.name(), SESSION_OPTIONS, WINDOW_READ, GLOBAL_READ)
+                .unwrap()
+                .unwrap()
         };
         options::run(server.name(), &commands(snapshot, &read(), Utc::now())).unwrap();
         read()
     }
 
     /// A session pm has published to before.
-    fn published_session(server: &OwnServer, dir: &Path) {
-        tmux::create_session(server.name(), "app/login", dir).unwrap();
+    fn published_session(server: &OwnServer, dir: &Path, session: &str) {
+        tmux::create_session(server.name(), session, dir).unwrap();
         options::run(
             server.name(),
-            &[options::set(
-                Scope::Session("app/login"),
-                PROJECT,
-                Some("app"),
-            )],
+            &[options::set(Scope::Session(session), PROJECT, Some("app"))],
         )
         .unwrap();
     }
@@ -1111,13 +1289,14 @@ mod tests {
     fn a_ready_feature_alerts_once_however_often_its_team_wakes() {
         let dir = tempdir().unwrap();
         let server = OwnServer::start("ready-busy");
-        published_session(&server, dir.path());
-        let mut client = ControlClient::attach(server.name(), "app/login");
+        published_session(&server, dir.path(), "app/login");
+        let mut announced = Announcements::held(&server);
         let mut badges = Vec::new();
         let mut attentions = Vec::new();
         let mut counts = Vec::new();
         for busy in [true, false, true, false, false] {
             let held = publish(&server, &ready_feature(busy));
+            announced.take();
             let login = held
                 .sessions
                 .iter()
@@ -1128,7 +1307,7 @@ mod tests {
             counts.push(held.global.get(COUNT).to_string());
         }
 
-        assert_eq!(client.messages(), ["pm: app/login ready: Adds login"]);
+        assert_eq!(announced.texts, ["pm: app/login ready: Adds login"]);
         let ready = "#[fg=green,bold]\u{f058}#[default]";
         assert_eq!(badges, [ready; 5]);
         assert_eq!(attentions, ["", "ready", "", "ready", "ready"]);
@@ -1162,8 +1341,8 @@ mod tests {
     fn a_kind_alerts_once_per_episode_however_often_it_is_outranked() {
         let dir = tempdir().unwrap();
         let server = OwnServer::start("episode");
-        published_session(&server, dir.path());
-        let mut client = ControlClient::attach(server.name(), "app/login");
+        published_session(&server, dir.path(), "app/login");
+        let mut announced = Announcements::held(&server);
         let asking = || {
             vec![AgentSnapshot {
                 waiting: Some(attention::WaitingSnapshot {
@@ -1176,14 +1355,19 @@ mod tests {
         };
         let idle = || vec![agent_in(AgentState::Idle)];
 
-        publish(&server, &feature_scope(Progress::Ready, false, idle()));
-        publish(&server, &feature_scope(Progress::Ready, false, asking()));
-        publish(&server, &feature_scope(Progress::Ready, false, idle()));
-        publish(&server, &feature_scope(Progress::Wip, false, idle()));
-        publish(&server, &feature_scope(Progress::Ready, false, idle()));
+        for (progress, agents) in [
+            (Progress::Ready, idle()),
+            (Progress::Ready, asking()),
+            (Progress::Ready, idle()),
+            (Progress::Wip, idle()),
+            (Progress::Ready, idle()),
+        ] {
+            publish(&server, &feature_scope(progress, false, agents));
+            announced.take();
+        }
 
         assert_eq!(
-            client.messages(),
+            announced.texts,
             [
                 "pm: app/login ready: Adds login",
                 "pm: app/login asking: implementer: permission",
@@ -1215,7 +1399,7 @@ mod tests {
                 .iter()
                 .find(|c| c[0] == "set-option" && c.iter().any(|a| a == FEATURES_ALERTED))
                 .map(|c| c[c.len() - 2..].join(" "));
-            (displayed(&commands).len(), record.unwrap_or_default())
+            (announced(&commands).len(), record.unwrap_or_default())
         };
         let served = (COUNT, "0");
 
@@ -1293,7 +1477,7 @@ mod tests {
             };
             let commands = commands(snapshot, &published, Utc::now());
             (
-                displayed(&commands).len(),
+                announced(&commands).len(),
                 sets(&commands, ATTENTION).concat(),
             )
         };

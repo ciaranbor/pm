@@ -1114,15 +1114,6 @@ impl ControlClient {
             .map(str::to_string)
             .collect()
     }
-
-    /// The status-line messages tmux has shown the client.
-    pub fn messages(&mut self) -> Vec<String> {
-        self.sync();
-        self.messages_raw()
-            .into_iter()
-            .filter(|m| !m.starts_with("sync-"))
-            .collect()
-    }
 }
 
 impl Drop for ControlClient {
