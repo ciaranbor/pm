@@ -36,6 +36,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mikepenz.markdown.m3.Markdown
+import com.mikepenz.markdown.m3.markdownTypography
 import dev.pm.app.R
 import dev.pm.app.model.Dialog
 
@@ -92,7 +93,22 @@ internal fun DialogCard(
                                 type = { typed[q.question] = it },
                             )
                         }
-                    "plan" -> Markdown(dialog.plan.orEmpty())
+                    "plan" -> {
+                        // Headings at title size: the card has little room.
+                        val type = MaterialTheme.typography
+                        Markdown(
+                            dialog.plan.orEmpty(),
+                            typography =
+                                markdownTypography(
+                                    h1 = type.titleLarge,
+                                    h2 = type.titleMedium,
+                                    h3 = type.titleSmall,
+                                    h4 = type.titleSmall,
+                                    h5 = type.titleSmall,
+                                    h6 = type.titleSmall,
+                                ),
+                        )
+                    }
                     else -> PermissionView(dialog)
                 }
             }
