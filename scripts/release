@@ -99,7 +99,12 @@ release() {
   [[ $version =~ $semver ]] || die "'$version' is not a semver version (X.Y.Z or X.Y.Z-pre)"
   local tag=v$version
   local git=(git -C "$root")
-  [ -z "$("${git[@]}" status --porcelain)" ] || die "the working tree is not clean"
+  # Untracked files can't reach the release: the commit names its paths.
+  [ -z "$("${git[@]}" status --porcelain --untracked-files=no)" ] \
+    || die "the working tree has uncommitted changes to tracked files"
+  local untracked
+  untracked=$("${git[@]}" ls-files --others --exclude-standard --directory | paste -sd ' ' -)
+  [ -z "$untracked" ] || echo "Note: untracked files are left out of the release: $untracked"
   [ "$("${git[@]}" symbolic-ref --short -q HEAD)" = main ] || die "not on main"
   "${git[@]}" rev-parse -q --verify "refs/tags/$tag" >/dev/null && die "tag $tag already exists"
   [ -z "$("${git[@]}" ls-remote --tags origin "refs/tags/$tag")" ] || die "tag $tag already exists on origin"
