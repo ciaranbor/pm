@@ -363,6 +363,19 @@ impl Harness {
         }
     }
 
+    /// A watch on input the user submits while pm's Stop hook waits, for a
+    /// harness that [holds it](Self::holds_input_behind_stop_hook) without
+    /// running any hook for it; `session_id` is from the Stop payload.
+    pub fn watch_held_input(self, home: &Path, session_id: &str) -> Option<HeldInput> {
+        match self {
+            Harness::Codex => Some(HeldInput(codex::history::Steers::watch(
+                &codex::home_dir(home),
+                session_id,
+            ))),
+            Harness::ClaudeCode | Harness::OpenCode => None,
+        }
+    }
+
     /// The text the user typed, from the prompt UserPromptSubmit reports.
     /// Claude Code reports a long paste wrapped in `<pasted_content>` tags,
     /// as its transcript records it (verified on 2.1.289).
@@ -809,6 +822,25 @@ impl Harness {
             Harness::OpenCode => opencode::sessions::import(&store.config.opencode, staging, to),
         }
     }
+}
+
+/// A watch from [`Harness::watch_held_input`].
+#[derive(Debug)]
+pub struct HeldInput(codex::history::Steers);
+
+impl HeldInput {
+    /// The latest input submitted since the last check.
+    pub fn arrived(&mut self) -> Option<HeldText> {
+        self.0.arrived()
+    }
+}
+
+/// Input a [`HeldInput`] saw submitted.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HeldText {
+    pub text: String,
+    /// When it was submitted, to the second.
+    pub at: chrono::DateTime<chrono::Utc>,
 }
 
 /// How the session seams reach a harness's store.

@@ -23,8 +23,10 @@
 
 use std::path::Path;
 
+use chrono::{DateTime, Utc};
+
 use crate::error::Result;
-use crate::harness::transcript::items::{Body, Tail};
+use crate::harness::transcript::items::{Body, Item, Tail};
 use crate::harness::{Conversation, Harness};
 use crate::state::agent::{self as registry, AgentRegistry};
 use crate::state::paths;
@@ -256,6 +258,15 @@ pub(super) fn request_yield(
 /// The SHA-256 of `text`, trimmed, in hex: what [`said`] matches.
 pub fn sha256(text: &str) -> String {
     crate::hash::sha256_hex(text.trim().as_bytes())
+}
+
+/// Whether `items` hold the user saying `text` at or after `since`.
+pub fn said_since(items: &[Item], since: DateTime<Utc>, text: &str) -> bool {
+    let text_sha256 = sha256(text);
+    items.iter().any(|item| {
+        item.at.is_some_and(|at| at >= since)
+            && matches!(&item.body, Body::User { text } if sha256(text) == text_sha256)
+    })
 }
 
 /// Whether the user said the text whose [`sha256`] is `text_sha256` in

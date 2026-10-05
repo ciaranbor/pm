@@ -18,6 +18,11 @@
 //! terminal does not wake the session), so `parse_busy` is false there and
 //! codex agents block every turn.
 //!
+//! Text typed straight into a codex window files no yield request, codex
+//! running no hook as it holds it, so the hook watches for it itself
+//! ([`Harness::watch_held_input`](crate::harness::Harness::watch_held_input)),
+//! dropping what the conversation already holds as it drops a request.
+//!
 //! The wait ends without a decision once the harness that ran the hook is
 //! gone ([`hook_process`](super::hook_process) has how that is told).
 //!
@@ -44,6 +49,7 @@ use serde_json::json;
 
 use crate::commands::attention::AgentState;
 use crate::commands::{agent_input, agent_wait};
+use crate::harness::{HeldInput, HeldText};
 use crate::messages;
 use crate::state::runtime::{self, Waiting, WaitingKind};
 use crate::state::{agent as registry, paths};
@@ -101,11 +107,13 @@ pub fn stop(on_turn: &mut dyn FnMut(AgentState, u32)) -> i32 {
         print!("{}", allow_decision());
         return 0;
     };
-    let busy = read_busy_from_stdin();
+    let payload = read_stdin();
+    let busy = parse_busy(&payload);
     let Ok((project_root, scope)) = scope() else {
         print!("{}", allow_decision());
         return 0;
     };
+    let mut held = watch_held_input(&project_root, &scope, &agent, &payload);
     let signals = Signals::install();
     let decided = wait_and_decide(
         busy,
@@ -119,12 +127,15 @@ pub fn stop(on_turn: &mut dyn FnMut(AgentState, u32)) -> i32 {
                 Some(signals) => {
                     let caught = signals.pause(interval);
                     if let Some(caught) = caught.iter().find(|c| caller.sent(c)) {
-                        return Some(Ended::By(format!("ended by {caught}")));
+                        return Some(Woke::Ended(Ended::By(format!("ended by {caught}"))));
                     }
                 }
                 None => std::thread::sleep(interval),
             }
-            (!caller.alive()).then_some(Ended::HarnessGone)
+            if !caller.alive() {
+                return Some(Woke::Ended(Ended::HarnessGone));
+            }
+            held.as_mut().and_then(HeldInput::arrived).map(Woke::Held)
         },
     );
     let why = match decided {
@@ -144,6 +155,24 @@ pub fn stop(on_turn: &mut dyn FnMut(AgentState, u32)) -> i32 {
     let message = format!("pm: Stop hook {why}; this agent is unarmed");
     print!("{}", json!({ "systemMessage": message }));
     0
+}
+
+/// The watch on input `agent`'s harness holds without telling pm, started
+/// before the wait so input from before it does not count.
+fn watch_held_input(
+    project_root: &std::path::Path,
+    scope: &str,
+    agent: &str,
+    payload: &str,
+) -> Option<HeldInput> {
+    let session_id = serde_json::from_str::<serde_json::Value>(payload)
+        .ok()?
+        .get("session_id")?
+        .as_str()?
+        .to_string();
+    let registry = registry::AgentRegistry::load(&paths::agents_dir(project_root), scope).ok()?;
+    let harness = registry.get(agent)?.harness;
+    harness.watch_held_input(&paths::home_dir().ok()?, &session_id)
 }
 
 fn scope() -> crate::error::Result<(std::path::PathBuf, String)> {
@@ -178,6 +207,15 @@ enum Ended {
     HarnessGone,
 }
 
+/// Why a pause cut the wait short.
+#[derive(Debug, PartialEq)]
+enum Woke {
+    Ended(Ended),
+    /// The harness has taken input while the hook waits that it reports
+    /// through no hook.
+    Held(HeldText),
+}
+
 #[derive(Debug, PartialEq)]
 enum Decided {
     /// The JSON to print.
@@ -196,7 +234,7 @@ fn wait_and_decide(
     agent: &str,
     poll_interval: Option<Duration>,
     on_turn: &mut dyn FnMut(AgentState, u32),
-    mut pause: impl FnMut(Duration) -> Option<Ended>,
+    mut pause: impl FnMut(Duration) -> Option<Woke>,
 ) -> crate::error::Result<Decided> {
     let block = |on_turn: &mut dyn FnMut(AgentState, u32), senders: &[String]| {
         let _ = runtime::touch_activity(project_root, feature, agent);
@@ -225,18 +263,31 @@ fn wait_and_decide(
         on_turn(AgentState::Idle, 0);
         let mut ended = None;
         let mut yield_requested = false;
+        let mut held = None;
         let waited =
             agent_wait::agent_wait_while(project_root, feature, agent, None, poll_interval, |d| {
-                ended = pause(d);
-                yield_requested =
-                    ended.is_none() && runtime::yield_requested(project_root, feature, agent);
-                ended.is_none() && !yield_requested
+                match pause(d) {
+                    Some(Woke::Ended(why)) => ended = Some(why),
+                    Some(Woke::Held(text)) => held = Some(text),
+                    None => {
+                        yield_requested = runtime::yield_requested(project_root, feature, agent)
+                    }
+                }
+                ended.is_none() && held.is_none() && !yield_requested
             })?;
-        if !yield_requested {
+        if held.is_none() && !yield_requested {
             break waited.ok_or(ended);
         }
         if !unread_senders(project_root, feature, agent)?.is_empty() {
             break Ok(0);
+        }
+        if let Some(held) = held {
+            if !taken(project_root, feature, agent, &held) {
+                let _ = runtime::take_yield_request(project_root, feature, agent);
+                on_turn(AgentState::Busy, 0);
+                return Ok(Decided::Answer(allow_decision()));
+            }
+            continue;
         }
         if let Some(answer) = yielded(project_root, feature, agent, on_turn)? {
             return Ok(answer);
@@ -287,6 +338,22 @@ fn yielded(
     Ok(Some(Decided::Answer(allow_decision())))
 }
 
+/// Whether `agent`'s conversation already holds `held`: taken in mid-turn,
+/// its report arriving after the turn ended. Best-effort: an unreadable
+/// conversation holds nothing, so the hook yields.
+fn taken(project_root: &std::path::Path, feature: &str, agent: &str, held: &HeldText) -> bool {
+    let Ok(Some(conversation)) = registry::conversation(project_root, feature, agent) else {
+        return false;
+    };
+    conversation
+        .page(None, TAKEN_LOOKBACK)
+        .is_ok_and(|page| agent_input::said_since(&page.items, held.at, &held.text))
+}
+
+/// How many of the conversation's latest items [`taken`] searches; a steer
+/// reported late was taken at the very end of the turn.
+const TAKEN_LOOKBACK: usize = 50;
+
 /// Senders with unread messages, oldest first — the order bare `pm msg read`
 /// will take them in.
 fn unread_senders(
@@ -310,14 +377,14 @@ fn allow_decision() -> String {
     json!({}).to_string()
 }
 
-/// Read stdin and derive `busy`. Any read/parse failure → not busy, so the
-/// hook never crashes or hangs on unexpected input.
-fn read_busy_from_stdin() -> bool {
+/// The Stop payload; empty when unreadable, which parses as not busy and
+/// no session, so the hook never crashes or hangs on unexpected input.
+fn read_stdin() -> String {
     let mut input = String::new();
     if std::io::stdin().read_to_string(&mut input).is_err() {
-        return false;
+        input.clear();
     }
-    parse_busy(&input)
+    input
 }
 
 /// `busy` if a `background_tasks` entry is running or a `session_crons` entry
@@ -559,7 +626,7 @@ mod tests {
             &mut |state, unread| turns.push((state, unread)),
             |_| {
                 polls += 1;
-                (polls > 3).then(|| Ended::By("ended by SIGTERM".to_string()))
+                (polls > 3).then(|| Woke::Ended(Ended::By("ended by SIGTERM".to_string())))
             },
         )
         .unwrap();
@@ -588,7 +655,7 @@ mod tests {
                 // A respawned session's hook marks it while the orphan waits.
                 let asked = Waiting::now(WaitingKind::Question, Some("Which DB?".into()));
                 runtime::write_waiting(&root, "login", "reviewer", &asked).unwrap();
-                Some(Ended::HarnessGone)
+                Some(Woke::Ended(Ended::HarnessGone))
             },
         )
         .unwrap();
@@ -638,19 +705,10 @@ mod tests {
         );
     }
 
-    fn request(root: &std::path::Path, after: Option<String>) {
-        let request = runtime::YieldRequest {
-            text_sha256: agent_input::sha256("deploy it"),
-            after,
-        };
-        runtime::request_yield(root, "login", "reviewer", &request).unwrap();
-    }
-
-    #[test]
-    fn a_request_for_text_already_taken_in_mid_turn_is_dropped_and_the_hook_waits() {
+    /// Register `reviewer` with a Claude Code transcript holding `lines`,
+    /// next to the project; returns its path.
+    fn with_transcript(root: &std::path::Path, lines: &str) -> std::path::PathBuf {
         use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
-        let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
         let mut registry = AgentRegistry::default();
         registry.register(
             "reviewer",
@@ -664,23 +722,46 @@ mod tests {
                 spawned_at: None,
             },
         );
-        registry.save(&paths::agents_dir(&root), "login").unwrap();
-        let transcript = dir.path().join("s1.jsonl");
-        let line = |uuid: &str, text: &str| {
-            json!({"type": "user", "uuid": uuid, "promptSource": "typed",
-                   "message": {"role": "user", "content": text}})
-            .to_string()
-                + "\n"
-        };
-        std::fs::write(&transcript, line("u1", "earlier")).unwrap();
+        registry.save(&paths::agents_dir(root), "login").unwrap();
+        let transcript = root.join("s1.jsonl");
+        std::fs::write(&transcript, lines).unwrap();
         runtime::write_session_path(
-            &root,
+            root,
             "login",
             "reviewer",
             runtime::SessionPath::Transcript,
             Some(&transcript),
         )
         .unwrap();
+        transcript
+    }
+
+    fn held(text: &str, at: chrono::DateTime<chrono::Utc>) -> Woke {
+        Woke::Held(HeldText {
+            text: text.into(),
+            at,
+        })
+    }
+
+    fn request(root: &std::path::Path, after: Option<String>) {
+        let request = runtime::YieldRequest {
+            text_sha256: agent_input::sha256("deploy it"),
+            after,
+        };
+        runtime::request_yield(root, "login", "reviewer", &request).unwrap();
+    }
+
+    #[test]
+    fn a_request_for_text_already_taken_in_mid_turn_is_dropped_and_the_hook_waits() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        let line = |uuid: &str, text: &str| {
+            json!({"type": "user", "uuid": uuid, "promptSource": "typed",
+                   "message": {"role": "user", "content": text}})
+            .to_string()
+                + "\n"
+        };
+        let transcript = with_transcript(&root, &line("u1", "earlier"));
         let after = registry::conversation(&root, "login", "reviewer")
             .unwrap()
             .unwrap()
@@ -704,7 +785,7 @@ mod tests {
             &mut |_, _| {},
             |_| {
                 polls += 1;
-                (polls > 3).then(|| Ended::By("ended by SIGTERM".to_string()))
+                (polls > 3).then(|| Woke::Ended(Ended::By("ended by SIGTERM".to_string())))
             },
         )
         .unwrap();
@@ -789,6 +870,120 @@ mod tests {
         assert_eq!(result, "{}");
         assert_eq!(turns, [(AgentState::Idle, 0), (AgentState::Busy, 0)]);
         assert!(!runtime::yield_requested(&root, "login", "reviewer"));
+    }
+
+    #[test]
+    fn input_held_while_waiting_ends_the_wait_with_the_agent_busy() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        let mut polls = 0;
+        let mut turns = Vec::new();
+
+        let result = wait_and_decide(
+            false,
+            &root,
+            "login",
+            "reviewer",
+            Some(Duration::from_millis(10)),
+            &mut |state, unread| turns.push((state, unread)),
+            |_| {
+                polls += 1;
+                (polls == 3).then(|| held("deploy it", chrono::Utc::now()))
+            },
+        )
+        .unwrap()
+        .answer();
+
+        assert_eq!(result, "{}");
+        assert_eq!(turns, [(AgentState::Idle, 0), (AgentState::Busy, 0)]);
+    }
+
+    #[test]
+    fn held_input_the_conversation_took_in_mid_turn_is_dropped_and_the_hook_waits() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        let submitted = chrono::Utc::now() - chrono::Duration::seconds(5);
+        let taken = json!({"type": "user", "uuid": "u1", "promptSource": "typed",
+            "timestamp": (submitted + chrono::Duration::milliseconds(300)).to_rfc3339(),
+            "message": {"role": "user", "content": "deploy it"}});
+        with_transcript(&root, &format!("{taken}\n"));
+        let mut polls = 0;
+
+        let result = wait_and_decide(
+            false,
+            &root,
+            "login",
+            "reviewer",
+            Some(Duration::from_millis(10)),
+            &mut |_, _| {},
+            |_| {
+                polls += 1;
+                match polls {
+                    2 => Some(held("deploy it", submitted)),
+                    p if p > 4 => Some(Woke::Ended(Ended::By("ended by SIGTERM".into()))),
+                    _ => None,
+                }
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result, Decided::Ended(Ended::By("ended by SIGTERM".into())));
+    }
+
+    #[test]
+    fn held_input_said_before_it_was_submitted_still_yields() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        let earlier = json!({"type": "user", "uuid": "u1", "promptSource": "typed",
+            "timestamp": (chrono::Utc::now() - chrono::Duration::minutes(5)).to_rfc3339(),
+            "message": {"role": "user", "content": "deploy it"}});
+        with_transcript(&root, &format!("{earlier}\n"));
+        let mut polls = 0;
+
+        let result = wait_and_decide(
+            false,
+            &root,
+            "login",
+            "reviewer",
+            Some(Duration::from_millis(10)),
+            &mut |_, _| {},
+            |_| {
+                polls += 1;
+                (polls == 2).then(|| held("deploy it", chrono::Utc::now()))
+            },
+        )
+        .unwrap()
+        .answer();
+
+        assert_eq!(result, "{}");
+    }
+
+    #[test]
+    fn messages_take_priority_over_held_input() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        let mut polls = 0;
+
+        let result = wait_and_decide(
+            false,
+            &root,
+            "login",
+            "reviewer",
+            Some(Duration::from_millis(10)),
+            &mut |_, _| {},
+            |_| {
+                polls += 1;
+                if polls == 3 {
+                    send(&root);
+                }
+                (polls == 3).then(|| held("deploy it", chrono::Utc::now()))
+            },
+        )
+        .unwrap()
+        .answer();
+
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["decision"], "block");
     }
 
     #[test]

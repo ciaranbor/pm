@@ -156,9 +156,10 @@ Type straight into an agent's window to answer a question, redirect, or
 add work. Typing into a blocked feature's agent sets the feature back to
 `wip`. Text typed into an *idle* agent — one waiting for its next message —
 starts a turn at once, and the agent waits for messages again after it.
-codex is the exception: there it stays queued until a message arrives, or
-Esc submits it now. `pm msg send <agent> "…"` from any pane reaches an
-agent either way.
+In codex, send it with Enter: a follow-up queued with Tab stays queued
+until a message arrives, or Esc submits it now
+([docs/harnesses.md](docs/harnesses.md#codex)). `pm msg send <agent> "…"`
+from any pane reaches an agent either way.
 
 You can split an agent's window to work beside it: pm watches and jumps to
 the pane it started the agent in, whichever pane is active. Restarting the
