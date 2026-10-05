@@ -106,11 +106,16 @@ fn writable_dirs(project_root: &Path, config: &HarnessConfig) -> Vec<std::path::
     dirs
 }
 
-/// The shell line sent to the window: pm's own `PM_AGENT_NAME` (so `pm msg`
-/// calls auto-identify) exported ahead of the harness command.
-fn window_command(agent_name: Option<&str>, cmd: &str) -> String {
+/// The shell line sent to the window: the agent's identity — its worktree
+/// ([`paths::AGENT_WORKTREE_ENV`]) and `PM_AGENT_NAME` (so `pm msg` calls
+/// auto-identify) — exported ahead of the harness command.
+fn window_command(agent_name: Option<&str>, worktree: &Path, cmd: &str) -> String {
     match agent_name {
-        Some(name) => format!("export PM_AGENT_NAME={name} && {cmd}"),
+        Some(name) => format!(
+            "export {}={} PM_AGENT_NAME={name} && {cmd}",
+            paths::AGENT_WORKTREE_ENV,
+            tmux::shell_quote(&worktree.to_string_lossy())
+        ),
         None => cmd.to_string(),
     }
 }
@@ -346,7 +351,7 @@ fn spawn_session_with_config(
     tmux::send_line(
         params.tmux_server,
         &window_target,
-        &window_command(params.agent_name, &cmd),
+        &window_command(params.agent_name, &worktree_path, &cmd),
     )?;
 
     let resumed = match (params.resume_session, &pre.session_id) {
@@ -2010,10 +2015,17 @@ package = "second-pkg"
     #[test]
     fn window_command_exports_agent_name_for_named_agents_only() {
         assert_eq!(
-            window_command(Some("reviewer"), "claude --agent reviewer"),
-            "export PM_AGENT_NAME=reviewer && claude --agent reviewer"
+            window_command(
+                Some("reviewer"),
+                Path::new("/p/login"),
+                "claude --agent reviewer"
+            ),
+            "export PM_AGENT_WORKTREE='/p/login' PM_AGENT_NAME=reviewer && claude --agent reviewer"
         );
-        assert_eq!(window_command(None, "claude"), "claude");
+        assert_eq!(
+            window_command(None, Path::new("/p/login"), "claude"),
+            "claude"
+        );
     }
 
     #[test]

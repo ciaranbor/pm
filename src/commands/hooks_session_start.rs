@@ -52,9 +52,7 @@ fn session_start_inner() -> Result<Option<String>> {
     std::io::stdin().read_to_string(&mut input)?;
     let payload = parse_payload(&input)?;
 
-    let cwd = std::env::current_dir()?;
-    let project_root = paths::find_project_root(&cwd)?;
-    let feature = paths::resolve_scope_from(&project_root, &cwd)?;
+    let (project_root, feature) = paths::agent_scope()?;
 
     let Some((harness, definition)) = record_start(&project_root, &feature, &agent_name, &payload)?
     else {

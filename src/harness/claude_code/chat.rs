@@ -32,7 +32,7 @@ use serde_json::Value;
 
 use crate::harness::AgentSession;
 use crate::harness::transcript::items::{Body, Item, content_text, summarize_input, timestamp};
-use crate::harness::transcript::jsonl::Entry;
+use crate::harness::transcript::jsonl::{self, Entry};
 
 /// Where Claude Code keeps the transcript of `agent`'s session: under the
 /// config dir its environment named, else `~/.claude`, keyed by the
@@ -134,9 +134,56 @@ fn user(line: &Value, item: &dyn Fn(Body) -> Vec<Entry>) -> Vec<Entry> {
         }),
         _ if text.trim().is_empty() => Vec::new(),
         _ => item(Body::User {
-            text: tag(&text, "command-name").map_or_else(|| unpasted(&text), str::to_string),
+            text: as_typed(&text),
         }),
     }
+}
+
+/// A prompt's text as the user typed it: a slash command by its name, a
+/// long paste unwrapped.
+fn as_typed(text: &str) -> String {
+    tag(text, "command-name").map_or_else(|| unpasted(text), str::to_string)
+}
+
+/// The text of a prompt `line` records the session taking in, as typed,
+/// whoever sent it: the user, a background task, a hook. Unlike [`parse`],
+/// which shows only the user's as theirs.
+fn taken_in(line: &Value) -> Option<String> {
+    if line.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+        return None;
+    }
+    let text = match line.get("type").and_then(Value::as_str) {
+        Some("user") if line.get("isCompactSummary").and_then(Value::as_bool) != Some(true) => {
+            line.pointer("/message/content")?.as_str()?
+        }
+        Some("attachment") if line.pointer("/attachment/type")? == "queued_command" => {
+            line.pointer("/attachment/prompt")?.as_str()?
+        }
+        _ => return None,
+    };
+    Some(as_typed(text))
+}
+
+/// Whether the transcript at `path` took in a prompt whose text, as typed,
+/// `is_text` after cursor `after` ([`taken_in`]).
+pub(in crate::harness) fn took_in(
+    path: &Path,
+    after: &str,
+    is_text: impl Fn(&str) -> bool,
+) -> std::io::Result<bool> {
+    let Ok(after) = after.parse() else {
+        return Ok(false);
+    };
+    Ok(jsonl::lines_after(path, after)?
+        .is_some_and(|lines| lines.iter().filter_map(taken_in).any(|text| is_text(&text))))
+}
+
+/// Whether `prompt`, as UserPromptSubmit reports it, is one Claude Code
+/// wrote rather than the user: a background task's end, or an
+/// `asyncRewake` hook's wake-up, both wrapped in `<task-notification>`
+/// (verified on 2.1.289).
+pub(crate) fn is_synthesized(prompt: &str) -> bool {
+    prompt.trim_start().starts_with("<task-notification>")
 }
 
 /// What the user typed while a turn ran, which the turn takes in at a step's

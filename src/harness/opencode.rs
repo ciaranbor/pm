@@ -88,6 +88,7 @@ use crate::error::{PmError, Result};
 use crate::fs_utils::write_atomic;
 use crate::harness::probe::{self, Probe};
 use crate::harness::{LaunchContext, PreLaunch, Projection, ProjectionScope, SpawnSpec};
+use crate::state::paths;
 use crate::state::project::OpenCodeConfig;
 use crate::state::workflow::VANILLA_AGENT;
 use crate::tmux;
@@ -132,6 +133,7 @@ const SESSION_NOT_FOUND: &str = "SessionNotFoundError";
 /// server started on another agent's behalf.
 const SCRUBBED_ENV: &[&str] = &[
     "PM_AGENT_NAME",
+    paths::AGENT_WORKTREE_ENV,
     SESSION_ENV,
     PROMPT_ENV,
     TRIP_ENV,
@@ -920,6 +922,7 @@ mod tests {
             .collect();
         for key in [
             "PM_AGENT_NAME",
+            paths::AGENT_WORKTREE_ENV,
             SESSION_ENV,
             PROMPT_ENV,
             TRIP_ENV,

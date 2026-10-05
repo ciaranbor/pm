@@ -520,8 +520,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             }
         }
         Commands::Msg(msg_cmd) => {
-            let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-            let feature = resolve_scope(&project_root)?;
+            let (project_root, feature) = paths::agent_scope()?;
             match msg_cmd {
                 MsgCommands::Send {
                     agent,

@@ -109,7 +109,7 @@ pub fn stop(on_turn: &mut dyn FnMut(AgentState, u32)) -> i32 {
     };
     let payload = read_stdin();
     let busy = parse_busy(&payload);
-    let Ok((project_root, scope)) = scope() else {
+    let Ok((project_root, scope)) = paths::agent_scope() else {
         print!("{}", allow_decision());
         return 0;
     };
@@ -173,13 +173,6 @@ fn watch_held_input(
     let registry = registry::AgentRegistry::load(&paths::agents_dir(project_root), scope).ok()?;
     let harness = registry.get(agent)?.harness;
     harness.watch_held_input(&paths::home_dir().ok()?, &session_id)
-}
-
-fn scope() -> crate::error::Result<(std::path::PathBuf, String)> {
-    let cwd = std::env::current_dir()?;
-    let project_root = paths::find_project_root(&cwd)?;
-    let scope = paths::resolve_scope_from(&project_root, &cwd)?;
-    Ok((project_root, scope))
 }
 
 /// Record that the hook ended without the agent getting a decision, so it
@@ -751,17 +744,15 @@ mod tests {
         runtime::request_yield(root, "login", "reviewer", &request).unwrap();
     }
 
-    #[test]
-    fn a_request_for_text_already_taken_in_mid_turn_is_dropped_and_the_hook_waits() {
+    /// The Stop hook's answer with a yield request filed for "deploy it"
+    /// once `reviewer`'s Claude Code transcript held one line, and `taken`
+    /// appended after it.
+    fn stop_after_taking_in(taken: &str) -> Decided {
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
-        let line = |uuid: &str, text: &str| {
-            json!({"type": "user", "uuid": uuid, "promptSource": "typed",
-                   "message": {"role": "user", "content": text}})
-            .to_string()
-                + "\n"
-        };
-        let transcript = with_transcript(&root, &line("u1", "earlier"));
+        let earlier = json!({"type": "user", "uuid": "u1", "promptSource": "typed",
+                             "message": {"role": "user", "content": "earlier"}});
+        let transcript = with_transcript(&root, &format!("{earlier}\n"));
         let after = registry::conversation(&root, "login", "reviewer")
             .unwrap()
             .unwrap()
@@ -773,7 +764,7 @@ mod tests {
             .append(true)
             .open(&transcript)
             .unwrap();
-        std::io::Write::write_all(&mut file, line("u2", "deploy it\n").as_bytes()).unwrap();
+        std::io::Write::write_all(&mut file, format!("{taken}\n").as_bytes()).unwrap();
         let mut polls = 0;
 
         let result = wait_and_decide(
@@ -789,9 +780,34 @@ mod tests {
             },
         )
         .unwrap();
-
-        assert_eq!(result, Decided::Ended(Ended::By("ended by SIGTERM".into())));
         assert!(!runtime::yield_requested(&root, "login", "reviewer"));
+        result
+    }
+
+    #[test]
+    fn a_request_for_text_already_taken_in_mid_turn_is_dropped_and_the_hook_waits() {
+        let waited = Decided::Ended(Ended::By("ended by SIGTERM".into()));
+        let typed = json!({"type": "user", "uuid": "u2", "promptSource": "typed",
+                           "message": {"role": "user", "content": "deploy it\n"}});
+        assert_eq!(stop_after_taking_in(&typed.to_string()), waited);
+
+        // A mid-turn task notification is recorded only as a non-human
+        // `queued_command`.
+        let notified = json!({"type": "attachment", "uuid": "a1", "attachment": {
+            "type": "queued_command", "prompt": "deploy it",
+            "commandMode": "task-notification",
+            "origin": {"kind": "task-notification", "producer": "session-task"}}});
+        assert_eq!(stop_after_taking_in(&notified.to_string()), waited);
+    }
+
+    #[test]
+    fn a_request_for_text_not_yet_taken_in_yields() {
+        let other = json!({"type": "user", "uuid": "u2", "promptSource": "typed",
+                           "message": {"role": "user", "content": "something else"}});
+        assert_eq!(
+            stop_after_taking_in(&other.to_string()),
+            Decided::Answer("{}".into())
+        );
     }
 
     #[test]

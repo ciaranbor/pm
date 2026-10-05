@@ -18,8 +18,14 @@ fn project(dir: &Path) {
 }
 
 /// The installed command under `/bin/sh -c`, as Claude Code runs it, with
-/// the built `pm` first on `PATH`. Returns once the hook is about to wait.
+/// the built `pm` first on `PATH`, for an agent spawned in the main
+/// worktree. Returns once the hook is about to wait.
 fn spawn_hook(dir: &Path) -> Child {
+    spawn_hook_in(dir, &dir.join("main"))
+}
+
+/// [`spawn_hook`], run in `cwd`, wherever the agent's shell has `cd`'d.
+fn spawn_hook_in(dir: &Path, cwd: &Path) -> Child {
     let bin = assert_cmd::cargo::cargo_bin("pm");
     let path = format!(
         "{}:{}",
@@ -37,7 +43,8 @@ fn spawn_hook(dir: &Path) -> Child {
         .env("HOME", dir)
         .env("PATH", path)
         .env("PM_AGENT_NAME", AGENT)
-        .current_dir(dir.join("main"))
+        .env(paths::AGENT_WORKTREE_ENV, dir.join("main"))
+        .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -102,6 +109,28 @@ fn a_signal_from_another_process_leaves_the_hook_armed() {
         decision["reason"],
         "You have new messages from researcher. Run `pm msg read` to read them."
     );
+}
+
+#[test]
+fn the_hook_finds_its_agent_wherever_the_agents_shell_has_moved() {
+    let dir = tempdir().unwrap();
+    project(dir.path());
+    let elsewhere = paths::summaries_dir(dir.path());
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let mut hook = spawn_hook_in(dir.path(), &elsewhere);
+
+    pm::messages::send(
+        &paths::messages_dir(dir.path()),
+        "main",
+        AGENT,
+        "researcher",
+        "hi",
+    )
+    .unwrap();
+    wait_for_exit(&mut hook);
+    let out = hook.wait_with_output().unwrap();
+    let decision: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(decision["decision"], "block", "{out:?}");
 }
 
 #[test]

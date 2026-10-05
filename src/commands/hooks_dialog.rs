@@ -88,9 +88,7 @@ fn open(harness: Harness) -> Result<Option<Opened>> {
     let Some((dialog, reply_context)) = harness.dialog(&payload) else {
         return Ok(None);
     };
-    let cwd = std::env::current_dir()?;
-    let project_root = paths::find_project_root(&cwd)?;
-    let scope = paths::resolve_scope_from(&project_root, &cwd)?;
+    let (project_root, scope) = paths::agent_scope()?;
     let record = DialogRecord {
         dialog,
         pid: std::process::id(),

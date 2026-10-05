@@ -49,6 +49,7 @@ fn command(dir: &Path, shell: &str) -> Command {
         .env("HOME", dir)
         .env("PATH", path_with_pm())
         .env("PM_AGENT_NAME", AGENT)
+        .env_remove(pm::state::paths::AGENT_WORKTREE_ENV)
         .current_dir(dir.join("main"));
     cmd
 }

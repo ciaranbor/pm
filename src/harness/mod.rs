@@ -36,7 +36,7 @@ use crate::state::runtime::{
     self, Answer, Dialog, DialogRecord, SessionPath, Waiting, WaitingClass,
 };
 
-use transcript::items::{Page, Tail};
+use transcript::items::{Body, Page, Tail};
 use transcript::jsonl::{self, Parse};
 
 /// A change to an agent's waiting marker.
@@ -383,6 +383,15 @@ impl Harness {
         match self {
             Harness::ClaudeCode => claude_code::chat::unpasted(prompt),
             Harness::Codex | Harness::OpenCode => prompt.to_string(),
+        }
+    }
+
+    /// Whether `prompt`, as UserPromptSubmit reports it, is one the harness
+    /// wrote itself rather than the user typed.
+    pub fn synthesized_prompt(self, prompt: &str) -> bool {
+        match self {
+            Harness::ClaudeCode => claude_code::chat::is_synthesized(prompt),
+            Harness::Codex | Harness::OpenCode => false,
         }
     }
 
@@ -945,6 +954,23 @@ impl Conversation {
                 Ok(after) => opencode::chat::tail(db, id, after),
                 Err(_) => Ok(Tail::Reset),
             },
+        }
+    }
+
+    /// Whether the conversation took in a prompt whose text, as typed,
+    /// `is_text` after cursor `after`: any prompt, whoever sent it, where the
+    /// harness records that; else the user's.
+    pub fn took_in(&self, after: &str, is_text: impl Fn(&str) -> bool) -> Result<bool> {
+        match (self.harness, &self.location) {
+            (Harness::ClaudeCode, Location::Jsonl { path, .. }) => {
+                claude_code::chat::took_in(path, after, is_text).map_err(unreadable)
+            }
+            _ => Ok(match self.tail(after)? {
+                Tail::Items { items, .. } => items
+                    .iter()
+                    .any(|item| matches!(&item.body, Body::User { text } if is_text(text))),
+                Tail::Reset => false,
+            }),
         }
     }
 

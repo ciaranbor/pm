@@ -3,9 +3,10 @@
 //!
 //! Only the user's input resets it. pm messages arrive as Stop-hook
 //! continuations, which no harness runs this hook for, or as the same text
-//! typed in to re-arm an agent (see `agent_rearm`); that and pm's own
-//! launch prompts ([`is_launch_prompt`]) are ignored. Blocked is per
-//! feature, so input to any of its agents resets it.
+//! typed in to re-arm an agent (see `agent_rearm`); that, pm's own launch
+//! prompts ([`is_launch_prompt`]) and prompts the harness wrote itself
+//! ([`Harness::synthesized_prompt`]) are ignored. Blocked is per feature,
+//! so input to any of its agents resets it.
 //!
 //! Any prompt, pm's own included, also means the agent is working again, so
 //! it clears the agent's waiting marker ([`runtime`]), claims a turn end its
@@ -32,6 +33,7 @@ use crate::commands::feat_status::feat_status;
 use crate::commands::hooks_stop;
 use crate::commands::running_agents::{self, Liveness, Windows};
 use crate::error::Result;
+use crate::harness::Harness;
 use crate::messages;
 use crate::state::agent::{AgentEntry, AgentRegistry};
 use crate::state::feature::{FeatureState, Progress};
@@ -64,9 +66,7 @@ fn user_prompt_inner(tmux_server: Option<&str>) -> Result<Option<u32>> {
     else {
         return Ok(None);
     };
-    let cwd = std::env::current_dir()?;
-    let project_root = paths::find_project_root(&cwd)?;
-    let scope = paths::resolve_scope_from(&project_root, &cwd)?;
+    let (project_root, scope) = paths::agent_scope()?;
     on_prompt(&project_root, &scope, &agent, &prompt, tmux_server)?;
     let unread = messages::unread_count(&paths::messages_dir(&project_root), &scope, &agent);
     Ok(Some(unread))
@@ -83,19 +83,21 @@ fn on_prompt(
     tmux_server: Option<&str>,
 ) -> Result<()> {
     let registry = AgentRegistry::load(&paths::agents_dir(project_root), scope)?;
-    if let Some(entry) = registry.get(agent)
+    let entry = registry.get(agent);
+    let harness = entry.map(|e| e.harness);
+    if let Some(entry) = entry
         && entry.harness.prompt_hook_runs_when_held()
-        && !is_pms(prompt)
+        && is_users(prompt, harness)
     {
         // Best-effort: the prompt's other effects must not wait on it. It
         // reads the waiting marker, so it goes before the marker is cleared.
         let _ = yield_if_held(project_root, scope, agent, entry, prompt, tmux_server);
     }
-    on_user_prompt(project_root, scope, prompt)?;
+    on_user_prompt(project_root, scope, prompt, harness)?;
     runtime::touch_activity(project_root, scope, agent)?;
     runtime::clear_waiting(project_root, scope, agent)?;
-    if let Some(entry) = registry.get(agent)
-        && let Some(ended) = running_agents::waiting(project_root, scope, agent, entry.harness)
+    if let Some(harness) = harness
+        && let Some(ended) = running_agents::waiting(project_root, scope, agent, harness)
         && let Some(id) = ended.entry
     {
         runtime::claim_turn_end(project_root, scope, agent, &id)?;
@@ -134,15 +136,23 @@ fn yield_if_held(
     agent_input::request_yield(project_root, scope, agent, &typed, after)
 }
 
-/// Whether `prompt` is one pm typed: a launch prompt or a re-arm.
-fn is_pms(prompt: &str) -> bool {
-    is_launch_prompt(prompt) || hooks_stop::is_continuation(prompt)
+/// Whether `prompt` to an agent running `harness` is the user's: neither
+/// one pm typed (a launch prompt or a re-arm) nor one the harness wrote.
+fn is_users(prompt: &str, harness: Option<Harness>) -> bool {
+    !is_launch_prompt(prompt)
+        && !hooks_stop::is_continuation(prompt)
+        && !harness.is_some_and(|h| h.synthesized_prompt(prompt))
 }
 
-/// Set `scope` back to `wip` if it is a blocked feature and `prompt` is the
-/// user's. Returns whether it did.
-pub(crate) fn on_user_prompt(project_root: &Path, scope: &str, prompt: &str) -> Result<bool> {
-    if scope == "main" || is_pms(prompt) {
+/// Set `scope` back to `wip` if it is a blocked feature and `prompt`, to an
+/// agent running `harness`, is the user's. Returns whether it did.
+fn on_user_prompt(
+    project_root: &Path,
+    scope: &str,
+    prompt: &str,
+    harness: Option<Harness>,
+) -> Result<bool> {
+    if scope == "main" || !is_users(prompt, harness) {
         return Ok(false);
     }
     let state = FeatureState::load(&paths::features_dir(project_root), scope)?;
@@ -157,7 +167,6 @@ pub(crate) fn on_user_prompt(project_root: &Path, scope: &str, prompt: &str) -> 
 mod tests {
     use super::*;
     use crate::commands::agent_spawn::{RESUME_PROMPT, SPAWN_PROMPT};
-    use crate::harness::Harness;
     use crate::state::runtime::YieldRequest;
     use crate::testing::TestServer;
     use tempfile::tempdir;
@@ -184,7 +193,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let project = blocked_feature(dir.path());
 
-        assert!(on_user_prompt(&project, "login", "use postgres").unwrap());
+        assert!(on_user_prompt(&project, "login", "use postgres", None).unwrap());
 
         let state = state(&project);
         assert_eq!(state.progress, Progress::Wip);
@@ -197,8 +206,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let project = blocked_feature(dir.path());
 
-        assert!(!on_user_prompt(&project, "login", SPAWN_PROMPT).unwrap());
-        assert!(!on_user_prompt(&project, "login", RESUME_PROMPT).unwrap());
+        assert!(!on_user_prompt(&project, "login", SPAWN_PROMPT, None).unwrap());
+        assert!(!on_user_prompt(&project, "login", RESUME_PROMPT, None).unwrap());
 
         let state = state(&project);
         assert_eq!(state.progress, Progress::Blocked);
@@ -219,11 +228,11 @@ mod tests {
         .unwrap();
         let rearm = hooks_stop::continuation(&project, "login", "implementer").unwrap();
 
-        assert!(!on_user_prompt(&project, "login", &rearm).unwrap());
+        assert!(!on_user_prompt(&project, "login", &rearm, None).unwrap());
         assert_eq!(state(&project).progress, Progress::Blocked);
         // The user quoting it in a longer prompt is still the user.
         let quoted = format!("why did you get \"{rearm}\"?");
-        assert!(on_user_prompt(&project, "login", &quoted).unwrap());
+        assert!(on_user_prompt(&project, "login", &quoted, None).unwrap());
     }
 
     #[test]
@@ -238,7 +247,7 @@ mod tests {
         .unwrap();
         feat_status(&project, "login", Progress::Ready, None, None).unwrap();
 
-        assert!(!on_user_prompt(&project, "login", "one more thing").unwrap());
+        assert!(!on_user_prompt(&project, "login", "one more thing", None).unwrap());
         assert_eq!(state(&project).progress, Progress::Ready);
     }
 
@@ -247,7 +256,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let project = blocked_feature(dir.path());
 
-        assert!(!on_user_prompt(&project, "main", "use postgres").unwrap());
+        assert!(!on_user_prompt(&project, "main", "use postgres", None).unwrap());
         assert_eq!(state(&project).progress, Progress::Blocked);
     }
 
@@ -406,6 +415,41 @@ mod tests {
         runtime::write_waiting(&project, "login", "implementer", &prompt).unwrap();
         on_prompt(&project, "login", "implementer", "go on", server.name()).unwrap();
         assert_eq!(yield_request(&project), None);
+    }
+
+    #[test]
+    fn a_background_tasks_end_mid_turn_is_not_the_user() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let project = agent(
+            &server,
+            dir.path(),
+            Harness::ClaudeCode,
+            running_agents::Liveness::Busy,
+        );
+        feat_status(
+            &project,
+            "login",
+            Progress::Blocked,
+            Some("which DB?"),
+            None,
+        )
+        .unwrap();
+        let notification = "<task-notification>\n<task-id>bdfpbsu9n</task-id>\n\
+            <status>completed</status>\n<summary>Background command \"Run tests\" \
+            completed (exit code 0)</summary>\n</task-notification>";
+
+        on_prompt(
+            &project,
+            "login",
+            "implementer",
+            notification,
+            server.name(),
+        )
+        .unwrap();
+
+        assert_eq!(yield_request(&project), None);
+        assert_eq!(state(&project).progress, Progress::Blocked);
     }
 
     #[test]
