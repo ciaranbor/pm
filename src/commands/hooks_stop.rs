@@ -109,7 +109,7 @@ pub fn stop(on_turn: &mut dyn FnMut(AgentState, u32)) -> i32 {
     };
     let payload = read_stdin();
     let busy = parse_busy(&payload);
-    let Ok((project_root, scope)) = scope() else {
+    let Ok((project_root, scope)) = paths::agent_scope() else {
         print!("{}", allow_decision());
         return 0;
     };
@@ -173,13 +173,6 @@ fn watch_held_input(
     let registry = registry::AgentRegistry::load(&paths::agents_dir(project_root), scope).ok()?;
     let harness = registry.get(agent)?.harness;
     harness.watch_held_input(&paths::home_dir().ok()?, &session_id)
-}
-
-fn scope() -> crate::error::Result<(std::path::PathBuf, String)> {
-    let cwd = std::env::current_dir()?;
-    let project_root = paths::find_project_root(&cwd)?;
-    let scope = paths::resolve_scope_from(&project_root, &cwd)?;
-    Ok((project_root, scope))
 }
 
 /// Record that the hook ended without the agent getting a decision, so it

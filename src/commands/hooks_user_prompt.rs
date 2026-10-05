@@ -66,9 +66,7 @@ fn user_prompt_inner(tmux_server: Option<&str>) -> Result<Option<u32>> {
     else {
         return Ok(None);
     };
-    let cwd = std::env::current_dir()?;
-    let project_root = paths::find_project_root(&cwd)?;
-    let scope = paths::resolve_scope_from(&project_root, &cwd)?;
+    let (project_root, scope) = paths::agent_scope()?;
     on_prompt(&project_root, &scope, &agent, &prompt, tmux_server)?;
     let unread = messages::unread_count(&paths::messages_dir(&project_root), &scope, &agent);
     Ok(Some(unread))

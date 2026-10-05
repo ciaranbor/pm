@@ -53,8 +53,8 @@ Design decisions you can't recover by reading the tree. Preserve them.
 - A waiting marker only refines busy; a running Stop hook or dead harness wins.
 - Hooks are installed once per machine for **every supported harness**;
   `pm doctor` checks only those the project's agents run on, deliberately.
-- Hooks read the agent's identity from their environment, so a spawn never
-  attaches to a shared harness server, whose hooks run in its own.
+- Hooks read the agent's name and worktree from their env (cwd is only a fallback),
+  so a spawn never attaches to a shared harness server, whose hooks run in its own.
 - opencode's Stop hook is a bundled plugin; a loop that stops itself must say so.
 - An opencode agent never spawns without a model row and reaches only the
   providers pm config names; keys are named by env var, never stored.

@@ -346,7 +346,9 @@ have given, but only when that agent's input line is empty; elsewhere the
 message waits.
 
 Identity resolves as `PM_AGENT_NAME` (set at spawn) > `$USER` > `"user"`, so
-spawned agents need no `--as-agent`.
+spawned agents need no `--as-agent`. An agent's scope resolves from the
+worktree it was spawned in (`PM_AGENT_WORKTREE`), not where its shell has
+`cd`'d, for `pm msg` and pm's hooks alike.
 
 ### Information store and summaries
 

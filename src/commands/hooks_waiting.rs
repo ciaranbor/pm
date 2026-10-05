@@ -42,9 +42,7 @@ fn waiting_inner(harness: Harness) -> Result<Option<(AgentState, u32)>> {
     let Ok(payload) = serde_json::from_str::<serde_json::Value>(&input) else {
         return Ok(None);
     };
-    let cwd = std::env::current_dir()?;
-    let project_root = paths::find_project_root(&cwd)?;
-    let scope = paths::resolve_scope_from(&project_root, &cwd)?;
+    let (project_root, scope) = paths::agent_scope()?;
     runtime::touch_activity(&project_root, &scope, &agent)?;
     let Some(state) = apply(
         &project_root,

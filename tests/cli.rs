@@ -36,7 +36,8 @@ fn pm() -> Command {
     let mut pm = Command::cargo_bin("pm").unwrap();
     pm.envs(no_tmux())
         .env_remove("TMUX")
-        .env_remove("TMUX_PANE");
+        .env_remove("TMUX_PANE")
+        .env_remove(pm::state::paths::AGENT_WORKTREE_ENV);
     pm
 }
 
@@ -324,6 +325,7 @@ fn stop_hook_waiting_on_an_empty_inbox_exits_when_its_harness_goes() {
         .envs(no_tmux())
         .env_remove("TMUX")
         .env_remove("TMUX_PANE")
+        .env_remove(pm::state::paths::AGENT_WORKTREE_ENV)
         .env("HOME", dir.path())
         .env("PM_AGENT_NAME", "implementer")
         .current_dir(dir.path().join("main"))

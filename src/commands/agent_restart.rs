@@ -450,7 +450,7 @@ mod tests {
             |pane: &str| server.tmux_stdout(&["display-message", "-p", "-t", pane, "#{pane_pid}"]);
         assert_eq!(pid(&user), user_pid);
         assert_ne!(pid(&agent), agent_pid);
-        server.wait_for_pane_text(&agent, "export PM_AGENT_NAME=reviewer");
+        server.wait_for_pane_text(&agent, "PM_AGENT_NAME=reviewer");
     }
 
     #[test]

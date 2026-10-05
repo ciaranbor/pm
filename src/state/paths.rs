@@ -187,6 +187,24 @@ pub fn detect_feature_from_cwd(project_root: &Path, cwd: &Path) -> Option<String
     Some(name)
 }
 
+/// The environment variable naming the worktree an agent was spawned in.
+/// Its hooks and `pm msg` calls resolve its scope from it rather than the
+/// current directory: a harness runs them wherever the agent's shell last
+/// `cd`'d to, which may be outside any worktree (an `--add-dir` root).
+pub const AGENT_WORKTREE_ENV: &str = "PM_AGENT_WORKTREE";
+
+/// The project root and scope of the agent this process runs for: resolved
+/// from [`AGENT_WORKTREE_ENV`] when set, else the current directory.
+pub fn agent_scope() -> Result<(PathBuf, String)> {
+    let dir = match std::env::var_os(AGENT_WORKTREE_ENV).filter(|d| !d.is_empty()) {
+        Some(dir) => PathBuf::from(dir),
+        None => std::env::current_dir()?,
+    };
+    let project_root = find_project_root(&dir)?;
+    let scope = resolve_scope_from(&project_root, &dir)?;
+    Ok((project_root, scope))
+}
+
 /// Resolve the current scope from a working directory: the feature name if
 /// `cwd` is inside a known feature worktree, `"main"` if inside the main
 /// worktree, otherwise [`PmError::NotInWorktree`].
