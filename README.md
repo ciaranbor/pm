@@ -374,7 +374,8 @@ For a workflow, copy `<pm config dir>/workflows/<name>/` into
 `<project>/.pm/workflows/<name>/` and edit its `config.toml` (the team)
 and `workflow.md` (the routing). `pm workflow list` shows what is
 installed and where from. `pm agent spawn <name> --agent <def>` runs
-several agents off one definition.
+several agents off one definition; the reserved definition `plain` is a
+vanilla session with none.
 
 **Skills are the exception.** Claude Code ranks *personal* skills above
 project ones, and pm projects every bundled skill into `~/.claude/skills/`,
@@ -474,7 +475,8 @@ max_features = 6             # refuse feat new / feat adopt beyond 6 unmerged fe
 
 **Rows.** Keys are the `--agent` definition, not the display name: an agent
 spawned as `frontend-dev --agent implementer` takes `implementer`'s row.
-`"*"` applies to every agent without a row of its own. Per setting, the
+`"*"` applies to every agent without a row of its own; `plain` keys the
+vanilla agent. Per setting, the
 first of these wins: project named row, project `"*"`, global named row,
 global `"*"`; `""` masks the rows below it.
 

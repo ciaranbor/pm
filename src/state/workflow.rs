@@ -23,7 +23,11 @@ use crate::state::paths;
 /// Unconditional: even if a `default.md` definition file exists, this name
 /// spawns with no definition flag. Validation skips the definition-file
 /// check for it.
-pub const VANILLA_AGENT: &str = "default";
+pub const VANILLA_AGENT: &str = "plain";
+
+/// The vanilla agent's name before it became [`VANILLA_AGENT`]; now an
+/// ordinary name.
+pub const LEGACY_VANILLA_AGENT: &str = "default";
 
 /// Whether `name` is the reserved vanilla agent.
 pub fn is_vanilla(name: &str) -> bool {
@@ -121,6 +125,11 @@ impl WorkflowDef {
                 continue;
             }
             if !definition_exists(project_root, agent, home) {
+                if agent == LEGACY_VANILLA_AGENT {
+                    return Err(PmError::WorkflowNamesLegacyVanilla {
+                        workflow: workflow_name.to_string(),
+                    });
+                }
                 return Err(PmError::WorkflowAgentMissing {
                     workflow: workflow_name.to_string(),
                     agent: agent.clone(),
@@ -557,6 +566,32 @@ brief_agents = ["{name}"]
         );
         let def = WorkflowDef::load(dir.path(), "demo").unwrap();
         // Home pointed at the empty tempdir: no definition can resolve.
+        def.validate_with_home(dir.path(), "demo", Some(dir.path()))
+            .unwrap();
+    }
+
+    #[test]
+    fn validate_treats_legacy_vanilla_name_as_an_ordinary_agent() {
+        let dir = tempdir().unwrap();
+        write_workflow(
+            dir.path(),
+            "demo",
+            r#"description = "x"
+agents = ["default"]
+"#,
+        );
+        let def = WorkflowDef::load(dir.path(), "demo").unwrap();
+        let err = def
+            .validate_with_home(dir.path(), "demo", Some(dir.path()))
+            .unwrap_err();
+        assert!(
+            matches!(err, PmError::WorkflowNamesLegacyVanilla { .. }),
+            "{err:?}"
+        );
+
+        let main_agents = paths::main_worktree(dir.path()).join(".agents/agents");
+        std::fs::create_dir_all(&main_agents).unwrap();
+        std::fs::write(main_agents.join("default.md"), "stub").unwrap();
         def.validate_with_home(dir.path(), "demo", Some(dir.path()))
             .unwrap();
     }

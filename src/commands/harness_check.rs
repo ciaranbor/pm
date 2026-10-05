@@ -526,8 +526,8 @@ mod tests {
         let config = opencode_reporting(dir.path(), "opencode v2.0.18");
         let mut agents = mixed_agents();
         agents.models.insert("qa".into(), "local/qwen".into());
-        agents.models.insert("default".into(), "local/qwen".into());
-        agents.harness.insert("default".into(), "opencode".into());
+        agents.models.insert("plain".into(), "local/qwen".into());
+        agents.harness.insert("plain".into(), "opencode".into());
         agents.harness.insert("reviewer".into(), "opencode".into());
         agents.models.insert("reviewer".into(), "local/qwen".into());
         let main = dir.path().join("main");
@@ -545,7 +545,7 @@ mod tests {
 
         // Launched without its role; the vanilla name has no definition.
         assert_eq!(
-            check(&["qa", "default"]).lines,
+            check(&["qa", "plain"]).lines,
             [
                 "qa (opencode): definition 'qa' is not projected for opencode, so the agent would \
               start without its role (run `pm upgrade`)"

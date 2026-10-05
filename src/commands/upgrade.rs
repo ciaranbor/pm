@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use crate::error::Result;
 use crate::state::paths;
 use crate::state::project::ProjectEntry;
+use crate::state::workflow::VANILLA_AGENT;
 
 use super::hooks_install;
 use super::serve_install::{self, Refresh};
@@ -46,6 +47,8 @@ pub fn upgrade_project(project_root: &Path) -> Result<Vec<String>> {
         }
     }
 
+    let renamed = super::vanilla_rename::migrate(project_root, false)?;
+
     // Harnesses read from their own dirs, not the canonical store. The
     // projection's own lines (which name any hand-written harness file a
     // canonical one replaced) follow the summary.
@@ -54,6 +57,12 @@ pub fn upgrade_project(project_root: &Path) -> Result<Vec<String>> {
 
     let summary = format!("Upgraded {} for main", updated.join(", "));
     let mut lines = vec![summary];
+    if !renamed.is_empty() {
+        lines.push(format!(
+            "Vanilla agents {} now launch as '{VANILLA_AGENT}'",
+            agent_list(&renamed)
+        ));
+    }
     lines.extend(notes);
     Ok(lines)
 }
@@ -99,10 +108,27 @@ pub fn upgrade_project_dry_run(project_root: &Path) -> Result<Vec<String>> {
         )?));
     }
 
+    let renamed = super::vanilla_rename::migrate(project_root, true)?;
+    if !renamed.is_empty() {
+        actions.push(format!(
+            "Would relaunch vanilla agents {} as '{VANILLA_AGENT}'",
+            agent_list(&renamed)
+        ));
+    }
+
     // Projections (compares the canonical store as it is on disk now)
     actions.extend(skills::project_assets(project_root, true)?);
 
     Ok(actions)
+}
+
+/// `agents` as `'default' (login), …`.
+fn agent_list(agents: &[(String, String)]) -> String {
+    let names: Vec<String> = agents
+        .iter()
+        .map(|(scope, name)| format!("'{name}' ({scope})"))
+        .collect();
+    names.join(", ")
 }
 
 /// One line with a file count per worktree a migration would remove bundled
@@ -357,6 +383,50 @@ last_active = "2026-01-01T00:00:00Z"
             content,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn upgrade_relaunches_registered_default_agents_as_plain() {
+        use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        skills::install_global().unwrap();
+        let agents_dir = paths::agents_dir(&root);
+        let mut registry = AgentRegistry::default();
+        registry.register(
+            "default",
+            AgentEntry {
+                agent_type: AgentType::Agent,
+                session_id: "sid".to_string(),
+                window_name: "default".to_string(),
+                active: true,
+                agent_definition: None,
+                harness: Harness::ClaudeCode,
+                spawned_at: None,
+            },
+        );
+        registry.save(&agents_dir, "login").unwrap();
+
+        let dry = upgrade_project_dry_run(&root).unwrap();
+        assert!(
+            dry.contains(&"Would relaunch vanilla agents 'default' (login) as 'plain'".to_string()),
+            "{dry:?}"
+        );
+        assert_eq!(AgentRegistry::load(&agents_dir, "login").unwrap(), registry);
+
+        let lines = upgrade_project(&root).unwrap();
+        assert!(
+            lines.contains(&"Vanilla agents 'default' (login) now launch as 'plain'".to_string()),
+            "{lines:?}"
+        );
+        let after = AgentRegistry::load(&agents_dir, "login").unwrap();
+        assert_eq!(
+            after
+                .get("default")
+                .unwrap()
+                .effective_definition("default"),
+            VANILLA_AGENT
+        );
     }
 
     #[test]

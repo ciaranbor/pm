@@ -40,6 +40,11 @@ fn validate_definition_resolves_with_home(
     if workflow::definition_exists(project_root, definition, home) {
         return Ok(());
     }
+    if definition == workflow::LEGACY_VANILLA_AGENT
+        && !super::vanilla_rename::is_migrated(project_root)
+    {
+        return Err(PmError::UnmigratedVanillaAgent);
+    }
     Err(PmError::AgentDefinitionMissing {
         agent: definition.to_string(),
         searched: workflow::definition_paths(project_root, definition, home),
@@ -1882,7 +1887,7 @@ package = "second-pkg"
     fn vanilla_agent_gets_no_definition_flag() {
         // The reserved name is filtered out of the definition flag; any
         // other definition passes through.
-        let alias = "default";
+        let alias = "plain";
         assert_eq!(definition_flag(Some(alias)), None, "{alias}");
         let cmd = Harness::ClaudeCode.build_cmd(
             &SpawnSpec {
@@ -1901,9 +1906,23 @@ package = "second-pkg"
 
     #[test]
     fn vanilla_agent_skips_definition_validation() {
-        // `pm agent spawn default` must work with no def anywhere.
+        // `pm agent spawn plain` must work with no def anywhere.
         let tmp = tempfile::tempdir().unwrap();
-        validate_definition_resolves_with_home(tmp.path(), "default", None).unwrap();
+        validate_definition_resolves_with_home(tmp.path(), "plain", None).unwrap();
+    }
+
+    #[test]
+    fn legacy_vanilla_name_needs_a_definition_and_hints_upgrade_until_migrated() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            validate_definition_resolves_with_home(tmp.path(), "default", None),
+            Err(PmError::UnmigratedVanillaAgent)
+        ));
+        crate::commands::vanilla_rename::write_marker(tmp.path()).unwrap();
+        assert!(matches!(
+            validate_definition_resolves_with_home(tmp.path(), "default", None),
+            Err(PmError::AgentDefinitionMissing { .. })
+        ));
     }
 
     #[test]
@@ -1912,7 +1931,7 @@ package = "second-pkg"
         let dir = tempdir().unwrap();
         let (session_name, feature) = setup_project(dir.path(), &server);
 
-        let alias = "default";
+        let alias = "plain";
         let (outcome, _, _) =
             agent_spawn(dir.path(), &feature, alias, None, None, server.name()).unwrap();
         assert_eq!(outcome, SpawnOutcome::Spawned);
@@ -1930,11 +1949,11 @@ package = "second-pkg"
         let dir = tempdir().unwrap();
         let (session_name, feature) = setup_project(dir.path(), &server);
 
-        agent_spawn(dir.path(), &feature, "default", None, None, server.name()).unwrap();
+        agent_spawn(dir.path(), &feature, "plain", None, None, server.name()).unwrap();
 
         let summaries = paths::summaries_dir(dir.path());
         assert!(summaries.is_dir());
-        let target = tmux::find_window(server.name(), &session_name, "default")
+        let target = tmux::find_window(server.name(), &session_name, "plain")
             .unwrap()
             .expect("window");
         server.wait_for_pane_text(

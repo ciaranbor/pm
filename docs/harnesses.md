@@ -51,7 +51,7 @@ check; `pm doctor` reports the same problems for existing agents.
 The default harness; it needs no setup beyond `claude` on your `PATH`
 (`pm harness probe` checks it).
 
-- pm launches `claude --agent <def>` (no `--agent` for `default`), appends the
+- pm launches `claude --agent <def>` (no `--agent` for `plain`), appends the
   [baseline](../README.md#shared-baseline-and-notice-board) with
   `--append-system-prompt-file`, and gives feature agents the summaries
   directory with `--add-dir`. It passes no `--permission-mode` unless an

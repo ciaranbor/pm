@@ -331,11 +331,10 @@ mod tests {
             std::fs::read_to_string(paths::home_dir().unwrap().join(".agents/pm-baseline.md"))
                 .unwrap();
         let dir = tempdir().unwrap();
-        let root =
-            setup_project_with_agent_on(dir.path(), "login", "default", None, Harness::Codex);
+        let root = setup_project_with_agent_on(dir.path(), "login", "plain", None, Harness::Codex);
         // Even a same-named definition file is ignored for the vanilla agent.
-        write_project_def(&root, "default", "# should not appear");
-        let out = hook_output(&root, Harness::Codex, "default")
+        write_project_def(&root, "plain", "# should not appear");
+        let out = hook_output(&root, Harness::Codex, "plain")
             .unwrap()
             .unwrap();
         assert_eq!(additional_context(&out), baseline);

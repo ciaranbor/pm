@@ -1,4 +1,4 @@
 description = "Single developer owns the feature end-to-end"
-agents = ["default"]
-brief_agents = ["default"]
+agents = ["plain"]
+brief_agents = ["plain"]
 when_to_use = "Default for a well-scoped task one capable agent can own — no handoffs or review loop."
