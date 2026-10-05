@@ -10,10 +10,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -290,7 +292,7 @@ private fun ScopeRow(
     }
 }
 
-/** A scope's header and agents. */
+/** A scope's header and agents; a feature's also leads to its summary, brief and details. */
 @Composable
 fun AgentsList(
     snapshot: Snapshot,
@@ -298,6 +300,7 @@ fun AgentsList(
     scope: String,
     now: Instant,
     openAgent: (String) -> Unit,
+    openPage: (Route) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val feature = snapshot.feature(project, scope)
@@ -308,23 +311,26 @@ fun AgentsList(
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 val attention = feature?.attention ?: main?.attention
                 if (attention != null) AttentionBadge(attention.kindOf, attention.kind)
-                attention?.let(::needLine)?.let {
-                    Text(it, style = MaterialTheme.typography.bodyLarge)
+                SelectionContainer {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        attention
+                            ?.let { headerNeedLine(it, feature) }
+                            ?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
+                        if (feature != null)
+                            Text(statusLine(feature), style = MaterialTheme.typography.bodyMedium)
+                    }
                 }
                 if (feature != null) {
-                    Text(
-                        listOfNotNull(
-                                "status ${feature.progress}",
-                                feature.lifecycle
-                                    .takeIf { it.isNotEmpty() }
-                                    ?.let { "lifecycle $it" },
-                                feature.pr?.let { "PR $it" },
-                            )
-                            .joinToString(" · "),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    feature.summary?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
                     ActivityLabel(activity(feature.working, feature.lastActivity, now))
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton({ openPage(Route.Summary(project, scope)) }) {
+                            Text("Summary")
+                        }
+                        OutlinedButton({ openPage(Route.Brief(project, scope)) }) { Text("Brief") }
+                        OutlinedButton({ openPage(Route.Details(project, scope)) }) {
+                            Text("Details")
+                        }
+                    }
                 } else if (main != null) {
                     ActivityLabel(activity(main.working, main.lastActivity, now))
                 }
@@ -357,3 +363,37 @@ fun AgentsList(
         }
     }
 }
+
+/**
+ * The header's need line: as [needLine], except a ready feature's, which is its summary's first
+ * line, says what it is waiting for instead.
+ */
+fun headerNeedLine(attention: Attention, feature: FeatureSnapshot?): String? =
+    if (
+        attention.kindOf == AttentionKind.Ready &&
+            feature != null &&
+            attention.detail == feature.summary
+    )
+        "Ready for review"
+    else needLine(attention)
+
+/** A feature's status and its PR's, in words: `Status wip · PR #12 open`. */
+fun statusLine(feature: FeatureSnapshot): String =
+    listOfNotNull(
+            "Status ${feature.progress}".takeIf { feature.progress.isNotEmpty() },
+            feature.pr?.let { pr ->
+                listOfNotNull("PR #$pr", prState(feature.lifecycle)).joinToString(" ")
+            },
+        )
+        .joinToString(" · ")
+
+/** What `pm feat sync` last saw of the PR, as `pm feat info` words it. */
+private fun prState(lifecycle: String): String? =
+    when (lifecycle) {
+        "wip" -> "draft"
+        "review" -> "open"
+        "approved" -> "approved"
+        "merged" -> "merged"
+        "stale" -> "closed"
+        else -> null
+    }

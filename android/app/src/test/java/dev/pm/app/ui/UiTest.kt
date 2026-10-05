@@ -1,5 +1,6 @@
 package dev.pm.app.ui
 
+import android.content.ClipboardManager
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -18,12 +19,15 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import dev.pm.app.SNAPSHOT
+import dev.pm.app.api.PmClient
 import dev.pm.app.data.Connection
 import dev.pm.app.data.Repository
 import dev.pm.app.data.Store
 import dev.pm.app.model.Conversation
+import dev.pm.app.model.FeatureInfo
 import dev.pm.app.model.Item
 import dev.pm.app.model.Pairing
+import dev.pm.app.model.Snapshot
 import dev.pm.app.model.ToolResult
 import dev.pm.app.push.Target
 import java.time.Instant
@@ -98,8 +102,62 @@ class UiTest {
 
         compose.onNodeWithContentDescription("Back").performClick()
         compose.onNodeWithText("login").assertIsDisplayed()
-        compose.onNodeWithContentDescription("More").performClick()
-        compose.onNodeWithText("Summary").assertIsDisplayed()
+    }
+
+    @Test
+    fun a_features_page_opens_its_summary_brief_and_details() {
+        val store = Store(ApplicationProvider.getApplicationContext())
+        store.pairing = Pairing("http://127.0.0.1:9", "pixel", "tok")
+        store.cacheSnapshot(SNAPSHOT)
+        val model = AppViewModel(Repository(store, OkHttpClient(), scope)) {}
+        compose.setContent { PmTheme { App(model, Target("app", "login", null), {}) } }
+        compose.waitUntil(5_000) { model.snapshot.value != null }
+
+        for (page in listOf("Summary", "Brief", "Details")) {
+            compose.onNodeWithText(page).performClick()
+            compose.onNodeWithText(page).assertIsDisplayed()
+            compose.onNodeWithText("app › login").assertIsDisplayed()
+            compose
+                .onNodeWithContentDescription("implementer", substring = true)
+                .assertDoesNotExist()
+            compose.onNodeWithContentDescription("Back").performClick()
+            compose
+                .onNodeWithContentDescription("implementer", substring = true)
+                .assertIsDisplayed()
+        }
+    }
+
+    @Test
+    fun a_ready_features_header_says_so_rather_than_repeating_its_summary() {
+        val snapshot = Snapshot.parse(SNAPSHOT)
+        val ready =
+            snapshot.copy(
+                features =
+                    snapshot.features.map {
+                        if (it.name == "search") it.copy(summary = "Adds search", pr = "12") else it
+                    }
+            )
+        val now = Instant.parse("2026-10-02T10:00:00Z")
+        compose.setContent {
+            PmTheme { AgentsList(ready, "app", "search", now, openAgent = {}, openPage = {}) }
+        }
+        compose.onNodeWithText("Ready for review").assertIsDisplayed()
+        compose.onNodeWithText("Adds search").assertDoesNotExist()
+        compose.onNodeWithText("Status ready · PR #12 open").assertIsDisplayed()
+    }
+
+    @Test
+    fun copy_puts_the_brief_on_the_clipboard() {
+        val brief = "# Login\n\nUse **OAuth**."
+        val client = PmClient(Pairing("http://127.0.0.1:9", "pixel", "tok"))
+        val model = ReadModel(client) { FeatureInfo(name = "login", context = brief) }
+        compose.setContent { PmTheme { BriefScreen(model) } }
+        compose.onNodeWithText("Copy").performClick()
+        compose.waitForIdle()
+
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val clip = context.getSystemService(ClipboardManager::class.java).primaryClip!!
+        assertEquals(brief, clip.getItemAt(0).text)
     }
 
     @Test

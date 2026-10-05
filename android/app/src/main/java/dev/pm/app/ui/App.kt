@@ -12,8 +12,6 @@ import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -72,6 +70,12 @@ sealed interface Route : NavKey {
 
     @Serializable data class Summary(val project: String, val feature: String) : Route
 
+    /** The feature's `--context` brief. */
+    @Serializable data class Brief(val project: String, val feature: String) : Route
+
+    /** The feature's details: branch, base, PR, workflow. */
+    @Serializable data class Details(val project: String, val feature: String) : Route
+
     /** A tool's whole output, by its result's `full` reference. */
     @Serializable
     data class Output(
@@ -95,6 +99,8 @@ sealed interface Route : NavKey {
                 is Scope -> scope to project
                 is Agent -> agent to "$project › $scope"
                 is Summary -> "Summary" to "$project › $feature"
+                is Brief -> "Brief" to "$project › $feature"
+                is Details -> "Details" to "$project › $feature"
                 is Output -> "$tool output" to "$project › $scope › $agent"
             }
 }
@@ -192,11 +198,6 @@ fun App(
                             Icon(painterResource(R.drawable.ic_settings), "Settings")
                         }
                     }
-                    if (top is Route.Scope && top.scope != Snapshot.MAIN) {
-                        FeatureMenu(
-                            openSummary = { backStack.add(Route.Summary(top.project, top.scope)) }
-                        )
-                    }
                 },
             )
         },
@@ -273,6 +274,7 @@ fun App(
                                     openAgent = { a ->
                                         backStack.add(Route.Agent(key.project, key.scope, a))
                                     },
+                                    openPage = { backStack.add(it) },
                                 )
                             }
                         }
@@ -307,7 +309,23 @@ fun App(
                         }
                         entry<Route.Summary> { key ->
                             SummaryScreen(
-                                viewModel { SummaryModel(client, key.project, key.feature) }
+                                viewModel {
+                                    ReadModel(client) { summary(key.project, key.feature) }
+                                }
+                            )
+                        }
+                        entry<Route.Brief> { key ->
+                            BriefScreen(
+                                viewModel {
+                                    ReadModel(client) { feature(key.project, key.feature) }
+                                }
+                            )
+                        }
+                        entry<Route.Details> { key ->
+                            DetailsScreen(
+                                viewModel {
+                                    ReadModel(client) { feature(key.project, key.feature) }
+                                }
                             )
                         }
                         entry<Route.Output> { key ->
@@ -356,26 +374,6 @@ fun App(
                             )
                         }
                     },
-            )
-        }
-    }
-}
-
-/** The top bar's menu of a feature's actions. */
-@Composable
-private fun FeatureMenu(openSummary: () -> Unit) {
-    var open by remember { mutableStateOf(false) }
-    Box {
-        IconButton(onClick = { open = true }) {
-            Icon(painterResource(R.drawable.ic_more_vert), "More")
-        }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            DropdownMenuItem(
-                text = { Text("Summary") },
-                onClick = {
-                    open = false
-                    openSummary()
-                },
             )
         }
     }

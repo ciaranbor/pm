@@ -65,6 +65,7 @@ The API is under `/v1`; every path needs a paired device's token:
 |---|---|
 | `snapshot` | `pm feat status --all --json` ([Attention snapshot](#attention-snapshot)) |
 | `events` | server-sent events: `snapshot` (the snapshot, at connect and on each change), `transition` (`{project, scope, kind, detail, agent}` as a feature or `main` becomes blocked, asking or ready — alerted as tmux alerts — or an agent dies); with `?watch={project}/{scope}/{agent}[&after={cursor}]`, also `transcript` (below); a comment line every 25 s of silence |
+| `features/{project}/{feature}` | the fields of `pm feat info`, with `lifecycle` as last synced (no GitHub query), and the feature's brief; JSON |
 | `features/{project}/{feature}/summary` | the feature's summary, Markdown |
 | `agents/{project}/{scope}/{agent}/screen` | what the agent's pane shows now, plain text, row for row |
 | `agents/{project}/{scope}/{agent}/transcript?before={cursor}&limit={n}` | the agent's conversation, a page back from `before` (the end when absent); `limit` 1–200, default 50 |
