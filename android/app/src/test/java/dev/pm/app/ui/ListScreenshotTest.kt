@@ -1,8 +1,10 @@
 package dev.pm.app.ui
 
+import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.Composable
 import com.github.takahirom.roborazzi.captureRoboImage
 import dev.pm.app.SNAPSHOT
+import dev.pm.app.data.Connection
 import dev.pm.app.model.Snapshot
 import java.time.Instant
 import org.junit.Test
@@ -20,17 +22,37 @@ import org.robolectric.annotation.GraphicsMode
 @Config(qualifiers = "w360dp-h400dp")
 class ListScreenshotTest {
     private val snapshot = Snapshot.parse(SNAPSHOT)
+    private val calm = Snapshot.parse("""{"version": 1, "projects": [{"name": "app"}]}""")
     private val now = Instant.parse("2026-10-02T10:00:00Z")
 
     private fun capture(content: @Composable () -> Unit) = captureRoboImage {
-        PmTheme { Surface(content) }
+        PmTheme(dynamic = false) { Surface(content) }
     }
 
-    @Test fun projects_light() = capture { ProjectsList(snapshot, now, open = {}) }
+    private val home = @Composable { Home(snapshot, now, openNeed = {}, openProject = {}) }
+    private val offline =
+        @Composable {
+            Column {
+                StatusStrip(
+                    Connection.Unreachable("refused"),
+                    readAt = now.toEpochMilli() - 12 * 60_000,
+                    now = now,
+                    retry = {},
+                    pairAgain = {},
+                )
+                home()
+            }
+        }
 
-    @Test
-    @Config(qualifiers = "+night")
-    fun projects_dark() = capture { ProjectsList(snapshot, now, open = {}) }
+    @Test fun home_light() = capture(home)
+
+    @Test @Config(qualifiers = "+night") fun home_dark() = capture(home)
+
+    @Test fun home_calm_light() = capture { Home(calm, now, openNeed = {}, openProject = {}) }
+
+    @Test fun offline_light() = capture(offline)
+
+    @Test @Config(qualifiers = "+night") fun offline_dark() = capture(offline)
 
     @Test fun scopes_light() = capture { ScopesList(snapshot, "app", now, open = {}) }
 
@@ -38,16 +60,11 @@ class ListScreenshotTest {
     @Config(qualifiers = "+night")
     fun scopes_dark() = capture { ScopesList(snapshot, "app", now, open = {}) }
 
-    @Test
-    fun agents_light() = capture {
-        AgentsList(snapshot, "app", "login", now, openAgent = {}, openSummary = {})
-    }
+    @Test fun agents_light() = capture { AgentsList(snapshot, "app", "login", now, openAgent = {}) }
 
     @Test
     @Config(qualifiers = "+night")
-    fun agents_dark() = capture {
-        AgentsList(snapshot, "app", "login", now, openAgent = {}, openSummary = {})
-    }
+    fun agents_dark() = capture { AgentsList(snapshot, "app", "login", now, openAgent = {}) }
 }
 
 @Composable

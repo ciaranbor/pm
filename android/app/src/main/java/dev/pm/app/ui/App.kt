@@ -5,10 +5,14 @@ import android.os.Build
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -19,10 +23,14 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -48,7 +56,7 @@ import kotlinx.serialization.Serializable
 sealed interface Route : NavKey {
     @Serializable data object Pair : Route
 
-    @Serializable data object Projects : Route
+    @Serializable data object Home : Route
 
     @Serializable data class Project(val project: String) : Route
 
@@ -61,23 +69,24 @@ sealed interface Route : NavKey {
 
     @Serializable data object Settings : Route
 
-    val title: String
+    /** The top bar's title, and the line under it that says where it is. */
+    val heading: kotlin.Pair<String, String?>
         get() =
             when (this) {
-                Pair -> "Pair"
-                Projects -> "pm"
-                Settings -> "Settings"
-                is Project -> project
-                is Scope -> "$project/$scope"
-                is Agent -> "$scope: $agent"
-                is Summary -> "$feature summary"
+                Pair -> "Pair" to null
+                Home -> "pm" to null
+                Settings -> "Settings" to null
+                is Project -> project to null
+                is Scope -> scope to project
+                is Agent -> agent to "$project › $scope"
+                is Summary -> "Summary" to "$project › $feature"
             }
 }
 
-/** The back stack a notification's target opens: down from the projects to its scope or agent. */
+/** The back stack a notification's target opens: from the start screen to its scope or agent. */
 fun Target.route(): List<Route> =
     listOfNotNull(
-        Route.Projects,
+        Route.Home,
         Route.Project(project),
         Route.Scope(project, scope),
         agent?.let { Route.Agent(project, scope, it) },
@@ -111,7 +120,7 @@ fun App(
     val readAt by model.readAt.collectAsStateWithLifecycle()
     val now by model.now.collectAsStateWithLifecycle()
     val pushKey by model.pushKey.collectAsStateWithLifecycle()
-    val backStack = rememberNavBackStack(if (pairing == null) Route.Pair else Route.Projects)
+    val backStack = rememberNavBackStack(if (pairing == null) Route.Pair else Route.Home)
     val top = backStack.lastOrNull() as? Route
     val askNotifications =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
@@ -134,11 +143,26 @@ fun App(
         targetShown()
     }
 
+    val pairAgain: () -> Unit = { backStack.add(Route.Pair) }
+    val (title, subtitle) = top?.heading ?: ("pm" to null)
     Scaffold(
         modifier = modifier,
         topBar = {
             TopAppBar(
-                title = { Text(top?.title ?: "pm") },
+                title = {
+                    Column {
+                        Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (subtitle != null) {
+                            Text(
+                                subtitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                },
                 navigationIcon = {
                     if (backStack.size > 1) {
                         IconButton(onClick = { backStack.removeLastOrNull() }) {
@@ -152,13 +176,18 @@ fun App(
                             Icon(painterResource(R.drawable.ic_settings), "Settings")
                         }
                     }
+                    if (top is Route.Scope && top.scope != Snapshot.MAIN) {
+                        FeatureMenu(
+                            openSummary = { backStack.add(Route.Summary(top.project, top.scope)) }
+                        )
+                    }
                 },
             )
         },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
-            if (top != Route.Pair && top != Route.Settings)
-                ConnectionBanner(connection, readAt, model::retry)
+            if (snapshot != null && top != Route.Pair && top != Route.Settings)
+                StatusStrip(connection, readAt, now, model::retry, pairAgain)
             if (snapshot?.understood == false) {
                 Text(
                     "pm serve sends a newer snapshot than this app knows; update the app.",
@@ -188,21 +217,28 @@ fun App(
                                             Manifest.permission.POST_NOTIFICATIONS
                                         )
                                     }
-                                    backStack.replaceWith(listOf(Route.Projects))
+                                    backStack.replaceWith(listOf(Route.Home))
                                 }
                             )
                         }
-                        entry<Route.Projects> {
-                            Shown(snapshot, connection) {
-                                ProjectsList(
+                        entry<Route.Home> {
+                            Shown(snapshot, connection, model::retry, pairAgain) {
+                                Home(
                                     it,
                                     now,
-                                    open = { p -> backStack.add(Route.Project(p)) },
+                                    openNeed = { need ->
+                                        backStack.addAll(
+                                            Target(need.project, need.scope, need.agent?.name)
+                                                .route()
+                                                .drop(1)
+                                        )
+                                    },
+                                    openProject = { p -> backStack.add(Route.Project(p)) },
                                 )
                             }
                         }
                         entry<Route.Project> { key ->
-                            Shown(snapshot, connection) {
+                            Shown(snapshot, connection, model::retry, pairAgain) {
                                 ScopesList(
                                     it,
                                     key.project,
@@ -212,7 +248,7 @@ fun App(
                             }
                         }
                         entry<Route.Scope> { key ->
-                            Shown(snapshot, connection) {
+                            Shown(snapshot, connection, model::retry, pairAgain) {
                                 AgentsList(
                                     it,
                                     key.project,
@@ -220,9 +256,6 @@ fun App(
                                     now,
                                     openAgent = { a ->
                                         backStack.add(Route.Agent(key.project, key.scope, a))
-                                    },
-                                    openSummary = {
-                                        backStack.add(Route.Summary(key.project, key.scope))
                                     },
                                 )
                             }
@@ -264,18 +297,63 @@ fun App(
     }
 }
 
+/** The top bar's menu of a feature's actions. */
 @Composable
-private fun Shown(
+private fun FeatureMenu(openSummary: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }) {
+            Icon(painterResource(R.drawable.ic_more_vert), "More")
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text("Summary") },
+                onClick = {
+                    open = false
+                    openSummary()
+                },
+            )
+        }
+    }
+}
+
+/**
+ * The snapshot's content, on a tinted background while it may be stale; with none yet, why not and
+ * what to do.
+ */
+@Composable
+internal fun Shown(
     snapshot: Snapshot?,
     connection: Connection,
+    retry: () -> Unit,
+    pairAgain: () -> Unit,
     content: @Composable (Snapshot) -> Unit,
 ) {
     when {
-        snapshot != null -> content(snapshot)
-        connection is Connection.Unreachable ->
-            Centered {
-                Text("Server unreachable: connect Tailscale to open.", textAlign = TextAlign.Center)
+        snapshot != null ->
+            Box(
+                Modifier.fillMaxSize()
+                    .background(
+                        if (connection == Connection.Live) MaterialTheme.colorScheme.surface
+                        else MaterialTheme.colorScheme.surfaceContainer
+                    )
+            ) {
+                content(snapshot)
             }
+        connection is Connection.Unreachable ->
+            EmptyState(
+                "Can't reach pm serve",
+                "Tailscale off, or pm serve not running on the Mac?",
+                "Retry",
+                retry,
+            )
+        connection == Connection.Unauthorized ->
+            EmptyState(
+                "Not paired",
+                "The Mac revoked this phone's token.",
+                "Pair again",
+                pairAgain,
+            )
         else -> Centered { CircularProgressIndicator() }
     }
 }

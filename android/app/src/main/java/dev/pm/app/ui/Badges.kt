@@ -11,6 +11,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.pm.app.R
@@ -42,8 +44,9 @@ private val Glyph.icon: Int
             Glyph.Unknown -> R.drawable.ic_circle
         }
 
+/** A badge's glyph; `description` is `null` where text beside it already says what it means. */
 @Composable
-fun MarkIcon(mark: Mark, description: String, modifier: Modifier = Modifier) {
+fun MarkIcon(mark: Mark, description: String?, modifier: Modifier = Modifier) {
     Icon(
         painterResource(mark.glyph.icon),
         contentDescription = description,
@@ -61,7 +64,7 @@ fun AttentionBadge(kind: AttentionKind, wire: String, modifier: Modifier = Modif
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        MarkIcon(mark, wire)
+        MarkIcon(mark, null)
         Text(
             wire,
             color = mark.tone.color(),
@@ -71,20 +74,28 @@ fun AttentionBadge(kind: AttentionKind, wire: String, modifier: Modifier = Modif
     }
 }
 
+/** What TalkBack reads for an agent: its name, state, and unread messages. */
+fun describe(agent: AgentSnapshot): String =
+    listOfNotNull(
+            "${agent.name} ${agent.state}",
+            agent.unread.takeIf { it > 0 }?.let { "$it unread" },
+        )
+        .joinToString(", ")
+
 /** An agent's state glyph, and an envelope when it has unread messages. */
 @Composable
 fun AgentBadge(agent: AgentSnapshot, modifier: Modifier = Modifier, showName: Boolean = true) {
     Row(
-        modifier = modifier,
+        modifier = modifier.clearAndSetSemantics { contentDescription = describe(agent) },
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        MarkIcon(Marks.agent(agent.stateOf), "${agent.name} ${agent.state}")
+        MarkIcon(Marks.agent(agent.stateOf), null)
         if (showName) Text(agent.name, style = MaterialTheme.typography.labelMedium)
         if (agent.unread > 0) {
             Icon(
                 painterResource(R.drawable.ic_mail),
-                "${agent.unread} unread",
+                null,
                 tint = Tone.Yellow.color(),
                 modifier = Modifier.size(14.dp),
             )
@@ -97,29 +108,28 @@ fun AgentBadge(agent: AgentSnapshot, modifier: Modifier = Modifier, showName: Bo
     }
 }
 
+/** What an [ActivityLabel] says, for a row's composed description. */
+fun describe(activity: Activity?): String? =
+    when (activity) {
+        Activity.Working -> "working"
+        is Activity.Quiet -> "quiet ${activity.span}"
+        null -> null
+    }
+
 @Composable
 fun ActivityLabel(activity: Activity?, modifier: Modifier = Modifier) {
-    when (activity) {
-        Activity.Working ->
-            Row(
-                modifier = modifier,
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                MarkIcon(Marks.agent(AgentState.Busy), "working", Modifier.size(14.dp))
-                Text(
-                    "working",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Tone.Green.color(),
-                )
-            }
-        is Activity.Quiet ->
-            Text(
-                "quiet ${activity.span}",
-                modifier = modifier,
-                style = MaterialTheme.typography.labelSmall,
-                color = Tone.Grey.color(),
-            )
-        null -> {}
+    val text = describe(activity) ?: return
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        val working = activity == Activity.Working
+        if (working) MarkIcon(Marks.agent(AgentState.Busy), null, Modifier.size(14.dp))
+        Text(
+            text,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (working) Tone.Green.color() else Tone.Grey.color(),
+        )
     }
 }

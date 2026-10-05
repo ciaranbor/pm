@@ -17,6 +17,10 @@ enum class AttentionKind(val wire: String) {
     /** A kind newer than this app. */
     Unknown("");
 
+    /** What the app calls it: its wire name, or `other` for a kind newer than the app. */
+    val label: String
+        get() = wire.ifEmpty { "other" }
+
     companion object {
         fun of(wire: String): AttentionKind =
             entries.find { it.wire == wire && it != Unknown } ?: Unknown

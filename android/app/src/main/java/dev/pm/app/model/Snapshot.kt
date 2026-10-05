@@ -1,5 +1,6 @@
 package dev.pm.app.model
 
+import java.time.Instant
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -47,6 +48,38 @@ data class Snapshot(
             .sortedBy { it.first.ordinal }
     }
 
+    /**
+     * Every scope, across projects, whose attention isn't `none`: most urgent kind first, as pm
+     * ranks its attention view; within a kind, the longest quiet first.
+     */
+    fun needsYou(): List<Need> {
+        val mains = projects.mapNotNull { p ->
+            p.main?.let { Need(p.name, MAIN, it.attention, it.agents, it.lastActivity) }
+        }
+        val feats = features.map {
+            Need(it.project, it.name, it.attention, it.agents, it.lastActivity)
+        }
+        return (mains + feats)
+            .filter { it.attention.kindOf != AttentionKind.None }
+            .sortedWith(
+                compareBy<Need> { it.attention.kindOf.ordinal }
+                    .thenBy(nullsLast()) { it.since }
+                    .thenBy { it.project }
+                    .thenBy { it.scope }
+            )
+    }
+
+    /** The projects, those with the most urgent need first, then by name. */
+    fun projectsByUrgency(): List<ProjectSnapshot> =
+        projects.sortedWith(
+            compareBy<ProjectSnapshot> {
+                    attentionCounts(it.name).firstOrNull()?.first?.ordinal ?: Int.MAX_VALUE
+                }
+                .thenBy { it.name }
+        )
+
+    fun workingFeatures(): Int = features.count { it.working }
+
     companion object {
         const val VERSION = 1
         const val MAIN = "main"
@@ -58,6 +91,22 @@ data class Snapshot(
 
         fun parse(text: String): Snapshot = json.decodeFromString(serializer(), text)
     }
+}
+
+/** A scope that needs the user: its attention, and since when it has been quiet. */
+data class Need(
+    val project: String,
+    val scope: String,
+    val attention: Attention,
+    val agents: List<AgentSnapshot>,
+    val lastActivity: String?,
+) {
+    val since: Instant?
+        get() = lastActivity?.let { runCatching { Instant.parse(it) }.getOrNull() }
+
+    /** The agent the attention names, when it is still in the scope. */
+    val agent: AgentSnapshot?
+        get() = attention.agent?.let { name -> agents.find { it.name == name } }
 }
 
 @Serializable
