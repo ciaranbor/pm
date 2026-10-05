@@ -190,7 +190,7 @@ TDD. Tests use real git repos and real tmux sessions, not mocks.
 
 When adding or changing commands/features, update:
 
-- `README.md` — user-facing usage and concepts; flags belong in `--help`
+- `README.md` — usage and concepts; reference in `docs/`; flags in `--help`
 - `AGENTS.md` — invariants and conventions only, under 200 lines. Mechanism
   goes in the owning module's `//!`; user-facing behaviour in README.
 

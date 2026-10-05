@@ -695,7 +695,7 @@ pub enum FeatCommands {
         /// View every feature of every registered project
         #[arg(long, conflicts_with_all = ["status", "name", "reason"])]
         all: bool,
-        /// View as JSON (the attention snapshot; see README)
+        /// View as JSON (the attention snapshot; see docs/remote-api.md)
         #[arg(long)]
         json: bool,
     },

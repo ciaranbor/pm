@@ -1,7 +1,7 @@
 //! The harness-neutral chat view of a conversation: what `pm serve` hands
-//! the phone app, in the shape README's "Remote access" publishes as a
-//! versioned contract. Every harness's reader produces these and nothing
-//! else, so a change here is a change to that contract.
+//! the phone app, in the shape docs/remote-api.md's "Transcript contract"
+//! publishes as a versioned contract. Every harness's reader produces
+//! these and nothing else, so a change here is a change to that contract.
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;

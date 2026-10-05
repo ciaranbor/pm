@@ -1,8 +1,9 @@
 //! The attention snapshot behind `pm feat status` and `pm status`: every
 //! feature, what its agents are doing, and what — if anything — it or a
-//! project's main scope needs from the user (README, "Attention view", has
-//! the ranking and the JSON contract). It reads pm state and the tmux server
-//! once ([`Windows`]), takes the PR state `pm feat sync` last recorded, and
+//! project's main scope needs from the user (README, "Follow what needs
+//! you", has the ranking; docs/remote-api.md, "Attention snapshot", the
+//! JSON contract). It reads pm state and the tmux server once
+//! ([`Windows`]), takes the PR state `pm feat sync` last recorded, and
 //! never calls `gh` or a harness, so it is cheap enough to poll.
 //!
 //! An agent the window reads as busy is refined by its waiting marker, or

@@ -69,7 +69,7 @@ data class Delivered(
 /** One server-sent event. */
 data class ServerEvent(val name: String, val data: String)
 
-/** A client of `pm serve`'s API (README, "Remote access"), as one paired device. */
+/** A client of `pm serve`'s API (docs/remote-api.md), as one paired device. */
 class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()) {
     private val _serverVersion = MutableStateFlow<String?>(null)
 

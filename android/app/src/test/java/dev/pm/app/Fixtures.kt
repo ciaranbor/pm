@@ -10,7 +10,8 @@ import mockwebserver3.SocketEffect
 import okio.BufferedSink
 
 /**
- * README's example snapshot, with a field, kind, state and version detail this app doesn't know.
+ * docs/remote-api.md's example snapshot, with a field, kind, state and version detail this app
+ * doesn't know.
  */
 val SNAPSHOT =
     """

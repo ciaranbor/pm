@@ -1,6 +1,6 @@
 //! `pm tmux refresh`: the [`attention`] snapshot of every project, published
 //! on the tmux server as `@pm_*` user options for status lines and tree
-//! formats to read (README, "tmux integration", has the contract).
+//! formats to read (docs/tmux.md, "Published options", has the contract).
 //!
 //! It runs on every watcher tick ([`tmux_watch`](super::tmux_watch)) and
 //! every push ([`tmux_push`](super::tmux_push)), so it costs the snapshot's

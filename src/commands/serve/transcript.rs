@@ -1,6 +1,6 @@
 //! An agent's conversation over HTTP: a page of it, one tool result whole,
-//! and the watch an event stream keeps on it. The contract is README's
-//! "Remote access".
+//! and the watch an event stream keeps on it. The contract is
+//! docs/remote-api.md's "Transcript contract".
 //!
 //! A watch re-reads the registry each poll, so a restart or fork that
 //! changes the agent's session is seen: the stream is then sent the new
