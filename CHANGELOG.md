@@ -6,6 +6,22 @@ notes.
 
 ## Unreleased
 
+- Answer an agent's dialogs from the Android app: questions, permission
+prompts and plan approval show as cards, and the answer goes back
+through the harness's own hook, so whichever of the phone or the
+terminal answers first wins. Works for Claude Code, and for opencode
+with `[harness.opencode] auto = false`. `pm upgrade` installs the new
+Claude Code hook. The app's Screen tab is gone.
+- The app's feature page opens full Summary, Brief and Details screens,
+with selectable text and a Copy button. `pm feat info` always shows the
+base branch.
+- `pm tmux init` starts `status-right` with what needs you, and pm's
+announcements appear in the middle of the status line instead of
+covering all of it. `@pm-status-right off` / `@pm-status-format off`
+opt out.
+- The README is shorter; reference material moved to `docs/`.
+
+
 ## 0.2.0 — 2026-10-05
 
 - pm is released on GitHub: install it with the install script, and `pm
