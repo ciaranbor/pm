@@ -3,9 +3,9 @@
 //!
 //! Only the user's input resets it. pm messages arrive as Stop-hook
 //! continuations, which no harness runs this hook for, or as the same text
-//! typed in to re-arm an agent (see `agent_rearm`); that and
-//! pm's own [`SPAWN_PROMPT`] are ignored. Blocked is per feature, so input
-//! to any of its agents resets it.
+//! typed in to re-arm an agent (see `agent_rearm`); that and pm's own
+//! launch prompts ([`is_launch_prompt`]) are ignored. Blocked is per
+//! feature, so input to any of its agents resets it.
 //!
 //! Any prompt, pm's own included, also means the agent is working again, so
 //! it clears the agent's waiting marker ([`runtime`]), claims a turn end its
@@ -27,7 +27,7 @@ use std::io::Read;
 use std::path::Path;
 
 use crate::commands::agent_input;
-use crate::commands::agent_spawn::SPAWN_PROMPT;
+use crate::commands::agent_spawn::is_launch_prompt;
 use crate::commands::feat_status::feat_status;
 use crate::commands::hooks_stop;
 use crate::commands::running_agents::{self, Liveness, Windows};
@@ -134,9 +134,9 @@ fn yield_if_held(
     agent_input::request_yield(project_root, scope, agent, &typed, after)
 }
 
-/// Whether `prompt` is one pm typed: the spawn prompt or a re-arm.
+/// Whether `prompt` is one pm typed: a launch prompt or a re-arm.
 fn is_pms(prompt: &str) -> bool {
-    prompt.trim() == SPAWN_PROMPT || hooks_stop::is_continuation(prompt)
+    is_launch_prompt(prompt) || hooks_stop::is_continuation(prompt)
 }
 
 /// Set `scope` back to `wip` if it is a blocked feature and `prompt` is the
@@ -156,6 +156,7 @@ pub(crate) fn on_user_prompt(project_root: &Path, scope: &str, prompt: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::agent_spawn::{RESUME_PROMPT, SPAWN_PROMPT};
     use crate::harness::Harness;
     use crate::state::runtime::YieldRequest;
     use crate::testing::TestServer;
@@ -192,11 +193,12 @@ mod tests {
     }
 
     #[test]
-    fn the_spawn_prompt_leaves_the_feature_blocked() {
+    fn the_launch_prompts_leave_the_feature_blocked() {
         let dir = tempdir().unwrap();
         let project = blocked_feature(dir.path());
 
         assert!(!on_user_prompt(&project, "login", SPAWN_PROMPT).unwrap());
+        assert!(!on_user_prompt(&project, "login", RESUME_PROMPT).unwrap());
 
         let state = state(&project);
         assert_eq!(state.progress, Progress::Blocked);

@@ -73,6 +73,10 @@ pub enum PmError {
     #[error("{0}")]
     SafetyCheck(String),
 
+    /// A merge git refused, then aborted: nothing changed.
+    #[error("{0}")]
+    MergeAborted(String),
+
     #[error("tmux error: {0}")]
     Tmux(String),
 

@@ -103,8 +103,16 @@ pub fn feat_merge(
                 // Abort the failed merge to leave base worktree clean
                 if let Err(abort_err) = git::merge_abort(base_repo) {
                     eprintln!("Warning: merge --abort failed: {abort_err}");
+                    return Err(e);
                 }
-                return Err(e);
+                let why = match &e {
+                    PmError::Git(stderr) if !stderr.is_empty() => format!(": {stderr}"),
+                    _ => String::new(),
+                };
+                return Err(PmError::MergeAborted(format!(
+                    "git could not merge feature '{name}' into '{base}'{why}; \
+                     the merge was aborted, so nothing changed"
+                )));
             }
             if let Some(tl) = tlog.as_mut() {
                 tl.record("merge-no-ff", merge_ff_start.elapsed());
@@ -563,7 +571,10 @@ mod tests {
             true,
             server.name(),
         );
-        assert!(result.is_err());
+        assert!(
+            matches!(result, Err(PmError::MergeAborted(_))),
+            "{result:?}"
+        );
 
         // Main worktree should be clean — merge was aborted
         assert!(!git::has_uncommitted_changes(&main_repo).unwrap());

@@ -76,6 +76,23 @@ The API is under `/v1`; every path needs a paired device's token:
 | `agents/{project}/{scope}/{agent}/interrupt` | `POST`: presses Escape, ending the agent's turn; refused while it waits for a message |
 | `agents/{project}/{scope}/{agent}/keys` | `POST {"keys": [...]}`: presses each of `Escape Enter Tab BTab Up Down Left Right Space BSpace C-c 0`–`9`; refused while it waits for a message |
 | `agents/{project}/{scope}/{agent}/dialog` | `GET`: the dialog on the agent's screen, when it can be answered remotely (below), else `404`; `POST {"id", "choice", "answers"?, "message"?}`: answers it, `{"answered": true}` once its harness has the answer |
+| `device` | `{"name", "grants"}`: the device the token belongs to, and what it was granted (`pm serve grant`) |
+| `features/{project}/{feature}/merge` | `POST`, with the `lifecycle` grant: `pm feat merge`, so merges and deletes the feature; `{"merged": true}` |
+| `features/{project}/{feature}/delete` | `POST`, with the `lifecycle` grant: `pm feat delete`; `{"deleted": true}` |
+| `agents/{project}/{scope}/{agent}/restart` | `POST {"force"?}`, with the `lifecycle` grant: `pm agent restart`; `{"restarted": <what it did>}` |
+
+A device without the grant a request needs gets `403` and `{"error",
+"missing"}`, `missing` naming the grant. Merge, delete and restart run
+pm's own handlers without `--force`, to the end however long they take
+(the post-merge hook runs in the base session's `hook` window, not in the
+request). A refusal changed nothing and comes back as `409` with
+`{"error", "refused"}`, `error` worded as the CLI prints it: `unsafe`
+(uncommitted changes, unmerged or unpushed commits, a missing base),
+`conflict` (git could not merge; the merge was aborted), `mid-turn` (a
+busy, asking or background agent: send `"force": true` to interrupt it,
+and it is told to resume). Any other failure is a `500` with `{"error"}`
+and may have come partway: the snapshot shows how far. A restart leaves
+which window each session shows as it was.
 
 A notes save is never merged: a client resolves a `409` by saving again
 against the version it carries, once its user has chosen what to keep.

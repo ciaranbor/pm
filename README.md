@@ -243,9 +243,12 @@ Google's, built into the app, or for notifications without Google, the
 pairing. With neither, the app polls the server only as often as Android
 lets it — hours apart once the phone dozes.
 
-A paired device reads everything and can type into agents. `pm serve pair
-<device>` pairs another phone, or one again after a reinstall; `pm serve
-devices` lists the paired devices and `pm serve revoke <device>` withdraws
+A paired device reads everything and can type into agents. `pm serve grant
+<device> lifecycle` also lets it merge and delete features and restart
+agents, as `pm feat merge`, `pm feat delete` and `pm agent restart` do
+without `--force` (`--remove` withdraws it). `pm serve pair <device>` pairs
+another phone, or one again after a reinstall; `pm serve devices` lists the
+paired devices and their grants, and `pm serve revoke <device>` withdraws
 one at once.
 
 [docs/remote-api.md](docs/remote-api.md) has the server's API, push and

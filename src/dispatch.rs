@@ -478,6 +478,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                         &target_scope,
                         &names,
                         force,
+                        true,
                         server,
                     );
                     restarted.confirm_launches(&project_root, &target_scope, server);

@@ -1,8 +1,9 @@
 //! What each request gets. The token is checked before anything else, so
 //! a request without a valid one learns nothing, not even which paths
-//! exist; a paired device's token may do everything. The writes are a
-//! device's own push subscription, an agent's input (`input`) and a
-//! dialog's answer (`dialog`).
+//! exist. A paired device's token may read everything and write a device's
+//! own push subscription, an agent's input (`input`) and a dialog's answer
+//! (`dialog`); merging, deleting and restarting (`lifecycle`) need the
+//! device's grant.
 //! Path segments name only what the registry and pm state list, so none
 //! reaches the filesystem as a path of its own.
 
@@ -11,14 +12,14 @@ use std::path::PathBuf;
 use crate::commands::{attention, feat_info};
 use crate::error::Result;
 use crate::state::agent::AgentRegistry;
-use crate::state::devices::{Devices, Push};
+use crate::state::devices::{Device, Devices, Grant, Push};
 use crate::state::feature::FeatureState;
 use crate::state::paths;
 use crate::state::project::ProjectEntry;
 use crate::tmux;
 
 use super::transcript::{Agent, DEFAULT_LIMIT, MAX_LIMIT, TranscriptWatch, page_json};
-use super::{Config, input, notes, push};
+use super::{Config, input, lifecycle, notes, push};
 
 pub(super) enum Reply {
     Body {
@@ -116,7 +117,7 @@ pub(super) fn route(config: &Config, vapid: &str, request: &Request<'_>) -> Hand
             };
         }
     };
-    let Some((device, _)) = token.and_then(|t| devices.authenticate(t.trim())) else {
+    let Some((device, paired)) = token.and_then(|t| devices.authenticate(t.trim())) else {
         return Handled {
             device: None,
             reply: error(401, "a paired device's bearer token is required"),
@@ -144,12 +145,18 @@ pub(super) fn route(config: &Config, vapid: &str, request: &Request<'_>) -> Hand
                 reply
             })
         }
+        ("GET", "/v1/device") => Ok(json(
+            200,
+            serde_json::json!({ "name": device, "grants": paired.grants }),
+        )),
         ("GET", _) => get(config, path, &Query::parse(query)),
-        ("POST", _) if path.starts_with("/v1/agents/") => post(config, path, body).map(|written| {
-            detail = Some(written.detail).filter(|d| !d.is_empty());
-            written.reply
-        }),
-        _ => Ok(error(405, "only GET is served here")),
+        ("POST", _) if path.starts_with("/v1/agents/") || path.starts_with("/v1/features/") => {
+            post(config, path, body, device, paired).map(|written| {
+                detail = Some(written.detail).filter(|d| !d.is_empty());
+                written.reply
+            })
+        }
+        _ => Ok(error(405, "no such endpoint for this method")),
     };
     let reply = served.unwrap_or_else(|e| error(500, &e.to_string()));
     Handled {
@@ -159,22 +166,49 @@ pub(super) fn route(config: &Config, vapid: &str, request: &Request<'_>) -> Hand
     }
 }
 
-/// `POST /v1/agents/{project}/{scope}/{agent}/{action}`: input for an agent.
-fn post(config: &Config, path: &str, body: &str) -> Result<input::Written> {
+/// `POST /v1/agents/{project}/{scope}/{agent}/{action}`, input for an
+/// agent or its restart, and `POST /v1/features/{project}/{feature}/{action}`,
+/// a feature's merge or delete; `device` is who asks.
+fn post(
+    config: &Config,
+    path: &str,
+    body: &str,
+    name: &str,
+    device: &Device,
+) -> Result<input::Written> {
+    let unwritten = |reply| input::Written {
+        reply,
+        detail: String::new(),
+    };
     let segments = segments(path);
     let segments: Vec<&str> = segments.iter().map(String::as_str).collect();
-    let ["agents", project, scope, agent, action] = segments[..] else {
-        return Ok(input::Written {
-            reply: error(404, "no such endpoint"),
-            detail: String::new(),
-        });
-    };
-    match find_agent(config, project, scope, agent)? {
-        Ok(agent) => input::post(&agent, action, body, config.tmux_server.as_deref()),
-        Err(reply) => Ok(input::Written {
-            reply,
-            detail: String::new(),
-        }),
+    match segments[..] {
+        ["agents", project, scope, agent, action] => {
+            let agent = match find_agent(config, project, scope, agent)? {
+                Ok(agent) => agent,
+                Err(reply) => return Ok(unwritten(reply)),
+            };
+            if action != "restart" {
+                return input::post(&agent, action, body, config.tmux_server.as_deref());
+            }
+            if let Some(refused) = lifecycle::ungranted(name, device, Grant::Lifecycle) {
+                return Ok(refused);
+            }
+            lifecycle::restart(config, &agent, body)
+        }
+        ["features", project, feature, action @ ("merge" | "delete")] => {
+            let Some(root) = project_root(config, project)? else {
+                return Ok(unwritten(error(404, "no such project")));
+            };
+            if !has_feature(&root, feature)? {
+                return Ok(unwritten(error(404, "no such feature")));
+            }
+            if let Some(refused) = lifecycle::ungranted(name, device, Grant::Lifecycle) {
+                return Ok(refused);
+            }
+            lifecycle::feature(config, &root, feature, action)
+        }
+        _ => Ok(unwritten(error(404, "no such endpoint"))),
     }
 }
 

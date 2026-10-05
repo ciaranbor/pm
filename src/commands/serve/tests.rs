@@ -14,15 +14,15 @@ use crate::state::feature::{FeatureState, Progress};
 use crate::state::paths;
 use crate::testing::TestServer;
 
-struct Fixture {
+pub(super) struct Fixture {
     _dir: TempDir,
-    server: TestServer,
-    project: PathBuf,
-    project_name: String,
-    config: Config,
+    pub server: TestServer,
+    pub project: PathBuf,
+    pub project_name: String,
+    pub config: Config,
 }
 
-fn fixture() -> Fixture {
+pub(super) fn fixture() -> Fixture {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
     let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
@@ -43,7 +43,7 @@ fn fixture() -> Fixture {
     }
 }
 
-fn pair(config: &Config, name: &str) -> String {
+pub(super) fn pair(config: &Config, name: &str) -> String {
     Devices::update(&config.devices, |d| d.pair(name)).unwrap()
 }
 
@@ -531,7 +531,13 @@ fn a_conversation_that_appears_after_the_watch_began_is_sent_whole() {
 const VAPID: &str = "the-servers-vapid-key";
 
 /// The status and body `method` on `path` gets with `token` and `body`.
-fn call(config: &Config, method: &str, path: &str, token: &str, body: &str) -> (u16, String) {
+pub(super) fn call(
+    config: &Config,
+    method: &str,
+    path: &str,
+    token: &str,
+    body: &str,
+) -> (u16, String) {
     let authorization = format!("Bearer {token}");
     match route(
         config,
