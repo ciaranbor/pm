@@ -6,6 +6,8 @@ notes.
 
 ## Unreleased
 
+## 0.3.0 — 2026-10-05
+
 - Answer an agent's dialogs from the Android app: questions, permission
 prompts and plan approval show as cards, and the answer goes back
 through the harness's own hook, so whichever of the phone or the
