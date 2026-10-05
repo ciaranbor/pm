@@ -45,7 +45,22 @@ sealed class PmError(message: String) : Exception(message) {
     /** The agent's session hasn't started, or its transcript is gone. */
     class NoConversation : PmError("the agent has no conversation yet")
 
+    /** The agent can't take input now; `code` says why (`asking`, `not-at-prompt`, …). */
+    class Refused(val code: String, message: String) : PmError(message)
+
     class Status(val code: Int, message: String) : PmError(message)
+}
+
+/** How typed text reached an agent (`POST …/input`). */
+@Serializable
+data class Delivered(
+    /** `sent`, submitted as a prompt; `queued`, held until a step of the running turn ends. */
+    val delivery: String,
+    /** For `sent`: whether the server saw it in the conversation. */
+    val confirmed: Boolean? = null,
+) {
+    val queued: Boolean
+        get() = delivery == "queued"
 }
 
 /** One server-sent event. */
@@ -122,6 +137,29 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
             )
         )
 
+    /** Type `text` into the agent's input line and submit it. */
+    suspend fun sendText(project: String, scope: String, agent: String, text: String): Delivered =
+        json.decodeFromString(
+            Delivered.serializer(),
+            post(
+                url("agents", project, scope, agent, "input"),
+                json.encodeToString(TextBody.serializer(), TextBody(text)),
+            ),
+        )
+
+    /** Press Escape in the agent's pane, ending its turn. */
+    suspend fun interrupt(project: String, scope: String, agent: String) {
+        post(url("agents", project, scope, agent, "interrupt"), "{}")
+    }
+
+    /** Press `keys`, by tmux's names for them, in the agent's pane. */
+    suspend fun pressKeys(project: String, scope: String, agent: String, keys: List<String>) {
+        post(
+            url("agents", project, scope, agent, "keys"),
+            json.encodeToString(KeysBody.serializer(), KeysBody(keys)),
+        )
+    }
+
     /** The server's VAPID public key, which push subscriptions are made against. */
     suspend fun vapidKey(): String =
         json
@@ -189,6 +227,9 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
 
     private suspend fun get(url: HttpUrl): String = send(Request.Builder().url(url).build())
 
+    private suspend fun post(url: HttpUrl, body: String): String =
+        send(Request.Builder().url(url).post(body.toRequestBody(JSON)).build())
+
     private suspend fun send(request: Request): String =
         withContext(Dispatchers.IO) {
             val response =
@@ -201,21 +242,27 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
         }
 
     private fun failure(response: Response): PmError {
-        val message = runCatching {
-            json
-                .decodeFromString(JsonObject.serializer(), response.peekBody(4096).string())[
-                    "error"]
-                ?.jsonPrimitive
-                ?.content
+        val body = runCatching {
+            json.decodeFromString(JsonObject.serializer(), response.peekBody(4096).string())
         }
             .getOrNull()
+        fun field(key: String) =
+            body?.get(key)?.let { runCatching { it.jsonPrimitive.content }.getOrNull() }
+        val message = field("error")
+        val refused = field("refused")
         return when {
             response.code == 401 -> PmError.Unauthorized()
+            response.code == 409 && refused != null ->
+                PmError.Refused(refused, message ?: "the agent can't take input now")
             response.code == 404 && message == NO_SUCH_ENDPOINT -> PmError.Unsupported()
             response.code == 404 && message == NO_CONVERSATION -> PmError.NoConversation()
             else -> PmError.Status(response.code, message ?: "HTTP ${response.code}")
         }
     }
+
+    @Serializable private data class TextBody(val text: String)
+
+    @Serializable private data class KeysBody(val keys: List<String>)
 
     @Serializable private data class Keys(val p256dh: String, val auth: String)
 

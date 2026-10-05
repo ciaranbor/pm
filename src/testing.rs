@@ -132,6 +132,29 @@ pub(crate) fn fake_claude() -> std::path::PathBuf {
     .clone()
 }
 
+/// `program` under the name of `harness`'s binary, so a pane running it
+/// runs the harness.
+pub(crate) fn fake_harness_binary(
+    harness: crate::harness::Harness,
+    program: &std::path::Path,
+) -> std::path::PathBuf {
+    let config = crate::state::project::HarnessConfig::default();
+    let name = ["claude", "codex", "opencode"]
+        .into_iter()
+        .find(|name| harness.runs_as(name, &config))
+        .expect("a harness binary name");
+    let tag: String = program
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let dir = test_home().join(format!("fake-{tag}"));
+    std::fs::create_dir_all(&dir).expect("create fake harness dir");
+    let bin = dir.join(name);
+    let _ = std::os::unix::fs::symlink(program, &bin);
+    bin
+}
+
 /// A script that draws Claude Code's input box, leaves the cursor on its
 /// prompt line, and execs [`fake_claude`].
 fn fake_claude_at_prompt() -> std::path::PathBuf {
@@ -850,9 +873,23 @@ impl TestServer {
         agent_name: &str,
         want: crate::commands::running_agents::Liveness,
     ) {
+        self.await_harness_liveness(
+            target,
+            agent_name,
+            crate::harness::Harness::ClaudeCode,
+            want,
+        );
+    }
+
+    fn await_harness_liveness(
+        &self,
+        target: &str,
+        agent_name: &str,
+        harness: crate::harness::Harness,
+        want: crate::commands::running_agents::Liveness,
+    ) {
         use crate::commands::running_agents::liveness;
         let config = crate::state::project::HarnessConfig::default();
-        let harness = crate::harness::Harness::ClaudeCode;
         // Under heavy load (parallel tests) this can take longer than
         // usual, so we poll generously.
         for _ in 0..500 {
@@ -899,6 +936,27 @@ impl TestServer {
         target
     }
 
+    /// An agent of `harness` whose pane runs `command` with `exec`, once the
+    /// window reads as `want`. Pair it with [`fake_harness_binary`] to have
+    /// the pane run the harness.
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_harness_agent(
+        &self,
+        project_root: &std::path::Path,
+        session_name: &str,
+        feature: &str,
+        agent_name: &str,
+        harness: crate::harness::Harness,
+        command: &str,
+        want: crate::commands::running_agents::Liveness,
+    ) -> String {
+        let target = self.fake_agent_window(project_root, session_name, feature, agent_name);
+        crate::tmux::send_line(self.name(), &target, &format!("exec {command}")).unwrap();
+        self.await_harness_liveness(&target, agent_name, harness, want);
+        self.register_harness_agent(project_root, feature, agent_name, harness);
+        target
+    }
+
     fn fake_agent_window(
         &self,
         project_root: &std::path::Path,
@@ -919,6 +977,21 @@ impl TestServer {
     }
 
     fn register_fake_agent(&self, project_root: &std::path::Path, feature: &str, agent_name: &str) {
+        self.register_harness_agent(
+            project_root,
+            feature,
+            agent_name,
+            crate::harness::Harness::ClaudeCode,
+        );
+    }
+
+    fn register_harness_agent(
+        &self,
+        project_root: &std::path::Path,
+        feature: &str,
+        agent_name: &str,
+        harness: crate::harness::Harness,
+    ) {
         use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
         use crate::state::paths;
 
@@ -932,7 +1005,7 @@ impl TestServer {
                 window_name: agent_name.to_string(),
                 active: true,
                 agent_definition: None,
-                harness: crate::harness::Harness::ClaudeCode,
+                harness,
                 spawned_at: None,
             },
         );

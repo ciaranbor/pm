@@ -4,7 +4,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
-use crate::harness::Harness;
+use crate::harness::{AgentSession, Conversation, Harness};
+use crate::state::paths;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -56,6 +57,36 @@ impl AgentEntry {
     /// were registered before alias support landed.
     pub fn effective_definition<'a>(&'a self, key: &'a str) -> &'a str {
         self.agent_definition.as_deref().unwrap_or(key)
+    }
+
+    /// The conversation of the session this entry records for `name`, an
+    /// agent of `scope`.
+    pub fn conversation(
+        &self,
+        project_root: &Path,
+        scope: &str,
+        name: &str,
+    ) -> Result<Option<Conversation>> {
+        let worktree = project_root.join(scope);
+        let home = paths::home_dir()?;
+        Ok(self.harness.conversation(&AgentSession {
+            project_root,
+            scope,
+            name,
+            session_id: &self.session_id,
+            worktree: &worktree,
+            home: &home,
+        }))
+    }
+}
+
+/// The conversation of `agent`'s current session; `None` while it has none,
+/// or the agent is gone.
+pub fn conversation(project_root: &Path, scope: &str, agent: &str) -> Result<Option<Conversation>> {
+    let registry = AgentRegistry::load(&paths::agents_dir(project_root), scope)?;
+    match registry.get(agent) {
+        Some(entry) => entry.conversation(project_root, scope, agent),
+        None => Ok(None),
     }
 }
 

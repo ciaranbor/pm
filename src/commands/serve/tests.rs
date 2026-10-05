@@ -9,7 +9,7 @@ use tempfile::{TempDir, tempdir};
 use super::routes::{Reply, route};
 use super::*;
 use crate::commands::feat_status::feat_status;
-use crate::state::devices::{Devices, Scope};
+use crate::state::devices::Devices;
 use crate::state::feature::Progress;
 use crate::state::paths;
 use crate::testing::TestServer;
@@ -43,8 +43,8 @@ fn fixture() -> Fixture {
     }
 }
 
-fn pair(config: &Config, name: &str, scopes: &[Scope]) -> String {
-    Devices::update(&config.devices, |d| d.pair(name, scopes)).unwrap()
+fn pair(config: &Config, name: &str) -> String {
+    Devices::update(&config.devices, |d| d.pair(name)).unwrap()
 }
 
 fn request<'a>(
@@ -80,11 +80,10 @@ fn get(config: &Config, path: &str, token: Option<&str>) -> (u16, String) {
 }
 
 #[test]
-fn a_request_without_a_live_token_with_the_read_scope_is_refused() {
+fn a_request_without_a_live_token_is_refused() {
     let f = fixture();
-    let reader = pair(&f.config, "reader", &[Scope::Read]);
-    let typist = pair(&f.config, "typist", &[Scope::Input]);
-    let revoked = pair(&f.config, "gone", &[Scope::Read]);
+    let reader = pair(&f.config, "reader");
+    let revoked = pair(&f.config, "gone");
     crate::commands::serve_revoke::revoke(&f.config.devices, "gone").unwrap();
 
     let status = |path: &str, token: Option<&str>| get(&f.config, path, token).0;
@@ -92,8 +91,6 @@ fn a_request_without_a_live_token_with_the_read_scope_is_refused() {
     assert_eq!(status("/v1/nowhere", None), 401, "no token learns no paths");
     assert_eq!(status("/v1/snapshot", Some("not-a-token")), 401);
     assert_eq!(status("/v1/snapshot", Some(&revoked)), 401);
-    assert_eq!(status("/v1/snapshot", Some(&typist)), 403);
-    assert_eq!(status("/v1/events", Some(&typist)), 403);
     assert_eq!(status("/v1/snapshot", Some(&reader)), 200);
 
     let bearer = format!("Bearer {reader}");
@@ -119,7 +116,7 @@ fn a_request_without_a_live_token_with_the_read_scope_is_refused() {
 #[test]
 fn the_endpoints_serve_the_snapshot_a_summary_and_an_agents_screen() {
     let f = fixture();
-    let token = pair(&f.config, "reader", &[Scope::Read]);
+    let token = pair(&f.config, "reader");
     let get = |path: &str| get(&f.config, path, Some(&token));
     let session = crate::tmux::session_name(&f.project_name, "login");
     let window = f
@@ -217,7 +214,7 @@ fn start(config: Config) -> Running {
 fn an_event_stream_sends_changes_transitions_and_heartbeats() {
     let mut f = fixture();
     f.config.heartbeat = Duration::from_millis(500);
-    let token = pair(&f.config, "reader", &[Scope::Read]);
+    let token = pair(&f.config, "reader");
     feat_status(
         &f.project,
         "login",
@@ -317,10 +314,9 @@ fn append(path: &std::path::Path, text: &str) {
 }
 
 #[test]
-fn an_agents_transcript_is_served_in_pages_to_the_read_scope_only() {
+fn an_agents_transcript_is_served_in_pages() {
     let f = fixture();
-    let reader = pair(&f.config, "reader", &[Scope::Read]);
-    let typist = pair(&f.config, "typist", &[Scope::Input]);
+    let reader = pair(&f.config, "reader");
     let transcript = register_conversation(&f.project, "implementer", "s1");
     let big = "o".repeat(crate::harness::transcript::items::RESULT_LIMIT * 2);
     append(
@@ -340,7 +336,6 @@ fn an_agents_transcript_is_served_in_pages_to_the_read_scope_only() {
     let p = &f.project_name;
     let path = format!("/v1/agents/{p}/login/implementer/transcript");
 
-    assert_eq!(get(&f.config, &path, Some(&typist)).0, 403);
     assert_eq!(get(&f.config, &path, None).0, 401);
 
     let (status, body) = get(&f.config, &path, Some(&reader));
@@ -402,7 +397,7 @@ fn an_agents_transcript_is_served_in_pages_to_the_read_scope_only() {
 fn a_watched_agents_new_items_and_session_change_are_streamed() {
     let mut f = fixture();
     f.config.transcript_poll = Duration::from_millis(100);
-    let token = pair(&f.config, "reader", &[Scope::Read]);
+    let token = pair(&f.config, "reader");
     let transcript = register_conversation(&f.project, "implementer", "s1");
     append(&transcript, &typed("u1", "before the watch"));
     let server = start(f.config.clone());
@@ -456,7 +451,7 @@ fn a_watched_agents_new_items_and_session_change_are_streamed() {
 fn a_conversation_that_appears_after_the_watch_began_is_sent_whole() {
     let mut f = fixture();
     f.config.transcript_poll = Duration::from_millis(100);
-    let token = pair(&f.config, "reader", &[Scope::Read]);
+    let token = pair(&f.config, "reader");
     let transcript = register_conversation(&f.project, "implementer", "s1");
     let server = start(f.config.clone());
     let p = &f.project_name;
@@ -538,9 +533,8 @@ fn stored_push(config: &Config, device: &str) -> Option<crate::state::devices::P
 #[test]
 fn a_device_sets_and_clears_only_its_own_https_subscription() {
     let f = fixture();
-    let phone = pair(&f.config, "phone", &[Scope::Read]);
-    pair(&f.config, "other", &[Scope::Read]);
-    let typist = pair(&f.config, "typist", &[Scope::Input]);
+    let phone = pair(&f.config, "phone");
+    pair(&f.config, "other");
 
     let (status, body) = call(&f.config, "GET", "/v1/push", &phone, "");
     assert_eq!(
@@ -553,10 +547,6 @@ fn a_device_sets_and_clears_only_its_own_https_subscription() {
     );
 
     let (_, _, subscription) = subscriber("https://ntfy.sh/upAbc?up=1");
-    assert_eq!(
-        call(&f.config, "PUT", "/v1/push", &typist, &subscription).0,
-        403
-    );
     assert_eq!(
         call(&f.config, "PUT", "/v1/push", &phone, &subscription).0,
         204
@@ -656,20 +646,16 @@ fn push_service_answering(responses: Vec<String>) -> (String, mpsc::Receiver<Rec
 fn a_transition_is_pushed_encrypted_to_each_subscriber_until_its_service_drops_it() {
     let mut f = fixture();
     f.config.push = PushPolicy::local();
-    let phone = pair(&f.config, "phone", &[Scope::Read]);
-    pair(&f.config, "typist", &[Scope::Input]);
-    pair(&f.config, "unsubscribed", &[Scope::Read]);
+    let phone = pair(&f.config, "phone");
+    pair(&f.config, "unsubscribed");
     let (url, received) = push_service(vec![201, 410]);
-    let (typist_url, typist_received) = push_service(vec![201]);
     let (secret, auth, subscription) = subscriber(&url);
     let push = super::push::subscription(&subscription, &PushPolicy::local()).unwrap();
     Devices::update(&f.config.devices, |d| {
-        for (device, endpoint) in [("phone", &url), ("typist", &typist_url)] {
-            d.devices.get_mut(device).unwrap().push = Some(crate::state::devices::Push {
-                endpoint: endpoint.clone(),
-                ..push.clone()
-            });
-        }
+        d.devices.get_mut("phone").unwrap().push = Some(crate::state::devices::Push {
+            endpoint: url.clone(),
+            ..push.clone()
+        });
         Ok(())
     })
     .unwrap();
@@ -724,10 +710,6 @@ fn a_transition_is_pushed_encrypted_to_each_subscriber_until_its_service_drops_i
         assert!(Instant::now() < deadline, "a 410 drops the subscription");
         std::thread::sleep(Duration::from_millis(50));
     }
-    assert!(
-        typist_received.try_recv().is_err(),
-        "a device without the read scope is never pushed to"
-    );
     assert!(received.try_recv().is_err(), "one push per transition");
     drop(server);
 }
@@ -736,7 +718,7 @@ fn a_transition_is_pushed_encrypted_to_each_subscriber_until_its_service_drops_i
 fn a_push_service_redirecting_is_not_followed() {
     let mut f = fixture();
     f.config.push = PushPolicy::local();
-    pair(&f.config, "phone", &[Scope::Read]);
+    pair(&f.config, "phone");
     let (elsewhere, followed) = push_service(vec![201]);
     let (url, received) = push_service_answering(vec![
         format!("HTTP/1.1 303 X\r\nLocation: {elsewhere}\r\nContent-Length: 0\r\n\r\n"),
@@ -774,7 +756,7 @@ fn a_push_service_redirecting_is_not_followed() {
 #[test]
 fn a_stored_subscription_the_policy_refuses_is_dropped() {
     let f = fixture();
-    pair(&f.config, "phone", &[Scope::Read]);
+    pair(&f.config, "phone");
     let (_, _, subscription) = subscriber("https://tailnet-service.ts.net/up");
     let push = super::push::subscription(&subscription, &PushPolicy::local()).unwrap();
     Devices::update(&f.config.devices, |d| {
@@ -834,7 +816,7 @@ fn a_wake_reads_a_change_pm_made_without_waiting_for_the_poll() {
     let mut f = fixture();
     f.config.idle_poll = Duration::from_secs(600);
     f.config.watched_poll = Duration::from_secs(600);
-    let token = pair(&f.config, "reader", &[Scope::Read]);
+    let token = pair(&f.config, "reader");
     let server = start(f.config.clone());
     let events = watched(&server, &token);
 
@@ -848,7 +830,7 @@ fn a_wake_reads_a_change_pm_made_without_waiting_for_the_poll() {
 fn an_open_stream_polls_often_for_what_pm_did_not_do() {
     let mut f = fixture();
     f.config.idle_poll = Duration::from_secs(600);
-    let token = pair(&f.config, "reader", &[Scope::Read]);
+    let token = pair(&f.config, "reader");
     let server = start(f.config.clone());
     let events = watched(&server, &token);
 
@@ -863,7 +845,7 @@ fn wakes_closer_together_than_the_gap_make_one_read() {
     f.config.idle_poll = Duration::from_secs(600);
     f.config.watched_poll = Duration::from_secs(600);
     f.config.min_gap = Duration::from_secs(2);
-    let token = pair(&f.config, "reader", &[Scope::Read]);
+    let token = pair(&f.config, "reader");
     let server = start(f.config.clone());
     let events = watched(&server, &token);
 
@@ -883,4 +865,60 @@ fn wakes_closer_together_than_the_gap_make_one_read() {
 
 fn block(f: &Fixture) {
     feat_status(&f.project, "login", Progress::Blocked, Some("why?"), None).unwrap();
+}
+
+#[test]
+fn typed_text_is_confirmed_from_the_conversation_and_keys_are_checked() {
+    use crate::state::runtime::{self, Waiting, WaitingKind};
+    let f = fixture();
+    let typist = pair(&f.config, "typist");
+    let session = crate::tmux::session_name(&f.project_name, "login");
+    let window = f
+        .server
+        .spawn_prompting_fake_agent(&f.project, &session, "login", "implementer");
+    f.server.wait_for_pane_text(&window, "❯");
+    let transcript = register_conversation(&f.project, "implementer", "s1");
+    append(&transcript, &typed("u1", "earlier"));
+    let mark = |kind| {
+        let waiting = Waiting::now(kind, None);
+        runtime::write_waiting(&f.project, "login", "implementer", &waiting).unwrap();
+    };
+    mark(WaitingKind::Prompt);
+    let agent = format!("/v1/agents/{}/login/implementer", f.project_name);
+    let post = |token: &str, action: &str, body: &str| {
+        call(&f.config, "POST", &format!("{agent}/{action}"), token, body)
+    };
+
+    let agent_types = std::thread::spawn({
+        let server = f.server.name().map(str::to_string);
+        let window = window.clone();
+        move || {
+            for _ in 0..250 {
+                let screen = crate::tmux::capture_pane(server.as_deref(), &window).unwrap();
+                if screen.contains("deploy it") {
+                    append(&transcript, &typed("u2", "deploy it"));
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+    });
+    let (status, body) = post(&typist, "input", r#"{"text":"deploy it\n"}"#);
+    agent_types.join().unwrap();
+    assert_eq!(status, 200, "{body}");
+    let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        body,
+        serde_json::json!({"delivery": "sent", "confirmed": true})
+    );
+
+    assert_eq!(post(&typist, "keys", r#"{"keys":["F1"]}"#).0, 400);
+    assert_eq!(post(&typist, "keys", r#"{"keys":["Down","Enter"]}"#).0, 200);
+    assert_eq!(post(&typist, "input", r#"{"text":"  "}"#).0, 400);
+
+    mark(WaitingKind::Permission);
+    let (status, body) = post(&typist, "input", r#"{"text":"yes"}"#);
+    assert_eq!(status, 409);
+    let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(body["refused"], "asking");
 }

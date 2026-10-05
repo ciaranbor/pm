@@ -7,6 +7,7 @@ pub mod clients;
 pub mod keys;
 pub mod options;
 pub mod panes;
+pub mod paste;
 
 /// Single source of truth for the tmux session naming convention.
 /// Returns `"{project_name}/{scope}"`.

@@ -5,7 +5,7 @@ use pm::commands::serve::{self, state};
 use pm::commands::serve_pair::{self, Pairing};
 use pm::commands::{serve_install, serve_logs, serve_status};
 use pm::error::Result;
-use pm::state::devices::{Devices, Scope};
+use pm::state::devices::Devices;
 use pm::state::paths;
 use pm::state::project::GlobalConfig;
 use pm::tailscale::{self, Serving};
@@ -28,8 +28,8 @@ pub(super) fn dispatch_serve(
             let port = port.unwrap_or_else(|| serve::configured_port(&config_dir));
             serve::serve(config, &config_dir, port)
         }
-        Some(ServeCommands::Pair { name, scope, url }) => {
-            print_pairing(&serve_pair::pair(&devices, &name, &scope, url.as_deref())?)
+        Some(ServeCommands::Pair { name, url }) => {
+            print_pairing(&serve_pair::pair(&devices, &name, url.as_deref())?)
         }
         Some(ServeCommands::Devices) => {
             let lines = pm::commands::serve_devices::devices(&devices)?;
@@ -125,7 +125,7 @@ fn install(
     println!("{}", serving.advice(port));
 
     if let Some(device) = pair {
-        match serve_pair::pair(&Devices::path(config_dir), &device, &[Scope::Read], None) {
+        match serve_pair::pair(&Devices::path(config_dir), &device, None) {
             Ok(pairing) => print_pairing(&pairing)?,
             Err(e) => println!(
                 "Not paired: {e}. `pm serve pair --name {device} --url <url>` pairs it with the URL the phone reaches."

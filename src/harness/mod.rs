@@ -327,6 +327,28 @@ impl Harness {
         }
     }
 
+    /// Whether pm reads this harness's input line off its screen
+    /// ([`input_is_empty`](Self::input_is_empty)).
+    pub fn reads_input_line(self) -> bool {
+        match self {
+            Harness::ClaudeCode | Harness::Codex => true,
+            Harness::OpenCode => false,
+        }
+    }
+
+    /// Whether text typed while pm's Stop hook runs is held until the hook
+    /// returns, rather than submitted at once: the hook must then yield for
+    /// the harness to take it (`runtime::request_yield`). opencode's plugin
+    /// kills its waiter when a prompt starts, and counts any answer but
+    /// `block` as a failed hook, so it is never asked to yield (verified on
+    /// Claude Code 2.1.289, codex 0.160 and opencode 2.0.23).
+    pub fn holds_input_behind_stop_hook(self) -> bool {
+        match self {
+            Harness::ClaudeCode | Harness::Codex => true,
+            Harness::OpenCode => false,
+        }
+    }
+
     /// The environment variable that moves the harness's config away from
     /// its default, where the input line's settings are read, for the
     /// SessionStart hook to record from the agent's own environment.

@@ -1,7 +1,7 @@
-//! The devices paired with `pm serve`, each with its own bearer token and
-//! scopes. Only a token's SHA-256 is stored: a token is 256 random bits, so
-//! a plain hash is as good as a slow one, and the file leaking gives away no
-//! token. The file is machine-local, under the config dir's `serve/`, which
+//! The devices paired with `pm serve`, each with its own bearer token,
+//! which may read everything and type into agents. Only a token's SHA-256
+//! is stored: a token is 256 random bits, so a plain hash is as good as a
+//! slow one, and the file leaking gives away no token. The file is machine-local, under the config dir's `serve/`, which
 //! the registry's `.gitignore` block names, and readable only by the user.
 //!
 //! A device's Web Push subscription lives on its entry, so revoking the
@@ -14,9 +14,9 @@ use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
+use crate::hash::{hex, sha256_hex};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::error::{PmError, Result};
 use crate::fs_utils::write_atomic;
@@ -26,34 +26,9 @@ pub const DIR_NAME: &str = "serve";
 const FILE_NAME: &str = "devices.toml";
 const LOCK_NAME: &str = "devices.lock";
 
-/// What a device's token lets it do.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, clap::ValueEnum,
-)]
-#[serde(rename_all = "lowercase")]
-pub enum Scope {
-    /// Read the snapshot, events, summaries and agent screens.
-    Read,
-    /// Send input to agents.
-    Input,
-    /// Start, stop and delete features and agents.
-    Lifecycle,
-}
-
-impl std::fmt::Display for Scope {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.pad(match self {
-            Self::Read => "read",
-            Self::Input => "input",
-            Self::Lifecycle => "lifecycle",
-        })
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Device {
     pub token_sha256: String,
-    pub scopes: Vec<Scope>,
     pub paired: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub push: Option<Push>,
@@ -112,9 +87,9 @@ impl Devices {
         Ok(out)
     }
 
-    /// Pair a device named `name` with `scopes`, returning its token, the
-    /// only time it is known.
-    pub fn pair(&mut self, name: &str, scopes: &[Scope]) -> Result<String> {
+    /// Pair a device named `name`, returning its token, the only time it is
+    /// known.
+    pub fn pair(&mut self, name: &str) -> Result<String> {
         if name.is_empty() || name.chars().any(|c| c.is_control() || c == '/') {
             return Err(PmError::Serve(format!("invalid device name {name:?}")));
         }
@@ -127,14 +102,10 @@ impl Devices {
         getrandom::fill(&mut bytes)
             .map_err(|e| PmError::Serve(format!("no randomness for a token: {e}")))?;
         let token = hex(&bytes);
-        let mut scopes = scopes.to_vec();
-        scopes.sort();
-        scopes.dedup();
         self.devices.insert(
             name.to_string(),
             Device {
                 token_sha256: digest(&token),
-                scopes,
                 paired: Utc::now(),
                 push: None,
             },
@@ -158,11 +129,7 @@ impl Devices {
 }
 
 fn digest(token: &str) -> String {
-    hex(&Sha256::digest(token.as_bytes()))
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    sha256_hex(token.as_bytes())
 }
 
 /// Equality that takes as long wherever the inputs first differ.
@@ -180,7 +147,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = Devices::path(dir.path());
         let mut devices = Devices::load(&path).unwrap();
-        let token = devices.pair("pixel", &[Scope::Input, Scope::Read]).unwrap();
+        let token = devices.pair("pixel").unwrap();
         devices.save(&path).unwrap();
 
         let stored = std::fs::read_to_string(&path).unwrap();
@@ -189,9 +156,8 @@ mod tests {
         assert_eq!(mode & 0o777, 0o600);
 
         let devices = Devices::load(&path).unwrap();
-        let (name, device) = devices.authenticate(&token).unwrap();
+        let (name, _) = devices.authenticate(&token).unwrap();
         assert_eq!(name, "pixel");
-        assert_eq!(device.scopes, [Scope::Read, Scope::Input]);
         assert!(devices.authenticate(&format!("{token}0")).is_none());
 
         let mut devices = devices;
@@ -202,9 +168,31 @@ mod tests {
     #[test]
     fn a_name_pairs_once() {
         let mut devices = Devices::default();
-        let first = devices.pair("pixel", &[Scope::Read]).unwrap();
-        assert!(devices.pair("pixel", &[Scope::Read]).is_err());
-        let other = devices.pair("tablet", &[Scope::Read]).unwrap();
+        let first = devices.pair("pixel").unwrap();
+        assert!(devices.pair("pixel").is_err());
+        let other = devices.pair("tablet").unwrap();
         assert_ne!(first, other);
+    }
+
+    #[test]
+    fn a_device_paired_with_scopes_still_authenticates() {
+        let dir = tempdir().unwrap();
+        let path = Devices::path(dir.path());
+        let token = "ab".repeat(32);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            format!(
+                "[devices.phone]\ntoken_sha256 = \"{}\"\nscopes = [\"read\"]\npaired = \"2026-10-01T10:00:00Z\"\n",
+                digest(&token)
+            ),
+        )
+        .unwrap();
+
+        let devices = Devices::load(&path).unwrap();
+        assert_eq!(
+            devices.authenticate(&token).map(|(name, _)| name),
+            Some("phone")
+        );
     }
 }

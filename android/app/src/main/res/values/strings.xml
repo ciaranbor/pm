@@ -6,5 +6,9 @@
     <string name="channel_ready">Ready for review</string>
     <string name="channel_ready_description">A feature is done, waiting for you to merge or delete it</string>
     <string name="channel_died">Agent died</string>
+    <string name="reply_action">Reply</string>
+    <string name="reply_label">Reply to %1$s</string>
+    <string name="reply_you">You</string>
+    <string name="reply_not_sent">Not sent (%1$s): %2$s</string>
     <string name="channel_died_description">An agent\'s session ended unexpectedly</string>
 </resources>

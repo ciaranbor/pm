@@ -139,4 +139,70 @@ class AgentModelTest {
         assertEquals("c3", reopened.url.queryParameter("after"))
         assertEquals(listOf("3"), ids)
     }
+
+    @Test
+    fun queued_text_is_seen_once_the_conversation_holds_it() = modelTest {
+        server.enqueue(MockResponse.Builder().body("""{"delivery":"queued"}""").build())
+        model.send("deploy it\n")
+        eventually { model.outbox.value == Outbox.Queued("deploy it\n") }
+        val posted = server.takeRequest()
+        assertEquals("/v1/agents/app/login/implementer/input", posted.url.encodedPath)
+        assertEquals("""{"text":"deploy it\n"}""", posted.body?.utf8())
+
+        server.enqueue(page(listOf("1"), before = null, after = "c1"))
+        val typed =
+            """{"project":"app","scope":"login","agent":"implementer",
+            "items":[{"id":"u","kind":"user","text":"deploy it"}],"after":"c2"}"""
+        server.enqueue(stream.response("snapshot" to SNAPSHOT, "transcript" to typed))
+        model.start()
+        eventually { model.outbox.value == Outbox.Seen("deploy it\n") }
+    }
+
+    @Test
+    fun a_refused_send_says_why_and_keeps_the_text() = modelTest {
+        server.enqueue(
+            MockResponse.Builder()
+                .code(409)
+                .body(
+                    """{"error":"a dialog is up (permission prompt); answer it with keys","refused":"asking"}"""
+                )
+                .build()
+        )
+        model.send("yes")
+        eventually { model.outbox.value is Outbox.Failed }
+        assertEquals(
+            Outbox.Failed("yes", "a dialog is up (permission prompt); answer it with keys"),
+            model.outbox.value,
+        )
+    }
+
+    @Test
+    fun the_same_words_said_before_the_send_are_not_taken_for_it() = modelTest {
+        server.enqueue(page(listOf("yes"), before = null, after = "c1"))
+        server.enqueue(stream.response("snapshot" to SNAPSHOT))
+        model.start()
+        eventually { shown?.live == true }
+
+        server.enqueue(
+            MockResponse.Builder().body("""{"delivery":"sent","confirmed":false}""").build()
+        )
+        model.send("yes")
+        eventually { model.outbox.value !is Outbox.Sending }
+        assertEquals(Outbox.Sent("yes"), model.outbox.value)
+    }
+
+    @Test
+    fun a_page_read_after_the_send_is_not_taken_for_it() = modelTest {
+        server.enqueue(
+            MockResponse.Builder().body("""{"delivery":"sent","confirmed":false}""").build()
+        )
+        model.send("yes")
+        eventually { model.outbox.value == Outbox.Sent("yes") }
+
+        server.enqueue(page(listOf("yes"), before = null, after = "c1"))
+        server.enqueue(stream.response("snapshot" to SNAPSHOT))
+        model.start()
+        eventually { shown?.live == true }
+        assertEquals(Outbox.Sent("yes"), model.outbox.value)
+    }
 }

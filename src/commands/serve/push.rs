@@ -28,7 +28,7 @@ use crate::commands::attention::AttentionKind;
 use crate::commands::attention::transition::Transition;
 use crate::error::{PmError, Result};
 use crate::fs_utils::write_atomic;
-use crate::state::devices::{Devices, Push, Scope};
+use crate::state::devices::{Devices, Push};
 
 use super::log;
 
@@ -171,11 +171,7 @@ fn deliver(
 ) -> Result<()> {
     let paired = Devices::load(devices)?;
     for (name, device) in &paired.devices {
-        let Some(push) = device
-            .push
-            .as_ref()
-            .filter(|_| device.scopes.contains(&Scope::Read))
-        else {
+        let Some(push) = device.push.as_ref() else {
             continue;
         };
         if let Some(refusal) = policy.refusal(&push.endpoint) {
