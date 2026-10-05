@@ -122,7 +122,7 @@ struct Target {
     liveness: Liveness,
 }
 
-/// The pane of `agent`, once it is out of any copy mode, if it runs the
+/// The pane of `agent`, once it is out of any tmux mode, if it runs the
 /// agent's harness.
 fn target(
     project_root: &Path,
@@ -497,12 +497,9 @@ mod tests {
         assert!(!agent.yield_requested());
     }
 
-    #[test]
-    fn a_pane_in_copy_mode_leaves_it_and_takes_the_text() {
+    fn a_pane_in_a_mode_leaves_it_and_takes_the_text(enter: &str) {
         let agent = Recording::new(Harness::ClaudeCode);
-        agent
-            .server
-            .tmux_stdout(&["copy-mode", "-t", &agent.target]);
+        agent.server.tmux_stdout(&[enter, "-t", &agent.target]);
         let pane = agent.server.pane_id(&agent.target);
         assert!(tmux::paste::in_mode(agent.server.name(), &pane).unwrap());
 
@@ -511,6 +508,16 @@ mod tests {
         let want = pasted("hello");
         assert_eq!(agent.received(want.len()), want);
         assert!(!tmux::paste::in_mode(agent.server.name(), &pane).unwrap());
+    }
+
+    #[test]
+    fn a_pane_in_copy_mode_leaves_it_and_takes_the_text() {
+        a_pane_in_a_mode_leaves_it_and_takes_the_text("copy-mode");
+    }
+
+    #[test]
+    fn a_pane_in_tree_mode_leaves_it_and_takes_the_text() {
+        a_pane_in_a_mode_leaves_it_and_takes_the_text("choose-tree");
     }
 
     #[test]
