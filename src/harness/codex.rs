@@ -24,6 +24,9 @@
 //! is recorded without passing through `inspect_pending_input`; not
 //! verified live). Its stdout becomes developer context.
 //!
+//! Nor does any hook run for text the user steers or queues while pm's Stop
+//! hook waits; [`history`] has how the hook learns of a steer.
+//!
 //! Two trust gates in `$CODEX_HOME/config.toml` stand between a spawn and a
 //! working agent: `[projects."<dir>"] trust_level = "trusted"`, which pm writes
 //! per worktree before launching, and `[hooks.state."<hooks.json>:<event>:<i>:<j>"]
@@ -43,6 +46,7 @@
 //! session then continues in the window's directory.
 
 pub(super) mod chat;
+pub(super) mod history;
 pub(super) mod input;
 pub(super) mod sessions;
 pub(super) mod transcript;

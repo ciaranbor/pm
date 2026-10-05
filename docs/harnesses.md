@@ -116,12 +116,15 @@ unattended:
   attached to codex's background server run in the server's environment,
   not the agent's. `pm doctor` reports a running agent that has recorded no
   session id after a grace period; `pm agent restart` it.
-- **Text queued while idle** (README, [Work with the
+- **Text typed while idle** (README, [Work with the
   agents](../README.md#work-with-the-agents)) shows in codex as "Messages
-  to be submitted after next tool call". No hook reports queued input, so
-  pm can't see it until it is submitted. A follow-up queued with Tab is not
-  delivered with a message's continuation either; it waits for a turn that
-  really ends.
+  to be submitted after next tool call". No codex hook reports it, so pm
+  watches codex's `$CODEX_HOME/history.jsonl` for text sent with Enter and
+  starts the turn within a couple of seconds — a workaround until codex
+  has such a hook. It needs codex's history on: with `[history]
+  persistence = "none"` Enter waits like Tab. A follow-up queued with Tab
+  is written nowhere pm can see, and is not delivered with a message's
+  continuation either; it waits for a turn that really ends, or Esc.
 - **Removing a model row keeps the session's model.** `codex resume` with
   no `-m` reuses the model the session last ran, so deleting an
   `[agents.models]` row changes nothing on restart; set the row to the
