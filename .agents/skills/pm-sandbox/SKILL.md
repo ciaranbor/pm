@@ -1,6 +1,6 @@
 ---
 name: pm-sandbox
-description: Exercise a pm build by hand or end to end without touching the real environment. Use whenever you run, try, QA, or smoke-test pm changes. Never run a build under test against the real registry, home directory, or default tmux server.
+description: Exercise a pm build by hand or end to end without touching the real environment. Use whenever you run, try, QA, or smoke-test pm changes, the Android app included. Never run a build under test against the real registry, home directory, or default tmux server.
 ---
 
 # pm sandbox
@@ -40,3 +40,9 @@ description: Exercise a pm build by hand or end to end without touching the real
 - Every tmux window holds a pty and test runs abort at 300 system-wide. A
   pty-budget failure means leaked sessions; recovery is in `AGENTS.md`
   (Development).
+- Testing on the Android phone (`adb`): run the session under
+  `scripts/phone hold -- <command>` so the phone neither sleeps nor locks
+  mid-test, and its setting is put back afterwards even on failure. To hold
+  across several tool calls, `hold --pid $PPID` (see `--help`) and
+  `release` the same pid when done. When it reports the phone locked, ask
+  the user to unlock it once; never type or ask for a PIN.

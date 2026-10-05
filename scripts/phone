@@ -1,0 +1,260 @@
+#!/usr/bin/env bash
+# Keep a USB-connected Android phone awake while something tests on it, then
+# put its stay-awake setting back. Holders are refcounted per device under
+# the state dir: holders/<pid> holds the pid's start time, so a reused pid
+# is not mistaken for the holder, then its watcher's pid and start time.
+# The phone's original value is recorded by the first holder and restored
+# when the last one goes; a restore that fails (phone unplugged) keeps the
+# record, and the next run retries it.
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/phone hold [--pid PID] [-- CMD...]
+       scripts/phone release [--pid PID]
+       scripts/phone status
+
+  hold -- CMD...   hold the phone awake while CMD runs, then release, also
+                   on error and Ctrl-C; exits with CMD's status
+  hold             hold on behalf of PID (default: the calling shell) until
+                   `release` or until PID exits. A shell started per
+                   command exits with it: for a hold spanning several
+                   commands, pass a PID that outlives them
+  release          drop PID's hold (default: the calling shell)
+  status           the device, its recorded original setting, and holders
+
+A hold records the phone's `stay_on_while_plugged_in` setting (first holder
+only), keeps the screen on while USB-powered (`svc power stayon usb`) and
+wakes it. A screen kept on never locks, but one already locked stays
+locked: when the keyguard is up, unlock the phone once by hand. No PIN is
+stored or typed. When the last live holder releases, the recorded value is
+restored exactly. A holder whose process has exited is dropped by a watcher
+started with its hold, and by any later run of this script.
+
+Holders on one machine share state; holds from different machines (each
+reaching the phone through its own adb server) are not coordinated.
+
+The device is the one adb picks: set ANDROID_SERIAL when several are
+attached, and ANDROID_ADB_SERVER_PORT for a forwarded adb server.
+
+Environment:
+  PM_PHONE_STATE   state dir (default: ${XDG_STATE_HOME:-~/.local/state}/pm-phone)
+USAGE
+}
+
+die() { echo "phone: $*" >&2; exit 1; }
+
+self=$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")
+state_root=${PM_PHONE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/pm-phone}
+setting=stay_on_while_plugged_in
+watch_interval=${PM_PHONE_WATCH_INTERVAL:-5}
+
+# The start time of PID, empty if it is not running.
+started() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//' || true; }
+
+padb() { adb -s "$serial" "$@"; }
+shell_out() { padb shell "$@" | tr -d '\r'; }
+
+select_device() {
+  serial=$1
+  case $serial in
+    ""|*/*|.*) die "unusable device serial '$serial'" ;;
+  esac
+  dir=$state_root/$serial
+  mkdir -p "$dir/holders"
+}
+
+# Run this script's internal COMMAND under the device's lock. The lock is a
+# flock held by perl, so the kernel drops it if the holder dies.
+locked() {
+  perl -MFcntl=:flock -e '
+    $SIG{INT} = $SIG{HUP} = "IGNORE";
+    open(my $f, ">>", shift) or die "phone: lock: $!\n";
+    flock($f, LOCK_EX) or die "phone: lock: $!\n";
+    system(@ARGV) == -1 and die "phone: $!\n";
+    exit($? & 127 ? 1 : $? >> 8);
+  ' "$dir/lock" "$self" "$1" "$serial" "${@:2}"
+}
+
+# Drop holders that are no longer running.
+prune() {
+  local h want
+  for h in "$dir"/holders/*; do
+    [ -e "$h" ] || continue
+    want=$(head -n 1 "$h")
+    [ -n "$want" ] && [ "$(started "${h##*/}")" = "$want" ] || rm -f "$h"
+  done
+}
+
+holders() { ls "$dir/holders"; }
+
+# With no holder left, put the recorded value back.
+restore_if_unheld() {
+  [ -f "$dir/original" ] && [ -z "$(holders)" ] || return 0
+  local orig
+  orig=$(cat "$dir/original")
+  if [ "$orig" = null ]; then
+    padb shell settings delete global "$setting" >/dev/null
+  else
+    padb shell settings put global "$setting" "$orig"
+  fi || {
+    echo "phone: could not restore $setting=$orig on $serial; the next run of scripts/phone retries" >&2
+    return 1
+  }
+  rm -f "$dir/original"
+  echo "phone: released $serial ($setting=$orig restored)" >&2
+}
+
+# Internal, under the lock. The original is read only when none is
+# recorded: a recorded one means the current value is ours.
+locked_hold() {
+  local pid=$1 start=$2 orig
+  prune
+  if [ ! -f "$dir/original" ]; then
+    orig=$(shell_out settings get global "$setting") || orig=""
+    [ -n "$orig" ] || die "cannot read $setting on $serial"
+    echo "$orig" > "$dir/original"
+  fi
+  [ "$(head -n 1 "$dir/holders/$pid" 2>/dev/null)" = "$start" ] \
+    || echo "$start" > "$dir/holders/$pid"
+  padb shell svc power stayon usb || {
+    rm -f "$dir/holders/$pid"
+    restore_if_unheld || true
+    die "cannot set stay-on on $serial"
+  }
+}
+
+# The live watcher registered for holder PID, if any.
+watcher_of() {
+  local w
+  w=$(sed -n 2p "$1" 2>/dev/null) || return 0
+  [ -n "$w" ] && [ "$(started "$w")" = "$(sed -n 3p "$1")" ] && echo "$w" || true
+}
+
+# Release PID's hold. CALLER is the watcher running this, when one is.
+locked_release() {
+  local pid=$1 caller=${2:-} h=$dir/holders/$1 w
+  if [ -e "$h" ]; then
+    w=$(watcher_of "$h")
+    [ -z "$w" ] || [ "$w" = "$caller" ] || kill "$w" 2>/dev/null || true
+    rm -f "$h"
+  elif [ -z "$caller" ]; then
+    echo "phone: pid $pid holds no hold on $serial" >&2
+  fi
+  prune
+  restore_if_unheld
+}
+
+locked_status() {
+  local h
+  prune
+  restore_if_unheld || true
+  echo "device:   $serial"
+  echo "setting:  $(shell_out settings get global "$setting" || echo '?')"
+  echo "original: $(cat "$dir/original" 2>/dev/null || echo '(none recorded)')"
+  echo "holders:"
+  for h in $(holders); do
+    echo "  $h  $(ps -o command= -p "$h" 2>/dev/null || true)"
+  done
+}
+
+# Register WATCHER as holder PID's watcher, unless the hold is gone or
+# already has a live one.
+locked_watching() {
+  local h=$dir/holders/$1
+  [ -e "$h" ] && [ -z "$(watcher_of "$h")" ] || return 1
+  printf '%s\n%s\n%s\n' "$(head -n 1 "$h")" "$2" "$3" > "$h"
+}
+
+# Release PID once it exits.
+watch() {
+  local pid=$1 start=$2
+  locked _watching "$pid" "$$" "$(started $$)" || exit 0
+  while [ "$(started "$pid")" = "$start" ]; do sleep "$watch_interval"; done
+  locked _release "$pid" "$$"
+}
+
+wake() {
+  local win
+  padb shell input keyevent KEYCODE_WAKEUP || true
+  win=$(shell_out dumpsys window) || win=""
+  if grep -qE 'isKeyguardShowing=true|mShowingLockscreen=true' <<<"$win"; then
+    echo "phone: $serial is locked: unlock it once by hand; it stays unlocked while held" >&2
+  fi
+}
+
+hold() {
+  local pid=$1 start
+  shift
+  start=$(started "$pid")
+  [ -n "$start" ] || die "no process $pid"
+  locked _hold "$pid" "$start"
+  # In its own session, so the caller's Ctrl-C or exit does not take it.
+  perl -MPOSIX=setsid -e 'setsid; exec @ARGV or die' \
+    "$self" _watch "$serial" "$pid" "$start" </dev/null >/dev/null 2>&1 &
+  wake
+  if [ "$#" -eq 0 ]; then
+    echo "phone: holding $serial for pid $pid (scripts/phone release --pid $pid)" >&2
+    return 0
+  fi
+  release_wrapper() {
+    trap '' INT HUP TERM
+    locked _release "$pid" || true
+  }
+  trap 'release_wrapper; exit 130' INT
+  trap 'release_wrapper; exit 129' HUP
+  trap 'release_wrapper; exit 143' TERM
+  local status=0
+  "$@" || status=$?
+  trap - INT HUP TERM
+  release_wrapper
+  return "$status"
+}
+
+cmd=${1:-}
+[ "$#" -gt 0 ] && shift
+case $cmd in
+  _hold|_release|_status|_watch|_watching)
+    select_device "$1"; shift
+    case $cmd in
+      _hold) locked_hold "$@" ;;
+      _release) locked_release "$@" ;;
+      _status) locked_status ;;
+      _watch) watch "$@" ;;
+      _watching) locked_watching "$@" ;;
+    esac
+    exit ;;
+  -h|--help|help) usage; exit 0 ;;
+  hold|release|status) ;;
+  "") usage >&2; exit 2 ;;
+  *) usage >&2; die "unknown command: $cmd" ;;
+esac
+
+pid="" wrap=0
+while [ "$#" -gt 0 ]; do
+  case $1 in
+    --pid) [ "$#" -ge 2 ] || die "--pid needs a value"; pid=$2; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    --) [ "$cmd" = hold ] || die "only hold takes a command"; wrap=1; shift; break ;;
+    *) usage >&2; die "unexpected argument: $1" ;;
+  esac
+done
+case $pid in *[!0-9]*) die "--pid takes a number" ;; esac
+[ "$wrap" = 0 ] || [ "$#" -gt 0 ] || die "hold --: no command"
+[ "$wrap" = 0 ] || [ -z "$pid" ] || die "--pid does not combine with a command"
+[ "$wrap" = 1 ] && pid=$$
+pid=${pid:-$PPID}
+
+command -v adb >/dev/null || die "adb not found on PATH"
+command -v perl >/dev/null || die "perl not found on PATH"
+serial=$(adb get-serialno 2>/dev/null | tr -d '\r') || serial=""
+case $serial in
+  ""|unknown) die "no single device: adb devices lists none or several (set ANDROID_SERIAL)" ;;
+esac
+select_device "$serial"
+
+case $cmd in
+  hold) hold "$pid" "$@" ;;
+  release) locked _release "$pid" ;;
+  status) locked _status ;;
+esac
