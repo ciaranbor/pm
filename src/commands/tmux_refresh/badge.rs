@@ -50,10 +50,11 @@ pub(super) fn attention_label(kind: AttentionKind) -> Option<String> {
     Some(styled(style, &format!("{glyph} {kind}")))
 }
 
-/// `count` scopes needing `kind`, as the summary lists them.
+/// `count` scopes needing `kind`, as the summary lists them: labelled as
+/// in pm's tree, the count before the kind.
 pub(super) fn attention_count(kind: AttentionKind, count: usize) -> Option<String> {
     let (style, glyph) = attention_mark(kind)?;
-    Some(styled(style, &format!("{glyph} {count}")))
+    Some(styled(style, &format!("{glyph} {count} {kind}")))
 }
 
 /// The busy glyph, for a scope that is working.
