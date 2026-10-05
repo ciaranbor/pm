@@ -48,6 +48,7 @@ use super::reexec::Binary;
 mod dialog;
 mod events;
 mod input;
+mod lifecycle;
 mod notes;
 mod push;
 mod routes;

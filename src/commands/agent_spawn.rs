@@ -127,6 +127,18 @@ fn definition_flag(effective_definition: Option<&str>) -> Option<&str> {
 /// user's input (see [`super::hooks_user_prompt`]).
 pub const SPAWN_PROMPT: &str = "Stand by.";
 
+/// [`SPAWN_PROMPT`] for a resumed session, whose conversation may hold work
+/// the agent was told to resume: "Stand by." there reads as the user calling
+/// that work off.
+pub const RESUME_PROMPT: &str = "pm resumed this session. This is not a message from the user \
+     and changes nothing: carry on as your messages direct.";
+
+/// Whether `prompt` is one pm launches an agent with, not the user's input.
+pub fn is_launch_prompt(prompt: &str) -> bool {
+    let prompt = prompt.trim();
+    prompt == SPAWN_PROMPT || prompt == RESUME_PROMPT
+}
+
 /// Parameters for spawning an agent session in a tmux window.
 pub struct SpawnParams<'a> {
     pub project_root: &'a Path,
@@ -217,6 +229,9 @@ fn spawn_session_with_config(
     // they're interactive by design.
     let effective_prompt = match (params.prompt, params.agent_name) {
         (Some(p), _) => Some(p),
+        (None, Some(_)) if params.resume_session.is_some() && !params.fork_session => {
+            Some(RESUME_PROMPT)
+        }
         (None, Some(_)) => Some(SPAWN_PROMPT),
         (None, None) => None,
     };
@@ -1061,6 +1076,14 @@ pub(crate) mod tests {
         assert_eq!(outcome, SpawnOutcome::Resumed);
         assert!(outcome.is_new_window());
         assert!(msg.contains("Resumed agent 'reviewer'"));
+        let window = format!("{session_name}:reviewer");
+        server.wait_for_pane_text(&window, "pm resumed this session");
+        assert!(
+            !tmux::capture_pane(server.name(), &window)
+                .unwrap()
+                .contains(SPAWN_PROMPT),
+            "a resumed session is not told to stand by"
+        );
     }
 
     #[test]

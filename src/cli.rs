@@ -278,6 +278,17 @@ pub enum ServeCommands {
         /// The device's name
         device: String,
     },
+    /// Let a paired device do more than read and type into agents
+    Grant {
+        /// The device's name
+        device: String,
+        /// What to grant: `lifecycle` merges and deletes features and
+        /// restarts agents
+        grant: pm::state::devices::Grant,
+        /// Withdraw the grant instead
+        #[arg(long)]
+        remove: bool,
+    },
     /// Run `pm serve` as a launchd LaunchAgent (macOS), at login and across
     /// restarts, and set up `tailscale serve` for it when the tailnet
     /// allows. Run it again to repair an install

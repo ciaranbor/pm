@@ -1,8 +1,10 @@
 //! The devices paired with `pm serve`, each with its own bearer token,
-//! which may read everything and type into agents. Only a token's SHA-256
-//! is stored: a token is 256 random bits, so a plain hash is as good as a
-//! slow one, and the file leaking gives away no token. The file is machine-local, under the config dir's `serve/`, which
-//! the registry's `.gitignore` block names, and readable only by the user.
+//! which may read everything and type into agents, and do more only as
+//! granted ([`Grant`]). Only a token's SHA-256 is stored: a token is 256
+//! random bits, so a plain hash is as good as a slow one, and the file
+//! leaking gives away no token. The file is machine-local, under the config
+//! dir's `serve/`, which the registry's `.gitignore` block names, and
+//! readable only by the user.
 //!
 //! A device's Web Push subscription lives on its entry, so revoking the
 //! device drops it. Every change goes through [`Devices::update`], which
@@ -26,10 +28,31 @@ pub const DIR_NAME: &str = "serve";
 const FILE_NAME: &str = "devices.toml";
 const LOCK_NAME: &str = "devices.lock";
 
+/// What a device may do beyond reading and typing into agents, granted
+/// explicitly (`pm serve grant`).
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, clap::ValueEnum,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Grant {
+    /// Merge and delete features, and restart agents.
+    Lifecycle,
+}
+
+impl std::fmt::Display for Grant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.pad(match self {
+            Self::Lifecycle => "lifecycle",
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Device {
     pub token_sha256: String,
     pub paired: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grants: Vec<Grant>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub push: Option<Push>,
 }
@@ -107,10 +130,25 @@ impl Devices {
             Device {
                 token_sha256: digest(&token),
                 paired: Utc::now(),
+                grants: Vec::new(),
                 push: None,
             },
         );
         Ok(token)
+    }
+
+    /// Grant `name` `grant`, or withdraw it when `granted` is false.
+    pub fn grant(&mut self, name: &str, grant: Grant, granted: bool) -> Result<()> {
+        let device = self
+            .devices
+            .get_mut(name)
+            .ok_or_else(|| PmError::Serve(format!("no device named {name} is paired")))?;
+        device.grants.retain(|g| *g != grant);
+        if granted {
+            device.grants.push(grant);
+            device.grants.sort();
+        }
+        Ok(())
     }
 
     /// Forget `name`'s token. Whether it was paired.
@@ -175,7 +213,7 @@ mod tests {
     }
 
     #[test]
-    fn a_device_paired_with_scopes_still_authenticates() {
+    fn a_device_paired_with_old_scopes_authenticates_and_is_granted_nothing() {
         let dir = tempdir().unwrap();
         let path = Devices::path(dir.path());
         let token = "ab".repeat(32);
@@ -183,16 +221,38 @@ mod tests {
         std::fs::write(
             &path,
             format!(
-                "[devices.phone]\ntoken_sha256 = \"{}\"\nscopes = [\"read\"]\npaired = \"2026-10-01T10:00:00Z\"\n",
+                "[devices.phone]\ntoken_sha256 = \"{}\"\nscopes = [\"read\", \"lifecycle\"]\npaired = \"2026-10-01T10:00:00Z\"\n",
                 digest(&token)
             ),
         )
         .unwrap();
 
         let devices = Devices::load(&path).unwrap();
-        assert_eq!(
-            devices.authenticate(&token).map(|(name, _)| name),
-            Some("phone")
-        );
+        let (name, device) = devices.authenticate(&token).unwrap();
+        assert_eq!(name, "phone");
+        assert!(device.grants.is_empty(), "an old scope grants nothing");
+    }
+
+    #[test]
+    fn a_grant_holds_until_withdrawn_and_only_for_a_paired_device() {
+        let dir = tempdir().unwrap();
+        let path = Devices::path(dir.path());
+        let token = Devices::update(&path, |d| d.pair("pixel")).unwrap();
+        Devices::update(&path, |d| d.grant("pixel", Grant::Lifecycle, true)).unwrap();
+        Devices::update(&path, |d| d.grant("pixel", Grant::Lifecycle, true)).unwrap();
+        let grants = |path: &Path| {
+            Devices::load(path)
+                .unwrap()
+                .authenticate(&token)
+                .unwrap()
+                .1
+                .grants
+                .clone()
+        };
+        assert_eq!(grants(&path), [Grant::Lifecycle]);
+
+        Devices::update(&path, |d| d.grant("pixel", Grant::Lifecycle, false)).unwrap();
+        assert!(grants(&path).is_empty());
+        assert!(Devices::update(&path, |d| d.grant("tablet", Grant::Lifecycle, true)).is_err());
     }
 }

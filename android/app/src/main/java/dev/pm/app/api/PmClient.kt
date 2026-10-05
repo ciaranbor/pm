@@ -60,6 +60,9 @@ sealed class PmError(message: String) : Exception(message) {
     /** A save of the notes was refused: they changed since the version it started from. */
     class NotesChanged(val current: Notes) : PmError("the notes changed since they were read")
 
+    /** The device lacks the grant `missing` names (`lifecycle`); `message` says how to grant it. */
+    class Forbidden(val missing: String, message: String) : PmError(message)
+
     class Status(val code: Int, message: String) : PmError(message)
 }
 
@@ -73,6 +76,17 @@ data class Delivered(
 ) {
     val queued: Boolean
         get() = delivery == "queued"
+}
+
+/** This device as the server knows it (`GET device`). */
+@Serializable
+data class DeviceInfo(val name: String, val grants: List<String> = emptyList()) {
+    val lifecycle: Boolean
+        get() = LIFECYCLE in grants
+
+    companion object {
+        const val LIFECYCLE = "lifecycle"
+    }
 }
 
 /** One server-sent event. */
@@ -103,6 +117,12 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
                     }
             }
             .build()
+
+    /**
+     * A merge runs a fetch, and a restart waits for the harness to start, so their requests wait
+     * longer than a read.
+     */
+    private val lifecycle = http.newBuilder().readTimeout(2, TimeUnit.MINUTES).build()
 
     /** Longer than the server's 25 s heartbeat, so a silent stream is a dead one. */
     private val streaming = http.newBuilder().readTimeout(60, TimeUnit.SECONDS).build()
@@ -242,6 +262,41 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
         )
     }
 
+    /** This device's name and grants; null from a server that predates grants. */
+    suspend fun device(): DeviceInfo? =
+        try {
+            json.decodeFromString(DeviceInfo.serializer(), get(url("device")))
+        } catch (e: PmError.Unsupported) {
+            null
+        }
+
+    /**
+     * Merge the feature into its base and delete it, as `pm feat merge` does. Refused (`unsafe`,
+     * `git`) with the CLI's own words.
+     */
+    suspend fun merge(project: String, feature: String) {
+        send(postRequest(url("features", project, feature, "merge"), "{}"), lifecycle)
+    }
+
+    /** Delete the feature, as `pm feat delete` does; refused (`unsafe`) when work would be lost. */
+    suspend fun delete(project: String, feature: String) {
+        send(postRequest(url("features", project, feature, "delete"), "{}"), lifecycle)
+    }
+
+    /**
+     * Restart the agent, resuming its session. Refused with `mid-turn` while it is busy, asking or
+     * waiting on background work, unless `force`.
+     */
+    suspend fun restart(project: String, scope: String, agent: String, force: Boolean) {
+        send(
+            postRequest(
+                url("agents", project, scope, agent, "restart"),
+                json.encodeToString(RestartBody.serializer(), RestartBody(force)),
+            ),
+            lifecycle,
+        )
+    }
+
     /** The server's VAPID public key, which push subscriptions are made against. */
     suspend fun vapidKey(): String =
         json
@@ -309,24 +364,28 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
 
     private suspend fun get(url: HttpUrl): String = send(Request.Builder().url(url).build())
 
-    private suspend fun post(url: HttpUrl, body: String): String =
-        send(Request.Builder().url(url).post(body.toRequestBody(JSON)).build())
+    private suspend fun post(url: HttpUrl, body: String): String = send(postRequest(url, body))
 
-    private suspend fun send(request: Request): String = call(request) { it.body.string() }
+    private fun postRequest(url: HttpUrl, body: String): Request =
+        Request.Builder().url(url).post(body.toRequestBody(JSON)).build()
+
+    private suspend fun send(request: Request, client: OkHttpClient = http): String =
+        call(request, client) { it.body.string() }
 
     /**
-     * `read` from the response to `request` once it succeeds; else the error `refuse` makes of it,
-     * or the general one.
+     * `read` from the response to `request`, made with `client`, once it succeeds; else the error
+     * `refuse` makes of it, or the general one.
      */
     private suspend fun <T> call(
         request: Request,
+        client: OkHttpClient = http,
         refuse: (Response) -> PmError? = { null },
         read: (Response) -> T,
     ): T =
         withContext(Dispatchers.IO) {
             val response =
                 try {
-                    http.newCall(request).await()
+                    client.newCall(request).await()
                 } catch (e: IOException) {
                     throw PmError.Unreachable(e)
                 }
@@ -342,8 +401,11 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
             body?.get(key)?.let { runCatching { it.jsonPrimitive.content }.getOrNull() }
         val message = field("error")
         val refused = field("refused")
+        val missing = field("missing")
         return when {
             response.code == 401 -> PmError.Unauthorized()
+            response.code == 403 && missing != null ->
+                PmError.Forbidden(missing, message ?: "this device may not do that")
             response.code == 409 && refused != null ->
                 PmError.Refused(refused, message ?: "the agent can't take input now")
             response.code == 404 && message == NO_SUCH_ENDPOINT -> PmError.Unsupported()
@@ -355,6 +417,8 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
     @Serializable private data class TextBody(val text: String)
 
     @Serializable private data class KeysBody(val keys: List<String>)
+
+    @Serializable private data class RestartBody(val force: Boolean)
 
     @Serializable private data class Keys(val p256dh: String, val auth: String)
 

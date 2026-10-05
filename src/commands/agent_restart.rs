@@ -21,7 +21,8 @@ use crate::tmux::{self, panes};
 /// caller whose own process lives in it; the agent starts in a pane split
 /// off it, which takes back the old one's area once it is killed. When `resume` is
 /// set the agent is first sent a message telling it to resume, which its
-/// respawned session reads at its first Stop hook.
+/// respawned session reads at its first Stop hook. With `focus`, its window
+/// becomes its session's current one, which moves every client viewing it.
 fn restart_one(
     project_root: &Path,
     feature: &str,
@@ -29,6 +30,7 @@ fn restart_one(
     tmux_server: Option<&str>,
     keep_old: bool,
     resume: bool,
+    focus: bool,
 ) -> Result<(String, Option<String>)> {
     crate::messages::validate_name(agent_name, "agent")?;
 
@@ -82,7 +84,7 @@ fn restart_one(
             )
         }
     };
-    if let Some(window) = tmux::find_window(tmux_server, &session_name, agent_name)? {
+    if focus && let Some(window) = tmux::find_window(tmux_server, &session_name, agent_name)? {
         let _ = tmux::select_window(tmux_server, &window);
     }
 
@@ -162,12 +164,15 @@ const RESUME_SENDER: &str = "no-reply-restart";
 /// refused unless `force`, and is then told to resume once it is back. An
 /// agent whose window holds this process is restarted last, always told to
 /// resume, and its old pane left to [`Restarted::finish`]: killing it ends
-/// the restart.
+/// the restart. With `focus`, each restarted agent's window becomes its
+/// session's current one, moving every client viewing the session; a
+/// restart asked for away from the terminal leaves what clients view alone.
 pub fn agent_restart_many(
     project_root: &Path,
     feature: &str,
     names: &[String],
     force: bool,
+    focus: bool,
     tmux_server: Option<&str>,
 ) -> Restarted {
     let caller = callers_agent(project_root, feature, names, tmux_server);
@@ -196,14 +201,23 @@ pub fn agent_restart_many(
                     "{reason}, or pass --force to interrupt it and have it resume"
                 )));
             }
-            let line = restart_one(project_root, feature, name, tmux_server, false, resume)?.0;
+            let line = restart_one(
+                project_root,
+                feature,
+                name,
+                tmux_server,
+                false,
+                resume,
+                focus,
+            )?
+            .0;
             launched.push((at, name.clone()));
             Ok(line)
         })
         .collect();
     let mut caller_pane = None;
     if let Some(name) = caller {
-        match restart_one(project_root, feature, name, tmux_server, true, true) {
+        match restart_one(project_root, feature, name, tmux_server, true, true, focus) {
             Ok((line, kept)) => {
                 caller_pane = kept;
                 results.push(Ok(line));
@@ -276,8 +290,16 @@ mod tests {
         agent_name: &str,
         tmux_server: Option<&str>,
     ) -> Result<String> {
-        restart_one(project_root, feature, agent_name, tmux_server, false, false)
-            .map(|(line, _)| line)
+        restart_one(
+            project_root,
+            feature,
+            agent_name,
+            tmux_server,
+            false,
+            false,
+            true,
+        )
+        .map(|(line, _)| line)
     }
 
     fn setup_project(dir: &Path, server: &TestServer) -> (String, String) {
@@ -599,6 +621,7 @@ mod tests {
             &feature,
             &["reviewer".to_string(), "nonexistent".to_string()],
             false,
+            true,
             server.name(),
         )
         .results;
@@ -618,7 +641,8 @@ mod tests {
         server.spawn_dead_fake_agent(&project, &session, "login", "qa");
         let names = ["implementer", "reviewer", "qa"].map(String::from);
 
-        let mut restarted = agent_restart_many(&project, "login", &names, false, server.name());
+        let mut restarted =
+            agent_restart_many(&project, "login", &names, false, true, server.name());
         restarted.record_failures(vec![FailedLaunch {
             launch: Launch {
                 project_root: project.clone(),
@@ -670,6 +694,7 @@ mod tests {
             "login",
             &["implementer".to_string(), "reviewer".to_string()],
             false,
+            true,
             server.name(),
         )
         .results;
@@ -689,6 +714,7 @@ mod tests {
             &project,
             "login",
             &["implementer".to_string()],
+            true,
             true,
             server.name(),
         )

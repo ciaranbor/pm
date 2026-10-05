@@ -17,6 +17,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -52,6 +54,7 @@ import dev.pm.app.update.UpdateWorker
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 
 /** Where the app can be. Each is a back stack entry, kept across process death. */
@@ -122,6 +125,23 @@ private fun NavBackStack<NavKey>.replaceWith(routes: List<Route>) {
     addAll(routes)
 }
 
+/** Drop the pages of `feature` in `project`, which is gone, and every page opened from them. */
+private fun NavBackStack<NavKey>.leave(project: String, feature: String) {
+    val at = indexOfFirst { (it as? Route)?.isOf(project, feature) == true }
+    if (at > 0) repeat(size - at) { removeLastOrNull() }
+}
+
+private fun Route.isOf(project: String, feature: String): Boolean =
+    when (this) {
+        is Route.Scope -> this.project == project && scope == feature
+        is Route.Agent -> this.project == project && scope == feature
+        is Route.Summary -> this.project == project && this.feature == feature
+        is Route.Brief -> this.project == project && this.feature == feature
+        is Route.Details -> this.project == project && this.feature == feature
+        is Route.Output -> this.project == project && scope == feature
+        else -> false
+    }
+
 /**
  * The app's frame and navigation. While shown, it holds the event stream open, and registers for
  * pushes once the server is reached. A `target` from a notification replaces the back stack once
@@ -168,10 +188,27 @@ fun App(
         targetShown()
     }
 
+    val grants by model.lifecycle.grants.collectAsStateWithLifecycle()
+    val acting by model.lifecycle.state.collectAsStateWithLifecycle()
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(model) {
+        model.lifecycle.finished.collect { action ->
+            if (action !is Action.Restart) backStack.leave(action.project, action.subject)
+            launch { snackbar.showSnackbar(action.done) }
+        }
+    }
+    ActionDialog(acting, model.lifecycle::confirm, model.lifecycle::dismiss)
+
     val pairAgain: () -> Unit = { backStack.add(Route.Pair) }
     val (title, subtitle) = top?.heading ?: ("pm" to null)
+    val actions =
+        top?.actions().orEmpty().filter {
+            it !is Action.Merge && it !is Action.Delete ||
+                snapshot?.feature(it.project, it.subject) != null
+        }
     Scaffold(
         modifier = modifier,
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = {
@@ -196,6 +233,14 @@ fun App(
                     }
                 },
                 actions = {
+                    if (actions.isNotEmpty()) {
+                        ActionsMenu(
+                            actions,
+                            grants,
+                            model.lifecycle::refreshGrants,
+                            model.lifecycle::ask,
+                        )
+                    }
                     if (top != Route.Settings && top != Route.Pair) {
                         IconButton(onClick = { backStack.add(Route.Settings) }) {
                             Icon(painterResource(R.drawable.ic_settings), "Settings")
