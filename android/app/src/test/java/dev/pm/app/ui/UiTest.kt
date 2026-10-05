@@ -4,15 +4,18 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.test.assert
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasScrollToIndexAction
-import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import dev.pm.app.SNAPSHOT
 import dev.pm.app.data.Connection
@@ -37,6 +40,8 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
 class UiTest {
@@ -151,15 +156,15 @@ class UiTest {
                 "cargo test",
                 ToolResult("first lines", error = false, truncated = true, full = "r1"),
             )
-        val opened = mutableListOf<Item.Tool>()
-        compose.setContent { PmTheme { ToolCard(tool) { opened.add(it) } } }
+        val opened = mutableListOf<Pair<String, String>>()
+        compose.setContent { PmTheme { ToolCard(tool) { name, ref -> opened.add(name to ref) } } }
         compose.onNodeWithText("first lines").assertDoesNotExist()
         compose.onNodeWithText("Bash").performClick()
         compose.onNodeWithText("first lines").assertIsDisplayed()
         compose.onNodeWithText("first lines").performClick()
         compose.onNodeWithText("first lines").assertIsDisplayed()
         compose.onNodeWithText("Show all").performClick()
-        assertEquals(listOf(tool), opened)
+        assertEquals(listOf("Bash" to "r1"), opened)
     }
 
     @Test
@@ -167,7 +172,7 @@ class UiTest {
         val user = { n: Int -> Item.User("u$n", null, "message $n") }
         var conversation by mutableStateOf(Conversation((0 until 40).map(user)))
         compose.setContent {
-            PmTheme { ChatView(conversation, live = true, older = {}, openResult = {}) }
+            PmTheme { ChatView(conversation, live = true, older = {}, openResult = { _, _ -> }) }
         }
         compose.onNodeWithText("message 39").assertIsDisplayed()
 
@@ -179,5 +184,52 @@ class UiTest {
         compose.onNodeWithText("2 new", useUnmergedTree = true).performClick()
         compose.onNodeWithText("message 42").assertIsDisplayed()
         compose.onNodeWithText("2 new", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun the_chat_follows_again_once_scrolled_back_and_stays_at_its_end_as_the_last_row_grows() {
+        val user = { n: Int -> Item.User("u$n", null, "message $n") }
+        val running = Item.Tool("t", null, "Bash", "cargo test", null)
+        var conversation by mutableStateOf(Conversation((0 until 40).map(user) + running))
+        compose.setContent {
+            PmTheme { ChatView(conversation, live = true, older = {}, openResult = { _, _ -> }) }
+        }
+        val list = compose.onNode(hasScrollToIndexAction())
+        list.performScrollToIndex(0)
+        compose.onNodeWithContentDescription("Go to the end").assertIsDisplayed()
+        list.performScrollToIndex(conversation.items.size)
+        compose.onNodeWithContentDescription("Go to the end").assertDoesNotExist()
+
+        val output = (0 until 60).joinToString("\n") { "line $it" }
+        conversation =
+            conversation.appended(
+                listOf(running.copy(result = ToolResult(output, false, false, null))),
+                null,
+            )
+        compose.onNodeWithText("Bash").performClick()
+        compose.waitForIdle()
+        val range = list.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+        assertEquals("scrolled to the end", range.maxValue(), range.value())
+        compose.onNodeWithContentDescription("Go to the end").assertDoesNotExist()
+    }
+
+    /** At a phone's density, not the 1× that screenshots render at. */
+    @Test
+    @Config(qualifiers = "w360dp-h640dp-440dpi")
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun the_screen_fits_its_widest_row_to_the_width() {
+        val row = "x".repeat(100)
+        compose.setContent { PmTheme { TerminalView("$row\nshort") } }
+        val layouts = mutableListOf<TextLayoutResult>()
+        compose
+            .onNodeWithText(row, substring = true)
+            .fetchSemanticsNode()
+            .config[SemanticsActions.GetTextLayoutResult]
+            .action!!(layouts)
+        val text = layouts.single().size.width
+        val padding = with(compose.density) { 16.dp.roundToPx() }
+        val screen = compose.onRoot().fetchSemanticsNode().size.width - padding
+        assertTrue("$text > $screen", text <= screen)
+        assertTrue("$text < 0.97 × $screen", text >= screen * 0.97f)
     }
 }

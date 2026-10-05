@@ -43,7 +43,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.pm.app.R
 import dev.pm.app.api.PmClient
 import dev.pm.app.model.Conversation
-import dev.pm.app.model.Item
 import java.time.LocalDate
 import java.time.ZoneId
 import kotlinx.coroutines.flow.Flow
@@ -55,7 +54,7 @@ fun AgentScreen(
     scope: String,
     agent: String,
     networkChanges: Flow<Unit>,
-    openResult: (Item.Tool) -> Unit,
+    openResult: (tool: String, ref: String) -> Unit,
     modifier: Modifier = Modifier,
     model: AgentModel = viewModel { AgentModel(client, project, scope, agent, networkChanges) },
 ) {
@@ -78,7 +77,7 @@ fun AgentScreen(
 }
 
 @Composable
-private fun Chat(model: AgentModel, openResult: (Item.Tool) -> Unit) {
+private fun Chat(model: AgentModel, openResult: (tool: String, ref: String) -> Unit) {
     val chat by model.chat.collectAsStateWithLifecycle()
     when (val state = chat) {
         ChatState.Loading -> Centered { CircularProgressIndicator() }
@@ -110,7 +109,7 @@ internal fun ChatView(
     conversation: Conversation,
     live: Boolean,
     older: () -> Unit,
-    openResult: (Item.Tool) -> Unit,
+    openResult: (tool: String, ref: String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val items = conversation.items

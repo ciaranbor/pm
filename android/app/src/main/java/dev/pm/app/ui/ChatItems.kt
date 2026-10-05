@@ -37,7 +37,11 @@ import dev.pm.app.model.Item
 import java.time.LocalDate
 
 @Composable
-internal fun ChatRowView(row: ChatRow, today: LocalDate, openResult: (Item.Tool) -> Unit) {
+internal fun ChatRowView(
+    row: ChatRow,
+    today: LocalDate,
+    openResult: (tool: String, ref: String) -> Unit,
+) {
     when (row) {
         is ChatRow.Day -> DayDivider(dayLabel(row.date, today))
         is ChatRow.Wakes -> Wakes(row.items)
@@ -46,7 +50,7 @@ internal fun ChatRowView(row: ChatRow, today: LocalDate, openResult: (Item.Tool)
 }
 
 @Composable
-private fun ItemView(item: Item, openResult: (Item.Tool) -> Unit) {
+private fun ItemView(item: Item, openResult: (tool: String, ref: String) -> Unit) {
     when (item) {
         is Item.User ->
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -158,10 +162,10 @@ private fun Collapsible(
 
 /**
  * A tool call, collapsed to its name and input. Its header opens it to the result, cut short as pm
- * serves it; "Show all" asks `openResult` for the whole output.
+ * serves it; "Show all" asks `openResult` for the whole output by its `full` reference.
  */
 @Composable
-internal fun ToolCard(tool: Item.Tool, openResult: (Item.Tool) -> Unit) {
+internal fun ToolCard(tool: Item.Tool, openResult: (tool: String, ref: String) -> Unit) {
     var open by rememberSaveable(tool.id) { mutableStateOf(false) }
     val result = tool.result
     Card(Modifier.fillMaxWidth().animateContentSize()) {
@@ -216,8 +220,9 @@ internal fun ToolCard(tool: Item.Tool, openResult: (Item.Tool) -> Unit) {
                         }
                     }
                 }
-                if (result?.truncated == true && result.full != null) {
-                    TextButton(onClick = { openResult(tool) }) { Text("Show all") }
+                val ref = result?.full
+                if (result?.truncated == true && ref != null) {
+                    TextButton(onClick = { openResult(tool.name, ref) }) { Text("Show all") }
                 }
             }
         }

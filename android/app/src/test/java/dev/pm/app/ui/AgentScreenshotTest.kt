@@ -49,7 +49,9 @@ class AgentScreenshotTest {
         )
 
     private fun capture() = captureRoboImage {
-        PmTheme { Surface { ChatView(conversation, live = true, older = {}, openResult = {}) } }
+        PmTheme {
+            Surface { ChatView(conversation, live = true, older = {}, openResult = { _, _ -> }) }
+        }
     }
 
     @Test fun chat_light() = capture()

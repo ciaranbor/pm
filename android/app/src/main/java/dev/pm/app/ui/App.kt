@@ -283,19 +283,16 @@ fun App(
                                     key.scope,
                                     key.agent,
                                     networkChanges,
-                                    openResult = { tool ->
-                                        val ref = tool.result?.full
-                                        if (ref != null) {
-                                            backStack.add(
-                                                Route.Output(
-                                                    key.project,
-                                                    key.scope,
-                                                    key.agent,
-                                                    ref,
-                                                    tool.name,
-                                                )
+                                    openResult = { tool, ref ->
+                                        backStack.add(
+                                            Route.Output(
+                                                key.project,
+                                                key.scope,
+                                                key.agent,
+                                                ref,
+                                                tool,
                                             )
-                                        }
+                                        )
                                     },
                                 )
                             }

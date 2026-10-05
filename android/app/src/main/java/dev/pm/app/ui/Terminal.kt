@@ -48,7 +48,9 @@ fun rememberCellWidth(): Float {
     return remember(measurer, density) {
         val sample = 100
         val size = 10f
-        measurer.measure("0".repeat(sample), terminalStyle(size.sp)).size.width / sample / size
+        measurer.measure("0".repeat(sample), terminalStyle(size.sp)).size.width.toFloat() /
+            sample /
+            size
     }
 }
 
