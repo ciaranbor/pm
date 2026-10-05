@@ -2,16 +2,23 @@ package dev.pm.app.ui
 
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasScrollToIndexAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.test.core.app.ApplicationProvider
 import dev.pm.app.SNAPSHOT
 import dev.pm.app.data.Connection
 import dev.pm.app.data.Repository
 import dev.pm.app.data.Store
+import dev.pm.app.model.Conversation
 import dev.pm.app.model.Item
 import dev.pm.app.model.Pairing
 import dev.pm.app.model.ToolResult
@@ -135,7 +142,7 @@ class UiTest {
     }
 
     @Test
-    fun a_tool_card_opens_to_its_result_and_loads_the_rest_on_request() {
+    fun a_tool_card_opens_from_its_header_and_asks_for_the_whole_output() {
         val tool =
             Item.Tool(
                 "t",
@@ -144,11 +151,33 @@ class UiTest {
                 "cargo test",
                 ToolResult("first lines", error = false, truncated = true, full = "r1"),
             )
-        compose.setContent { PmTheme { ToolCard(tool) { ref -> Result.success("all of $ref") } } }
+        val opened = mutableListOf<Item.Tool>()
+        compose.setContent { PmTheme { ToolCard(tool) { opened.add(it) } } }
         compose.onNodeWithText("first lines").assertDoesNotExist()
         compose.onNodeWithText("Bash").performClick()
         compose.onNodeWithText("first lines").assertIsDisplayed()
+        compose.onNodeWithText("first lines").performClick()
+        compose.onNodeWithText("first lines").assertIsDisplayed()
         compose.onNodeWithText("Show all").performClick()
-        compose.onNodeWithText("all of r1").assertIsDisplayed()
+        assertEquals(listOf(tool), opened)
+    }
+
+    @Test
+    fun the_chat_follows_its_end_until_scrolled_up_then_counts_what_came_since() {
+        val user = { n: Int -> Item.User("u$n", null, "message $n") }
+        var conversation by mutableStateOf(Conversation((0 until 40).map(user)))
+        compose.setContent {
+            PmTheme { ChatView(conversation, live = true, older = {}, openResult = {}) }
+        }
+        compose.onNodeWithText("message 39").assertIsDisplayed()
+
+        conversation = conversation.appended(listOf(user(40)), null)
+        compose.onNodeWithText("message 40").assertIsDisplayed()
+
+        compose.onNode(hasScrollToIndexAction()).performScrollToIndex(0)
+        conversation = conversation.appended(listOf(user(41), user(42)), null)
+        compose.onNodeWithText("2 new", useUnmergedTree = true).performClick()
+        compose.onNodeWithText("message 42").assertIsDisplayed()
+        compose.onNodeWithText("2 new", useUnmergedTree = true).assertDoesNotExist()
     }
 }

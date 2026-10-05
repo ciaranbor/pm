@@ -1,56 +1,52 @@
 package dev.pm.app.ui
 
-import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.mikepenz.markdown.m3.Markdown
+import dev.pm.app.R
 import dev.pm.app.api.PmClient
+import dev.pm.app.model.Conversation
 import dev.pm.app.model.Item
+import java.time.LocalDate
+import java.time.ZoneId
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.launch
 
 @Composable
 fun AgentScreen(
@@ -59,6 +55,7 @@ fun AgentScreen(
     scope: String,
     agent: String,
     networkChanges: Flow<Unit>,
+    openResult: (Item.Tool) -> Unit,
     modifier: Modifier = Modifier,
     model: AgentModel = viewModel { AgentModel(client, project, scope, agent, networkChanges) },
 ) {
@@ -74,14 +71,14 @@ fun AgentScreen(
             Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Screen") })
         }
         when (tab) {
-            0 -> Chat(model)
+            0 -> Chat(model, openResult)
             else -> Screen(model)
         }
     }
 }
 
 @Composable
-private fun Chat(model: AgentModel) {
+private fun Chat(model: AgentModel, openResult: (Item.Tool) -> Unit) {
     val chat by model.chat.collectAsStateWithLifecycle()
     when (val state = chat) {
         ChatState.Loading -> Centered { CircularProgressIndicator() }
@@ -99,26 +96,54 @@ private fun Chat(model: AgentModel) {
                     textAlign = TextAlign.Center,
                 )
             }
-        is ChatState.Shown -> Conversation(model, state)
+        is ChatState.Shown ->
+            ChatView(state.conversation, state.live, older = model::older, openResult = openResult)
     }
 }
 
+/**
+ * The conversation, oldest first, kept at its end while the user is there; scrolled up, a button
+ * counts what has come since and goes back down. Reaching the top asks for `older` items.
+ */
 @Composable
-private fun Conversation(model: AgentModel, state: ChatState.Shown) {
-    val items = state.conversation.items
-    val list = rememberLazyListState()
-    LaunchedEffect(Unit) { if (items.isNotEmpty()) list.scrollToItem(items.size - 1) }
-    LaunchedEffect(items.lastOrNull()?.id) {
-        val atEnd =
-            list.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= items.size - 3 }
-                ?: true
-        if (atEnd && items.isNotEmpty()) list.animateScrollToItem(items.size - 1)
+internal fun ChatView(
+    conversation: Conversation,
+    live: Boolean,
+    older: () -> Unit,
+    openResult: (Item.Tool) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val items = conversation.items
+    val rows = remember(items) { chatRows(items, ZoneId.systemDefault()) }
+    val today = LocalDate.now()
+    val list =
+        rememberLazyListState(
+            initialFirstVisibleItemIndex = rows.size - if (conversation.before == null) 0 else 1
+        )
+    var follow by rememberSaveable { mutableStateOf(true) }
+    var seen by rememberSaveable { mutableStateOf(items.lastOrNull()?.id) }
+    val latest = items.lastOrNull()?.id
+    val askOlder by rememberUpdatedState(older)
+
+    LaunchedEffect(follow, latest) { if (follow) seen = latest }
+    LaunchedEffect(list) {
+        followEnd(
+            // From the layout, as `canScrollForward` is: the state's index moves before it.
+            position = {
+                list.layoutInfo.visibleItemsInfo.firstOrNull()?.let { it.index to it.offset } ?: 0
+            },
+            behind = { list.canScrollForward },
+            following = { follow },
+            setFollowing = { follow = it },
+            toEnd = { list.scrollToEnd() },
+        )
     }
     LaunchedEffect(list) {
-        snapshotFlow { list.firstVisibleItemIndex }.collect { if (it == 0) model.older() }
+        snapshotFlow { list.firstVisibleItemIndex }.collect { if (it == 0) askOlder() }
     }
-    Column(Modifier.fillMaxSize()) {
-        if (!state.live) {
+
+    Column(modifier.fillMaxSize().imePadding()) {
+        if (!live) {
             Text(
                 "Not live: reconnecting",
                 style = MaterialTheme.typography.labelSmall,
@@ -133,135 +158,64 @@ private fun Conversation(model: AgentModel, state: ChatState.Shown) {
             Centered { Text("Nothing said yet.") }
             return
         }
-        LazyColumn(
-            state = list,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            if (state.conversation.before == null) {
-                item(key = "start") { SystemRow("start of the conversation") }
-            }
-            items(items, key = { it.id }) { item -> ItemRow(model, item) }
-        }
-    }
-}
-
-@Composable
-private fun ItemRow(model: AgentModel, item: Item) {
-    when (item) {
-        is Item.User ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                Box(
-                    Modifier.widthIn(max = 320.dp)
-                        .background(
-                            MaterialTheme.colorScheme.primaryContainer,
-                            RoundedCornerShape(12.dp),
-                        )
-                        .padding(10.dp)
-                ) {
-                    SelectionContainer {
-                        Text(item.text, color = MaterialTheme.colorScheme.onPrimaryContainer)
+        Box(Modifier.weight(1f)) {
+            LazyColumn(
+                state = list,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (conversation.before == null) {
+                    item(key = "start", contentType = "start") {
+                        SystemRow("start of the conversation")
                     }
                 }
+                items(rows, key = { it.key }, contentType = { it.contentType }) { row ->
+                    ChatRowView(row, today, openResult)
+                }
             }
-        is Item.Assistant -> SelectionContainer { Markdown(item.text) }
-        is Item.Thinking -> Collapsible(title = "thinking", body = item.text, italic = true)
-        is Item.Tool -> ToolCard(item, model::fullResult)
-        is Item.Continuation -> SystemRow("pm: ${item.text.lineSequence().firstOrNull().orEmpty()}")
-        is Item.Compaction -> SystemRow("context compacted")
-        is Item.Event -> SystemRow(item.text)
-    }
-}
-
-@Composable
-private fun SystemRow(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        textAlign = TextAlign.Center,
-        maxLines = 2,
-        overflow = TextOverflow.Ellipsis,
-        modifier = Modifier.fillMaxWidth(),
-    )
-}
-
-@Composable
-private fun Collapsible(title: String, body: String, italic: Boolean = false) {
-    var open by rememberSaveable { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth().clickable { open = !open }.animateContentSize()) {
-        Text(
-            if (open) "▾ $title" else "▸ $title",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        if (open) {
-            Text(
-                body,
-                style = MaterialTheme.typography.bodySmall,
-                fontStyle = if (italic) FontStyle.Italic else null,
-            )
-        }
-    }
-}
-
-/** A tool call, collapsed to its name and input; open, it shows the result. */
-@Composable
-internal fun ToolCard(tool: Item.Tool, fullResult: suspend (ref: String) -> Result<String>) {
-    var open by rememberSaveable(tool.id) { mutableStateOf(false) }
-    var full by remember(tool.id) { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
-    val result = tool.result
-    Card(Modifier.fillMaxWidth().clickable { open = !open }.animateContentSize()) {
-        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(tool.name, style = MaterialTheme.typography.labelLarge)
-                Text(
-                    when {
-                        result == null -> "  running"
-                        result.error -> "  failed"
-                        else -> ""
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color =
-                        if (result?.error == true) MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Text(
-                tool.input,
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace,
-                maxLines = if (open) Int.MAX_VALUE else 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (open && result != null) {
-                SelectionContainer {
-                    Text(
-                        full ?: result.text,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+            if (!follow) {
+                val unseen = newSince(items, seen)
+                val down = { follow = true }
+                val placed = Modifier.align(Alignment.BottomEnd).padding(16.dp)
+                val arrow = painterResource(R.drawable.ic_arrow_down)
+                if (unseen > 0) {
+                    ExtendedFloatingActionButton(
+                        onClick = down,
+                        icon = { Icon(arrow, null) },
+                        text = { Text("$unseen new") },
+                        modifier = placed,
                     )
-                }
-                val ref = result.full
-                if (result.truncated && ref != null && full == null) {
-                    TextButton(
-                        onClick = {
-                            scope.launch {
-                                full =
-                                    fullResult(ref).getOrElse { "Couldn't load it: ${it.message}" }
-                            }
-                        }
-                    ) {
-                        Text("Show all")
+                } else {
+                    SmallFloatingActionButton(onClick = down, modifier = placed) {
+                        Icon(arrow, "Go to the end")
                     }
                 }
             }
         }
     }
 }
+
+private val ChatRow.contentType: Any
+    get() =
+        when (this) {
+            is ChatRow.Day -> "day"
+            is ChatRow.Wakes -> "wakes"
+            is ChatRow.Single -> item::class
+        }
+
+/** Scroll to the very end: the bottom of the last row, however tall. */
+private suspend fun LazyListState.scrollToEnd() {
+    val last = layoutInfo.totalItemsCount - 1
+    if (last < 0) return
+    scrollToItem(last)
+    repeat(MAX_END_STEPS) {
+        if (!canScrollForward) return
+        scrollBy(layoutInfo.viewportSize.height.toFloat().coerceAtLeast(1f))
+    }
+}
+
+private const val MAX_END_STEPS = 50
 
 @Composable
 private fun Screen(model: AgentModel) {
@@ -276,20 +230,7 @@ private fun Screen(model: AgentModel) {
                     textAlign = TextAlign.Center,
                 )
             }
-        else ->
-            SelectionContainer {
-                Text(
-                    shown.getOrThrow(),
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodySmall,
-                    softWrap = false,
-                    modifier =
-                        Modifier.fillMaxSize()
-                            .verticalScroll(rememberScrollState())
-                            .horizontalScroll(rememberScrollState())
-                            .padding(8.dp),
-                )
-            }
+        else -> TerminalView(shown.getOrThrow())
     }
 }
 

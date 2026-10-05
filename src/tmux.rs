@@ -570,9 +570,10 @@ pub fn capture_pane(server: Option<&str>, window: &str) -> Result<String> {
     )
 }
 
-/// What `pane` shows now, as plain text, wrapped lines joined.
+/// What `pane` shows now, as plain text, row for row: a wrapped line stays
+/// on the rows it was drawn on, so no row is wider than the pane.
 pub fn capture_visible(server: Option<&str>, pane: &str) -> Result<String> {
-    run_tmux_untrimmed(server, &["capture-pane", "-p", "-J", "-t", &exact(pane)])
+    run_tmux_untrimmed(server, &["capture-pane", "-p", "-t", &exact(pane)])
 }
 
 /// Select (focus) a specific window in a session.
@@ -674,6 +675,33 @@ mod tests {
                 .unwrap()
                 .contains("in-the-users-pane")
         );
+    }
+
+    #[test]
+    fn the_visible_screen_keeps_a_wrapped_line_on_the_rows_it_was_drawn_on() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let session = server.scope("wrapped");
+        create_session(server.name(), &session, dir.path()).unwrap();
+        let window = format!("{session}:0");
+        let width: usize = server
+            .tmux_stdout(&["display-message", "-p", "-t", &window, "#{pane_width}"])
+            .parse()
+            .unwrap();
+        send_line(
+            server.name(),
+            &window,
+            &format!("printf '%0{}d\\n' 0", width + 10),
+        )
+        .unwrap();
+        server.wait_for_pane_text(&window, "0000000000");
+
+        let screen = capture_visible(server.name(), &window).unwrap();
+        assert!(
+            screen.lines().all(|l| l.chars().count() <= width),
+            "{screen}"
+        );
+        assert!(screen.lines().any(|l| l == "0".repeat(width)), "{screen}");
     }
 
     #[test]

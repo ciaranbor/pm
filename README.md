@@ -280,7 +280,7 @@ The API is under `/v1`; every path needs the `read` scope, and only
 | `snapshot` | `pm feat status --all --json` ([Attention view](#attention-view)) |
 | `events` | server-sent events: `snapshot` (the snapshot, at connect and on each change), `transition` (`{project, scope, kind, detail, agent}` as a feature or `main` becomes blocked, asking or ready — alerted as tmux alerts — or an agent dies); with `?watch={project}/{scope}/{agent}[&after={cursor}]`, also `transcript` (below); a comment line every 25 s of silence |
 | `features/{project}/{feature}/summary` | the feature's summary, Markdown |
-| `agents/{project}/{scope}/{agent}/screen` | what the agent's pane shows now, plain text |
+| `agents/{project}/{scope}/{agent}/screen` | what the agent's pane shows now, plain text, row for row |
 | `agents/{project}/{scope}/{agent}/transcript?before={cursor}&limit={n}` | the agent's conversation, a page back from `before` (the end when absent); `limit` 1–200, default 50 |
 | `agents/{project}/{scope}/{agent}/transcript/result?ref={full}` | a tool result's whole output, plain text |
 | `push` | `GET`: `{"vapid": <public key>}`, to subscribe against; `PUT` a Web Push subscription (`{"endpoint": <https URL>, "keys": {"p256dh", "auth"}}`) to push to this device; `DELETE` to stop |
