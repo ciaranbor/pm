@@ -18,13 +18,15 @@ use crate::state::project::ProjectEntry;
 use crate::tmux;
 
 use super::transcript::{Agent, DEFAULT_LIMIT, MAX_LIMIT, TranscriptWatch, page_json};
-use super::{Config, input, push};
+use super::{Config, input, notes, push};
 
 pub(super) enum Reply {
     Body {
         status: u16,
         content_type: &'static str,
         body: String,
+        /// The version the body is, sent as its `ETag`.
+        etag: Option<String>,
     },
     /// Hand the connection to an event stream, watching an agent's
     /// conversation if the request named one.
@@ -48,8 +50,8 @@ pub(super) struct Handled {
     pub detail: Option<String>,
 }
 
-const JSON: &str = "application/json";
-const MARKDOWN: &str = "text/markdown; charset=utf-8";
+pub(super) const JSON: &str = "application/json";
+pub(super) const MARKDOWN: &str = "text/markdown; charset=utf-8";
 const TEXT: &str = "text/plain; charset=utf-8";
 
 pub(super) fn error(status: u16, message: &str) -> Reply {
@@ -57,6 +59,7 @@ pub(super) fn error(status: u16, message: &str) -> Reply {
         status,
         content_type: JSON,
         body: serde_json::json!({ "error": message }).to_string(),
+        etag: None,
     }
 }
 
@@ -65,6 +68,7 @@ pub(super) fn json(status: u16, body: serde_json::Value) -> Reply {
         status,
         content_type: JSON,
         body: body.to_string(),
+        etag: None,
     }
 }
 
@@ -73,6 +77,7 @@ fn ok(content_type: &'static str, body: String) -> Reply {
         status: 200,
         content_type,
         body,
+        etag: None,
     }
 }
 
@@ -82,7 +87,10 @@ pub(super) struct Request<'a> {
     pub path: &'a str,
     pub query: &'a str,
     pub authorization: Option<&'a str>,
+    pub if_match: Option<&'a str>,
     pub body: &'a str,
+    /// The body was longer than the server reads; `body` is then empty.
+    pub too_long: bool,
 }
 
 /// Answer `request`; `vapid` is the public key the server signs pushes
@@ -93,7 +101,9 @@ pub(super) fn route(config: &Config, vapid: &str, request: &Request<'_>) -> Hand
         path,
         query,
         authorization,
+        if_match,
         body,
+        too_long,
     } = *request;
     let token = authorization.and_then(bearer);
     let devices = match Devices::load(&config.devices) {
@@ -113,9 +123,27 @@ pub(super) fn route(config: &Config, vapid: &str, request: &Request<'_>) -> Hand
             detail: None,
         };
     };
+    if too_long {
+        let reply = if path.starts_with("/v1/projects/") {
+            notes::too_long()
+        } else {
+            error(413, "the body is too long")
+        };
+        return Handled {
+            device: Some(device.to_string()),
+            reply,
+            detail: None,
+        };
+    }
     let mut detail = None;
     let served = match (method, path) {
         (_, "/v1/push") => push_route(config, vapid, method, device, body),
+        (_, _) if path.starts_with("/v1/projects/") => {
+            notes_route(config, method, path, if_match, body).map(|(reply, written)| {
+                detail = written;
+                reply
+            })
+        }
         ("GET", _) => get(config, path, &Query::parse(query)),
         ("POST", _) if path.starts_with("/v1/agents/") => post(config, path, body).map(|written| {
             detail = Some(written.detail).filter(|d| !d.is_empty());
@@ -147,6 +175,30 @@ fn post(config: &Config, path: &str, body: &str) -> Result<input::Written> {
             reply,
             detail: String::new(),
         }),
+    }
+}
+
+/// `/v1/projects/{project}/notes`: the project's notes, and what a save
+/// wrote, for the request log.
+fn notes_route(
+    config: &Config,
+    method: &str,
+    path: &str,
+    if_match: Option<&str>,
+    body: &str,
+) -> Result<(Reply, Option<String>)> {
+    let segments = segments(path);
+    let segments: Vec<&str> = segments.iter().map(String::as_str).collect();
+    let ["projects", project, "notes"] = segments[..] else {
+        return Ok((error(404, "no such endpoint"), None));
+    };
+    let Some(root) = project_root(config, project)? else {
+        return Ok((error(404, "no such project"), None));
+    };
+    match method {
+        "GET" => Ok((notes::get(&root)?, None)),
+        "PUT" => notes::put(&root, if_match, body),
+        _ => Ok((error(405, "GET and PUT are served here"), None)),
     }
 }
 
@@ -199,6 +251,7 @@ fn no_content() -> Reply {
         status: 204,
         content_type: JSON,
         body: String::new(),
+        etag: None,
     }
 }
 

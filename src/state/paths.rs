@@ -106,6 +106,11 @@ pub fn summary_path(project_root: &Path, feature: &str) -> PathBuf {
     summaries_dir(project_root).join(format!("{feature}.md"))
 }
 
+/// The project's notes: `<project>/.pm/notes.md`.
+pub fn notes_path(project_root: &Path) -> PathBuf {
+    pm_dir(project_root).join("notes.md")
+}
+
 /// The project workflow tier: `<project>/.pm/workflows/`.
 pub fn workflows_dir(project_root: &Path) -> PathBuf {
     pm_dir(project_root).join(WORKFLOWS_DIR_NAME)

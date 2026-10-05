@@ -59,6 +59,7 @@ class UiTest {
     }
 
     @Test
+    @Config(qualifiers = "w360dp-h640dp-440dpi")
     fun a_notification_opens_its_scope_over_the_projects() {
         val store = Store(ApplicationProvider.getApplicationContext())
         // Nothing listens on the discard port: the server is unreachable, as off the tailnet.

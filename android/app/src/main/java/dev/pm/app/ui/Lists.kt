@@ -202,10 +202,17 @@ fun ScopesList(
     project: String,
     now: Instant,
     open: (String) -> Unit,
+    openNotes: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val main = snapshot.project(project)?.main
     LazyColumn(modifier) {
+        item(key = "header") {
+            OutlinedButton(openNotes, Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                Text("Notes")
+            }
+            HorizontalDivider()
+        }
         if (main != null) {
             item(key = "main") {
                 ScopeRow(

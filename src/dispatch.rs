@@ -954,6 +954,11 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             push();
             Ok(())
         }
+        Commands::Notes { project } => {
+            let projects_dir = paths::global_projects_dir()?;
+            let project_root = project_root(&projects_dir, project.as_deref())?;
+            commands::notes::edit(&project_root)
+        }
         Commands::Status { project } => {
             let projects_dir = paths::global_projects_dir()?;
             let project_root = project_root(&projects_dir, project.as_deref())?;

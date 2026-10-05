@@ -13,7 +13,7 @@ docs (`//!`) hold each mechanism. What follows is only what the tree doesn't say
 
 - **Layering** — `cli.rs`/`main.rs`/`dispatch.rs` parse and dispatch,
   `commands/` handlers orchestrate, and all shelling-out is funnelled through
-  the `git/`, `tmux.rs`, `gh.rs` wrappers — never inline in a handler.
+  wrappers (`git/`, `tmux.rs`, `gh.rs`, `editor.rs`, …) — never inline in a handler.
 - **State** (`state/`, TOML) — the pm config dir holds the global registry
   and global config; `<project>/.pm/` is per-project state. Config precedence
   is project > global > unset.

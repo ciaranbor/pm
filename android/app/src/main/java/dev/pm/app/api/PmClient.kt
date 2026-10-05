@@ -3,6 +3,7 @@ package dev.pm.app.api
 import dev.pm.app.model.Dialog
 import dev.pm.app.model.DialogAnswer
 import dev.pm.app.model.FeatureInfo
+import dev.pm.app.model.Notes
 import dev.pm.app.model.Pairing
 import dev.pm.app.model.Snapshot
 import dev.pm.app.model.TranscriptPage
@@ -55,6 +56,9 @@ sealed class PmError(message: String) : Exception(message) {
      * The agent can't take this now; `code` says why (`asking`, `not-at-prompt`, `answered`, …).
      */
     class Refused(val code: String, message: String) : PmError(message)
+
+    /** A save of the notes was refused: they changed since the version it started from. */
+    class NotesChanged(val current: Notes) : PmError("the notes changed since they were read")
 
     class Status(val code: Int, message: String) : PmError(message)
 }
@@ -119,6 +123,40 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
 
     suspend fun summary(project: String, feature: String): String =
         get(url("features", project, feature, "summary"))
+
+    /** The project's notes, with the version a save names. */
+    suspend fun notes(project: String): Notes =
+        call(Request.Builder().url(url("projects", project, "notes")).build()) {
+            Notes(it.body.string(), it.header("ETag").orEmpty().trim('"'))
+        }
+
+    /**
+     * Save `text` as the project's notes if they are still at version `base`; returns the new
+     * version. Throws [PmError.NotesChanged] when they are not.
+     */
+    suspend fun saveNotes(project: String, text: String, base: String): String =
+        call(
+            Request.Builder()
+                .url(url("projects", project, "notes"))
+                .header("If-Match", "\"$base\"")
+                .put(text.toRequestBody(MARKDOWN))
+                .build(),
+            refuse = { response ->
+                if (response.code != 409) return@call null
+                // Read whole, not peeked: it carries the notes, which the terminal can grow
+                // to any length.
+                val body = response.body.string()
+                val changed = runCatching {
+                    json.decodeFromString(Changed.serializer(), body)
+                }
+                    .getOrNull()
+                if (changed?.refused == "changed")
+                    PmError.NotesChanged(Notes(changed.text, changed.version))
+                else PmError.Status(409, changed?.error ?: "HTTP 409")
+            },
+        ) {
+            json.decodeFromString(Saved.serializer(), it.body.string()).version
+        }
 
     suspend fun screen(project: String, scope: String, agent: String): String =
         get(url("agents", project, scope, agent, "screen"))
@@ -274,7 +312,17 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
     private suspend fun post(url: HttpUrl, body: String): String =
         send(Request.Builder().url(url).post(body.toRequestBody(JSON)).build())
 
-    private suspend fun send(request: Request): String =
+    private suspend fun send(request: Request): String = call(request) { it.body.string() }
+
+    /**
+     * `read` from the response to `request` once it succeeds; else the error `refuse` makes of it,
+     * or the general one.
+     */
+    private suspend fun <T> call(
+        request: Request,
+        refuse: (Response) -> PmError? = { null },
+        read: (Response) -> T,
+    ): T =
         withContext(Dispatchers.IO) {
             val response =
                 try {
@@ -282,7 +330,7 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
                 } catch (e: IOException) {
                     throw PmError.Unreachable(e)
                 }
-            response.use { if (it.isSuccessful) it.body.string() else throw failure(it) }
+            response.use { if (it.isSuccessful) read(it) else throw refuse(it) ?: failure(it) }
         }
 
     private fun failure(response: Response): PmError {
@@ -312,8 +360,19 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
 
     @Serializable private data class Subscription(val endpoint: String, val keys: Keys)
 
+    @Serializable private data class Saved(val version: String)
+
+    @Serializable
+    private data class Changed(
+        val error: String? = null,
+        val refused: String? = null,
+        val text: String = "",
+        val version: String = "",
+    )
+
     private companion object {
         val JSON = "application/json".toMediaType()
+        val MARKDOWN = "text/markdown; charset=utf-8".toMediaType()
         const val NO_SUCH_ENDPOINT = "no such endpoint"
         const val NO_CONVERSATION = "the agent has no conversation yet"
         val json = Json { ignoreUnknownKeys = true }

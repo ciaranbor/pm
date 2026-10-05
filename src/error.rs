@@ -154,6 +154,9 @@ pub enum PmError {
     #[error("{0}")]
     Serve(String),
 
+    #[error("editor: {0}")]
+    Editor(String),
+
     #[error("self-update: {0}")]
     SelfUpdate(String),
 
