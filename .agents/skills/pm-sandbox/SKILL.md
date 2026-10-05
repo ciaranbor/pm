@@ -40,6 +40,17 @@ description: Exercise a pm build by hand or end to end without touching the real
 - Every tmux window holds a pty and test runs abort at 300 system-wide. A
   pty-budget failure means leaked sessions; recovery is in `AGENTS.md`
   (Development).
+- Testing the Android app: prefer the headless emulator, `scripts/emulator`
+  (`--help`). It runs beside the user's phone, their installed app and their
+  `pm serve` without touching any of them, and uses its own adb server: drive
+  it through the script (`adb -- …`, or `eval "$(scripts/emulator env)"`),
+  never with a bare `adb`. Usual loop: `up`, `install` the APK
+  (`assembleGoogleDebug`), start `pm serve --port P` in your sandbox
+  (`scripts/sandbox run -- sh -c 'pm serve --port P >serve.log 2>&1 &'`, P not
+  7764, the real server's), `pair -s <sandbox> -p P`, then `tap`, `type`,
+  `ui` and `screenshot`, and `down`. Name it as you name your sandbox (`-n`).
+  Use the phone only for what an emulator lacks (real push, the camera, the
+  user's own install), and only when the user asks.
 - Testing on the Android phone (`adb`): run the session under
   `scripts/phone hold -- <command>` so the phone neither sleeps nor locks
   mid-test, and its setting is put back afterwards even on failure. To hold

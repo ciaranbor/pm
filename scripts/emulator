@@ -1,0 +1,469 @@
+#!/usr/bin/env bash
+# A headless Android emulator for testing the app end to end, isolated from
+# the user's phone and adb. Each named instance has its own AVD, console
+# port and adb server port, recorded under the state dir with the
+# emulator's pid and start time; ANDROID_USER_HOME points into the state
+# dir, so the adb key, AVDs and emulator settings never touch ~/.android.
+# Processes are found only through that record and the emulator's process
+# group, never by pattern.
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/emulator [-n NAME] COMMAND [ARGS]
+
+  setup                 install the emulator and system image into the SDK
+                        (sdkmanager) if missing; `up` runs it
+  up [--wipe]           create the AVD if missing, boot it headless and wait
+                        until booted. It runs until `down`; --wipe boots
+                        with fresh user data
+  down                  shut the emulator down and stop its adb server
+  remove                down, then delete the AVD
+  status                the instance's pids, ports and boot state
+  env                   shell exports pointing plain `adb` at this
+                        instance: eval "$(scripts/emulator env)"
+  adb ARGS...           adb against this instance
+  install APK           install APK, granting its runtime permissions
+  launch                start the pm app
+  reverse PORT          make the emulator's 127.0.0.1:PORT reach the
+                        host's 127.0.0.1:PORT
+  pair -s SANDBOX -p PORT [--device D]
+                        pair the app with a `pm serve --port PORT` already
+                        running in sandbox SANDBOX: reverse PORT, run
+                        `pm serve pair --name D` there (default D:
+                        emulator) and paste the pairing into the app,
+                        which must be on its pair screen
+  ui [FILE]             UI Automator dump of the screen (stdout without FILE)
+  tap [--nth N] TEXT    tap the node whose text or content-desc is exactly
+                        TEXT (a clickable Compose row merges its texts into
+                        one content-desc: read `ui`); when several are,
+                        --nth picks one (dump order)
+  tap [--nth N] --class CLASS
+                        tap the node of class CLASS, likewise
+  type TEXT             type TEXT into the focused field
+  screenshot FILE       save a PNG of the screen
+
+  -n NAME   instance name (default: "default", or $PM_EMULATOR); give each
+            agent its own
+
+The emulator's adb server listens on its own port (never 5037 or 5038), so
+the phone's adb, a forwarded adb server and their devices are untouched;
+inside this script ANDROID_ADB_SERVER_PORT and ANDROID_SERIAL are this
+instance's. The emulator and image come from the Android SDK at
+$ANDROID_HOME (default ~/Library/Android/sdk); `setup` needs its
+cmdline-tools and a JDK (JAVA_HOME, else /usr/libexec/java_home).
+
+Environment:
+  PM_EMULATOR_STATE   state dir (default: ${XDG_STATE_HOME:-~/.local/state}/pm-emulator)
+  PM_EMULATOR_IMAGE   system image package (default: system-images;android-37.0;google_apis;arm64-v8a)
+  PM_EMULATOR_BOOT_TIMEOUT  seconds `up` waits for boot (default: 300)
+USAGE
+}
+
+die() { echo "emulator: $*" >&2; exit 1; }
+
+here=$(cd "$(dirname "$0")/.." && pwd -P)
+self=$here/scripts/$(basename "$0")
+sdk=${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}
+state_root=${PM_EMULATOR_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/pm-emulator}
+image=${PM_EMULATOR_IMAGE:-system-images;android-37.0;google_apis;arm64-v8a}
+boot_timeout=${PM_EMULATOR_BOOT_TIMEOUT:-300}
+package=dev.pm.app
+# Ports the user's own adb servers use: the default, and studio's forwarded one.
+reserved_adb_ports=" 5037 5038 "
+
+name=${PM_EMULATOR:-default}
+if [ "${1:-}" = -n ]; then
+  [ "$#" -ge 2 ] || die "-n needs a value"
+  name=$2
+  shift 2
+fi
+case $name in
+  *[!A-Za-z0-9_-]*|"") die "invalid instance name '$name' (use [A-Za-z0-9_-])" ;;
+esac
+cmd=${1:-}
+[ "$#" -gt 0 ] && shift
+
+dir=$state_root/$name
+android_home=$state_root/android
+avd=pm-$name
+
+# Everything this script runs sees only this instance's adb.
+export ANDROID_USER_HOME=$android_home ANDROID_EMULATOR_HOME=$android_home
+export ANDROID_AVD_HOME=$android_home/avd ANDROID_HOME=$sdk
+unset ANDROID_SDK_ROOT ANDROID_SERIAL
+
+# The start time of PID, empty if it is not running.
+started() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//' || true; }
+
+field() { sed -n "s/^$1=//p" "$dir/instance" 2>/dev/null || true; }
+
+# Whether the recorded emulator is the process running under its pid.
+running() {
+  local pid
+  pid=$(field pid)
+  [ -n "$pid" ] && [ "$(started "$pid")" = "$(field started)" ]
+}
+
+load() {
+  console=$(field console)
+  adb_port=$(field adb_port)
+  serial=emulator-$console
+  [ -n "$console" ] && [ -n "$adb_port" ] || return 1
+  export ANDROID_ADB_SERVER_PORT=$adb_port ANDROID_SERIAL=$serial
+}
+
+require_up() {
+  running && load || die "instance '$name' is not up (scripts/emulator -n $name up)"
+}
+
+adb_bin() {
+  local a=$sdk/platform-tools/adb
+  [ -x "$a" ] || a=$(command -v adb) || die "adb not found in $sdk/platform-tools or on PATH"
+  echo "$a"
+}
+
+eadb() {
+  case $reserved_adb_ports in *" ${ANDROID_ADB_SERVER_PORT:-5037} "*)
+    die "refusing adb on server port ${ANDROID_ADB_SERVER_PORT:-5037}" ;;
+  esac
+  "$adb" "$@"
+}
+
+listening() { lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
+
+# Ports other instances have recorded.
+claimed() {
+  local f
+  for f in "$state_root"/*/instance; do
+    [ -e "$f" ] && [ "$f" != "$dir/instance" ] || continue
+    sed -nE 's/^(console|adb_port)=//p' "$f"
+  done
+}
+
+# The first even console port the adb server scans (5554-5584) whose pair
+# is free, and a free adb server port above the reserved ones.
+pick_ports() {
+  local taken p
+  taken=" $(claimed | tr '\n' ' ') "
+  console=""
+  for p in $(seq 5554 2 5584); do
+    case $taken in *" $p "*) continue ;; esac
+    listening "$p" || listening "$((p + 1))" || { console=$p; break; }
+  done
+  [ -n "$console" ] || die "no free emulator console port in 5554-5585"
+  adb_port=""
+  for p in $(seq 5040 5099); do
+    case $taken$reserved_adb_ports in *" $p "*) continue ;; esac
+    listening "$p" || { adb_port=$p; break; }
+  done
+  [ -n "$adb_port" ] || die "no free adb server port in 5040-5099"
+}
+
+java_home() {
+  if [ -n "${JAVA_HOME:-}" ]; then echo "$JAVA_HOME"; return; fi
+  /usr/libexec/java_home 2>/dev/null && return
+  [ -x /opt/homebrew/opt/openjdk@21/bin/java ] && echo /opt/homebrew/opt/openjdk@21 && return
+  die "no JDK found: set JAVA_HOME"
+}
+
+image_dir() { echo "$sdk/${image//;//}"; }
+
+setup() {
+  local want=() tools=$sdk/cmdline-tools/latest/bin
+  [ -x "$sdk/emulator/emulator" ] || want+=(emulator)
+  [ -f "$(image_dir)/system.img" ] || want+=("$image")
+  [ ${#want[@]} -gt 0 ] || return 0
+  [ -x "$tools/sdkmanager" ] \
+    || die "missing ${want[*]} and no $tools/sdkmanager: install Android's cmdline-tools there"
+  echo "emulator: installing ${want[*]}" >&2
+  { yes || true; } | JAVA_HOME=$(java_home) "$tools/sdkmanager" --sdk_root="$sdk" --install "${want[@]}" >/dev/null
+}
+
+# A Pixel-sized AVD written directly, so creating one needs no JDK.
+create_avd() {
+  local path=$ANDROID_AVD_HOME/$avd.avd target tag
+  IFS=';' read -r _ target tag _ <<<"$image"
+  [ -f "$path/config.ini" ] && return 0
+  mkdir -p "$path"
+  cat > "$path/config.ini" <<EOF
+AvdId=$avd
+avd.ini.displayname=$avd
+abi.type=arm64-v8a
+hw.cpu.arch=arm64
+hw.cpu.ncore=4
+hw.ramSize=4096
+disk.dataPartition.size=6G
+hw.lcd.width=1080
+hw.lcd.height=2400
+hw.lcd.density=420
+hw.keyboard=yes
+hw.gpu.enabled=yes
+hw.gpu.mode=swiftshader_indirect
+hw.audioInput=no
+hw.audioOutput=no
+hw.camera.back=emulated
+hw.camera.front=none
+fastboot.forceColdBoot=yes
+image.sysdir.1=${image//;//}/
+tag.id=$tag
+EOF
+  printf 'avd.ini.encoding=UTF-8\npath=%s\npath.rel=avd/%s.avd\ntarget=%s\n' \
+    "$path" "$avd" "$target" > "$ANDROID_AVD_HOME/$avd.ini"
+}
+
+up() {
+  local wipe=0 pid log booted="" i
+  while [ "$#" -gt 0 ]; do
+    case $1 in
+      --wipe) wipe=1; shift ;;
+      *) usage >&2; die "unexpected argument: $1" ;;
+    esac
+  done
+  running && die "instance '$name' is already up ($(field serial)); down first"
+  # What a crashed run left: its helpers and adb server.
+  [ ! -f "$dir/instance" ] || down
+  setup
+  mkdir -p "$dir" "$ANDROID_AVD_HOME"
+  create_avd
+  # Ports are picked and recorded under a lock, so concurrent `up`s never
+  # pick the same ones. The lock is a flock held by perl, so the kernel
+  # drops it if the holder dies.
+  perl -MFcntl=:flock -e '
+    open(my $f, ">>", shift) or die "emulator: lock: $!\n";
+    flock($f, LOCK_EX) or die "emulator: lock: $!\n";
+    system(@ARGV) == -1 and die "emulator: $!\n";
+    exit($? & 127 ? 1 : $? >> 8);
+  ' "$state_root/lock" "$self" -n "$name" _claim
+  load || die "no ports recorded for '$name'"
+  # Started first, so the emulator registers with it as it boots.
+  eadb start-server >/dev/null 2>&1 || die "cannot start an adb server on port $adb_port"
+  log=$dir/emulator.log
+  local args=(-avd "$avd" -port "$console" -no-window -no-audio -no-boot-anim
+    -no-snapshot -accel on -gpu swiftshader_indirect -netdelay none
+    -netspeed full)
+  [ "$wipe" = 0 ] || args+=(-wipe-data)
+  # In its own session, so it outlives the caller and its process group
+  # holds every helper it starts. Its own TMPDIR keeps its helpers its own:
+  # netsimd advertises itself in $TMPDIR/netsim.ini, and another emulator
+  # finding it there would share it.
+  rm -rf "$dir/tmp"
+  mkdir -p "$dir/tmp"
+  TMPDIR=$dir/tmp perl -MPOSIX=setsid -e 'setsid; exec @ARGV or die "emulator: $!\n"' \
+    "$sdk/emulator/emulator" "${args[@]}" </dev/null >"$log" 2>&1 &
+  pid=$!
+  printf 'pid=%s\nstarted=%s\nconsole=%s\nadb_port=%s\nserial=%s\n' \
+    "$pid" "$(started "$pid")" "$console" "$adb_port" "$serial" > "$dir/instance"
+  echo "emulator: booting $serial (pid $pid, adb server port $adb_port, log $log)" >&2
+  for (( i = 0; i < boot_timeout; i++ )); do
+    if ! running; then
+      tail -n 20 "$log" >&2 || true
+      down >/dev/null 2>&1 || true
+      die "the emulator exited while booting (log above)"
+    fi
+    booted=$(eadb -s "$serial" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r') || booted=""
+    [ "$booted" = 1 ] && break
+    sleep 1
+  done
+  if [ "$booted" != 1 ]; then
+    down >/dev/null 2>&1 || true
+    die "not booted after ${boot_timeout}s (log: $log)"
+  fi
+  eadb shell svc power stayon true >/dev/null 2>&1 || true
+  eadb shell wm dismiss-keyguard >/dev/null 2>&1 || true
+  echo "emulator: $serial up" >&2
+}
+
+# Wait up to SECONDS for the recorded emulator to exit.
+exited_within() {
+  local i
+  for (( i = 0; i < $1 * 10; i++ )); do
+    running || return 0
+    sleep 0.1
+  done
+  return 1
+}
+
+down() {
+  local pid loaded
+  if [ ! -f "$dir/instance" ]; then
+    echo "emulator: no instance '$name'" >&2
+    return 0
+  fi
+  loaded=1
+  load || loaded=0
+  pid=$(field pid)
+  if running; then
+    [ "$loaded" = 0 ] || eadb -s "$serial" emu kill >/dev/null 2>&1 || true
+    if ! exited_within 30; then
+      kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+      exited_within 10 || kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+    fi
+  fi
+  # Helpers left in the emulator's process group. A group outlives its
+  # leader only while it has members, so its id is not reused until they
+  # are gone; a live process under the pid that is not the recorded one
+  # leads someone else's group.
+  if [ -n "$pid" ] && { [ -z "$(started "$pid")" ] || running; }; then
+    kill -TERM -- "-$pid" 2>/dev/null || true
+  fi
+  [ "$loaded" = 0 ] || eadb kill-server >/dev/null 2>&1 || true
+  rm -f "$dir/instance"
+  echo "emulator: '$name' down" >&2
+}
+
+remove() {
+  down
+  rm -rf "${ANDROID_AVD_HOME:?}/$avd.avd" "$ANDROID_AVD_HOME/$avd.ini" "$dir"
+  echo "emulator: '$name' removed" >&2
+}
+
+status() {
+  if ! running; then
+    echo "instance: $name (down)"
+    return 0
+  fi
+  load
+  echo "instance:  $name"
+  echo "serial:    $serial"
+  echo "pid:       $(field pid)"
+  echo "adb port:  $adb_port"
+  echo "booted:    $(eadb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || echo '?')"
+  echo "log:       $dir/emulator.log"
+}
+
+# The centers, as "X Y" lines, of the nodes in the screen's UI dump whose
+# ATTRS (a |-separated list) include one equal to VALUE.
+centers() {
+  eadb shell uiautomator dump /sdcard/pm-ui.xml >/dev/null
+  eadb exec-out cat /sdcard/pm-ui.xml | perl -0ne '
+    BEGIN { ($attrs, $want) = splice @ARGV, 0, 2; %want = map { $_ => 1 } split /\|/, $attrs }
+    sub unescape { my $s = shift; $s =~ s/&lt;/</g; $s =~ s/&gt;/>/g; $s =~ s/&quot;/"/g;
+      $s =~ s/&apos;/\x27/g; $s =~ s/&#(\d+);/chr $1/ge; $s =~ s/&amp;/&/g; $s }
+    while (/<node\b([^>]*)>/g) {
+      my $node = $1;
+      my %a = map { $_->[0] => unescape($_->[1]) } map { [/([\w-]+)="([^"]*)"/] } $node =~ /[\w-]+="[^"]*"/g;
+      next unless grep { $want{$_} && $a{$_} eq $want } keys %a;
+      $a{bounds} =~ /\[(\d+),(\d+)\]\[(\d+),(\d+)\]/ or next;
+      printf "%d %d\n", ($1 + $3) / 2, ($2 + $4) / 2;
+    }
+  ' "$1" "$2"
+}
+
+tap() {
+  local attrs="text|content-desc" value="" nth="" found count xy
+  while [ "$#" -gt 0 ]; do
+    case $1 in
+      --class) [ "$#" -ge 2 ] || die "--class needs a value"; attrs=class; value=$2; shift 2 ;;
+      --nth) [ "$#" -ge 2 ] || die "--nth needs a value"; nth=$2; shift 2 ;;
+      *) [ -z "$value" ] || die "tap takes one TEXT (quote text with spaces)"; value=$1; shift ;;
+    esac
+  done
+  [ -n "$value" ] || die "tap: no text"
+  case $nth in *[!0-9]*) die "--nth takes a number" ;; esac
+  found=$(centers "$attrs" "$value")
+  count=$(grep -c . <<<"$found" || true)
+  [ "$count" -gt 0 ] || die "no node with ${attrs//|/ or } '$value' on screen"
+  if [ -z "$nth" ]; then
+    [ "$count" -eq 1 ] || die "$count nodes with ${attrs//|/ or } '$value' on screen: pick one with --nth N (in dump order)"
+    nth=1
+  fi
+  xy=$(sed -n "${nth}p" <<<"$found")
+  [ -n "$xy" ] || die "only $count nodes with ${attrs//|/ or } '$value' on screen"
+  # shellcheck disable=SC2086
+  eadb shell input tap $xy
+}
+
+# `input text` reads %s as a space and runs through the device's shell.
+type_text() {
+  local t=${1// /%s}
+  t=${t//\'/\'\\\'\'}
+  eadb shell "input text '$t'"
+}
+
+pair() {
+  local sandbox="" port="" device=emulator out url token json
+  while [ "$#" -gt 0 ]; do
+    case $1 in
+      -s) [ "$#" -ge 2 ] || die "-s needs a value"; sandbox=$2; shift 2 ;;
+      -p) [ "$#" -ge 2 ] || die "-p needs a value"; port=$2; shift 2 ;;
+      --device) [ "$#" -ge 2 ] || die "--device needs a value"; device=$2; shift 2 ;;
+      *) usage >&2; die "unexpected argument: $1" ;;
+    esac
+  done
+  [ -n "$sandbox" ] && [ -n "$port" ] || die "pair needs -s SANDBOX and -p PORT"
+  case $device in *[\"\]*|"") die "--device: a name without quotes or backslashes" ;; esac
+  case $port in *[!0-9]*) die "-p takes a port number" ;; esac
+  # The scanner's preview would push the paste field off screen, and
+  # nothing can show the emulated camera a QR code.
+  eadb shell pm revoke "$package" android.permission.CAMERA 2>/dev/null || true
+  launch
+  on_screen class android.widget.EditText 15 \
+    || die "the app is not on its pair screen (already paired? \`scripts/emulator adb shell pm clear $package\` resets it)"
+  eadb reverse "tcp:$port" "tcp:$port" >/dev/null
+  out=$("$here/scripts/sandbox" -n "$sandbox" run -- \
+    pm serve pair --name "$device" --url "http://127.0.0.1:$port") \
+    || die "pm serve pair failed in sandbox '$sandbox'"
+  url=$(sed -n 's/^url: *//p' <<<"$out")
+  token=$(sed -n 's/^token: *//p' <<<"$out")
+  [ -n "$url" ] && [ -n "$token" ] || die "no url and token in pm serve pair's output"
+  json=$(printf '{"url":"%s","device":"%s","token":"%s"}' "$url" "$device" "$token")
+  tap --class android.widget.EditText
+  type_text "$json"
+  # The button; the first "Pair" in dump order.
+  tap --nth 1 Pair
+  on_screen text "Pair with pm serve" 15 0 \
+    || die "still on the pair screen after pairing (scripts/emulator screenshot to see why)"
+  echo "emulator: paired as '$device' with $url" >&2
+}
+
+# Whether, within SECONDS, a node whose ATTR is VALUE is on screen (with a
+# fourth argument 0: is gone).
+on_screen() {
+  local i want=${4:-1} have
+  for (( i = 0; i < $3; i++ )); do
+    have=0
+    [ -z "$(centers "$1" "$2")" ] || have=1
+    [ "$have" != "$want" ] || return 0
+    sleep 1
+  done
+  return 1
+}
+
+launch() {
+  eadb shell am start -W -n "$package/.MainActivity" >/dev/null
+}
+
+case $cmd in
+  -h|--help|help) usage; exit 0 ;;
+  "") usage >&2; exit 2 ;;
+esac
+
+adb=$(adb_bin)
+case $cmd in
+  _claim) mkdir -p "$dir"; pick_ports
+          printf 'console=%s\nadb_port=%s\nserial=emulator-%s\n' "$console" "$adb_port" "$console" \
+            > "$dir/instance" ;;
+  setup) setup ;;
+  up) up "$@" ;;
+  down) down ;;
+  remove) remove ;;
+  status) status ;;
+  env) require_up
+       printf 'export ANDROID_ADB_SERVER_PORT=%s ANDROID_SERIAL=%s\n' "$adb_port" "$serial" ;;
+  adb) require_up; eadb "$@" ;;
+  install) require_up; [ "$#" -eq 1 ] || die "install APK"; eadb install -r -g "$1" ;;
+  launch) require_up; launch ;;
+  reverse) require_up; [ "$#" -eq 1 ] || die "reverse PORT"
+           eadb reverse "tcp:$1" "tcp:$1" >/dev/null ;;
+  pair) require_up; pair "$@" ;;
+  ui) require_up
+      eadb shell uiautomator dump /sdcard/pm-ui.xml >/dev/null
+      if [ "$#" -ge 1 ]; then eadb exec-out cat /sdcard/pm-ui.xml > "$1"
+      else eadb exec-out cat /sdcard/pm-ui.xml; echo; fi ;;
+  tap) require_up; tap "$@" ;;
+  type) require_up; [ "$#" -eq 1 ] || die "type TEXT"; type_text "$1" ;;
+  screenshot) require_up; [ "$#" -eq 1 ] || die "screenshot FILE"
+              eadb exec-out screencap -p > "$1" ;;
+  *) usage >&2; die "unknown command: $cmd" ;;
+esac
