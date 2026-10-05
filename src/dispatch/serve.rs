@@ -46,19 +46,6 @@ pub(super) fn dispatch_serve(
             println!("Revoked {device}.");
             Ok(())
         }
-        Some(ServeCommands::Grant {
-            device,
-            grant,
-            remove,
-        }) => {
-            Devices::update(&devices, |paired| paired.grant(&device, grant, !remove))?;
-            if remove {
-                println!("Withdrew {grant} from {device}.");
-            } else {
-                println!("Granted {device} {grant}.");
-            }
-            Ok(())
-        }
         Some(ServeCommands::Install {
             port,
             no_tailscale,

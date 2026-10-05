@@ -3,9 +3,7 @@ package dev.pm.app.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -41,36 +39,14 @@ fun Route.actions(): List<Action> =
         else -> emptyList()
     }
 
-/**
- * The top bar's overflow, holding `actions`; asks the server what this device was granted as it
- * opens, and says how to grant what it lacks.
- */
+/** The top bar's overflow, holding `actions`. */
 @Composable
-fun ActionsMenu(
-    actions: List<Action>,
-    grants: Grants,
-    refreshGrants: () -> Unit,
-    ask: (Action) -> Unit,
-    modifier: Modifier = Modifier,
-) =
+fun ActionsMenu(actions: List<Action>, ask: (Action) -> Unit, modifier: Modifier = Modifier) =
     Box(modifier) {
         var open by remember { mutableStateOf(false) }
-        IconButton(
-            onClick = {
-                refreshGrants()
-                open = true
-            }
-        ) {
+        IconButton(onClick = { open = true }) {
             Icon(painterResource(R.drawable.ic_more_vert), "More actions")
         }
-        val why =
-            when (grants) {
-                is Grants.NotGranted ->
-                    "This phone may not merge, delete or restart. On the Mac, run " +
-                        grantCommand(grants.device)
-                Grants.Unsupported -> Lifecycle.UNSUPPORTED
-                else -> null
-            }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             actions.forEach { action ->
                 if (action is Action.Delete) HorizontalDivider()
@@ -79,25 +55,14 @@ fun ActionsMenu(
                         Text(
                             action.verb,
                             color =
-                                if (action is Action.Delete && why == null)
-                                    MaterialTheme.colorScheme.error
+                                if (action is Action.Delete) MaterialTheme.colorScheme.error
                                 else Color.Unspecified,
                         )
                     },
-                    enabled = why == null,
                     onClick = {
                         open = false
                         ask(action)
                     },
-                )
-            }
-            if (why != null) {
-                Text(
-                    why,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier =
-                        Modifier.widthIn(max = 280.dp).padding(horizontal = 12.dp, vertical = 8.dp),
                 )
             }
         }

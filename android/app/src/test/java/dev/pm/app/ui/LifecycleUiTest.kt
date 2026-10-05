@@ -1,7 +1,6 @@
 package dev.pm.app.ui
 
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -36,7 +35,6 @@ class LifecycleUiTest {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val server = MockWebServer()
-    @Volatile private var grants = "[]"
     private val posted = mutableListOf<String>()
 
     @Before
@@ -49,7 +47,6 @@ class LifecycleUiTest {
                         MockResponse.Builder().code(code).body(body).build()
                     }
                     return when {
-                        path == "/v1/device" -> reply(200, """{"name":"pixel","grants":$grants}""")
                         request.method == "POST" -> {
                             synchronized(posted) { posted += path }
                             reply(200, "{}")
@@ -78,23 +75,7 @@ class LifecycleUiTest {
     }
 
     @Test
-    fun without_the_grant_the_actions_are_off_and_say_how_to_grant_it() {
-        open(Target("app", "login", null))
-
-        compose.onNodeWithContentDescription("More actions").performClick()
-        compose.waitUntil(5_000) {
-            compose
-                .onAllNodesWithText("pm serve grant pixel lifecycle", substring = true)
-                .fetchSemanticsNodes()
-                .isNotEmpty()
-        }
-        compose.onNodeWithText("Merge").assertIsNotEnabled()
-        compose.onNodeWithText("Delete").assertIsNotEnabled()
-    }
-
-    @Test
     fun a_confirmed_merge_leaves_the_feature_for_its_project() {
-        grants = """["lifecycle"]"""
         open(Target("app", "login", null))
 
         compose.onNodeWithContentDescription("More actions").performClick()
@@ -115,7 +96,6 @@ class LifecycleUiTest {
 
     @Test
     fun an_agent_restarts_from_its_page_without_confirming() {
-        grants = """["lifecycle"]"""
         open(Target("app", "login", "implementer"))
 
         compose.onNodeWithContentDescription("More actions").performClick()

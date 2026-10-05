@@ -1,7 +1,6 @@
 //! The lifecycle endpoints: merge and delete a feature, restart an agent,
-//! through the handlers the CLI runs, for a device granted
-//! [`Grant::Lifecycle`]. A handler's refusal reaches the device as the CLI
-//! words it.
+//! through the handlers the CLI runs. A handler's refusal reaches the
+//! device as the CLI words it.
 //!
 //! Each runs to its end within the request, whether or not the device is
 //! still there to hear how it went. The post-merge hook doesn't hold it:
@@ -15,28 +14,11 @@ use std::path::Path;
 
 use crate::commands::{agent_restart, feat_delete, feat_merge, tmux_push};
 use crate::error::{PmError, Result};
-use crate::state::devices::{Device, Grant};
 
 use super::Config;
 use super::input::Written;
 use super::routes::{error, json};
 use super::transcript::Agent;
-
-/// The refusal for a device that lacks `grant`, which names how to grant
-/// it; `None` when it holds it.
-pub(super) fn ungranted(name: &str, device: &Device, grant: Grant) -> Option<Written> {
-    if device.grants.contains(&grant) {
-        return None;
-    }
-    let body = serde_json::json!({
-        "error": format!("this device may not do that: `pm serve grant {name} {grant}` lets it"),
-        "missing": grant.to_string(),
-    });
-    Some(Written {
-        reply: json(403, body),
-        detail: format!("missing {grant}"),
-    })
-}
 
 /// `POST features/{project}/{feature}/{merge|delete}` for the feature
 /// `feature` of the project at `root`.
@@ -125,78 +107,19 @@ fn finish(config: &Config, action: &str, done: Result<serde_json::Value>) -> Res
 #[cfg(test)]
 mod tests {
     use super::super::tests::{call, fixture, pair};
-    use crate::state::devices::{Devices, Grant};
     use crate::state::feature::FeatureState;
     use crate::state::paths;
     use crate::testing::TestServer;
     use crate::tmux;
-
-    fn grant(f: &super::super::tests::Fixture, device: &str) {
-        Devices::update(&f.config.devices, |d| {
-            d.grant(device, Grant::Lifecycle, true)
-        })
-        .unwrap();
-    }
 
     fn body(reply: &str) -> serde_json::Value {
         serde_json::from_str(reply).unwrap()
     }
 
     #[test]
-    fn a_device_without_the_lifecycle_grant_is_refused_and_told_how_to_get_it() {
-        let f = fixture();
-        let phone = pair(&f.config, "phone");
-        let p = &f.project_name;
-        let session = tmux::session_name(p, "login");
-        f.server
-            .spawn_idle_fake_agent(&f.project, &session, "login", "implementer");
-
-        let (status, device) = call(&f.config, "GET", "/v1/device", &phone, "");
-        assert_eq!(status, 200);
-        assert_eq!(
-            body(&device),
-            serde_json::json!({"name": "phone", "grants": []})
-        );
-        for path in [
-            format!("/v1/features/{p}/login/merge"),
-            format!("/v1/features/{p}/login/delete"),
-            format!("/v1/agents/{p}/login/implementer/restart"),
-        ] {
-            let (status, reply) = call(&f.config, "POST", &path, &phone, "{}");
-            assert_eq!(status, 403, "{path}: {reply}");
-            let reply = body(&reply);
-            assert_eq!(reply["missing"], "lifecycle");
-            assert!(
-                reply["error"]
-                    .as_str()
-                    .unwrap()
-                    .contains("pm serve grant phone lifecycle"),
-                "{reply}"
-            );
-        }
-        assert!(FeatureState::load(&paths::features_dir(&f.project), "login").is_ok());
-        let (status, _) = call(
-            &f.config,
-            "POST",
-            &format!("/v1/features/{p}/ghost/merge"),
-            &phone,
-            "",
-        );
-        assert_eq!(
-            status, 404,
-            "what doesn't exist is not hidden behind the grant"
-        );
-
-        grant(&f, "phone");
-        let (_, device) = call(&f.config, "GET", "/v1/device", &phone, "");
-        assert_eq!(body(&device)["grants"], serde_json::json!(["lifecycle"]));
-    }
-
-    #[test]
     fn a_merge_is_refused_as_the_cli_words_it_until_the_work_is_committed() {
         let f = fixture();
         let phone = pair(&f.config, "phone");
-        grant(&f, "phone");
         let merge = format!("/v1/features/{}/login/merge", f.project_name);
         TestServer::add_feature_commit(&f.project, "login");
         std::fs::write(f.project.join("login/wip.txt"), "draft").unwrap();
@@ -231,8 +154,13 @@ mod tests {
     fn a_delete_of_unmerged_work_is_refused() {
         let f = fixture();
         let phone = pair(&f.config, "phone");
-        grant(&f, "phone");
         TestServer::add_feature_commit(&f.project, "login");
+        let ghost = format!("/v1/features/{}/ghost/delete", f.project_name);
+        let (status, reply) = call(&f.config, "POST", &ghost, &phone, "");
+        assert_eq!(
+            (status, body(&reply)["error"].as_str()),
+            (404, Some("no such feature"))
+        );
 
         let delete = format!("/v1/features/{}/login/delete", f.project_name);
         let (status, reply) = call(&f.config, "POST", &delete, &phone, "");
@@ -248,7 +176,6 @@ mod tests {
     fn a_restart_refuses_a_mid_turn_agent_unless_forced_and_moves_no_client() {
         let f = fixture();
         let phone = pair(&f.config, "phone");
-        grant(&f, "phone");
         let session = tmux::session_name(&f.project_name, "login");
         f.server
             .spawn_fake_agent(&f.project, &session, "login", "implementer");
@@ -290,7 +217,6 @@ mod tests {
     fn a_conflicting_merge_is_refused_aborted_and_leaves_the_feature() {
         let f = fixture();
         let phone = pair(&f.config, "phone");
-        grant(&f, "phone");
         let main = paths::main_worktree(&f.project);
         for (repo, text) in [(main.clone(), "main"), (f.project.join("login"), "feature")] {
             std::fs::write(repo.join("shared.txt"), text).unwrap();

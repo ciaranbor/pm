@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 
-/** What the app can ask `pm serve` to do to a feature or an agent, with the `lifecycle` grant. */
+/** What the app can ask `pm serve` to do to a feature or an agent. */
 sealed interface Action {
     val project: String
 
@@ -41,20 +41,6 @@ sealed interface Action {
         override val subject = agent
         override val verb = "Restart"
     }
-}
-
-/** Whether this device may merge, delete and restart. */
-sealed interface Grants {
-    /** Not asked yet, or the server couldn't be reached: an action finds out. */
-    data object Unknown : Grants
-
-    data object Granted : Grants
-
-    /** The device lacks the grant; `device` is its name, which the grant command takes. */
-    data class NotGranted(val device: String) : Grants
-
-    /** The server predates grants. */
-    data object Unsupported : Grants
 }
 
 /** Where an action stands. */
@@ -86,18 +72,12 @@ enum class Outcome {
     Broken,
 }
 
-/** The command that grants this device lifecycle actions, run on the Mac. */
-fun grantCommand(device: String) = "pm serve grant $device lifecycle"
-
 /**
  * Lifecycle actions: confirmed where they destroy or interrupt, run one at a time, with their
  * refusals kept as the server words them. A merge or delete that went through is sent on
  * [finished].
  */
 class Lifecycle(private val scope: CoroutineScope, private val client: () -> PmClient?) {
-    private val _grants = MutableStateFlow<Grants>(Grants.Unknown)
-    val grants: StateFlow<Grants> = _grants.asStateFlow()
-
     private val _state = MutableStateFlow<ActionState>(ActionState.Idle)
     val state: StateFlow<ActionState> = _state.asStateFlow()
 
@@ -105,25 +85,6 @@ class Lifecycle(private val scope: CoroutineScope, private val client: () -> PmC
 
     /** Each action that went through, once. */
     val finished: Flow<Action> = _finished.receiveAsFlow()
-
-    /** Ask the server what this device was granted. */
-    fun refreshGrants() {
-        val client = client() ?: return
-        scope.launch {
-            _grants.value =
-                try {
-                    when (val device = client.device()) {
-                        null -> Grants.Unsupported
-                        else ->
-                            if (device.lifecycle) Grants.Granted else Grants.NotGranted(device.name)
-                    }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    Grants.Unknown
-                }
-        }
-    }
 
     /** Start `action` from its menu: a restart runs at once, a merge or delete asks first. */
     fun ask(action: Action) {
@@ -162,12 +123,7 @@ class Lifecycle(private val scope: CoroutineScope, private val client: () -> PmC
                     if (action is Action.Restart && e.code == MID_TURN && !action.force)
                         ActionState.Confirming(action.copy(force = true))
                     else ActionState.Failed(action, e.message.orEmpty())
-                } catch (e: PmError.Forbidden) {
-                    _grants.value = Grants.Unknown
-                    refreshGrants()
-                    ActionState.Failed(action, e.message.orEmpty())
                 } catch (e: PmError.Unsupported) {
-                    _grants.value = Grants.Unsupported
                     ActionState.Failed(action, UNSUPPORTED)
                 } catch (e: PmError.Unreachable) {
                     ActionState.Failed(action, UNREACHABLE, Outcome.Lost)

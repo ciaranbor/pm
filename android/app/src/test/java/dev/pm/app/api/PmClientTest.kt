@@ -226,34 +226,19 @@ class PmClientTest {
     }
 
     @Test
-    fun lifecycle_actions_are_posted_and_a_missing_grant_is_told_apart() = runBlocking {
-        reply(200, """{"name":"pixel","grants":["lifecycle"]}""")
-        reply(404, """{"error":"no such endpoint"}""")
+    fun lifecycle_actions_are_posted_and_a_refusal_is_told_apart() = runBlocking {
         reply(200, """{"merged":true}""")
-        reply(
-            403,
-            """{"error":"this device may not do that: `pm serve grant pixel lifecycle` lets it","missing":"lifecycle"}""",
-        )
+        reply(200, """{"deleted":true}""")
         reply(409, """{"error":"agent 'implementer' is mid-turn","refused":"mid-turn"}""")
 
-        assertEquals(DeviceInfo("pixel", listOf("lifecycle")), client.device())
-        assertNull("a server without grants", client.device())
         client.merge("app", "login")
-        val forbidden = runCatching { client.delete("app", "login") }.exceptionOrNull()
-        assertTrue(
-            "$forbidden",
-            forbidden is PmError.Forbidden &&
-                forbidden.missing == "lifecycle" &&
-                forbidden.message!!.contains("pm serve grant pixel lifecycle"),
-        )
+        client.delete("app", "login")
         val busy = runCatching {
             client.restart("app", "login", "implementer", force = true)
         }
             .exceptionOrNull()
         assertTrue("$busy", busy is PmError.Refused && busy.code == "mid-turn")
 
-        assertEquals("/v1/device", server.takeRequest().url.encodedPath)
-        server.takeRequest()
         val merged = server.takeRequest()
         assertEquals("POST", merged.method)
         assertEquals("/v1/features/app/login/merge", merged.url.encodedPath)
