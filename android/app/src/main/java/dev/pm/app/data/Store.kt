@@ -3,11 +3,14 @@ package dev.pm.app.data
 import android.content.Context
 import androidx.core.content.edit
 import dev.pm.app.model.Pairing
+import dev.pm.app.model.PushedTransition
 import java.io.File
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
 
 /**
  * What the app keeps on the phone: the pairing, the last snapshot (shown while the server can't be
- * reached), and the push subscription, kept until the server has it.
+ * reached), the push subscription, what polling last alerted, and the update check's settings.
  */
 class Store(context: Context) {
     private val prefs = context.getSharedPreferences("pm", Context.MODE_PRIVATE)
@@ -64,7 +67,35 @@ class Store(context: Context) {
             }
         }
 
+    /** The alerts polling made whose condition held as it last read; `null` before it has read. */
+    var polled: Set<PushedTransition>?
+        get() =
+            prefs.getString(POLLED, null)?.let {
+                runCatching { json.decodeFromString(alerts, it).toSet() }.getOrNull()
+            }
+        set(value) {
+            prefs.edit {
+                if (value == null) remove(POLLED)
+                else putString(POLLED, json.encodeToString(alerts, value.toList()))
+            }
+        }
+
+    /** Whether to check GitHub for a newer app. */
+    var checkUpdates: Boolean
+        get() = prefs.getBoolean(CHECK_UPDATES, true)
+        set(value) = prefs.edit { putBoolean(CHECK_UPDATES, value) }
+
+    /** The newest release already notified of. */
+    var notifiedUpdate: String?
+        get() = prefs.getString(NOTIFIED_UPDATE, null)
+        set(value) = prefs.edit { putString(NOTIFIED_UPDATE, value) }
+
     private companion object {
+        val json = Json { ignoreUnknownKeys = true }
+        val alerts = ListSerializer(PushedTransition.serializer())
+        const val POLLED = "polled"
+        const val CHECK_UPDATES = "check_updates"
+        const val NOTIFIED_UPDATE = "notified_update"
         const val PAIRING = "pairing"
         const val ENDPOINT = "push_endpoint"
         const val P256DH = "push_p256dh"

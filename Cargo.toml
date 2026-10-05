@@ -26,6 +26,7 @@ base64ct = { version = "1", features = ["alloc"] }
 web-push-native = "0.5.0"
 ureq = { version = "3.4.2", default-features = false, features = ["rustls"] }
 http = "1"
+semver = "1.0.28"
 
 [dev-dependencies]
 assert_cmd = "2.2.0"

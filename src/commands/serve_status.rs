@@ -42,11 +42,13 @@ impl Facts {
         }
     }
 
-    /// Doctor's warnings. `tailscale` says what `tailscale serve` does for
-    /// the port, asked only while a device is paired.
+    /// Doctor's warnings for this pm, at `exe` and of `version`.
+    /// `tailscale` says what `tailscale serve` does for the port, asked only
+    /// while a device is paired.
     pub fn warnings(
         &self,
         exe: &Path,
+        version: &str,
         tailscale: impl FnOnce(u16) -> Option<Serving>,
     ) -> Vec<String> {
         let mut warnings = Vec::new();
@@ -64,6 +66,18 @@ impl Facts {
                     exe.display()
                 ));
             }
+        }
+        if let Some(running) = &self.running
+            && running.version != version
+        {
+            let theirs = if running.version.is_empty() {
+                "an older pm".to_string()
+            } else {
+                format!("pm {}", running.version)
+            };
+            warn(format!(
+                "the running server is {theirs}, not this pm ({version}); restart it with `pm serve install`"
+            ));
         }
         if self.devices > 0 {
             if self.installed.is_none() && self.running.is_none() {
@@ -88,9 +102,14 @@ pub fn status(home: &Path, config_dir: &Path, port: u16, exe: &Path) -> Vec<Stri
     let mut lines = Vec::new();
     lines.push(match &facts.running {
         Some(s) => format!(
-            "server:    listening on 127.0.0.1:{} (pid {}) since {}",
+            "server:    listening on 127.0.0.1:{} (pid {}, pm {}) since {}",
             s.port,
             s.pid,
+            if s.version.is_empty() {
+                "?"
+            } else {
+                &s.version
+            },
             s.started
                 .with_timezone(&chrono::Local)
                 .format("%Y-%m-%d %H:%M")
@@ -118,7 +137,7 @@ pub fn status(home: &Path, config_dir: &Path, port: u16, exe: &Path) -> Vec<Stri
     ));
     lines.extend(
         facts
-            .warnings(exe, |_| None)
+            .warnings(exe, crate::version::VERSION, |_| None)
             .into_iter()
             .map(|w| format!("warning:   {}", w.trim_start_matches("serve — "))),
     );
@@ -134,12 +153,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn doctor_warns_of_an_installed_server_not_running_or_running_another_pm() {
+    fn doctor_warns_of_an_installed_server_not_running_or_running_another_pm_or_version() {
         let dir = tempfile::tempdir().unwrap();
         let (home, config) = (dir.path().join("home"), dir.path().join("config"));
         let exe = Path::new("/usr/local/bin/pm");
         std::fs::create_dir_all(home.join("Library/LaunchAgents")).unwrap();
-        let warnings = |facts: &Facts| facts.warnings(exe, |_| panic!("no device is paired"));
+        let version = crate::version::VERSION;
+        let warnings =
+            |facts: &Facts| facts.warnings(exe, version, |_| panic!("no device is paired"));
         assert!(warnings(&Facts::read(&home, &config, 7764)).is_empty());
 
         let plist = format!(
@@ -165,5 +186,16 @@ mod tests {
         let found = warnings(&Facts::read(&home, &config, 7764));
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(found[0].contains("/opt/old/bin/pm"), "{found:?}");
+
+        std::fs::write(plist_path(&home), &plist).unwrap();
+        State {
+            version: "0.0.1".into(),
+            ..State::now(7764)
+        }
+        .save(&config)
+        .unwrap();
+        let found = warnings(&Facts::read(&home, &config, 7764));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("pm 0.0.1, not this pm"), "{found:?}");
     }
 }

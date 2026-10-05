@@ -43,12 +43,16 @@ import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
+import dev.pm.app.BuildConfig
 import dev.pm.app.R
+import dev.pm.app.container
 import dev.pm.app.data.Connection
 import dev.pm.app.model.Snapshot
 import dev.pm.app.push.Notifications
 import dev.pm.app.push.Target
+import dev.pm.app.update.UpdateWorker
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.serialization.Serializable
 
@@ -320,10 +324,30 @@ fun App(
                             )
                         }
                         entry<Route.Settings> {
+                            val context = LocalContext.current
+                            val container = context.container
+                            var checkUpdates by remember {
+                                mutableStateOf(container.store.checkUpdates)
+                            }
+                            val serverVersion by
+                                remember(client) { client?.serverVersion ?: MutableStateFlow(null) }
+                                    .collectAsStateWithLifecycle()
                             SettingsScreen(
                                 pairing = pairing,
                                 connection = connection,
+                                versions = Versions(BuildConfig.VERSION_NAME, serverVersion),
                                 vapid = model::vapid,
+                                updates =
+                                    UpdateControls(
+                                            enabled = checkUpdates,
+                                            setEnabled = {
+                                                checkUpdates = it
+                                                container.store.checkUpdates = it
+                                                UpdateWorker.schedule(context, it)
+                                            },
+                                            checkNow = { UpdateWorker.check(container.http) },
+                                        )
+                                        .takeIf { BuildConfig.SELF_UPDATE },
                                 pair = { backStack.add(Route.Pair) },
                                 unpair = {
                                     model.unpair()

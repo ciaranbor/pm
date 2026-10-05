@@ -24,13 +24,22 @@ you.
 
 ## Install
 
+On macOS (Apple silicon) or Linux (x86_64):
+
 ```sh
-cargo install --path .
+curl -fsSL https://github.com/ciaranbor/pm/releases/latest/download/install.sh | sh
 ```
 
-Installs the `pm` binary to `~/.cargo/bin/` (ensure it's on your `PATH`).
-Once pm's own source is a registered pm project, `pm self-update` pulls,
-rebuilds, and upgrades every project.
+The script installs the latest release's binary, checked against the
+release's `SHA256SUMS`, beside a `pm` already on your `PATH`, else in
+`~/.local/bin`. `PM_VERSION=0.2.0` pins a release and `PM_INSTALL_DIR`
+picks the directory. Run again, it replaces pm in place and runs `pm
+upgrade --all`. `pm self-update` does the same from pm itself, and `pm
+--version` says which pm you have. Elsewhere, or to run your own changes,
+build from source: `cargo install --path .` in a checkout, or `cargo
+install --git https://github.com/ciaranbor/pm`. A build from source reports
+its commit in its version (`0.2.0+3.gabc1234`), and `pm self-update`
+leaves it alone unless given `--force`.
 
 Then add pm's tmux plugin: one line in your tmux config, after any `@pm-*`
 options (see [tmux integration](#tmux-integration)) and any `bind s` or
@@ -255,17 +264,17 @@ pm's config dir, beside the devices file and the server's VAPID key
 
 Notifications don't need the tailnet. A device subscribes through
 [UnifiedPush](https://unifiedpush.org) — the ntfy app using ntfy.sh, or
-Google's push service built into pm's app — and registers the
-subscription with `pm serve`, which sends each `transition` event to it
-as an encrypted Web Push (RFC 8030/8291, signed with the VAPID key). A
-push carries only `{project, scope, kind, agent}`; the app fetches the rest
-over the tailnet when opened. A push service answering that a
-subscription is gone drops it. Deleting `vapid.pem` strands every
-subscription until the app is next opened and subscribes again.
+Google's push service built into pm's app — and registers the subscription with `pm serve`, which sends each
+`transition` event to it as an encrypted Web Push (RFC 8030/8291, signed
+with the VAPID key). A push carries only `{project, scope, kind, agent}`;
+the app fetches the rest over the tailnet when opened. A push service
+answering that a subscription is gone drops it. Deleting `vapid.pem`
+strands every subscription until the app is next opened and subscribes
+again.
 
 A subscription must be https on a known push service — Google's
-(`fcm.googleapis.com`) or `ntfy.sh` — so a token can't aim `pm serve` at
-a service on the tailnet or the Mac. A self-hosted distributor's host goes
+(`fcm.googleapis.com`) or `ntfy.sh` — so a token can't aim `pm serve` at a
+service on the tailnet or the Mac. A self-hosted distributor's host goes
 in the global config, read as `pm serve` starts:
 
 ```toml
@@ -349,42 +358,58 @@ default; an agent whose transcript is gone has no conversation (404).
 
 #### The Android app
 
-The app lives in `android/` (Kotlin, Jetpack Compose). Building needs JDK
-17+ and the Android SDK with platform 37. The build finds the SDK through
-`ANDROID_HOME` or `sdk.dir` in `android/local.properties`; with neither, it
-writes the latter for `~/Library/Android/sdk`, where Android Studio installs
-it on macOS.
+Each release publishes the app beside pm, as `pm-android-arm64-v8a.apk`
+on its [GitHub release](https://github.com/ciaranbor/pm/releases/latest).
+Open that link on the phone, download the APK, and open it; Android asks
+once to allow installs from the browser. The app is of pm's own version:
+Settings shows it beside the server's, and warns when the two are of
+different releases. It checks GitHub for a newer release as it starts and
+daily (Settings turns that off, or checks now); a newer one comes as a
+notification whose tap downloads its APK, which installs over the app.
 
-Build the release APK and sideload it:
+Scan the code `pm serve pair` prints, or paste its `url`, `device` and
+`token` lines. The app asks to post notifications, which reach it off the
+tailnet through a UnifiedPush distributor. Each time the app opens and
+reaches the server, it registers through the distributor it used before —
+or, if that one is gone, the phone's default, else any installed one, else
+Google's push service built into the app (which needs Google Play
+services) — and sends the server its subscription; Settings switches
+between them. For notifications without Google, install
+[ntfy](https://ntfy.sh) (F-Droid or Google Play; its default server is
+ntfy.sh) before pairing. While the app holds no subscription — no
+distributor gave it one, or registering failed, as Google's does on a
+phone without Play services — it polls the server instead, which works
+only on the tailnet and only as often as Android lets it: every 15 minutes
+at best, and hours apart once the phone dozes or the app goes unused.
+
+To build it yourself: the app lives in `android/` (Kotlin, Jetpack
+Compose), and needs JDK 17+ and the Android SDK with platform 37. The build
+finds the SDK through `ANDROID_HOME` or `sdk.dir` in
+`android/local.properties`; with neither, it writes the latter for
+`~/Library/Android/sdk`, where Android Studio installs it on macOS.
 
 ```sh
-android/gradlew -p android assembleRelease
-adb install -r android/app/build/outputs/apk/release/app-release.apk
+android/gradlew -p android assembleGoogleRelease
+adb install -r android/app/build/outputs/apk/google/release/app-google-release.apk
 ```
+
+The `google` flavour is the one released; `fdroid` (`assembleFdroidRelease`)
+is the same app without Google's push service or the GitHub update check,
+so it has no proprietary code and leaves updates to F-Droid.
 
 The release build is shrunk by R8 and carries only `arm64-v8a` code (the
 debug build adds `x86_64` for an emulator). It is signed only when the
 Gradle property `pmReleaseSigning` (in `~/.gradle/gradle.properties`, or
 `ORG_GRADLE_PROJECT_pmReleaseSigning`) names a properties file with
 `storeFile`, `storePassword`, `keyAlias` and `keyPassword`; otherwise it
-builds `app-release-unsigned.apk`, which a phone refuses. Keep that file
-and the keystore out of the repo, and back both up: an APK signed with
-another key installs only after an uninstall, which drops the app's
-pairing. For the same reason, installing the release build over the debug
-one (`assembleDebug`, signed with the SDK's debug key) needs one
-`adb uninstall dev.pm.app` and a new pairing. The version code is the
-minute of the last commit, so a build of an earlier commit cannot replace a
-later one.
-
-Without `adb`, copy the APK to the phone and open it, allowing installs
-from that source. In the app, scan the code `pm serve pair` prints, or
-paste its `url`, `device` and `token` lines. It asks to post
-notifications. Each time it opens and reaches the server, it registers
-through the UnifiedPush distributor it used before — or, if that one is
-gone, the phone's default, else any installed one, else Google's — and
-sends the server its subscription; Settings switches between them. For
-notifications off the tailnet without Google, install ntfy from F-Droid
-(its default server is ntfy.sh) before pairing.
+builds an `-unsigned.apk`, which a phone refuses. A phone installs
+an update only if it is signed with the key the installed app was, so
+every release is signed with the one key; an APK signed with another
+installs only after an uninstall, which drops the app's pairing. For the
+same reason, installing a release over the debug build (`assembleDebug`,
+signed with the SDK's debug key) needs one `adb uninstall dev.pm.app` and
+a new pairing. The version code is the minute of the last commit, so a
+build of an earlier commit cannot replace a later one, a release included.
 
 The app opens on what needs you: every scope across
 projects whose attention isn't `none`, ranked by kind as the attention
@@ -572,8 +597,8 @@ that feature name.
 ### Asset tiers
 
 Bundled assets — skills, agent definitions, workflows, and the shared
-baseline — install **once per machine** and are refreshed by `pm upgrade` /
-`pm self-update`:
+baseline — install **once per machine** and are refreshed by `pm upgrade`,
+which `pm self-update` and the install script run:
 
 | Tier | Skills / agents / baseline | Workflows |
 |------|----------------------------|-----------|
@@ -1132,3 +1157,16 @@ server's. `scripts/sandbox` uses it to give you a throwaway pm environment
 for trying changes by hand (see `AGENTS.md`).
 
 See `AGENTS.md` for architecture and development guidelines.
+
+### Releasing
+
+pm and the app share one version, Cargo.toml's. Note each user-facing
+change under `## Unreleased` in `CHANGELOG.md` as it lands. On an
+up-to-date `main`, `scripts/release 0.2.0` bumps the version, makes the
+Unreleased notes the release's, commits, tags `v0.2.0` and pushes; CI
+(`.github/workflows/release.yml`) builds the binaries and the signed APK
+and publishes the release with those notes. `--dry-run` checks everything
+first. A version such as `0.2.0-rc.1` is published as a prerelease, which
+the install script, `pm self-update` and the app all pass over. CI signs
+the APK with secrets that `scripts/release --setup-secrets` sets from
+`~/.config/pm-secrets/`, once.

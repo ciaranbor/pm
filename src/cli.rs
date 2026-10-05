@@ -7,6 +7,7 @@ use pm::harness::Harness;
 #[derive(Parser)]
 #[command(
     name = "pm",
+    version = pm::version::VERSION,
     about = "Terminal-based project manager built around tmux and git worktrees"
 )]
 pub struct Cli {
@@ -128,8 +129,14 @@ pub enum Commands {
     /// Moving projects to another machine
     #[command(subcommand)]
     Migrate(MigrateCommands),
-    /// Pull latest pm source, rebuild, and upgrade all projects
-    SelfUpdate,
+    /// Install the latest pm release over this binary, then upgrade all
+    /// projects with it
+    SelfUpdate {
+        /// Install the latest release even if this pm is newer or was built
+        /// from source
+        #[arg(long)]
+        force: bool,
+    },
     /// Git-backed state management (.pm/ backup and sync)
     #[command(subcommand)]
     State(StateCommands),

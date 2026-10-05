@@ -60,6 +60,9 @@ use routes::Reply;
 use wake::Waker;
 pub use wake::wake;
 
+/// The response header every reply carries, naming the server's version.
+const VERSION_HEADER: &str = "Pm-Version";
+
 /// The most of a request body read: the longest text a device may send,
 /// as JSON, with room for its escapes.
 const MAX_BODY: u64 = 2 * input::MAX_TEXT as u64 + 1024;
@@ -278,7 +281,8 @@ impl Server {
             } => {
                 let mut response = tiny_http::Response::from_string(body)
                     .with_status_code(status)
-                    .with_header(header("Content-Type", content_type));
+                    .with_header(header("Content-Type", content_type))
+                    .with_header(header(VERSION_HEADER, crate::version::VERSION));
                 if status == 401 {
                     response = response.with_header(header("WWW-Authenticate", "Bearer"));
                 }

@@ -18,7 +18,56 @@ val commitMinutes =
         .asText
         .map { it.trim().toLongOrNull()?.let { seconds -> (seconds / 60).toInt() } ?: 1 }
 
+/** Set by CI: a release build, named by Cargo.toml's version alone and signed. */
+val pmRelease = providers.gradleProperty("pmRelease").isPresent
+
+/** pm's version, which the app shares: Cargo.toml's `[package]` version. */
+val cargoVersion =
+    providers.fileContents(rootProject.layout.projectDirectory.file("../Cargo.toml")).asText.map {
+        Regex("""(?m)^\[package\][^\[]*?^version\s*=\s*"([^"]+)"""").find(it)?.groupValues?.get(1)
+            ?: error("Cargo.toml has no [package] version")
+    }
+
+/**
+ * A build that isn't a release appends what `git describe` says of the checkout, as pm's `build.rs`
+ * does: commits since the last `v*` tag, the commit, and whether the tree is dirty.
+ */
+val buildMetadata =
+    providers
+        .exec {
+            commandLine(
+                "git",
+                "describe",
+                "--tags",
+                "--long",
+                "--dirty",
+                "--match",
+                "v*",
+                "--always",
+            )
+            isIgnoreExitValue = true
+        }
+        .standardOutput
+        .asText
+        .map { described ->
+            val dirty = described.trim().endsWith("-dirty")
+            val clean = described.trim().removeSuffix("-dirty")
+            val fields = clean.split("-")
+            val parts =
+                when {
+                    clean.isEmpty() -> emptyList()
+                    fields.size >= 3 && fields.last().startsWith("g") ->
+                        listOf(fields[fields.size - 2], fields.last())
+                    else -> listOf("g$clean")
+                } + if (dirty) listOf("dirty") else emptyList()
+            parts.joinToString(".")
+        }
+
 val releaseSigning = providers.gradleProperty("pmReleaseSigning").map { file(it) }
+
+if (pmRelease && !releaseSigning.isPresent) {
+    error("-PpmRelease needs -PpmReleaseSigning: a release is never published unsigned")
+}
 
 android {
     namespace = "dev.pm.app"
@@ -29,7 +78,11 @@ android {
         minSdk = 26
         targetSdk = 37
         versionCode = commitMinutes.get()
-        versionName = "0.1.0"
+        versionName =
+            cargoVersion.get().let { base ->
+                if (pmRelease) base
+                else buildMetadata.get().let { if (it.isEmpty()) base else "$base+$it" }
+            }
     }
 
     signingConfigs {
@@ -59,7 +112,27 @@ android {
         }
     }
 
-    buildFeatures { compose = true }
+    // The published build carries Google's push service as a UnifiedPush distributor for phones
+    // without one; fdroid has no proprietary code, so only a distributor such as ntfy, or
+    // polling, notifies.
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("google") {
+            dimension = "distribution"
+            isDefault = true
+            buildConfigField("boolean", "SELF_UPDATE", "true")
+        }
+        // F-Droid builds, signs and updates its own APK, so this one never offers GitHub's.
+        create("fdroid") {
+            dimension = "distribution"
+            buildConfigField("boolean", "SELF_UPDATE", "false")
+        }
+    }
+
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -74,20 +147,9 @@ android {
 
     lint {
         warningsAsErrors = true
-        // Release ships arm64 only, to keep ML Kit's native scanner to one ABI.
+        // Release ships arm64 only, the one APK a release publishes.
         disable += "ChromeOsAbiSupport"
         abortOnError = true
-    }
-}
-
-configurations.configureEach {
-    // The UnifiedPush connector's tink and ML Kit's must agree.
-    val tink = "com.google.crypto.tink:tink-android:1.20.0"
-    resolutionStrategy {
-        force(tink)
-        dependencySubstitution {
-            substitute(module("com.google.crypto.tink:tink")).using(module(tink))
-        }
     }
 }
 
@@ -111,16 +173,18 @@ dependencies {
     implementation(libs.camera.camera2)
     implementation(libs.camera.lifecycle)
     implementation(libs.camera.view)
-    implementation(libs.mlkit.barcode)
+    implementation(libs.zxing.core)
+    implementation(libs.androidx.work.runtime)
     implementation(libs.markdown.m3)
     implementation(libs.unifiedpush.connector)
-    implementation(libs.unifiedpush.fcm)
+    "googleImplementation"(libs.unifiedpush.fcm)
 
     lintChecks(libs.compose.lint.checks)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
+    testImplementation(libs.androidx.work.testing)
     testImplementation(libs.robolectric)
     testImplementation(libs.compose.ui.test.junit4)
     testImplementation(libs.roborazzi)

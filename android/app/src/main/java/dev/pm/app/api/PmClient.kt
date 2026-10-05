@@ -11,6 +11,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.channels.trySendBlocking
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -68,18 +71,27 @@ data class ServerEvent(val name: String, val data: String)
 
 /** A client of `pm serve`'s API (README, "Remote access"), as one paired device. */
 class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()) {
+    private val _serverVersion = MutableStateFlow<String?>(null)
+
+    /** The version of pm the server last answered as (its `Pm-Version` header). */
+    val serverVersion: StateFlow<String?> = _serverVersion.asStateFlow()
+
     private val http =
         base
             .newBuilder()
             .connectTimeout(10, TimeUnit.SECONDS)
             .addInterceptor { chain ->
-                chain.proceed(
-                    chain
-                        .request()
-                        .newBuilder()
-                        .header("Authorization", "Bearer ${pairing.token}")
-                        .build()
-                )
+                chain
+                    .proceed(
+                        chain
+                            .request()
+                            .newBuilder()
+                            .header("Authorization", "Bearer ${pairing.token}")
+                            .build()
+                    )
+                    .also { response ->
+                        response.header("Pm-Version")?.let { _serverVersion.value = it }
+                    }
             }
             .build()
 

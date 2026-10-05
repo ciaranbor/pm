@@ -2,7 +2,7 @@
 //! a paired device, so without a check any read-scoped token could make
 //! the server POST to an https service of its choosing, on the tailnet or
 //! the Mac itself. An endpoint must be https on a known push service's
-//! host — Google's (FCM, which UnifiedPush's embedded distributor uses),
+//! host — Google's (FCM, which the app's embedded distributor uses),
 //! ntfy.sh, or one `[serve] push_hosts` names in the global config, for a
 //! self-hosted distributor — and is checked again as it is sent: the
 //! host's addresses are resolved and every one that isn't public (loopback,
@@ -157,8 +157,9 @@ mod tests {
         }
         for refused in [
             "http://ntfy.sh/upAbc",
-            "https://evil.example/fcm.googleapis.com",
             "https://fcm.googleapis.com@evil.example/",
+            "https://evil.example/ntfy.sh",
+            "https://ntfy.sh@evil.example/",
             "https://ntfy.sh.evil.example/up",
             "https://127.0.0.1/up",
             "not a url",

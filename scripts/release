@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+# Cut a pm release: README, "Releasing", has the flow.
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/release X.Y.Z [--dry-run]
+       scripts/release --notes X.Y.Z
+       scripts/release --setup-secrets
+
+  X.Y.Z            bump Cargo.toml (and Cargo.lock) to X.Y.Z, roll
+                   CHANGELOG.md's Unreleased section into `## X.Y.Z — <date>`,
+                   commit "Release vX.Y.Z", tag vX.Y.Z, and push main and the
+                   tag; CI builds and publishes the release. A version with a
+                   pre-release part (0.2.0-rc.1) is published as a prerelease,
+                   which self-update and the app ignore; it leaves the
+                   changelog alone and takes Unreleased as its notes.
+  --dry-run        check everything and print the release notes; change nothing
+  --notes X.Y.Z    print the release notes of X.Y.Z: its CHANGELOG.md section,
+                   or Unreleased for a prerelease
+  --setup-secrets  set the GitHub Actions secrets CI signs the APK with, from
+                   ~/.config/pm-secrets/pm-android-release.{jks,properties}
+EOF
+}
+
+die() { echo "release: $*" >&2; exit 1; }
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+changelog="$root/CHANGELOG.md"
+semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'
+
+# Whether semver $1 has precedence over $2: numbers field by field, a
+# prerelease below its release, prerelease fields numeric below alphanumeric.
+newer() {
+  local a=${1%%+*} b=${2%%+*}
+  local ac=${a%%-*} bc=${b%%-*} ap= bp= i x y
+  [[ $a == *-* ]] && ap=${a#*-}
+  [[ $b == *-* ]] && bp=${b#*-}
+  IFS=. read -ra x <<< "$ac"
+  IFS=. read -ra y <<< "$bc"
+  for i in 0 1 2; do
+    (( 10#${x[i]:-0} > 10#${y[i]:-0} )) && return 0
+    (( 10#${x[i]:-0} < 10#${y[i]:-0} )) && return 1
+  done
+  [ "$ap" = "$bp" ] && return 1
+  [ -z "$ap" ] && return 0
+  [ -z "$bp" ] && return 1
+  IFS=. read -ra x <<< "$ap"
+  IFS=. read -ra y <<< "$bp"
+  for ((i = 0; i < ${#x[@]} && i < ${#y[@]}; i++)); do
+    [ "${x[i]}" = "${y[i]}" ] && continue
+    if [[ ${x[i]} =~ ^[0-9]+$ && ${y[i]} =~ ^[0-9]+$ ]]; then
+      (( 10#${x[i]} > 10#${y[i]} )) && return 0 || return 1
+    fi
+    [[ ${x[i]} =~ ^[0-9]+$ ]] && return 1
+    [[ ${y[i]} =~ ^[0-9]+$ ]] && return 0
+    [[ ${x[i]} > ${y[i]} ]] && return 0 || return 1
+  done
+  (( ${#x[@]} > ${#y[@]} ))
+}
+
+# CHANGELOG.md's section headed `## $1` (bare, or followed by a space), body only.
+section() {
+  awk -v want="$1" '
+    /^## / {
+      if (found) exit
+      head = substr($0, 4)
+      if (head == want || index(head, want " ") == 1) { found = 1; next }
+    }
+    found && (n || NF) { lines[++n] = $0; if (NF) last = n }
+    END { for (i = 1; i <= last; i++) print lines[i] }
+  ' "$changelog"
+}
+
+setup_secrets() {
+  local dir=$HOME/.config/pm-secrets
+  local props=$dir/pm-android-release.properties
+  [ -r "$props" ] || die "no $props"
+  command -v gh >/dev/null || die "gh is not installed"
+  prop() { sed -n "s/^$1=//p" "$props" | head -n1; }
+  local store
+  store=$(prop storeFile)
+  [ -n "$store" ] || die "$props lacks storeFile"
+  case $store in /*) ;; *) store=$dir/$store ;; esac
+  [ -r "$store" ] || die "no keystore at $store"
+  base64 < "$store" | tr -d '\n' | gh secret set PM_KEYSTORE_B64
+  local pair key name value
+  for pair in storePassword:PM_KEYSTORE_PASSWORD keyAlias:PM_KEY_ALIAS keyPassword:PM_KEY_PASSWORD; do
+    key=${pair%%:*} name=${pair#*:}
+    value=$(prop "$key")
+    [ -n "$value" ] || die "$props lacks $key"
+    printf %s "$value" | gh secret set "$name"
+  done
+  echo "Set PM_KEYSTORE_B64, PM_KEYSTORE_PASSWORD, PM_KEY_ALIAS and PM_KEY_PASSWORD."
+}
+
+release() {
+  local version=$1 dry=$2
+  [[ $version =~ $semver ]] || die "'$version' is not a semver version (X.Y.Z or X.Y.Z-pre)"
+  local tag=v$version
+  local git=(git -C "$root")
+  [ -z "$("${git[@]}" status --porcelain)" ] || die "the working tree is not clean"
+  [ "$("${git[@]}" symbolic-ref --short -q HEAD)" = main ] || die "not on main"
+  "${git[@]}" rev-parse -q --verify "refs/tags/$tag" >/dev/null && die "tag $tag already exists"
+  [ -z "$("${git[@]}" ls-remote --tags origin "refs/tags/$tag")" ] || die "tag $tag already exists on origin"
+  "${git[@]}" fetch -q origin main
+  [ "$("${git[@]}" rev-parse HEAD)" = "$("${git[@]}" rev-parse origin/main)" ] \
+    || die "main is not origin/main; pull or push first"
+  local current
+  current=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$root/Cargo.toml" | head -n1)
+  newer "$version" "$current" || die "$version is not newer than Cargo.toml's $current"
+  local notes
+  notes=$(section Unreleased)
+  [ -n "$notes" ] || die "CHANGELOG.md's Unreleased section is empty"
+
+  echo "Release $tag (from $current). Notes:"
+  echo
+  echo "$notes"
+  echo
+  if [ "$dry" = 1 ]; then
+    echo "(dry run: nothing changed)"
+    return
+  fi
+
+  local first
+  first=$(grep -n '^version = ' "$root/Cargo.toml" | head -n1 | cut -d: -f1)
+  sed -i.bak "${first}s/.*/version = \"$version\"/" "$root/Cargo.toml"
+  rm "$root/Cargo.toml.bak"
+  (cd "$root" && cargo update --workspace --offline -q)
+  if [[ $version != *-* ]]; then
+    local date
+    date=$(date +%Y-%m-%d)
+    awk -v head="## $version — $date" '
+      !done && /^## Unreleased[[:space:]]*$/ { print; print ""; print head; done = 1; next }
+      { print }
+    ' "$changelog" > "$changelog.tmp"
+    mv "$changelog.tmp" "$changelog"
+  fi
+
+  "${git[@]}" commit -q -m "Release $tag" -- Cargo.toml Cargo.lock CHANGELOG.md
+  "${git[@]}" tag -a "$tag" -m "pm $version"
+  "${git[@]}" push -q --atomic origin main "$tag"
+  echo "Pushed $tag; CI publishes the release: https://github.com/ciaranbor/pm/actions"
+}
+
+case "${1:-}" in
+  -h|--help) usage ;;
+  --setup-secrets) setup_secrets ;;
+  --notes)
+    [ -n "${2:-}" ] || die "--notes needs a version"
+    if [[ $2 == *-* ]]; then section Unreleased; else section "$2"; fi
+    ;;
+  "") usage >&2; exit 2 ;;
+  *)
+    dry=0
+    [ "${2:-}" = --dry-run ] && dry=1
+    release "$1" "$dry"
+    ;;
+esac

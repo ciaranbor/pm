@@ -11,4 +11,8 @@
     <string name="reply_you">You</string>
     <string name="reply_not_sent">Not sent (%1$s): %2$s</string>
     <string name="channel_died_description">An agent\'s session ended unexpectedly</string>
+    <string name="channel_update">App updates</string>
+    <string name="channel_update_description">A newer pm app is released</string>
+    <string name="update_title">pm %1$s is available</string>
+    <string name="update_text">Tap to download it, then install it over this one</string>
 </resources>

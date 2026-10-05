@@ -32,8 +32,10 @@ class PushService : UnifiedPushService() {
         Notifications.show(this, transition)
     }
 
+    /** No push will come, as when Google's distributor has no Play services: polling takes over. */
     override fun onRegistrationFailed(reason: FailedReason, instance: String) {
         Log.w(TAG, "push registration failed: $reason")
+        container.repository.unsubscribed()
     }
 
     override fun onUnregistered(instance: String) {

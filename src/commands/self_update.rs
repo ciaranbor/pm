@@ -1,60 +1,251 @@
-use std::path::Path;
+//! `pm self-update`: replace this binary with the latest GitHub release
+//! for its target, then run the new binary's `pm upgrade --all`, so the
+//! bundled assets installed are the new binary's, not this one's.
+//!
+//! The release is the one `releases/latest` names, which excludes
+//! prereleases. Its `pm-<target>` asset is checked against the release's
+//! `SHA256SUMS` before anything is written. The new binary is written
+//! beside the old one and renamed over it, never written in place: on
+//! macOS, overwriting a signed binary in place gets processes running it
+//! killed, and the rename gives the new mtime `pm tmux watch` and `pm
+//! serve` re-execute on ([`reexec`](super::reexec)).
+//!
+//! A build from source is left alone unless forced: the checkout's `cargo
+//! install --path .` is what updates it.
+
+use std::cmp::Ordering;
+use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
+
+use serde::Deserialize;
 
 use crate::error::{PmError, Result};
+use crate::hash::sha256_hex as sha256;
 use crate::state::paths;
 use crate::state::project::ProjectEntry;
+use crate::version;
 
-/// Find the pm project's main worktree by looking it up in the global registry.
-fn find_pm_source() -> Result<std::path::PathBuf> {
-    let projects_dir = paths::global_projects_dir()?;
-    let entry = ProjectEntry::load(&projects_dir, "pm").map_err(|_| {
-        PmError::SafetyCheck(
-            "pm project not found in global registry. Register it with: \
-             pm register <path-to-pm-source>"
-                .to_string(),
-        )
-    })?;
-    let root = entry.root_path();
-    if !root.exists() {
-        return Err(PmError::SafetyCheck(format!(
-            "pm project root does not exist: {}",
-            root.display()
-        )));
-    }
-    let main_worktree = paths::main_worktree(&root);
-    if !main_worktree.exists() {
-        return Err(PmError::SafetyCheck(format!(
-            "pm main worktree not found at: {}",
-            main_worktree.display()
-        )));
-    }
-    Ok(main_worktree)
+/// The GitHub API URL of pm's repository.
+pub const REPO_API: &str = "https://api.github.com/repos/ciaranbor/pm";
+
+/// The install script of the latest release.
+pub const INSTALL_SCRIPT: &str =
+    "https://github.com/ciaranbor/pm/releases/latest/download/install.sh";
+
+/// Overrides [`REPO_API`], so a sandbox can serve releases of its own.
+pub const REPO_API_ENV: &str = "PM_RELEASES_URL";
+
+/// The largest asset downloaded.
+const MAX_ASSET: u64 = 256 * 1024 * 1024;
+
+/// What an update starts from and where it looks.
+pub struct Update<'a> {
+    /// The repository's API URL, as [`REPO_API`].
+    pub api: &'a str,
+    /// The binary to replace.
+    pub exe: &'a Path,
+    /// Its version.
+    pub current: &'a str,
+    /// Its target triple, naming the asset fetched.
+    pub target: &'a str,
+    /// Install the latest release whatever the current version.
+    pub force: bool,
 }
 
-/// Get the HEAD short hash from a repo.
-fn head_short_hash(repo: &Path) -> Result<String> {
-    crate::git::run_git(repo, &["rev-parse", "--short", "HEAD"])
+#[derive(Deserialize)]
+struct Release {
+    tag_name: String,
+    assets: Vec<Asset>,
 }
 
-/// Read the version from Cargo.toml in the given source directory.
-fn version_from_cargo_toml(source: &Path) -> Result<String> {
-    let cargo_toml = source.join("Cargo.toml");
-    let content = std::fs::read_to_string(&cargo_toml).map_err(|_| {
-        PmError::SafetyCheck(format!(
-            "Could not read Cargo.toml at: {}",
-            cargo_toml.display()
+#[derive(Deserialize)]
+struct Asset {
+    name: String,
+    browser_download_url: String,
+}
+
+impl Release {
+    fn asset(&self, name: &str) -> Result<&Asset> {
+        self.assets.iter().find(|a| a.name == name).ok_or_else(|| {
+            PmError::SelfUpdate(format!("release {} has no asset {name}", self.tag_name))
+        })
+    }
+}
+
+/// An agent that gives up on a stalled server rather than waiting forever,
+/// as ureq's defaults would.
+fn agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_connect(Some(Duration::from_secs(10)))
+        .timeout_recv_response(Some(Duration::from_secs(30)))
+        .timeout_global(Some(Duration::from_secs(600)))
+        .user_agent(format!("pm/{}", version::VERSION))
+        .build()
+        .into()
+}
+
+fn get(agent: &ureq::Agent, url: &str, accept: Option<&str>) -> Result<ureq::Body> {
+    let mut request = agent.get(url);
+    if let Some(accept) = accept {
+        request = request.header("Accept", accept);
+    }
+    request
+        .call()
+        .map(|response| response.into_body())
+        .map_err(|e| PmError::SelfUpdate(format!("GET {url}: {e}")))
+}
+
+fn download(agent: &ureq::Agent, asset: &Asset) -> Result<Vec<u8>> {
+    get(agent, &asset.browser_download_url, None)?
+        .with_config()
+        .limit(MAX_ASSET)
+        .read_to_vec()
+        .map_err(|e| PmError::SelfUpdate(format!("downloading {}: {e}", asset.name)))
+}
+
+/// The digest `sums` (a `sha256sum` listing) gives for `name`.
+fn listed_digest<'a>(sums: &'a str, name: &str) -> Option<&'a str> {
+    sums.lines().find_map(|line| {
+        let (digest, file) = line.split_once(char::is_whitespace)?;
+        (file.trim_start().trim_start_matches('*') == name).then_some(digest)
+    })
+}
+
+/// What [`update`] did.
+#[derive(Debug)]
+pub enum Outcome {
+    UpToDate(String),
+    /// What it printed, the new binary's `upgrade --all` included.
+    Installed(Vec<String>),
+}
+
+/// Check the release `api` names latest and, if it is newer than
+/// `update.current` (or `update.force`), install it over `update.exe` and
+/// run its `upgrade --all`.
+pub fn update(update: &Update<'_>) -> Result<Outcome> {
+    if version::is_dev(update.current) && !update.force {
+        return Err(PmError::SelfUpdate(format!(
+            "this pm ({}) was built from source: `cargo install --path .` in its checkout \
+             updates it, or `pm self-update --force` replaces it with the latest release",
+            update.current
+        )));
+    }
+    let agent = agent();
+    let url = format!("{}/releases/latest", update.api.trim_end_matches('/'));
+    let body = get(&agent, &url, Some("application/vnd.github+json"))?;
+    let release: Release = serde_json::from_reader(body.into_reader())
+        .map_err(|e| PmError::SelfUpdate(format!("{url}: {e}")))?;
+    let latest = release.tag_name.trim_start_matches('v');
+    let newer = version::compare(latest, update.current) == Some(Ordering::Greater);
+    if !newer && !update.force {
+        return Ok(Outcome::UpToDate(format!(
+            "pm {} is up to date (latest release: {latest})",
+            update.current
+        )));
+    }
+
+    let name = format!("pm-{}", update.target);
+    let binary = release.asset(&name).map_err(|_| {
+        PmError::SelfUpdate(format!(
+            "release {} has no binary for {}; build from source: \
+             cargo install --git https://github.com/ciaranbor/pm",
+            release.tag_name, update.target
         ))
     })?;
-    let doc: toml::Table = toml::from_str(&content)
-        .map_err(|_| PmError::SafetyCheck("Could not parse Cargo.toml".to_string()))?;
-    doc.get("package")
-        .and_then(|p| p.get("version"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .ok_or_else(|| {
-            PmError::SafetyCheck("Could not find package.version in Cargo.toml".to_string())
-        })
+    let sums = download(&agent, release.asset("SHA256SUMS")?)?;
+    let sums = String::from_utf8_lossy(&sums);
+    let expected = listed_digest(&sums, &name)
+        .ok_or_else(|| PmError::SelfUpdate(format!("SHA256SUMS lists no {name}")))?;
+    let bytes = download(&agent, binary)?;
+    let actual = sha256(&bytes);
+    if !actual.eq_ignore_ascii_case(expected) {
+        return Err(PmError::SelfUpdate(format!(
+            "{name} does not match SHA256SUMS (expected {expected}, got {actual}); nothing was installed"
+        )));
+    }
+    install(update.exe, &bytes)?;
+
+    let mut lines = vec![format!(
+        "Installed pm {latest} over {} ({})",
+        update.current,
+        update.exe.display()
+    )];
+    lines.extend(upgrade_all(update.exe));
+    Ok(Outcome::Installed(lines))
+}
+
+/// Put `bytes` at `exe` by renaming a file written beside it.
+fn install(exe: &Path, bytes: &[u8]) -> Result<()> {
+    let dir = exe.parent().unwrap_or(Path::new("."));
+    let cannot =
+        |e: std::io::Error| PmError::SelfUpdate(format!("cannot replace {}: {e}", exe.display()));
+    let mut file = tempfile::Builder::new()
+        .prefix(".pm-new-")
+        .tempfile_in(dir)
+        .map_err(cannot)?;
+    file.write_all(bytes).map_err(cannot)?;
+    file.as_file().sync_all().map_err(cannot)?;
+    std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o755))
+        .map_err(cannot)?;
+    file.persist(exe).map_err(|e| cannot(e.error))?;
+    Ok(())
+}
+
+/// Run `exe upgrade --all`, returning what it printed.
+fn upgrade_all(exe: &Path) -> Vec<String> {
+    let mut lines = vec!["Upgrading all projects...".to_string()];
+    match Command::new(exe).args(["upgrade", "--all"]).output() {
+        Ok(out) => {
+            lines.extend(
+                String::from_utf8_lossy(&out.stdout)
+                    .lines()
+                    .map(String::from),
+            );
+            if !out.status.success() {
+                lines.push(format!(
+                    "Warning: `pm upgrade --all` failed: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ));
+            }
+        }
+        Err(e) => lines.push(format!("Warning: could not run `pm upgrade --all`: {e}")),
+    }
+    lines
+}
+
+/// `pm self-update` for this binary.
+pub fn self_update(force: bool) -> Result<Vec<String>> {
+    let api = std::env::var(REPO_API_ENV).unwrap_or_else(|_| REPO_API.to_string());
+    let exe: PathBuf = std::env::current_exe()?.canonicalize()?;
+    let mut lines = match update(&Update {
+        api: &api,
+        exe: &exe,
+        current: version::VERSION,
+        target: version::TARGET,
+        force,
+    })? {
+        Outcome::UpToDate(line) => return Ok(vec![line]),
+        Outcome::Installed(lines) => lines,
+    };
+    let active_features = count_active_features()?;
+    if !active_features.is_empty() {
+        let total: usize = active_features.iter().map(|(_, c)| c).sum();
+        lines.push(format!(
+            "⚠ {total} active feature{} across {} project{} (new binary may differ from in-flight worktrees):",
+            if total == 1 { "" } else { "s" },
+            active_features.len(),
+            if active_features.len() == 1 { "" } else { "s" },
+        ));
+        lines.extend(
+            active_features
+                .iter()
+                .map(|(name, count)| format!("  {name}: {count}")),
+        );
+    }
+    Ok(lines)
 }
 
 /// Count active features across all registered projects.
@@ -85,206 +276,153 @@ pub(crate) fn count_active_features() -> Result<Vec<(String, usize)>> {
     Ok(results)
 }
 
-/// Run `pm self-update`: pull latest main, rebuild, install, upgrade projects.
-pub fn self_update() -> Result<Vec<String>> {
-    let mut output = Vec::new();
-    let source = find_pm_source()?;
-
-    // 1. Check for uncommitted changes
-    if crate::git::has_uncommitted_changes(&source)? {
-        return Err(PmError::SafetyCheck(
-            "pm main worktree has uncommitted changes — commit or stash them first".to_string(),
-        ));
-    }
-
-    let hash_before = head_short_hash(&source).unwrap_or_default();
-
-    // 2. git pull (fast-forward only — if main has diverged, tell the user)
-    output.push("Pulling latest changes...".to_string());
-    match crate::git::pull(&source) {
-        Ok(()) => {
-            let hash_after = head_short_hash(&source).unwrap_or_default();
-            if hash_before == hash_after {
-                output.push("Already up to date.".to_string());
-            } else {
-                output.push(format!("Updated {hash_before} → {hash_after}"));
-            }
-        }
-        Err(e) => {
-            return Err(PmError::Git(format!("git pull failed: {e}")));
-        }
-    }
-
-    // 3. cargo install --path .
-    output.push("Building and installing...".to_string());
-    let install = Command::new("cargo")
-        .args(["install", "--path", "."])
-        .current_dir(&source)
-        .output()
-        .map_err(|e| PmError::SafetyCheck(format!("failed to run cargo install: {e}")))?;
-
-    if !install.status.success() {
-        let stderr = String::from_utf8_lossy(&install.stderr).trim().to_string();
-        return Err(PmError::SafetyCheck(format!(
-            "Build failed (old binary is still intact):\n{stderr}"
-        )));
-    }
-    output.push("Installed successfully.".to_string());
-
-    let version = version_from_cargo_toml(&source).unwrap_or_else(|_| "unknown".to_string());
-
-    // 4. Warn about active features
-    let active_features = count_active_features()?;
-    if !active_features.is_empty() {
-        let total: usize = active_features.iter().map(|(_, c)| c).sum();
-        let details: Vec<String> = active_features
-            .iter()
-            .map(|(name, count)| format!("  {name}: {count}"))
-            .collect();
-        output.push(format!(
-            "⚠ {total} active feature{} across {} project{} (new binary may differ from in-flight worktrees):",
-            if total == 1 { "" } else { "s" },
-            active_features.len(),
-            if active_features.len() == 1 { "" } else { "s" },
-        ));
-        output.extend(details);
-    }
-
-    // 5. Auto-run pm upgrade --all
-    output.push("Upgrading all projects...".to_string());
-    match super::upgrade::upgrade_all() {
-        Ok(lines) => output.extend(lines),
-        Err(e) => output.push(format!("Warning: upgrade failed: {e}")),
-    }
-
-    // 6. Summary
-    let hash_final = head_short_hash(&source).unwrap_or_default();
-    if hash_before == hash_final {
-        output.push(format!("Done. v{version} ({hash_final}, unchanged)"));
-    } else {
-        output.push(format!("Done. v{version} ({hash_before} → {hash_final})"));
-    }
-
-    Ok(output)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::feature::{FeatureState, FeatureStatus};
-    use tempfile::tempdir;
+    use std::sync::Arc;
+    use tempfile::{TempDir, tempdir};
 
-    #[test]
-    fn version_from_cargo_toml_parses_version() {
-        let dir = tempdir().unwrap();
-        let cargo_toml = dir.path().join("Cargo.toml");
-        std::fs::write(
-            &cargo_toml,
-            "[package]\nname = \"test\"\nversion = \"1.2.3\"\n",
-        )
-        .unwrap();
+    const TARGET: &str = "test-target";
 
-        let v = version_from_cargo_toml(dir.path()).unwrap();
-        assert_eq!(v, "1.2.3");
+    /// A stand-in for GitHub serving release `tag` with `binary` as its
+    /// asset and `sums` as its SHA256SUMS; its API URL, and the number of
+    /// asset downloads it has served.
+    struct Releases {
+        api: String,
+        downloads: Arc<std::sync::atomic::AtomicUsize>,
+        server: Arc<tiny_http::Server>,
     }
 
-    #[test]
-    fn version_from_cargo_toml_ignores_dependency_versions() {
-        let dir = tempdir().unwrap();
-        let cargo_toml = dir.path().join("Cargo.toml");
-        std::fs::write(
-            &cargo_toml,
-            "[package]\nname = \"test\"\nversion = \"1.0.0\"\n\n[dependencies.serde]\nversion = \"2.0.0\"\n",
-        )
-        .unwrap();
-
-        let v = version_from_cargo_toml(dir.path()).unwrap();
-        assert_eq!(v, "1.0.0");
-    }
-
-    #[test]
-    fn version_from_cargo_toml_errors_on_missing_file() {
-        let dir = tempdir().unwrap();
-        let result = version_from_cargo_toml(dir.path());
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn find_pm_source_errors_when_not_registered() {
-        // This test depends on global state, so just verify the error type
-        // if pm is not registered (which it might be in the dev environment)
-        let result = find_pm_source();
-        // Either succeeds (pm is registered) or gives SafetyCheck error
-        if let Err(e) = result {
-            assert!(matches!(e, PmError::SafetyCheck(_)));
+    impl Drop for Releases {
+        fn drop(&mut self) {
+            self.server.unblock();
         }
     }
 
-    #[test]
-    fn dirty_worktree_refuses_update() {
+    fn releases(tag: &str, binary: &[u8], sums: Option<String>) -> Releases {
+        let server = Arc::new(tiny_http::Server::http("127.0.0.1:0").unwrap());
+        let base = format!("http://{}", server.server_addr().to_ip().unwrap());
+        let asset = format!("pm-{TARGET}");
+        let sums = sums.unwrap_or_else(|| format!("{}  {asset}\n", sha256(binary)));
+        let latest = serde_json::json!({
+            "tag_name": tag,
+            "assets": [
+                {"name": asset, "browser_download_url": format!("{base}/dl/{asset}")},
+                {"name": "SHA256SUMS", "browser_download_url": format!("{base}/dl/SHA256SUMS")},
+            ],
+        })
+        .to_string();
+        let downloads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (serving, counted, binary) =
+            (Arc::clone(&server), Arc::clone(&downloads), binary.to_vec());
+        std::thread::spawn(move || {
+            for request in serving.incoming_requests() {
+                let body = match request.url() {
+                    "/releases/latest" => latest.clone().into_bytes(),
+                    "/dl/SHA256SUMS" => sums.clone().into_bytes(),
+                    url if url == format!("/dl/pm-{TARGET}") => {
+                        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        binary.clone()
+                    }
+                    _ => {
+                        let _ = request.respond(tiny_http::Response::empty(404));
+                        continue;
+                    }
+                };
+                let _ = request.respond(tiny_http::Response::from_data(body));
+            }
+        });
+        Releases {
+            api: base,
+            downloads,
+            server,
+        }
+    }
+
+    /// An installed pm at `<dir>/bin/pm`, and a release binary that records
+    /// the arguments it is run with in `<dir>/ran`.
+    fn installed() -> (TempDir, PathBuf, Vec<u8>) {
         let dir = tempdir().unwrap();
-        let repo_path = dir.path().join("pm-source");
-        crate::git::init_repo(&repo_path).unwrap();
+        let exe = dir.path().join("bin/pm");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, "old").unwrap();
+        let release = format!(
+            "#!/bin/sh\necho \"$@\" > '{}'\necho upgraded\n",
+            dir.path().join("ran").display()
+        );
+        (dir, exe, release.into_bytes())
+    }
 
-        // Create a tracked file, commit, then modify it
-        std::fs::write(repo_path.join("file.txt"), "original").unwrap();
-        crate::git::run_git(&repo_path, &["add", "file.txt"]).unwrap();
-        crate::git::run_git(&repo_path, &["commit", "-m", "init"]).unwrap();
-        std::fs::write(repo_path.join("file.txt"), "modified").unwrap();
-
-        assert!(crate::git::has_uncommitted_changes(&repo_path).unwrap());
+    fn run(api: &str, exe: &Path, current: &str, force: bool) -> Result<Outcome> {
+        update(&Update {
+            api,
+            exe,
+            current,
+            target: TARGET,
+            force,
+        })
     }
 
     #[test]
-    fn count_active_features_with_temp_project() {
-        let dir = tempdir().unwrap();
-        let root = dir.path();
-
-        // Set up minimal pm project structure
-        let features_dir = root.join(".pm").join("features");
-        std::fs::create_dir_all(&features_dir).unwrap();
-
-        // Write a WIP feature
-        let wip = FeatureState {
-            status: FeatureStatus::Wip,
-            branch: "feat-a".to_string(),
-            worktree: "feat-a".to_string(),
-            base: "main".to_string(),
-            pr: String::new(),
-            context: String::new(),
-            workflow: None,
-            created: chrono::Utc::now(),
-            last_active: chrono::Utc::now(),
-            progress: Default::default(),
-            blocked_reason: None,
-            blocked_by: None,
+    fn a_newer_release_is_verified_renamed_over_the_binary_and_upgrades_projects() {
+        let (dir, exe, release) = installed();
+        let github = releases("v0.3.0", &release, None);
+        let Outcome::Installed(lines) = run(&github.api, &exe, "0.2.0", false).unwrap() else {
+            panic!("0.3.0 is newer");
         };
-        wip.save(&features_dir, "feat-a").unwrap();
+        assert_eq!(std::fs::read(&exe).unwrap(), release);
+        assert_eq!(
+            std::fs::metadata(&exe).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("ran")).unwrap(),
+            "upgrade --all\n"
+        );
+        assert!(lines.iter().any(|l| l == "upgraded"), "{lines:?}");
+        let leftovers: Vec<_> = std::fs::read_dir(exe.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(leftovers, ["pm"]);
+    }
 
-        // Write a Merged feature (should not count)
-        let merged = FeatureState {
-            status: FeatureStatus::Merged,
-            branch: "feat-b".to_string(),
-            worktree: "feat-b".to_string(),
-            base: "main".to_string(),
-            pr: String::new(),
-            context: String::new(),
-            workflow: None,
-            created: chrono::Utc::now(),
-            last_active: chrono::Utc::now(),
-            progress: Default::default(),
-            blocked_reason: None,
-            blocked_by: None,
-        };
-        merged.save(&features_dir, "feat-b").unwrap();
+    #[test]
+    fn a_binary_not_matching_its_checksum_is_not_installed() {
+        let (dir, exe, release) = installed();
+        let wrong = format!("{}  pm-{TARGET}\n", sha256(b"other"));
+        let github = releases("v0.3.0", &release, Some(wrong));
+        let err = run(&github.api, &exe, "0.2.0", false).unwrap_err();
+        assert!(err.to_string().contains("SHA256SUMS"), "{err}");
+        assert_eq!(std::fs::read_to_string(&exe).unwrap(), "old");
+        assert!(!dir.path().join("ran").exists());
+        assert_eq!(std::fs::read_dir(exe.parent().unwrap()).unwrap().count(), 1);
+    }
 
-        // Count directly using FeatureState::list
-        let features = FeatureState::list(&features_dir).unwrap();
-        let active = features
-            .iter()
-            .filter(|(_, s)| !matches!(s.status, FeatureStatus::Merged | FeatureStatus::Stale))
-            .count();
+    #[test]
+    fn the_same_or_an_older_release_downloads_nothing() {
+        let (_dir, exe, release) = installed();
+        let github = releases("v0.2.0", &release, None);
+        for current in ["0.2.0", "0.3.0-rc.1", "1.0.0"] {
+            let outcome = run(&github.api, &exe, current, false).unwrap();
+            assert!(matches!(outcome, Outcome::UpToDate(_)), "{current}");
+        }
+        assert_eq!(
+            github.downloads.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        assert_eq!(std::fs::read_to_string(&exe).unwrap(), "old");
+    }
 
-        assert_eq!(active, 1);
+    #[test]
+    fn a_build_from_source_is_replaced_only_when_forced() {
+        let (_dir, exe, release) = installed();
+        let github = releases("v0.2.0", &release, None);
+        let err = run(&github.api, &exe, "0.2.0+3.gabc1234", false).unwrap_err();
+        assert!(err.to_string().contains("cargo install --path ."), "{err}");
+        assert_eq!(std::fs::read_to_string(&exe).unwrap(), "old");
+
+        run(&github.api, &exe, "0.2.0+3.gabc1234", true).unwrap();
+        assert_eq!(std::fs::read(&exe).unwrap(), release);
     }
 }

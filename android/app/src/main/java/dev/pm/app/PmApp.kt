@@ -2,9 +2,14 @@ package dev.pm.app
 
 import android.app.Application
 import android.content.Context
+import androidx.work.Configuration
 import dev.pm.app.push.Notifications
 
-class PmApp : Application() {
+/** WorkManager starts on first use, from [workManagerConfiguration], rather than at launch. */
+class PmApp : Application(), Configuration.Provider {
+    override val workManagerConfiguration: Configuration
+        get() = Configuration.Builder().build()
+
     lateinit var container: AppContainer
         private set
 
