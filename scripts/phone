@@ -188,6 +188,18 @@ hold() {
   shift
   start=$(started "$pid")
   [ -n "$start" ] || die "no process $pid"
+  if [ "$#" -gt 0 ]; then
+    # Trapped before the hold is taken: a signal bash receives while waiting
+    # on a child that survives it (the lock's perl ignores INT) is otherwise
+    # dropped, and CMD would run anyway.
+    release_wrapper() {
+      trap '' INT HUP TERM
+      [ ! -e "$dir/holders/$pid" ] || locked _release "$pid" || true
+    }
+    trap 'release_wrapper; exit 130' INT
+    trap 'release_wrapper; exit 129' HUP
+    trap 'release_wrapper; exit 143' TERM
+  fi
   locked _hold "$pid" "$start"
   # In its own session, so the caller's Ctrl-C or exit does not take it.
   perl -MPOSIX=setsid -e 'setsid; exec @ARGV or die' \
@@ -197,16 +209,8 @@ hold() {
     echo "phone: holding $serial for pid $pid (scripts/phone release --pid $pid)" >&2
     return 0
   fi
-  release_wrapper() {
-    trap '' INT HUP TERM
-    locked _release "$pid" || true
-  }
-  trap 'release_wrapper; exit 130' INT
-  trap 'release_wrapper; exit 129' HUP
-  trap 'release_wrapper; exit 143' TERM
   local status=0
   "$@" || status=$?
-  trap - INT HUP TERM
   release_wrapper
   return "$status"
 }
