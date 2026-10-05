@@ -18,8 +18,10 @@ pub struct Cli {
 pub enum Commands {
     /// Create a new pm project with a git repo
     Init {
-        /// Path for the new project root
-        path: PathBuf,
+        /// Path for the new project root; its last component names the
+        /// project. Defaults to `./<repo name>` when cloning with --git
+        #[arg(required_unless_present = "git")]
+        path: Option<PathBuf>,
         /// Clone a remote repo instead of running git init
         #[arg(long)]
         git: Option<String>,

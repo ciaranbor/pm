@@ -508,6 +508,41 @@ fn init_starts_main_in_the_main_session() {
     assert_eq!(s.window_names("proj/main"), ["main"]);
 }
 
+/// Catches: `pm init --git <url>` without a PATH not cloning into
+/// `./<repo name>` under the caller's cwd.
+#[test]
+#[ignore]
+fn init_from_git_without_a_path_roots_the_project_in_the_cwd() {
+    let s = Smoke::new();
+    let staging = s.home().join("staging");
+    s.git(
+        s.home(),
+        &["init", "-q", "-b", "main", &staging.to_string_lossy()],
+    );
+    s.git(&staging, &["commit", "-q", "--allow-empty", "-m", "init"]);
+    let remote = s.home().join("remotes/app.git");
+    s.git(
+        s.home(),
+        &[
+            "clone",
+            "-q",
+            "--bare",
+            &staging.to_string_lossy(),
+            &remote.to_string_lossy(),
+        ],
+    );
+    let cwd = s.home().join("work");
+    std::fs::create_dir(&cwd).unwrap();
+
+    s.pm(&cwd)
+        .args(["init", "--no-main", "--git", &remote.to_string_lossy()])
+        .assert()
+        .success();
+
+    assert!(cwd.join("app/main/.git").exists());
+    assert!(s.projects_dir().join("app.toml").exists());
+}
+
 /// Catches: `agent spawn --scope` resolving the target from the caller's
 /// cwd instead of the flag, run from `main` as an orchestrator would.
 #[test]

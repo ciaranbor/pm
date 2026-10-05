@@ -37,6 +37,9 @@ pub enum PmError {
     #[error("Not in a feature or main worktree — run from a worktree directory")]
     NotInWorktree,
 
+    #[error("Cannot derive a project name from git URL \"{0}\": pass a PATH")]
+    UnnamedGitUrl(String),
+
     #[error("Path already exists: {0}")]
     PathAlreadyExists(PathBuf),
 
