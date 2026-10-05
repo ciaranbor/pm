@@ -105,6 +105,12 @@ pub enum PmError {
         searched: Vec<PathBuf>,
     },
 
+    #[error(
+        "Workflow '{workflow}' lists 'default', which is no longer the vanilla agent and has \
+         no definition. Rename it to 'plain' in the workflow's config.toml."
+    )]
+    WorkflowNamesLegacyVanilla { workflow: String },
+
     #[error("Agent error: {0}")]
     Agent(String),
 
@@ -120,6 +126,12 @@ pub enum PmError {
         agent: String,
         searched: Vec<PathBuf>,
     },
+
+    #[error(
+        "No agent definition 'default': the vanilla agent is now 'plain'. Run `pm upgrade` to \
+         migrate agents spawned as 'default', or spawn 'plain'."
+    )]
+    UnmigratedVanillaAgent,
 
     #[error("Invalid agent name: {0}")]
     InvalidAgentName(String),

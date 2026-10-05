@@ -479,6 +479,7 @@ pub enum AgentCommands {
         /// `~/.agents/agents/`). Defaults to `name` when omitted. Use this to
         /// spawn multiple agents from the same definition under different
         /// display names, e.g. `pm agent spawn frontend-dev --agent implementer`.
+        /// `plain` launches a vanilla session with no definition.
         #[arg(long = "agent", value_name = "DEFINITION")]
         agent_definition: Option<String>,
         /// Initial context for the agent. Use `-` to read the body from stdin

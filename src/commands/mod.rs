@@ -72,4 +72,5 @@ pub mod tmux_push;
 pub mod tmux_refresh;
 pub mod tmux_watch;
 pub mod upgrade;
+pub mod vanilla_rename;
 pub mod workflow;

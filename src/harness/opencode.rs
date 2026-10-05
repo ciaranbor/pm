@@ -953,7 +953,7 @@ mod tests {
     fn pre_launch_vanilla_session_names_no_agent() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = fake_opencode(dir.path(), r#"{"data":{"id":"ses_new"}}"#, 0);
-        pre_launch(&ctx(dir.path(), "default"), &with_model(), &cfg).unwrap();
+        pre_launch(&ctx(dir.path(), "plain"), &with_model(), &cfg).unwrap();
         let body = body_of(&fake_opencode_argv(dir.path()));
         assert!(body.get("agent").is_none(), "{body}");
     }
@@ -989,10 +989,10 @@ mod tests {
                 "{err}"
             );
         }
-        let err = pre_launch(&ctx(dir.path(), "default"), &SpawnSpec::default(), &cfg)
+        let err = pre_launch(&ctx(dir.path(), "plain"), &SpawnSpec::default(), &cfg)
             .unwrap_err()
             .to_string();
-        assert!(err.contains("`[agents.models] default = "), "{err}");
+        assert!(err.contains("`[agents.models] plain = "), "{err}");
         assert!(fake_opencode_calls(dir.path()).is_empty());
     }
 

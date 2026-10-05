@@ -117,6 +117,11 @@ pub fn migrations_dir(project_root: &Path) -> PathBuf {
     pm_dir(project_root).join("migrations")
 }
 
+/// The marker recording that migration `name` has run for this project.
+pub fn migration_marker(project_root: &Path, name: &str) -> PathBuf {
+    migrations_dir(project_root).join(name)
+}
+
 /// Single source of truth for the main worktree directory name convention.
 /// Returns `<project_root>/main`.
 pub fn main_worktree(project_root: &Path) -> PathBuf {

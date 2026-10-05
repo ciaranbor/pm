@@ -808,19 +808,18 @@ pub fn redundant_overrides(project_root: &Path) -> Vec<String> {
 
 // --- Migration: project bundled copies → global tier ---
 
-fn migration_marker(project_root: &Path) -> PathBuf {
-    paths::migrations_dir(project_root).join(MIGRATION_MARKER)
-}
-
 /// Whether this project's bundled copies have been migrated to the global
 /// tier. Until then, bundled-named project files are stale pm-owned copies;
 /// after, they are the user's customs.
 pub fn is_migrated(project_root: &Path) -> bool {
-    migration_marker(project_root).exists()
+    paths::migration_marker(project_root, MIGRATION_MARKER).exists()
 }
 
 pub fn write_migration_marker(project_root: &Path) -> Result<()> {
-    write_atomic(&migration_marker(project_root), b"")
+    write_atomic(
+        &paths::migration_marker(project_root, MIGRATION_MARKER),
+        b"",
+    )
 }
 
 /// The project-tier paths a migration removes: every bundled skill/agent

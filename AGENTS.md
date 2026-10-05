@@ -79,7 +79,7 @@ Design decisions you can't recover by reading the tree. Preserve them.
 - Definitions resolve only from the canonical `.agents/agents/` stores
   (project, then global). A harness's own dir is a projection, never a
   source — a def hand-written only in `.claude/agents/` does not resolve.
-- The reserved name `default` means a definition-less vanilla session:
+- The reserved name `plain` means a definition-less vanilla session:
   validation skips it and the spawn passes no definition, unconditionally.
 
 ### Registry, config, and the baseline

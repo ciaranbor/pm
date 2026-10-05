@@ -1077,9 +1077,9 @@ mod tests {
         let state = FeatureState::load(&features_dir, "login").unwrap();
         assert_eq!(state.workflow.as_deref(), Some("solo"));
 
-        // solo's sole team member is the reserved vanilla `default` name —
+        // solo's sole team member is the reserved vanilla `plain` name —
         // spawned and registered despite having no definition file.
-        assert_vanilla_spawned(&project_path, &project_name, server.name(), "default");
+        assert_vanilla_spawned(&project_path, &project_name, server.name(), "plain");
     }
 
     /// The vanilla agent spawned under `name`: a window, a registry entry
@@ -1145,7 +1145,7 @@ mod tests {
             ..FeatNewParams::with_defaults(&project_path, &projects_dir, "login", server.name())
         })
         .unwrap();
-        assert_vanilla_spawned(&project_path, &project_name, server.name(), "default");
+        assert_vanilla_spawned(&project_path, &project_name, server.name(), "plain");
     }
 
     #[test]

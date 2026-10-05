@@ -123,6 +123,7 @@ pub fn init_in(
     // bundled copies and is born migrated.
     skills::install_global_in(global)?;
     skills::write_migration_marker(path)?;
+    super::vanilla_rename::write_marker(path)?;
 
     // Register in global registry
     let entry = ProjectEntry {

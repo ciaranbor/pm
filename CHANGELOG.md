@@ -6,6 +6,13 @@ notes.
 
 ## Unreleased
 
+- The definition-less vanilla agent is now `plain` (it was `default`,
+which read like a catch-all in `[agents.*]`, where that is `"*"`).
+`default` is an ordinary name. `pm upgrade` keeps an agent already
+running as `default` under that name and relaunches it as `plain`.
+Rename `default` to `plain` in your own workflows and `[agents.*]` rows;
+`pm doctor` reports rows still keyed `default`.
+
 ## 0.3.0 — 2026-10-05
 
 - Answer an agent's dialogs from the Android app: questions, permission

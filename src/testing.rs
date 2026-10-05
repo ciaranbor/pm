@@ -695,6 +695,7 @@ impl TestServer {
         crate::commands::hooks_install::install(Some(&project_path)).unwrap();
         crate::commands::skills::install_global().unwrap();
         crate::commands::skills::write_migration_marker(&project_path).unwrap();
+        crate::commands::vanilla_rename::write_marker(&project_path).unwrap();
 
         // Register in global registry
         use crate::state::project::ProjectEntry;

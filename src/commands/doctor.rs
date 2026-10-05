@@ -5,7 +5,7 @@ use crate::commands::attention::{self, AgentState};
 use crate::commands::feat_delete::{self, CleanupParams};
 use crate::commands::harness_check::{self, Problem, ProblemKind};
 use crate::commands::running_agents::Windows;
-use crate::commands::{agent_spawn, hooks_install, skills};
+use crate::commands::{agent_spawn, hooks_install, skills, vanilla_rename};
 use crate::error::Result;
 use crate::harness::{Harness, Probe};
 use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
@@ -15,7 +15,7 @@ use crate::state::project::{
     AgentsConfig, GlobalConfig, ProjectConfig, ProjectEntry, WILDCARD_AGENT, harness_config,
     resolve_agent_settings,
 };
-use crate::state::workflow;
+use crate::state::workflow::{self, LEGACY_VANILLA_AGENT, VANILLA_AGENT};
 use crate::{gh, git, tmux};
 
 /// Categorisation of an issue for callers that want to filter findings.
@@ -68,7 +68,12 @@ pub enum IssueKind {
     SkillShadowedByGlobal,
     /// An active agent is named `claude`, the removed vanilla alias: it runs
     /// until its window dies, then restart/heal fail to resolve a definition.
+    /// Also an agent registered as `default` in a project `pm upgrade` has not
+    /// yet migrated to `plain` (`commands::vanilla_rename`).
     LegacyVanillaAgentName,
+    /// An `[agents.*]` row keyed `default`, which names no definition: it
+    /// reads as a catch-all but matches only an agent defined as `default`.
+    LegacyVanillaConfigRow,
     /// A harness's hooks file has an entry in a shape the harness silently
     /// registers nothing for.
     HooksMalformed,
@@ -173,6 +178,8 @@ enum FixAction {
     TrustWorktree { harness: Harness, path: PathBuf },
     /// Rewrite the registry entry's `main_branch`.
     RecordMainBranch { branch: String },
+    /// Point registered `default` agents at `plain` (`vanilla_rename`).
+    MigrateVanillaAgents,
     /// `pm harness pull` the feature.
     PullFeatureAssets,
 }
@@ -263,6 +270,7 @@ pub fn diagnose(
         });
     }
     main_issues.extend(harness_config_issues(project_root)?);
+    main_issues.extend(legacy_vanilla_row_issues(project_root)?);
     let projections = DefinitionProjections::load(project_root)?;
     main_issues.extend(asset_issues(project_root, &projections)?);
     main_issues.extend(rebase_issue(&main_repo));
@@ -1220,28 +1228,73 @@ fn loop_issue(project_root: &Path, scope: &str, name: &str, entry: &AgentEntry) 
 }
 
 /// One warning per active agent in `scope` whose effective definition is
-/// `claude`, the removed vanilla alias (spawned by a pre-`default` solo).
+/// `claude`, the removed vanilla alias (spawned by a pre-`default` solo), and
+/// per agent registered as `default` before this project's `plain` migration.
 fn legacy_vanilla_agent_issues(project_root: &Path, scope: &str) -> Vec<Issue> {
     let Ok(registry) = AgentRegistry::load(&paths::agents_dir(project_root), scope) else {
         return Vec::new();
     };
+    let unmigrated = !vanilla_rename::is_migrated(project_root);
     registry
         .agents
         .iter()
-        .filter(|(name, entry)| {
-            entry.agent_type == AgentType::Agent
-                && entry.active
-                && entry.effective_definition(name) == "claude"
-        })
-        .map(|(name, _)| Issue {
-            kind: IssueKind::LegacyVanillaAgentName,
-            message: format!(
-                "agent '{name}' uses removed vanilla agent name 'claude' and cannot be \
-                 restarted (stop it and respawn as 'default')"
-            ),
-            fix: Fix::None,
+        .filter(|(_, entry)| entry.agent_type == AgentType::Agent)
+        .filter_map(|(name, entry)| match entry.effective_definition(name) {
+            "claude" if entry.active => Some(Issue {
+                kind: IssueKind::LegacyVanillaAgentName,
+                message: format!(
+                    "agent '{name}' uses removed vanilla agent name 'claude' and cannot be \
+                     restarted (stop it and respawn as '{VANILLA_AGENT}')"
+                ),
+                fix: Fix::None,
+            }),
+            LEGACY_VANILLA_AGENT if unmigrated => Some(Issue {
+                kind: IssueKind::LegacyVanillaAgentName,
+                message: format!(
+                    "agent '{name}' was spawned as vanilla agent '{LEGACY_VANILLA_AGENT}', now \
+                     '{VANILLA_AGENT}': it cannot be restarted until it is migrated (run `pm \
+                     upgrade`)"
+                ),
+                fix: Fix::Auto(FixAction::MigrateVanillaAgents),
+            }),
+            _ => None,
         })
         .collect()
+}
+
+/// One warning per `[agents.*]` row keyed `default` while no `default`
+/// definition exists: the row matches nothing, and was likely meant as `"*"`
+/// (every agent) or `plain` (the vanilla agent).
+fn legacy_vanilla_row_issues(project_root: &Path) -> Result<Vec<Issue>> {
+    if workflow::definition_exists(
+        project_root,
+        LEGACY_VANILLA_AGENT,
+        paths::home_dir().ok().as_deref(),
+    ) {
+        return Ok(Vec::new());
+    }
+    let (project, global) = agents_configs(project_root)?;
+    let mut issues = Vec::new();
+    for (tier, config) in [("project", &project), ("global", &global)] {
+        for (table, rows) in [
+            ("harness", &config.harness),
+            ("models", &config.models),
+            ("permissions", &config.permissions),
+        ] {
+            if rows.contains_key(LEGACY_VANILLA_AGENT) {
+                issues.push(Issue {
+                    kind: IssueKind::LegacyVanillaConfigRow,
+                    message: format!(
+                        "{tier} [agents.{table}] row '{LEGACY_VANILLA_AGENT}' matches no agent \
+                         definition: use \"{WILDCARD_AGENT}\" for every agent or \
+                         '{VANILLA_AGENT}' for the vanilla agent"
+                    ),
+                    fix: Fix::None,
+                });
+            }
+        }
+    }
+    Ok(issues)
 }
 
 /// A rebase paused in `worktree`.
@@ -1343,6 +1396,9 @@ fn apply_fix(
         }
         FixAction::InstallGlobalAssets => {
             crate::commands::skills::install_global()?;
+        }
+        FixAction::MigrateVanillaAgents => {
+            crate::commands::vanilla_rename::migrate(project_root, false)?;
         }
         FixAction::RespawnAgent { agent_name } => {
             let (_, _, notes) =
@@ -1992,7 +2048,7 @@ mod tests {
                 session_id: String::new(),
                 window_name: "dev".to_string(),
                 active: true,
-                agent_definition: Some("default".to_string()),
+                agent_definition: Some("plain".to_string()),
                 harness: Harness::ClaudeCode,
                 spawned_at: None,
             },
@@ -2021,6 +2077,91 @@ mod tests {
             !lines.iter().any(|l| l.contains("uses removed")),
             "{lines:?}"
         );
+    }
+
+    #[test]
+    fn unmigrated_default_agent_is_flagged_and_fix_migrates_it() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
+        let agents_dir = paths::agents_dir(&project_path);
+        let mut registry = AgentRegistry::load(&agents_dir, "login").unwrap();
+        registry.register(
+            "default",
+            crate::state::agent::AgentEntry {
+                agent_type: AgentType::Agent,
+                session_id: String::new(),
+                window_name: "default".to_string(),
+                active: false,
+                agent_definition: None,
+                harness: Harness::ClaudeCode,
+                spawned_at: None,
+            },
+        );
+        registry.save(&agents_dir, "login").unwrap();
+        let flagged = |lines: &[String]| {
+            lines
+                .iter()
+                .any(|l| l.contains("agent 'default' was spawned as vanilla agent"))
+        };
+
+        // A project born after the rename: `default` is an ordinary name.
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
+        assert!(!flagged(&lines), "{lines:?}");
+
+        std::fs::remove_file(paths::migrations_dir(&project_path).join("plain-agent")).unwrap();
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
+        assert!(flagged(&lines), "{lines:?}");
+
+        doctor(&project_path, &projects_dir, true, server.name()).unwrap();
+        let entry = AgentRegistry::load(&agents_dir, "login").unwrap();
+        assert_eq!(
+            entry
+                .get("default")
+                .unwrap()
+                .effective_definition("default"),
+            VANILLA_AGENT
+        );
+        let lines = doctor(&project_path, &projects_dir, false, server.name())
+            .unwrap()
+            .lines();
+        assert!(!flagged(&lines), "{lines:?}");
+    }
+
+    #[test]
+    fn config_row_keyed_default_is_flagged_until_a_default_definition_exists() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, _) = server.setup_project_no_tmux(dir.path());
+        let pm_dir = paths::pm_dir(&project_path);
+        let mut config = ProjectConfig::load(&pm_dir).unwrap();
+        config
+            .agents
+            .permissions
+            .insert("default".into(), "auto".into());
+        config.agents.models.insert("plain".into(), "opus".into());
+        config.save(&pm_dir).unwrap();
+
+        assert_eq!(
+            messages(
+                &legacy_vanilla_row_issues(&project_path).unwrap(),
+                IssueKind::LegacyVanillaConfigRow
+            ),
+            [
+                "project [agents.permissions] row 'default' matches no agent definition: use \
+                 \"*\" for every agent or 'plain' for the vanilla agent"
+            ]
+        );
+
+        let defs = paths::main_worktree(&project_path).join(".agents/agents");
+        std::fs::create_dir_all(&defs).unwrap();
+        std::fs::write(defs.join("default.md"), "stub").unwrap();
+        assert!(legacy_vanilla_row_issues(&project_path).unwrap().is_empty());
     }
 
     #[test]

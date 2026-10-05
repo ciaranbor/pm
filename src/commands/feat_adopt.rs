@@ -932,9 +932,9 @@ mod tests {
         assert_eq!(state.workflow.as_deref(), Some("solo"));
 
         // The brief is queued to solo's sole brief agent (the reserved
-        // vanilla `default` name).
+        // vanilla `plain` name).
         let messages_dir = paths::messages_dir(&project_path);
-        let summaries = crate::messages::list(&messages_dir, "login", "default", None).unwrap();
+        let summaries = crate::messages::list(&messages_dir, "login", "plain", None).unwrap();
         assert_eq!(summaries.len(), 1);
     }
 
