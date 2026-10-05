@@ -61,8 +61,9 @@ pub fn paste_text(server: Option<&str>, pane: &str, text: &str) -> Result<()> {
     send_key(server, pane, "Enter")
 }
 
-/// Whether `pane` is in a mode — copy mode, most often — where keys drive
-/// the mode rather than reach the program.
+/// Whether `pane` is in a mode — copy mode or a chooser such as
+/// `choose-tree`'s tree mode — where keys drive the mode rather than reach
+/// the program.
 pub fn in_mode(server: Option<&str>, pane: &str) -> Result<bool> {
     let out = run_tmux(
         server,
@@ -77,8 +78,9 @@ pub fn in_mode(server: Option<&str>, pane: &str) -> Result<bool> {
     Ok(out == "1")
 }
 
-/// Leave the mode `pane` is in.
+/// Leave whatever mode `pane` is in: `copy-mode -q` leaves any mode, not
+/// only copy mode.
 pub fn cancel_mode(server: Option<&str>, pane: &str) -> Result<()> {
-    run_tmux(server, &["send-keys", "-X", "-t", &exact(pane), "cancel"])?;
+    run_tmux(server, &["copy-mode", "-q", "-t", &exact(pane)])?;
     Ok(())
 }
