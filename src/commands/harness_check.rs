@@ -398,6 +398,14 @@ mod tests {
         let hooks = root["hooks"].as_object_mut().unwrap();
         hooks.remove("Notification");
         hooks.remove("StopFailure");
+        // The dialog hook's entry alone, the status hook's beside it kept.
+        hooks["PermissionRequest"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|e| {
+                !e.to_string()
+                    .contains(crate::commands::hooks_install::PM_DIALOG_MARKER)
+            });
         std::fs::write(&settings, root.to_string()).unwrap();
 
         let problems = harness_problems(
@@ -411,12 +419,19 @@ mod tests {
             .iter()
             .map(|p| (p.kind, p.message.as_str()))
             .collect();
-        assert_eq!(kinds.len(), 1, "{kinds:?}");
+        assert_eq!(kinds.len(), 2, "{kinds:?}");
         assert_eq!(kinds[0].0, ProblemKind::StatusHooksMissing);
         assert!(
             kinds[0]
                 .1
                 .starts_with("pm status hooks (StopFailure, Notification) not installed"),
+            "{kinds:?}"
+        );
+        assert_eq!(kinds[1].0, ProblemKind::StatusHooksMissing);
+        assert!(
+            kinds[1]
+                .1
+                .starts_with("pm dialog hook (PermissionRequest) not installed"),
             "{kinds:?}"
         );
 

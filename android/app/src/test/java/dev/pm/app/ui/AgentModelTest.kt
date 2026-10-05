@@ -257,4 +257,30 @@ class AgentModelTest {
         model.dialogNamed(null)
         assertNull(model.dialog.value)
     }
+
+    @Test
+    fun a_dialog_whose_hook_is_gone_is_not_taken_for_answered_elsewhere() = modelTest {
+        server.enqueue(MockResponse.Builder().body(permission).build())
+        model.dialogNamed("d1")
+        eventually { model.dialog.value?.id == "d1" }
+
+        server.enqueue(
+            MockResponse.Builder()
+                .code(409)
+                .body("""{"error":"the dialog's hook is gone","refused":"gone"}""")
+                .build()
+        )
+        server.enqueue(
+            MockResponse.Builder()
+                .code(404)
+                .body("""{"error":"no dialog of the agent's can be answered"}""")
+                .build()
+        )
+        model.answer("allow")
+        eventually { server.requestCount == 3 && model.dialog.value == null }
+        assertEquals(
+            "The dialog can no longer be answered here; answer it at the terminal",
+            model.notice.value,
+        )
+    }
 }

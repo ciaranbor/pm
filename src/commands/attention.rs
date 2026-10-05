@@ -620,7 +620,7 @@ impl ScopeReader<'_> {
                 detail: w.describe(),
                 since: Some(w.since),
                 dialog: (w.kind.class() == WaitingClass::Asking)
-                    .then(|| hooks_dialog::current(self.project_root, scope, agent, harness))
+                    .then(|| hooks_dialog::current_for(self.project_root, scope, agent, &w))
                     .flatten()
                     .map(|record| record.dialog.id),
             })

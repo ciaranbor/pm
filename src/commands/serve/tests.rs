@@ -166,6 +166,7 @@ fn the_endpoints_serve_the_snapshot_a_features_details_and_summary_and_an_agents
     let (status, screen) = get(&format!("/v1/agents/{p}/login/implementer/screen"));
     assert_eq!(status, 200);
     assert!(screen.contains("sleep 999"), "{screen}");
+
     for missing in [
         "/v1/features/nope/login/summary".to_string(),
         format!("/v1/features/{p}/search/summary"),
@@ -176,6 +177,7 @@ fn the_endpoints_serve_the_snapshot_a_features_details_and_summary_and_an_agents
         format!("/v1/features/{p}/%2E%2E"),
         format!("/v1/features/{p}/..%2F..%2Fconfig"),
         format!("/v1/agents/{p}/login/reviewer/screen"),
+        format!("/v1/agents/{p}/%2E%2E/implementer/screen"),
         format!("/v1/agents/{p}/login/implementer/dialog"),
         format!("/v1/agents/{p}/login/reviewer/dialog"),
         format!("/v1/agents/{p}/%2E%2E/implementer/dialog"),

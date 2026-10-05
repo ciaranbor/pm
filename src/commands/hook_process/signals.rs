@@ -1,5 +1,5 @@
-//! SIGTERM, SIGHUP and SIGINT, caught for the rest of the process so the
-//! Stop hook's wait can tell who sent a signal and record why it ended. A
+//! SIGTERM, SIGHUP and SIGINT, caught for the rest of the process so a
+//! blocking hook's wait can tell who sent a signal and act on it at once. A
 //! handler may only do async-signal-safe work, so it writes the signal and
 //! its sender's pid to a pipe the wait polls; a write of at most `PIPE_BUF`
 //! bytes is atomic, so concurrent records never interleave.

@@ -16,11 +16,17 @@
 //!   its input, which restores the mode from before planning; a `setMode`
 //!   in `updatedPermissions` picks another. "Keep planning" is `deny` with
 //!   a message. The CLI's "clear context" option has no hook equivalent.
+//!   Its "use auto mode" choice is offered as the CLI offers it where auto
+//!   mode is available; the payload doesn't say whether it is, and where it
+//!   isn't, the CLI offers "auto-accept edits" instead — what `setMode`
+//!   auto does there is unverified.
 //! - A tool prompt's "don't ask again" is `allow` with the payload's
 //!   `permission_suggestions` (allow rules and directories) as
 //!   `updatedPermissions`; it is offered only when there are some, and the
-//!   label approximates the CLI's. Its "switch to auto mode" is left out:
-//!   the suggestions carry no sign of whether auto mode is available.
+//!   label approximates the CLI's. Its "switch to auto mode" or "switch to
+//!   accept edits" is left out: which one the CLI shows doesn't follow the
+//!   suggestions (a Bash prompt suggested `acceptEdits` while the CLI
+//!   offered auto mode).
 
 use serde_json::{Value, json};
 

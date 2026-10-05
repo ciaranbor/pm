@@ -60,11 +60,12 @@ pub(super) fn post(agent: &Agent, body: &str) -> Result<Written> {
         Err(e) => return Ok(bad(&format!("the body is not a dialog answer: {e}"))),
     };
     let message = body.message.filter(|m| !m.trim().is_empty());
+    if message.as_ref().is_some_and(|m| m.len() > MAX_TEXT) {
+        return Ok(bad(&format!("message is over {MAX_TEXT} bytes")));
+    }
+    // Logged only once the dialog has accepted the choice.
     let mut detail = format!("dialog {}", body.choice);
     if let Some(message) = &message {
-        if message.len() > MAX_TEXT {
-            return Ok(bad(&format!("message is over {MAX_TEXT} bytes")));
-        }
         detail.push_str(&format!(" message sha256:{}", agent_input::sha256(message)));
     }
     let answer = Answer {
@@ -82,25 +83,32 @@ pub(super) fn post(agent: &Agent, body: &str) -> Result<Written> {
     };
     let Some(harness) = agent.harness()? else {
         return Ok(Written {
-            reply: refused("answered", "the agent is gone"),
-            detail,
+            reply: error(404, "no such agent"),
+            detail: String::new(),
         });
     };
-    let reply = match hooks_dialog::answer(
+    let answered = hooks_dialog::answer(
         &agent.root,
         &agent.scope,
         &agent.name,
         harness,
         &answer,
         TAKEN_WITHIN,
-    )? {
-        Answered::Taken => json(200, serde_json::json!({ "answered": true })),
-        Answered::Invalid(why) => error(400, &why),
-        Answered::Elsewhere => refused(
-            "answered",
-            "the dialog is no longer up: answered at the terminal, or replaced",
+    )?;
+    let (reply, detail) = match answered {
+        Answered::Taken => (json(200, serde_json::json!({ "answered": true })), detail),
+        Answered::Invalid(why) => (error(400, &why), String::new()),
+        Answered::Elsewhere => (
+            refused(
+                "answered",
+                "the dialog is no longer up: answered at the terminal, or replaced",
+            ),
+            "dialog refused: answered".into(),
         ),
-        Answered::Gone => refused("gone", "the dialog's hook is gone"),
+        Answered::Gone => (
+            refused("gone", "the dialog's hook is gone"),
+            "dialog refused: gone".into(),
+        ),
     };
     Ok(Written { reply, detail })
 }

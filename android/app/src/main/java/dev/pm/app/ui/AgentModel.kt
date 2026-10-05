@@ -265,7 +265,7 @@ class AgentModel(
 
     /**
      * Answer [dialog] with `choice`, the `answers` to its questions, and a `message` for the agent.
-     * One answered at the terminal first says so and is read again.
+     * One refused (answered at the terminal first, or its hook gone) says why and is read again.
      */
     fun answer(
         choice: String,
@@ -288,7 +288,13 @@ class AgentModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: PmError.Refused) {
-                _notice.value = "Answered elsewhere"
+                _notice.value =
+                    when (e.code) {
+                        "answered" -> "Answered elsewhere"
+                        "gone" ->
+                            "The dialog can no longer be answered here; answer it at the terminal"
+                        else -> e.message
+                    }
                 fetchDialog()
             } catch (e: Exception) {
                 _notice.value = e.message ?: e.javaClass.simpleName

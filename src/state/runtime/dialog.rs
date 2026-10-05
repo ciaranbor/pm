@@ -210,10 +210,30 @@ pub fn remove_dialog(project_root: &Path, scope: &str, agent: &str, id: &str) ->
     Ok(())
 }
 
-/// Leave `answer` for the dialog's hook, replacing any answer left before.
-pub fn write_answer(project_root: &Path, scope: &str, agent: &str, answer: &Answer) -> Result<()> {
-    let file = agent_dir(project_root, scope, agent)?.join(ANSWER_FILE);
-    write_atomic(&file, serde_json::to_string(answer)?.as_bytes())
+/// Leave `answer` for the dialog's hook, unless an answer is already left:
+/// false then, so of two answers the first stands. Linked into place
+/// whole, so the hook never reads it half written.
+pub fn leave_answer(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    answer: &Answer,
+) -> Result<bool> {
+    let dir = agent_dir(project_root, scope, agent)?;
+    static LEFT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let staged = dir.join(format!(
+        "{ANSWER_FILE}.new-{}-{}",
+        std::process::id(),
+        LEFT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    write_atomic(&staged, serde_json::to_string(answer)?.as_bytes())?;
+    let linked = std::fs::hard_link(&staged, dir.join(ANSWER_FILE));
+    let _ = std::fs::remove_file(&staged);
+    match linked {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Remove the answer left for the agent's dialog, returning it, so of two
@@ -354,7 +374,7 @@ mod tests {
     }
 
     #[test]
-    fn a_record_is_removed_only_by_its_own_dialog_and_an_answer_is_taken_once() {
+    fn a_record_is_removed_only_by_its_own_dialog_and_the_first_answer_is_taken_once() {
         let dir = tempdir().unwrap();
         let root = dir.path();
         let record = DialogRecord {
@@ -370,15 +390,20 @@ mod tests {
         assert!(read_dialog(root, "login", "qa").is_some());
 
         let given = answer(&record.dialog, "decline", &[]);
-        write_answer(root, "login", "qa", &given).unwrap();
+        assert!(leave_answer(root, "login", "qa", &given).unwrap());
         assert!(answer_pending(root, "login", "qa"));
+        let second = answer(&record.dialog, ANSWER_CHOICE, &[("Which DB?", &["SQLite"])]);
+        assert!(
+            !leave_answer(root, "login", "qa", &second).unwrap(),
+            "the first stands"
+        );
         assert_eq!(
             take_answer(root, "login", "qa").unwrap(),
             Some(given.clone())
         );
         assert_eq!(take_answer(root, "login", "qa").unwrap(), None);
 
-        write_answer(root, "login", "qa", &given).unwrap();
+        assert!(leave_answer(root, "login", "qa", &given).unwrap());
         remove_dialog(root, "login", "qa", &id).unwrap();
         assert_eq!(read_dialog(root, "login", "qa"), None);
         assert!(!answer_pending(root, "login", "qa"));
