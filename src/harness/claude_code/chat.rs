@@ -158,7 +158,7 @@ fn queued(line: &Value, item: &dyn Fn(Body) -> Vec<Entry>) -> Vec<Entry> {
 
 /// `text` with each paste Claude Code wrapped in `<pasted_content id=…>`
 /// tags (a long one) put back as it was typed.
-fn unpasted(text: &str) -> String {
+pub(crate) fn unpasted(text: &str) -> String {
     const OPEN: &str = "<pasted_content id=";
     const CLOSE: &str = "</pasted_content id=";
     let mut out = String::with_capacity(text.len());

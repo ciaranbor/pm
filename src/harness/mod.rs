@@ -351,6 +351,28 @@ impl Harness {
         }
     }
 
+    /// Whether UserPromptSubmit runs for text the harness [holds behind
+    /// pm's Stop hook](Self::holds_input_behind_stop_hook) as it is queued,
+    /// so that hook can ask the Stop hook to yield. codex runs it only as
+    /// held text is submitted (verified on Claude Code 2.1.289 and codex
+    /// 0.160).
+    pub fn prompt_hook_runs_when_held(self) -> bool {
+        match self {
+            Harness::ClaudeCode => true,
+            Harness::Codex | Harness::OpenCode => false,
+        }
+    }
+
+    /// The text the user typed, from the prompt UserPromptSubmit reports.
+    /// Claude Code reports a long paste wrapped in `<pasted_content>` tags,
+    /// as its transcript records it (verified on 2.1.289).
+    pub fn typed_prompt(self, prompt: &str) -> String {
+        match self {
+            Harness::ClaudeCode => claude_code::chat::unpasted(prompt),
+            Harness::Codex | Harness::OpenCode => prompt.to_string(),
+        }
+    }
+
     /// The environment variable that moves the harness's config away from
     /// its default, where the input line's settings are read, for the
     /// SessionStart hook to record from the agent's own environment.
