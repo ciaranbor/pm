@@ -60,9 +60,6 @@ sealed class PmError(message: String) : Exception(message) {
     /** A save of the notes was refused: they changed since the version it started from. */
     class NotesChanged(val current: Notes) : PmError("the notes changed since they were read")
 
-    /** The device lacks the grant `missing` names (`lifecycle`); `message` says how to grant it. */
-    class Forbidden(val missing: String, message: String) : PmError(message)
-
     class Status(val code: Int, message: String) : PmError(message)
 }
 
@@ -76,17 +73,6 @@ data class Delivered(
 ) {
     val queued: Boolean
         get() = delivery == "queued"
-}
-
-/** This device as the server knows it (`GET device`). */
-@Serializable
-data class DeviceInfo(val name: String, val grants: List<String> = emptyList()) {
-    val lifecycle: Boolean
-        get() = LIFECYCLE in grants
-
-    companion object {
-        const val LIFECYCLE = "lifecycle"
-    }
 }
 
 /** One server-sent event. */
@@ -262,14 +248,6 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
         )
     }
 
-    /** This device's name and grants; null from a server that predates grants. */
-    suspend fun device(): DeviceInfo? =
-        try {
-            json.decodeFromString(DeviceInfo.serializer(), get(url("device")))
-        } catch (e: PmError.Unsupported) {
-            null
-        }
-
     /**
      * Merge the feature into its base and delete it, as `pm feat merge` does. Refused (`unsafe`,
      * `git`) with the CLI's own words.
@@ -401,11 +379,8 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
             body?.get(key)?.let { runCatching { it.jsonPrimitive.content }.getOrNull() }
         val message = field("error")
         val refused = field("refused")
-        val missing = field("missing")
         return when {
             response.code == 401 -> PmError.Unauthorized()
-            response.code == 403 && missing != null ->
-                PmError.Forbidden(missing, message ?: "this device may not do that")
             response.code == 409 && refused != null ->
                 PmError.Refused(refused, message ?: "the agent can't take input now")
             response.code == 404 && message == NO_SUCH_ENDPOINT -> PmError.Unsupported()

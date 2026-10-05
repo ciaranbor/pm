@@ -188,7 +188,6 @@ fun App(
         targetShown()
     }
 
-    val grants by model.lifecycle.grants.collectAsStateWithLifecycle()
     val acting by model.lifecycle.state.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(model) {
@@ -234,12 +233,7 @@ fun App(
                 },
                 actions = {
                     if (actions.isNotEmpty()) {
-                        ActionsMenu(
-                            actions,
-                            grants,
-                            model.lifecycle::refreshGrants,
-                            model.lifecycle::ask,
-                        )
+                        ActionsMenu(actions, model.lifecycle::ask)
                     }
                     if (top != Route.Settings && top != Route.Pair) {
                         IconButton(onClick = { backStack.add(Route.Settings) }) {
