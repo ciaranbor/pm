@@ -14,33 +14,42 @@
 //! rather than left for the harness to bury under the prompt: the push may
 //! read the transcript before the prompt reaches it.
 //!
+//! The user's prompt to a harness that runs this hook as it queues text
+//! behind pm's Stop hook
+//! ([`Harness::prompt_hook_runs_when_held`](crate::harness::Harness::prompt_hook_runs_when_held))
+//! files a yield request as `pm serve`'s typed text does, gated as in
+//! [`agent_input`].
+//!
 //! The harness adds the hook's stdout to the model's context and may refuse
 //! the prompt on a non-zero exit, so it prints nothing and always exits 0.
 
 use std::io::Read;
 use std::path::Path;
 
+use crate::commands::agent_input;
 use crate::commands::agent_spawn::SPAWN_PROMPT;
 use crate::commands::feat_status::feat_status;
 use crate::commands::hooks_stop;
-use crate::commands::running_agents;
+use crate::commands::running_agents::{self, Liveness, Windows};
 use crate::error::Result;
 use crate::messages;
-use crate::state::agent::AgentRegistry;
+use crate::state::agent::{AgentEntry, AgentRegistry};
 use crate::state::feature::{FeatureState, Progress};
 use crate::state::paths;
+use crate::state::project::{GlobalConfig, ProjectConfig, resolve_harness_config};
 use crate::state::runtime;
+use crate::tmux;
 
 /// Run the hook. Always exit code 0, whatever happened. `on_prompt` gets
 /// the agent's unread message count.
-pub fn user_prompt(on_prompt: impl FnOnce(u32)) -> i32 {
-    if let Ok(Some(unread)) = user_prompt_inner() {
+pub fn user_prompt(tmux_server: Option<&str>, on_prompt: impl FnOnce(u32)) -> i32 {
+    if let Ok(Some(unread)) = user_prompt_inner(tmux_server) {
         on_prompt(unread);
     }
     0
 }
 
-fn user_prompt_inner() -> Result<Option<u32>> {
+fn user_prompt_inner(tmux_server: Option<&str>) -> Result<Option<u32>> {
     let Some(agent) = std::env::var("PM_AGENT_NAME")
         .ok()
         .filter(|a| !a.is_empty())
@@ -58,18 +67,33 @@ fn user_prompt_inner() -> Result<Option<u32>> {
     let cwd = std::env::current_dir()?;
     let project_root = paths::find_project_root(&cwd)?;
     let scope = paths::resolve_scope_from(&project_root, &cwd)?;
-    on_prompt(&project_root, &scope, &agent, &prompt)?;
+    on_prompt(&project_root, &scope, &agent, &prompt, tmux_server)?;
     let unread = messages::unread_count(&paths::messages_dir(&project_root), &scope, &agent);
     Ok(Some(unread))
 }
 
-/// Any prompt to `agent`: unblock its feature if the prompt is the user's,
-/// then clear its marker and claim its transcript's turn end.
-fn on_prompt(project_root: &Path, scope: &str, agent: &str, prompt: &str) -> Result<()> {
+/// Any prompt to `agent`: have its Stop hook yield for the user's prompt
+/// should its harness hold it, unblock its feature if the prompt is the
+/// user's, then clear its marker and claim its transcript's turn end.
+fn on_prompt(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    prompt: &str,
+    tmux_server: Option<&str>,
+) -> Result<()> {
+    let registry = AgentRegistry::load(&paths::agents_dir(project_root), scope)?;
+    if let Some(entry) = registry.get(agent)
+        && entry.harness.prompt_hook_runs_when_held()
+        && !is_pms(prompt)
+    {
+        // Best-effort: the prompt's other effects must not wait on it. It
+        // reads the waiting marker, so it goes before the marker is cleared.
+        let _ = yield_if_held(project_root, scope, agent, entry, prompt, tmux_server);
+    }
     on_user_prompt(project_root, scope, prompt)?;
     runtime::touch_activity(project_root, scope, agent)?;
     runtime::clear_waiting(project_root, scope, agent)?;
-    let registry = AgentRegistry::load(&paths::agents_dir(project_root), scope)?;
     if let Some(entry) = registry.get(agent)
         && let Some(ended) = running_agents::waiting(project_root, scope, agent, entry.harness)
         && let Some(id) = ended.entry
@@ -79,10 +103,46 @@ fn on_prompt(project_root: &Path, scope: &str, agent: &str, prompt: &str) -> Res
     Ok(())
 }
 
+/// File a yield request for `prompt` if `agent`'s next turn end runs pm's
+/// Stop hook.
+fn yield_if_held(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    entry: &AgentEntry,
+    prompt: &str,
+    tmux_server: Option<&str>,
+) -> Result<()> {
+    let project = ProjectConfig::load(&paths::pm_dir(project_root))?;
+    let session = tmux::session_name(&project.project.name, scope);
+    let windows = Windows::read(tmux_server)?;
+    let Some(pane) = windows.find(&session, &entry.window_name) else {
+        return Ok(());
+    };
+    let config = resolve_harness_config(&project.harness, &GlobalConfig::load_or_default().harness);
+    let processes = windows.processes(pane);
+    let liveness = running_agents::liveness(processes.as_deref(), entry.harness, &config);
+    let at = match liveness {
+        Liveness::Busy => running_agents::waiting(project_root, scope, agent, entry.harness),
+        _ => None,
+    };
+    if !agent_input::hook_runs_next(liveness, at.as_ref()) {
+        return Ok(());
+    }
+    let after = agent_input::conversation_end(project_root, scope, agent)?;
+    let typed = entry.harness.typed_prompt(prompt);
+    agent_input::request_yield(project_root, scope, agent, &typed, after)
+}
+
+/// Whether `prompt` is one pm typed: the spawn prompt or a re-arm.
+fn is_pms(prompt: &str) -> bool {
+    prompt.trim() == SPAWN_PROMPT || hooks_stop::is_continuation(prompt)
+}
+
 /// Set `scope` back to `wip` if it is a blocked feature and `prompt` is the
 /// user's. Returns whether it did.
 pub(crate) fn on_user_prompt(project_root: &Path, scope: &str, prompt: &str) -> Result<bool> {
-    if scope == "main" || prompt.trim() == SPAWN_PROMPT || hooks_stop::is_continuation(prompt) {
+    if scope == "main" || is_pms(prompt) {
         return Ok(false);
     }
     let state = FeatureState::load(&paths::features_dir(project_root), scope)?;
@@ -96,6 +156,8 @@ pub(crate) fn on_user_prompt(project_root: &Path, scope: &str, prompt: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::harness::Harness;
+    use crate::state::runtime::YieldRequest;
     use crate::testing::TestServer;
     use tempfile::tempdir;
 
@@ -195,11 +257,11 @@ mod tests {
         let interrupted = Waiting::now(WaitingKind::Interrupted, None);
 
         runtime::write_waiting(&project, "main", "main", &interrupted).unwrap();
-        on_prompt(&project, "main", "main", "go on").unwrap();
+        on_prompt(&project, "main", "main", "go on", None).unwrap();
         assert_eq!(runtime::read_waiting(&project, "main", "main"), None);
 
         runtime::write_waiting(&project, "login", "implementer", &interrupted).unwrap();
-        on_prompt(&project, "login", "implementer", SPAWN_PROMPT).unwrap();
+        on_prompt(&project, "login", "implementer", SPAWN_PROMPT, None).unwrap();
         assert_eq!(
             runtime::read_waiting(&project, "login", "implementer"),
             None
@@ -210,7 +272,6 @@ mod tests {
     #[test]
     fn a_prompt_ends_an_interrupt_the_transcript_still_shows() {
         use crate::commands::running_agents::waiting;
-        use crate::harness::Harness;
         use crate::state::agent::{AgentEntry, AgentType};
         use crate::state::runtime::{SessionPath, WaitingKind};
         let dir = tempdir().unwrap();
@@ -246,7 +307,121 @@ mod tests {
         let at = || waiting(&project, "login", "implementer", Harness::ClaudeCode).map(|w| w.kind);
         assert_eq!(at(), Some(WaitingKind::Interrupted));
 
-        on_prompt(&project, "login", "implementer", "keep going").unwrap();
+        on_prompt(&project, "login", "implementer", "keep going", None).unwrap();
         assert_eq!(at(), None, "busy before the prompt reaches the transcript");
+    }
+
+    /// A feature whose `implementer` runs `harness`, its window reading as
+    /// `liveness`: idle runs a process carrying pm's Stop hook.
+    fn agent(
+        server: &TestServer,
+        dir: &Path,
+        harness: crate::harness::Harness,
+        liveness: running_agents::Liveness,
+    ) -> std::path::PathBuf {
+        let (project, name) = server.setup_project_with_feature(dir, "login");
+        let session = tmux::session_name(&name, "login");
+        let shell = crate::testing::fake_harness_binary(harness, Path::new("/bin/bash"));
+        let job = match liveness {
+            running_agents::Liveness::Idle => format!(
+                "sh -c 'sleep 999; :' {}",
+                crate::commands::hooks_install::PM_HOOK_MARKER
+            ),
+            _ => "sleep 999".into(),
+        };
+        let command = format!("{} -c \"{job}; :\"", shell.display());
+        server.spawn_harness_agent(
+            &project,
+            &session,
+            "login",
+            "implementer",
+            harness,
+            &command,
+            liveness,
+        );
+        project
+    }
+
+    fn yield_request(project: &Path) -> Option<YieldRequest> {
+        runtime::take_yield_request(project, "login", "implementer").unwrap()
+    }
+
+    #[test]
+    fn the_users_prompt_to_a_claude_code_agent_in_its_stop_hook_asks_it_to_yield() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let project = agent(
+            &server,
+            dir.path(),
+            Harness::ClaudeCode,
+            running_agents::Liveness::Idle,
+        );
+        let prompt =
+            |text: &str| on_prompt(&project, "login", "implementer", text, server.name()).unwrap();
+
+        prompt("use postgres");
+        let request = yield_request(&project).expect("a yield request");
+        assert_eq!(request.text_sha256, agent_input::sha256("use postgres"));
+
+        // A long paste is matched as typed, as the conversation shows it.
+        prompt("see:\n<pasted_content id=\"e801\">\nline 1\nline 2\n</pasted_content id=\"e801\">");
+        let request = yield_request(&project).expect("a yield request");
+        assert_eq!(
+            request.text_sha256,
+            agent_input::sha256("see:\nline 1\nline 2")
+        );
+
+        prompt(SPAWN_PROMPT);
+        assert_eq!(yield_request(&project), None);
+        crate::messages::send(
+            &paths::messages_dir(&project),
+            "login",
+            "implementer",
+            "reviewer",
+            "hi",
+        )
+        .unwrap();
+        prompt(&hooks_stop::continuation(&project, "login", "implementer").unwrap());
+        assert_eq!(yield_request(&project), None);
+    }
+
+    #[test]
+    fn a_claude_code_agent_mid_turn_is_asked_to_yield_but_not_one_at_its_prompt() {
+        use crate::state::runtime::{Waiting, WaitingKind};
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let project = agent(
+            &server,
+            dir.path(),
+            Harness::ClaudeCode,
+            running_agents::Liveness::Busy,
+        );
+
+        on_prompt(&project, "login", "implementer", "also this", server.name()).unwrap();
+        assert!(yield_request(&project).is_some());
+
+        let prompt = Waiting::now(WaitingKind::Prompt, None);
+        runtime::write_waiting(&project, "login", "implementer", &prompt).unwrap();
+        on_prompt(&project, "login", "implementer", "go on", server.name()).unwrap();
+        assert_eq!(yield_request(&project), None);
+    }
+
+    #[test]
+    fn a_harness_that_runs_no_hook_as_it_queues_text_is_never_asked_to_yield() {
+        for harness in [Harness::OpenCode, Harness::Codex] {
+            let server = TestServer::new();
+            let dir = tempdir().unwrap();
+            let project = agent(&server, dir.path(), harness, running_agents::Liveness::Idle);
+
+            on_prompt(
+                &project,
+                "login",
+                "implementer",
+                "use postgres",
+                server.name(),
+            )
+            .unwrap();
+            assert_eq!(yield_request(&project), None, "{harness:?}");
+        }
     }
 }

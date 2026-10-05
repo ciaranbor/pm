@@ -29,7 +29,7 @@ use crate::harness::{Conversation, Harness};
 use crate::state::agent::{self as registry, AgentRegistry};
 use crate::state::paths;
 use crate::state::project::{GlobalConfig, ProjectConfig, resolve_harness_config};
-use crate::state::runtime::{self, SessionPath, WaitingClass, YieldRequest};
+use crate::state::runtime::{self, SessionPath, Waiting, WaitingClass, YieldRequest};
 use crate::tmux::{self, Pane};
 
 use super::running_agents::{Liveness, Windows, liveness, waiting};
@@ -197,19 +197,12 @@ pub fn send_text(
     {
         return Ok(Err(Refusal::NotAtPrompt));
     }
-    let after = match registry::conversation(project_root, scope, agent)? {
-        Some(conversation) => Some(conversation.page(None, 1)?.after),
-        None => None,
-    };
+    let after = conversation_end(project_root, scope, agent)?;
     let mid_turn = target.liveness == Liveness::Busy && at.is_none();
-    let hook_next = target.liveness == Liveness::Idle || mid_turn;
-    let requested = hook_next && target.harness.holds_input_behind_stop_hook();
+    let requested = target.harness.holds_input_behind_stop_hook()
+        && hook_runs_next(target.liveness, at.as_ref());
     if requested {
-        let request = YieldRequest {
-            text_sha256: sha256(text),
-            after: after.clone(),
-        };
-        runtime::request_yield(project_root, scope, agent, &request)?;
+        request_yield(project_root, scope, agent, text, after.clone())?;
     }
     if let Err(e) = tmux::paste::paste_text(tmux_server, &target.pane, text) {
         if requested {
@@ -223,6 +216,41 @@ pub fn send_text(
         Delivery::Sent
     };
     Ok(Ok(Typed { delivery, after }))
+}
+
+/// Whether pm's Stop hook runs at the next turn end of an agent its window
+/// reads as `liveness`, at `at` ([`waiting`]): it runs now, or the agent is
+/// mid-turn, at no waiting marker or recorded turn end.
+pub(super) fn hook_runs_next(liveness: Liveness, at: Option<&Waiting>) -> bool {
+    liveness == Liveness::Idle || (liveness == Liveness::Busy && at.is_none())
+}
+
+/// Where `agent`'s conversation ends now; `None` when it has none.
+pub(super) fn conversation_end(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+) -> Result<Option<String>> {
+    Ok(match registry::conversation(project_root, scope, agent)? {
+        Some(conversation) => Some(conversation.page(None, 1)?.after),
+        None => None,
+    })
+}
+
+/// Ask `agent`'s next Stop hook to yield for `text`, typed once its
+/// conversation ended at `after` ([`runtime::request_yield`]).
+pub(super) fn request_yield(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    text: &str,
+    after: Option<String>,
+) -> Result<()> {
+    let request = YieldRequest {
+        text_sha256: sha256(text),
+        after,
+    };
+    runtime::request_yield(project_root, scope, agent, &request)
 }
 
 /// The SHA-256 of `text`, trimmed, in hex: what [`said`] matches.

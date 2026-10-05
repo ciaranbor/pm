@@ -1316,10 +1316,13 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
                 exit_unless_ok(code)
             }
             HarnessHooksCommands::UserPrompt => {
-                exit_unless_ok(commands::hooks_user_prompt::user_prompt(|unread| {
-                    publish(AgentState::Busy, unread);
-                    push();
-                }))
+                exit_unless_ok(commands::hooks_user_prompt::user_prompt(
+                    tmux_server_from_env().as_deref(),
+                    |unread| {
+                        publish(AgentState::Busy, unread);
+                        push();
+                    },
+                ))
             }
             HarnessHooksCommands::Waiting { harness } => exit_unless_ok(
                 commands::hooks_waiting::waiting(harness, |state, unread| {

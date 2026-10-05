@@ -8,8 +8,9 @@
 //! text typed while the hook runs until it returns, then submit it as the
 //! user's prompt, which ends in this hook again. A request whose text the
 //! conversation already holds — taken in mid-turn — is dropped instead. A
-//! `block` takes the request too: the harness submits what it holds with
-//! the continuation. `{}` is the documented
+//! `block` takes the request too: Claude Code submits what it holds with
+//! the continuation, as codex does text sent with Enter (a steer); a codex
+//! follow-up queued with Tab stays held across it. `{}` is the documented
 //! "allow" for Stop: a `decision` other than `block` fails schema validation.
 //! Recurring crons stay active between fires, so an agent with one is
 //! message-delivered only at fire boundaries. Codex's Stop payload carries
@@ -199,7 +200,7 @@ fn wait_and_decide(
 ) -> crate::error::Result<Decided> {
     let block = |on_turn: &mut dyn FnMut(AgentState, u32), senders: &[String]| {
         let _ = runtime::touch_activity(project_root, feature, agent);
-        // The harness submits text it holds with the continuation.
+        // What the harness holds goes in with the continuation (module doc).
         let _ = runtime::take_yield_request(project_root, feature, agent);
         let unread = messages::unread_count(&paths::messages_dir(project_root), feature, agent);
         on_turn(AgentState::Busy, unread);

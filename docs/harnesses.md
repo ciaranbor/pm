@@ -17,7 +17,9 @@ file of every supported harness (`~/.claude/settings.json` for Claude Code,
   agent, which reads `background` until then. Codex and opencode agents
   wait every turn.
 - a **UserPromptSubmit** hook, which sets a blocked feature back to `wip`
-  when you type into one of its agents; pm's own prompts don't count.
+  when you type into one of its agents; pm's own prompts don't count. On
+  Claude Code it also lets a Stop hook that is waiting end its turn, so
+  text you type while the agent waits is submitted at once.
 - the **status hook** (`pm harness hooks waiting`), on the events that open
   and close a harness's dialogs and end its turns without Stop, which keeps
   each agent's `asking`/`unarmed` state; opencode's plugin reports the
@@ -117,7 +119,9 @@ unattended:
 - **Text queued while idle** (README, [Work with the
   agents](../README.md#work-with-the-agents)) shows in codex as "Messages
   to be submitted after next tool call". No hook reports queued input, so
-  pm can't see it until it is submitted.
+  pm can't see it until it is submitted. A follow-up queued with Tab is not
+  delivered with a message's continuation either; it waits for a turn that
+  really ends.
 - **Removing a model row keeps the session's model.** `codex resume` with
   no `-m` reuses the model the session last ran, so deleting an
   `[agents.models]` row changes nothing on restart; set the row to the

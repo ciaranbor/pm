@@ -12,7 +12,8 @@
 //! The **yield request** asks the agent's next Stop hook to let its turn
 //! end (`{}`) rather than wait, for text typed into a harness that holds
 //! typing queued behind a running hook, so the harness submits it. `pm
-//! serve` writes it before typing, naming the text and where the agent's
+//! serve` writes it before typing, and Claude Code's UserPromptSubmit as
+//! the user's text is queued, naming the text and where the agent's
 //! conversation ended then; the Stop hook takes it. UserPromptSubmit can't
 //! clear it: Claude Code runs that hook as text is queued, not as it is
 //! submitted (verified on 2.1.289).
