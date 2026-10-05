@@ -10,7 +10,7 @@ use super::routes::{Reply, route};
 use super::*;
 use crate::commands::feat_status::feat_status;
 use crate::state::devices::Devices;
-use crate::state::feature::Progress;
+use crate::state::feature::{FeatureState, Progress};
 use crate::state::paths;
 use crate::testing::TestServer;
 
@@ -114,7 +114,7 @@ fn a_request_without_a_live_token_is_refused() {
 }
 
 #[test]
-fn the_endpoints_serve_the_snapshot_a_summary_and_an_agents_screen() {
+fn the_endpoints_serve_the_snapshot_a_features_details_and_summary_and_an_agents_screen() {
     let f = fixture();
     let token = pair(&f.config, "reader");
     let get = |path: &str| get(&f.config, path, Some(&token));
@@ -141,6 +141,28 @@ fn the_endpoints_serve_the_snapshot_a_summary_and_an_agents_screen() {
         get(&format!("/v1/features/{p}/login/summary")),
         (200, "Adds login\n\nDetails.\n".into())
     );
+    let features = paths::features_dir(&f.project);
+    let mut state = FeatureState::load(&features, "login").unwrap();
+    state.context = "Add a login page".into();
+    state.workflow = Some("implement-and-review".into());
+    state.save(&features, "login").unwrap();
+    let (status, body) = get(&format!("/v1/features/{p}/login"));
+    assert_eq!(status, 200);
+    let info: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(info["context"], "Add a login page");
+    assert_eq!(info["branch"], "login");
+    assert_eq!(info["base"], "main");
+    assert_eq!(info["has_summary"], true);
+    assert_eq!(info["pr"], serde_json::Value::Null);
+    assert_eq!(info["divergence"]["ahead"], 0);
+    assert_eq!(info["divergence"]["behind"], 0);
+    assert_eq!(info["workflow"]["name"], "implement-and-review");
+    assert!(info["workflow"]["description"].is_string(), "{info}");
+    assert_eq!(info["rebase_in_progress"], false);
+    for stamp in ["created", "last_active"] {
+        chrono::DateTime::parse_from_rfc3339(info[stamp].as_str().unwrap()).unwrap();
+    }
+
     let (status, screen) = get(&format!("/v1/agents/{p}/login/implementer/screen"));
     assert_eq!(status, 200);
     assert!(screen.contains("sleep 999"), "{screen}");
@@ -150,6 +172,10 @@ fn the_endpoints_serve_the_snapshot_a_summary_and_an_agents_screen() {
         format!("/v1/features/{p}/search/summary"),
         format!("/v1/features/{p}/%2E%2E/summary"),
         format!("/v1/features/{p}/..%2F..%2Fconfig/summary"),
+        "/v1/features/nope/login".to_string(),
+        format!("/v1/features/{p}/search"),
+        format!("/v1/features/{p}/%2E%2E"),
+        format!("/v1/features/{p}/..%2F..%2Fconfig"),
         format!("/v1/agents/{p}/login/reviewer/screen"),
         format!("/v1/agents/{p}/%2E%2E/implementer/screen"),
         "/v1/nowhere".to_string(),

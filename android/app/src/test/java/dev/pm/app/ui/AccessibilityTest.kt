@@ -59,7 +59,8 @@ class AccessibilityTest {
             }
         }
 
-    private val scope = @Composable { AgentsList(snapshot, "app", "login", now, openAgent = {}) }
+    private val scope =
+        @Composable { AgentsList(snapshot, "app", "login", now, openAgent = {}, openPage = {}) }
 
     @Test fun home_light() = check(home)
 

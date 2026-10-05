@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use crate::commands::attention;
+use crate::commands::{attention, feat_info};
 use crate::error::Result;
 use crate::state::agent::AgentRegistry;
 use crate::state::devices::{Devices, Push};
@@ -292,6 +292,16 @@ fn get(config: &Config, path: &str, query: &Query) -> Result<Reply> {
                 Some(text) => Ok(ok(TEXT, text)),
                 None => Ok(error(404, "no such result")),
             }
+        }
+        ["features", project, feature] => {
+            let Some(root) = project_root(config, project)? else {
+                return Ok(error(404, "no such project"));
+            };
+            if !has_feature(&root, feature)? {
+                return Ok(error(404, "no such feature"));
+            }
+            let info = feat_info::info(&root, &config.projects_dir, feature)?;
+            Ok(ok(JSON, serde_json::to_string(&info)?))
         }
         ["features", project, feature, "summary"] => {
             let Some(root) = project_root(config, project)? else {

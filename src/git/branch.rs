@@ -182,7 +182,7 @@ pub fn default_branch(repo: &Path) -> Result<String> {
 }
 
 /// Branch divergence info: how many commits ahead/behind relative to a base.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct BranchDivergence {
     pub ahead: usize,
     pub behind: usize,

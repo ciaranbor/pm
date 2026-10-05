@@ -62,6 +62,32 @@ class PmClientTest {
     }
 
     @Test
+    fun a_features_details_parse_with_their_optional_fields_absent() = runBlocking {
+        reply(
+            200,
+            """{"name":"login","progress":"wip","lifecycle":"wip","branch":"login","base":"main",
+               "divergence":{"ahead":3,"behind":1},"workflow":{"name":"review"},"created":"2026-10-05T18:36:31.235464Z","extra":1}""",
+        )
+        val info = client.feature("app", "login")
+        assertEquals("/v1/features/app/login", server.takeRequest().url.encodedPath)
+        assertEquals(null, info.context)
+        assertEquals(null, info.pr)
+        assertEquals(
+            listOf(
+                "Status" to "wip",
+                "Lifecycle" to "wip",
+                "Branch" to "login",
+                "Remote" to "none",
+                "Base" to "main",
+                "Divergence" to "3 ahead, 1 behind main",
+                "Workflow" to "review",
+                "Created" to "2026-10-05 18:36:31 UTC",
+            ),
+            info.rows,
+        )
+    }
+
+    @Test
     fun a_subscription_is_sent_in_the_web_push_shape() = runBlocking {
         reply(204, "")
         client.registerPush("https://ntfy.sh/upX?up=1", "BKey", "auth")
