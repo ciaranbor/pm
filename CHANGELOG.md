@@ -6,6 +6,8 @@ notes.
 
 ## Unreleased
 
+## 0.2.0 — 2026-10-05
+
 - pm is released on GitHub: install it with the install script, and `pm
   self-update` installs the latest release over itself.
 - `pm --version`; `pm doctor` and `pm serve status` show the version, and
