@@ -60,6 +60,7 @@ set -g status-right '#{E:@pm_summary} %H:%M'
 ```sh
 pm init ~/projects/myapp                                         # new repo
 pm init ~/projects/myapp --git https://github.com/org/myapp.git  # clone
+pm init --git https://github.com/org/myapp.git                   # clone into ./myapp
 pm register ~/code/myapp --name myapp                            # existing repo (--move to restructure in place)
 ```
 

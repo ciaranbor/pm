@@ -253,6 +253,10 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
     match cli.command {
         Commands::Init { path, git, no_main } => {
             let projects_dir = paths::global_projects_dir()?;
+            let path = match path {
+                Some(path) => path,
+                None => commands::init::default_path(git.as_deref().unwrap_or_default())?,
+            };
             let root = commands::init::init(&path, &projects_dir, git.as_deref(), server)?;
             if !no_main {
                 report_main_spawn(&root, server);

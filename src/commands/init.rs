@@ -140,6 +140,19 @@ pub fn init_in(
     Ok(path_buf)
 }
 
+/// The project root `pm init --git <url>` uses without a PATH: `./<repo
+/// name>`, the directory `git clone <url>` would create.
+pub fn default_path(git_url: &str) -> Result<PathBuf> {
+    let trimmed = git_url.trim_end_matches('/');
+    let trimmed = trimmed.strip_suffix("/.git").unwrap_or(trimmed);
+    let last = trimmed.rsplit(['/', ':']).next().unwrap_or_default();
+    let name = last.strip_suffix(".git").unwrap_or(last);
+    if name.is_empty() || name == "." || name == ".." {
+        return Err(PmError::UnnamedGitUrl(git_url.to_string()));
+    }
+    Ok(PathBuf::from(name))
+}
+
 /// Spawn the project's `main` agent in its main session: into the session's
 /// first window, the shell it was created with, unless `main` already has
 /// one of its own.
@@ -162,6 +175,30 @@ mod tests {
     use super::*;
     use crate::testing::TestServer;
     use tempfile::tempdir;
+
+    #[test]
+    fn default_path_is_the_repo_name_git_clone_would_use() {
+        for (url, name) in [
+            ("git@github.com:me/foo.git", "foo"),
+            ("https://github.com/org/myapp.git", "myapp"),
+            ("https://github.com/org/myapp/", "myapp"),
+            ("ssh://host:2222/srv/repo.git", "repo"),
+            ("host:repo.git", "repo"),
+            ("/srv/git/proj/.git", "proj"),
+        ] {
+            assert_eq!(default_path(url).unwrap(), PathBuf::from(name), "{url}");
+        }
+    }
+
+    #[test]
+    fn default_path_refuses_a_url_with_no_repo_name() {
+        for url in ["", "/", "https://host/..", ".git"] {
+            assert!(
+                matches!(default_path(url), Err(PmError::UnnamedGitUrl(_))),
+                "{url}"
+            );
+        }
+    }
 
     #[test]
     fn init_creates_main_directory() {
