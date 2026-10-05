@@ -25,6 +25,11 @@ file of every supported harness (`~/.claude/settings.json` for Claude Code,
   agent interrupted mid-turn or a dialog it rejected, nor a codex turn an
   API error ended; pm reads those from the tail of the session's
   transcript instead.
+- the **dialog hook** (`pm harness hooks dialog`), on Claude Code's
+  PermissionRequest, and from opencode's plugin on a permission ask: it
+  waits, with the Stop hook's timeout, for the dialog to be answered from
+  the phone app ([remote API](remote-api.md)), and ends once it is answered
+  at the terminal instead.
 
 The hooks apply to every session of that harness on the machine, so each is
 guarded on `PM_AGENT_NAME`: a session pm didn't spawn exits it at once,
@@ -160,7 +165,8 @@ bash`. What differs:
 
 - **Permissions.** pm runs opencode with `--auto`, which approves whatever no
   rule denies; an `[agents.permissions]` row is opencode's rule list as a
-  JSON array. `[harness.opencode] auto = false` makes it ask instead.
+  JSON array. `[harness.opencode] auto = false` makes it ask instead, at the
+  terminal or from the phone app.
 - **Always `--standalone`.** Without it, opencode commands share one server
   whose plugins act as whichever agent started it. If you run `opencode`
   yourself in an agent's window, pass `--standalone` too.

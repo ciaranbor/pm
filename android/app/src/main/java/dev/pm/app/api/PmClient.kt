@@ -1,5 +1,7 @@
 package dev.pm.app.api
 
+import dev.pm.app.model.Dialog
+import dev.pm.app.model.DialogAnswer
 import dev.pm.app.model.FeatureInfo
 import dev.pm.app.model.Pairing
 import dev.pm.app.model.Snapshot
@@ -49,7 +51,9 @@ sealed class PmError(message: String) : Exception(message) {
     /** The agent's session hasn't started, or its transcript is gone. */
     class NoConversation : PmError("the agent has no conversation yet")
 
-    /** The agent can't take input now; `code` says why (`asking`, `not-at-prompt`, …). */
+    /**
+     * The agent can't take this now; `code` says why (`asking`, `not-at-prompt`, `answered`, …).
+     */
     class Refused(val code: String, message: String) : PmError(message)
 
     class Status(val code: Int, message: String) : PmError(message)
@@ -173,6 +177,30 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
         post(
             url("agents", project, scope, agent, "keys"),
             json.encodeToString(KeysBody.serializer(), KeysBody(keys)),
+        )
+    }
+
+    /** The dialog on the agent's screen that can be answered from here; null when there is none. */
+    suspend fun dialog(project: String, scope: String, agent: String): Dialog? =
+        try {
+            json.decodeFromString(
+                Dialog.serializer(),
+                get(url("agents", project, scope, agent, "dialog")),
+            )
+        } catch (e: PmError.Status) {
+            if (e.code == 404) null else throw e
+        } catch (e: PmError.Unsupported) {
+            null
+        }
+
+    /**
+     * Answer the agent's dialog; returns once its harness has the answer. A dialog already answered
+     * at the terminal is refused with `answered`, one whose hook has ended with `gone`.
+     */
+    suspend fun answerDialog(project: String, scope: String, agent: String, answer: DialogAnswer) {
+        post(
+            url("agents", project, scope, agent, "dialog"),
+            json.encodeToString(DialogAnswer.serializer(), answer),
         )
     }
 

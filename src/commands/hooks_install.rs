@@ -50,6 +50,11 @@
 //! records when an agent waits on the user (see [`super::hooks_waiting`]).
 //! It is installed without a matcher: the handler filters by payload.
 //!
+//! The dialog hook is `pm harness hooks dialog <harness>`, installed under
+//! each event of [`Harness::dialog_events`] in an entry of its own, beside
+//! the status hook's, with the Stop hook's timeout: it blocks until a
+//! dialog is answered remotely (see [`super::hooks_dialog`]).
+//!
 //! Entries written by older releases (`pm claude hooks …`, or the unguarded
 //! `pm harness hooks …`) are recognised as pm-owned: rewritten in place in
 //! the user file, removed from project files.
@@ -108,6 +113,10 @@ const USER_PROMPT_MARKERS: &[&str] = &[PM_USER_PROMPT_MARKER];
 pub const PM_WAITING_MARKER: &str = "pm harness hooks waiting";
 const WAITING_MARKERS: &[&str] = &[PM_WAITING_MARKER];
 
+/// Marker string for pm-owned dialog hook entries.
+pub const PM_DIALOG_MARKER: &str = "pm harness hooks dialog";
+const DIALOG_MARKERS: &[&str] = &[PM_DIALOG_MARKER];
+
 /// The hook events every harness gets, with the command markers that
 /// identify pm's entry under each.
 const LOOP_EVENTS: &[(&str, &[&str])] = &[
@@ -123,7 +132,18 @@ pub fn pm_events(harness: Harness) -> Vec<(&'static str, &'static [&'static str]
         .iter()
         .copied()
         .chain(waiting_events(harness))
+        .chain(dialog_events(harness))
         .collect()
+}
+
+/// `harness`'s dialog hook events, with their marker.
+pub fn dialog_events(
+    harness: Harness,
+) -> impl Iterator<Item = (&'static str, &'static [&'static str])> {
+    harness
+        .dialog_events()
+        .iter()
+        .map(|event| (*event, DIALOG_MARKERS))
 }
 
 /// `harness`'s status hook events, with their marker.
@@ -160,6 +180,11 @@ pub fn user_prompt_hook_command() -> String {
 /// The shell command registered as `harness`'s status hook.
 pub fn waiting_hook_command(harness: Harness) -> String {
     format!("{GUARD}{PM_WAITING_MARKER} {harness}")
+}
+
+/// The shell command registered as `harness`'s dialog hook.
+pub fn dialog_hook_command(harness: Harness) -> String {
+    format!("{GUARD}{PM_DIALOG_MARKER} {harness}")
 }
 
 /// Where `harness`'s never-idle loop is installed, for messages: its hooks
@@ -282,6 +307,19 @@ fn install_global(harness: Harness, user_file: &Path, dry_run: bool) -> Result<b
             event,
             markers,
             json!({"type": "command", "command": waiting_hook_command(harness)}),
+        )?;
+    }
+    for (event, markers) in dialog_events(harness) {
+        // As long as the Stop hook's: a dialog may wait on the user that long.
+        waiting_changed |= upsert_hook(
+            &mut root,
+            event,
+            markers,
+            json!({
+                "type": "command",
+                "command": dialog_hook_command(harness),
+                "timeout": STOP_HOOK_TIMEOUT_SECS,
+            }),
         )?;
     }
     if !(stop_changed || session_start_changed || user_prompt_changed || waiting_changed) {
@@ -507,6 +545,17 @@ pub fn missing_status_hooks(harness: Harness, root: Option<&Value>) -> Vec<&'sta
         .collect()
 }
 
+/// `harness`'s dialog hook events with no pm entry in `root`. Optional
+/// too: without them a dialog is answered at the terminal only.
+pub fn missing_dialog_hooks(harness: Harness, root: Option<&Value>) -> Vec<&'static str> {
+    dialog_events(harness)
+        .filter(|(event, markers)| {
+            root.is_none_or(|root| pm_hook_position(root, event, markers).is_none())
+        })
+        .map(|(event, _)| event)
+        .collect()
+}
+
 /// The parsed user-level hooks file of `harness`; `None` when it has none,
 /// or the file is missing or not JSON.
 pub fn user_hooks_root(harness: Harness, home: &Path) -> Result<Option<Value>> {
@@ -672,6 +721,24 @@ mod tests {
             waiting_hook_command(Harness::ClaudeCode)
         );
         assert_eq!(codex["hooks"]["Stop"], parsed["hooks"]["Stop"]);
+        // The dialog hook blocks, so it gets an entry of its own beside the
+        // status hook's, which must answer at once, and the Stop hook's
+        // timeout; codex gets none.
+        assert_eq!(
+            parsed["hooks"]["PermissionRequest"],
+            json!([
+                {"hooks": [{"type": "command", "command": waiting_hook_command(Harness::ClaudeCode)}]},
+                {"hooks": [{"type": "command", "command": dialog_hook_command(Harness::ClaudeCode),
+                            "timeout": STOP_HOOK_TIMEOUT_SECS}]}
+            ])
+        );
+        assert_eq!(
+            codex["hooks"]["PermissionRequest"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
         // A fresh project gets no project-level file.
         assert!(!paths::main_worktree(&root).join(".claude").exists());
         assert_eq!(

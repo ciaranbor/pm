@@ -178,6 +178,9 @@ fn the_endpoints_serve_the_snapshot_a_features_details_and_summary_and_an_agents
         format!("/v1/features/{p}/..%2F..%2Fconfig"),
         format!("/v1/agents/{p}/login/reviewer/screen"),
         format!("/v1/agents/{p}/%2E%2E/implementer/screen"),
+        format!("/v1/agents/{p}/login/implementer/dialog"),
+        format!("/v1/agents/{p}/login/reviewer/dialog"),
+        format!("/v1/agents/{p}/%2E%2E/implementer/dialog"),
         "/v1/nowhere".to_string(),
     ] {
         assert_eq!(get(&missing).0, 404, "{missing}");
@@ -958,4 +961,94 @@ fn typed_text_is_confirmed_from_the_conversation_and_keys_are_checked() {
     assert_eq!(status, 409);
     let body: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(body["refused"], "asking");
+}
+
+#[test]
+fn a_dialog_is_served_while_its_hook_waits_and_an_answer_reaches_the_hook() {
+    use crate::harness::Harness;
+    use crate::state::runtime::{self, DialogRecord, Waiting, WaitingKind};
+    let f = fixture();
+    let token = pair(&f.config, "phone");
+    register_conversation(&f.project, "implementer", "s1");
+    let agent = format!("/v1/agents/{}/login/implementer/dialog", f.project_name);
+    let get = || get(&f.config, &agent, Some(&token));
+    let post =
+        |body: &serde_json::Value| call(&f.config, "POST", &agent, &token, &body.to_string());
+    let payload = serde_json::json!({
+        "hook_event_name": "PermissionRequest", "tool_name": "Bash",
+        "tool_input": {"command": "cargo publish"}
+    });
+    let (dialog, reply_context) = Harness::ClaudeCode.dialog(&payload).unwrap();
+    let id = dialog.id.clone();
+    let mut record = DialogRecord {
+        dialog,
+        pid: u32::MAX / 2,
+        reply_context,
+    };
+    let waiting = Waiting::now(WaitingKind::Permission, Some("Bash: cargo publish".into()));
+    runtime::write_waiting(&f.project, "login", "implementer", &waiting).unwrap();
+    runtime::write_dialog(&f.project, "login", "implementer", &record).unwrap();
+
+    assert_eq!(get().0, 404, "its hook is dead");
+    assert_eq!(
+        post(&serde_json::json!({"id": id, "choice": "allow"})),
+        (
+            409,
+            serde_json::json!({"error": "the dialog's hook is gone", "refused": "gone"})
+                .to_string()
+        )
+    );
+
+    // This process stands in for the hook.
+    record.pid = std::process::id();
+    runtime::write_dialog(&f.project, "login", "implementer", &record).unwrap();
+    let (status, body) = get();
+    assert_eq!(status, 200);
+    let served: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(served["kind"], "permission");
+    assert_eq!(served["tool"], "Bash");
+    assert_eq!(served["detail"], "cargo publish");
+    assert_eq!(served["choices"][1]["id"], "deny");
+    assert_eq!(served.get("reply_context"), None);
+    assert_eq!(served.get("pid"), None);
+
+    let stale = post(&serde_json::json!({"id": "old", "choice": "allow"}));
+    assert_eq!(stale.0, 409);
+    assert!(stale.1.contains(r#""refused":"answered""#), "{}", stale.1);
+    assert_eq!(
+        post(&serde_json::json!({"id": id, "choice": "maybe"})).0,
+        400
+    );
+    assert_eq!(post(&serde_json::json!({"id": id})).0, 400);
+
+    let project = f.project.clone();
+    let hook = std::thread::spawn(move || {
+        for _ in 0..250 {
+            if let Some(answer) = runtime::take_answer(&project, "login", "implementer").unwrap() {
+                runtime::remove_dialog(&project, "login", "implementer", &answer.id).unwrap();
+                return Some(answer);
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        None
+    });
+    let bearer = format!("Bearer {token}");
+    let body = serde_json::json!({"id": id, "choice": "deny", "message": "dry-run first"});
+    let body = body.to_string();
+    let handled = route(
+        &f.config,
+        VAPID,
+        &request("POST", &agent, "", Some(&bearer), &body),
+    );
+    let answer = hook.join().unwrap().unwrap();
+    assert_eq!(handled.reply.status(), 200);
+    assert_eq!(answer.choice, "deny");
+    assert_eq!(answer.message.as_deref(), Some("dry-run first"));
+    let logged = handled.detail.unwrap();
+    assert!(
+        logged.starts_with("dialog deny message sha256:"),
+        "{logged}"
+    );
+    assert!(!logged.contains("dry-run"), "{logged}");
+    assert_eq!(get().0, 404, "answered");
 }

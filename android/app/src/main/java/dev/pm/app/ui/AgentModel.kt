@@ -5,6 +5,8 @@ import androidx.lifecycle.viewModelScope
 import dev.pm.app.api.PmClient
 import dev.pm.app.api.PmError
 import dev.pm.app.model.Conversation
+import dev.pm.app.model.Dialog
+import dev.pm.app.model.DialogAnswer
 import dev.pm.app.model.Item
 import dev.pm.app.model.TranscriptEvent
 import dev.pm.app.model.Transcripts
@@ -64,13 +66,18 @@ class AgentModel(
     private val _chat = MutableStateFlow<ChatState>(ChatState.Loading)
     val chat: StateFlow<ChatState> = _chat.asStateFlow()
 
-    private val _screen = MutableStateFlow<Result<String>?>(null)
-    val screen: StateFlow<Result<String>?> = _screen.asStateFlow()
+    /** The dialog the agent shows that can be answered here; null when none can. */
+    private val _dialog = MutableStateFlow<Dialog?>(null)
+    val dialog: StateFlow<Dialog?> = _dialog.asStateFlow()
+
+    /** An answer to [dialog] is on its way. */
+    private val _answering = MutableStateFlow(false)
+    val answering: StateFlow<Boolean> = _answering.asStateFlow()
 
     private val _outbox = MutableStateFlow<Outbox?>(null)
     val outbox: StateFlow<Outbox?> = _outbox.asStateFlow()
 
-    /** Why the last interrupt or key press failed; cleared by the next. */
+    /** Why the last interrupt or answer failed; cleared by the next. */
     private val _notice = MutableStateFlow<String?>(null)
     val notice: StateFlow<String?> = _notice.asStateFlow()
 
@@ -82,18 +89,14 @@ class AgentModel(
 
     private var watching: Job? = null
     private var reconnecting: Job? = null
-    private var screenPolling: Job? = null
-    private var screenShown = false
-    private var started = false
+    private var fetchingDialog: Job? = null
     private var paging = false
 
     private val conversation
         get() = (_chat.value as? ChatState.Shown)?.conversation
 
-    /** Follow the conversation, and the screen if its tab shows, until [stop]. */
+    /** Follow the conversation until [stop]. */
     fun start() {
-        started = true
-        if (screenShown && screenPolling?.isActive != true) pollScreen()
         if (watching?.isActive != true) watching = viewModelScope.launch { follow() }
         if (reconnecting?.isActive != true) {
             reconnecting = viewModelScope.launch {
@@ -219,19 +222,84 @@ class AgentModel(
 
     fun interrupt() = act { client.interrupt(project, scope, agent) }
 
-    fun press(keys: List<String>) = act { client.pressKeys(project, scope, agent, keys) }
-
     private fun act(action: suspend () -> Unit) {
         _notice.value = null
         viewModelScope.launch {
             try {
                 action()
-                if (screenShown)
-                    _screen.value = runCatching { client.screen(project, scope, agent) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 _notice.value = e.message ?: e.javaClass.simpleName
+            }
+        }
+    }
+
+    /**
+     * The snapshot names the agent's answerable dialog by `id`, null for none: read it when it is
+     * one not held.
+     */
+    fun dialogNamed(id: String?) {
+        if (id == null) {
+            fetchingDialog?.cancel()
+            _dialog.value = null
+            return
+        }
+        if (_dialog.value?.id == id) return
+        fetchDialog()
+    }
+
+    private fun fetchDialog() {
+        fetchingDialog?.cancel()
+        fetchingDialog = viewModelScope.launch {
+            _dialog.value =
+                try {
+                    client.dialog(project, scope, agent)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    null
+                }
+        }
+    }
+
+    /**
+     * Answer [dialog] with `choice`, the `answers` to its questions, and a `message` for the agent.
+     * One refused (answered at the terminal first, or its hook gone) says why and is read again.
+     */
+    fun answer(
+        choice: String,
+        answers: Map<String, List<String>> = emptyMap(),
+        message: String? = null,
+    ) {
+        val shown = _dialog.value ?: return
+        if (_answering.value) return
+        _answering.value = true
+        _notice.value = null
+        viewModelScope.launch {
+            try {
+                client.answerDialog(
+                    project,
+                    scope,
+                    agent,
+                    DialogAnswer(shown.id, choice, answers, message?.takeIf { it.isNotBlank() }),
+                )
+                if (_dialog.value?.id == shown.id) _dialog.value = null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: PmError.Refused) {
+                _notice.value =
+                    when (e.code) {
+                        "answered" -> "Answered elsewhere"
+                        "gone" ->
+                            "The dialog can no longer be answered here; answer it at the terminal"
+                        else -> e.message
+                    }
+                fetchDialog()
+            } catch (e: Exception) {
+                _notice.value = e.message ?: e.javaClass.simpleName
+            } finally {
+                _answering.value = false
             }
         }
     }
@@ -252,13 +320,10 @@ class AgentModel(
     }
 
     fun stop() {
-        started = false
         watching?.cancel()
         watching = null
         reconnecting?.cancel()
         reconnecting = null
-        screenPolling?.cancel()
-        screenPolling = null
     }
 
     /** Page the conversation back from its oldest item held. */
@@ -289,23 +354,6 @@ class AgentModel(
             _chat.value = shown.copy(conversation = next)
             if (next.items.size > shown.conversation.items.size) return
             cursor = page.before ?: return
-        }
-    }
-
-    /** Read the agent's screen every few seconds while its tab shows. */
-    fun watchScreen(on: Boolean) {
-        screenShown = on
-        screenPolling?.cancel()
-        screenPolling = null
-        if (on && started) pollScreen()
-    }
-
-    private fun pollScreen() {
-        screenPolling = viewModelScope.launch {
-            while (true) {
-                _screen.value = runCatching { client.screen(project, scope, agent) }
-                delay(3.seconds)
-            }
         }
     }
 

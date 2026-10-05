@@ -91,7 +91,10 @@ pub fn harness_problems(
         let (status, others): (Vec<_>, Vec<_>) = hooks_install::pm_events(harness)
             .into_iter()
             .filter(untrusted)
-            .partition(|(_, markers)| markers.contains(&hooks_install::PM_WAITING_MARKER));
+            .partition(|(_, markers)| {
+                markers.contains(&hooks_install::PM_WAITING_MARKER)
+                    || markers.contains(&hooks_install::PM_DIALOG_MARKER)
+            });
         for (event, _) in others {
             push(
                 if event == hooks_install::USER_PROMPT_EVENT {
@@ -132,6 +135,17 @@ pub fn harness_problems(
                 format!(
                     "pm status hooks ({}) not installed in {shown}, so an agent waiting on you \
                      reads as busy (run `pm harness hooks install`)",
+                    missing.join(", ")
+                ),
+            );
+        }
+        let missing = hooks_install::missing_dialog_hooks(harness, root.as_ref());
+        if !missing.is_empty() {
+            push(
+                ProblemKind::StatusHooksMissing,
+                format!(
+                    "pm dialog hook ({}) not installed in {shown}, so a dialog can be answered \
+                     at the terminal only (run `pm harness hooks install`)",
                     missing.join(", ")
                 ),
             );
@@ -384,6 +398,14 @@ mod tests {
         let hooks = root["hooks"].as_object_mut().unwrap();
         hooks.remove("Notification");
         hooks.remove("StopFailure");
+        // The dialog hook's entry alone, the status hook's beside it kept.
+        hooks["PermissionRequest"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|e| {
+                !e.to_string()
+                    .contains(crate::commands::hooks_install::PM_DIALOG_MARKER)
+            });
         std::fs::write(&settings, root.to_string()).unwrap();
 
         let problems = harness_problems(
@@ -397,12 +419,19 @@ mod tests {
             .iter()
             .map(|p| (p.kind, p.message.as_str()))
             .collect();
-        assert_eq!(kinds.len(), 1, "{kinds:?}");
+        assert_eq!(kinds.len(), 2, "{kinds:?}");
         assert_eq!(kinds[0].0, ProblemKind::StatusHooksMissing);
         assert!(
             kinds[0]
                 .1
                 .starts_with("pm status hooks (StopFailure, Notification) not installed"),
+            "{kinds:?}"
+        );
+        assert_eq!(kinds[1].0, ProblemKind::StatusHooksMissing);
+        assert!(
+            kinds[1]
+                .1
+                .starts_with("pm dialog hook (PermissionRequest) not installed"),
             "{kinds:?}"
         );
 

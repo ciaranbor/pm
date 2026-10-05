@@ -33,6 +33,7 @@ use crate::state::runtime::{self, WaitingClass, WaitingKind};
 use crate::tmux;
 
 use super::feat_status_view::first_line;
+use super::hooks_dialog;
 use super::running_agents::{self, Liveness, Windows, liveness};
 
 pub mod transition;
@@ -160,6 +161,9 @@ pub struct WaitingSnapshot {
     pub detail: String,
     /// When the wait began; `None` for a loop that stopped itself.
     pub since: Option<DateTime<Utc>>,
+    /// The id of the dialog, when it can be answered remotely.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dialog: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -615,6 +619,10 @@ impl ScopeReader<'_> {
                 kind: w.kind,
                 detail: w.describe(),
                 since: Some(w.since),
+                dialog: (w.kind.class() == WaitingClass::Asking)
+                    .then(|| hooks_dialog::current_for(self.project_root, scope, agent, &w))
+                    .flatten()
+                    .map(|record| record.dialog.id),
             })
             .or_else(|| {
                 let reason = harness.loop_stopped(self.project_root, scope, agent)?;
@@ -622,6 +630,7 @@ impl ScopeReader<'_> {
                     kind: WaitingKind::Tripped,
                     detail: format!("loop stopped: {reason}"),
                     since: None,
+                    dialog: None,
                 })
             });
         let Some(waiting) = waiting else {
@@ -683,6 +692,7 @@ mod tests {
                 kind,
                 detail: detail.into(),
                 since: None,
+                dialog: None,
             }),
             ..agent(name, state, 0)
         }
@@ -801,6 +811,7 @@ mod tests {
                             kind: WaitingKind::Plan,
                             detail: "plan approval".into(),
                             since: Some("2026-10-02T09:25:00Z".parse().unwrap()),
+                            dialog: None,
                         }),
                         ..agent("main", AgentState::Asking, 0)
                     }],
@@ -1082,6 +1093,23 @@ mod tests {
         );
         assert_eq!(login.attention.kind, AttentionKind::Asking);
         assert!(!login.working, "its only busy agent was never active");
+        assert_eq!(login.agents[0].waiting.as_ref().unwrap().dialog, None);
+
+        // A dialog whose hook (this process) waits names it.
+        let payload = serde_json::json!({
+            "hook_event_name": "PermissionRequest", "tool_name": "AskUserQuestion",
+            "tool_input": {"questions": [{"question": "Which DB?", "options": []}]}
+        });
+        let (dialog, reply_context) = Harness::ClaudeCode.dialog(&payload).unwrap();
+        let id = dialog.id.clone();
+        let record = runtime::DialogRecord {
+            dialog,
+            pid: std::process::id(),
+            reply_context,
+        };
+        runtime::write_dialog(&project, "login", "asking", &record).unwrap();
+        let login = &super::project(&project, server.name()).unwrap().features[0];
+        assert_eq!(login.agents[0].waiting.as_ref().unwrap().dialog, Some(id));
 
         let at = |minutes| Utc::now() - chrono::Duration::minutes(minutes);
         runtime::set_activity(&project, "login", "starting", at(1));

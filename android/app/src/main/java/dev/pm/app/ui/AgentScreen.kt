@@ -18,14 +18,11 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.SmallFloatingActionButton
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -44,6 +41,7 @@ import dev.pm.app.R
 import dev.pm.app.api.PmClient
 import dev.pm.app.model.AgentState
 import dev.pm.app.model.Conversation
+import dev.pm.app.model.Waiting
 import java.time.LocalDate
 import java.time.ZoneId
 import kotlinx.coroutines.flow.Flow
@@ -55,6 +53,7 @@ fun AgentScreen(
     scope: String,
     agent: String,
     state: AgentState?,
+    waiting: Waiting?,
     networkChanges: Flow<Unit>,
     openResult: (tool: String, ref: String) -> Unit,
     modifier: Modifier = Modifier,
@@ -64,34 +63,33 @@ fun AgentScreen(
         model.start()
         onStopOrDispose { model.stop() }
     }
-    var tab by rememberSaveable { mutableIntStateOf(0) }
-    LaunchedEffect(tab) { model.watchScreen(tab == 1) }
+    val asking = state == AgentState.Asking
+    val dialogId = waiting?.dialog?.takeIf { asking }
+    LaunchedEffect(dialogId) { model.dialogNamed(dialogId) }
     val outbox by model.outbox.collectAsStateWithLifecycle()
     val notice by model.notice.collectAsStateWithLifecycle()
+    val dialog by model.dialog.collectAsStateWithLifecycle()
+    val answering by model.answering.collectAsStateWithLifecycle()
     Column(modifier.fillMaxSize().imePadding()) {
-        PrimaryTabRow(selectedTabIndex = tab) {
-            Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Chat") })
-            Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Screen") })
-        }
-        Box(Modifier.weight(1f)) {
-            when (tab) {
-                0 -> Chat(model, openResult)
-                else -> Screen(model)
-            }
-        }
-        when (tab) {
-            0 -> Composer(state, outbox, notice, send = model::send, interrupt = model::interrupt)
-            else -> {
-                notice?.let {
-                    Text(
-                        it,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.padding(horizontal = 8.dp),
-                    )
-                }
-                KeyBar(state, press = model::press)
-            }
+        Box(Modifier.weight(1f)) { Chat(model, openResult) }
+        val shown = dialog
+        if (asking && shown != null) {
+            DialogCard(
+                shown,
+                answering,
+                notice,
+                answer = model::answer,
+                interrupt = model::interrupt,
+            )
+        } else {
+            Composer(
+                state,
+                waiting,
+                outbox,
+                notice,
+                send = model::send,
+                interrupt = model::interrupt,
+            )
         }
     }
 }
@@ -104,7 +102,7 @@ private fun Chat(model: AgentModel, openResult: (tool: String, ref: String) -> U
         ChatState.Unsupported ->
             Centered {
                 Text(
-                    "This pm serve has no transcripts yet. Upgrade pm on the Mac; the Screen tab shows the agent meanwhile.",
+                    "This pm serve has no transcripts yet. Upgrade pm on the Mac to see the conversation.",
                     textAlign = TextAlign.Center,
                 )
             }
@@ -235,23 +233,6 @@ private suspend fun LazyListState.scrollToEnd() {
 }
 
 private const val MAX_END_STEPS = 50
-
-@Composable
-private fun Screen(model: AgentModel) {
-    val screen by model.screen.collectAsStateWithLifecycle()
-    val shown = screen
-    when {
-        shown == null -> Centered { CircularProgressIndicator() }
-        shown.isFailure ->
-            Centered {
-                Text(
-                    "Couldn't read the screen: ${shown.exceptionOrNull()?.message}",
-                    textAlign = TextAlign.Center,
-                )
-            }
-        else -> TerminalView(shown.getOrThrow())
-    }
-}
 
 @Composable
 fun Centered(modifier: Modifier = Modifier, content: @Composable () -> Unit) {

@@ -12,9 +12,9 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * The chat's rows and the screen tab, compared with the images in `src/test/screenshots` on every
- * test run; `gradlew recordRoborazziDebug` records them anew. Times are at noon UTC so the day is
- * the same in any zone the run is in.
+ * The chat's rows and the terminal view, compared with the images in `src/test/screenshots` on
+ * every test run; `gradlew recordRoborazziDebug` records them anew. Times are at noon UTC so the
+ * day is the same in any zone the run is in.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)

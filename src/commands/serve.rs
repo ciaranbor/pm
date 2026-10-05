@@ -45,6 +45,7 @@ use crate::error::{PmError, Result};
 use super::attention::{self, transition::Watch};
 use super::reexec::Binary;
 
+mod dialog;
 mod events;
 mod input;
 mod push;

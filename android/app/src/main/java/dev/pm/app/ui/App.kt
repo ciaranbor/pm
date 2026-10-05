@@ -283,15 +283,17 @@ fun App(
                             if (paired == null) {
                                 Centered { Text("Not paired.") }
                             } else {
+                                val shown =
+                                    snapshot?.agents(key.project, key.scope)?.find {
+                                        it.name == key.agent
+                                    }
                                 AgentScreen(
                                     paired,
                                     key.project,
                                     key.scope,
                                     key.agent,
-                                    snapshot
-                                        ?.agents(key.project, key.scope)
-                                        ?.find { it.name == key.agent }
-                                        ?.stateOf,
+                                    shown?.stateOf,
+                                    shown?.waiting,
                                     networkChanges,
                                     openResult = { tool, ref ->
                                         backStack.add(

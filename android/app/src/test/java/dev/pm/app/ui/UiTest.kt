@@ -98,7 +98,9 @@ class UiTest {
             )
             .performClick()
         compose.onNodeWithText("app › login").assertIsDisplayed()
-        compose.onNodeWithText("Chat").assertIsDisplayed()
+        compose
+            .onNodeWithText("A dialog is up at the terminal: Postgres or SQLite?")
+            .assertIsDisplayed()
 
         compose.onNodeWithContentDescription("Back").performClick()
         compose.onNodeWithText("login").assertIsDisplayed()

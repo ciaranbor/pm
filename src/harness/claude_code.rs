@@ -7,6 +7,7 @@
 //! exit 2 refuses the prompt.
 
 pub(super) mod chat;
+pub(super) mod dialog;
 pub(super) mod input;
 pub(super) mod sessions;
 pub(super) mod transcript;

@@ -73,6 +73,7 @@
 
 mod bounded;
 pub(super) mod chat;
+pub(super) mod dialog;
 mod messages;
 mod providers;
 pub(super) mod sessions;

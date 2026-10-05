@@ -1,5 +1,5 @@
-//! SIGTERM, SIGHUP and SIGINT, caught for the rest of the process so the
-//! Stop hook's wait can tell who sent a signal and record why it ended. A
+//! SIGTERM, SIGHUP and SIGINT, caught for the rest of the process so a
+//! blocking hook's wait can tell who sent a signal and act on it at once. A
 //! handler may only do async-signal-safe work, so it writes the signal and
 //! its sender's pid to a pipe the wait polls; a write of at most `PIPE_BUF`
 //! bytes is atomic, so concurrent records never interleave.
@@ -9,7 +9,7 @@ use std::time::Duration;
 
 /// A caught signal and the pid that sent it (`si_pid`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Caught {
+pub(crate) struct Caught {
     pub signal: libc::c_int,
     pub sender: libc::pid_t,
 }
@@ -27,7 +27,7 @@ impl std::fmt::Display for Caught {
 
 const RECORD: usize = 8;
 
-pub(super) struct Signals {
+pub(crate) struct Signals {
     read: libc::c_int,
     write: libc::c_int,
 }

@@ -419,3 +419,72 @@ export class Asks {
     return this.open.delete(id) && this.open.size === 0
   }
 }
+
+/** What `pm harness hooks dialog opencode` printed for an answer from `pm serve`. */
+export type DialogDecision = { decision: "once" | "always" | "reject"; message?: string }
+
+/** The decision the dialog hook printed; null when it printed none. */
+export function dialogDecision(result: HookResult): DialogDecision | null {
+  if (result.code !== 0) return null
+  let parsed: any
+  try {
+    parsed = JSON.parse(result.out)
+  } catch {
+    return null
+  }
+  if (!["once", "always", "reject"].includes(parsed?.decision)) return null
+  return typeof parsed.message === "string"
+    ? { decision: parsed.decision, message: parsed.message }
+    : { decision: parsed.decision }
+}
+
+export type RemoteDeps = {
+  /** Run `pm harness hooks dialog opencode` with the ask; end it once `cancel` aborts. */
+  hook(payload: string, cancel: AbortSignal): Promise<HookResult>
+  /** `ctx.permission.reply`. */
+  reply(reply: { sessionID: string; requestID: string } & DialogDecision): Promise<unknown>
+}
+
+/**
+ * The permission asks `pm serve` can answer: each blocks in pm's dialog
+ * hook while open, and the decision it prints is the reply. One settled
+ * at the TUI first ends its hook with no reply.
+ */
+export class RemoteAsks {
+  private readonly deps: RemoteDeps
+  private readonly open = new Map<string, AbortController>()
+
+  constructor(deps: RemoteDeps) {
+    this.deps = deps
+  }
+
+  /** A `permission.asked` event's data. */
+  async asked(data: any): Promise<void> {
+    if (typeof data?.id !== "string" || typeof data?.sessionID !== "string") return
+    const cancel = new AbortController()
+    this.open.set(data.id, cancel)
+    let result: HookResult
+    try {
+      result = await this.deps.hook(JSON.stringify(data), cancel.signal)
+    } finally {
+      if (this.open.get(data.id) === cancel) this.open.delete(data.id)
+    }
+    if (cancel.signal.aborted) return
+    const decision = dialogDecision(result)
+    if (!decision) return
+    try {
+      await this.deps.reply({ sessionID: data.sessionID, requestID: data.id, ...decision })
+    } catch {
+      // "Permission request not found": the TUI settled it first.
+    }
+  }
+
+  replied(id: string): void {
+    this.open.get(id)?.abort()
+  }
+
+  unload(): void {
+    for (const cancel of this.open.values()) cancel.abort()
+    this.open.clear()
+  }
+}

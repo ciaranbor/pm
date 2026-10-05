@@ -8,7 +8,7 @@
 //
 // It also stands in for the hooks opencode lacks: it reports the user's
 // prompts, the dialogs that wait on the user, failed turns, and the agent's
-// activity.
+// activity, and lets `pm serve` answer a permission ask.
 //
 // Installed by pm and overwritten on upgrade. opencode reloads it in every
 // running server when the file changes, so the cleanup must leave nothing
@@ -25,6 +25,7 @@ import {
   LOADED_FILE,
   Loop,
   PM_PROMPT,
+  RemoteAsks,
   TURN_END,
   TURN_ERROR_FILE,
   TURN_STARTED,
@@ -47,8 +48,8 @@ export default {
     const tripFile = process.env.PM_OPENCODE_TRIP_FILE
     const controller = new AbortController()
     const children = new Set<ChildProcess>()
-    const pm = (args: string[], stdin: string, signal?: AbortSignal) =>
-      runPm(args, stdin, { cwd: ctx.location.directory, env: process.env, children, signal })
+    const pm = (args: string[], stdin: string, signal?: AbortSignal, killSignal?: NodeJS.Signals) =>
+      runPm(args, stdin, { cwd: ctx.location.directory, env: process.env, children, signal, killSignal })
 
     const stateFile = (name: string) => (tripFile ? join(dirname(tripFile), name) : undefined)
     const record = (file: string | undefined, text: string | null) => {
@@ -64,6 +65,11 @@ export default {
     const activityFile = stateFile(ACTIVITY_FILE)
     const active = () => record(activityFile, "")
     const asks = new Asks()
+    // SIGTERM, so the hook removes its dialog as it ends.
+    const remote = new RemoteAsks({
+      hook: (payload, cancel) => pm(["harness", "hooks", "dialog", "opencode"], payload, cancel, "SIGTERM"),
+      reply: (reply) => ctx.permission.reply(reply),
+    })
     // In order, so a reply can't overtake the ask it answers.
     let reported: Promise<unknown> = Promise.resolve()
     const waiting = (payload: object) => {
@@ -137,11 +143,13 @@ export default {
               if (ask.sessionID === null || (await drivesSession(own, ask.sessionID, parentOf))) {
                 asks.opened(ask.id)
                 waiting(ask.payload)
+                if (event.type === "permission.asked") void remote.asked(event.data)
               }
               continue
             }
             const answered = answeredOf(event)
             if (answered) {
+              remote.replied(answered)
               if (asks.closed(answered)) waiting({ hook_event_name: "Resolved" })
               continue
             }
@@ -185,6 +193,7 @@ export default {
         if (loadedFile && readFileSync(loadedFile, "utf8").trim() === loadedMark) record(loadedFile, null)
       } catch {}
       loop.unload()
+      remote.unload()
       controller.abort()
       for (const child of children) child.kill("SIGTERM")
       children.clear()

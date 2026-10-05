@@ -158,7 +158,13 @@ data class AgentSnapshot(
         get() = AgentState.of(state)
 }
 
-@Serializable data class Waiting(val kind: String = "", val detail: String = "")
+@Serializable
+data class Waiting(
+    val kind: String = "",
+    val detail: String = "",
+    /** The id of the dialog, while it can be answered from the phone. */
+    val dialog: String? = null,
+)
 
 @Serializable
 data class Attention(

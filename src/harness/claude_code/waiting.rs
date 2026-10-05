@@ -90,18 +90,36 @@ fn permission(payload: &Value) -> Waiting {
                 .and_then(Value::as_str)
                 .map(one_line),
         ),
-        "ExitPlanMode" => Waiting::now(WaitingKind::Plan, None),
+        "ExitPlanMode" => Waiting::now(
+            WaitingKind::Plan,
+            input
+                .and_then(|i| i.get("plan"))
+                .and_then(Value::as_str)
+                .and_then(plan_title),
+        ),
         _ => {
-            let target = ["command", "file_path", "url", "path", "pattern"]
-                .iter()
-                .find_map(|key| input?.get(key)?.as_str());
-            let detail = match target {
+            let detail = match input.and_then(target) {
                 Some(target) => format!("{tool}: {}", one_line(target)),
                 None => tool.to_string(),
             };
             Waiting::now(WaitingKind::Permission, Some(detail))
         }
     }
+}
+
+/// What a tool's input says it acts on: the command, the file, the URL.
+pub(super) fn target(input: &Value) -> Option<&str> {
+    ["command", "file_path", "url", "path", "pattern"]
+        .iter()
+        .find_map(|key| input.get(key)?.as_str())
+}
+
+/// A plan's first Markdown heading, without its `#`s.
+pub(super) fn plan_title(plan: &str) -> Option<String> {
+    plan.lines()
+        .find_map(|line| line.trim_start().strip_prefix('#'))
+        .map(|heading| one_line(heading.trim_start_matches('#')))
+        .filter(|title| !title.is_empty())
 }
 
 #[cfg(test)]
@@ -132,6 +150,20 @@ mod tests {
         );
         assert_eq!(
             set(request("ExitPlanMode", json!({}))),
+            (WaitingKind::Plan, None)
+        );
+        assert_eq!(
+            set(request(
+                "ExitPlanMode",
+                json!({"plan": "Context first.\n\n## Add login\n- step"})
+            )),
+            (WaitingKind::Plan, Some("Add login".into()))
+        );
+        assert_eq!(
+            set(request(
+                "ExitPlanMode",
+                json!({"plan": "No heading at all"})
+            )),
             (WaitingKind::Plan, None)
         );
         assert_eq!(

@@ -13,6 +13,7 @@ import {
   MAX_WASTED_TURNS,
   PM_PROMPT,
   RETRY_MS,
+  RemoteAsks,
   TURN_FAILED,
   answeredOf,
   askOf,
@@ -535,4 +536,87 @@ test("the agent stops waiting only once every open dialog has closed", () => {
   assert.equal(asks.closed("unknown"), false)
   assert.equal(asks.closed("frm_1"), true)
   assert.equal(asks.closed("frm_1"), false, "nothing was open")
+})
+
+const ASK = { id: "per_1", sessionID: "ses_1", action: "edit", resources: ["src/a.rs"] }
+
+/** Remote asks over a scripted dialog hook, recording what was replied. */
+function remoteAsks(hook: (payload: string, cancel: AbortSignal) => Promise<HookResult>, reply?: () => Promise<unknown>) {
+  const replies: object[] = []
+  const remote = new RemoteAsks({
+    hook,
+    reply: async (r) => {
+      replies.push(r)
+      await reply?.()
+    },
+  })
+  return { remote, replies }
+}
+
+test("a permission ask is replied to with the decision the dialog hook printed", async () => {
+  const payloads: string[] = []
+  const { remote, replies } = remoteAsks(async (payload) => {
+    payloads.push(payload)
+    return { code: 0, out: '{"decision":"reject","message":"not that file"}' }
+  })
+  await remote.asked(ASK)
+  assert.deepEqual(payloads.map((p) => JSON.parse(p)), [ASK])
+  assert.deepEqual(replies, [{ sessionID: "ses_1", requestID: "per_1", decision: "reject", message: "not that file" }])
+})
+
+test("an ask settled at the TUI ends its dialog hook and sends no reply", async () => {
+  let ended = false
+  const { remote, replies } = remoteAsks(
+    (_payload, cancel) =>
+      new Promise((resolve) =>
+        cancel.addEventListener("abort", () => {
+          ended = true
+          resolve({ code: 0, out: '{"decision":"once"}' })
+        }),
+      ),
+  )
+  const asked = remote.asked(ASK)
+  remote.replied("per_2")
+  assert.equal(ended, false, "another ask's reply")
+  remote.replied("per_1")
+  await asked
+  assert.equal(ended, true)
+  assert.deepEqual(replies, [])
+})
+
+test("a hook that prints no decision sends no reply, and a refused reply is not an error", async () => {
+  for (const out of ["", "{}", '{"decision":"maybe"}']) {
+    const { remote, replies } = remoteAsks(async () => ({ code: 0, out }))
+    await remote.asked(ASK)
+    assert.deepEqual(replies, [], out)
+  }
+  const { remote, replies } = remoteAsks(
+    async () => ({ code: 0, out: '{"decision":"once"}' }),
+    async () => {
+      throw new Error("Permission request not found")
+    },
+  )
+  await remote.asked(ASK)
+  assert.equal(replies.length, 1)
+})
+
+test("a cancelled `pm` given a kill signal gets that one", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "pm-plugin-test-"))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const caught = join(dir, "caught")
+  const ready = join(dir, "ready")
+  const command = fakePm(t, `trap 'touch ${caught}; exit 0' TERM; touch ${ready}; while :; do sleep 0.05; done`)
+  const cancel = new AbortController()
+  const running = runPm(["harness", "hooks", "dialog", "opencode"], "{}", {
+    cwd: tmpdir(),
+    env: process.env,
+    children: new Set(),
+    command,
+    signal: cancel.signal,
+    killSignal: "SIGTERM",
+  })
+  while (!existsSync(ready)) await new Promise((resolve) => setTimeout(resolve, 10))
+  cancel.abort()
+  await running
+  assert.equal(existsSync(caught), true)
 })
