@@ -2,6 +2,7 @@ package dev.pm.app.data
 
 import android.content.Context
 import androidx.core.content.edit
+import dev.pm.app.model.NotesDraft
 import dev.pm.app.model.Pairing
 import dev.pm.app.model.PushedTransition
 import java.io.File
@@ -10,9 +11,10 @@ import kotlinx.serialization.json.Json
 
 /**
  * What the app keeps on the phone: the pairing, the last snapshot (shown while the server can't be
- * reached), the push subscription, what polling last alerted, and the update check's settings.
+ * reached), the push subscription, what polling last alerted, the update check's settings, and
+ * unsaved edits of each project's notes.
  */
-class Store(context: Context) {
+class Store(context: Context) : NotesDrafts {
     private val prefs = context.getSharedPreferences("pm", Context.MODE_PRIVATE)
     private val snapshotFile = File(context.filesDir, "snapshot.json")
 
@@ -90,7 +92,20 @@ class Store(context: Context) {
         get() = prefs.getString(NOTIFIED_UPDATE, null)
         set(value) = prefs.edit { putString(NOTIFIED_UPDATE, value) }
 
+    override fun draft(project: String): NotesDraft? =
+        prefs.getString(DRAFT + project, null)?.let {
+            runCatching { json.decodeFromString(NotesDraft.serializer(), it) }.getOrNull()
+        }
+
+    override fun keep(project: String, draft: NotesDraft?) {
+        prefs.edit {
+            if (draft == null) remove(DRAFT + project)
+            else putString(DRAFT + project, json.encodeToString(NotesDraft.serializer(), draft))
+        }
+    }
+
     private companion object {
+        const val DRAFT = "notes_draft/"
         val json = Json { ignoreUnknownKeys = true }
         val alerts = ListSerializer(PushedTransition.serializer())
         const val POLLED = "polled"
@@ -110,3 +125,11 @@ data class Subscription(
     val auth: String,
     val sent: Boolean,
 )
+
+/** Unsaved edits of projects' notes, kept until saved or discarded. */
+interface NotesDrafts {
+    fun draft(project: String): NotesDraft?
+
+    /** Keep `draft` as `project`'s, or forget it with null. */
+    fun keep(project: String, draft: NotesDraft?)
+}

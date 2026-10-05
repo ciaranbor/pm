@@ -70,6 +70,8 @@ sealed interface Route : NavKey {
 
     @Serializable data class Summary(val project: String, val feature: String) : Route
 
+    @Serializable data class Notes(val project: String) : Route
+
     /** The feature's `--context` brief. */
     @Serializable data class Brief(val project: String, val feature: String) : Route
 
@@ -99,6 +101,7 @@ sealed interface Route : NavKey {
                 is Scope -> scope to project
                 is Agent -> agent to "$project › $scope"
                 is Summary -> "Summary" to "$project › $feature"
+                is Notes -> "Notes" to project
                 is Brief -> "Brief" to "$project › $feature"
                 is Details -> "Details" to "$project › $feature"
                 is Output -> "$tool output" to "$project › $scope › $agent"
@@ -261,6 +264,7 @@ fun App(
                                     key.project,
                                     now,
                                     open = { s -> backStack.add(Route.Scope(key.project, s)) },
+                                    openNotes = { backStack.add(Route.Notes(key.project)) },
                                 )
                             }
                         }
@@ -315,6 +319,10 @@ fun App(
                                     ReadModel(client) { summary(key.project, key.feature) }
                                 }
                             )
+                        }
+                        entry<Route.Notes> { key ->
+                            val store = LocalContext.current.container.store
+                            NotesScreen(viewModel { NotesModel(client, key.project, store) })
                         }
                         entry<Route.Brief> { key ->
                             BriefScreen(

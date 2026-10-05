@@ -92,6 +92,14 @@ pub enum Commands {
         #[arg(short, long)]
         yes: bool,
     },
+    /// Edit the project's notes (`.pm/notes.md`) in $VISUAL or $EDITOR
+    ///
+    /// One Markdown file per project, outside every worktree, synced by
+    /// `pm state push` and editable from the phone app through `pm serve`.
+    Notes {
+        /// Project name (defaults to current project from CWD)
+        project: Option<String>,
+    },
     /// Show project dashboard (what each feature needs, health)
     Status {
         /// Project name (defaults to current project from CWD)

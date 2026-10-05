@@ -508,6 +508,39 @@ fn init_starts_main_in_the_main_session() {
     assert_eq!(s.window_names("proj/main"), ["main"]);
 }
 
+/// Catches: `pm notes` not finding its editor in the inherited env — an
+/// empty `$VISUAL` taken over `$EDITOR`, or an `$EDITOR` with arguments not
+/// run through the shell.
+#[test]
+#[ignore]
+fn notes_opens_the_editor_from_the_env_with_its_arguments() {
+    let s = Smoke::new();
+    s.pm(s.home())
+        .args(["init", "--no-main", &s.proj().to_string_lossy()])
+        .assert()
+        .success();
+    let source = s.home().join("from editor.md");
+    std::fs::write(&source, "written by the editor\n").unwrap();
+
+    s.pm(&s.proj().join("main"))
+        .arg("notes")
+        .env("VISUAL", "")
+        .env("EDITOR", format!("cp '{}'", source.display()))
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read_to_string(s.proj().join(".pm/notes.md")).unwrap(),
+        "written by the editor\n"
+    );
+
+    s.pm(s.home())
+        .args(["notes", "proj"])
+        .env("VISUAL", "false")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("false exited"));
+}
+
 /// Catches: `pm init --git <url>` without a PATH not cloning into
 /// `./<repo name>` under the caller's cwd.
 #[test]

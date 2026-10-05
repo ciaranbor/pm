@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -191,12 +192,20 @@ fun DetailsScreen(model: ReadModel<FeatureInfo>, modifier: Modifier = Modifier) 
 
 private const val GONE = "This feature is no longer there."
 
-/** `markdown`, selectable, under a button copying its source as `label`. */
+/** `markdown`, selectable, under a button copying its source as `label`, after `actions`. */
 @Composable
-private fun MarkdownPage(markdown: String, label: String, modifier: Modifier = Modifier) {
+internal fun MarkdownPage(
+    markdown: String,
+    label: String,
+    modifier: Modifier = Modifier,
+    actions: @Composable RowScope.() -> Unit = {},
+) {
     val state = rememberMarkdownState(markdown, retainState = true)
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-        CopyButton(label, markdown, Modifier.align(Alignment.End))
+        Row(Modifier.align(Alignment.End)) {
+            actions()
+            CopyButton(label, markdown)
+        }
         SelectionContainer {
             Markdown(
                 markdownState = state,

@@ -60,11 +60,12 @@ class ListScreenshotTest {
 
     @Test @Config(qualifiers = "+night") fun offline_dark() = capture(offline)
 
-    @Test fun scopes_light() = capture { ScopesList(snapshot, "app", now, open = {}) }
+    @Test
+    fun scopes_light() = capture { ScopesList(snapshot, "app", now, open = {}, openNotes = {}) }
 
     @Test
     @Config(qualifiers = "+night")
-    fun scopes_dark() = capture { ScopesList(snapshot, "app", now, open = {}) }
+    fun scopes_dark() = capture { ScopesList(snapshot, "app", now, open = {}, openNotes = {}) }
 
     @Test
     fun agents_light() = capture {

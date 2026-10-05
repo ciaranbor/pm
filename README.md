@@ -173,6 +173,19 @@ When an agent misbehaves, `pm agent restart <name>` respawns it on the same
 conversation; `pm agent spawn <name>` adds one to the feature. `pm doctor`
 reports an agent whose harness has exited.
 
+### Project notes
+
+`pm notes` opens the project's notes in `$VISUAL` or `$EDITOR`: one
+Markdown file, `.pm/notes.md`, outside every worktree, which `pm state push`
+syncs with the rest of `.pm/`. Run it from any scope, or name another
+project (`pm notes tools`). The phone app edits the same file through
+`pm serve`, from a project's Notes button; a phone save made while the file
+changed underneath is refused and shows both texts to keep one or merge.
+Notes over 256 KB are edited with `pm notes` only.
+A save from the phone replaces the file, so vim warns that it changed if
+you have it open; `:set autoread` reloads it instead when you have no
+unsaved changes.
+
 ### Finish a feature
 
 When a feature is `ready`, its summary owner has written a summary for
@@ -212,7 +225,8 @@ worktrees too — `main` included, unpushed history with it.
 
 `pm serve` serves the attention view to pm's Android app, and types what you
 send from it into agents' panes: from the phone you can see what needs you,
-read an agent's conversation, reply, interrupt, and answer its dialogs. On a Mac, the `pm serve install --pair <device>` that pairs the
+read an agent's conversation, reply, interrupt, answer its dialogs, and
+edit a project's [notes](#project-notes). On a Mac, the `pm serve install --pair <device>` that pairs the
 [Android app](#android-app) also runs `pm serve` as a LaunchAgent and puts
 it behind `tailscale serve`; `pm serve status` says whether it runs and
 what reaches it.

@@ -48,6 +48,7 @@ use super::reexec::Binary;
 mod dialog;
 mod events;
 mod input;
+mod notes;
 mod push;
 mod routes;
 pub mod state;
@@ -64,9 +65,13 @@ pub use wake::wake;
 /// The response header every reply carries, naming the server's version.
 const VERSION_HEADER: &str = "Pm-Version";
 
-/// The most of a request body read: the longest text a device may send,
-/// as JSON, with room for its escapes.
-const MAX_BODY: u64 = 2 * input::MAX_TEXT as u64 + 1024;
+/// The most of a request body read: the longest input a device may send,
+/// as JSON with room for its escapes, or the longest notes, raw.
+const MAX_BODY: u64 = {
+    let input = 2 * input::MAX_TEXT as u64 + 1024;
+    let notes = notes::MAX_TEXT as u64;
+    if input > notes { input } else { notes }
+};
 
 pub const DEFAULT_PORT: u16 = 7764;
 
@@ -225,11 +230,15 @@ impl Server {
     }
 
     fn handle(&self, mut request: tiny_http::Request) {
-        let authorization = request
-            .headers()
-            .iter()
-            .find(|h| h.field.equiv("Authorization"))
-            .map(|h| h.value.as_str().to_string());
+        let header_value = |name: &'static str| {
+            request
+                .headers()
+                .iter()
+                .find(|h| h.field.equiv(name))
+                .map(|h| h.value.as_str().to_string())
+        };
+        let authorization = header_value("Authorization");
+        let if_match = header_value("If-Match");
         let method = request.method().as_str().to_string();
         let (path, query) = request
             .url()
@@ -241,12 +250,11 @@ impl Server {
             &mut std::io::Read::take(request.as_reader(), MAX_BODY + 1),
             &mut body,
         );
+        let too_long = body.len() as u64 > MAX_BODY;
+        if too_long {
+            body.clear();
+        }
         let handled = match read {
-            Ok(_) if body.len() as u64 > MAX_BODY => routes::Handled {
-                device: None,
-                reply: routes::error(413, "the body is too long"),
-                detail: None,
-            },
             Ok(_) => routes::route(
                 &self.config,
                 &self.vapid,
@@ -255,7 +263,9 @@ impl Server {
                     path: &path,
                     query: &query,
                     authorization: authorization.as_deref(),
+                    if_match: if_match.as_deref(),
                     body: &body,
+                    too_long,
                 },
             ),
             Err(_) => routes::Handled {
@@ -279,6 +289,7 @@ impl Server {
                 status,
                 content_type,
                 body,
+                etag,
             } => {
                 let mut response = tiny_http::Response::from_string(body)
                     .with_status_code(status)
@@ -286,6 +297,9 @@ impl Server {
                     .with_header(header(VERSION_HEADER, crate::version::VERSION));
                 if status == 401 {
                     response = response.with_header(header("WWW-Authenticate", "Bearer"));
+                }
+                if let Some(etag) = etag {
+                    response = response.with_header(header("ETag", &format!("\"{etag}\"")));
                 }
                 request.respond(response)
             }

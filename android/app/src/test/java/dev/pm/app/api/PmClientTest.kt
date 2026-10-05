@@ -64,6 +64,42 @@ class PmClientTest {
     }
 
     @Test
+    fun notes_are_saved_against_the_version_read_and_a_stale_save_returns_the_current_notes() =
+        runBlocking {
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(200)
+                    .body("# Ideas\n")
+                    .addHeader("ETag", "\"v1\"")
+                    .build()
+            )
+            reply(200, """{"version":"v2"}""")
+            // Longer than any limit on a save: the terminal can grow the notes past one.
+            val grown = "from the Mac\n".repeat(200_000)
+            reply(
+                409,
+                """{"error":"the notes changed since that version","refused":"changed",
+                   "text":"${grown.replace("\n", "\\n")}","version":"v3"}""",
+            )
+
+            val notes = client.notes("app")
+            assertEquals(dev.pm.app.model.Notes("# Ideas\n", "v1"), notes)
+            assertEquals("v2", client.saveNotes("app", "# Ideas\nmore\n", notes.version))
+            val stale = runCatching { client.saveNotes("app", "stale\n", "v2") }.exceptionOrNull()
+            assertTrue("$stale", stale is PmError.NotesChanged)
+            assertEquals(
+                dev.pm.app.model.Notes(grown, "v3"),
+                (stale as PmError.NotesChanged).current,
+            )
+
+            assertEquals("/v1/projects/app/notes", server.takeRequest().url.encodedPath)
+            val save = server.takeRequest()
+            assertEquals("PUT", save.method)
+            assertEquals("\"v1\"", save.headers["If-Match"])
+            assertEquals("# Ideas\nmore\n", save.body?.utf8())
+        }
+
+    @Test
     fun a_features_details_parse_with_their_optional_fields_absent() = runBlocking {
         reply(
             200,
