@@ -61,6 +61,25 @@ pub fn kill(server: Option<&str>, pane: &str) -> Result<()> {
     Ok(())
 }
 
+/// Whether someone may be using `pane`: it is in a mode (copy mode, or a
+/// chooser such as tree mode), where keys drive the mode rather than reach
+/// the program, or it is the pane an attached client is looking at, where
+/// the user may start typing at any moment. `capture-pane` shows neither: it
+/// reads the screen under a mode.
+pub fn in_use(server: Option<&str>, pane: &str) -> Result<bool> {
+    let out = run_tmux(
+        server,
+        &[
+            "display-message",
+            "-p",
+            "-t",
+            &exact(pane),
+            "#{||:#{pane_in_mode},#{&&:#{pane_active},#{&&:#{window_active},#{session_attached}}}}",
+        ],
+    )?;
+    Ok(out == "1")
+}
+
 /// End the agent in `window`: kill the window, or, when the user has split
 /// it, only the agent's pane. A window left behind is named after what its
 /// panes run, no longer after the agent.

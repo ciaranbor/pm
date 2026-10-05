@@ -320,7 +320,7 @@ pub fn send_keys(
 /// Whether the input line in `pane` is empty and takes typed keys as text,
 /// once any key its harness names to make it take text has been pressed;
 /// that key is undone should the line have taken it as text.
-pub(super) fn input_line_ready(
+fn input_line_ready(
     project_root: &Path,
     scope: &str,
     agent: &str,
@@ -383,32 +383,9 @@ mod tests {
             let server = TestServer::new();
             let dir = tempdir().unwrap();
             let (project, name) = server.setup_project_with_feature(dir.path(), "login");
-            let received = dir.path().join("received");
-            let cat = fake_harness_binary(harness, Path::new("/bin/cat"));
-            let script = dir.path().join("recorder");
-            std::fs::write(
-                &script,
-                format!(
-                    "#!/bin/sh\nclear\nprintf '\\033[?2004h──── agent ─\\n❯ \\n────────\\n\\033[2A\\033[3G'\n\
-                     stty raw -echo\nexec {} -u > {}\n",
-                    cat.display(),
-                    received.display()
-                ),
-            )
-            .unwrap();
-            std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-                .unwrap();
             let session = tmux::session_name(&name, "login");
-            let target = server.spawn_harness_agent(
-                &project,
-                &session,
-                "login",
-                "implementer",
-                harness,
-                &script.display().to_string(),
-                Liveness::Busy,
-            );
-            server.wait_for_pane_text(&target, "❯");
+            let (target, received) =
+                server.spawn_recording_agent(&project, &session, "login", "implementer", harness);
             Self {
                 server,
                 project,

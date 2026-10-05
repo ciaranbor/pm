@@ -311,9 +311,11 @@ Agents never sit idle: after every turn, pm's Stop hook waits until the
 agent has unread messages, then prompts it to read them, so the brief at
 feature creation is just the first message. An agent whose turn ends some
 other way — an interrupt, a rejected dialog, an API error, or Esc while it
-waits — is `unarmed`: no message wakes it until something prompts it, and
-[`pm msg send`](#messaging) re-arms it when its input line is empty. pm
-installs the hooks once per machine
+waits — is `unarmed`: no message wakes it until something prompts it.
+[`pm msg send`](#messaging) re-arms it when its input line is empty and
+takes text (not vim NORMAL mode) and no one is using its pane (a tmux mode
+such as copy or tree mode, or shown on an attached client); otherwise the
+message waits for a later send. pm installs the hooks once per machine
 ([docs/harnesses.md](docs/harnesses.md#hooks)); `pm doctor --fix` restores a
 missing one.
 

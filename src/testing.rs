@@ -958,6 +958,45 @@ impl TestServer {
         target
     }
 
+    /// An agent of `harness` whose pane shows Claude Code's empty input box
+    /// and records every byte it is sent, waiting at that box. Returns its
+    /// window and the file the bytes go to.
+    pub fn spawn_recording_agent(
+        &self,
+        project_root: &std::path::Path,
+        session_name: &str,
+        feature: &str,
+        agent_name: &str,
+        harness: crate::harness::Harness,
+    ) -> (String, std::path::PathBuf) {
+        let received = project_root.join(format!(".pm/received-{agent_name}"));
+        let cat = fake_harness_binary(harness, std::path::Path::new("/bin/cat"));
+        let script = project_root.join(format!(".pm/recorder-{agent_name}"));
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nclear\nprintf '\\033[?2004h──── agent ─\\n❯ \\n────────\\n\\033[2A\\033[3G'\n\
+                 stty raw -echo\nexec {} -u > {}\n",
+                cat.display(),
+                received.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let target = self.spawn_harness_agent(
+            project_root,
+            session_name,
+            feature,
+            agent_name,
+            harness,
+            &script.display().to_string(),
+            crate::commands::running_agents::Liveness::Busy,
+        );
+        self.wait_for_pane_text(&target, "❯");
+        (target, received)
+    }
+
     fn fake_agent_window(
         &self,
         project_root: &std::path::Path,

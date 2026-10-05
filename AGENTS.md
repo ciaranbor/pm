@@ -61,11 +61,11 @@ Design decisions you can't recover by reading the tree. Preserve them.
 - Three context-delivery contracts: `feat new`/`feat adopt --workflow` spawn
   the whole team (refused up front if a member's harness can't run it) and
   brief only `brief_agents` (none is an error); `agent spawn --context`
-  enqueues, then spawns or no-ops — ungated, being also the heal path;
-  `msg send` never spawns, errors on an inactive recipient, heals a dead
-  window, re-arms an unarmed one only at an empty prompt. Remote input is
-  typed into the pane like local input — never a pm message or continuation;
-  a dialog's answer is the harness's own decision via its hook — never keys.
+  enqueues, then spawns or no-ops — ungated, as the heal path; `msg send` never
+  spawns, errors on an inactive recipient, heals a dead window, re-arms an
+  unarmed one only at an empty prompt in an unused pane, pressing no mode key.
+  Remote input is typed into the pane like local input — never a pm message or
+  continuation; the harness answers a dialog via its hook — never keys.
 
 ### Workflows vs agents
 
