@@ -26,7 +26,7 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 
 use crate::error::Result;
-use crate::harness::transcript::items::{Body, Item, Tail};
+use crate::harness::transcript::items::{Body, Item};
 use crate::harness::{Conversation, Harness};
 use crate::state::agent::{self as registry, AgentRegistry};
 use crate::state::paths;
@@ -269,15 +269,10 @@ pub fn said_since(items: &[Item], since: DateTime<Utc>, text: &str) -> bool {
     })
 }
 
-/// Whether the user said the text whose [`sha256`] is `text_sha256` in
-/// `conversation` after cursor `after`.
+/// Whether `conversation` took in the text whose [`sha256`] is
+/// `text_sha256` as a prompt after cursor `after` ([`Conversation::took_in`]).
 pub fn said(conversation: &Conversation, after: &str, text_sha256: &str) -> Result<bool> {
-    Ok(match conversation.tail(after)? {
-        Tail::Items { items, .. } => items
-            .iter()
-            .any(|item| matches!(&item.body, Body::User { text } if sha256(text) == text_sha256)),
-        Tail::Reset => false,
-    })
+    conversation.took_in(after, |text| sha256(text) == text_sha256)
 }
 
 /// Press Escape in `agent`'s pane, unless it waits between turns: there

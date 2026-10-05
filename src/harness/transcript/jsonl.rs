@@ -204,6 +204,22 @@ pub(in crate::harness) fn tail(path: &Path, after: u64, parse: Parse) -> io::Res
     })
 }
 
+/// The lines appended after cursor `after`, as JSON; `None` when the cursor
+/// no longer points into the file.
+pub(in crate::harness) fn lines_after(path: &Path, after: u64) -> io::Result<Option<Vec<Value>>> {
+    let mut src = open(path)?;
+    if after > src.len || !src.is_line_start(after)? {
+        return Ok(None);
+    }
+    let (lines, _) = src.forward(after, SEARCH_SCAN)?;
+    Ok(Some(
+        lines
+            .iter()
+            .filter_map(|(_, line)| serde_json::from_str(line).ok())
+            .collect(),
+    ))
+}
+
 /// The tool call item `id`, from a line before `before`.
 fn find_call(src: &mut Source, before: u64, id: &str, parse: Parse) -> io::Result<Option<Item>> {
     let mut back = Backward::new(before, SEARCH_SCAN);
