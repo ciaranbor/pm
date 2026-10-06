@@ -149,8 +149,14 @@ pub fn update(update: &Update<'_>) -> Result<Outcome> {
 
     let name = format!("pm-{}", update.target);
     let binary = release.asset(&name).map_err(|_| {
+        // The release workflow adds the macOS binary after the rest.
+        let pending = if update.target.contains("apple-darwin") {
+            "if it was published in the last hour, try again later; otherwise "
+        } else {
+            ""
+        };
         PmError::SelfUpdate(format!(
-            "release {} has no binary for {}; build from source: \
+            "release {} has no binary for {}; {pending}build from source: \
              cargo install --git https://github.com/ciaranbor/pm",
             release.tag_name, update.target
         ))
@@ -361,6 +367,29 @@ mod tests {
             target: TARGET,
             force,
         })
+    }
+
+    #[test]
+    fn a_missing_binary_is_retried_later_only_on_macos() {
+        let (_dir, exe, release) = installed();
+        let github = releases("v0.3.0", &release, None);
+        let missing = |target| {
+            let result = update(&Update {
+                api: &github.api,
+                exe: &exe,
+                current: "0.2.0",
+                target,
+                force: false,
+            });
+            match result {
+                Err(PmError::SelfUpdate(message)) => message,
+                other => panic!("{other:?}"),
+            }
+        };
+
+        assert!(missing("aarch64-apple-darwin").contains("try again later"));
+        assert!(!missing("x86_64-unknown-linux-gnu").contains("try again later"));
+        assert_eq!(std::fs::read(&exe).unwrap(), b"old");
     }
 
     #[test]

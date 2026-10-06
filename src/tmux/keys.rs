@@ -80,8 +80,11 @@ pub fn prefix_table(server: Option<&str>) -> Result<BTreeMap<String, Binding>> {
             },
         );
     }
-    for (key, note) in notes {
-        if let Some(binding) = table.get_mut(key) {
+    let notes: BTreeMap<&str, &str> = notes.into_iter().collect();
+    for (key, binding) in table.iter_mut() {
+        // `list-keys -N` prints a key unescaped (`"` for `\"`).
+        let unescaped = key.strip_prefix('\\').unwrap_or(key);
+        if let Some(note) = notes.get(key.as_str()).or_else(|| notes.get(unescaped)) {
             binding.note = Some(note.trim().to_string());
         }
     }
@@ -276,6 +279,11 @@ mod tests {
                 note: Some("Choose a session from a list".into()),
                 command: Some(vec!["choose-tree".to_string(), "-Zs".into()]),
             }
+        );
+        assert_eq!(
+            table["\\\""].note.as_deref(),
+            Some("Split window vertically"),
+            "an escaped key keeps its note"
         );
         assert_eq!(table["x"].command, None, "a command list");
         assert!(!table.contains_key("F12"));

@@ -106,13 +106,15 @@ fn writable_dirs(project_root: &Path, config: &HarnessConfig) -> Vec<std::path::
     dirs
 }
 
-/// The shell line sent to the window: the agent's identity — its worktree
+/// The shell line sent to the window: for an agent, its launch stamp
+/// ([`runtime::launched_at`]) created, then its identity — its worktree
 /// ([`paths::AGENT_WORKTREE_ENV`]) and `PM_AGENT_NAME` (so `pm msg` calls
 /// auto-identify) — exported ahead of the harness command.
-fn window_command(agent_name: Option<&str>, worktree: &Path, cmd: &str) -> String {
-    match agent_name {
-        Some(name) => format!(
-            "export {}={} PM_AGENT_NAME={name} && {cmd}",
+fn window_command(agent: Option<(&str, &Path)>, worktree: &Path, cmd: &str) -> String {
+    match agent {
+        Some((name, launched)) => format!(
+            "touch {} && export {}={} PM_AGENT_NAME={name} && {cmd}",
+            tmux::shell_quote(&launched.to_string_lossy()),
             paths::AGENT_WORKTREE_ENV,
             tmux::shell_quote(&worktree.to_string_lossy())
         ),
@@ -349,10 +351,22 @@ fn spawn_session_with_config(
         }
     }
 
+    let launched = match params.agent_name {
+        Some(name) => Some(runtime::reset_launched(
+            params.project_root,
+            params.feature,
+            name,
+        )?),
+        None => None,
+    };
     tmux::send_line(
         params.tmux_server,
         &window_target,
-        &window_command(params.agent_name, &worktree_path, &cmd),
+        &window_command(
+            params.agent_name.zip(launched.as_deref()),
+            &worktree_path,
+            &cmd,
+        ),
     )?;
 
     let resumed = match (params.resume_session, &pre.session_id) {
@@ -2017,11 +2031,15 @@ package = "second-pkg"
     fn window_command_exports_agent_name_for_named_agents_only() {
         assert_eq!(
             window_command(
-                Some("reviewer"),
+                Some((
+                    "reviewer",
+                    Path::new("/p/.pm/runtime/login/reviewer/launched")
+                )),
                 Path::new("/p/login"),
                 "claude --agent reviewer"
             ),
-            "export PM_AGENT_WORKTREE='/p/login' PM_AGENT_NAME=reviewer && claude --agent reviewer"
+            "touch '/p/.pm/runtime/login/reviewer/launched' && \
+             export PM_AGENT_WORKTREE='/p/login' PM_AGENT_NAME=reviewer && claude --agent reviewer"
         );
         assert_eq!(
             window_command(None, Path::new("/p/login"), "claude"),

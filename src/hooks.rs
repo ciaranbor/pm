@@ -38,7 +38,8 @@ macro_rules! env_comment {
 pub const DEFAULT_POST_CREATE: &str = concat!(
     "\
 #!/bin/sh
-# post-create hook — runs in the new feature's session after 'pm feat new'
+# post-create hook — runs in the new feature's session after 'pm feat new',
+# 'pm feat adopt' or 'pm feat review' creates it
 ",
     env_comment!(),
     "\
@@ -56,7 +57,8 @@ echo \"post-create hook: edit .pm/hooks/post-create.sh to customize\"
 pub const DEFAULT_POST_MERGE: &str = concat!(
     "\
 #!/bin/sh
-# post-merge hook — runs in the base session after 'pm feat merge'
+# post-merge hook — runs in the base session after 'pm feat merge', or
+# 'pm feat delete' of a feature whose PR merged
 ",
     env_comment!(),
     "\

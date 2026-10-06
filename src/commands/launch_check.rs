@@ -12,8 +12,11 @@
 //! some as foreground jobs and some in itself, before it reads the typed
 //! line, which under load can take seconds. A harness rejecting its flags
 //! can exit in tens of milliseconds, too fast to be seen, so a launch also
-//! fails once its shell has sat waiting for input — asleep at its prompt,
-//! so it has read the typed line — for a moment without the harness seen.
+//! fails once its shell has run the typed line (the line creates the
+//! agent's launch stamp, [`runtime::launched_at`]) and then sat waiting for
+//! input, asleep at its prompt, for a moment without the harness seen. A
+//! shell asleep in a startup file (`read -t`, `wait`) before it ran the line
+//! is still starting.
 //! A window that settles neither way is judged by its liveness after a
 //! generous deadline.
 
@@ -26,6 +29,7 @@ use crate::harness::Harness;
 use crate::state::agent::{AgentRegistry, AgentType};
 use crate::state::paths;
 use crate::state::project::{GlobalConfig, HarnessConfig, ProjectConfig, resolve_harness_config};
+use crate::state::runtime;
 use crate::tmux::{self, Process};
 
 use super::running_agents::{AgentAt, Liveness, Windows, classify, liveness};
@@ -35,7 +39,7 @@ const STAY_UP: Duration = Duration::from_secs(2);
 
 /// How long a window may go without showing its harness before its launch
 /// is judged by its liveness.
-const START_WITHIN: Duration = Duration::from_secs(30);
+pub const START_WITHIN: Duration = Duration::from_secs(30);
 
 /// How long a shell must wait for input, its harness unseen, before the
 /// harness counts as having exited too fast to be seen.
@@ -224,7 +228,14 @@ fn watch(
                 .any(|p| watched.harness.runs_as(&p.command, &watched.harness_config));
             let dead = liveness(Some(&processes), watched.harness, &watched.harness_config)
                 == Liveness::Dead;
-            let at_input = dead && reading_input(&processes);
+            let at_input = dead
+                && reading_input(&processes)
+                && runtime::launched_at(
+                    &watched.launch.project_root,
+                    &watched.launch.scope,
+                    &watched.launch.agent,
+                )
+                .is_some();
             watched.reading_since = at_input.then(|| watched.reading_since.unwrap_or(now));
             let settled = watched
                 .reading_since
@@ -293,40 +304,43 @@ mod tests {
         let login = tmux::session_name(&project_name, "login");
         let main = tmux::session_name(&project_name, "main");
         server.spawn_fake_agent(&project, &login, "login", "up");
+        // What a spawn types: the launch stamp, then the harness.
+        let type_launch = |scope: &str, agent: &str, window: &str, line: String| {
+            let stamp = runtime::reset_launched(&project, scope, agent).unwrap();
+            let stamp = tmux::shell_quote(&stamp.to_string_lossy());
+            tmux::send_line(server.name(), window, &format!("touch {stamp} && {line}")).unwrap();
+        };
+        let fake = fake_claude().display().to_string();
         let quits = server.spawn_dead_fake_agent(&project, &login, "login", "quits");
-        tmux::send_line(
-            server.name(),
+        type_launch(
+            "login",
+            "quits",
             &quits,
-            &format!(
-                "{} 0.5 && echo 'error: unexpected argument --bogus'",
-                fake_claude().display()
-            ),
-        )
-        .unwrap();
+            format!("{fake} 0.5 && echo 'error: unexpected argument --bogus'"),
+        );
         let instant = server.spawn_dead_fake_agent(&project, &main, "main", "instant");
-        tmux::send_line(
-            server.name(),
-            &instant,
-            &format!("{} 0", fake_claude().display()),
-        )
-        .unwrap();
+        type_launch("main", "instant", &instant, format!("{fake} 0"));
         let slow = server.spawn_dead_fake_agent(&project, &main, "main", "slow");
         tmux::send_line(
             server.name(),
             &slow,
-            &format!(
-                "sleep 0.3; end=$(($(date +%s) + 2)); \
-                 while [ \"$(date +%s)\" -lt $end ]; do :; done; {} 999",
-                fake_claude().display()
-            ),
+            "sleep 0.3; end=$(($(date +%s) + 2)); \
+             while [ \"$(date +%s)\" -lt $end ]; do :; done",
         )
         .unwrap();
+        type_launch("main", "slow", &slow, format!("{fake} 999"));
+        // A startup file waiting inside the shell, asleep with nothing in
+        // the foreground, before the launch line runs.
+        let waits = server.spawn_dead_fake_agent(&project, &main, "main", "waits");
+        tmux::send_line(server.name(), &waits, "sleep 1.5 & wait").unwrap();
+        type_launch("main", "waits", &waits, format!("{fake} 999"));
 
         let launches = [
             launch(&project, "login", "up"),
             launch(&project, "login", "quits"),
             launch(&project, "main", "instant"),
             launch(&project, "main", "slow"),
+            launch(&project, "main", "waits"),
         ];
         let started = Instant::now();
         let failed = confirm_within(&launches, server.name(), Duration::from_secs(30));

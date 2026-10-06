@@ -84,17 +84,50 @@ pub fn init_in(
     let path = path_buf.as_path();
     ProjectEntry::ensure_name_free(projects_dir, &name, path)?;
 
+    // A failure before the registry save removes what this call created, so
+    // a retry finds no path in the way. `path` was absent, so its outermost
+    // missing ancestor and everything under it are new.
+    let created = topmost_missing(path);
+    let main_branch = match populate(path, &name, global, git_url) {
+        Ok(branch) => branch,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&created);
+            return Err(e);
+        }
+    };
+    let main_path = paths::main_worktree(path);
+
+    // Register in global registry
+    let entry = ProjectEntry {
+        root: crate::path_utils::to_portable(path),
+        main_branch,
+        repo_url: git_url.map(|u| u.to_string()),
+        state_remote: None,
+    };
+    entry.save(projects_dir, &name)?;
+
+    // Create main tmux session
+    let session_name = tmux::session_name(&name, "main");
+    tmux::create_session(tmux_server, &session_name, &main_path)?;
+
+    Ok(path_buf)
+}
+
+/// The part of [`init_in`] that builds the project on disk, returning its
+/// main branch.
+fn populate(
+    path: &Path,
+    name: &str,
+    global: &GlobalStore,
+    git_url: Option<&str>,
+) -> Result<String> {
     // Create project root
     std::fs::create_dir_all(path)?;
 
     // Init or clone git repo in main/
     let main_path = paths::main_worktree(path);
     let main_branch = if let Some(url) = git_url {
-        // A failed clone leaves nothing, so a retry finds no path in the way.
-        if let Err(e) = git::clone_repo(url, &main_path) {
-            let _ = std::fs::remove_dir_all(path);
-            return Err(e);
-        }
+        git::clone_repo(url, &main_path)?;
         git::main_branch(&main_path)?
     } else {
         git::init_repo(&main_path)?;
@@ -109,7 +142,7 @@ pub fn init_in(
     // Write project config
     let config = ProjectConfig {
         project: ProjectInfo {
-            name: name.clone(),
+            name: name.to_string(),
             max_features: None,
         },
         agents: AgentsConfig::default(),
@@ -136,20 +169,19 @@ pub fn init_in(
     skills::write_migration_marker(path)?;
     super::vanilla_rename::write_marker(path)?;
 
-    // Register in global registry
-    let entry = ProjectEntry {
-        root: crate::path_utils::to_portable(path),
-        main_branch,
-        repo_url: git_url.map(|u| u.to_string()),
-        state_remote: None,
-    };
-    entry.save(projects_dir, &name)?;
+    Ok(main_branch)
+}
 
-    // Create main tmux session
-    let session_name = tmux::session_name(&name, "main");
-    tmux::create_session(tmux_server, &session_name, &main_path)?;
-
-    Ok(path_buf)
+/// The outermost of `path` and its ancestors that does not exist.
+fn topmost_missing(path: &Path) -> PathBuf {
+    let mut top = path;
+    while let Some(parent) = top.parent() {
+        if parent.as_os_str().is_empty() || std::fs::symlink_metadata(parent).is_ok() {
+            break;
+        }
+        top = parent;
+    }
+    top.to_path_buf()
 }
 
 /// The project root `pm init --git <url>` uses without a PATH: `./<repo
@@ -406,6 +438,31 @@ mod tests {
 
         assert!(matches!(result, Err(PmError::Git(_))), "{result:?}");
         assert!(!project_path.exists());
+        assert!(ProjectEntry::list(&projects_dir).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_failure_before_registration_removes_only_what_init_created() {
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::write(&home, "not a directory").unwrap();
+        let created = dir.path().join("new");
+        let project_path = created.join("nested").join("myapp");
+        let projects_dir = dir.path().join("registry");
+
+        let result = init_in(
+            &project_path,
+            None,
+            &projects_dir,
+            &GlobalStore::at(&home),
+            None,
+            None,
+        );
+
+        assert!(result.is_err());
+        assert!(!created.exists());
+        assert!(dir.path().exists());
+        assert!(home.is_file());
         assert!(ProjectEntry::list(&projects_dir).unwrap().is_empty());
     }
 
