@@ -126,6 +126,7 @@ pub fn rows(
     };
     let features = features.iter().map(|f| {
         let label = match f.attention.kind {
+            AttentionKind::None if f.progress == Progress::Ready => Progress::Wip.to_string(),
             AttentionKind::None => f.progress.to_string(),
             kind => kind.to_string(),
         };
@@ -425,6 +426,23 @@ mod tests {
         let lines = rows(&features, &[main(needs(AttentionKind::None, None))], false);
         assert_eq!(lines.len(), 2, "a main that needs nothing has no row");
         assert!(lines[0].starts_with("login "), "{lines:?}");
+    }
+
+    #[test]
+    fn a_ready_feature_reads_wip_while_an_agent_is_busy() {
+        let row = |state| {
+            let mut f = snapshot_feature(
+                "login",
+                needs(AttentionKind::None, None),
+                vec![scope_agent("implementer", state)],
+                None,
+            );
+            f.progress = Progress::Ready;
+            f.attention = attention::attention(&f);
+            rows(&[f], &[], false).remove(0)
+        };
+        assert_eq!(row(AgentState::Busy), "login  wip  implementer:busy");
+        assert_eq!(row(AgentState::Idle), "login  ready  implementer:idle");
     }
 
     #[test]

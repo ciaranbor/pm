@@ -49,7 +49,6 @@ const BADGE: &str = "@pm_badge";
 const LABEL: &str = "@pm_label";
 const ACTIVITY: &str = "@pm_activity";
 const ACTIVITY_LABEL: &str = "@pm_activity_label";
-const ALERT_PENDING: &str = "@pm_alert_pending";
 const ALERTED: &str = "@pm_alerted";
 const SESSION_OPTIONS: &[&str] = &[
     PROJECT,
@@ -61,7 +60,6 @@ const SESSION_OPTIONS: &[&str] = &[
     LABEL,
     ACTIVITY,
     ACTIVITY_LABEL,
-    ALERT_PENDING,
     ALERTED,
 ];
 
@@ -178,8 +176,7 @@ fn commands(snapshot: &Snapshot, published: &Options, now: DateTime<Utc>) -> Vec
             record.push(feature_entry(&feature.session, &kinds));
         }
         needing.extend(verdict.judged.attention);
-        let mut values = session_values(feature, &verdict.judged, now);
-        values.push((ALERT_PENDING, verdict.judged.owed.then(|| "1".into())));
+        let values = session_values(feature, &verdict.judged, now);
         diff(&mut writes, Scope::Session(&feature.session), held, &values);
         agent_windows(&mut writes, &mut windows, published, &feature.agents);
     }
@@ -299,7 +296,6 @@ fn previous(held: &Holder) -> Option<Judged> {
     Some(Judged {
         attention: Judged::parse_attention(held.get(ATTENTION)),
         alerted: Judged::parse_alerted(held.get(ALERTED)),
-        owed: !held.get(ALERT_PENDING).is_empty(),
     })
 }
 
@@ -321,8 +317,6 @@ fn clear(writes: &mut Vec<Command>, scope: Scope, held: &Holder, names: &[&str])
     }
 }
 
-/// A feature session's options. Its badge shows its attention even while
-/// its judgement leaves it out of the attention tree and the count.
 fn session_values(
     feature: &FeatureSnapshot,
     judged: &Judged,
@@ -664,7 +658,6 @@ mod tests {
                 "#[fg=red,bold]\u{f256} blocked#[default]",
                 "",
                 "",
-                "",
                 "blocked",
             ]
         );
@@ -759,7 +752,6 @@ mod tests {
                 "",
                 "",
                 "",
-                "",
                 ""
             ]
         );
@@ -823,7 +815,6 @@ mod tests {
                 "#[fg=colour245]\u{f252} idle#[default] #[fg=yellow]\u{f0e0} 1#[default]",
                 "",
                 "",
-                "",
                 ""
             ],
             "main's own badge, whatever its attention"
@@ -882,7 +873,7 @@ mod tests {
         assert!(!now.sessions.iter().any(|s| s.target == search));
         assert_eq!(
             values(&now.sessions, &login, SESSION_OPTIONS),
-            ["", "", "", "", "", "", "", "", "", "", ""]
+            ["", "", "", "", "", "", "", "", "", ""]
         );
         assert_eq!([now.global.get(COUNT), now.global.get(SUMMARY)], ["0", ""]);
     }
@@ -1261,7 +1252,12 @@ mod tests {
     }
 
     fn ready_feature(busy: bool) -> Snapshot {
-        feature_scope(Progress::Ready, busy, Vec::new())
+        let state = if busy {
+            AgentState::Busy
+        } else {
+            AgentState::Idle
+        };
+        feature_scope(Progress::Ready, busy, vec![agent_in(state)])
     }
 
     /// Publish `snapshot` on `server` as a refresh would, returning what is
@@ -1310,7 +1306,7 @@ mod tests {
 
         assert_eq!(announced.texts, ["pm: app/login ready: Adds login"]);
         let ready = "#[fg=green,bold]\u{f058}#[default]";
-        assert_eq!(badges, [ready; 5]);
+        assert_eq!(badges, ["", ready, "", ready, ready]);
         assert_eq!(attentions, ["", "ready", "", "ready", "ready"]);
         assert_eq!(counts, ["0", "1", "0", "1", "1"]);
     }

@@ -262,7 +262,9 @@ consumer must tolerate values it doesn't know:
 ```
 
 `features` is sorted like the rows. `attention.kind` is one of the table's
-kinds or `none`; `skipped` says why a project's features are missing, and
+kinds or `none`; `progress` stays `ready` while a busy agent holds
+[`ready`](../README.md#follow-what-needs-you) back; `skipped` says why a
+project's features are missing, and
 `main` (its session and agents, shaped like a feature's) is then `null`,
 and `root` empty if its registry entry is unreadable;
 `summary` is the summary's first line whatever the status; `window` is the

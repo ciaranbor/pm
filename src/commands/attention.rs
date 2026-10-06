@@ -290,7 +290,8 @@ fn agent_attention(agent: &AgentSnapshot, kind: AttentionKind) -> Attention {
 }
 
 /// The attention a feature needs: the first kind that applies, in
-/// [`AttentionKind`]'s order.
+/// [`AttentionKind`]'s order. A feature is ready only while none of its
+/// agents is busy; its stored progress stays ready meanwhile.
 pub fn attention(feature: &FeatureSnapshot) -> Attention {
     if feature.progress == Progress::Blocked {
         return of(
@@ -307,11 +308,13 @@ pub fn attention(feature: &FeatureSnapshot) -> Attention {
         FeatureStatus::Stale => return of(AttentionKind::Cleanup, Some("stale".into()), None),
         _ => {}
     }
-    if feature.progress == Progress::Ready {
-        return of(AttentionKind::Ready, feature.summary.clone(), None);
-    }
-    if feature.lifecycle == FeatureStatus::Approved {
-        return of(AttentionKind::Ready, Some("PR approved".into()), None);
+    if !feature.agents.iter().any(|a| a.state == AgentState::Busy) {
+        if feature.progress == Progress::Ready {
+            return of(AttentionKind::Ready, feature.summary.clone(), None);
+        }
+        if feature.lifecycle == FeatureStatus::Approved {
+            return of(AttentionKind::Ready, Some("PR approved".into()), None);
+        }
     }
     if let Some(dead) = agent_in(&feature.agents, AgentState::Dead, AttentionKind::Dead) {
         return dead;
@@ -745,6 +748,29 @@ mod tests {
         f.agents = vec![agent("implementer", AgentState::Idle, 0)];
         assert_eq!(attention(&f).kind, AttentionKind::Ready);
         assert_eq!(attention(&f).detail.as_deref(), Some("PR approved"));
+    }
+
+    #[test]
+    fn a_feature_is_ready_only_while_none_of_its_agents_is_busy() {
+        for (progress, lifecycle) in [
+            (Progress::Ready, FeatureStatus::Review),
+            (Progress::Wip, FeatureStatus::Approved),
+        ] {
+            let mut f = feature(progress, lifecycle);
+            f.agents = vec![
+                agent("implementer", AgentState::Idle, 0),
+                agent("reviewer", AgentState::Busy, 0),
+            ];
+            assert_eq!(kind(&f), AttentionKind::None, "{progress} {lifecycle}");
+
+            f.agents[1] = waiting(
+                "reviewer",
+                AgentState::Background,
+                WaitingKind::Background,
+                "CI watch",
+            );
+            assert_eq!(kind(&f), AttentionKind::Ready, "background work isn't busy");
+        }
     }
 
     #[test]

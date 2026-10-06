@@ -137,7 +137,7 @@ first of these that applies, most urgent first:
 | `blocked` | status `blocked`: an agent asked you a question |
 | `asking` | an agent's harness shows a dialog: a question, a permission prompt, a plan to approve, or a startup prompt (folder or hook trust, login) still up a minute after spawn |
 | `cleanup` | its PR merged, or it went stale: delete it |
-| `ready` | status `ready`, or PR approved: merge it |
+| `ready` | status `ready`, or PR approved, and no agent busy: merge it |
 | `dead` | an agent's window is gone from an open session, or its harness exited |
 | `unarmed` | an agent sits at its prompt where no message wakes it ([why](#agents-are-message-processors)) |
 | `stalled` | status `wip`, but every agent is idle with no unread messages: the team stopped without saying why |
