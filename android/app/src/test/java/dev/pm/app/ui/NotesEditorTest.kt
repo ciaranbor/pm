@@ -4,13 +4,21 @@ import android.os.SystemClock
 import android.view.MotionEvent
 import android.widget.EditText
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
@@ -18,6 +26,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.SavedStateHandle
 import dev.pm.app.api.PmClient
 import dev.pm.app.data.NotesDrafts
+import dev.pm.app.model.MAX_NOTES_BYTES
 import dev.pm.app.model.Notes
 import dev.pm.app.model.NotesDraft
 import dev.pm.app.model.Pairing
@@ -64,12 +73,7 @@ class NotesEditorTest {
     private fun editing(saved: SavedStateHandle = SavedStateHandle()): EditText {
         drafts.kept["app"] = NotesDraft(base, base.text)
         val model = NotesModel(null, "app", drafts, saved, Dispatchers.Unconfined)
-        compose.setContent {
-            val scope = rememberCoroutineScope()
-            CompositionLocalProvider(LocalFeedback provides Feedback(SnackbarHostState(), scope)) {
-                NotesScreen(model, TopBarSlot())
-            }
-        }
+        compose.setContent { Screen(model) }
         return field()
     }
 
@@ -156,12 +160,7 @@ class NotesEditorTest {
         server.start()
         val client = PmClient(Pairing(server.url("/").toString().trimEnd('/'), "pixel", "tok"))
         val model = NotesModel(client, "app", drafts, SavedStateHandle(), Dispatchers.Unconfined)
-        compose.setContent {
-            val scope = rememberCoroutineScope()
-            CompositionLocalProvider(LocalFeedback provides Feedback(SnackbarHostState(), scope)) {
-                NotesScreen(model, TopBarSlot())
-            }
-        }
+        compose.setContent { Screen(model) }
         compose.waitUntil(5_000) {
             compose.onAllNodesWithText("Section 4").fetchSemanticsNodes().isNotEmpty()
         }
@@ -177,6 +176,54 @@ class NotesEditorTest {
         compose.runOnIdle {
             assertEquals(text.indexOf("## Section 4"), field.selectionStart)
             assertEquals(field.topOf(text.indexOf("## Section 4")), field.scrollY)
+        }
+    }
+
+    @Test
+    fun a_failed_save_says_why_and_its_retry_saves_again() {
+        server.enqueue(MockResponse.Builder().code(500).body("""{"error":"disk full"}""").build())
+        server.enqueue(MockResponse.Builder().code(500).body("""{"error":"disk full"}""").build())
+        server.start()
+        val client = PmClient(Pairing(server.url("/").toString().trimEnd('/'), "pixel", "tok"))
+        drafts.kept["app"] = NotesDraft(base, base.text + "\nmore")
+        val model = NotesModel(client, "app", drafts, SavedStateHandle(), Dispatchers.Unconfined)
+        compose.setContent { Screen(model) }
+
+        compose.onNodeWithContentDescription("Save").performClick()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText("disk full").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText("Retry").performClick()
+        compose.waitUntil(5_000) { server.requestCount == 2 }
+    }
+
+    @Test
+    fun notes_too_long_to_save_say_so_with_nothing_to_retry() {
+        drafts.kept["app"] = NotesDraft(base, "x".repeat(MAX_NOTES_BYTES + 1))
+        val model = NotesModel(null, "app", drafts, SavedStateHandle(), Dispatchers.Unconfined)
+        compose.setContent { Screen(model) }
+
+        compose.onNodeWithContentDescription("Save").performClick()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText(NotesModel.TOO_LONG).fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText("Retry").assertDoesNotExist()
+    }
+}
+
+/** The notes screen as the app shows it, under its top bar's actions and over its snackbar. */
+@Composable
+private fun Screen(model: NotesModel) {
+    val scope = rememberCoroutineScope()
+    val feedback = remember(scope) { Feedback(SnackbarHostState(), scope) }
+    val topBar = remember { TopBarSlot() }
+    CompositionLocalProvider(LocalFeedback provides feedback) {
+        Column {
+            Row { topBar.actions?.invoke(this) }
+            Box(Modifier.weight(1f)) {
+                NotesScreen(model, topBar)
+                FeedbackHost(feedback, Modifier.align(Alignment.BottomCenter))
+            }
         }
     }
 }

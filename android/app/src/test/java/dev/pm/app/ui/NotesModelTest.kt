@@ -71,6 +71,12 @@ class NotesModelTest {
         eventually { models.all { it.viewModelScope.coroutineContext.job.isCompleted } }
     }
 
+    /** What `model` reports on [NotesModel.failures] from now on. */
+    private fun TestScope.failuresOf(model: NotesModel): List<String> =
+        mutableListOf<String>().also { seen ->
+            backgroundScope.launch { model.failures.collect { seen += it } }
+        }
+
     private fun notes(text: String, version: String) =
         MockResponse.Builder().body(text).addHeader("ETag", "\"$version\"").build()
 
@@ -128,9 +134,10 @@ class NotesModelTest {
         eventually { first.state.value is NotesState.Viewing }
         first.edit()
         first.edited("unsaved\n")
+        val failures = failuresOf(first)
         server.close()
         first.save()
-        eventually { (first.state.value as? NotesState.Editing)?.error != null }
+        eventually { failures.isNotEmpty() }
 
         val again = model()
         assertEquals(NotesState.Editing(Notes("old\n", "v1"), changed = true), again.state.value)
@@ -166,8 +173,10 @@ class NotesModelTest {
         eventually { fresh.state.value is NotesState.Viewing }
         fresh.edit()
         fresh.edited(grown)
+        val failures = failuresOf(fresh)
         fresh.save()
-        assertEquals(NotesModel.TOO_LONG, (fresh.state.value as NotesState.Editing).error)
+        eventually { failures.isNotEmpty() }
+        assertEquals(listOf(NotesModel.TOO_LONG), failures)
         assertEquals(3, server.requestCount)
     }
 
@@ -204,10 +213,11 @@ class NotesModelTest {
             }
         eventually { model.state.value is NotesState.Viewing }
         model.edit()
+        val failures = failuresOf(model)
         model.edited("new\n")
         advanceTimeBy(NotesModel.KEEP_AFTER_MS + 1)
-        val error = (model.state.value as NotesState.Editing).error
-        assertTrue(error, error?.contains("No space left on device") == true)
+        eventually { failures.isNotEmpty() }
+        assertTrue(failures.single(), failures.single().contains("No space left on device"))
     }
 
     @Test
@@ -217,8 +227,7 @@ class NotesModelTest {
         eventually { model.state.value is NotesState.Viewing }
         model.edit()
         model.edited("unsaved\n")
-        val failures = mutableListOf<String>()
-        backgroundScope.launch { model.failures.collect { failures += it } }
+        val failures = failuresOf(model)
         server.close()
 
         model.save()
