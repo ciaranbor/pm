@@ -233,6 +233,35 @@ struct TeamProblems {
     failing: usize,
     /// One per problem, in team order, each naming its member.
     lines: Vec<String>,
+    /// The member each of `lines` is about.
+    members: Vec<String>,
+}
+
+impl TeamProblems {
+    fn push(&mut self, member: &str, line: String) {
+        self.lines.push(line);
+        self.members.push(member.to_string());
+    }
+}
+
+/// What [`check_team`] would refuse each of `definitions` on, as
+/// `(definition, line)`: why an agent launched as it would not start, or
+/// would start and never wake for a message.
+pub fn launch_problems(
+    project_root: &Path,
+    config: &ProjectConfig,
+    global: &GlobalConfig,
+    definitions: &[String],
+) -> Result<Vec<(String, String)>> {
+    let problems = team_problems(
+        &config.agents,
+        &global.agents,
+        &resolve_harness_config(&config.harness, &global.harness),
+        &paths::main_worktree(project_root),
+        &paths::home_dir()?,
+        definitions,
+    )?;
+    Ok(problems.members.into_iter().zip(problems.lines).collect())
 }
 
 fn team_problems(
@@ -248,7 +277,7 @@ fn team_problems(
     for member in team {
         let before = out.lines.len();
         match resolve_agent_settings(project, global, member) {
-            Err(e) => out.lines.push(format!("{member}: {e}")),
+            Err(e) => out.push(member, format!("{member}: {e}")),
             Ok(settings) => {
                 let harness = settings.harness;
                 let cached = match by_harness.iter().position(|(h, _)| *h == harness) {
@@ -269,24 +298,29 @@ fn team_problems(
                             | ProblemKind::StatusHooksMissing
                     )
                 }) {
-                    out.lines
-                        .push(format!("{member} ({harness}): {}", problem.message));
+                    out.push(member, format!("{member} ({harness}): {}", problem.message));
                 }
                 if let Some(dropped) = missing_model_row(&settings) {
-                    out.lines.push(format!(
-                        "{member} ({harness}): no [agents.models] row, which {harness} agents \
+                    out.push(
+                        member,
+                        format!(
+                            "{member} ({harness}): no [agents.models] row, which {harness} agents \
                          need{dropped}; set `[agents.models] {member} = \
                          \"<provider>/<model>\"`"
-                    ));
+                        ),
+                    );
                 }
                 for issue in row_issues(&settings) {
-                    out.lines.push(format!("{member} ({harness}): {issue}"));
+                    out.push(member, format!("{member} ({harness}): {issue}"));
                 }
                 if !is_vanilla(member) && !harness.definition_projected(main, home, member) {
-                    out.lines.push(format!(
-                        "{member} ({harness}): definition '{member}' is not projected for \
+                    out.push(
+                        member,
+                        format!(
+                            "{member} ({harness}): definition '{member}' is not projected for \
                          {harness}, so the agent would start without its role (run `pm upgrade`)"
-                    ));
+                        ),
+                    );
                 }
             }
         }

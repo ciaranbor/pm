@@ -175,14 +175,28 @@ conversation; `pm agent spawn <name>` adds one to the feature. `pm doctor`
 reports an agent whose harness has exited.
 
 `pm agent restart --all` restarts every active agent of the scope, and
-`--all --global` every scope of every project — after an upgrade, say, so
-every agent runs under pm's new hooks. Idle agents restart and dead ones
-are respawned. One mid-turn, asking, or waiting on background work is
+`--all --global` every scope of every project. Idle agents restart and dead
+ones are respawned. One mid-turn, asking, or waiting on background work is
 skipped unless `--force`, which interrupts it and tells it to resume; an
 agent whose session is closed (a closed feature, a project not opened) is
 skipped, leaving the session closed. Run from an agent's own pane, that
 agent restarts last. Each agent gets a line and the run ends with a count;
 only a failed restart makes it exit non-zero.
+
+A running agent keeps what it was launched with: its definition, the
+baseline and notice boards, its config rows, and on codex and opencode pm's
+hooks. So `pm upgrade` ends by restarting each running agent that would
+launch differently now — one of those changed since it started, or a pm
+release changed what agents launch with. Idle agents restart on the same
+conversation. Left running and listed with the command that restarts them:
+a busy agent, the agent running the upgrade, one whose configured harness
+changed (a restart would start its conversation over), and one that would
+not relaunch — no model row, or codex hooks not yet trusted. A dead agent
+picks up the change at its next spawn. `pm upgrade`
+covers its project, `--all` every project. `pm agent restart --all --stale`
+runs the same sweep by hand, `pm doctor` names each stale agent, and
+`restart_agents = false` under `[upgrade]` in the global config turns the
+upgrade's restarts off.
 
 ### Project notes
 
@@ -591,6 +605,10 @@ hook-trust step per machine** and fails silently without it;
 
 **`[bundled.disable]`** is global only; see [Disabling bundled
 items](#agents-workflows-and-skills).
+
+**`[upgrade] restart_agents`**, in the global config only: `false` stops
+`pm upgrade` restarting stale agents ([Work with the
+agents](#work-with-the-agents)).
 
 **`[project] max_features`** caps a project's in-flight features (any not
 merged or stale); the project value beats the global one, and unset means

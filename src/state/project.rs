@@ -122,6 +122,8 @@ pub struct GlobalConfig {
     pub serve: ServeConfig,
     #[serde(default, skip_serializing_if = "is_default")]
     pub bundled: BundledConfig,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub upgrade: UpgradeConfig,
 }
 
 /// `[bundled.disable]`: settings for the bundled assets. Global only: the global
@@ -144,6 +146,15 @@ pub struct BundledDisable {
     pub skills: Vec<String>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub baseline: bool,
+}
+
+/// `pm upgrade`'s settings; global only, as `upgrade --all` sweeps the
+/// machine.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct UpgradeConfig {
+    /// Restart the idle agents whose launch is stale; unset means `true`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart_agents: Option<bool>,
 }
 
 /// `pm serve`'s settings; global only, as the server is the machine's.

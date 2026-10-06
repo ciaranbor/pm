@@ -103,7 +103,8 @@ fn is_open_recoverable(kind: IssueKind) -> bool {
         | IssueKind::BundledDisabled
         | IssueKind::BundledUnknown
         | IssueKind::DisabledStillInstalled
-        | IssueKind::BundledDisabledDangling => false,
+        | IssueKind::BundledDisabledDangling
+        | IssueKind::AgentLaunchStale => false,
     }
 }
 

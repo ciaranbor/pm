@@ -131,8 +131,43 @@ fn window_command(agent: Option<(&str, &Path)>, worktree: &Path, cmd: &str) -> S
 /// The definition that reaches the harness: the effective definition, except
 /// the reserved vanilla name (any alias), which launches a definition-less
 /// session even if a matching definition file happens to exist.
-fn definition_flag(effective_definition: Option<&str>) -> Option<&str> {
+pub(crate) fn definition_flag(effective_definition: Option<&str>) -> Option<&str> {
     effective_definition.filter(|d| !workflow::is_vanilla(d))
+}
+
+/// What config has a spawn of `definition` (the effective one) in `scope`
+/// launch with: the one resolution a spawn and its
+/// [`launch_stamp`](super::launch_stamp) share.
+pub(crate) struct LaunchConfig {
+    /// Re-resolved from config on every spawn, never stored on the registry
+    /// entry, so restart, fork and heal pick up config edits.
+    pub settings: AgentSettings,
+    pub harness_config: HarnessConfig,
+    pub writable_dirs: Vec<std::path::PathBuf>,
+    pub edit_dirs: Vec<std::path::PathBuf>,
+}
+
+pub(crate) fn resolve_launch(
+    project_root: &Path,
+    scope: &str,
+    definition: Option<&str>,
+    config: &ProjectConfig,
+    global: &GlobalConfig,
+) -> Result<LaunchConfig> {
+    let settings = spawn_settings(definition, &config.agents, &global.agents)?;
+    let harness_config = resolve_harness_config(&config.harness, &global.harness);
+    let writable_dirs = writable_dirs(project_root, &harness_config);
+    let edit_dirs = if scope == "main" {
+        Vec::new()
+    } else {
+        vec![paths::summaries_dir(project_root)]
+    };
+    Ok(LaunchConfig {
+        settings,
+        harness_config,
+        writable_dirs,
+        edit_dirs,
+    })
 }
 
 /// The prompt a named agent is launched with when none is given, so its
@@ -229,10 +264,14 @@ fn spawn_session_with_config(
 
     let effective_definition = effective_definition(params.agent_definition, params.agent_name);
 
-    // Settings are configured per agent definition, not per display name,
-    // and are re-resolved from config on every spawn — never stored on the
-    // registry entry — so restart/fork/heal pick up config edits.
-    let settings = spawn_settings(effective_definition, &config.agents, &global.agents)?;
+    let launch = resolve_launch(
+        params.project_root,
+        params.feature,
+        effective_definition,
+        config,
+        global,
+    )?;
+    let settings = &launch.settings;
 
     // Named agents need a sentinel prompt when none is explicitly provided:
     // a harness with no positional prompt just waits for user input and never
@@ -257,15 +296,9 @@ fn spawn_session_with_config(
     // older projects keep spawning exactly as before.
     let append_file =
         crate::notice::compose_spawn_prompt(params.project_root, params.feature, window_name)?;
-    let harness_config = resolve_harness_config(&config.harness, &global.harness);
-    let dirs = writable_dirs(params.project_root, &harness_config);
-    let edit_dirs = if params.feature == "main" {
-        Vec::new()
-    } else {
-        let summaries = paths::summaries_dir(params.project_root);
-        std::fs::create_dir_all(&summaries)?;
-        vec![summaries]
-    };
+    for dir in &launch.edit_dirs {
+        std::fs::create_dir_all(dir)?;
+    }
     // A harness with a directory-trust gate would otherwise stop at an
     // interactive prompt nobody is watching.
     settings
@@ -279,8 +312,8 @@ fn spawn_session_with_config(
         fork_session: params.fork_session,
         permission_mode: settings.permission_mode.as_deref(),
         model: settings.model.as_deref(),
-        writable_dirs: &dirs,
-        edit_dirs: &edit_dirs,
+        writable_dirs: &launch.writable_dirs,
+        edit_dirs: &launch.edit_dirs,
     };
     let pre = settings
         .harness
@@ -292,7 +325,7 @@ fn spawn_session_with_config(
                 agent: window_name,
             },
             &spec,
-            &harness_config,
+            &launch.harness_config,
         )
         // A refusal for want of a model row may be about one the
         // resolution dropped.
@@ -302,7 +335,9 @@ fn spawn_session_with_config(
             }
             (e, _, _) => e,
         })?;
-    let cmd = settings.harness.build_cmd(&spec, &harness_config, &pre);
+    let cmd = settings
+        .harness
+        .build_cmd(&spec, &launch.harness_config, &pre);
     let window_target = if let Some(target) = params.reuse_window {
         tmux::rename_window(params.tmux_server, target, window_name)?;
         target.to_string()
@@ -349,6 +384,8 @@ fn spawn_session_with_config(
         let startup = runtime::Waiting::now(runtime::WaitingKind::Startup, None);
         runtime::write_waiting(params.project_root, params.feature, name, &startup)?;
         runtime::reset_loop(params.project_root, params.feature, name)?;
+        let stamp = super::launch_stamp::stamp(params.project_root, effective_definition, &launch)?;
+        runtime::write_launch_stamp(params.project_root, params.feature, name, &stamp)?;
         for which in [
             runtime::SessionPath::Transcript,
             runtime::SessionPath::ConfigDir,
@@ -381,7 +418,7 @@ fn spawn_session_with_config(
         (asked, None) => asked.is_some(),
         (None, Some(_)) => false,
     };
-    let mut notes = settings.notes;
+    let mut notes = launch.settings.notes;
     notes.extend(pre.notes);
     Ok(SpawnedSession {
         window_target,
@@ -1144,6 +1181,70 @@ pub(crate) mod tests {
             .harness
             .insert(definition.to_string(), harness.to_string());
         config.save(&pm_dir).unwrap();
+    }
+
+    #[test]
+    fn a_spawn_stamps_its_launch_and_a_changed_input_makes_it_stale() {
+        let _guard = crate::testing::CODEX_CONFIG_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let (_, feature) = setup_project(root, &server);
+        configure_harness(root, "tester", "codex");
+        configure_opencode(root, "implementer", r#"{"data":{"id":"ses_abc"}}"#, 0);
+        let agents = ["reviewer", "tester", "implementer"];
+        for agent in agents {
+            agent_spawn(root, &feature, agent, None, None, server.name()).unwrap();
+        }
+        let pm_dir = paths::pm_dir(root);
+        let stale = |agent: &str| {
+            let registry = AgentRegistry::load(&paths::agents_dir(root), &feature).unwrap();
+            super::super::launch_stamp::is_stale(
+                root,
+                &feature,
+                agent,
+                registry.get(agent).unwrap(),
+                &ProjectConfig::load(&pm_dir).unwrap(),
+                &GlobalConfig::load_or_default(),
+            )
+            .unwrap()
+        };
+        let all_stale = || agents.map(stale);
+        assert_eq!(all_stale(), [false; 3], "right after their spawn");
+
+        let definition = paths::main_worktree(root).join(".agents/agents/reviewer.md");
+        std::fs::write(&definition, "# edited").unwrap();
+        assert_eq!(all_stale(), [true, false, false], "an edited definition");
+        std::fs::write(&definition, "# stub").unwrap();
+        assert_eq!(all_stale(), [false; 3]);
+
+        std::fs::write(pm_dir.join("notices.md"), "Be terse.").unwrap();
+        assert_eq!(all_stale(), [true; 3], "a notice board");
+        std::fs::remove_file(pm_dir.join("notices.md")).unwrap();
+
+        let edit = |change: &dyn Fn(&mut ProjectConfig)| {
+            let mut config = ProjectConfig::load(&pm_dir).unwrap();
+            change(&mut config);
+            config.save(&pm_dir).unwrap();
+        };
+        edit(&|c| {
+            c.agents
+                .models
+                .insert("reviewer".to_string(), "opus".to_string());
+        });
+        assert!(stale("reviewer"), "a model row");
+        edit(&|c| {
+            c.agents.models.remove("reviewer");
+        });
+        edit(&|c| c.harness.codex.sandbox = Some("workspace-write".to_string()));
+        assert_eq!(all_stale(), [false, true, false], "[harness.codex]");
+        edit(&|c| c.harness.codex.sandbox = None);
+        assert_eq!(all_stale(), [false; 3]);
+
+        runtime::write_launch_stamp(root, &feature, "reviewer", "").unwrap();
+        assert!(stale("reviewer"), "launched with something else");
     }
 
     #[test]

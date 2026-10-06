@@ -546,6 +546,10 @@ pub enum AgentCommands {
         /// With --all: every scope of every registered project
         #[arg(long, requires = "all", conflicts_with = "scope")]
         global: bool,
+        /// With --all: only running agents that would launch differently
+        /// now; the agent running the command is reported, not restarted
+        #[arg(long, requires = "all")]
+        stale: bool,
         /// Restart an agent that is mid-turn, asking, or running background
         /// work; it is sent a message telling it to resume. With --all, every
         /// such agent is interrupted

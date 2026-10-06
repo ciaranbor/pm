@@ -1100,6 +1100,22 @@ impl TestServer {
             },
         );
         registry.save(&agents_dir, feature).unwrap();
+        // Launched with what is current, as a spawn would record.
+        let config =
+            crate::state::project::ProjectConfig::load(&paths::pm_dir(project_root)).unwrap();
+        let global = crate::state::project::GlobalConfig::load_or_default();
+        let entry = registry.get(agent_name).unwrap();
+        let stamp = crate::commands::launch_stamp::current(
+            project_root,
+            feature,
+            agent_name,
+            entry,
+            &config,
+            &global,
+        )
+        .unwrap();
+        crate::state::runtime::write_launch_stamp(project_root, feature, agent_name, &stamp)
+            .unwrap();
     }
 
     /// Add a commit to a feature worktree.
