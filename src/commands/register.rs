@@ -70,11 +70,17 @@ pub fn register(
         ))
     })?;
 
-    let wrapper_dir = if move_repo {
-        // Move mode: wrapper takes the project name directly (no -pm suffix).
-        // The original repo path is vacated by the move.
-        let wrapper = parent.join(&project_name);
+    // Move mode: wrapper takes the project name directly (no -pm suffix),
+    // the original repo path being vacated by the move. Symlink mode: the
+    // -pm suffix avoids a collision with the original repo.
+    let wrapper = if move_repo {
+        parent.join(&project_name)
+    } else {
+        parent.join(format!("{project_name}-pm"))
+    };
+    ProjectEntry::ensure_name_free(projects_dir, &project_name, &wrapper)?;
 
+    let wrapper_dir = if move_repo {
         // Temporarily rename the repo so we can create the wrapper at the target path
         let tmp_name = parent.join(format!(".{project_name}-pm-tmp"));
         if tmp_name.exists() {
@@ -85,8 +91,6 @@ pub fn register(
         std::fs::rename(&tmp_name, paths::main_worktree(&wrapper))?;
         wrapper
     } else {
-        // Symlink mode: wrapper gets -pm suffix to avoid collision with the original repo
-        let wrapper = parent.join(format!("{project_name}-pm"));
         if wrapper.exists() {
             return Err(PmError::PathAlreadyExists(wrapper));
         }
@@ -205,6 +209,40 @@ mod tests {
 
         let entry = ProjectEntry::load(&projects_dir, &name).unwrap();
         assert_eq!(entry.main_branch, "main");
+    }
+
+    #[test]
+    fn register_refuses_a_name_the_registry_holds_for_another_project() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let name = server.scope("taken");
+        let projects_dir = dir.path().join("registry");
+        let first = dir.path().join(&name);
+        create_git_repo(&first);
+        register(&first, None, &projects_dir, false, server.name(), None).unwrap();
+        let second = dir.path().join("other");
+        create_git_repo(&second);
+
+        let err = register(
+            &second,
+            Some(&name),
+            &projects_dir,
+            true,
+            server.name(),
+            None,
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, PmError::ProjectNameTaken { .. }), "{err}");
+        assert!(second.join(".git").exists(), "the repo was not moved");
+        let entry = ProjectEntry::load(&projects_dir, &name).unwrap();
+        assert_eq!(
+            entry.root_path().canonicalize().unwrap(),
+            dir.path()
+                .join(format!("{name}-pm"))
+                .canonicalize()
+                .unwrap()
+        );
     }
 
     #[test]

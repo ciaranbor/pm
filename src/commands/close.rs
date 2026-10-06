@@ -6,13 +6,20 @@ use crate::state::paths;
 use crate::state::project::{ProjectConfig, ProjectEntry};
 use crate::tmux;
 
+/// What [`close`] did.
+pub struct Closed {
+    pub project: String,
+    /// How many sessions it closed, `own` included.
+    pub killed: usize,
+    /// The session this process runs in, when it was one of the project's.
+    pub own: Option<tmux::OwnSession>,
+}
+
 /// Close a project by killing all its tmux sessions (main + features).
 ///
 /// This is the counterpart to `pm open`. No state or files are deleted.
 /// Idempotent — sessions that are already gone are silently skipped.
-///
-/// Returns the project name and the number of sessions killed.
-pub fn close(project_root: &Path, tmux_server: Option<&str>) -> Result<(String, usize)> {
+pub fn close(project_root: &Path, tmux_server: Option<&str>) -> Result<Closed> {
     let pm_dir = paths::pm_dir(project_root);
     let config = ProjectConfig::load(&pm_dir)?;
     let project_name = &config.project.name;
@@ -32,20 +39,26 @@ pub fn close(project_root: &Path, tmux_server: Option<&str>) -> Result<(String, 
         }
     }
 
-    // Killing the session this runs in ends this process, so it goes last.
+    let killed = doomed.len();
     let own = tmux::own_session(tmux_server);
-    if let Some(at) = doomed.iter().position(|s| Some(s) == own.as_ref()) {
-        let own = doomed.remove(at);
-        doomed.push(own);
-    }
+    let own = doomed
+        .iter()
+        .position(|s| Some(s) == own.as_ref())
+        .map(|at| tmux::OwnSession {
+            name: doomed.remove(at),
+            preferred: None,
+        });
 
     tmux::clients::move_off(tmux_server, &doomed, None)?;
     for session in &doomed {
         tmux::kill_session(tmux_server, session)?;
     }
-    let killed = doomed.len();
 
-    Ok((project_name.clone(), killed))
+    Ok(Closed {
+        project: project_name.clone(),
+        killed,
+        own,
+    })
 }
 
 /// Close every project in the global registry by killing their tmux sessions.
@@ -55,25 +68,25 @@ pub fn close(project_root: &Path, tmux_server: Option<&str>) -> Result<(String, 
 /// no-op; per-project failures are reported but never abort the sweep. No
 /// state or files are deleted.
 ///
-/// Returns one human-readable status line per project.
-pub fn close_all(tmux_server: Option<&str>) -> Result<Vec<String>> {
+/// Returns one human-readable status line per project, and the session
+/// this process runs in, as [`Closed::own`].
+pub fn close_all(tmux_server: Option<&str>) -> Result<(Vec<String>, Option<tmux::OwnSession>)> {
     let projects_dir = paths::global_projects_dir()?;
     close_all_with_dir(&projects_dir, tmux_server)
 }
 
 /// `close_all` with an injectable registry dir (for tests).
-pub fn close_all_with_dir(projects_dir: &Path, tmux_server: Option<&str>) -> Result<Vec<String>> {
-    let mut projects = ProjectEntry::list(projects_dir)?;
-    // The project this runs in goes last, as its sessions do in `close`.
-    if let Some(own) = tmux::own_session(tmux_server) {
-        projects.sort_by_key(|(name, _)| own.starts_with(&format!("{name}/")));
-    }
-
+pub fn close_all_with_dir(
+    projects_dir: &Path,
+    tmux_server: Option<&str>,
+) -> Result<(Vec<String>, Option<tmux::OwnSession>)> {
+    let projects = ProjectEntry::list(projects_dir)?;
     if projects.is_empty() {
-        return Ok(vec!["No projects in registry".to_string()]);
+        return Ok((vec!["No projects in registry".to_string()], None));
     }
 
     let mut messages = Vec::new();
+    let mut own = None;
     for (name, entry) in &projects {
         let root = entry.root_path();
         if !root.exists() {
@@ -81,11 +94,14 @@ pub fn close_all_with_dir(projects_dir: &Path, tmux_server: Option<&str>) -> Res
             continue;
         }
         match close(&root, tmux_server) {
-            Ok((project_name, killed)) => {
+            Ok(closed) => {
                 messages.push(format!(
-                    "{project_name}: closed (killed {killed} session{})",
-                    if killed == 1 { "" } else { "s" }
+                    "{}: closed (killed {} session{})",
+                    closed.project,
+                    closed.killed,
+                    if closed.killed == 1 { "" } else { "s" }
                 ));
+                own = own.or(closed.own);
             }
             Err(e) => {
                 messages.push(format!("{name}: error: {e}"));
@@ -93,7 +109,7 @@ pub fn close_all_with_dir(projects_dir: &Path, tmux_server: Option<&str>) -> Res
         }
     }
 
-    Ok(messages)
+    Ok((messages, own))
 }
 
 #[cfg(test)]
@@ -159,7 +175,11 @@ mod tests {
         assert!(tmux::has_session(server.name(), &format!("{project_name}/login")).unwrap());
         assert!(tmux::has_session(server.name(), &format!("{project_name}/api")).unwrap());
 
-        let (name, killed) = close(&project_path, server.name()).unwrap();
+        let Closed {
+            project: name,
+            killed,
+            ..
+        } = close(&project_path, server.name()).unwrap();
 
         assert_eq!(name, project_name);
         assert_eq!(killed, 3);
@@ -204,7 +224,11 @@ mod tests {
         tmux::kill_session(server.name(), &main_session).unwrap();
 
         // close should not error
-        let (name, killed) = close(&project_path, server.name()).unwrap();
+        let Closed {
+            project: name,
+            killed,
+            ..
+        } = close(&project_path, server.name()).unwrap();
         assert_eq!(name, project_name);
         assert_eq!(killed, 0);
     }
@@ -215,7 +239,11 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _projects_dir, project_name) = server.setup_project(dir.path());
 
-        let (name, killed) = close(&project_path, server.name()).unwrap();
+        let Closed {
+            project: name,
+            killed,
+            ..
+        } = close(&project_path, server.name()).unwrap();
         assert_eq!(name, project_name);
         assert_eq!(killed, 1);
         assert!(!tmux::has_session(server.name(), &format!("{project_name}/main")).unwrap());
@@ -239,7 +267,7 @@ mod tests {
         assert!(tmux::has_session(server.name(), &format!("{name_a}/main")).unwrap());
         assert!(tmux::has_session(server.name(), &format!("{name_b}/main")).unwrap());
 
-        let msgs = close_all_with_dir(&projects_dir, server.name()).unwrap();
+        let (msgs, _) = close_all_with_dir(&projects_dir, server.name()).unwrap();
 
         assert!(msgs.iter().any(|m| m.contains(&name_a)), "{msgs:?}");
         assert!(msgs.iter().any(|m| m.contains(&name_b)), "{msgs:?}");
@@ -258,7 +286,7 @@ mod tests {
         let server = TestServer::new();
         let (_project_path, projects_dir, project_name) = server.setup_project_no_tmux(dir.path());
 
-        let msgs = close_all_with_dir(&projects_dir, server.name()).unwrap();
+        let (msgs, _) = close_all_with_dir(&projects_dir, server.name()).unwrap();
         assert!(
             msgs.iter()
                 .any(|m| m.contains(&project_name) && m.contains("killed 0 sessions")),
@@ -273,7 +301,7 @@ mod tests {
         let projects_dir = dir.path().join("registry");
         std::fs::create_dir_all(&projects_dir).unwrap();
 
-        let msgs = close_all_with_dir(&projects_dir, server.name()).unwrap();
+        let (msgs, _) = close_all_with_dir(&projects_dir, server.name()).unwrap();
         assert!(msgs.iter().any(|m| m.contains("No projects")), "{msgs:?}");
     }
 
@@ -291,7 +319,7 @@ mod tests {
         };
         entry.save(&projects_dir, "ghost").unwrap();
 
-        let msgs = close_all_with_dir(&projects_dir, server.name()).unwrap();
+        let (msgs, _) = close_all_with_dir(&projects_dir, server.name()).unwrap();
         assert!(
             msgs.iter()
                 .any(|m| m.contains("ghost") && m.contains("directory does not exist")),
@@ -323,7 +351,7 @@ mod tests {
         let path_ok = dir.path().join(&name_ok);
         crate::commands::init::init(&path_ok, &projects_dir, None, server.name()).unwrap();
 
-        let msgs = close_all_with_dir(&projects_dir, server.name()).unwrap();
+        let (msgs, _) = close_all_with_dir(&projects_dir, server.name()).unwrap();
 
         assert!(
             msgs.iter()

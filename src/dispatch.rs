@@ -237,6 +237,18 @@ fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
 }
 
+/// Push the tmux refresh, killing first the session this process runs in
+/// when the command left it to be killed last (`own`).
+fn finish_in_own_session(
+    server: Option<&str>,
+    own: Option<tmux::OwnSession>,
+) -> pm::error::Result<()> {
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    let killed = own.map_or(Ok(()), |own| own.kill(server));
+    push();
+    killed
+}
+
 /// Bring pm's tmux options up to date with a change this command made, in
 /// a background `pm tmux push` the command neither waits for nor fails on.
 fn push() {
@@ -401,22 +413,25 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
         }
         Commands::Harness(cmd) | Commands::Claude(cmd) => dispatch_harness(cmd),
         Commands::Close { project, all } => {
-            if all {
-                let messages = commands::close::close_all(server)?;
+            let own = if all {
+                let (messages, own) = commands::close::close_all(server)?;
                 for m in messages {
                     println!("{m}");
                 }
+                own
             } else {
                 let projects_dir = paths::global_projects_dir()?;
                 let project_root = project_root(&projects_dir, project.as_deref())?;
-                let (project_name, killed) = commands::close::close(&project_root, server)?;
+                let closed = commands::close::close(&project_root, server)?;
                 println!(
-                    "Closed project {project_name} (killed {killed} session{})",
-                    if killed == 1 { "" } else { "s" }
+                    "Closed project {} (killed {} session{})",
+                    closed.project,
+                    closed.killed,
+                    if closed.killed == 1 { "" } else { "s" }
                 );
-            }
-            push();
-            Ok(())
+                closed.own
+            };
+            finish_in_own_session(server, own)
         }
         Commands::Agent(AgentCommands::Restart {
             all: true,
@@ -826,33 +841,37 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                 }
                 FeatCommands::Delete { name, force } => {
                     let name = resolve_feature_name(name, &project_root)?;
-                    commands::feat_delete::feat_delete(
+                    let ended = commands::feat_delete::feat_delete(
                         &project_root,
                         &projects_dir,
                         &name,
                         force,
                         server,
                     )?;
+                    for warning in ended.warnings {
+                        eprintln!("warning: {warning}");
+                    }
                     println!("Deleted feature '{name}'");
-                    push();
-                    Ok(())
+                    finish_in_own_session(server, ended.own)
                 }
                 FeatCommands::Merge { name, keep } => {
                     let name = resolve_feature_name(name, &project_root)?;
-                    commands::feat_merge::feat_merge(
+                    let ended = commands::feat_merge::feat_merge(
                         &project_root,
                         &projects_dir,
                         &name,
                         keep,
                         server,
                     )?;
+                    for warning in ended.warnings {
+                        eprintln!("warning: {warning}");
+                    }
                     if keep {
                         println!("Merged feature '{name}'");
                     } else {
                         println!("Merged and deleted feature '{name}'");
                     }
-                    push();
-                    Ok(())
+                    finish_in_own_session(server, ended.own)
                 }
                 FeatCommands::Pr(pr_cmd) => match pr_cmd {
                     PrCommands::Create { name, ready, body } => {
@@ -995,11 +1014,10 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
         } => {
             let projects_dir = paths::global_projects_dir()?;
             let project_root = project_root(&projects_dir, project.as_deref())?;
-            let project_name =
+            let (project_name, own) =
                 commands::delete::delete(&project_root, &projects_dir, force, yes, server)?;
             println!("Deleted project '{project_name}'");
-            push();
-            Ok(())
+            finish_in_own_session(server, own)
         }
         Commands::Notes { project } => {
             let projects_dir = paths::global_projects_dir()?;

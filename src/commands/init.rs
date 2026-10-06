@@ -26,6 +26,9 @@ use crate::tmux;
 ///
 /// Returns the project root, made absolute.
 ///
+/// The project is named after its directory. A name the registry holds for
+/// another project is refused.
+///
 /// The `tmux_server` parameter allows tests to use an isolated tmux server.
 pub fn init(
     path: &Path,
@@ -35,6 +38,7 @@ pub fn init(
 ) -> Result<PathBuf> {
     init_in(
         path,
+        None,
         projects_dir,
         &GlobalStore::resolve()?,
         git_url,
@@ -42,9 +46,11 @@ pub fn init(
     )
 }
 
-/// [`init`] installing into an explicit global tier.
+/// [`init`] installing into an explicit global tier, under `name` when
+/// given rather than the directory's.
 pub fn init_in(
     path: &Path,
+    name: Option<&str>,
     projects_dir: &Path,
     global: &GlobalStore,
     git_url: Option<&str>,
@@ -54,16 +60,16 @@ pub fn init_in(
         return Err(PmError::PathAlreadyExists(path.to_path_buf()));
     }
 
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| {
+    let name = match name {
+        Some(name) => name,
+        None => path.file_name().and_then(|n| n.to_str()).ok_or_else(|| {
             PmError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "invalid project path",
             ))
-        })?
-        .to_string();
+        })?,
+    }
+    .to_string();
 
     // Resolve to an absolute path before touching the filesystem. Without
     // this a relative argument (`pm init exo-bench`) would be saved verbatim
@@ -76,6 +82,7 @@ pub fn init_in(
     // and breaks path comparisons in tests).
     let path_buf = crate::path_utils::absolutize(path)?;
     let path = path_buf.as_path();
+    ProjectEntry::ensure_name_free(projects_dir, &name, path)?;
 
     // Create project root
     std::fs::create_dir_all(path)?;
@@ -83,7 +90,11 @@ pub fn init_in(
     // Init or clone git repo in main/
     let main_path = paths::main_worktree(path);
     let main_branch = if let Some(url) = git_url {
-        git::clone_repo(url, &main_path)?;
+        // A failed clone leaves nothing, so a retry finds no path in the way.
+        if let Err(e) = git::clone_repo(url, &main_path) {
+            let _ = std::fs::remove_dir_all(path);
+            return Err(e);
+        }
         git::main_branch(&main_path)?
     } else {
         git::init_repo(&main_path)?;
@@ -288,6 +299,7 @@ mod tests {
 
         init_in(
             &project_path,
+            None,
             &dir.path().join("registry"),
             &global,
             None,
@@ -355,6 +367,46 @@ mod tests {
         let entry = ProjectEntry::load(&projects_dir, &name).unwrap();
         assert_eq!(entry.root, crate::path_utils::to_portable(&project_path));
         assert_eq!(entry.main_branch, "main");
+    }
+
+    #[test]
+    fn init_refuses_a_name_the_registry_holds_for_another_project() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let name = server.scope("myapp");
+        let projects_dir = dir.path().join("registry");
+        let first = dir.path().join("a").join(&name);
+        init(&first, &projects_dir, None, server.name()).unwrap();
+
+        let second = dir.path().join("b").join(&name);
+        let err = init(&second, &projects_dir, None, server.name()).unwrap_err();
+
+        assert!(matches!(err, PmError::ProjectNameTaken { .. }), "{err}");
+        assert!(!second.exists());
+        let entry = ProjectEntry::load(&projects_dir, &name).unwrap();
+        assert_eq!(entry.root_path(), first);
+    }
+
+    #[test]
+    fn a_failed_clone_leaves_no_directory_in_the_way_of_a_retry() {
+        let _cwd = crate::testing::CWD_LOCK
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().join("myapp");
+        let projects_dir = dir.path().join("registry");
+
+        let missing = dir.path().join("missing.git");
+        let result = init(
+            &project_path,
+            &projects_dir,
+            Some(&missing.to_string_lossy()),
+            None,
+        );
+
+        assert!(matches!(result, Err(PmError::Git(_))), "{result:?}");
+        assert!(!project_path.exists());
+        assert!(ProjectEntry::list(&projects_dir).unwrap().is_empty());
     }
 
     #[test]

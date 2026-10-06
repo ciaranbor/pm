@@ -53,6 +53,13 @@ pub enum PmError {
     RepoAlreadyRegistered(String),
 
     #[error(
+        "A project named \"{name}\" is already registered, at {}: \
+         choose another name, or `pm delete {name}` first",
+        .root.display()
+    )]
+    ProjectNameTaken { name: String, root: PathBuf },
+
+    #[error(
         "Invalid project root \"{0}\": must be an absolute path or start with `~/` \
          (relative paths in the registry resolve against each caller's CWD, \
          which silently corrupts cross-project operations like messaging)"
@@ -72,6 +79,15 @@ pub enum PmError {
 
     #[error("{0}")]
     SafetyCheck(String),
+
+    /// A refusal to lose work whose way out is a terminal command: `cli`
+    /// words it for the CLI, `remote` for a device, which can't run it.
+    #[error("{reason} {cli}")]
+    Unsafe {
+        reason: String,
+        cli: String,
+        remote: String,
+    },
 
     /// A merge git refused, then aborted: nothing changed.
     #[error("{0}")]

@@ -71,11 +71,13 @@ pm register ~/code/myapp --name myapp                            # existing repo
 ```
 
 Each gives a project root with the repo in `main/`, a `.pm/` state
-directory, and a `myapp/main` tmux session. pm records the repo's default
-branch (`origin/HEAD`, else the checked-out branch) as the project's main
-branch. Bundled skills, agents, and workflows install once per machine
-([Customising](#customising)). pm projects your `main/.agents/` customs
-into `main/.claude/`, which is generated: gitignore it.
+directory, and a `myapp/main` tmux session. The project is named after its
+directory (or `--name`), a name no other registered project may have. pm
+records the repo's default branch (`origin/HEAD`, else the checked-out
+branch) as the project's main branch. Bundled skills, agents, and workflows
+install once per machine ([Customising](#customising)). pm projects your
+`main/.agents/` customs into `main/.claude/`, which is generated: gitignore
+it.
 
 Each also starts the orchestrator, the `main` agent, in that session
 (`--no-main` skips it; `pm agent spawn main` starts it later). `main`
@@ -208,7 +210,9 @@ pm feat delete             # or discard it
 
 The feature is the one your CWD is in, and tmux moves you to the base's
 session before the feature's goes. From elsewhere, name it:
-`pm feat merge login`.
+`pm feat merge login`. A worktree pm can't fully remove (a locked file, say)
+doesn't stop the rest: the feature goes, and pm names what is left to delete
+by hand.
 
 Either tells `main`, which triages the summary into the project's
 information store (`.pm/docs/`): follow-up todos, issues, ideas, and

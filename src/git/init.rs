@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use crate::error::{PmError, Result};
+use crate::error::Result;
 
 use super::run_git;
 
@@ -15,8 +15,7 @@ pub fn init_repo(path: &Path) -> Result<()> {
         .output()?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(PmError::Git(stderr));
+        return Err(super::failure(&output));
     }
 
     // Retargeting the unborn HEAD works on every git version, unlike `init -b`.
@@ -34,8 +33,7 @@ pub(crate) fn init_bare(path: &Path) -> Result<()> {
         .args(["init", "--bare", &path.to_string_lossy()])
         .output()?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(PmError::Git(stderr));
+        return Err(super::failure(&output));
     }
     Ok(())
 }

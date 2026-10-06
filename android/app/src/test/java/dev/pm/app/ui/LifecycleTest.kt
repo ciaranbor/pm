@@ -106,6 +106,27 @@ class LifecycleTest {
         }
 
     @Test
+    fun a_delete_that_went_through_with_warnings_shows_them() = runTest {
+        val lifecycle = Lifecycle(backgroundScope) { client }
+        val delete = Action.Delete("app", "login")
+        val warning = "feature 'login' had 1 untracked file(s), deleted with it: notes.txt"
+        reply(200, """{"deleted":true,"warnings":["$warning"]}""")
+        reply(200, """{"deleted":true}""")
+        val finished = backgroundScope.launch { lifecycle.finished.first() }
+
+        lifecycle.ask(delete)
+        lifecycle.confirm()
+        eventually { lifecycle.state.value is ActionState.Warned }
+        assertEquals(ActionState.Warned(delete, listOf(warning)), lifecycle.state.value)
+        eventually { finished.isCompleted }
+
+        lifecycle.dismiss()
+        lifecycle.ask(delete)
+        lifecycle.confirm()
+        eventually { server.requestCount == 2 && lifecycle.state.value == ActionState.Idle }
+    }
+
+    @Test
     fun a_failure_that_is_not_a_refusal_is_told_apart_as_possibly_partway() = runTest {
         val lifecycle = Lifecycle(backgroundScope) { client }
         val delete = Action.Delete("app", "login")

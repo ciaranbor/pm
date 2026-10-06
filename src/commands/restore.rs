@@ -246,7 +246,14 @@ fn restore_project(
     if !root.exists() {
         if let Some(ref repo_url) = entry.repo_url {
             messages.push(format!("{name}: cloning from {repo_url}..."));
-            super::init::init(&root, projects_dir, Some(repo_url), tmux_server)?;
+            super::init::init_in(
+                &root,
+                Some(name),
+                projects_dir,
+                &super::skills::GlobalStore::resolve()?,
+                Some(repo_url),
+                tmux_server,
+            )?;
             // init creates a fresh registry entry; re-save the original URLs
             // so state_remote isn't lost
             let mut refreshed = match ProjectEntry::load(projects_dir, name) {
@@ -479,6 +486,45 @@ mod tests {
             loaded.state_remote.as_deref(),
             Some("https://example.com/state.git")
         );
+    }
+
+    #[test]
+    fn a_clone_keeps_the_registry_name_that_differs_from_its_directory() {
+        let _cwd = crate::testing::CWD_LOCK
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("projects");
+        let server = TestServer::new();
+        let name = server.scope("named");
+        let bare_path = dir.path().join("remote.git");
+        crate::git::init_bare(&bare_path).unwrap();
+        let staging = dir.path().join("staging");
+        crate::git::init_repo(&staging).unwrap();
+        crate::git::add_remote(&staging, "origin", &bare_path.to_string_lossy()).unwrap();
+        crate::git::push(&staging, "origin", "main").unwrap();
+        let project_path = dir.path().join("checkout");
+        ProjectEntry {
+            root: project_path.to_string_lossy().to_string(),
+            main_branch: "main".to_string(),
+            repo_url: Some(bare_path.to_string_lossy().to_string()),
+            state_remote: None,
+        }
+        .save(&projects_dir, &name)
+        .unwrap();
+
+        restore_with_dir(&projects_dir, server.name()).unwrap();
+
+        let names: Vec<String> = ProjectEntry::list(&projects_dir)
+            .unwrap()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(names, std::slice::from_ref(&name));
+        let config =
+            crate::state::project::ProjectConfig::load(&paths::pm_dir(&project_path)).unwrap();
+        assert_eq!(config.project.name, name);
+        assert!(tmux::has_session(server.name(), &tmux::session_name(&name, "main")).unwrap());
     }
 
     #[test]

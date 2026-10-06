@@ -16,7 +16,8 @@
 //! reports nothing that was already so. Each transition also goes to every
 //! subscribed device as a Web Push (`push`), which reaches a phone off the
 //! tailnet. The poller also re-executes the binary once it is replaced
-//! ([`Binary`]), so an upgrade reaches a server launchd keeps running.
+//! ([`Binary`]), so an upgrade reaches a server launchd keeps running; it
+//! first lets the requests being answered finish (`in_flight`).
 //!
 //! Nothing on the phone is urgent, so the poller is sparing: it reads the
 //! snapshot every minute, and every few seconds only while an event stream
@@ -47,6 +48,7 @@ use super::reexec::Binary;
 
 mod dialog;
 mod events;
+mod in_flight;
 mod input;
 mod lifecycle;
 mod notes;
@@ -57,6 +59,7 @@ mod transcript;
 mod wake;
 
 use events::Hub;
+use in_flight::{Answering, InFlight};
 use push::Pusher;
 pub use push::policy::Policy as PushPolicy;
 use routes::Reply;
@@ -75,6 +78,9 @@ const MAX_BODY: u64 = {
 };
 
 pub const DEFAULT_PORT: u16 = 7764;
+
+/// The longest a re-exec waits for the requests being answered.
+const REEXEC_WAIT: Duration = Duration::from_secs(600);
 
 /// The port to listen on: `[serve] port` in the global config at
 /// `config_dir`, else [`DEFAULT_PORT`].
@@ -133,6 +139,7 @@ pub struct Server {
     watch: Mutex<Watch>,
     stopped: AtomicBool,
     waker: Waker,
+    in_flight: Arc<InFlight>,
     /// How many snapshots the poller has read.
     #[cfg(test)]
     reads: std::sync::atomic::AtomicUsize,
@@ -157,6 +164,7 @@ impl Server {
             hub: Hub::new(&snapshot)?,
             watch: Mutex::new(Watch::start(&snapshot)),
             stopped: AtomicBool::new(false),
+            in_flight: Arc::default(),
             #[cfg(test)]
             reads: std::sync::atomic::AtomicUsize::new(0),
         }))
@@ -175,7 +183,8 @@ impl Server {
         std::thread::spawn(move || poller.poll());
         for request in self.http.incoming_requests() {
             let server = Arc::clone(self);
-            std::thread::spawn(move || server.handle(request));
+            let answering = self.in_flight.begin();
+            std::thread::spawn(move || server.handle(request, answering));
         }
     }
 
@@ -222,6 +231,10 @@ impl Server {
             }
             drop(watch);
             if let Some(binary) = binary.as_ref().filter(|b| b.replaced()) {
+                let (_held, idle) = self.in_flight.wait_idle(REEXEC_WAIT);
+                if !idle {
+                    log("binary replaced; re-executing with requests still unanswered");
+                }
                 log(&format!(
                     "binary replaced; re-executing failed: {}",
                     binary.exec()
@@ -230,7 +243,7 @@ impl Server {
         }
     }
 
-    fn handle(&self, mut request: tiny_http::Request) {
+    fn handle(&self, mut request: tiny_http::Request, answering: Answering) {
         let header_value = |name: &'static str| {
             request
                 .headers()
@@ -305,6 +318,7 @@ impl Server {
                 request.respond(response)
             }
             Reply::Events(watch) => {
+                drop(answering);
                 self.waker.notify();
                 let mut writer = request.into_writer();
                 let watch = watch.map(|w| (*w, self.config.transcript_poll));

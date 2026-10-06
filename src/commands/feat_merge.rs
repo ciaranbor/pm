@@ -2,7 +2,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use crate::commands::feat_delete::{
-    CleanupParams, Ending, MissingBase, TimingLog, cleanup_feature_with_timing,
+    CleanupParams, Ended, Ending, MissingBase, TimingLog, cleanup_feature_with_timing,
 };
 use crate::error::{PmError, Result};
 use crate::git;
@@ -20,7 +20,7 @@ pub fn feat_merge(
     name: &str,
     keep: bool,
     tmux_server: Option<&str>,
-) -> Result<()> {
+) -> Result<Ended> {
     let features_dir = paths::features_dir(project_root);
     let pm_dir = paths::pm_dir(project_root);
 
@@ -33,15 +33,20 @@ pub fn feat_merge(
     let checkout = match base_checkout(project_root, &main_branch, base) {
         Err(PmError::BaseNotCheckedOut(_)) => {
             let missing = MissingBase::probe(&paths::main_worktree(project_root), base)?;
-            return Err(PmError::SafetyCheck(format!(
-                "cannot merge feature '{name}': {}",
-                missing.hint(name, base, &main_branch)
-            )));
+            return Err(missing.refusal(
+                &format!("cannot merge feature '{name}'"),
+                name,
+                base,
+                &main_branch,
+            ));
         }
         other => other?,
     };
     let base_repo = &checkout.worktree;
     let worktree_path = project_root.join(&state.worktree);
+    // A worktree git no longer knows holds no work it can check: most likely
+    // a cleanup that failed partway.
+    let live = git::is_worktree(base_repo, &worktree_path)?;
 
     let merge_start = Instant::now();
     let mut tlog: Option<TimingLog> = Some(TimingLog::new(&pm_dir, "merge", name));
@@ -57,11 +62,13 @@ pub fn feat_merge(
         eprintln!("Feature '{name}' already merged — cleaning up");
 
         // Still guard against data loss if user edited after the first merge
-        if !keep {
+        if !keep && live {
             ensure_settled(&worktree_path, &format!("feature '{name}'"), "cleaning up")?;
         }
     } else {
-        ensure_settled(&worktree_path, &format!("feature '{name}'"), "merging")?;
+        if live {
+            ensure_settled(&worktree_path, &format!("feature '{name}'"), "merging")?;
+        }
         ensure_settled(
             base_repo,
             &format!("{} worktree", checkout.scope),
@@ -132,19 +139,22 @@ pub fn feat_merge(
         }
     }
 
-    if keep {
-        // Update feature state to Merged
-        let mut updated = state.clone();
-        updated.status = FeatureStatus::Merged;
-        updated.save(&features_dir, name)?;
+    // Recorded before any cleanup, so a retry after one that failed partway
+    // only cleans up.
+    let mut updated = state.clone();
+    updated.status = FeatureStatus::Merged;
+    updated.save(&features_dir, name)?;
 
+    if keep {
         // Flush timing log for --keep (no cleanup phase follows)
         if let Some(tl) = tlog.as_mut() {
             tl.record_total(merge_start.elapsed());
             tl.flush();
         }
+        Ok(Ended::default())
     } else {
-        cleanup_feature_with_timing(
+        let own = Ended::own_session(tmux_server, project_name, name, &checkout.scope);
+        let warnings = cleanup_feature_with_timing(
             &CleanupParams {
                 repo: base_repo,
                 worktree_path: &worktree_path,
@@ -153,7 +163,9 @@ pub fn feat_merge(
                 name,
                 project_name,
                 force_worktree: true, // always force — both paths checked for uncommitted changes above
+                worktree_created: true,
                 tmux_server,
+                kill_session: own.is_none(),
                 delete_branch: true,
                 best_effort: false,
                 base_scope: &checkout.scope,
@@ -161,9 +173,8 @@ pub fn feat_merge(
             },
             &mut tlog,
         )?;
+        Ok(Ended { warnings, own })
     }
-
-    Ok(())
 }
 
 /// Refuse to merge into or out of a worktree whose work isn't settled:
@@ -698,6 +709,69 @@ mod tests {
         assert!(!git::branch_exists(&main_repo, "login").unwrap());
         let features_dir = paths::features_dir(&project_path);
         assert!(!FeatureState::exists(&features_dir, "login"));
+    }
+
+    #[test]
+    fn a_merge_whose_worktree_cannot_be_removed_still_ends_the_feature() {
+        use crate::testing::{lock_in, unlock};
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        TestServer::add_feature_commit(&project_path, "login");
+        let locked = lock_in(&project_path.join("login"));
+        let projects_dir = TestServer::registry_dir(&project_path);
+
+        let Ended { warnings, .. } =
+            feat_merge(&project_path, &projects_dir, "login", false, server.name()).unwrap();
+
+        assert!(
+            warnings.iter().any(|w| w.contains("could not remove")),
+            "{warnings:?}"
+        );
+        let main = paths::main_worktree(&project_path);
+        assert!(main.join("feature.txt").exists(), "the merge landed");
+        assert!(!git::branch_exists(&main, "login").unwrap());
+        assert!(!FeatureState::exists(
+            &paths::features_dir(&project_path),
+            "login"
+        ));
+        unlock(&locked);
+    }
+
+    #[test]
+    fn a_merge_whose_cleanup_failed_is_recorded_merged_so_a_retry_only_cleans_up() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        TestServer::add_feature_commit(&project_path, "login");
+        let main = paths::main_worktree(&project_path);
+        let holder = dir.path().join("holder");
+        git::run_git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "--force",
+                &holder.to_string_lossy(),
+                "login",
+            ],
+        )
+        .unwrap();
+        let projects_dir = TestServer::registry_dir(&project_path);
+        let features_dir = paths::features_dir(&project_path);
+
+        let failed = feat_merge(&project_path, &projects_dir, "login", false, server.name());
+
+        assert!(failed.is_err(), "the branch is checked out elsewhere");
+        assert!(main.join("feature.txt").exists(), "the merge landed");
+        let state = FeatureState::load(&features_dir, "login").unwrap();
+        assert_eq!(state.status, FeatureStatus::Merged);
+
+        git::remove_worktree_force(&main, &holder).unwrap();
+        feat_merge(&project_path, &projects_dir, "login", false, server.name()).unwrap();
+
+        assert!(!FeatureState::exists(&features_dir, "login"));
+        assert!(!git::branch_exists(&main, "login").unwrap());
     }
 
     #[test]

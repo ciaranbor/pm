@@ -476,8 +476,10 @@ mod tests {
         stage_file(&wt_path, "shared.txt").unwrap();
         commit(&wt_path, "feature change").unwrap();
 
-        let result = merge_no_ff(&repo_path, "feature");
-        assert!(result.is_err());
+        let Err(PmError::Git(why)) = merge_no_ff(&repo_path, "feature") else {
+            panic!("a conflicting merge must fail as a git error");
+        };
+        assert!(why.contains("CONFLICT"), "git's stdout is kept: {why:?}");
     }
 
     #[test]

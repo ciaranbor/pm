@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 
-use crate::error::{PmError, Result};
+use crate::error::Result;
 
 use super::run_git;
 
@@ -13,8 +13,7 @@ pub fn clone_repo(url: &str, path: &Path) -> Result<()> {
         .output()?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(PmError::Git(stderr));
+        return Err(super::failure(&output));
     }
 
     Ok(())
@@ -54,8 +53,7 @@ pub fn remote_heads(repo: &Path, remote: &str) -> Result<BTreeMap<String, String
         .stdin(std::process::Stdio::null())
         .output()?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(PmError::Git(stderr));
+        return Err(super::failure(&output));
     }
     Ok(String::from_utf8_lossy(&output.stdout)
         .lines()

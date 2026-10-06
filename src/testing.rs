@@ -27,6 +27,22 @@ pub static CWD_LOCK: RwLock<()> = RwLock::new(());
 /// tests could each drop the other's entry.
 pub static CODEX_CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// A directory in `worktree` that neither git nor pm can delete, as a
+/// locked file makes one; [`unlock`] lets the test's temp dir go.
+pub fn lock_in(worktree: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let locked = worktree.join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::write(locked.join("file"), "x").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+    locked
+}
+
+pub fn unlock(locked: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
 /// The directory name Claude Code keeps the sessions of `path` under.
 pub fn claude_key(path: &std::path::Path) -> String {
     path.to_string_lossy()

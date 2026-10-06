@@ -27,6 +27,13 @@ impl Remote {
         }))
     }
 
+    /// Whether `origin` has `branch`.
+    pub(super) fn has(&self, branch: &str) -> bool {
+        self.heads
+            .as_ref()
+            .is_ok_and(|heads| heads.contains_key(branch))
+    }
+
     /// Whether every commit of local `branch` is on `origin`'s `base`.
     pub(super) fn base_holds(&self, repo: &Path, branch: &str, base: &str) -> Result<bool> {
         let Some(tip) = self.heads.as_ref().ok().and_then(|heads| heads.get(base)) else {

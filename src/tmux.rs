@@ -95,6 +95,39 @@ pub fn kill_session(server: Option<&str>, name: &str) -> Result<()> {
     Ok(())
 }
 
+/// The session this process runs in ([`own_session`]), which a command
+/// left for its caller to kill once it has reported, since the kill ends
+/// this process.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnSession {
+    pub name: String,
+    /// Where its clients go, as [`clients::move_off`] takes it.
+    pub preferred: Option<String>,
+}
+
+impl OwnSession {
+    /// `own_session`, when it is `session`.
+    pub fn is(server: Option<&str>, session: &str, preferred: Option<String>) -> Option<Self> {
+        (own_session(server)? == session).then(|| Self {
+            name: session.to_string(),
+            preferred,
+        })
+    }
+
+    /// Kill it. Its pane's SIGHUP is ignored, so this process outlives the
+    /// kill and can still finish what follows it.
+    pub fn kill(&self, server: Option<&str>) -> Result<()> {
+        // SAFETY: setting a signal's disposition to SIG_IGN installs no handler.
+        unsafe { libc::signal(libc::SIGHUP, libc::SIG_IGN) };
+        clients::move_off(
+            server,
+            std::slice::from_ref(&self.name),
+            self.preferred.as_deref(),
+        )?;
+        kill_session(server, &self.name)
+    }
+}
+
 /// List all tmux session names.
 pub fn list_sessions(server: Option<&str>) -> Result<Vec<String>> {
     let result = run_tmux(server, &["list-sessions", "-F", "#{session_name}"]);

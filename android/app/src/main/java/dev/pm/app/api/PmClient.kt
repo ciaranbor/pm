@@ -267,16 +267,20 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
 
     /**
      * Merge the feature into its base and delete it, as `pm feat merge` does. Refused (`unsafe`,
-     * `git`) with the CLI's own words.
+     * `git`) with the CLI's own words. Returns what the CLI would warn of.
      */
-    suspend fun merge(project: String, feature: String) {
-        send(postRequest(url("features", project, feature, "merge"), "{}"), lifecycle)
-    }
+    suspend fun merge(project: String, feature: String): List<String> =
+        warnings(send(postRequest(url("features", project, feature, "merge"), "{}"), lifecycle))
 
-    /** Delete the feature, as `pm feat delete` does; refused (`unsafe`) when work would be lost. */
-    suspend fun delete(project: String, feature: String) {
-        send(postRequest(url("features", project, feature, "delete"), "{}"), lifecycle)
-    }
+    /**
+     * Delete the feature, as `pm feat delete` does; refused (`unsafe`) when work would be lost.
+     * Returns what the CLI would warn of, such as the untracked files deleted with it.
+     */
+    suspend fun delete(project: String, feature: String): List<String> =
+        warnings(send(postRequest(url("features", project, feature, "delete"), "{}"), lifecycle))
+
+    private fun warnings(reply: String): List<String> =
+        json.decodeFromString(Ended.serializer(), reply).warnings
 
     /**
      * Restart the agent, resuming its session. Refused with `mid-turn` while it is busy, asking or
@@ -419,6 +423,8 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
     @Serializable private data class Subscription(val endpoint: String, val keys: Keys)
 
     @Serializable private data class Saved(val version: String)
+
+    @Serializable private data class Ended(val warnings: List<String> = emptyList())
 
     @Serializable
     private data class Changed(

@@ -85,7 +85,10 @@ val Action.done: String
             is Action.Restart -> "Restarted $agent"
         }
 
-/** The dialog an action's state calls for: its confirmation, its progress, or why it failed. */
+/**
+ * The dialog an action's state calls for: its confirmation, its progress, what it warned of, or why
+ * it failed.
+ */
 @Composable
 fun ActionDialog(state: ActionState, confirm: () -> Unit, dismiss: () -> Unit) {
     when (state) {
@@ -149,6 +152,13 @@ fun ActionDialog(state: ActionState, confirm: () -> Unit, dismiss: () -> Unit) {
                         Text("${state.action.running} ${state.action.subject}…")
                     }
                 },
+            )
+        is ActionState.Warned ->
+            AlertDialog(
+                onDismissRequest = dismiss,
+                title = { Text("${state.action.done}, with warnings") },
+                text = { SelectionContainer { Text(state.warnings.joinToString("\n\n")) } },
+                confirmButton = { TextButton(onClick = dismiss) { Text("OK") } },
             )
         is ActionState.Failed ->
             AlertDialog(
