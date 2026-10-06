@@ -8,12 +8,16 @@
 //! customs and shadows the global tier by name. No harness reads pm's
 //! `.agents/agents/`, so each tier's store is *projected* into the harness's
 //! own layout (`~/.claude/` and `main/.claude/` for claude-code) via
-//! [`Harness::project_assets`]; the canonical copy always wins over a
-//! same-named projected file, and projection never deletes. A feature
-//! worktree's projection is [`seed`](super::seed)'s, which removes that of a
-//! skill the feature's branch deleted. An item the global `[bundled.disable]` table
-//! disables ([`bundled_disable`](super::bundled_disable)) is removed from the
-//! global tier and its projections by every global install.
+//! [`Harness::project_assets`]; the canonical copy always overwrites a
+//! same-named projected file. Claude Code resolves a personal skill over a
+//! project one, so a project custom of a global skill's name never applies
+//! there: `pm doctor` reports it ([`shadowed_project_skills`]).
+//!
+//! Projection deletes only three things: [`write_atomic`] temp files whose
+//! writer has exited, a feature's projection of a skill its branch deleted
+//! ([`seed`](super::seed)), and an item the global `[bundled.disable]`
+//! table disables ([`bundled_disable`](super::bundled_disable)), which
+//! every global install removes from the global tier and its projections.
 
 use std::fs;
 use std::path::{Path, PathBuf};

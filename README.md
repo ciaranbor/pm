@@ -628,5 +628,4 @@ no cap.
 - [docs/migration.md](docs/migration.md) — moving projects to another
   machine
 - [docs/releasing.md](docs/releasing.md) — cutting a release
-- [AGENTS.md](AGENTS.md) — architecture, invariants, and development:
-  build, test, the pty budget, and `scripts/sandbox`
+- [AGENTS.md](AGENTS.md) — architecture, invariants, and development

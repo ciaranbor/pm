@@ -1,9 +1,10 @@
 //! `pm msg send`: a queue that never spawns a new agent. Same-scope and
-//! cross-scope sends (`--scope`/`--upstream`, same project) heal a dead
-//! window of an active recipient after queuing, and re-arm a live one no
-//! message would wake ([`agent_rearm`](super::agent_rearm)); a
-//! cross-project send only queues, since the target agent lives in a
-//! project this one can't spawn in.
+//! cross-scope sends (`--scope`/`--upstream`, same project) error on an
+//! unregistered or inactive recipient, and heal an active one after
+//! queuing — a dead window, or a harness that exited to the shell in its
+//! pane, is respawned — and re-arm a live one no message would wake
+//! ([`agent_rearm`](super::agent_rearm)); a cross-project send only queues,
+//! since the target agent lives in a project this one can't spawn in.
 
 use std::path::Path;
 
@@ -114,12 +115,9 @@ pub struct Heal {
 
 /// Send a message to an agent's inbox.
 ///
-/// `agent_send` is a near-pure queue: it never spawns a *new* agent. If the
-/// recipient isn't registered or is flagged inactive (`active = false`), it
-/// errors — delivering a message nobody can ever read is a mistake. If the
-/// recipient is active but its tmux window has died, or its harness exited
-/// to the shell there, the message is queued and the agent is healed via
-/// `agent_spawn` (a no-op if its harness runs).
+/// Delivering to an inactive recipient is an error because nobody could
+/// ever read the message; healing goes through `agent_spawn`, a no-op if
+/// the harness runs.
 ///
 /// `target_scope` is the scope (feature or "main") the message is delivered
 /// to. When `None`, defaults to `sender_scope` (same-scope message).

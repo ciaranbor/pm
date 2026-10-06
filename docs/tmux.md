@@ -110,4 +110,4 @@ Setting `PM_TMUX_SERVER=<name>` makes every `pm` command target that tmux
 server (`tmux -L <name>`) instead of the default one; `pm open` run from a
 pane of another server attaches a nested client rather than switching that
 server's. `scripts/sandbox` uses it for a throwaway pm environment
-(AGENTS.md, "Sandbox and smoke tests").
+(`scripts/sandbox --help`).

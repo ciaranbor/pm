@@ -1,3 +1,11 @@
+//! `pm agent spawn`.
+//!
+//! With `--context`, on a (re)spawn the context is enqueued after the
+//! definition validates, so a bad spawn leaves no message; an agent already
+//! active gets it unvalidated. Unlike a team brief
+//! ([`feat_common`](super::feat_common)) it is never refused on the
+//! workflow's account, since it is also the path that heals a dead agent.
+
 use std::path::Path;
 
 use crate::commands::bundled_disable::Disabled;

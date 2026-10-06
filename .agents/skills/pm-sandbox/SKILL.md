@@ -38,8 +38,7 @@ description: Exercise a pm build by hand or end to end without touching the real
   sandbox (`cargo test --test smoke -- --ignored`); read it for how to drive
   a scenario, not as a substitute for exercising the change.
 - Every tmux window holds a pty and test runs abort at 300 system-wide. A
-  pty-budget failure means leaked sessions; recovery is in `AGENTS.md`
-  (Development).
+  pty-budget failure means leaked sessions; recovery is in `src/testing.rs`.
 - Testing the Android app: prefer the headless emulator, `scripts/emulator`
   (`--help`). It runs beside the user's phone, their installed app and their
   `pm serve` without touching any of them, and uses its own adb server: drive
