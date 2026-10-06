@@ -31,7 +31,20 @@ pub(crate) fn run_git(repo: &Path, args: &[&str]) -> Result<String> {
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        Err(PmError::Git(stderr))
+        Err(failure(&output))
     }
+}
+
+/// The error of a failed git command, with what it said: some explain a
+/// failure on stdout alone (`git merge`'s conflicts), so both streams are
+/// kept.
+fn failure(output: &std::process::Output) -> PmError {
+    PmError::Git(
+        [&output.stderr, &output.stdout]
+            .iter()
+            .map(|s| String::from_utf8_lossy(s).trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }

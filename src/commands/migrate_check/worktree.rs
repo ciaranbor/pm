@@ -90,6 +90,9 @@ pub(super) struct Branch<'a> {
     /// A feature's base, which `pm restore` creates the branch from when
     /// origin lacks it.
     pub base: Option<&'a str>,
+    /// The branch on origin that creation starts from: `base`, or, for a
+    /// base `pm restore` creates too, that one's start.
+    pub start: Option<&'a str>,
 }
 
 /// What a branch's line found, beside the line itself.
@@ -174,8 +177,10 @@ pub(super) fn check(branch: &Branch<'_>, remote: Option<&Remote>) -> Result<Chec
                 line.git(&push);
             }
         }
-        Sync::NotOnRemote => match branch.base {
-            Some(base) if !dirty && remote.base_holds(branch.main, branch.name, base)? => {
+        Sync::NotOnRemote => match (branch.base, branch.start) {
+            (Some(base), Some(start))
+                if !dirty && remote.base_holds(branch.main, branch.name, start)? =>
+            {
                 from_base = Some(base.to_string());
             }
             _ => {

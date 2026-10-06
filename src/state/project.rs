@@ -432,6 +432,20 @@ impl ProjectEntry {
         Ok(())
     }
 
+    /// Refuse `name` for the project at `root` when the registry has a
+    /// project of that name elsewhere: saving would re-point that entry,
+    /// and the two projects would share their tmux sessions.
+    pub fn ensure_name_free(projects_dir: &Path, name: &str, root: &Path) -> Result<()> {
+        match Self::load(projects_dir, name) {
+            Ok(existing) if existing.root_path() != root => Err(PmError::ProjectNameTaken {
+                name: name.to_string(),
+                root: existing.root_path(),
+            }),
+            Ok(_) | Err(PmError::ProjectNotFound(_)) => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Load from the global registry.
     pub fn load(projects_dir: &Path, name: &str) -> Result<Self> {
         let path = projects_dir.join(format!("{name}.toml"));

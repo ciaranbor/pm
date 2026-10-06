@@ -736,6 +736,11 @@ fn delete_force_from_inside_main_session() {
     assert_eq!(outcome.exit, None, "{outcome:?}");
     assert!(!outcome.alive);
     assert!(!outcome.log.contains("error:"), "{}", outcome.log);
+    assert!(
+        outcome.log.contains("Deleted project 'proj'"),
+        "reported before the kill: {}",
+        outcome.log
+    );
 
     let sessions = s.sessions();
     assert!(
@@ -747,8 +752,68 @@ fn delete_force_from_inside_main_session() {
     assert!(!proj.exists(), "project root left behind");
 }
 
+/// Catches: `pm delete` run from a feature's session, with and without
+/// `--force`, which killed that session, and so itself, before `.pm/` and
+/// the registry entry went.
+#[test]
+#[ignore]
+fn delete_from_inside_a_feature_session() {
+    for args in ["--yes", "--force --yes"] {
+        let s = Smoke::new();
+        let proj = s.proj();
+        s.init_with_feature();
+        let registry_entry = s.projects_dir().join("proj.toml");
+
+        let outcome = s.run_in("proj/login:0", &format!("pm delete {args}"));
+        assert!(!outcome.alive, "{args}: {outcome:?}");
+        assert!(
+            outcome.log.contains("Deleted project 'proj'"),
+            "{args}: {}",
+            outcome.log
+        );
+
+        let sessions = s.sessions();
+        assert!(
+            !sessions.iter().any(|n| n.starts_with("proj/")),
+            "{args}: sessions: {sessions:?}"
+        );
+        assert!(
+            !registry_entry.exists(),
+            "{args}: registry entry left behind"
+        );
+        assert!(!proj.join(".pm").exists(), "{args}: .pm/ left behind");
+    }
+}
+
+/// Catches: `pm feat delete` and `pm feat merge` run from the feature's own
+/// session, which killed it, and so themselves, before they reported.
+#[test]
+#[ignore]
+fn feature_delete_and_merge_from_inside_its_own_session() {
+    for (command, said) in [
+        ("pm feat delete", "Deleted feature 'login'"),
+        ("pm feat merge", "Merged and deleted feature 'login'"),
+    ] {
+        let s = Smoke::new();
+        let login = s.init_with_feature();
+
+        let outcome = s.run_in("proj/login:0", command);
+        assert!(!outcome.alive, "{command}: {outcome:?}");
+        assert!(outcome.log.contains(said), "{command}: {}", outcome.log);
+
+        let sessions = s.sessions();
+        assert!(
+            !sessions.iter().any(|n| n == "proj/login"),
+            "{command}: sessions: {sessions:?}"
+        );
+        assert!(sessions.iter().any(|n| n == "proj/main"), "{sessions:?}");
+        assert!(!login.exists(), "{command}: worktree left behind");
+    }
+}
+
 /// Catches: `pm close` run from a feature session, whose kill ends the
-/// caller, leaving the sessions it had not reached open.
+/// caller, leaving the sessions it had not reached open, or before it
+/// reports.
 #[test]
 #[ignore]
 fn close_from_inside_a_feature_session() {
@@ -761,6 +826,13 @@ fn close_from_inside_a_feature_session() {
 
     let outcome = s.run_in("proj/api:0", "pm close");
     assert!(!outcome.alive, "{outcome:?}");
+    assert!(
+        outcome
+            .log
+            .contains("Closed project proj (killed 3 sessions)"),
+        "{}",
+        outcome.log
+    );
 
     let sessions = s.sessions();
     assert!(

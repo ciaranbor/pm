@@ -48,7 +48,6 @@ pub(super) fn findings(
         notes: Vec::new(),
         registry: Line::default(),
     };
-    p.directory_note();
     p.out.extend(running(&agents));
     p.branches(&agents)?;
     p.state(&pm_dir)?;
@@ -145,25 +144,12 @@ struct Project<'a> {
 }
 
 impl Project<'_> {
-    fn directory_note(&mut self) {
-        let dir = self.root.file_name().unwrap_or_default().to_string_lossy();
-        if dir != self.name {
-            self.notes.push(Finding::note(
-                "",
-                format!(
-                    "the registry names it '{}' but its directory is '{dir}': `pm restore` \
-                     registers a clone under the directory name",
-                    self.name
-                ),
-            ));
-        }
-    }
-
     fn branch<'b>(
         &'b self,
         name: &'b str,
         worktree: Option<&'b Path>,
         base: Option<&'b str>,
+        start: Option<&'b str>,
     ) -> Branch<'b> {
         Branch {
             root: self.root,
@@ -172,7 +158,27 @@ impl Project<'_> {
             worktree,
             feature: base.is_some(),
             base,
+            start,
         }
+    }
+
+    /// The branch on origin `pm restore` starts a feature on `base` from,
+    /// when origin lacks the feature's branch: `base`, else, when `base` is
+    /// an active feature's branch, which restore creates first, that one's.
+    fn restore_start<'b>(&'b self, remote: Option<&Remote>, mut base: &'b str) -> Option<&'b str> {
+        let remote = remote?;
+        let main_branch = &self.entry.main_branch;
+        for _ in 0..=self.features.len() {
+            if remote.has(base) {
+                return Some(base);
+            }
+            let (_, parent) = self
+                .features
+                .iter()
+                .find(|(_, f)| f.branch == base && f.status.is_active())?;
+            base = parent.base_branch(main_branch);
+        }
+        None
     }
 
     /// main's, each feature's, and each outside base's branch and worktree,
@@ -194,7 +200,7 @@ impl Project<'_> {
         let remote = Remote::of(self.main)?;
         let main_branch = &self.entry.main_branch;
         let mut checked = worktree::check(
-            &self.branch(main_branch, Some(self.main), None),
+            &self.branch(main_branch, Some(self.main), None, None),
             remote.as_ref(),
         )?;
         if origin.is_none() {
@@ -220,7 +226,8 @@ impl Project<'_> {
             let base = state.base.as_str();
             if base != main_branch && !branches.contains(&base) && !bases.contains(&base) {
                 bases.push(base);
-                let checked = worktree::check(&self.branch(base, None, None), remote.as_ref())?;
+                let checked =
+                    worktree::check(&self.branch(base, None, None, None), remote.as_ref())?;
                 lines.push((format!("{base} (base)"), checked, false));
                 self.notes.push(Finding::note(
                     base,
@@ -241,11 +248,13 @@ impl Project<'_> {
             }
             let path = self.root.join(&state.worktree);
             let present = path.is_dir();
+            let base = state.base_branch(main_branch);
             let checked = worktree::check(
                 &self.branch(
                     &state.branch,
                     present.then_some(path.as_path()),
-                    Some(state.base_branch(main_branch)),
+                    Some(base),
+                    self.restore_start(remote.as_ref(), base),
                 ),
                 remote.as_ref(),
             )?;
@@ -470,6 +479,60 @@ mod tests {
         assert_eq!(found.len(), 1, "{found:#?}");
         assert_eq!(found[0].severity, Severity::Blocker);
         assert_eq!(found[0].what, "not on origin");
+    }
+
+    #[test]
+    fn a_commitless_branch_stacked_on_another_needs_neither_pushed() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (root, name) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let main = paths::main_worktree(&root);
+        let repo = bare(&dir.path().join("repo.git"));
+        git::add_remote(&main, "origin", &repo).unwrap();
+        git::push(&main, "origin", "main").unwrap();
+        git::create_branch_from(&main, "notes", "login").unwrap();
+        git::add_worktree(&main, &root.join("notes"), "notes").unwrap();
+        let features_dir = paths::features_dir(&root);
+        let mut notes = FeatureState::load(&features_dir, "login").unwrap();
+        notes.branch = "notes".to_string();
+        notes.worktree = "notes".to_string();
+        notes.base = "login".to_string();
+        notes.save(&features_dir, "notes").unwrap();
+        let entry = ProjectEntry {
+            root: path_utils::to_portable(&root),
+            main_branch: "main".to_string(),
+            repo_url: Some(repo),
+            state_remote: None,
+        };
+        let notes_findings = || {
+            findings(&name, &entry, None, &HarnessConfig::default())
+                .unwrap()
+                .0
+                .into_iter()
+                .filter(|f| f.subject == "notes/")
+                .collect::<Vec<_>>()
+        };
+
+        let found = notes_findings();
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(found[0].severity, Severity::Note);
+        assert_eq!(
+            found[0].what,
+            "not on origin, but has no commits of its own: `pm restore` creates it from login"
+        );
+
+        let login = root.join("login");
+        std::fs::write(login.join("a.txt"), "a").unwrap();
+        git::add_all(&login).unwrap();
+        git::commit_with_message(&login, "a").unwrap();
+        git::run_git(&root.join("notes"), &["merge", "-q", "--ff-only", "login"]).unwrap();
+        let found = notes_findings();
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(
+            found[0].severity,
+            Severity::Blocker,
+            "login's commit is on neither"
+        );
     }
 
     #[test]

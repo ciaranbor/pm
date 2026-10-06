@@ -25,7 +25,13 @@ fn check_all_features_safety(
             continue;
         }
 
-        let report = check_safety(&worktree_path, &main_repo, &state.branch, main_branch)?;
+        let live = git::is_worktree(&main_repo, &worktree_path)?;
+        let report = check_safety(
+            live.then_some(worktree_path.as_path()),
+            &main_repo,
+            &state.branch,
+            main_branch,
+        )?;
 
         let pr_merged =
             !state.pr.is_empty() && gh::pr_is_merged(&main_repo, &state.pr).unwrap_or(false);
@@ -49,6 +55,8 @@ fn check_all_features_safety(
 }
 
 /// Delete a project: safety-check all features, kill sessions, remove state and registry.
+/// Returns the project's name, and the session this process runs in when it
+/// was one of the project's.
 ///
 /// Without `--force`, every worktree directory is left in place — `main` holds the
 /// repository the feature worktrees link into, so it stays with them. With `--force`,
@@ -60,7 +68,7 @@ pub fn delete(
     force: bool,
     yes: bool,
     tmux_server: Option<&str>,
-) -> Result<String> {
+) -> Result<(String, Option<tmux::OwnSession>)> {
     let pm_dir = paths::pm_dir(project_root);
     let features_dir = paths::features_dir(project_root);
     let config = ProjectConfig::load(&pm_dir)?;
@@ -123,17 +131,31 @@ pub fn delete(
         io::stdin().read_line(&mut answer)?;
         if !answer.trim().eq_ignore_ascii_case("y") {
             eprintln!("Aborted.");
-            return Ok(project_name);
+            return Ok((project_name, None));
         }
     }
 
     // --- Delete all features ---
+    let own = tmux::own_session(tmux_server)
+        .filter(|own| {
+            features
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .chain(["main"])
+                .any(|scope| tmux::session_name(&project_name, scope) == *own)
+        })
+        .map(|name| tmux::OwnSession {
+            name,
+            preferred: None,
+        });
     for (name, state) in &features {
         let worktree_path = project_root.join(&state.worktree);
+        let session_name = tmux::session_name(&project_name, name);
+        let kill_session = own.as_ref().is_none_or(|own| own.name != session_name);
 
         if force {
             // --force: full cleanup including worktree directory removal
-            cleanup_feature(&CleanupParams {
+            let warnings = cleanup_feature(&CleanupParams {
                 repo: &main_repo,
                 worktree_path: &worktree_path,
                 branch: &state.branch,
@@ -141,7 +163,9 @@ pub fn delete(
                 name,
                 project_name: &project_name,
                 force_worktree: true,
+                worktree_created: true,
                 tmux_server,
+                kill_session,
                 delete_branch: true,
                 best_effort: false,
                 base_scope: &base_scope(
@@ -151,6 +175,9 @@ pub fn delete(
                 ),
                 ending: None,
             })?;
+            for warning in warnings {
+                eprintln!("warning: {warning}");
+            }
         } else {
             // Soft teardown: remove pm state and tmux session, but leave
             // the worktree directories and git branches intact so the user
@@ -163,8 +190,7 @@ pub fn delete(
             let messages_dir = paths::messages_dir(project_root);
             messages::delete_feature(&messages_dir, name)?;
 
-            let session_name = tmux::session_name(&project_name, name);
-            if tmux::has_session(tmux_server, &session_name)? {
+            if kill_session && tmux::has_session(tmux_server, &session_name)? {
                 let main_session = tmux::session_name(&project_name, "main");
                 tmux::clients::move_off(
                     tmux_server,
@@ -194,15 +220,15 @@ pub fn delete(
         let _ = std::fs::remove_dir(project_root);
     }
 
-    // --- Kill main tmux session (must be last — if the caller is inside this
-    // session, the kill terminates this process) ---
     let main_session = tmux::session_name(&project_name, "main");
-    if tmux::has_session(tmux_server, &main_session)? {
+    if own.as_ref().is_none_or(|own| own.name != main_session)
+        && tmux::has_session(tmux_server, &main_session)?
+    {
         tmux::clients::move_off(tmux_server, std::slice::from_ref(&main_session), None)?;
         tmux::kill_session(tmux_server, &main_session)?;
     }
 
-    Ok(project_name)
+    Ok((project_name, own))
 }
 
 /// What `--force` would destroy along with `main` that exists nowhere else:

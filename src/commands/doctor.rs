@@ -1332,8 +1332,8 @@ fn main_branch_issue(main_repo: &Path, recorded: &str) -> Option<Issue> {
     })
 }
 
-/// Apply a single fix action. Returns the notes a respawn produced; empty
-/// for every other action.
+/// Apply a single fix action. Returns the notes a respawn or a cleanup
+/// produced; empty for every other action.
 fn apply_fix(
     action: &FixAction,
     project_root: &Path,
@@ -1354,7 +1354,7 @@ fn apply_fix(
             base_scope,
         } => {
             let worktree_path = project_root.join(worktree);
-            feat_delete::cleanup_feature(&CleanupParams {
+            return feat_delete::cleanup_feature(&CleanupParams {
                 repo: main_repo,
                 worktree_path: &worktree_path,
                 branch,
@@ -1362,12 +1362,14 @@ fn apply_fix(
                 name,
                 project_name,
                 force_worktree: true,
+                worktree_created: false,
                 tmux_server,
+                kill_session: true,
                 delete_branch: true,
                 best_effort: false,
                 base_scope,
                 ending: None,
-            })?;
+            });
         }
         FixAction::RecreateTmuxSession {
             session_name,

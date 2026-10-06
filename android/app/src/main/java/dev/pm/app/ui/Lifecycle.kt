@@ -52,6 +52,9 @@ sealed interface ActionState {
 
     data class Running(val action: Action) : ActionState
 
+    /** A merge or delete went through, but with `warnings`, in the server's words. */
+    data class Warned(val action: Action, val warnings: List<String>) : ActionState
+
     /** It didn't end as asked; `reason` says why, in the server's words. */
     data class Failed(
         val action: Action,
@@ -109,14 +112,23 @@ class Lifecycle(private val scope: CoroutineScope, private val client: () -> PmC
         scope.launch {
             _state.value =
                 try {
-                    when (action) {
-                        is Action.Merge -> client.merge(action.project, action.feature)
-                        is Action.Delete -> client.delete(action.project, action.feature)
-                        is Action.Restart ->
-                            client.restart(action.project, action.scope, action.agent, action.force)
-                    }
+                    val warnings =
+                        when (action) {
+                            is Action.Merge -> client.merge(action.project, action.feature)
+                            is Action.Delete -> client.delete(action.project, action.feature)
+                            is Action.Restart -> {
+                                client.restart(
+                                    action.project,
+                                    action.scope,
+                                    action.agent,
+                                    action.force,
+                                )
+                                emptyList()
+                            }
+                        }
                     _finished.send(action)
-                    ActionState.Idle
+                    if (warnings.isEmpty()) ActionState.Idle
+                    else ActionState.Warned(action, warnings)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: PmError.Refused) {

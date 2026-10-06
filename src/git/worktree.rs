@@ -47,6 +47,16 @@ pub fn list_worktrees(repo: &Path) -> Result<Vec<String>> {
     Ok(paths)
 }
 
+/// Whether `path` is one of `repo`'s worktrees. A removal that fails
+/// partway drops git's record of the worktree but can leave its directory.
+pub fn is_worktree(repo: &Path, path: &Path) -> Result<bool> {
+    let canonical = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let path = canonical(path);
+    Ok(list_worktrees(repo)?
+        .iter()
+        .any(|w| canonical(Path::new(w)) == path))
+}
+
 /// Prune stale worktree entries (e.g. after a worktree directory is moved/deleted).
 pub fn prune_worktrees(repo: &Path) -> Result<()> {
     run_git(repo, &["worktree", "prune"])?;
@@ -153,6 +163,25 @@ mod tests {
                 .iter()
                 .any(|w| Path::new(w) == canonical_wt.as_path()),
         );
+    }
+
+    #[test]
+    fn a_worktree_whose_removal_failed_partway_is_no_worktree() {
+        let dir = tempdir().unwrap();
+        let repo_path = paths::main_worktree(dir.path());
+        init_repo(&repo_path).unwrap();
+        create_branch(&repo_path, "feature").unwrap();
+        let wt_path = dir.path().join("feature");
+        add_worktree(&repo_path, &wt_path, "feature").unwrap();
+        assert!(is_worktree(&repo_path, &wt_path).unwrap());
+        assert!(!is_worktree(&repo_path, dir.path()).unwrap());
+
+        // What git leaves when it cannot delete a file inside.
+        std::fs::remove_file(wt_path.join(".git")).unwrap();
+        prune_worktrees(&repo_path).unwrap();
+
+        assert!(wt_path.exists());
+        assert!(!is_worktree(&repo_path, &wt_path).unwrap());
     }
 
     #[test]

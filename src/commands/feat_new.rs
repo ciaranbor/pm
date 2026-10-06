@@ -497,6 +497,10 @@ mod tests {
         // Branch should be cleaned up (worktree was never created by git)
         let main_path = paths::main_worktree(&project_path);
         assert!(!git::branch_exists(&main_path, "login").unwrap());
+        assert!(
+            project_path.join("login/blocker.txt").exists(),
+            "the directory in the way is the user's"
+        );
     }
 
     #[test]

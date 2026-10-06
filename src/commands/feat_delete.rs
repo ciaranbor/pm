@@ -71,7 +71,15 @@ pub struct CleanupParams<'a> {
     pub name: &'a str,
     pub project_name: &'a str,
     pub force_worktree: bool,
+    /// Whether pm created the worktree at `worktree_path`, so a directory
+    /// there that git no longer knows is what a failed removal left, and
+    /// pm's to delete. False for a creation rollback, where it may be the
+    /// user's directory that blocked the worktree.
+    pub worktree_created: bool,
     pub tmux_server: Option<&'a str>,
+    /// False leaves the feature's session to the caller: `pm delete` run
+    /// from inside it kills it once the rest of the project is gone.
+    pub kill_session: bool,
     /// Whether to delete the branch as part of cleanup. Set this to `false`
     /// when rolling back a `feat_adopt` failure, since the branch is owned by
     /// the user and must not be destroyed.
@@ -89,6 +97,33 @@ pub struct CleanupParams<'a> {
     /// How the feature ended, for `main`'s notice; `None` tells no one and
     /// leaves the summary alone (a rollback, or the project going too).
     pub ending: Option<Ending>,
+}
+
+/// What a finished delete or merge leaves its caller.
+#[derive(Debug, Default)]
+pub struct Ended {
+    /// What the CLI warns of: untracked files deleted with the worktree,
+    /// what of it could not be removed.
+    pub warnings: Vec<String>,
+    /// The feature's session, when this process runs in it.
+    pub own: Option<tmux::OwnSession>,
+}
+
+impl Ended {
+    /// The feature's session, as [`tmux::OwnSession::is`], its clients going
+    /// to `base_scope`'s.
+    pub(crate) fn own_session(
+        tmux_server: Option<&str>,
+        project_name: &str,
+        name: &str,
+        base_scope: &str,
+    ) -> Option<tmux::OwnSession> {
+        tmux::OwnSession::is(
+            tmux_server,
+            &tmux::session_name(project_name, name),
+            Some(tmux::session_name(project_name, base_scope)),
+        )
+    }
 }
 
 /// How a feature ended. `main` triages its summary differently: a deleted
@@ -159,31 +194,44 @@ impl MissingBase {
         }
     }
 
-    /// [`Self::reason`] plus the way out for a command that needs the base
-    /// checked out. pm never guesses a replacement base, so the choice is
-    /// the user's.
-    pub fn hint(self, feature: &str, base: &str, main_branch: &str) -> String {
-        let reason = self.reason(base);
-        match self {
-            Self::Gone => format!(
-                "{reason}. Rebase onto a live branch (`git rebase {main_branch}` in the worktree) \
-                 and set `base = \"{main_branch}\"` in .pm/features/{feature}.toml, \
-                 or discard the feature with `pm feat delete --force {feature}`."
+    /// The refusal of a command that needs the base checked out, `cannot`
+    /// saying which: [`Self::reason`] plus the way out. pm never guesses a
+    /// replacement base, so the choice is the user's.
+    pub fn refusal(self, cannot: &str, feature: &str, base: &str, main_branch: &str) -> PmError {
+        let reason = format!("{cannot}: {}.", self.reason(base));
+        let (cli, remote) = match self {
+            Self::Gone => (
+                format!(
+                    "Rebase onto a live branch (`git rebase {main_branch}` in the worktree) \
+                     and set `base = \"{main_branch}\"` in .pm/features/{feature}.toml, \
+                     or discard the feature with `pm feat delete --force {feature}`."
+                ),
+                format!(
+                    "At a terminal, rebase it onto a live branch and set its base, \
+                     or discard it with `pm feat delete --force {feature}`."
+                ),
             ),
-            Self::NoCheckout => {
-                format!("{reason}. Give it one with `pm feat adopt {base}`, then retry.")
-            }
+            Self::NoCheckout => (
+                format!("Give it one with `pm feat adopt {base}`, then retry."),
+                format!("Give it one with `pm feat adopt {base}` at a terminal, then retry."),
+            ),
+        };
+        PmError::Unsafe {
+            reason,
+            cli,
+            remote,
         }
     }
 }
 
 /// Remove a feature's worktree, branch, state file, agent registry,
-/// message queue, and tmux session.
+/// message queue, and tmux session. Returns warnings: what it could not
+/// remove without failing the rest.
 ///
 /// The tmux session is killed last so that cleanup completes even when run
 /// from within the feature session (where killing the session would kill
 /// this process).
-pub fn cleanup_feature(params: &CleanupParams) -> Result<()> {
+pub fn cleanup_feature(params: &CleanupParams) -> Result<Vec<String>> {
     let mut tlog = params
         .features_dir
         .parent()
@@ -198,8 +246,9 @@ pub fn cleanup_feature(params: &CleanupParams) -> Result<()> {
 pub(crate) fn cleanup_feature_with_timing(
     params: &CleanupParams,
     tlog: &mut Option<TimingLog>,
-) -> Result<()> {
+) -> Result<Vec<String>> {
     let cleanup_start = Instant::now();
+    let mut warnings = Vec::new();
 
     /// Run a cleanup step, recording its duration in `$tlog` and handling
     /// best-effort error swallowing. This is a macro rather than a closure
@@ -239,16 +288,12 @@ pub(crate) fn cleanup_feature_with_timing(
     })?;
 
     // Step 1: Remove git worktree
-    run!(tlog, "remove-worktree", params.best_effort, {
-        if params.worktree_path.exists() {
-            if params.force_worktree {
-                git::remove_worktree_force(params.repo, params.worktree_path)?;
-            } else {
-                git::remove_worktree(params.repo, params.worktree_path)?;
-            }
-        }
-        Ok(())
-    })?;
+    run!(
+        tlog,
+        "remove-worktree",
+        params.best_effort,
+        remove_worktree(params, &mut warnings)
+    )?;
 
     // Step 1b: Prune stale worktree entries so git no longer considers the
     // branch checked-out. Without this, `git branch -D` can race against the
@@ -321,7 +366,7 @@ pub(crate) fn cleanup_feature_with_timing(
     // Step 5: Kill tmux session (last — see doc comment above)
     run!(tlog, "kill-session", params.best_effort, {
         let session_name = tmux::session_name(params.project_name, params.name);
-        if tmux::has_session(params.tmux_server, &session_name)? {
+        if params.kill_session && tmux::has_session(params.tmux_server, &session_name)? {
             let base_session = tmux::session_name(params.project_name, params.base_scope);
             tmux::clients::move_off(
                 params.tmux_server,
@@ -333,6 +378,43 @@ pub(crate) fn cleanup_feature_with_timing(
         Ok(())
     })?;
 
+    Ok(warnings)
+}
+
+/// Remove the feature's worktree. A directory git no longer knows as one
+/// (see [`git::is_worktree`]) that pm created goes from disk directly; what
+/// of it can't is a warning, so the feature's state still goes.
+fn remove_worktree(params: &CleanupParams, warnings: &mut Vec<String>) -> Result<()> {
+    let path = params.worktree_path;
+    if !path.exists() {
+        return Ok(());
+    }
+    let tracked = git::is_worktree(params.repo, path)?;
+    if tracked || !params.worktree_created {
+        let removed = if params.force_worktree {
+            git::remove_worktree_force(params.repo, path)
+        } else {
+            git::remove_worktree(params.repo, path)
+        };
+        match removed {
+            Ok(()) => return Ok(()),
+            Err(e) if !params.worktree_created || git::is_worktree(params.repo, path)? => {
+                return Err(e);
+            }
+            Err(_) => {}
+        }
+    }
+    match std::fs::remove_dir_all(path) {
+        Err(e) => warnings.push(format!(
+            "could not remove {} ({e}): delete what is left of it by hand",
+            path.display()
+        )),
+        Ok(()) if !tracked => warnings.push(format!(
+            "{} was no longer a git worktree; removed what was left of it",
+            path.display()
+        )),
+        Ok(()) => {}
+    }
     Ok(())
 }
 
@@ -354,17 +436,27 @@ impl SafetyReport {
     }
 }
 
-/// Run safety checks on a feature worktree.
+/// Run safety checks on a feature's branch and its worktree, `None` when
+/// git has none (see [`git::is_worktree`]), so there is no work in it.
 /// All checks go through git.rs and propagate errors — a git failure blocks deletion.
 pub fn check_safety(
-    worktree_path: &Path,
+    worktree: Option<&Path>,
     main_repo: &Path,
     branch: &str,
     main_branch: &str,
 ) -> Result<SafetyReport> {
-    let has_uncommitted_changes = git::has_uncommitted_changes(worktree_path)?;
-    let untracked_files = git::untracked_files(worktree_path)?;
-    let has_unpushed_commits = git::has_unpushed_commits(worktree_path)?;
+    let (has_uncommitted_changes, untracked_files, has_unpushed_commits) = match worktree {
+        Some(worktree) => (
+            git::has_uncommitted_changes(worktree)?,
+            git::untracked_files(worktree)?,
+            git::has_unpushed_commits(worktree)?,
+        ),
+        None => (
+            false,
+            Vec::new(),
+            git::branch_has_unpushed_commits(main_repo, branch)?,
+        ),
+    };
     let is_merged = git::branch_merged_into(main_repo, branch, main_branch)?;
 
     Ok(SafetyReport {
@@ -379,25 +471,25 @@ pub fn check_safety(
 /// When `pr_merged` is true, the unmerged-commits and unpushed-commits checks
 /// are skipped (handles squash merges where git can't detect the merge).
 fn evaluate_safety(report: &SafetyReport, pr_merged: bool, name: &str) -> Result<()> {
+    let refuse = |has: &str| {
+        Err(PmError::Unsafe {
+            reason: format!("feature '{name}' has {has}."),
+            cli: "Use --force to override.".to_string(),
+            remote: format!(
+                "Deleting it anyway takes `pm feat delete --force {name}` at a terminal."
+            ),
+        })
+    };
     if report.has_uncommitted_changes {
-        return Err(PmError::SafetyCheck(format!(
-            "feature '{name}' has uncommitted changes. Use --force to override."
-        )));
+        return refuse("uncommitted changes");
     }
-
     if !report.is_merged && !pr_merged {
-        return Err(PmError::SafetyCheck(format!(
-            "feature '{name}' has commits not merged into its base. Use --force to override."
-        )));
+        return refuse("commits not merged into its base");
     }
-
     // Skip unpushed check when PR is merged — the commits are on GitHub already
     if report.has_unpushed_commits && !pr_merged {
-        return Err(PmError::SafetyCheck(format!(
-            "feature '{name}' has unpushed commits. Use --force to override."
-        )));
+        return refuse("unpushed commits");
     }
-
     Ok(())
 }
 
@@ -408,7 +500,7 @@ pub fn feat_delete(
     name: &str,
     force: bool,
     tmux_server: Option<&str>,
-) -> Result<()> {
+) -> Result<Ended> {
     let features_dir = paths::features_dir(project_root);
     let pm_dir = paths::pm_dir(project_root);
 
@@ -428,10 +520,12 @@ pub fn feat_delete(
         other => other?,
     };
     if !force && MissingBase::probe(&checkout.worktree, base)? == MissingBase::Gone {
-        return Err(PmError::SafetyCheck(format!(
-            "cannot check whether feature '{name}' is merged: {}",
-            MissingBase::Gone.hint(name, base, &main_branch)
-        )));
+        return Err(MissingBase::Gone.refusal(
+            &format!("cannot check whether feature '{name}' is merged"),
+            name,
+            base,
+            &main_branch,
+        ));
     }
     let base_repo = &checkout.worktree;
 
@@ -440,20 +534,25 @@ pub fn feat_delete(
     let pr_merged = !state.pr.is_empty() && gh::pr_is_merged(base_repo, &state.pr).unwrap_or(false);
 
     // Run safety checks unless --force
+    let mut warnings = Vec::new();
     let git_merged;
     let has_untracked = if !force {
-        let report = check_safety(&worktree_path, base_repo, &state.branch, base)?;
+        let live = git::is_worktree(base_repo, &worktree_path)?;
+        let report = check_safety(
+            live.then_some(worktree_path.as_path()),
+            base_repo,
+            &state.branch,
+            base,
+        )?;
         evaluate_safety(&report, pr_merged, name)?;
         git_merged = report.is_merged;
 
         if report.has_warnings() {
-            eprintln!(
-                "warning: feature '{name}' has {} untracked file(s):",
-                report.untracked_files.len()
-            );
-            for f in &report.untracked_files {
-                eprintln!("  {f}");
-            }
+            warnings.push(format!(
+                "feature '{name}' had {} untracked file(s), deleted with it: {}",
+                report.untracked_files.len(),
+                report.untracked_files.join(", ")
+            ));
         }
         !report.untracked_files.is_empty()
     } else {
@@ -476,7 +575,8 @@ pub fn feat_delete(
     // already warned the user about them in the safety checks above)
     let force_worktree = force || has_untracked;
 
-    cleanup_feature(&CleanupParams {
+    let own = Ended::own_session(tmux_server, project_name, name, &checkout.scope);
+    warnings.extend(cleanup_feature(&CleanupParams {
         repo: base_repo,
         worktree_path: &worktree_path,
         branch: &state.branch,
@@ -484,12 +584,14 @@ pub fn feat_delete(
         name,
         project_name,
         force_worktree,
+        worktree_created: true,
         tmux_server,
+        kill_session: own.is_none(),
         delete_branch: true,
         best_effort: false,
         base_scope: &checkout.scope,
         ending: Some(ending),
-    })?;
+    })?);
 
     // Trigger post-merge hook when deleting a feature whose PR was merged
     if pr_merged {
@@ -501,7 +603,7 @@ pub fn feat_delete(
         );
     }
 
-    Ok(())
+    Ok(Ended { warnings, own })
 }
 
 #[cfg(test)]
@@ -934,6 +1036,74 @@ mod tests {
         assert!(FeatureState::exists(&features_dir, "login"));
     }
 
+    #[test]
+    fn a_worktree_that_cannot_be_removed_is_reported_and_the_rest_still_goes() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let worktree = project_path.join("login");
+        let locked = crate::testing::lock_in(&worktree);
+
+        let Ended { warnings, .. } = feat_delete(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            false,
+            server.name(),
+        )
+        .unwrap();
+
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("could not remove") && w.contains("login")),
+            "{warnings:?}"
+        );
+        let main = paths::main_worktree(&project_path);
+        assert!(!FeatureState::exists(
+            &paths::features_dir(&project_path),
+            "login"
+        ));
+        assert!(!git::branch_exists(&main, "login").unwrap());
+        let session = tmux::session_name(&project_name, "login");
+        assert!(!tmux::has_session(server.name(), &session).unwrap());
+        crate::testing::unlock(&locked);
+    }
+
+    #[test]
+    fn a_feature_whose_worktree_git_dropped_is_deleted_with_what_is_left_of_it() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+        let worktree = project_path.join("login");
+        let main = paths::main_worktree(&project_path);
+        std::fs::remove_file(worktree.join(".git")).unwrap();
+        git::prune_worktrees(&main).unwrap();
+        std::fs::write(worktree.join("left.txt"), "left behind").unwrap();
+
+        let Ended { warnings, .. } = feat_delete(
+            &project_path,
+            &TestServer::registry_dir(&project_path),
+            "login",
+            false,
+            server.name(),
+        )
+        .unwrap();
+
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("no longer a git worktree") && w.contains("login")),
+            "{warnings:?}"
+        );
+        assert!(!worktree.exists());
+        assert!(!FeatureState::exists(
+            &paths::features_dir(&project_path),
+            "login"
+        ));
+        assert!(!git::branch_exists(&main, "login").unwrap());
+    }
+
     // --- evaluate_safety unit tests ---
 
     fn make_report(uncommitted: bool, merged: bool, unpushed: bool) -> SafetyReport {
@@ -1082,7 +1252,7 @@ mod tests {
 
         let unmerged = feat_delete(&project_path, &projects_dir, "child", false, server.name());
         assert!(
-            matches!(&unmerged, Err(PmError::SafetyCheck(m)) if m.contains("not merged into its base")),
+            matches!(&unmerged, Err(PmError::Unsafe { reason, .. }) if reason.contains("not merged into its base")),
             "{unmerged:?}"
         );
 

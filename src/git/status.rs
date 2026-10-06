@@ -25,8 +25,7 @@ pub fn changed_paths(worktree: &Path) -> Result<Vec<String>> {
         ])
         .output()?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(PmError::Git(stderr));
+        return Err(super::failure(&output));
     }
     Ok(String::from_utf8_lossy(&output.stdout)
         .lines()
@@ -55,6 +54,17 @@ pub fn has_unpushed_commits(worktree: &Path) -> Result<bool> {
     }
 
     let output = run_git(worktree, &["rev-list", "@{upstream}..HEAD"])?;
+    Ok(!output.trim().is_empty())
+}
+
+/// Whether `branch` has commits its upstream lacks; `false` without an
+/// upstream. [`has_unpushed_commits`] for a branch with no worktree.
+pub fn branch_has_unpushed_commits(repo: &Path, branch: &str) -> Result<bool> {
+    let upstream = format!("{branch}@{{upstream}}");
+    if run_git(repo, &["rev-parse", "--abbrev-ref", &upstream]).is_err() {
+        return Ok(false);
+    }
+    let output = run_git(repo, &["rev-list", &format!("{upstream}..{branch}")])?;
     Ok(!output.trim().is_empty())
 }
 
@@ -299,6 +309,9 @@ mod tests {
         run_git(&clone_path, &["commit", "--allow-empty", "-m", "unpushed"]).unwrap();
 
         assert!(has_unpushed_commits(&clone_path).unwrap());
+        assert!(branch_has_unpushed_commits(&clone_path, "main").unwrap());
+        run_git(&clone_path, &["push"]).unwrap();
+        assert!(!branch_has_unpushed_commits(&clone_path, "main").unwrap());
     }
 
     #[test]

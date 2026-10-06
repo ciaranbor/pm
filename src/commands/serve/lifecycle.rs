@@ -1,6 +1,8 @@
 //! The lifecycle endpoints: merge and delete a feature, restart an agent,
 //! through the handlers the CLI runs. A handler's refusal reaches the
-//! device as the CLI words it.
+//! device in the CLI's words, except a way out only a terminal offers,
+//! which is worded for the device; a merge's or delete's warnings go with
+//! it as `warnings`.
 //!
 //! Each runs to its end within the request, whether or not the device is
 //! still there to hear how it went. The post-merge hook doesn't hold it:
@@ -29,11 +31,9 @@ pub(super) fn feature(
     action: &str,
 ) -> Result<Written> {
     let server = config.tmux_server.as_deref();
-    let done = match action {
-        "merge" => feat_merge::feat_merge(root, &config.projects_dir, feature, false, server)
-            .map(|()| serde_json::json!({ "merged": true })),
-        "delete" => feat_delete::feat_delete(root, &config.projects_dir, feature, false, server)
-            .map(|()| serde_json::json!({ "deleted": true })),
+    let ended = match action {
+        "merge" => feat_merge::feat_merge(root, &config.projects_dir, feature, false, server),
+        "delete" => feat_delete::feat_delete(root, &config.projects_dir, feature, false, server),
         _ => {
             return Ok(Written {
                 reply: error(404, "no such endpoint"),
@@ -41,6 +41,18 @@ pub(super) fn feature(
             });
         }
     };
+    let done = ended.and_then(|ended| {
+        // A server run by hand in the feature's own session outlives it.
+        if let Some(own) = &ended.own {
+            own.kill(server)?;
+        }
+        let key = if action == "merge" {
+            "merged"
+        } else {
+            "deleted"
+        };
+        Ok(serde_json::json!({ key: true, "warnings": ended.warnings }))
+    });
     finish(config, action, done)
 }
 
@@ -86,16 +98,16 @@ fn finish(config: &Config, action: &str, done: Result<serde_json::Value>) -> Res
     let reply = match done {
         Ok(body) => json(200, body),
         Err(e) => {
-            let refused = match &e {
-                PmError::SafetyCheck(_) if action.starts_with("restart") => "mid-turn",
-                PmError::SafetyCheck(_) => "unsafe",
-                PmError::MergeAborted(_) => "conflict",
+            let (refused, why) = match &e {
+                PmError::SafetyCheck(_) if action.starts_with("restart") => {
+                    ("mid-turn", e.to_string())
+                }
+                PmError::SafetyCheck(_) => ("unsafe", e.to_string()),
+                PmError::Unsafe { reason, remote, .. } => ("unsafe", format!("{reason} {remote}")),
+                PmError::MergeAborted(_) => ("conflict", e.to_string()),
                 _ => return Err(e),
             };
-            json(
-                409,
-                serde_json::json!({ "error": e.to_string(), "refused": refused }),
-            )
+            json(409, serde_json::json!({ "error": why, "refused": refused }))
         }
     };
     Ok(Written {
@@ -139,7 +151,7 @@ mod tests {
         let (status, reply) = call(&f.config, "POST", &merge, &phone, "");
         assert_eq!(
             (status, body(&reply)),
-            (200, serde_json::json!({"merged": true}))
+            (200, serde_json::json!({"merged": true, "warnings": []}))
         );
         assert!(paths::main_worktree(&f.project).join("wip.txt").exists());
         assert!(FeatureState::load(&paths::features_dir(&f.project), "login").is_err());
@@ -167,9 +179,31 @@ mod tests {
         assert_eq!(status, 409, "{reply}");
         assert_eq!(
             body(&reply)["error"],
-            "feature 'login' has commits not merged into its base. Use --force to override."
+            "feature 'login' has commits not merged into its base. \
+             Deleting it anyway takes `pm feat delete --force login` at a terminal."
         );
         assert!(FeatureState::load(&paths::features_dir(&f.project), "login").is_ok());
+    }
+
+    #[test]
+    fn a_delete_tells_the_device_of_the_untracked_files_it_deleted() {
+        let f = fixture();
+        let phone = pair(&f.config, "phone");
+        std::fs::write(f.project.join("login/scratch.txt"), "notes").unwrap();
+
+        let delete = format!("/v1/features/{}/login/delete", f.project_name);
+        let (status, reply) = call(&f.config, "POST", &delete, &phone, "");
+
+        assert_eq!(status, 200, "{reply}");
+        let reply = body(&reply);
+        assert_eq!(reply["deleted"], true);
+        let warnings = reply["warnings"].as_array().unwrap();
+        assert_eq!(warnings.len(), 1, "{reply}");
+        assert!(
+            warnings[0].as_str().unwrap().contains("scratch.txt"),
+            "{reply}"
+        );
+        assert!(!f.project.join("login").exists());
     }
 
     #[test]
