@@ -24,21 +24,19 @@
 //! opencode drops a key it does not know silently, and drops the **whole
 //! entry** when a known field has the wrong type; the rest of the config,
 //! the restriction included, still applies. Only opencode knows its schema,
-//! so [`config_issues`] asks it what it kept. The same answer lists every
+//! so [`super::provider_check`] asks it what it kept. The same answer lists every
 //! other config document opencode merges in — the user-level
 //! `opencode.json`, a `.opencode/` directory above the worktree — and a
 //! provider restriction in one of those replaces the one pm writes.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use serde_json::{Map, Value};
 
-use super::{CONFIG_ENV, ModelRef, bounded, command};
+use super::ModelRef;
 use crate::error::{PmError, Result};
-use crate::state::project::OpenCodeConfig;
 
-type Providers = BTreeMap<String, toml::Table>;
+pub(super) type Providers = BTreeMap<String, toml::Table>;
 
 /// The `providers` object of an agent's config: every entry as written,
 /// plus `model` in the list of its provider when pm defines that provider.
@@ -331,106 +329,6 @@ pub(super) fn set_in_environment(name: &str) -> bool {
     std::env::var_os(name).is_some_and(|value| !value.is_empty())
 }
 
-/// What is wrong with the configured providers, for `pm doctor`: an entry
-/// pm refuses to render, one opencode dropped, a provider restriction from
-/// another config document opencode merges in for an agent started in
-/// `worktree`, and keys that look unset.
-pub(super) fn config_issues(cfg: &OpenCodeConfig, worktree: &Path) -> Vec<String> {
-    let mut issues = Vec::new();
-    let mut rendered = Map::new();
-    for (id, entry) in &cfg.providers {
-        let one = Providers::from([(id.clone(), entry.clone())]);
-        match render(&one, None) {
-            Ok(entry) => rendered.extend(entry),
-            Err(PmError::Agent(message)) => issues.push(message),
-            Err(e) => issues.push(e.to_string()),
-        }
-    }
-    issues.extend(split_model_id_notes(&cfg.providers));
-    issues.extend(merged_config_issues(cfg, worktree, rendered).unwrap_or_default());
-    issues.extend(unset_key_notes(&cfg.providers, set_in_environment));
-    issues
-}
-
-/// What opencode's own reading of the config shows. `None` when opencode
-/// cannot be asked or answers something else than its config documents.
-fn merged_config_issues(
-    cfg: &OpenCodeConfig,
-    worktree: &Path,
-    rendered: Map<String, Value>,
-) -> Option<Vec<String>> {
-    let file = tempfile::Builder::new()
-        .prefix("pm-opencode-doctor-")
-        .suffix(".json")
-        .tempfile()
-        .ok()?;
-    let ids: Vec<String> = rendered.keys().cloned().collect();
-    let config = Value::Object(Map::from_iter([(
-        "providers".to_string(),
-        Value::Object(rendered),
-    )]));
-    std::fs::write(file.path(), config.to_string()).ok()?;
-
-    let mut command = command(cfg, &["api"], &["config.get"]);
-    command.env(CONFIG_ENV, file.path()).current_dir(worktree);
-    let out = match bounded::run(&mut command, bounded::CALL) {
-        Ok(out) => out,
-        Err(failure @ bounded::Failure::TimedOut { .. }) => {
-            return Some(vec![format!(
-                "{}, so pm could not check what opencode made of [harness.opencode]",
-                failure.describe("config.get")
-            )]);
-        }
-        Err(bounded::Failure::Unrunnable { .. }) => return None,
-    };
-    let response: Value = serde_json::from_slice(&out.stdout).ok()?;
-    let documents = response
-        .get("data")
-        .unwrap_or(&response)
-        .as_array()?
-        .iter()
-        .filter(|source| source["type"] == "document");
-
-    let own = file.path().canonicalize().ok()?;
-    let mut issues = Vec::new();
-    for document in documents {
-        let Some(path) = document["path"].as_str().map(Path::new) else {
-            continue;
-        };
-        let info = &document["info"];
-        if path.canonicalize().is_ok_and(|path| path == own) {
-            for id in &ids {
-                if info["providers"].get(id).is_none() {
-                    issues.push(format!(
-                        "opencode dropped [harness.opencode.providers.{id}]: a field of it has \
-                         a type opencode's provider schema does not accept"
-                    ));
-                }
-            }
-        } else if restricts_providers(info) {
-            issues.push(format!(
-                "{} restricts providers (`enabled_providers` or a `provider.use` policy); \
-                 opencode applies it in place of the restriction pm writes, so pm's agents \
-                 fail with `Model unavailable` or reach providers pm config does not name — \
-                 remove it",
-                crate::path_utils::to_portable(path)
-            ));
-        }
-    }
-    Some(issues)
-}
-
-/// opencode reports `enabled_providers` as the policies it becomes.
-fn restricts_providers(info: &Value) -> bool {
-    info.pointer("/experimental/policies")
-        .and_then(Value::as_array)
-        .is_some_and(|policies| {
-            policies
-                .iter()
-                .any(|policy| policy["action"] == "provider.use")
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -652,73 +550,6 @@ headers = { "X-Team" = "pm" }
         assert!(
             notes[1].contains("from LOCAL_API_KEY, OTHER_KEY,"),
             "{notes:?}"
-        );
-    }
-
-    /// An opencode that answers `config.get` with `documents`, naming pm's
-    /// own file by the path it was handed.
-    fn opencode_answering(dir: &Path, documents: &str) -> OpenCodeConfig {
-        use std::os::unix::fs::PermissionsExt;
-        let bin = dir.join("opencode");
-        std::fs::write(
-            &bin,
-            format!(
-                "#!/bin/sh\nsed \"s|@OWN@|$OPENCODE_CONFIG|\" <<'ANSWER'\n{documents}\nANSWER\n"
-            ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-        OpenCodeConfig {
-            binary: Some(bin.to_string_lossy().into_owned()),
-            providers: providers(
-                "[providers.local]\npackage = \"pkg\"\n[providers.typo]\npackage = 5\n",
-            ),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn doctor_reports_what_opencode_dropped_and_what_overrides_pm() {
-        let dir = tempfile::tempdir().unwrap();
-        // The shape opencode 2.0.18 answers with.
-        let cfg = opencode_answering(
-            dir.path(),
-            r#"[
-              {"type":"document","path":"/home/u/.config/opencode/opencode.jsonc","info":{
-                "experimental":{"policies":[
-                  {"action":"provider.use","resource":"*","effect":"deny"},
-                  {"action":"provider.use","resource":"anthropic","effect":"allow"}]}}},
-              {"type":"directory","path":"/home/u/.config/opencode"},
-              {"type":"document","path":"@OWN@","info":{"providers":{"local":{"package":"pkg"}}}},
-              {"type":"document","path":"/proj/.opencode/opencode.json","info":{"model":"a/b"}}
-            ]"#,
-        );
-        assert_eq!(
-            config_issues(&cfg, dir.path()),
-            [
-                "/home/u/.config/opencode/opencode.jsonc restricts providers \
-                 (`enabled_providers` or a `provider.use` policy); opencode applies it in place \
-                 of the restriction pm writes, so pm's agents fail with `Model unavailable` or \
-                 reach providers pm config does not name — remove it",
-                "opencode dropped [harness.opencode.providers.typo]: a field of it has a type \
-                 opencode's provider schema does not accept",
-            ]
-        );
-    }
-
-    #[test]
-    fn doctor_reports_an_entry_pm_refuses_and_nothing_opencode_did_not_say() {
-        let dir = tempfile::tempdir().unwrap();
-        // What a call answers when it is not a list of config documents.
-        let mut cfg = opencode_answering(dir.path(), r#"{"data":{"id":"ses_1"}}"#);
-        assert_eq!(config_issues(&cfg, dir.path()), Vec::<String>::new());
-
-        cfg.providers = providers("[providers.local]\nsettings = { apiKey = \"sk-live-123\" }\n");
-        let issues = config_issues(&cfg, dir.path());
-        assert_eq!(issues.len(), 1, "{issues:?}");
-        assert!(
-            issues[0].starts_with("[harness.opencode.providers.local] `settings.apiKey` must"),
-            "{issues:?}"
         );
     }
 }

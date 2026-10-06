@@ -77,7 +77,9 @@ mod bounded;
 pub(super) mod chat;
 pub(super) mod dialog;
 mod messages;
+mod provider_check;
 mod providers;
+mod reach;
 pub(super) mod sessions;
 pub(super) mod waiting;
 
@@ -357,8 +359,12 @@ fn unprojected_definition(ctx: &LaunchContext<'_>, definition: &str, home: &Path
 
 /// What `pm doctor` reports about `[harness.opencode]` for agents started
 /// in `worktree`.
-pub(super) fn config_issues(cfg: &OpenCodeConfig, worktree: &Path) -> Vec<String> {
-    providers::config_issues(cfg, worktree)
+pub(super) fn config_issues(
+    cfg: &OpenCodeConfig,
+    worktree: &Path,
+    rows: &[String],
+) -> Vec<super::ConfigIssue> {
+    provider_check::config_issues(cfg, worktree, rows)
 }
 
 /// What is worth remarking on about a model row that a spawn still takes.
@@ -389,10 +395,7 @@ pub(super) fn row_issues(model: Option<&str>, permission_mode: Option<&str>) -> 
     model
         .into_iter()
         .chain(permissions)
-        .map(|e| match e {
-            PmError::Agent(message) => message,
-            e => e.to_string(),
-        })
+        .map(PmError::reason)
         .collect()
 }
 
@@ -501,12 +504,22 @@ fn command(cfg: &OpenCodeConfig, subcommand: &[&str], args: &[&str]) -> Command 
 /// `program` as pm runs opencode itself: stdin closed, and nothing of the
 /// calling agent's identity or opencode config in its environment.
 fn detached(program: &str) -> Command {
-    let mut command = Command::new(program);
+    let mut command = Command::new(executable(program));
     command.stdin(Stdio::null());
     for key in SCRUBBED_ENV {
         command.env_remove(key);
     }
     command
+}
+
+/// `program` to execute. A lib test runs opencode only through a fake it
+/// configures, never the developer's own and its session store.
+fn executable(program: &str) -> &str {
+    if cfg!(test) && program == DEFAULT_BINARY {
+        "pm-test-opencode-not-configured"
+    } else {
+        program
+    }
 }
 
 fn api(cfg: &OpenCodeConfig, args: &[&str]) -> Result<Value> {
@@ -631,7 +644,7 @@ pub(super) fn installed_version(
 ) -> std::result::Result<String, String> {
     let unrunnable = || format!("`{}` could not be run", binary(cfg));
     let exit = probe::run(binary(cfg), "--version", probe, || {
-        let mut command = Command::new(binary(cfg));
+        let mut command = Command::new(executable(binary(cfg)));
         command.arg("--version").stdin(Stdio::null());
         bounded::run(&mut command, bounded::CALL)
             .map(probe::Exit::from)

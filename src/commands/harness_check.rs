@@ -9,7 +9,7 @@ use std::path::Path;
 
 use crate::commands::{agent_spawn, hooks_install};
 use crate::error::{PmError, Result};
-use crate::harness::{Harness, Probe};
+use crate::harness::{Harness, HookTrustStatus, Probe};
 use crate::state::paths;
 use crate::state::project::{
     AgentSettings, AgentsConfig, GlobalConfig, HarnessConfig, ProjectConfig, WILDCARD_AGENT,
@@ -83,19 +83,26 @@ pub fn harness_problems(
                 ),
             );
         }
-        let untrusted = |(event, markers): &(&str, &[&str])| {
-            hooks_install::pm_hook_position(root, event, markers).is_some_and(|(entry, hook)| {
-                !harness.hook_trusted(config, home, event, entry, hook)
-            })
+        let trust = harness.hook_trust(config, home, probe);
+        let status_of = |event: &str, markers: &[&str]| {
+            hooks_install::pm_hook_position(root, event, markers)
+                .map_or(HookTrustStatus::Trusted, |(entry, hook)| {
+                    trust.status(event, entry, hook)
+                })
         };
         let (status, others): (Vec<_>, Vec<_>) = hooks_install::pm_events(harness)
             .into_iter()
-            .filter(untrusted)
-            .partition(|(_, markers)| {
+            .map(|(event, markers)| (event, markers, status_of(event, markers)))
+            .filter(|(_, _, trust)| *trust != HookTrustStatus::Trusted)
+            .partition(|(_, markers, _)| {
                 markers.contains(&hooks_install::PM_WAITING_MARKER)
                     || markers.contains(&hooks_install::PM_DIALOG_MARKER)
             });
-        for (event, _) in others {
+        let state = |trust: HookTrustStatus| match trust {
+            HookTrustStatus::Modified => "trusts only an earlier version of",
+            _ => "has not trusted",
+        };
+        for (event, _, trust) in others {
             push(
                 if event == hooks_install::USER_PROMPT_EVENT {
                     ProblemKind::ResetHookUntrusted
@@ -103,19 +110,28 @@ pub fn harness_problems(
                     ProblemKind::HookUntrusted
                 },
                 format!(
-                    "{harness} has not trusted pm's {event} hook, so it silently does not \
-                     run: {}",
+                    "{harness} {} pm's {event} hook, so it silently does not run: {}",
+                    state(trust),
                     harness.hook_trust_remedy()
                 ),
             );
         }
-        if !status.is_empty() {
-            let events: Vec<&str> = status.iter().map(|(event, _)| *event).collect();
+        if let Some((_, _, trust)) = status.first() {
+            let events: Vec<&str> = status.iter().map(|(event, _, _)| *event).collect();
+            let trust = if status
+                .iter()
+                .all(|(_, _, t)| *t == HookTrustStatus::Modified)
+            {
+                *trust
+            } else {
+                HookTrustStatus::Untrusted
+            };
             push(
                 ProblemKind::StatusHookUntrusted,
                 format!(
-                    "{harness} has not trusted pm's status hooks ({}), so an agent waiting on \
-                     you reads as busy: {}",
+                    "{harness} {} pm's status hooks ({}), so an agent waiting on you reads \
+                     as busy: {}",
+                    state(trust),
                     events.join(", "),
                     harness.hook_trust_remedy()
                 ),

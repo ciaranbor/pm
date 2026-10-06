@@ -30,8 +30,8 @@
 //! working agent: `[projects."<dir>"] trust_level = "trusted"`, which pm writes
 //! per worktree before launching, and `[hooks.state."<hooks.json>:<event>:<i>:<j>"]
 //! trusted_hash`, which only codex can write (one interactive "Trust all and
-//! continue" per machine, re-asked when a hook's command text changes). Absent
-//! hook trust, hooks silently do not run — `pm doctor` checks for the entry.
+//! continue" per machine, re-asked when a hook changes — [`hook_trust`]).
+//! Absent hook trust, hooks silently do not run.
 //!
 //! pm's tmux socket is unreachable from inside any codex sandbox (macOS
 //! Seatbelt blocks `AF_UNIX` connect), so the default sandbox is
@@ -45,6 +45,7 @@
 //! session then continues in the window's directory.
 
 pub(super) mod chat;
+pub(super) mod hook_trust;
 pub(super) mod input;
 pub(super) mod sessions;
 pub(super) mod transcript;
@@ -75,6 +76,7 @@ pub(super) const MIN_VERSION: (u32, u32, u32) = (0, 156, 0);
 
 /// The sandbox mode with nothing to open up.
 const FULL_ACCESS: &str = "danger-full-access";
+const READ_ONLY: &str = "read-only";
 const DEFAULT_SANDBOX: &str = FULL_ACCESS;
 const DEFAULT_APPROVAL: &str = "never";
 
@@ -125,6 +127,25 @@ fn config_file(codex_home: &Path) -> PathBuf {
     codex_home.join(CONFIG_FILE)
 }
 
+/// The sandbox mode an agent with `permission_mode` runs in.
+fn sandbox_mode<'a>(cfg: &'a CodexConfig, permission_mode: Option<&'a str>) -> &'a str {
+    permission_mode
+        .or(cfg.sandbox.as_deref())
+        .unwrap_or(DEFAULT_SANDBOX)
+}
+
+/// What is worth remarking on about an agent's sandbox mode.
+pub(super) fn row_notes(cfg: &CodexConfig, permission_mode: Option<&str>) -> Vec<String> {
+    if sandbox_mode(cfg, permission_mode) != READ_ONLY {
+        return Vec::new();
+    }
+    vec![
+        "runs in codex's read-only sandbox, where it cannot write pm's state, so it can \
+         neither read nor send messages and never reports back; use workspace-write"
+            .to_string(),
+    ]
+}
+
 pub(super) fn build_cmd(spec: &SpawnSpec<'_>, cfg: &CodexConfig) -> String {
     let SpawnSpec {
         definition: _,
@@ -141,9 +162,7 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>, cfg: &CodexConfig) -> String {
     let approval = cfg.approval.as_deref().unwrap_or(DEFAULT_APPROVAL);
     // The per-agent permission row is the sandbox mode; `[harness.codex]`
     // supplies the harness-wide default.
-    let sandbox = permission_mode
-        .or(cfg.sandbox.as_deref())
-        .unwrap_or(DEFAULT_SANDBOX);
+    let sandbox = sandbox_mode(cfg, permission_mode);
 
     let mut parts = vec![
         BINARY.to_string(),
@@ -158,7 +177,9 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>, cfg: &CodexConfig) -> String {
         parts.push("--dangerously-bypass-hook-trust".to_string());
     }
 
-    if sandbox != FULL_ACCESS {
+    // Full access needs no extra roots, and codex refuses to start a
+    // read-only session that is given any.
+    if sandbox != FULL_ACCESS && sandbox != READ_ONLY {
         for dir in writable_dirs {
             parts.push("--add-dir".to_string());
             parts.push(tmux::shell_quote(&dir.to_string_lossy()));
@@ -263,9 +284,8 @@ fn table_at<'a>(doc: &'a DocumentMut, keys: &[&str]) -> Option<&'a dyn toml_edit
     Some(cur)
 }
 
-/// Whether codex has a trust entry for `hooks.state.<key>`. The entry's hash
-/// is codex's own, so whether it still matches the hook's command text is
-/// not checked.
+/// Whether codex has a trust entry for `hooks.state.<key>`, current or
+/// not.
 pub(super) fn hook_trusted(codex_home: &Path, key: &str) -> bool {
     let Ok(doc) = load_config(codex_home) else {
         return false;
@@ -411,6 +431,18 @@ mod tests {
     }
 
     #[test]
+    fn a_read_only_agent_is_remarked_on_whichever_tier_sets_it() {
+        let read_only = CodexConfig {
+            sandbox: Some("read-only".into()),
+            ..Default::default()
+        };
+        assert_eq!(row_notes(&read_only, None).len(), 1);
+        assert!(row_notes(&read_only, Some("workspace-write")).is_empty());
+        assert_eq!(row_notes(&cfg(), Some("read-only")).len(), 1);
+        assert!(row_notes(&cfg(), None).is_empty());
+    }
+
+    #[test]
     fn build_cmd_sandboxed_agent_gets_writable_dirs_and_permission_row_wins() {
         let dirs = vec![PathBuf::from("/proj/.pm"), PathBuf::from("/proj/main/.git")];
         let config = CodexConfig {
@@ -443,6 +475,15 @@ mod tests {
             &cfg(),
         );
         assert_eq!(cmd, "codex --no-daemon -a 'never' -s 'danger-full-access'");
+
+        let cmd = build_cmd(
+            &SpawnSpec {
+                writable_dirs: &dirs,
+                ..Default::default()
+            },
+            &config,
+        );
+        assert_eq!(cmd, "codex --no-daemon -a 'on-request' -s 'read-only'");
     }
 
     #[test]

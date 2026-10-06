@@ -88,8 +88,9 @@ unattended:
   trust for the status hooks alone an agent still runs, but a dialog
   waiting on you reads as busy. The hooks file is
   global: the prompt appears in whichever codex session comes first,
-  including your own non-pm ones. `pm doctor` reports a missing trust
-  entry; the escape hatch is `[harness.codex] bypass_hook_trust = true`
+  including your own non-pm ones. `pm doctor` asks codex which of pm's
+  hooks it trusts, so it also reports a trust an upgrade has outdated; the
+  escape hatch is `[harness.codex] bypass_hook_trust = true`
   (`--dangerously-bypass-hook-trust`, one warning line per launch).
 - **Directory trust** pm writes itself: each worktree gets a
   `trust_level = "trusted"` entry in `$CODEX_HOME/config.toml` at spawn
@@ -111,9 +112,12 @@ unattended:
   writable_roots = ["main/target"]   # extra --add-dir; a project [] masks global
   ```
 
-  pm always adds `--add-dir` for its state dir, the shared `main/.git`, and
-  the pm config dir, so a sandboxed agent can read, run git, and message;
-  every tmux-touching command fails.
+  pm adds `--add-dir` for its state dir, the shared `main/.git`, and the pm
+  config dir, so a sandboxed agent can read, run git, and message; every
+  tmux-touching command fails. Under `read-only` it adds none, since codex
+  refuses to start a read-only session with extra roots — so a read-only
+  agent cannot read or send messages and never reports back; `pm doctor`
+  remarks on one.
 - **Role delivery.** Codex has no `--agent`; the definition, baseline, and
   notice boards reach it through the SessionStart hook, on start and on
   every resume.
@@ -181,3 +185,8 @@ bash`. What differs:
   yourself in an agent's window, pass `--standalone` too.
 - An `enabled_providers` in your own `~/.config/opencode/opencode.json`
   overrides pm's provider restriction; `pm doctor` reports it.
+- **A provider only your own opencode config defines is out of reach** of
+  pm's agents and their subagents, as is a definition whose `model` names
+  one: pm limits an agent to the providers pm config defines and its own
+  row's. `pm doctor` reports both; define the provider in pm config.
+- An `apiKey` replaces any `Authorization` header of the same provider.

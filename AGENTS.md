@@ -165,9 +165,9 @@ seam), and the built `pm` plus recording harness shims first on `PATH`.
 `tests/smoke.rs` runs the built binary in one: `cargo test --test smoke --
 --ignored`. Add a scenario only when the failure mode is environmental — cwd
 or scope detection, the real config dir, inherited env, a command run from
-inside the session it kills; never to mirror a lib test. A change touching a
-`Harness` enum seam verifies every supported harness live (`up --real`, set
-up per `--help`), or records in the feature summary each one it could not.
+inside the session it kills; never to mirror a lib test. A `Harness` seam
+change verifies every harness live (`cargo test --test real_harness --
+--ignored`, else `up --real`), or records in the summary each it could not.
 
 ## Testing approach
 

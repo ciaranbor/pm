@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use crate::error::{PmError, Result};
 
 /// The limit for a call that answers from opencode's own store.
-pub(super) const CALL: Duration = Duration::from_secs(60);
+pub(super) const CALL: Duration = crate::harness::CALL_LIMIT;
 
 /// The limit for a call that writes or reads a whole transcript.
 pub(super) const TRANSFER: Duration = Duration::from_secs(300);

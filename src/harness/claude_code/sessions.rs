@@ -233,6 +233,13 @@ pub(crate) fn migrate_sessions(
     Ok(messages)
 }
 
+/// Whether any session is recorded at `dir`.
+pub(crate) fn has_sessions(base: &Path, dir: &Path) -> bool {
+    [dir.to_path_buf(), recorded(dir)]
+        .iter()
+        .any(|form| base.join("projects").join(path_to_key(form)).exists())
+}
+
 /// Copy the sessions recorded at `dir` into `staging`. Returns the store key
 /// they were found under, or `None` when there are none.
 pub(crate) fn export(base: &Path, dir: &Path, staging: &Path) -> Result<Option<String>> {

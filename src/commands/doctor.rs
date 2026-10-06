@@ -8,7 +8,7 @@ use crate::commands::harness_check::{self, Problem, ProblemKind};
 use crate::commands::running_agents::Windows;
 use crate::commands::{agent_spawn, hooks_install, launch_stamp, skills, vanilla_rename};
 use crate::error::Result;
-use crate::harness::{Harness, Probe};
+use crate::harness::{ConfigIssueKind, Harness, Probe};
 use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
@@ -112,15 +112,22 @@ pub enum IssueKind {
     /// An agent has a model or permission row its harness refuses to spawn
     /// with.
     AgentRowInvalid,
-    /// An agent's model row names a model its provider's entry does not
-    /// declare; the spawn goes ahead.
-    AgentModelUndeclared,
+    /// An agent's model or permission row has a consequence worth knowing
+    /// (a model its provider does not declare, a sandbox it cannot report
+    /// from); the spawn goes ahead.
+    AgentRowRemark,
     /// A harness in use reports a problem with its `[harness.<name>]`
     /// settings.
     HarnessConfigInvalid,
     /// A running agent would launch differently now than it did: it runs
     /// on an outdated definition, prompt, config row or never-idle loop.
     AgentLaunchStale,
+    /// A provider's key variable is unset in pm's environment. Advisory:
+    /// the agent's own environment may set it.
+    ProviderKeyUnset,
+    /// A provider that a definition runs on, or that the user configured
+    /// outside pm, is out of reach of pm's agents.
+    ProviderUnreachable,
     /// A feature's or main's worktree has a rebase paused, so its branch
     /// does not yet hold the rebased commits and `pm feat merge` refuses it.
     RebaseInProgress,
@@ -871,16 +878,27 @@ fn harness_config_issues(project_root: &Path) -> Result<Vec<Issue>> {
 
     let config = harness_config(Some(project_root));
     let mut issues = Vec::new();
+    let mut rows: Vec<(Harness, String)> = Vec::new();
+    // The catch-all row reaches agents no other row names.
+    if let Ok(settings) = resolve_agent_settings(&project, &global, WILDCARD_AGENT)
+        && let Some(model) = settings.model
+    {
+        rows.push((settings.harness, model));
+    }
     for definition in definitions {
         let Ok(settings) = resolve_agent_settings(&project, &global, &definition) else {
             continue;
         };
-        for note in settings
-            .harness
-            .row_notes(&config, settings.model.as_deref())
-        {
+        if let Some(model) = &settings.model {
+            rows.push((settings.harness, model.clone()));
+        }
+        for note in settings.harness.row_notes(
+            &config,
+            settings.model.as_deref(),
+            settings.permission_mode.as_deref(),
+        ) {
             issues.push(Issue {
-                kind: IssueKind::AgentModelUndeclared,
+                kind: IssueKind::AgentRowRemark,
                 message: format!("agent '{definition}': {note}"),
                 fix: Fix::None,
             });
@@ -907,10 +925,19 @@ fn harness_config_issues(project_root: &Path) -> Result<Vec<Issue>> {
 
     let main = paths::main_worktree(project_root);
     for harness in skills::harnesses_in_use(project_root)? {
-        for message in harness.config_issues(&config, &main) {
+        let rows: Vec<String> = rows
+            .iter()
+            .filter(|(on, _)| *on == harness)
+            .map(|(_, row)| row.clone())
+            .collect();
+        for issue in harness.config_issues(&config, &main, &rows) {
             issues.push(Issue {
-                kind: IssueKind::HarnessConfigInvalid,
-                message,
+                kind: match issue.kind {
+                    ConfigIssueKind::Invalid => IssueKind::HarnessConfigInvalid,
+                    ConfigIssueKind::KeyUnset => IssueKind::ProviderKeyUnset,
+                    ConfigIssueKind::ProviderUnreachable => IssueKind::ProviderUnreachable,
+                },
+                message: issue.message,
                 fix: Fix::None,
             });
         }
@@ -1976,7 +2003,7 @@ mod tests {
 
         let issues = harness_config_issues(&project_path).unwrap();
         assert_eq!(
-            messages(&issues, IssueKind::AgentModelUndeclared),
+            messages(&issues, IssueKind::AgentRowRemark),
             ["agent 'reviewer': model 'qwen-typo' is not among those \
                  [harness.opencode.providers.local] declares (qwen); if it is a typo, every turn \
                  fails at the endpoint"]
