@@ -1,4 +1,14 @@
-/// Test utilities shared across modules.
+//! Test utilities shared across modules.
+//!
+//! Each test binary owns one `pm-test-<pid>` tmux server (hermetic: no tmux
+//! config, `/bin/sh` windows, a `keepalive` session). Servers of dead pids
+//! are reaped as the next run starts, and the current one is killed at exit.
+//! Every session consumes a pty, so [`TestServer::new`] aborts the run once
+//! the system-wide count reaches a budget below the macOS limit, and
+//! `.cargo/config.toml` caps runs at 4 threads. A budget failure means leaked
+//! sessions. To recover from a runaway run, kill its server with
+//! `tmux -L pm-test-<pid> kill-server`, or every test server with
+//! `for s in /tmp/tmux-$(id -u)/pm-test-*; do tmux -L $(basename "$s") kill-server; rm -f "$s"; done`.
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::OnceLock;

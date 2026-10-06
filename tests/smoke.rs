@@ -2,7 +2,8 @@
 //! `$HOME`, private tmux server, harness shims on `PATH`). Each scenario
 //! covers behaviour that depends on where a command is run from (cwd, the
 //! real config dir, inherited env, inside its own tmux window) — nothing a
-//! lib test can reach. Ignored by default:
+//! lib test can reach. A scenario earns its place only by such a failure
+//! mode, never by mirroring a lib test. Ignored by default:
 //! `cargo test --test smoke -- --ignored`.
 
 mod sandbox;

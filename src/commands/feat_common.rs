@@ -4,6 +4,12 @@
 //! so we expose plain helper functions rather than a builder or trait. Each
 //! helper captures a step that was byte-for-byte duplicated across the three
 //! flows; call sites continue to read as inspectable recipes.
+//!
+//! The team-brief contract of `feat new` and `feat adopt --workflow`: the
+//! whole team spawns, refused up front if a member's harness can't run the
+//! workflow ([`load_and_validate_workflow`]), and the brief goes only to the
+//! workflow's `brief_agents` ([`enqueue_initial_context`]); a brief with
+//! none to receive it is an error.
 
 use std::path::Path;
 
