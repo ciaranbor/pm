@@ -36,6 +36,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
 import androidx.navigation3.runtime.NavBackStack
@@ -193,6 +194,7 @@ fun App(
 
     val acting by model.lifecycle.state.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
+    val topBar = remember { TopBarSlot() }
     LaunchedEffect(model) {
         model.lifecycle.finished.collect { action ->
             if (action !is Action.Restart) backStack.leave(action.project, action.subject)
@@ -234,12 +236,17 @@ fun App(
                     }
                 },
                 actions = {
-                    if (actions.isNotEmpty()) {
-                        ActionsMenu(actions, model.lifecycle::ask)
-                    }
-                    if (top != Route.Settings && top != Route.Pair) {
-                        IconButton(onClick = { backStack.add(Route.Settings) }) {
-                            Icon(painterResource(R.drawable.ic_settings), "Settings")
+                    val screen = topBar.actions
+                    if (screen != null) {
+                        screen()
+                    } else {
+                        if (actions.isNotEmpty()) {
+                            ActionsMenu(actions, model.lifecycle::ask)
+                        }
+                        if (top != Route.Settings && top != Route.Pair) {
+                            IconButton(onClick = { backStack.add(Route.Settings) }) {
+                                Icon(painterResource(R.drawable.ic_settings), "Settings")
+                            }
                         }
                     }
                 },
@@ -366,7 +373,17 @@ fun App(
                         }
                         entry<Route.Notes> { key ->
                             val store = LocalContext.current.container.store
-                            NotesScreen(viewModel { NotesModel(client, key.project, store) })
+                            NotesScreen(
+                                viewModel {
+                                    NotesModel(
+                                        client,
+                                        key.project,
+                                        store,
+                                        createSavedStateHandle(),
+                                    )
+                                },
+                                topBar,
+                            )
                         }
                         entry<Route.Brief> { key ->
                             BriefScreen(

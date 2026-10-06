@@ -38,8 +38,11 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mikepenz.markdown.compose.components.MarkdownComponents
+import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.model.rememberMarkdownState
 import dev.pm.app.R
@@ -207,16 +210,27 @@ fun DetailsScreen(model: ReadModel<FeatureInfo>, modifier: Modifier = Modifier) 
 
 private const val GONE = "This feature is no longer there."
 
-/** `markdown`, selectable, under a button copying its source as `label`, after `actions`. */
+/**
+ * `markdown`, selectable, under a button copying its source as `label`, after `actions`;
+ * `components` draws its parts, and `bottom` is room left below it, as for a floating button.
+ */
 @Composable
 internal fun MarkdownPage(
     markdown: String,
     label: String,
     modifier: Modifier = Modifier,
+    components: MarkdownComponents = markdownComponents(),
+    bottom: Dp = 0.dp,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     val state = rememberMarkdownState(markdown, retainState = true)
-    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+    Column(
+        modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp)
+            .padding(bottom = bottom)
+    ) {
         Row(Modifier.align(Alignment.End)) {
             actions()
             CopyButton(label, markdown)
@@ -224,6 +238,7 @@ internal fun MarkdownPage(
         SelectionContainer {
             Markdown(
                 markdownState = state,
+                components = components,
                 loading = { Text(markdown, it, style = MaterialTheme.typography.bodyMedium) },
             )
         }
