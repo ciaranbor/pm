@@ -353,7 +353,10 @@ mod tests {
             .agents
             .models
             .insert("reviewer".to_string(), "local/qwen".to_string());
-        agent_spawn::tests::project_opencode_definition(&dir.path().join(&feature), "reviewer");
+        agent_spawn::test_support::project_opencode_definition(
+            &dir.path().join(&feature),
+            "reviewer",
+        );
         config.harness.opencode.binary = Some(crate::testing::fake_opencode(
             dir.path(),
             r#"{"data":{"id":"ses_source"}}"#,
@@ -400,7 +403,10 @@ mod tests {
             .agents
             .models
             .insert("reviewer".to_string(), "local/qwen".to_string());
-        agent_spawn::tests::project_opencode_definition(&dir.path().join(&feature), "reviewer");
+        agent_spawn::test_support::project_opencode_definition(
+            &dir.path().join(&feature),
+            "reviewer",
+        );
         config.harness.opencode.binary = Some(crate::testing::fake_opencode(
             dir.path(),
             r#"{"data":{"id":"ses_source"}}"#,
