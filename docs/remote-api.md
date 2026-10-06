@@ -68,13 +68,14 @@ The API is under `/v1`; every path needs a paired device's token:
 | `features/{project}/{feature}` | the fields of `pm feat info`, with `lifecycle` as last synced (no GitHub query), and the feature's brief; JSON |
 | `features/{project}/{feature}/summary` | the feature's summary, Markdown |
 | `projects/{project}/notes` | `GET`: the project's [notes](../README.md#project-notes), Markdown (empty when there are none), with their version as the `ETag`; `PUT` the new Markdown with `If-Match: <that ETag>` (up to 256 KB; longer notes, which only `pm notes` can write, get `413`): `{"version"}`, the new `ETag`, or `409` with `{"error", "refused": "changed", "text", "version"}` (the notes as they are now) when they changed since; `428` without `If-Match` |
-| `agents/{project}/{scope}/{agent}/screen` | what the agent's pane shows now, plain text, row for row |
+| `agents/{project}/{scope}/{agent}/screen` | what the agent's pane shows now, plain text, row for row; the app's terminal sheet reads it to answer a dialog with `keys` and `type` |
 | `agents/{project}/{scope}/{agent}/transcript?before={cursor}&limit={n}` | the agent's conversation, a page back from `before` (the end when absent); `limit` 1–200, default 50 |
 | `agents/{project}/{scope}/{agent}/transcript/result?ref={full}` | a tool result's whole output, plain text |
 | `push` | `GET`: `{"vapid": <public key>}`, to subscribe against; `PUT` a Web Push subscription (`{"endpoint": <https URL>, "keys": {"p256dh", "auth"}}`) to push to this device; `DELETE` to stop |
 | `agents/{project}/{scope}/{agent}/input` | `POST {"text"}` (up to 128 KB): typed into the agent's input line and submitted; `{"delivery": "sent", "confirmed"}` once submitted (`confirmed`: seen in the conversation within 5 s), or `{"delivery": "queued"}` when the agent is mid-turn and takes it as a step ends |
 | `agents/{project}/{scope}/{agent}/interrupt` | `POST`: presses Escape, ending the agent's turn |
 | `agents/{project}/{scope}/{agent}/keys` | `POST {"keys": [...]}`: presses each of `Escape Enter Tab BTab Up Down Left Right Space BSpace C-c 0`–`9` |
+| `agents/{project}/{scope}/{agent}/type` | `POST {"text"}` (up to 4 KB, no control characters): typed into the pane as keys with nothing pressed after, for a dialog that takes text (a login code) |
 | `agents/{project}/{scope}/{agent}/dialog` | `GET`: the dialog on the agent's screen, when it can be answered remotely (below), else `404`; `POST {"id", "choice", "answers"?, "message"?}`: answers it, `{"answered": true}` once its harness has the answer |
 | `features/{project}/{feature}/merge` | `POST`: `pm feat merge`, so merges and deletes the feature; `{"merged": true}` |
 | `features/{project}/{feature}/delete` | `POST`: `pm feat delete`; `{"deleted": true}` |

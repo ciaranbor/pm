@@ -16,7 +16,6 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.text.TextLayoutResult
-import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import dev.pm.app.SNAPSHOT
 import dev.pm.app.api.PmClient
@@ -39,6 +38,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import okhttp3.OkHttpClient
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -278,19 +278,42 @@ class UiTest {
     @Test
     @Config(qualifiers = "w360dp-h640dp-440dpi")
     @GraphicsMode(GraphicsMode.Mode.NATIVE)
-    fun the_screen_fits_its_widest_row_to_the_width() {
-        val row = "x".repeat(100)
-        compose.setContent { PmTheme { TerminalView("$row\nshort") } }
-        val layouts = mutableListOf<TextLayoutResult>()
-        compose
-            .onNodeWithText(row, substring = true)
-            .fetchSemanticsNode()
-            .config[SemanticsActions.GetTextLayoutResult]
-            .action!!(layouts)
-        val text = layouts.single().size.width
-        val padding = with(compose.density) { 16.dp.roundToPx() }
-        val screen = compose.onRoot().fetchSemanticsNode().size.width - padding
-        assertTrue("$text > $screen", text <= screen)
-        assertTrue("$text < 0.97 × $screen", text >= screen * 0.97f)
+    fun the_screen_wraps_its_rows_and_fits_its_rules() {
+        val prose = (1..40).joinToString(" ") { "word$it" }
+        val rule = "─".repeat(150) + " main ─"
+        compose.setContent { PmTheme { TerminalView("$rule\n$prose") } }
+        val screen = compose.onRoot().fetchSemanticsNode().size.width
+        fun layout(text: String): TextLayoutResult {
+            val layouts = mutableListOf<TextLayoutResult>()
+            compose
+                .onNodeWithText(text, substring = true)
+                .fetchSemanticsNode()
+                .config[SemanticsActions.GetTextLayoutResult]
+                .action!!(layouts)
+            return layouts.single()
+        }
+
+        val wrapped = layout(prose)
+        assertTrue("${wrapped.lineCount} lines", wrapped.lineCount > 1)
+        assertTrue("${wrapped.size.width} > $screen", wrapped.size.width <= screen)
+        val ruled = layout(" main ─")
+        assertEquals(1, ruled.lineCount)
+        assertFalse("the label is clipped", ruled.hasVisualOverflow)
+    }
+
+    @Test
+    fun a_rule_too_wide_for_the_screen_keeps_its_label() {
+        assertEquals("──── main ─", fitRule("─".repeat(70) + " main ─", 11))
+        assertEquals("╭─ Title ─╮", fitRule("╭─ Title " + "─".repeat(50) + "╮", 11))
+        assertEquals("─── a ─", fitRule("─── a ─", 40))
+        assertEquals("─── \udb81\ude8c ─", fitRule("─".repeat(40) + " \udb81\ude8c ─", 7))
+    }
+
+    @Test
+    fun the_screen_drops_the_blank_rows_below_it_and_collapses_those_between() {
+        assertEquals(
+            listOf("menu", "", "> 1. Yes", "", "input"),
+            screenRows("menu\n   \n\n> 1. Yes   \n\n\n\ninput\n\n  \n"),
+        )
     }
 }

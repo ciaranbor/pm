@@ -234,8 +234,10 @@ worktrees too — `main` included, unpushed history with it.
 
 `pm serve` serves the attention view to pm's Android app, and types what you
 send from it into agents' panes: from the phone you can see what needs you,
-read an agent's conversation, reply, interrupt, answer its dialogs, and
-edit a project's [notes](#project-notes). On a Mac, the `pm serve install --pair <device>` that pairs the
+read an agent's conversation, reply, interrupt, answer its dialogs — one
+the app can't show as a card (a startup prompt, a codex approval) from its
+terminal, with keys and typed text — and edit a project's
+[notes](#project-notes). On a Mac, the `pm serve install --pair <device>` that pairs the
 [Android app](#android-app) also runs `pm serve` as a LaunchAgent and puts
 it behind `tailscale serve`; `pm serve status` says whether it runs and
 what reaches it.

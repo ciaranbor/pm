@@ -33,7 +33,8 @@ class DialogScreenshotTest {
                         answering = false,
                         notice = null,
                         answer = { _, _, _ -> },
-                        {},
+                        interrupt = {},
+                        openTerminal = {},
                     )
                 }
             }

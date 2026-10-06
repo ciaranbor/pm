@@ -12,7 +12,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * The chat's rows and the terminal view, compared with the images in `src/test/screenshots` on
+ * The chat's rows and the terminal sheet, compared with the images in `src/test/screenshots` on
  * every test run; `gradlew recordRoborazziDebug` records them anew. Times are at noon UTC so the
  * day is the same in any zone the run is in.
  */
@@ -58,24 +58,36 @@ class AgentScreenshotTest {
 
     @Test @Config(qualifiers = "+night") fun chat_dark() = capture()
 
-    /** Box drawing and pm's badge glyphs keep to the grid, and the widest row fits the width. */
-    @Test
-    fun screen() = captureRoboImage {
-        PmTheme {
-            Surface {
-                TerminalView(
-                    listOf(
-                            "╭${"─".repeat(66)}╮",
-                            "│ > fix the failing test${" ".repeat(43)}│",
-                            "╰${"─".repeat(66)}╯",
-                            "  \uf013 busy  \uf059 asking  \uf1f6 unarmed  \uf252 idle  \uf0e0 2",
-                            "  \uf256 blocked  \uf058 ready  \uf04c stalled  \udb81\ude8c dead",
-                            "",
-                            "",
-                        )
-                        .joinToString("\n")
-                )
-            }
-        }
+    /** Claude Code's folder trust dialog, as `screen` returns it from a 229-column pane. */
+    private val trust =
+        listOf(
+                "",
+                "─".repeat(229),
+                " Accessing workspace:",
+                "",
+                " /Users/me/Projects/app",
+                "",
+                " Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what's in this folder first.",
+                "",
+                " Claude Code'll be able to read, edit, and execute files here.",
+                "",
+                " \uf059 Security guide",
+                "",
+                " ❯ 1. Yes, I trust this folder",
+                "   2. No, exit",
+                "",
+                " Enter to confirm · Esc to cancel",
+            )
+            .map { it.padEnd(229) }
+            .plus(List(24) { " ".repeat(229) })
+            .joinToString("\n")
+
+    private fun terminal() = captureRoboImage {
+        PmTheme { Surface { ScreenPanel(trust, notice = null, press = {}, type = { true }) } }
     }
+
+    /** Prose wraps, the rule stays one line, and the keys wrap at a phone's width. */
+    @Test fun terminal_light() = terminal()
+
+    @Test @Config(qualifiers = "+night") fun terminal_dark() = terminal()
 }

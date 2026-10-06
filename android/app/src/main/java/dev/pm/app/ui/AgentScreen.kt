@@ -70,6 +70,8 @@ fun AgentScreen(
     val notice by model.notice.collectAsStateWithLifecycle()
     val dialog by model.dialog.collectAsStateWithLifecycle()
     val answering by model.answering.collectAsStateWithLifecycle()
+    var terminal by rememberSaveable { mutableStateOf(false) }
+    val openTerminal = { terminal = true }
     Column(modifier.fillMaxSize().imePadding()) {
         Box(Modifier.weight(1f)) { Chat(model, openResult) }
         val shown = dialog
@@ -80,6 +82,7 @@ fun AgentScreen(
                 notice,
                 answer = model::answer,
                 interrupt = model::interrupt,
+                openTerminal = openTerminal,
             )
         } else {
             Composer(
@@ -89,9 +92,11 @@ fun AgentScreen(
                 notice,
                 send = model::send,
                 interrupt = model::interrupt,
+                openTerminal = openTerminal,
             )
         }
     }
+    if (terminal) ScreenSheet(client, project, scope, agent, dismiss = { terminal = false })
 }
 
 @Composable

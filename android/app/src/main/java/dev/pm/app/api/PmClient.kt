@@ -224,6 +224,17 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
         )
     }
 
+    /**
+     * Type `text` into the agent's pane as keys, pressing nothing after it: for a dialog that takes
+     * text. A server that predates it throws [PmError.Unsupported].
+     */
+    suspend fun typeText(project: String, scope: String, agent: String, text: String) {
+        post(
+            url("agents", project, scope, agent, "type"),
+            json.encodeToString(TextBody.serializer(), TextBody(text)),
+        )
+    }
+
     /** The dialog on the agent's screen that can be answered from here; null when there is none. */
     suspend fun dialog(project: String, scope: String, agent: String): Dialog? =
         try {

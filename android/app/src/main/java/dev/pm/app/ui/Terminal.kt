@@ -2,8 +2,8 @@ package dev.pm.app.ui
 
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -24,6 +24,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -54,28 +55,46 @@ fun rememberCellWidth(): Float {
     }
 }
 
-/** A pane's text as the screen tab shows it: without the blank rows below what was drawn. */
-fun screenLines(text: String): List<String> = text.lines().dropLastWhile { it.isBlank() }
-
-/** The columns `lines` fill, trailing spaces aside, and never fewer than [MIN_COLUMNS]. */
-fun screenColumns(lines: List<String>): Int =
-    maxOf(
-        MIN_COLUMNS,
-        lines.maxOfOrNull { it.trimEnd().let { l -> l.codePointCount(0, l.length) } } ?: 0,
-    )
-
-private const val MIN_COLUMNS = 20
+/**
+ * A pane's rows as the terminal sheet shows them: without the blank rows below what was drawn, and
+ * each run of blank rows between parts of the screen as one.
+ */
+fun screenRows(text: String): List<String> {
+    val rows = text.lines().map { it.trimEnd() }.dropLastWhile { it.isEmpty() }
+    return rows.filterIndexed { i, row -> row.isNotEmpty() || i == 0 || rows[i - 1].isNotEmpty() }
+}
 
 /**
- * An agent's pane: sized so its widest row fits the width, then pinch to zoom. It opens at the
- * bottom, where the prompt is, and stays there as the pane changes unless scrolled away.
+ * Whether `row` is drawn mostly in box-drawing and block characters: a rule, perhaps labelled
+ * (`──── main ─`), which wrapping repeats.
+ */
+fun isRule(row: String): Boolean {
+    val drawn = row.codePoints().filter { it != ' '.code }.toArray()
+    val box = drawn.count { it in 0x2500..0x259F }
+    return drawn.isNotEmpty() && box >= drawn.size * 4 / 5
+}
+
+/**
+ * [rule] in at most `columns` cells: its longest run of one character shortened, so a label on it
+ * stays in view.
+ */
+fun fitRule(rule: String, columns: Int): String {
+    val excess = rule.codePointCount(0, rule.length) - columns
+    if (excess <= 0) return rule
+    val runs = Regex("""(.)\1*""").findAll(rule)
+    val longest = runs.filter { it.value[0] != ' ' }.maxByOrNull { it.value.length } ?: return rule
+    val keep = maxOf(1, longest.value.length - excess)
+    return rule.replaceRange(longest.range, longest.value.take(keep))
+}
+
+/**
+ * An agent's pane at a readable size, each row wrapped to the width but a rule kept to one line;
+ * pinch to zoom. It opens at the bottom, where a dialog's choices or the prompt are, and stays
+ * there as the pane changes unless scrolled away.
  */
 @Composable
 internal fun TerminalView(text: String, modifier: Modifier = Modifier) {
-    val lines = remember(text) { screenLines(text) }
-    val columns = remember(lines) { screenColumns(lines) }
-    val cell = rememberCellWidth()
-    val padding = 8.dp
+    val rows = remember(text) { screenRows(text) }
     var zoom by rememberSaveable { mutableFloatStateOf(1f) }
     val zooming = rememberTransformableState { change, _, _ ->
         zoom = (zoom * change).coerceIn(MIN_ZOOM, MAX_ZOOM)
@@ -91,26 +110,30 @@ internal fun TerminalView(text: String, modifier: Modifier = Modifier) {
             toEnd = { vertical.scrollTo(vertical.maxValue) },
         )
     }
-    BoxWithConstraints(modifier.fillMaxSize().transformable(zooming, canPan = { false })) {
+    val size = TEXT_SP * zoom
+    val style = terminalStyle(size.sp)
+    val cell = rememberCellWidth()
+    val padding = 8.dp
+    BoxWithConstraints(modifier.transformable(zooming, canPan = { false })) {
         val width = constraints.maxWidth - with(LocalDensity.current) { (padding * 2).toPx() }
-        val fit = width / (columns * cell)
-        val size = (fit * zoom).coerceIn(MIN_SP, MAX_SP).sp
+        val columns = (width / (cell * size)).toInt()
         SelectionContainer {
-            Text(
-                lines.joinToString("\n"),
-                style = terminalStyle(size),
-                softWrap = false,
-                modifier =
-                    Modifier.fillMaxSize()
-                        .verticalScroll(vertical)
-                        .horizontalScroll(rememberScrollState())
-                        .padding(padding),
-            )
+            Column(Modifier.fillMaxSize().verticalScroll(vertical).padding(padding)) {
+                for (row in rows) {
+                    val rule = isRule(row)
+                    Text(
+                        if (rule) fitRule(row, columns) else row,
+                        style = style,
+                        softWrap = !rule,
+                        maxLines = if (rule) 1 else Int.MAX_VALUE,
+                        overflow = TextOverflow.Clip,
+                    )
+                }
+            }
         }
     }
 }
 
+private const val TEXT_SP = 12f
 private const val MIN_ZOOM = 0.5f
-private const val MAX_ZOOM = 4f
-private const val MIN_SP = 4f
-private const val MAX_SP = 32f
+private const val MAX_ZOOM = 2.5f

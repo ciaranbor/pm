@@ -21,9 +21,10 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * The start screen under an offline strip, and a scope's screen, whose header shows a badge's text
- * unmerged, through Android's accessibility checks. Only errors fail: its contrast warnings come
- * from antialiased glyph edges on dark text; [ThemeTest] holds the badge tones to 4.5:1.
+ * The start screen under an offline strip, a scope's screen, whose header shows a badge's text
+ * unmerged, and the terminal sheet's keys, through Android's accessibility checks. Only errors
+ * fail: its contrast warnings come from antialiased glyph edges on dark text; [ThemeTest] holds the
+ * badge tones to 4.5:1.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -62,6 +63,16 @@ class AccessibilityTest {
     private val scope =
         @Composable { AgentsList(snapshot, "app", "login", now, openAgent = {}, openPage = {}) }
 
+    private val terminal =
+        @Composable {
+            ScreenPanel(
+                "Trust this folder?\n❯ 1. Yes\n  2. No",
+                notice = null,
+                press = {},
+                type = { true },
+            )
+        }
+
     @Test fun home_light() = check(home)
 
     @Test @Config(qualifiers = "+night") fun home_dark() = check(home)
@@ -69,4 +80,8 @@ class AccessibilityTest {
     @Test fun scope_light() = check(scope)
 
     @Test @Config(qualifiers = "+night") fun scope_dark() = check(scope)
+
+    @Test fun terminal_light() = check(terminal)
+
+    @Test @Config(qualifiers = "+night") fun terminal_dark() = check(terminal)
 }
