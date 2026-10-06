@@ -204,4 +204,15 @@ fn display_paths(paths: &[PathBuf]) -> String {
         .join(", ")
 }
 
+impl PmError {
+    /// The message without an [`PmError::Agent`]'s kind prefix, for a
+    /// report that frames it itself.
+    pub fn reason(self) -> String {
+        match self {
+            PmError::Agent(message) => message,
+            e => e.to_string(),
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, PmError>;

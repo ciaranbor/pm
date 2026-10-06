@@ -51,11 +51,13 @@ pub(super) struct Carry<'a> {
     pub tmux_server: Option<&'a str>,
 }
 
-/// Carry the sessions of every harness the project's agents run on, and
-/// return the report. Nothing here is fatal, since the command this is part
-/// of has done its own work by now: a harness whose store cannot be reached
-/// is skipped with a line saying so, and a failure is reported with the
-/// command that retries it.
+/// Carry the sessions of every supported harness, not only those the
+/// project's agents run on: sessions predate the project's pm config, as
+/// when `pm register` moves a repo. Return the report, which covers a
+/// harness no agent runs on only when it has sessions to carry. Nothing here
+/// is fatal, since the command this is part of has done its own work by now:
+/// a harness in use whose store cannot be reached is skipped with a line
+/// saying so, and a failure is reported with the command that retries it.
 pub(super) fn carry_sessions(carry: &Carry<'_>) -> Vec<String> {
     let home = match carry
         .home
@@ -67,13 +69,23 @@ pub(super) fn carry_sessions(carry: &Carry<'_>) -> Vec<String> {
     };
     let global = GlobalConfig::load_or_default().harness;
     let config = harness_config_in(Some(carry.project_root), &global);
-    let harnesses = super::skills::harnesses_in_use(carry.project_root)
+    let in_use = super::skills::harnesses_in_use(carry.project_root)
         .unwrap_or_else(|_| vec![Harness::default()]);
-
     let mut report = Vec::new();
-    for harness in harnesses {
+    for &harness in Harness::SUPPORTED {
+        let named = in_use.contains(&harness);
         if let Some(why) = harness.sessions_unreachable(&config) {
-            report.push(format!("Skipped {harness} sessions: {why}"));
+            if named {
+                report.push(format!("Skipped {harness} sessions: {why}"));
+            }
+            continue;
+        }
+        let store = SessionStore {
+            home: &home,
+            config: &config,
+        };
+        // A store that cannot be read is left to the migration to report.
+        if !named && !harness.has_sessions(&store, carry.from).unwrap_or(true) {
             continue;
         }
         let migrated = migrate(&MigrateParams {
@@ -89,9 +101,10 @@ pub(super) fn carry_sessions(carry: &Carry<'_>) -> Vec<String> {
             Ok(messages) => report.extend(messages),
             Err(e) => {
                 report.push(format!(
-                    "Warning: {harness} sessions of {} were not all carried to {}: {e}",
+                    "Warning: {harness} sessions of {} were not all carried to {}: {}",
                     carry.from.display(),
-                    carry.to.display()
+                    carry.to.display(),
+                    e.reason()
                 ));
                 report.push(format!(
                     "To retry, run `pm harness migrate --harness {harness} --from {}` in {}",
@@ -161,7 +174,7 @@ mod tests {
     }
 
     #[test]
-    fn carry_covers_every_harness_the_project_runs_agents_on() {
+    fn carry_covers_every_harness_whether_or_not_an_agent_runs_on_it() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project(dir.path());
@@ -182,18 +195,15 @@ mod tests {
             "data": {"location": {"directory": to.canonicalize().unwrap()}},
         })
         .to_string();
+        // No agent runs on opencode or codex: opencode's sessions predate the
+        // config, and codex, having none to carry, goes unreported.
         let pm_dir = paths::pm_dir(&project_path);
         let mut config = ProjectConfig::load(&pm_dir).unwrap();
-        for (agent, harness) in [("qa", "opencode"), ("reviewer", "codex")] {
-            config
-                .agents
-                .harness
-                .insert(agent.to_string(), harness.to_string());
-        }
         config.harness.opencode.binary = Some(fake_opencode_sequence(
             fake.path(),
             &[
                 "opencode v2.0.18",
+                listing,
                 listing,
                 "server listening on http://127.0.0.1:9",
                 "",
@@ -237,9 +247,6 @@ mod tests {
                     from.display(),
                     to.display()
                 ),
-                "Nothing to migrate: codex finds a session by id, and pm resumes it in the \
-                 agent's current directory"
-                    .to_string(),
             ]
         );
     }

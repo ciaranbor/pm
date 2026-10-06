@@ -231,6 +231,10 @@ pub(in crate::harness) fn unreachable(cfg: &OpenCodeConfig) -> Option<String> {
     installed_version(cfg, Probe::Fresh).err()
 }
 
+pub(in crate::harness) fn has_sessions(cfg: &OpenCodeConfig, dir: &Path) -> Result<bool> {
+    Ok(!list(cfg, dir)?.is_empty())
+}
+
 pub(in crate::harness) fn migrate(
     cfg: &OpenCodeConfig,
     from: &Path,
@@ -280,11 +284,15 @@ pub(in crate::harness) fn migrate(
             for session in &free {
                 match server.move_session(&session.id, &directory) {
                     Ok(()) => moved += 1,
-                    Err(e) => failures.push(format!("Session {} was not moved: {e}", session.id)),
+                    Err(e) => failures.push(format!(
+                        "Session {} was not moved: {}",
+                        session.id,
+                        e.reason()
+                    )),
                 }
             }
         }
-        Err(e) => failures.push(e.to_string()),
+        Err(e) => failures.push(e.reason()),
     }
     if moved > 0 || failures.is_empty() {
         report.push(format!(

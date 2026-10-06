@@ -97,8 +97,10 @@ fn is_open_recoverable(kind: IssueKind) -> bool {
         | IssueKind::TurnFailed
         | IssueKind::AgentModelMissing
         | IssueKind::AgentRowInvalid
-        | IssueKind::AgentModelUndeclared
+        | IssueKind::AgentRowRemark
         | IssueKind::HarnessConfigInvalid
+        | IssueKind::ProviderKeyUnset
+        | IssueKind::ProviderUnreachable
         | IssueKind::RebaseInProgress
         | IssueKind::BundledDisabled
         | IssueKind::BundledUnknown

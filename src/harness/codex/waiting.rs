@@ -1,13 +1,18 @@
 //! What codex's hooks say about an agent waiting on the user (verified on
-//! 0.157).
+//! 0.157; approvals, denial and subagents again on 0.160).
 //!
 //! - An approval prompt (only under an approval policy other than pm's
 //!   default `never`) fires `PermissionRequest`.
 //! - A question (`request_user_input`, Plan mode only) fires only
-//!   `PreToolUse`, carrying the questions.
+//!   `PreToolUse`, carrying the questions. Outside Plan mode 0.160 offers
+//!   `request_user_input_async` instead, which returns at once while the
+//!   question stays queued in the TUI; nothing marks it answered, so it is
+//!   not read as waiting.
 //! - Either resolves with `PostToolUse`. Denying, or any interrupt of a
 //!   turn, fires only `Interrupt` and skips Stop, leaving the agent at its
 //!   prompt with no hook to wake it.
+//! - Hooks fired inside a subagent (`spawn_agent`) carry its `agent_id`, so
+//!   its `PostToolUse` resolves only a dialog of its own.
 //!
 //! Codex has no idle or notification event.
 
@@ -27,6 +32,10 @@ const QUESTION_TOOL: &str = "request_user_input";
 
 pub(in crate::harness) fn event(payload: &Value) -> Option<WaitingEvent> {
     let tool = payload.get("tool_name").and_then(Value::as_str);
+    let subagent = payload
+        .get("agent_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     match payload.get("hook_event_name")?.as_str()? {
         "PermissionRequest" => {
             let command = payload
@@ -37,19 +46,25 @@ pub(in crate::harness) fn event(payload: &Value) -> Option<WaitingEvent> {
                 (Some(tool), Some(command)) => Some(format!("{tool}: {command}")),
                 (tool, command) => command.or(tool.map(str::to_string)),
             };
-            Some(WaitingEvent::Set(Waiting::now(
-                WaitingKind::Permission,
-                detail,
-            )))
+            Some(WaitingEvent::Set(Waiting {
+                subagent,
+                ..Waiting::now(WaitingKind::Permission, detail)
+            }))
         }
-        "PreToolUse" if tool == Some(QUESTION_TOOL) => Some(WaitingEvent::Set(Waiting::now(
-            WaitingKind::Question,
-            payload
-                .pointer("/tool_input/questions/0/question")
-                .and_then(Value::as_str)
-                .map(one_line),
-        ))),
-        "PostToolUse" => Some(WaitingEvent::Clear),
+        "PreToolUse" if tool == Some(QUESTION_TOOL) => Some(WaitingEvent::Set(Waiting {
+            subagent,
+            ..Waiting::now(
+                WaitingKind::Question,
+                payload
+                    .pointer("/tool_input/questions/0/question")
+                    .and_then(Value::as_str)
+                    .map(one_line),
+            )
+        })),
+        "PostToolUse" => Some(match subagent {
+            Some(subagent) => WaitingEvent::ClearSubagent(subagent),
+            None => WaitingEvent::Clear,
+        }),
         "Interrupt" => Some(WaitingEvent::Set(Waiting::now(
             WaitingKind::Interrupted,
             None,
@@ -107,6 +122,24 @@ mod tests {
         assert_eq!(
             event(&json!({"hook_event_name": "PostToolUse", "tool_name": "shell"})),
             Some(WaitingEvent::Clear)
+        );
+    }
+
+    #[test]
+    fn a_subagents_dialog_is_its_own() {
+        // The fields codex 0.160 adds inside a `spawn_agent` subagent.
+        let inside = |event: &str| {
+            json!({"hook_event_name": event, "tool_name": "Bash",
+                   "agent_id": "01a1", "agent_type": "default",
+                   "tool_input": {"command": "ls"}})
+        };
+        match event(&inside("PermissionRequest")) {
+            Some(WaitingEvent::Set(w)) => assert_eq!(w.subagent.as_deref(), Some("01a1")),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(
+            event(&inside("PostToolUse")),
+            Some(WaitingEvent::ClearSubagent("01a1".into()))
         );
     }
 }

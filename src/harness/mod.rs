@@ -202,21 +202,33 @@ impl Harness {
         }
     }
 
-    /// What a spawn remarks on about an agent's `[agents.models]` row
-    /// without refusing it.
-    pub fn row_notes(self, config: &HarnessConfig, model: Option<&str>) -> Vec<String> {
+    /// What is worth remarking on about an agent's `[agents.models]` and
+    /// `[agents.permissions]` rows that a spawn still takes.
+    pub fn row_notes(
+        self,
+        config: &HarnessConfig,
+        model: Option<&str>,
+        permission_mode: Option<&str>,
+    ) -> Vec<String> {
         match self {
-            Harness::ClaudeCode | Harness::Codex => Vec::new(),
+            Harness::ClaudeCode => Vec::new(),
+            Harness::Codex => codex::row_notes(&config.codex, permission_mode),
             Harness::OpenCode => opencode::row_notes(&config.opencode, model),
         }
     }
 
     /// What is wrong with the harness's `[harness.<name>]` settings for
-    /// agents started in `worktree`, where only the harness can tell.
-    pub fn config_issues(self, config: &HarnessConfig, worktree: &Path) -> Vec<String> {
+    /// agents started in `worktree`, where only the harness can tell. `rows`
+    /// are the `[agents.models]` rows of the agents on this harness.
+    pub fn config_issues(
+        self,
+        config: &HarnessConfig,
+        worktree: &Path,
+        rows: &[String],
+    ) -> Vec<ConfigIssue> {
         match self {
             Harness::ClaudeCode | Harness::Codex => Vec::new(),
-            Harness::OpenCode => opencode::config_issues(&config.opencode, worktree),
+            Harness::OpenCode => opencode::config_issues(&config.opencode, worktree, rows),
         }
     }
 
@@ -693,29 +705,19 @@ impl Harness {
         }
     }
 
-    /// Whether the harness has recorded trust for the hook at `hooks.<event>[entry].hooks[hook]`
-    /// of its user-level file — the gate without which codex runs no hooks,
-    /// silently. Always true for a harness without hook trust, and when
-    /// `config` has pm launch the harness with the gate bypassed.
-    pub fn hook_trusted(
-        self,
-        config: &HarnessConfig,
-        home: &Path,
-        event: &str,
-        entry: usize,
-        hook: usize,
-    ) -> bool {
+    /// The harness's trust in the hooks of its user-level file — the gate
+    /// without which codex runs no hooks, silently. Every hook reads trusted
+    /// for a harness without hook trust, and when `config` has pm launch the
+    /// harness with the gate bypassed. Only a [`Probe::Fresh`] asks the
+    /// harness itself, which can tell a trust outdated by a changed hook.
+    pub fn hook_trust(self, config: &HarnessConfig, home: &Path, probe: Probe) -> HookTrust {
         match self {
-            Harness::ClaudeCode | Harness::OpenCode => true,
-            Harness::Codex => {
-                if config.codex.bypass_hook_trust == Some(true) {
-                    return true;
-                }
-                let codex_home = codex::home_dir(home);
-                let key =
-                    codex::hook_trust_key(&codex_home.join(codex::HOOKS_FILE), event, entry, hook);
-                codex::hook_trusted(&codex_home, &key)
-            }
+            Harness::ClaudeCode | Harness::OpenCode => HookTrust(None),
+            Harness::Codex if config.codex.bypass_hook_trust == Some(true) => HookTrust(None),
+            Harness::Codex => HookTrust(Some(codex::hook_trust::HookTrust::read(
+                &codex::home_dir(home),
+                probe == Probe::Fresh,
+            ))),
         }
     }
 
@@ -784,6 +786,19 @@ impl Harness {
         match self {
             Harness::ClaudeCode | Harness::Codex => None,
             Harness::OpenCode => opencode::sessions::unreachable(&config.opencode),
+        }
+    }
+
+    /// Whether the harness has any session recorded at `dir` that a
+    /// migration could act on; never true for codex, which needs none.
+    pub fn has_sessions(self, store: &SessionStore<'_>, dir: &Path) -> Result<bool> {
+        match self {
+            Harness::ClaudeCode => Ok(claude_code::sessions::has_sessions(
+                &store.claude_base(),
+                dir,
+            )),
+            Harness::Codex => Ok(false),
+            Harness::OpenCode => opencode::sessions::has_sessions(&store.config.opencode, dir),
         }
     }
 
@@ -862,6 +877,52 @@ impl Harness {
             Harness::Codex => codex::sessions::import(&codex::home_dir(store.home), staging),
             Harness::OpenCode => opencode::sessions::import(&store.config.opencode, staging, to),
         }
+    }
+}
+
+/// The longest pm waits on one call to a harness binary that answers from
+/// local state, killing it after.
+pub(crate) const CALL_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// A finding about a harness's `[harness.<name>]` settings
+/// ([`Harness::config_issues`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigIssue {
+    pub kind: ConfigIssueKind,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigIssueKind {
+    /// Settings the harness or pm refuses or drops.
+    Invalid,
+    /// A variable a setting names is unset in pm's environment; the agent's
+    /// own environment may still set it.
+    KeyUnset,
+    /// A provider a model or definition needs that pm's agents cannot reach.
+    ProviderUnreachable,
+}
+
+/// How a harness stands towards one of pm's hooks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookTrustStatus {
+    Trusted,
+    /// Never trusted.
+    Untrusted,
+    /// Trusted in an earlier form: the hook has changed since.
+    Modified,
+}
+
+/// A harness's trust in the hooks of its user-level file
+/// ([`Harness::hook_trust`]).
+pub struct HookTrust(Option<codex::hook_trust::HookTrust>);
+
+impl HookTrust {
+    /// The trust in the hook at `hooks.<event>[entry].hooks[hook]`.
+    pub fn status(&self, event: &str, entry: usize, hook: usize) -> HookTrustStatus {
+        self.0.as_ref().map_or(HookTrustStatus::Trusted, |trust| {
+            trust.status(event, entry, hook)
+        })
     }
 }
 
@@ -1551,7 +1612,13 @@ mod tests {
                 .trust_worktree(home.path(), wt.path())
                 .unwrap()
         );
-        assert!(Harness::ClaudeCode.hook_trusted(&config, home.path(), "Stop", 0, 0));
+        let trusted = |harness: Harness, config: &HarnessConfig, event, entry| {
+            harness
+                .hook_trust(config, home.path(), Probe::Cached)
+                .status(event, entry, 0)
+                == HookTrustStatus::Trusted
+        };
+        assert!(trusted(Harness::ClaudeCode, &config, "Stop", 0));
 
         assert!(!Harness::Codex.worktree_trusted(home.path(), wt.path()));
         assert!(
@@ -1560,7 +1627,7 @@ mod tests {
                 .unwrap()
         );
         assert!(Harness::Codex.worktree_trusted(home.path(), wt.path()));
-        assert!(!Harness::Codex.hook_trusted(&config, home.path(), "Stop", 0, 0));
+        assert!(!trusted(Harness::Codex, &config, "Stop", 0));
         let hooks = home.path().join(".codex/hooks.json");
         std::fs::write(
             home.path().join(".codex/config.toml"),
@@ -1570,13 +1637,13 @@ mod tests {
             ),
         )
         .unwrap();
-        assert!(Harness::Codex.hook_trusted(&config, home.path(), "Stop", 1, 0));
-        assert!(!Harness::Codex.hook_trusted(&config, home.path(), "Stop", 0, 0));
-        assert!(!Harness::Codex.hook_trusted(&config, home.path(), "SessionStart", 1, 0));
+        assert!(trusted(Harness::Codex, &config, "Stop", 1));
+        assert!(!trusted(Harness::Codex, &config, "Stop", 0));
+        assert!(!trusted(Harness::Codex, &config, "SessionStart", 1));
 
         let mut bypassed = HarnessConfig::default();
         bypassed.codex.bypass_hook_trust = Some(true);
-        assert!(Harness::Codex.hook_trusted(&bypassed, home.path(), "SessionStart", 1, 0));
+        assert!(trusted(Harness::Codex, &bypassed, "SessionStart", 1));
     }
 
     #[test]
