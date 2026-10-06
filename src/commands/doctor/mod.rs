@@ -2153,7 +2153,7 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
         let projects_dir = TestServer::registry_dir(&project_path);
-        let bundled_reviewer = include_str!("../../assets/agents/reviewer.md");
+        let bundled_reviewer = include_str!("../../../assets/agents/reviewer.md");
 
         // A pre-migration project: bundled copies present, no marker.
         let claude_agents = paths::main_worktree(&project_path).join(".claude/agents");
