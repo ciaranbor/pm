@@ -1,5 +1,6 @@
 # Publishes a release when `scripts/release` pushes its tag: the pm binaries,
-# the signed Android APK, install.sh, and SHA256SUMS over them all.
+# the signed Android APK (`pm-<version>-android-<abi>.apk`), install.sh, and
+# SHA256SUMS over them all.
 name: release
 
 on:
@@ -105,15 +106,20 @@ jobs:
       - name: Build
         run: android/gradlew -p android assembleGoogleRelease -PpmRelease -PpmReleaseSigning="$RUNNER_TEMP/pm-release.properties"
       - name: Check the signer
+        env:
+          APK: pm-${{ needs.verify.outputs.version }}-android-arm64-v8a.apk
         run: |
           apksigner=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n1)/apksigner
           mkdir dist
-          cp android/app/build/outputs/apk/google/release/app-google-release.apk dist/pm-android-arm64-v8a.apk
-          "$apksigner" verify --print-certs dist/pm-android-arm64-v8a.apk | tee certs.txt
+          cp android/app/build/outputs/apk/google/release/app-google-release.apk "dist/$APK"
+          "$apksigner" verify --print-certs "dist/$APK" | tee certs.txt
           grep -q "certificate SHA-256 digest: $SIGNER_SHA256" certs.txt || {
             echo "::error::the APK is not signed with pm's key"
             exit 1
           }
+          # Apps up to 0.4.0 look only for this unversioned name: drop it a few
+          # months after the first release after 0.4.0.
+          cp "dist/$APK" dist/pm-android-arm64-v8a.apk
       - name: Remove the signing key
         if: always()
         run: rm -f "$RUNNER_TEMP/pm-release.jks" "$RUNNER_TEMP/pm-release.properties"

@@ -6,6 +6,10 @@ notes.
 
 ## Unreleased
 
+- The release APK is named for its version, `pm-<version>-android-<abi>.apk`,
+so a second download no longer saves as `pm-android-arm64-v8a(1).apk`. The
+unversioned copy stays for a while so 0.4.0 apps still see the update.
+
 ## 0.4.0 — 2026-10-06
 
 - Agents are woken through each harness's own input path instead of a

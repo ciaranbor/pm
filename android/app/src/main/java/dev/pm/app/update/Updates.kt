@@ -14,8 +14,8 @@ data class Update(val version: String, val apk: String)
 
 /**
  * Whether pm has released a newer app, asked of GitHub's latest release, which is never a
- * prerelease. Each release carries one APK per ABI, `pm-android-<abi>.apk`, signed with the key
- * every pm APK is, so Android installs it over this one.
+ * prerelease. Each release carries one APK per ABI, `pm-<version>-android-<abi>.apk`, signed with
+ * the key every pm APK is, so Android installs it over this one.
  */
 class Updates(
     private val http: OkHttpClient,
@@ -26,12 +26,13 @@ class Updates(
      */
     suspend fun check(current: String, abis: List<String>): Update? {
         val release = withContext(Dispatchers.IO) { fetch() }
-        if (compare(release.tag.removePrefix("v"), current) <= 0) return null
+        val version = release.tag.removePrefix("v")
+        if (compare(version, current) <= 0) return null
         val apk =
             abis.firstNotNullOfOrNull { abi ->
-                release.assets.find { it.name == "pm-android-$abi.apk" }
+                release.assets.find { it.name == "pm-$version-android-$abi.apk" }
             } ?: return null
-        return Update(release.tag.removePrefix("v"), apk.url)
+        return Update(version, apk.url)
     }
 
     private fun fetch(): Release {
