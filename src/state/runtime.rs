@@ -184,6 +184,11 @@ pub struct Waiting {
     /// agent's own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent: Option<String>,
+    /// Whether the agent's turn has ended: the waiter wrote the marker, or
+    /// a dialog's replaced one it wrote. A subagent's dialog closing then
+    /// puts back the waiter's marker, not a busy agent's none.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub between_turns: bool,
     /// For a turn end read from the transcript, the id of the entry that
     /// records it, which a claim on it names ([`claim_turn_end`]).
     #[serde(skip)]
@@ -197,6 +202,7 @@ impl Waiting {
             detail: detail.filter(|d| !d.trim().is_empty()),
             since: Utc::now(),
             subagent: None,
+            between_turns: false,
             entry: None,
         }
     }

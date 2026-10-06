@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use pm::commands::hooks_dialog::{self, Answered};
 use pm::commands::hooks_install::dialog_hook_command;
 use pm::harness::Harness;
-use pm::state::runtime::{self, ANSWER_CHOICE, Answer, Waiting, WaitingKind};
+use pm::state::runtime::{self, ANSWER_CHOICE, Answer};
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -54,9 +54,13 @@ fn command(dir: &Path, shell: &str) -> Command {
     cmd
 }
 
-/// The installed command with `payload` on stdin, its marker written as the
-/// waiting hook beside it would. Returns once its dialog is recorded.
+/// The installed command with `payload` on stdin. Returns once its dialog
+/// is recorded.
 fn spawn_hook(dir: &Path, payload: &serde_json::Value) -> (Child, String) {
+    let known: Vec<String> = runtime::read_dialogs(dir, "main", AGENT)
+        .into_iter()
+        .map(|r| r.dialog.id)
+        .collect();
     let mut hook = command(dir, &dialog_hook_command(Harness::ClaudeCode))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -68,24 +72,50 @@ fn spawn_hook(dir: &Path, payload: &serde_json::Value) -> (Child, String) {
         .unwrap()
         .write_all(payload.to_string().as_bytes())
         .unwrap();
-    let id = recorded(dir, None);
-    let waiting = Waiting::now(WaitingKind::Question, None);
-    runtime::write_waiting(dir, "main", AGENT, &waiting).unwrap();
-    (hook, id)
+    (hook, recorded(dir, &known))
 }
 
-/// The id of the dialog recorded once it is not `previous`.
-fn recorded(dir: &Path, previous: Option<&str>) -> String {
+/// The id of a dialog recorded that is not one of `known`.
+fn recorded(dir: &Path, known: &[String]) -> String {
     let start = Instant::now();
     loop {
-        if let Some(r) = runtime::read_dialog(dir, "main", AGENT)
-            && Some(r.dialog.id.as_str()) != previous
+        if let Some(r) = runtime::read_dialogs(dir, "main", AGENT)
+            .into_iter()
+            .find(|r| !known.contains(&r.dialog.id))
         {
             return r.dialog.id;
         }
         assert!(start.elapsed() < Duration::from_secs(10), "never recorded");
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+fn bash(subagent: &str, command: &str) -> serde_json::Value {
+    json!({"hook_event_name": "PermissionRequest", "agent_id": subagent,
+           "tool_name": "Bash", "tool_input": {"command": command}})
+}
+
+fn send(dir: &Path, id: &str, choice: &str) -> Answered {
+    let answer = Answer {
+        id: id.into(),
+        choice: choice.into(),
+        answers: Default::default(),
+        message: None,
+    };
+    hooks_dialog::answer(
+        dir,
+        "main",
+        AGENT,
+        Harness::ClaudeCode,
+        &answer,
+        Duration::from_secs(5),
+    )
+    .unwrap()
+}
+
+fn decision(out: &std::process::Output) -> serde_json::Value {
+    let printed: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    printed["hookSpecificOutput"]["decision"].clone()
 }
 
 fn wait_for_exit(hook: &mut Child) -> std::process::Output {
@@ -134,26 +164,37 @@ fn an_answer_left_for_the_dialog_is_printed_as_the_decision() {
 
     let out = wait_for_exit(&mut hook);
     assert!(out.status.success());
-    let decision: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(
-        decision["hookSpecificOutput"]["decision"],
+        decision(&out),
         json!({"behavior": "allow", "updatedInput": {
             "questions": question("Ship it?")["tool_input"]["questions"],
             "answers": {"Ship it?": "Yes"}}})
     );
-    assert_eq!(runtime::read_dialog(dir.path(), "main", AGENT), None);
-    assert!(!runtime::answer_pending(dir.path(), "main", AGENT));
+    assert_eq!(runtime::read_dialog(dir.path(), "main", AGENT, &id), None);
+    assert_eq!(send(dir.path(), &id, "decline"), Answered::Elsewhere);
 }
 
 #[test]
-fn a_dialog_answered_at_the_terminal_ends_the_hook_silently() {
+fn a_dialog_approved_at_the_terminal_ends_its_hook_silently_through_the_waiting_hook() {
     let dir = tempdir().unwrap();
     project(dir.path());
-    let (mut hook, _) = spawn_hook(dir.path(), &question("Ship it?"));
-    std::thread::sleep(Duration::from_millis(600));
+    let (mut hook, id) = spawn_hook(dir.path(), &bash("a1", "touch a"));
 
-    // PostToolUse, as the user answers at the terminal.
-    runtime::clear_waiting(dir.path(), "main", AGENT).unwrap();
+    // The tool's PostToolUse, as the user approves it at the terminal.
+    let mut waiting = command(dir.path(), "pm harness hooks waiting claude-code")
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let done = json!({"hook_event_name": "PostToolUse", "agent_id": "a1",
+                      "tool_name": "Bash", "tool_input": {"command": "touch a"}});
+    waiting
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(done.to_string().as_bytes())
+        .unwrap();
+    assert!(waiting.wait().unwrap().success());
+
     let out = wait_for_exit(&mut hook);
     assert!(out.status.success());
     assert!(
@@ -161,37 +202,32 @@ fn a_dialog_answered_at_the_terminal_ends_the_hook_silently() {
         "{:?}",
         String::from_utf8_lossy(&out.stdout)
     );
-    assert_eq!(runtime::read_dialog(dir.path(), "main", AGENT), None);
+    assert_eq!(send(dir.path(), &id, "allow"), Answered::Elsewhere);
 }
 
 #[test]
-fn a_newer_dialog_ends_the_older_ones_hook_and_keeps_its_record() {
+fn dialogs_open_at_once_are_each_answered_by_their_own_hook() {
     let dir = tempdir().unwrap();
     project(dir.path());
-    let (mut first, first_id) = spawn_hook(dir.path(), &question("First?"));
-    let mut second = command(dir.path(), &dialog_hook_command(Harness::ClaudeCode))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    second
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(question("Second?").to_string().as_bytes())
-        .unwrap();
-    let second_id = recorded(dir.path(), Some(&first_id));
+    let (mut a, a_id) = spawn_hook(dir.path(), &bash("a1", "touch a"));
+    let (mut b, b_id) = spawn_hook(dir.path(), &bash("a2", "touch b"));
+    let open = hooks_dialog::open_dialogs(dir.path(), "main", AGENT, Harness::ClaudeCode);
+    assert_eq!(open.len(), 2);
 
-    let out = wait_for_exit(&mut first);
-    assert!(out.stdout.is_empty());
-    let left = runtime::read_dialog(dir.path(), "main", AGENT).unwrap();
-    assert_eq!(left.dialog.id, second_id);
+    assert_eq!(send(dir.path(), &b_id, "deny"), Answered::Taken);
     assert_eq!(
-        hooks_dialog::current(dir.path(), "main", AGENT, Harness::ClaudeCode).map(|r| r.dialog.id),
-        Some(second_id)
+        decision(&wait_for_exit(&mut b)),
+        json!({"behavior": "deny", "interrupt": true})
     );
-    second.kill().unwrap();
-    second.wait().unwrap();
+    let open = hooks_dialog::open_dialogs(dir.path(), "main", AGENT, Harness::ClaudeCode);
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0].dialog.id, a_id);
+
+    assert_eq!(send(dir.path(), &a_id, "allow"), Answered::Taken);
+    assert_eq!(
+        decision(&wait_for_exit(&mut a)),
+        json!({"behavior": "allow"})
+    );
 }
 
 #[test]
@@ -218,14 +254,7 @@ fn the_hook_ends_once_its_harness_is_gone() {
     )
     .unwrap();
     let hook: libc::pid_t = line.trim().parse().unwrap();
-    recorded(dir.path(), None);
-    runtime::write_waiting(
-        dir.path(),
-        "main",
-        AGENT,
-        &Waiting::now(WaitingKind::Question, None),
-    )
-    .unwrap();
+    let id = recorded(dir.path(), &[]);
 
     harness.kill().unwrap();
     harness.wait().unwrap();
@@ -238,5 +267,5 @@ fn the_hook_ends_once_its_harness_is_gone() {
         );
         std::thread::sleep(Duration::from_millis(50));
     }
-    assert_eq!(runtime::read_dialog(dir.path(), "main", AGENT), None);
+    assert_eq!(runtime::read_dialog(dir.path(), "main", AGENT, &id), None);
 }

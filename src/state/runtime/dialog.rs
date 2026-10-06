@@ -1,27 +1,36 @@
-//! The **dialog record**: a dialog on an agent's screen that can be
-//! answered remotely, written by `pm harness hooks dialog` while it blocks
-//! the harness's own decision point, and the **answer** `pm serve` leaves
-//! for it. One record per agent; a newer dialog's replaces it, which ends
-//! the older dialog's hook, so that one is answered at the terminal only.
+//! The **dialog records**: the dialogs on an agent's screen that can be
+//! answered remotely, each written by the `pm harness hooks dialog` that
+//! blocks the harness's own decision point for it, and the **answer** `pm
+//! serve` leaves for one. Several can be open at once (parallel subagents,
+//! several opencode asks), each with its own record and answer.
 //!
-//! The record is harness-neutral apart from `reply_context`, which holds
-//! what the harness needs to turn an answer into its decision and is never
-//! served. The answer is a separate file, taken by renaming it away, so of
-//! the hook and a `pm serve` withdrawing it only one gets it.
+//! A record is harness-neutral apart from `reply_context`, which holds what
+//! the harness needs to turn an answer into its decision and is never
+//! served. An answer is a separate file, taken by renaming it away, so of
+//! the hook and a `pm serve` withdrawing it only one gets it. Closing a
+//! dialog leaves a tombstone for a day, so an answer naming a dialog that
+//! has closed is told apart from one naming no dialog at all.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{WaitingKind, agent_dir, agent_file};
+use super::{Waiting, WaitingKind, agent_dir, agent_file};
 use crate::error::Result;
 use crate::fs_utils::write_atomic;
 
-const DIALOG_FILE: &str = "dialog.json";
-const ANSWER_FILE: &str = "dialog-answer.json";
+const DIALOGS_DIR: &str = "dialogs";
+const RECORD: &str = ".json";
+const ANSWER: &str = ".answer.json";
+const TOMBSTONE: &str = ".closed";
+/// The tombstone of a dialog whose hook took an answer.
+const TAKEN: &str = ".answered";
+/// How long a closed dialog's id is remembered.
+const TOMBSTONE_KEPT: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// A dialog as a client sees it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -105,6 +114,21 @@ impl Dialog {
         }
     }
 
+    /// The waiting marker that stands for this dialog.
+    pub fn waiting(&self) -> Waiting {
+        let detail = match (&self.tool, &self.detail) {
+            (Some(tool), Some(detail)) => {
+                Some(format!("{tool}: {}", crate::harness::one_line(detail)))
+            }
+            (tool, detail) => detail.clone().or_else(|| tool.clone()),
+        };
+        Waiting {
+            subagent: self.subagent.clone(),
+            since: self.since,
+            ..Waiting::now(self.kind, detail)
+        }
+    }
+
     /// Why `answer` can't answer this dialog; `None` when it can. A choice
     /// that answers the questions needs every one answered: by its
     /// options' labels, one unless it is multi-select, or by the user's own
@@ -177,57 +201,154 @@ pub struct Answer {
     pub message: Option<String>,
 }
 
+/// The agent's dialogs dir, not created.
+fn dialogs_dir(project_root: &Path, scope: &str, agent: &str) -> PathBuf {
+    agent_file(project_root, scope, agent, DIALOGS_DIR)
+}
+
+/// The file `suffix` of dialog `id`; `None` for an id no dialog could have,
+/// so a client's id never names a path.
+fn dialog_file(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    id: &str,
+    suffix: &str,
+) -> Option<PathBuf> {
+    let valid = !id.is_empty()
+        && id.len() <= 64
+        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    valid.then(|| dialogs_dir(project_root, scope, agent).join(format!("{id}{suffix}")))
+}
+
+/// Record a dialog that opened, pruning tombstones older than a day.
 pub fn write_dialog(
     project_root: &Path,
     scope: &str,
     agent: &str,
     record: &DialogRecord,
 ) -> Result<()> {
-    let file = agent_dir(project_root, scope, agent)?.join(DIALOG_FILE);
+    let dir = agent_dir(project_root, scope, agent)?.join(DIALOGS_DIR);
+    std::fs::create_dir_all(&dir)?;
+    prune_tombstones(&dir);
+    let file = dir.join(format!("{}{RECORD}", record.dialog.id));
     write_atomic(&file, serde_json::to_string(record)?.as_bytes())
 }
 
-/// The agent's dialog record; `None` when it has none or it can't be read.
-pub fn read_dialog(project_root: &Path, scope: &str, agent: &str) -> Option<DialogRecord> {
-    let text = std::fs::read_to_string(agent_file(project_root, scope, agent, DIALOG_FILE)).ok()?;
-    serde_json::from_str(&text).ok()
+fn prune_tombstones(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let old = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > TOMBSTONE_KEPT);
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if old && (name.ends_with(TOMBSTONE) || name.ends_with(TAKEN)) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
-/// Remove the agent's dialog record if it is dialog `id`'s, with any
-/// answer left for it.
-pub fn remove_dialog(project_root: &Path, scope: &str, agent: &str, id: &str) -> Result<()> {
-    if read_dialog(project_root, scope, agent).is_some_and(|r| r.dialog.id == id) {
-        remove(&agent_file(project_root, scope, agent, DIALOG_FILE))?;
-    }
-    let answer = agent_file(project_root, scope, agent, ANSWER_FILE);
-    let stale = std::fs::read_to_string(&answer)
-        .ok()
-        .and_then(|t| serde_json::from_str::<Answer>(&t).ok())
-        .is_some_and(|a| a.id == id);
-    if stale {
-        remove(&answer)?;
-    }
-    Ok(())
+/// Dialog `id`'s record while it is open; `None` once closed, or when it
+/// can't be read.
+pub fn read_dialog(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    id: &str,
+) -> Option<DialogRecord> {
+    let file = dialog_file(project_root, scope, agent, id, RECORD)?;
+    serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()
 }
 
-/// Leave `answer` for the dialog's hook, unless an answer is already left:
-/// false then, so of two answers the first stands. Linked into place
-/// whole, so the hook never reads it half written.
+/// The agent's open dialog records, oldest first.
+pub fn read_dialogs(project_root: &Path, scope: &str, agent: &str) -> Vec<DialogRecord> {
+    let Ok(entries) = std::fs::read_dir(dialogs_dir(project_root, scope, agent)) else {
+        return Vec::new();
+    };
+    let mut records: Vec<DialogRecord> = entries
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().ends_with(RECORD))
+        .filter(|e| !e.file_name().to_string_lossy().ends_with(ANSWER))
+        .filter_map(|e| serde_json::from_str(&std::fs::read_to_string(e.path()).ok()?).ok())
+        .collect();
+    records.sort_by(|a: &DialogRecord, b| {
+        (a.dialog.since, &a.dialog.id).cmp(&(b.dialog.since, &b.dialog.id))
+    });
+    records
+}
+
+/// Close dialog `id`: its record becomes a tombstone, so an answer naming
+/// it is known to come too late, and any answer left for it goes. `taken`
+/// says its hook took an answer, which the tombstone records before the
+/// record goes, so whoever left that answer learns it won.
+pub fn close_dialog(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    id: &str,
+    taken: bool,
+) -> Result<()> {
+    let (Some(record), Some(closed), Some(won), Some(answer)) = (
+        dialog_file(project_root, scope, agent, id, RECORD),
+        dialog_file(project_root, scope, agent, id, TOMBSTONE),
+        dialog_file(project_root, scope, agent, id, TAKEN),
+        dialog_file(project_root, scope, agent, id, ANSWER),
+    ) else {
+        return Ok(());
+    };
+    if taken {
+        std::fs::write(&won, b"")?;
+        remove(&record)?;
+        remove(&closed)?;
+    } else if !won.exists() {
+        match std::fs::rename(&record, &closed) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+            _ => {}
+        }
+    }
+    remove(&answer)
+}
+
+/// Whether dialog `id` was open once and has closed since.
+pub fn dialog_closed(project_root: &Path, scope: &str, agent: &str, id: &str) -> bool {
+    [TOMBSTONE, TAKEN]
+        .iter()
+        .any(|t| dialog_file(project_root, scope, agent, id, t).is_some_and(|f| f.exists()))
+}
+
+/// Whether dialog `id` closed with its hook taking an answer.
+pub fn dialog_answer_taken(project_root: &Path, scope: &str, agent: &str, id: &str) -> bool {
+    dialog_file(project_root, scope, agent, id, TAKEN).is_some_and(|f| f.exists())
+}
+
+/// Leave `answer` for its dialog's hook, unless an answer is already left
+/// for it: false then, so of two answers the first stands. Linked into
+/// place whole, so the hook never reads it half written.
 pub fn leave_answer(
     project_root: &Path,
     scope: &str,
     agent: &str,
     answer: &Answer,
 ) -> Result<bool> {
-    let dir = agent_dir(project_root, scope, agent)?;
+    let Some(file) = dialog_file(project_root, scope, agent, &answer.id, ANSWER) else {
+        return Ok(false);
+    };
+    let dir = agent_dir(project_root, scope, agent)?.join(DIALOGS_DIR);
+    std::fs::create_dir_all(&dir)?;
     static LEFT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let staged = dir.join(format!(
-        "{ANSWER_FILE}.new-{}-{}",
+        ".answer.new-{}-{}",
         std::process::id(),
         LEFT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     write_atomic(&staged, serde_json::to_string(answer)?.as_bytes())?;
-    let linked = std::fs::hard_link(&staged, dir.join(ANSWER_FILE));
+    let linked = std::fs::hard_link(&staged, file);
     let _ = std::fs::remove_file(&staged);
     match linked {
         Ok(()) => Ok(true),
@@ -236,13 +357,20 @@ pub fn leave_answer(
     }
 }
 
-/// Remove the answer left for the agent's dialog, returning it, so of two
-/// callers only one takes it. One that can't be read is dropped.
-pub fn take_answer(project_root: &Path, scope: &str, agent: &str) -> Result<Option<Answer>> {
-    let file = agent_file(project_root, scope, agent, ANSWER_FILE);
+/// Remove the answer left for dialog `id`, returning it, so of two callers
+/// only one takes it. One that can't be read is dropped.
+pub fn take_answer(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    id: &str,
+) -> Result<Option<Answer>> {
+    let Some(file) = dialog_file(project_root, scope, agent, id, ANSWER) else {
+        return Ok(None);
+    };
     static TAKES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let taken = file.with_file_name(format!(
-        "{ANSWER_FILE}.taken-{}-{}",
+        ".answer.taken-{}-{}",
         std::process::id(),
         TAKES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
@@ -253,12 +381,15 @@ pub fn take_answer(project_root: &Path, scope: &str, agent: &str) -> Result<Opti
     }
     let text = std::fs::read_to_string(&taken);
     let _ = std::fs::remove_file(&taken);
-    Ok(text.ok().and_then(|t| serde_json::from_str(&t).ok()))
+    Ok(text
+        .ok()
+        .and_then(|t| serde_json::from_str::<Answer>(&t).ok())
+        .filter(|a| a.id == id))
 }
 
-/// Whether an answer is waiting to be taken.
-pub fn answer_pending(project_root: &Path, scope: &str, agent: &str) -> bool {
-    agent_file(project_root, scope, agent, ANSWER_FILE).exists()
+/// Whether an answer is waiting for dialog `id`'s hook to take it.
+pub fn answer_pending(project_root: &Path, scope: &str, agent: &str, id: &str) -> bool {
+    dialog_file(project_root, scope, agent, id, ANSWER).is_some_and(|f| f.exists())
 }
 
 fn remove(file: &Path) -> Result<()> {
@@ -374,38 +505,64 @@ mod tests {
     }
 
     #[test]
-    fn a_record_is_removed_only_by_its_own_dialog_and_the_first_answer_is_taken_once() {
+    fn dialogs_open_side_by_side_each_taking_only_its_own_first_answer() {
         let dir = tempdir().unwrap();
         let root = dir.path();
-        let record = DialogRecord {
-            dialog: questions(),
+        let record = |dialog: Dialog| DialogRecord {
+            dialog,
             pid: 1,
             reply_context: serde_json::json!({"secret": true}),
         };
-        let id = record.dialog.id.clone();
-        write_dialog(root, "login", "qa", &record).unwrap();
-        assert_eq!(read_dialog(root, "login", "qa"), Some(record.clone()));
+        let older = record(questions());
+        let mut newer = record(questions());
+        newer.dialog.since = older.dialog.since + chrono::Duration::seconds(1);
+        write_dialog(root, "login", "qa", &newer).unwrap();
+        write_dialog(root, "login", "qa", &older).unwrap();
+        assert_eq!(
+            read_dialogs(root, "login", "qa"),
+            [older.clone(), newer.clone()]
+        );
 
-        remove_dialog(root, "login", "qa", "another").unwrap();
-        assert!(read_dialog(root, "login", "qa").is_some());
-
-        let given = answer(&record.dialog, "decline", &[]);
+        let given = answer(&newer.dialog, "decline", &[]);
         assert!(leave_answer(root, "login", "qa", &given).unwrap());
-        assert!(answer_pending(root, "login", "qa"));
-        let second = answer(&record.dialog, ANSWER_CHOICE, &[("Which DB?", &["SQLite"])]);
+        let second = answer(&newer.dialog, ANSWER_CHOICE, &[("Which DB?", &["SQLite"])]);
         assert!(
             !leave_answer(root, "login", "qa", &second).unwrap(),
             "the first stands"
         );
         assert_eq!(
-            take_answer(root, "login", "qa").unwrap(),
+            take_answer(root, "login", "qa", &older.dialog.id).unwrap(),
+            None
+        );
+        assert_eq!(
+            take_answer(root, "login", "qa", &newer.dialog.id).unwrap(),
             Some(given.clone())
         );
-        assert_eq!(take_answer(root, "login", "qa").unwrap(), None);
+        assert_eq!(
+            take_answer(root, "login", "qa", &newer.dialog.id).unwrap(),
+            None
+        );
 
         assert!(leave_answer(root, "login", "qa", &given).unwrap());
-        remove_dialog(root, "login", "qa", &id).unwrap();
-        assert_eq!(read_dialog(root, "login", "qa"), None);
-        assert!(!answer_pending(root, "login", "qa"));
+        close_dialog(root, "login", "qa", &newer.dialog.id, false).unwrap();
+        assert!(!answer_pending(root, "login", "qa", &newer.dialog.id));
+        assert_eq!(
+            read_dialogs(root, "login", "qa"),
+            std::slice::from_ref(&older)
+        );
+        assert!(dialog_closed(root, "login", "qa", &newer.dialog.id));
+        assert!(!dialog_closed(root, "login", "qa", &older.dialog.id));
+        assert!(!dialog_closed(root, "login", "qa", "unknown"));
+    }
+
+    #[test]
+    fn an_id_that_is_not_a_dialogs_names_no_file() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let mut escape = answer(&questions(), "decline", &[]);
+        escape.id = "../../waiting".into();
+        assert!(!leave_answer(root, "login", "qa", &escape).unwrap());
+        assert_eq!(read_dialog(root, "login", "qa", "../../waiting"), None);
+        assert!(!root.join(".pm").exists(), "nothing written");
     }
 }

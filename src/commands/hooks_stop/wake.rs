@@ -6,7 +6,8 @@
 //! It takes over the agent's waiter file and marks the agent idle (or
 //! background, while background work runs, which the waiter file records
 //! too: a prompt clears the marker, and an interrupt can leave this waiter
-//! the agent's only one), then waits on the inbox. With
+//! the agent's only one; or asking, while a subagent's dialog is still
+//! open), then waits on the inbox. With
 //! messages unread it hands the continuation to the harness: at once when
 //! some are unread as it starts. The harness never ends an earlier waiter
 //! as a later turn starts, so one can outlive several turns and fire
@@ -31,6 +32,7 @@ use std::time::Duration;
 use crate::commands::agent_wait;
 use crate::commands::attention::AgentState;
 use crate::commands::hook_process::Caller;
+use crate::commands::hooks_waiting;
 use crate::error::Result;
 use crate::harness::{Harness, Wake};
 use crate::messages;
@@ -84,10 +86,18 @@ pub(super) fn run(harness: Harness, on_turn: &mut dyn FnMut(AgentState, u32)) ->
         &agent,
         &format!("{harness} waiter: {}", background_work(&payload)),
     );
-    let waited = wait(busy, &project_root, &scope, &agent, on_turn, |interval| {
-        std::thread::sleep(interval);
-        !caller.alive()
-    });
+    let waited = wait(
+        harness,
+        busy,
+        &project_root,
+        &scope,
+        &agent,
+        on_turn,
+        |interval| {
+            std::thread::sleep(interval);
+            !caller.alive()
+        },
+    );
     let failed = |why: String, on_turn: &mut dyn FnMut(AgentState, u32)| {
         runtime::log_stop_hook(&project_root, &scope, &agent, &why);
         hook_ended(&project_root, &scope, &agent, why.clone(), on_turn);
@@ -130,6 +140,7 @@ fn session_id(payload: &str) -> Option<String> {
 /// poll interval and returns whether the harness that ran the waiter is
 /// gone.
 fn wait(
+    harness: Harness,
     busy: bool,
     project_root: &Path,
     scope: &str,
@@ -155,18 +166,10 @@ fn wait(
         WaitingKind::Idle
     };
     if !immediate {
-        log(&format!("nothing unread: waits, marked {marker:?}"));
-        let mut waiting = Waiting::now(marker, None);
-        waiting.since = started;
+        let waiting = hooks_waiting::between_turns(project_root, scope, agent, harness, started);
+        log(&format!("nothing unread: waits, marked {:?}", waiting.kind));
         runtime::write_waiting(project_root, scope, agent, &waiting)?;
-        on_turn(
-            if busy {
-                AgentState::Background
-            } else {
-                AgentState::Idle
-            },
-            0,
-        );
+        on_turn(hooks_waiting::state_of(&waiting), 0);
         let mut ended = false;
         agent_wait::agent_wait_while(project_root, scope, agent, None, None, |d| {
             ended = gone(d) || !newest();
@@ -193,7 +196,18 @@ fn wait(
     } else {
         "a message arrived: wakes the agent"
     });
-    runtime::clear_waiting_if(project_root, scope, agent, marker)?;
+    // The turn the wake starts ends what the waiter marked: its own marker,
+    // or a dialog's it kept, which then stands for an agent mid-turn.
+    if !runtime::clear_waiting_if(project_root, scope, agent, marker)?
+        && let Some(held) =
+            runtime::read_waiting(project_root, scope, agent).filter(|w| w.between_turns)
+    {
+        let held = Waiting {
+            between_turns: false,
+            ..held
+        };
+        runtime::write_waiting(project_root, scope, agent, &held)?;
+    }
     runtime::touch_activity(project_root, scope, agent)?;
     on_turn(
         AgentState::Busy,

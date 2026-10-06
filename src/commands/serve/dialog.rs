@@ -1,7 +1,7 @@
-//! `…/dialog`: the dialog on an agent's screen that can be answered
-//! remotely, and its answer, which the dialog's hook hands its harness
-//! ([`hooks_dialog`]). The answer is logged by its choice only, never the
-//! words typed.
+//! `…/dialog` and `…/dialogs`: the dialogs on an agent's screen that can
+//! be answered remotely, and an answer to one, which the dialog's hook
+//! hands its harness ([`hooks_dialog`]). The answer is logged by its choice
+//! only, never the words typed.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -11,7 +11,7 @@ use serde::Deserialize;
 use crate::commands::agent_input;
 use crate::commands::hooks_dialog::{self, Answered};
 use crate::error::Result;
-use crate::state::runtime::Answer;
+use crate::state::runtime::{Answer, Dialog};
 
 use super::input::{MAX_TEXT, Written};
 use super::routes::{Reply, error, json};
@@ -22,17 +22,25 @@ const TAKEN_WITHIN: Duration = Duration::from_secs(5);
 
 const NONE: &str = "no dialog of the agent's can be answered";
 
-/// `GET …/dialog`.
-pub(super) fn get(agent: &Agent) -> Result<Reply> {
-    let Some(harness) = agent.harness()? else {
-        return Ok(error(404, NONE));
+/// `GET …/dialog`, the oldest open dialog, which is the one a terminal
+/// queueing several shows; or `GET …/dialogs`, every one, oldest first.
+pub(super) fn get(agent: &Agent, all: bool) -> Result<Reply> {
+    let open: Vec<Dialog> = match agent.harness()? {
+        Some(harness) => {
+            hooks_dialog::open_dialogs(&agent.root, &agent.scope, &agent.name, harness)
+                .into_iter()
+                .map(|r| r.dialog)
+                .collect()
+        }
+        None => Vec::new(),
     };
-    Ok(
-        match hooks_dialog::current(&agent.root, &agent.scope, &agent.name, harness) {
-            Some(record) => json(200, serde_json::to_value(&record.dialog)?),
-            None => error(404, NONE),
-        },
-    )
+    if all {
+        return Ok(json(200, serde_json::json!({ "dialogs": open })));
+    }
+    Ok(match open.first() {
+        Some(oldest) => json(200, serde_json::to_value(oldest)?),
+        None => error(404, NONE),
+    })
 }
 
 #[derive(Deserialize)]
@@ -98,10 +106,11 @@ pub(super) fn post(agent: &Agent, body: &str) -> Result<Written> {
     let (reply, detail) = match answered {
         Answered::Taken => (json(200, serde_json::json!({ "answered": true })), detail),
         Answered::Invalid(why) => (error(400, &why), String::new()),
+        Answered::Unknown => (error(404, "no such dialog"), String::new()),
         Answered::Elsewhere => (
             refused(
                 "answered",
-                "the dialog is no longer up: answered at the terminal, or replaced",
+                "the dialog is no longer up: answered at the terminal or by another device",
             ),
             "dialog refused: answered".into(),
         ),
