@@ -40,9 +40,9 @@ class UpdatesTest {
 
     @Test
     fun a_newer_release_offers_the_apk_of_the_first_abi_it_has() = runBlocking {
-        latest("v0.3.0", "pm-android-arm64-v8a.apk", "pm-android-x86_64.apk")
+        latest("v0.3.0", "pm-0.3.0-android-arm64-v8a.apk", "pm-0.3.0-android-x86_64.apk")
         assertEquals(
-            Update("0.3.0", "https://example.com/v0.3.0/pm-android-x86_64.apk"),
+            Update("0.3.0", "https://example.com/v0.3.0/pm-0.3.0-android-x86_64.apk"),
             updates.check("0.2.0", listOf("riscv64", "x86_64", "arm64-v8a")),
         )
         assertEquals(
@@ -52,13 +52,37 @@ class UpdatesTest {
     }
 
     @Test
+    fun the_versioned_apk_is_offered_not_the_unversioned_copy() = runBlocking {
+        latest(
+            "v0.5.0",
+            "pm-android-arm64-v8a.apk",
+            "pm-0.5.0-android-x86_64.apk",
+            "pm-0.5.0-android-arm64-v8a.apk",
+        )
+        assertEquals(
+            Update("0.5.0", "https://example.com/v0.5.0/pm-0.5.0-android-arm64-v8a.apk"),
+            updates.check("0.4.0", listOf("arm64-v8a")),
+        )
+    }
+
+    @Test
+    fun another_abis_or_versions_apk_is_not_offered() = runBlocking {
+        latest(
+            "v0.5.0",
+            "pm-0.5.0-android-arm64-v8a.apk",
+            "pm-0.4.0-android-v8a.apk",
+        )
+        assertNull(updates.check("0.4.0", listOf("v8a")))
+    }
+
+    @Test
     fun the_same_or_an_older_release_or_one_without_an_apk_for_this_phone_offers_nothing() =
         runBlocking {
-            latest("v0.2.0", "pm-android-arm64-v8a.apk")
+            latest("v0.2.0", "pm-0.2.0-android-arm64-v8a.apk")
             assertNull(updates.check("0.2.0+3.gabc1234.dirty", listOf("arm64-v8a")))
-            latest("v0.2.0", "pm-android-arm64-v8a.apk")
+            latest("v0.2.0", "pm-0.2.0-android-arm64-v8a.apk")
             assertNull(updates.check("0.10.0", listOf("arm64-v8a")))
-            latest("v0.3.0", "pm-android-arm64-v8a.apk")
+            latest("v0.3.0", "pm-0.3.0-android-arm64-v8a.apk")
             assertNull(updates.check("0.2.0", listOf("x86_64")))
         }
 

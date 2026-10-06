@@ -50,7 +50,7 @@ options and what to do if tmux can't find `pm`.
 
 On an arm64 phone, open the
 [latest release](https://github.com/ciaranbor/pm/releases/latest), download
-`pm-android-arm64-v8a.apk`, and open it; Android asks once to allow
+`pm-<version>-android-arm64-v8a.apk`, and open it; Android asks once to allow
 installs from the browser. Google Play Protect then says "App blocked to
 protect your device": that is expected for this app, so tap "Install
 anyway". Pair it by running `pm serve install --pair <device>` on the server
