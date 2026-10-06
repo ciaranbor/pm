@@ -12,16 +12,27 @@
 
 mod claude_code;
 mod codex;
+mod hook_trust;
 mod opencode;
 pub(crate) mod probe;
+mod projection;
 mod screen;
+mod session_store;
+mod spawn;
 pub(crate) mod transcript;
 
+pub use hook_trust::{HookTrust, HookTrustStatus};
 #[cfg(test)]
 pub(crate) use opencode::chat::testing as opencode_testing;
 pub use probe::Probe;
+pub(crate) use projection::project_by_copy;
+pub use projection::{Projection, ProjectionScope};
+pub use session_store::{
+    AgentSession, Conversation, ExportJob, ImportOutcome, InUse, SessionStore,
+};
+pub(crate) use session_store::{per_session_outcome, session_counts};
+pub use spawn::{LaunchContext, PreLaunch, SpawnSpec, resumable_session};
 
-use std::collections::HashSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -29,15 +40,13 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{PmError, Result};
-use crate::fs_utils;
 use crate::state::paths;
 use crate::state::project::{AgentsConfig, HarnessConfig, layered};
 use crate::state::runtime::{
     self, Answer, Dialog, DialogRecord, SessionPath, Waiting, WaitingClass, WaitingKind,
 };
 
-use transcript::items::{Body, Page, Tail};
-use transcript::jsonl::{self, Parse};
+use session_store::Location;
 
 /// A change to an agent's waiting marker.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -897,29 +906,6 @@ pub enum ConfigIssueKind {
     ProviderUnreachable,
 }
 
-/// How a harness stands towards one of pm's hooks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HookTrustStatus {
-    Trusted,
-    /// Never trusted.
-    Untrusted,
-    /// Trusted in an earlier form: the hook has changed since.
-    Modified,
-}
-
-/// A harness's trust in the hooks of its user-level file
-/// ([`Harness::hook_trust`]).
-pub struct HookTrust(Option<codex::hook_trust::HookTrust>);
-
-impl HookTrust {
-    /// The trust in the hook at `hooks.<event>[entry].hooks[hook]`.
-    pub fn status(&self, event: &str, entry: usize, hook: usize) -> HookTrustStatus {
-        self.0.as_ref().map_or(HookTrustStatus::Trusted, |trust| {
-            trust.status(event, entry, hook)
-        })
-    }
-}
-
 /// How pm's Stop hook gets the continuation to an agent
 /// ([`Harness::wake`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -933,269 +919,6 @@ pub enum Wake {
     /// It runs on once the turn has ended, and puts the continuation on the
     /// session's queue ([`Harness::queue_prompt`]).
     Queue,
-}
-
-/// How the session seams reach a harness's store.
-#[derive(Debug, Clone, Copy)]
-pub struct SessionStore<'a> {
-    /// The user's home; a harness with a file store derives it from here.
-    pub home: &'a Path,
-    /// The `[harness.*]` settings in effect where the sessions belong.
-    pub config: &'a HarnessConfig,
-}
-
-impl SessionStore<'_> {
-    fn claude_base(&self) -> PathBuf {
-        self.home.join(claude_code::CONFIG_DIR)
-    }
-}
-
-/// One directory whose sessions [`Harness::export_sessions`] writes.
-pub struct ExportJob<'a> {
-    /// The `[harness.*]` settings in effect where the sessions belong.
-    pub config: &'a HarnessConfig,
-    /// The directory the sessions were recorded at.
-    pub dir: &'a Path,
-    /// Where they are written.
-    pub staging: PathBuf,
-}
-
-/// The agent whose conversation [`Harness::conversation`] locates.
-#[derive(Debug, Clone, Copy)]
-pub struct AgentSession<'a> {
-    pub project_root: &'a Path,
-    pub scope: &'a str,
-    pub name: &'a str,
-    /// The registry's session id.
-    pub session_id: &'a str,
-    /// Where the agent runs.
-    pub worktree: &'a Path,
-    pub home: &'a Path,
-}
-
-/// An agent session's conversation, read as the chat view of
-/// `transcript::items`. Cursors are opaque to callers: a byte offset for
-/// a transcript file; for opencode a `seq` going back and a
-/// `time_updated` going forward.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Conversation {
-    harness: Harness,
-    location: Location,
-}
-
-#[derive(Debug, Clone)]
-enum Location {
-    Jsonl { path: PathBuf, parse: Parse },
-    Session { db: PathBuf, id: String },
-}
-
-/// The same conversation: a harness reads a given file with one parser.
-impl PartialEq for Location {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Jsonl { path: a, .. }, Self::Jsonl { path: b, .. }) => a == b,
-            (Self::Session { db: a, id: x }, Self::Session { db: b, id: y }) => a == b && x == y,
-            _ => false,
-        }
-    }
-}
-
-impl Eq for Location {}
-
-fn unreadable(e: std::io::Error) -> PmError {
-    PmError::Transcript(e.to_string())
-}
-
-impl Conversation {
-    pub fn harness(&self) -> Harness {
-        self.harness
-    }
-
-    /// Up to about `limit` items before cursor `before` (the end when
-    /// `None`, or not a cursor of this conversation), oldest first.
-    pub fn page(&self, before: Option<&str>, limit: usize) -> Result<Page> {
-        match &self.location {
-            Location::Jsonl { path, parse } => {
-                let before = before.and_then(|b| b.parse().ok());
-                jsonl::page(path, before, limit, *parse).map_err(unreadable)
-            }
-            Location::Session { db, id } => {
-                let before = before.and_then(|b| b.parse().ok());
-                opencode::chat::page(db, id, before, limit)
-            }
-        }
-    }
-
-    /// What the conversation gained after cursor `after`.
-    pub fn tail(&self, after: &str) -> Result<Tail> {
-        match &self.location {
-            Location::Jsonl { path, parse } => match after.parse() {
-                Ok(after) => jsonl::tail(path, after, *parse).map_err(unreadable),
-                Err(_) => Ok(Tail::Reset),
-            },
-            Location::Session { db, id } => match after.parse() {
-                Ok(after) => opencode::chat::tail(db, id, after),
-                Err(_) => Ok(Tail::Reset),
-            },
-        }
-    }
-
-    /// Whether the conversation took in a prompt whose text, as typed,
-    /// `is_text` after cursor `after`: any prompt, whoever sent it, where the
-    /// harness records that; else the user's.
-    pub fn took_in(&self, after: &str, is_text: impl Fn(&str) -> bool) -> Result<bool> {
-        match (self.harness, &self.location) {
-            (Harness::ClaudeCode, Location::Jsonl { path, .. }) => {
-                claude_code::chat::took_in(path, after, is_text).map_err(unreadable)
-            }
-            _ => Ok(match self.tail(after)? {
-                Tail::Items { items, .. } => items
-                    .iter()
-                    .any(|item| matches!(&item.body, Body::User { text } if is_text(text))),
-                Tail::Reset => false,
-            }),
-        }
-    }
-
-    /// The whole output of the tool result whose `full` is `reference`.
-    pub fn full_result(&self, reference: &str) -> Result<Option<String>> {
-        match &self.location {
-            Location::Jsonl { path, parse } => {
-                jsonl::full_result(path, reference, *parse).map_err(unreadable)
-            }
-            Location::Session { db, id } => opencode::chat::full_result(db, id, reference),
-        }
-    }
-
-    /// The size and mtime of the file the conversation is read from; a
-    /// tail of an unchanged one finds nothing. `None` when it can't be
-    /// told: the file is gone, or the conversation is in a database.
-    pub fn stamp(&self) -> Option<(u64, std::time::SystemTime)> {
-        match &self.location {
-            Location::Jsonl { path, .. } => {
-                let meta = std::fs::metadata(path).ok()?;
-                Some((meta.len(), meta.modified().ok()?))
-            }
-            Location::Session { .. } => None,
-        }
-    }
-
-    /// Whether what the conversation is read from is still there.
-    pub fn exists(&self) -> bool {
-        match &self.location {
-            Location::Jsonl { path, .. } => path.is_file(),
-            Location::Session { db, .. } => db.is_file(),
-        }
-    }
-}
-
-/// A session an agent is running on.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InUse {
-    pub session_id: String,
-    /// `<scope>/<agent>`, for the report.
-    pub agent: String,
-}
-
-/// What importing one directory's sessions did.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ImportOutcome {
-    /// Nothing was written, and why.
-    Skipped(String),
-    Imported {
-        /// What was imported, for the report.
-        detail: String,
-        notes: Vec<String>,
-    },
-}
-
-/// `imported` of `total` sessions were new to the store; the rest were
-/// already there and left untouched.
-pub(crate) fn per_session_outcome(imported: usize, total: usize) -> ImportOutcome {
-    match session_counts(imported, total) {
-        Ok(detail) => ImportOutcome::Imported {
-            detail,
-            notes: Vec::new(),
-        },
-        Err(why) => ImportOutcome::Skipped(why),
-    }
-}
-
-/// [`per_session_outcome`]'s wording: the detail when any session was new,
-/// else why there was nothing to import.
-pub(crate) fn session_counts(imported: usize, total: usize) -> std::result::Result<String, String> {
-    if total == 0 {
-        return Err("no sessions in the export".to_string());
-    }
-    if imported == 0 {
-        return Err(format!("all {total} session(s) already exist locally"));
-    }
-    Ok(match total - imported {
-        0 => format!("{imported} session(s)"),
-        present => format!("{imported} session(s), {present} already present"),
-    })
-}
-
-/// What a projection wrote (or, in dry-run, would write), as paths
-/// relative to the target root.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct Projection {
-    pub written: Vec<PathBuf>,
-    /// The subset of `written` that replaced an existing file with
-    /// different content.
-    pub replaced: Vec<PathBuf>,
-}
-
-impl Projection {
-    pub fn is_empty(&self) -> bool {
-        self.written.is_empty()
-    }
-}
-
-/// Which part of a projection [`Harness::project_assets`] writes.
-#[derive(Debug, Default)]
-pub struct ProjectionScope<'a> {
-    /// The projected subdirs to write; `None` for all of the harness's.
-    pub subdirs: Option<&'a [&'a str]>,
-    /// Target paths, relative to the target root, never written (a
-    /// directory: its whole subtree).
-    pub keep: HashSet<PathBuf>,
-}
-
-/// Copy `<canonical_root>/<subdir>` over `<target_root>/<subdir>` for each
-/// `subdirs` entry within `scope`, recording what changed. Shared by every
-/// harness whose projection is a plain copy.
-pub(crate) fn project_by_copy(
-    canonical_root: &Path,
-    target_root: &Path,
-    subdirs: &[&str],
-    scope: &ProjectionScope<'_>,
-    dry_run: bool,
-) -> Result<Projection> {
-    let mut out = Projection::default();
-    for sub in subdirs {
-        if scope.subdirs.is_some_and(|only| !only.contains(sub)) {
-            continue;
-        }
-        let src = canonical_root.join(sub);
-        if !src.is_dir() {
-            continue;
-        }
-        let dst = target_root.join(sub);
-        let keep: HashSet<PathBuf> = scope
-            .keep
-            .iter()
-            .filter_map(|p| p.strip_prefix(sub).ok().map(Path::to_path_buf))
-            .collect();
-        for (rel, replaced) in fs_utils::sync_tree_except(&src, &dst, &keep, dry_run)? {
-            let rel = Path::new(sub).join(rel);
-            if replaced {
-                out.replaced.push(rel.clone());
-            }
-            out.written.push(rel);
-        }
-    }
-    Ok(out)
 }
 
 /// Every harness the project's agents run on: the default plus whatever
@@ -1241,70 +964,6 @@ impl FromStr for Harness {
     }
 }
 
-/// A harness-neutral description of the agent session pm wants to launch.
-/// Every field left unset omits the corresponding flag, so the agent
-/// inherits the harness's own default for that setting.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SpawnSpec<'a> {
-    /// Agent definition to launch; `None` is a plain, definition-less session.
-    pub definition: Option<&'a str>,
-    /// The composed baseline + notice-board file appended to the system prompt.
-    pub append_prompt_file: Option<&'a str>,
-    /// Initial positional prompt (or the never-idle sentinel).
-    pub prompt: Option<&'a str>,
-    /// Session id to resume.
-    pub resume_session: Option<&'a str>,
-    /// With `resume_session`, load its transcript under a fresh session id.
-    pub fork_session: bool,
-    /// Harness-specific, like `model`: whatever the config row said.
-    pub permission_mode: Option<&'a str>,
-    pub model: Option<&'a str>,
-    /// Directories outside the worktree the agent must be able to write
-    /// (pm's state, the shared `.git`) — what a sandboxing harness opens up.
-    pub writable_dirs: &'a [PathBuf],
-    /// Directories outside the worktree the agent edits with its own file
-    /// tools (the feature summary's), for a harness that gates those edits
-    /// by directory. Each lies within a `writable_dirs` entry.
-    pub edit_dirs: &'a [PathBuf],
-}
-
-/// Where a spawn happens, for [`Harness::pre_launch`].
-#[derive(Debug, Clone, Copy)]
-pub struct LaunchContext<'a> {
-    pub project_root: &'a Path,
-    /// The scope the agent belongs to.
-    pub feature: &'a str,
-    pub worktree: &'a Path,
-    /// The agent's display name.
-    pub agent: &'a str,
-}
-
-/// What [`Harness::pre_launch`] prepared for the command line.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct PreLaunch {
-    /// The session the harness will open, known before it starts — recorded
-    /// on the registry entry at spawn. `None` for a harness that reports its
-    /// session through the SessionStart hook.
-    pub session_id: Option<String>,
-    /// Environment the command must run with.
-    pub env: Vec<(String, String)>,
-    /// Variables the command must not inherit from the window's shell.
-    pub env_remove: Vec<String>,
-    /// Remarks for the spawn line.
-    pub notes: Vec<String>,
-}
-
-/// A session id is bound to the harness that produced it. Returns the id
-/// to resume only when `stored` (the harness recorded on the registry
-/// entry) still matches `resolved` (what config says now); otherwise the
-/// agent must start fresh.
-pub fn resumable_session(session_id: &str, stored: Harness, resolved: Harness) -> Option<String> {
-    if session_id.is_empty() || stored != resolved {
-        return None;
-    }
-    Some(session_id.to_string())
-}
-
 /// Whether `command` runs `binary`, by file name: as the program, or as
 /// the script an interpreter runs (`node …/codex`).
 fn launched_as(command: &str, binary: &str) -> bool {
@@ -1319,67 +978,6 @@ fn launched_as(command: &str, binary: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_conversation_is_the_recorded_transcript_else_the_one_its_id_names() {
-        let dir = tempfile::tempdir().unwrap();
-        let (root, home) = (dir.path().join("proj"), dir.path().join("home"));
-        let worktree = root.join("main");
-        let agent = AgentSession {
-            project_root: &root,
-            scope: "main",
-            name: "impl",
-            session_id: "s1",
-            worktree: &worktree,
-            home: &home,
-        };
-        assert_eq!(Harness::ClaudeCode.conversation(&agent), None);
-
-        let derived = home
-            .join(".claude/projects")
-            .join(claude_code::sessions::path_to_key(&worktree))
-            .join("s1.jsonl");
-        std::fs::create_dir_all(derived.parent().unwrap()).unwrap();
-        std::fs::write(&derived, "").unwrap();
-        let file = |c: Option<Conversation>| match c.map(|c| c.location) {
-            Some(Location::Jsonl { path, .. }) => path,
-            other => panic!("{other:?}"),
-        };
-        assert_eq!(file(Harness::ClaudeCode.conversation(&agent)), derived);
-
-        let recorded = dir.path().join("elsewhere/s1.jsonl");
-        std::fs::create_dir_all(recorded.parent().unwrap()).unwrap();
-        std::fs::write(&recorded, "").unwrap();
-        runtime::write_session_path(
-            &root,
-            "main",
-            "impl",
-            SessionPath::Transcript,
-            Some(&recorded),
-        )
-        .unwrap();
-        assert_eq!(file(Harness::ClaudeCode.conversation(&agent)), recorded);
-
-        let restarted = AgentSession {
-            session_id: "s2",
-            ..agent
-        };
-        assert_eq!(
-            Harness::ClaudeCode.conversation(&restarted),
-            None,
-            "a recorded transcript of another session is not this one's"
-        );
-
-        let rollout =
-            home.join(".codex/sessions/2026/10/03/rollout-2026-10-03T00-00-00-s1.jsonl.zst");
-        std::fs::create_dir_all(rollout.parent().unwrap()).unwrap();
-        std::fs::write(&rollout, "").unwrap();
-        let codex = AgentSession {
-            name: "cx",
-            ..agent
-        };
-        assert_eq!(file(Harness::Codex.conversation(&codex)), rollout);
-    }
 
     #[test]
     fn parses_and_displays_supported_names() {
@@ -1423,84 +1021,6 @@ mod tests {
             assert_eq!(stored.trim(), format!("h = \"{h}\""));
             assert_eq!(toml::from_str::<Wrap>(&stored).unwrap().h, *h);
         }
-    }
-
-    #[test]
-    fn claude_code_build_cmd_full_spec() {
-        // Every field set at once, pinning flag order through the seam.
-        let dirs = vec![PathBuf::from("/proj/.pm")];
-        let edit = vec![PathBuf::from("/proj/.pm/summaries")];
-        let cmd = Harness::ClaudeCode.build_cmd(
-            &SpawnSpec {
-                definition: Some("reviewer"),
-                append_prompt_file: Some("/proj/main/.agents/pm-baseline.md"),
-                prompt: Some("Stand by."),
-                resume_session: Some("abc123"),
-                fork_session: true,
-                permission_mode: Some("acceptEdits"),
-                model: Some("opus"),
-                writable_dirs: &dirs,
-                edit_dirs: &edit,
-            },
-            &HarnessConfig::default(),
-            &PreLaunch::default(),
-        );
-        assert_eq!(
-            cmd,
-            "claude --agent reviewer --model 'opus' \
-             --append-system-prompt-file '/proj/main/.agents/pm-baseline.md' \
-             --permission-mode 'acceptEdits' --add-dir='/proj/.pm/summaries' \
-             --resume abc123 --fork-session 'Stand by.'"
-        );
-    }
-
-    #[test]
-    fn project_assets_copies_overwrites_and_never_deletes() {
-        let tmp = tempfile::tempdir().unwrap();
-        let canonical = tmp.path().join(".agents");
-        let target = tmp.path().join(".claude");
-        std::fs::create_dir_all(canonical.join("agents")).unwrap();
-        std::fs::create_dir_all(canonical.join("skills/pm")).unwrap();
-        std::fs::write(canonical.join("agents/reviewer.md"), "new").unwrap();
-        std::fs::write(canonical.join("skills/pm/SKILL.md"), "skill").unwrap();
-        std::fs::create_dir_all(target.join("agents")).unwrap();
-        std::fs::write(target.join("agents/reviewer.md"), "old").unwrap();
-        std::fs::write(target.join("agents/custom.md"), "mine").unwrap();
-
-        // Dry run: reports, writes nothing.
-        let dry = Harness::ClaudeCode
-            .project_assets(&canonical, &target, &ProjectionScope::default(), true)
-            .unwrap();
-        assert_eq!(dry.written.len(), 2);
-        assert_eq!(dry.replaced, vec![PathBuf::from("agents/reviewer.md")]);
-        assert_eq!(
-            std::fs::read_to_string(target.join("agents/reviewer.md")).unwrap(),
-            "old"
-        );
-        assert!(!target.join("skills").exists());
-
-        let real = Harness::ClaudeCode
-            .project_assets(&canonical, &target, &ProjectionScope::default(), false)
-            .unwrap();
-        assert_eq!(real, dry);
-        assert_eq!(
-            std::fs::read_to_string(target.join("agents/reviewer.md")).unwrap(),
-            "new"
-        );
-        assert_eq!(
-            std::fs::read_to_string(target.join("skills/pm/SKILL.md")).unwrap(),
-            "skill"
-        );
-        assert_eq!(
-            std::fs::read_to_string(target.join("agents/custom.md")).unwrap(),
-            "mine"
-        );
-
-        // In sync: nothing to do.
-        let again = Harness::ClaudeCode
-            .project_assets(&canonical, &target, &ProjectionScope::default(), true)
-            .unwrap();
-        assert!(again.is_empty());
     }
 
     #[test]
@@ -1565,98 +1085,6 @@ mod tests {
         assert_eq!(
             harnesses_in_use(&project, &global),
             vec![Harness::ClaudeCode, Harness::Codex]
-        );
-    }
-
-    #[test]
-    fn codex_layout_needs_no_projection_and_hooks_live_in_codex_home() {
-        let home = Path::new("/h");
-        assert_eq!(
-            Harness::Codex.user_settings_file(home),
-            Some(PathBuf::from("/h/.codex/hooks.json"))
-        );
-        assert_eq!(
-            Harness::Codex.global_config_dir(home),
-            Some(PathBuf::from("/h/.codex"))
-        );
-        assert!(Harness::Codex.projected_dirs().is_empty());
-
-        let tmp = tempfile::tempdir().unwrap();
-        let canonical = tmp.path().join(".agents");
-        std::fs::create_dir_all(canonical.join("agents")).unwrap();
-        std::fs::write(canonical.join("agents/reviewer.md"), "x").unwrap();
-        let target = tmp.path().join(".codex");
-        assert!(
-            Harness::Codex
-                .project_assets(&canonical, &target, &ProjectionScope::default(), false)
-                .unwrap()
-                .is_empty()
-        );
-        assert!(!target.exists());
-    }
-
-    #[test]
-    fn trust_seams_are_inert_for_claude_code_and_gate_codex() {
-        let home = tempfile::tempdir().unwrap();
-        let wt = tempfile::tempdir().unwrap();
-        let config = HarnessConfig::default();
-        assert!(Harness::ClaudeCode.worktree_trusted(home.path(), wt.path()));
-        assert!(
-            !Harness::ClaudeCode
-                .trust_worktree(home.path(), wt.path())
-                .unwrap()
-        );
-        let trusted = |harness: Harness, config: &HarnessConfig, event, entry| {
-            harness
-                .hook_trust(config, home.path(), Probe::Cached)
-                .status(event, entry, 0)
-                == HookTrustStatus::Trusted
-        };
-        assert!(trusted(Harness::ClaudeCode, &config, "Stop", 0));
-
-        assert!(!Harness::Codex.worktree_trusted(home.path(), wt.path()));
-        assert!(
-            Harness::Codex
-                .trust_worktree(home.path(), wt.path())
-                .unwrap()
-        );
-        assert!(Harness::Codex.worktree_trusted(home.path(), wt.path()));
-        assert!(!trusted(Harness::Codex, &config, "Stop", 0));
-        let hooks = home.path().join(".codex/hooks.json");
-        std::fs::write(
-            home.path().join(".codex/config.toml"),
-            format!(
-                "[hooks.state.\"{}:stop:1:0\"]\ntrusted_hash = \"sha256:x\"\n",
-                hooks.display()
-            ),
-        )
-        .unwrap();
-        assert!(trusted(Harness::Codex, &config, "Stop", 1));
-        assert!(!trusted(Harness::Codex, &config, "Stop", 0));
-        assert!(!trusted(Harness::Codex, &config, "SessionStart", 1));
-
-        let mut bypassed = HarnessConfig::default();
-        bypassed.codex.bypass_hook_trust = Some(true);
-        assert!(trusted(Harness::Codex, &bypassed, "SessionStart", 1));
-    }
-
-    #[test]
-    fn resumable_session_needs_an_id_and_the_same_harness() {
-        assert_eq!(
-            resumable_session("sess", Harness::ClaudeCode, Harness::ClaudeCode).as_deref(),
-            Some("sess")
-        );
-        assert_eq!(
-            resumable_session("sess", Harness::Codex, Harness::Codex).as_deref(),
-            Some("sess")
-        );
-        assert_eq!(
-            resumable_session("", Harness::ClaudeCode, Harness::ClaudeCode),
-            None
-        );
-        assert_eq!(
-            resumable_session("sess", Harness::ClaudeCode, Harness::Codex),
-            None
         );
     }
 }
