@@ -10,7 +10,7 @@
 //! of its own ([`sessions`]).
 //!
 //! opencode has no Stop hook. The never-idle loop is the bundled
-//! `pm-never-idle` plugin (`plugins/opencode/pm-never-idle/`), installed once
+//! `pm-never-idle` plugin (`assets/plugins/opencode/pm-never-idle/`), installed once
 //! per machine under the user-level plugins dir: on each turn end it blocks
 //! in `pm harness hooks stop` and prompts the session with the answer. It
 //! also appends pm's composed prompt to the system prompt of every model
@@ -112,15 +112,15 @@ const PLUGIN_DIR: &str = "plugins/pm-never-idle";
 const PLUGIN_FILES: &[(&str, &str)] = &[
     (
         "index.ts",
-        include_str!("../../plugins/opencode/pm-never-idle/index.ts"),
+        include_str!("../../assets/plugins/opencode/pm-never-idle/index.ts"),
     ),
     (
         "loop.ts",
-        include_str!("../../plugins/opencode/pm-never-idle/loop.ts"),
+        include_str!("../../assets/plugins/opencode/pm-never-idle/loop.ts"),
     ),
     (
         "pm.ts",
-        include_str!("../../plugins/opencode/pm-never-idle/pm.ts"),
+        include_str!("../../assets/plugins/opencode/pm-never-idle/pm.ts"),
     ),
 ];
 

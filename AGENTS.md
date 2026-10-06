@@ -16,16 +16,16 @@ docs (`//!`) hold each mechanism. What follows is only what the tree doesn't say
   wrappers (`git/`, `tmux.rs`, `gh.rs`, `editor.rs`, …) — never inline in a handler.
 - **State** (`state/`, TOML) — the pm config dir holds the global registry and
   config; `<project>/.pm/` is per-project state. Precedence: project > global > unset.
-- **Bundled assets** (`commands/skills.rs`) — two tiers. Bundled skills,
-  agent defs, workflows, and the baseline install into the **global tier**,
-  where bundled names are reserved and rewritten on upgrade; the **project
-  tier** holds only the user's customs and shadows the global tier by name
-  — except Claude Code skills, where personal outranks project, so `pm
-  doctor` reports the shadow instead. No harness reads pm's canonical store,
-  so each tier is *projected* into the harness's layout: same-named files
-  are overwritten; nothing is deleted but pm's temp files, a feature's
-  projection of a skill its branch deleted (`seed.rs`), and what global
-  config disables. Bundled workflows are never git-backed (`state_gitignore.rs`).
+- **Bundled assets** (`assets/`, embedded by `commands/skills.rs`) — two tiers.
+  Bundled skills, agent defs, workflows, and the baseline install into the
+  **global tier**, where bundled names are reserved and rewritten on upgrade;
+  the **project tier** holds only the user's customs and shadows the global tier
+  by name — except Claude Code skills, where personal outranks project, so `pm
+  doctor` reports the shadow instead. No harness reads pm's canonical store, so
+  each tier is *projected* into the harness's layout: same-named files are
+  overwritten; nothing is deleted but pm's temp files, a feature's projection of
+  a skill its branch deleted (`seed.rs`), and what global config disables.
+  Bundled workflows are never git-backed (`state_gitignore.rs`).
 - **Portability** — `path_utils.rs` swaps `~/` ↔ `$HOME` so registry state moves.
 - **Releases** — one version for pm and app, Cargo.toml's; one APK signing key, ever;
   a removed `pm serve` path joins `RETIRED` (`serve/routes.rs`) so old apps blame themselves.

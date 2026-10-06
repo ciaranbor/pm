@@ -142,7 +142,7 @@ jobs:
           PRERELEASE: ${{ needs.verify.outputs.prerelease }}
         run: |
           mv dist/notes.md notes.md
-          cp install.sh dist/
+          cp scripts/install.sh dist/
           (cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS)
           flags=()
           [ "$PRERELEASE" = true ] && flags+=(--prerelease)
