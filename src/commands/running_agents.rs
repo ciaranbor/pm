@@ -19,11 +19,19 @@
 //! will wake it, and a background task the harness reported may have ended
 //! already.
 //!
+//! A blocking Stop hook in the pane that is not its recorded waiter is idle
+//! too: one a release before the waiter installed, still running in a
+//! session that release launched, records neither waiter nor marker, and
+//! answers a message as it lands. A waiter (named with its harness) that is
+//! not recorded is not: a superseded one lingers up to a poll interval,
+//! maybe into its agent's next turn.
+//!
 //! [`Windows`] reads every pane on the server and the process table once,
 //! so classifying any number of agents costs one `tmux` and one `ps` call.
 
 use std::path::Path;
 
+use crate::commands::hooks_install::runs_blocking_stop_hook;
 use crate::error::Result;
 use crate::harness::Harness;
 use crate::state::agent::{AgentEntry, AgentRegistry};
@@ -161,6 +169,9 @@ pub fn classify(
     if liveness(processes, harness, config) == Liveness::Dead {
         return (Liveness::Dead, None);
     }
+    if unrecorded_stop_hook(project_root, scope, name, processes.unwrap_or_default()) {
+        return (Liveness::Idle, None);
+    }
     let at = at.map(|w| match w.kind {
         WaitingKind::Background if !waiter => Waiting {
             kind: WaitingKind::Idle,
@@ -170,6 +181,20 @@ pub fn classify(
         _ => w,
     });
     (Liveness::Busy, at)
+}
+
+/// Whether one of `processes` runs pm's blocking Stop hook but is not
+/// `agent`'s recorded waiter.
+fn unrecorded_stop_hook(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    processes: &[Process],
+) -> bool {
+    let waiter = runtime::read_waiter(project_root, scope, agent);
+    processes
+        .iter()
+        .any(|p| runs_blocking_stop_hook(&p.command) && Some(p.pid) != waiter)
 }
 
 /// Whether `agent`'s waiter is one of `processes`.
@@ -254,9 +279,10 @@ mod tests {
         let session = tmux::session_name(&project_name, "login");
         let shell = crate::testing::fake_harness_binary(Harness::ClaudeCode, Path::new("/bin/sh"));
         let hook = format!(
-            "{} -c \"sh -c 'sleep 999; :' {}; :\"",
+            "{} -c \"sh -c 'sleep 999; :' {} {}; :\"",
             shell.display(),
-            crate::commands::hooks_install::PM_HOOK_MARKER
+            crate::commands::hooks_install::PM_HOOK_MARKER,
+            Harness::ClaudeCode
         );
         server.spawn_harness_agent(
             &project,
@@ -318,6 +344,50 @@ mod tests {
 
         runtime::clear_waiting(&project, "login", "qa").unwrap();
         assert_eq!(state(), (Liveness::Busy, None), "mid-turn");
+    }
+
+    #[test]
+    fn a_blocking_stop_hook_no_waiter_recorded_is_idle_and_an_unrecorded_waiter_is_not() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let session = tmux::session_name(&project_name, "login");
+        let shell = crate::testing::fake_harness_binary(Harness::ClaudeCode, Path::new("/bin/sh"));
+        let marker = crate::commands::hooks_install::PM_HOOK_MARKER;
+        let hook =
+            |args: &str| format!("{} -c \"sh -c 'sleep 999; :' {args}; :\"", shell.display());
+        let config = HarnessConfig::default();
+        let state = |name: &str| {
+            let windows = Windows::read(server.name()).unwrap();
+            let agent = AgentAt {
+                project_root: &project,
+                scope: "login",
+                name,
+                harness: Harness::ClaudeCode,
+            };
+            let processes = windows.processes(windows.find(&session, name).unwrap());
+            classify(agent, processes.as_deref(), &config).0
+        };
+        for (name, args, want) in [
+            ("legacy", marker.to_string(), Liveness::Idle),
+            (
+                "superseded",
+                format!("{marker} {}", Harness::ClaudeCode),
+                Liveness::Busy,
+            ),
+        ] {
+            server.spawn_harness_agent(
+                &project,
+                &session,
+                "login",
+                name,
+                Harness::ClaudeCode,
+                &hook(&args),
+                Liveness::Busy,
+            );
+            runtime::take_waiter(&project, "login", name, u32::MAX, None).unwrap();
+            assert_eq!(state(name), want, "{name}");
+        }
     }
 
     #[test]

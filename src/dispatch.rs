@@ -134,11 +134,12 @@ fn report_agent_op_results(
 fn report_restart_all(
     scopes: &[commands::agent_restart_all::Scope],
     unread: Vec<commands::agent_restart_all::Report>,
+    select: commands::agent_restart_all::Select,
     force: bool,
     server: Option<&str>,
 ) -> pm::error::Result<()> {
     use commands::agent_restart_all::Outcome;
-    let mut done = commands::agent_restart_all::restart_all(scopes, force, server)?;
+    let mut done = commands::agent_restart_all::restart_all(scopes, select, force, server)?;
     done.confirm_launches(server);
     let mut sweep = done.sweep();
     sweep.reports.splice(0..0, unread);
@@ -157,6 +158,14 @@ fn report_restart_all(
         return Err(PmError::Agent("some agents failed to restart".to_string()));
     }
     Ok(())
+}
+
+fn restart_select(stale: bool) -> commands::agent_restart_all::Select {
+    if stale {
+        commands::agent_restart_all::Select::Stale
+    } else {
+        commands::agent_restart_all::Select::All
+    }
 }
 
 /// Print what a send did, reporting a respawned recipient only once its
@@ -436,12 +445,13 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
         Commands::Agent(AgentCommands::Restart {
             all: true,
             global: true,
+            stale,
             force,
             ..
         }) => {
             let (scopes, unread) =
                 commands::agent_restart_all::global_scopes(&paths::global_projects_dir()?)?;
-            report_restart_all(&scopes, unread, force, server)
+            report_restart_all(&scopes, unread, restart_select(stale), force, server)
         }
         Commands::Agent(agent_cmd) => {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
@@ -525,6 +535,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                 AgentCommands::Restart {
                     names,
                     all,
+                    stale,
                     force,
                     scope,
                     ..
@@ -533,7 +544,13 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                     if all {
                         let scope =
                             commands::agent_restart_all::Scope::of(&project_root, &target_scope)?;
-                        return report_restart_all(&[scope], Vec::new(), force, server);
+                        return report_restart_all(
+                            &[scope],
+                            Vec::new(),
+                            restart_select(stale),
+                            force,
+                            server,
+                        );
                     }
                     let mut restarted = commands::agent_restart::agent_restart_many(
                         &project_root,
@@ -1048,7 +1065,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             Ok(())
         }
         Commands::Upgrade { all, dry_run } => {
-            let lines = commands::upgrade::upgrade(all, dry_run)?;
+            let lines = commands::upgrade::upgrade(all, dry_run, server)?;
             for line in lines {
                 println!("{line}");
             }

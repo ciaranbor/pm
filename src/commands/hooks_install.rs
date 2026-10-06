@@ -93,6 +93,17 @@ const LEGACY_HOOK_MARKER: &str = "pm claude hooks stop";
 const LEGACY_SESSION_START_MARKER: &str = "pm claude hooks session-start";
 
 const STOP_MARKERS: &[&str] = &[PM_HOOK_MARKER, LEGACY_HOOK_MARKER];
+
+/// Whether a process command line runs pm's Stop hook named with no
+/// harness: the blocking form, which runs inside the turn — every release
+/// before the waiter ran only that.
+pub fn runs_blocking_stop_hook(command: &str) -> bool {
+    STOP_MARKERS.iter().any(|marker| {
+        command
+            .split_once(marker)
+            .is_some_and(|(_, rest)| rest.trim().is_empty())
+    })
+}
 const SESSION_START_MARKERS: &[&str] = &[PM_SESSION_START_MARKER, LEGACY_SESSION_START_MARKER];
 
 /// The event of pm's hook that resets a blocked feature. Not part of the
@@ -288,37 +299,29 @@ pub(crate) fn install_in(
     Ok(lines)
 }
 
-/// Upsert every pm entry of `harness` into its user-level file. Returns
-/// whether the file changed (or would).
-fn install_global(harness: Harness, user_file: &Path, dry_run: bool) -> Result<bool> {
-    let mut root =
-        load_settings(user_file)?.unwrap_or_else(|| Value::Object(serde_json::Map::new()));
-    let stop_changed = upsert_hook(&mut root, "Stop", STOP_MARKERS, stop_hook_entry(harness))?;
-    let session_start_changed = upsert_hook(
-        &mut root,
-        "SessionStart",
-        SESSION_START_MARKERS,
-        json!({"type": "command", "command": session_start_hook_command()}),
-    )?;
-    let user_prompt_changed = upsert_hook(
-        &mut root,
-        USER_PROMPT_EVENT,
-        USER_PROMPT_MARKERS,
-        json!({"type": "command", "command": user_prompt_hook_command()}),
-    )?;
-    let mut waiting_changed = false;
+/// Every pm entry of `harness`'s user-level file: its event, the markers
+/// that identify it there, and the entry.
+fn pm_entries(harness: Harness) -> Vec<(&'static str, &'static [&'static str], Value)> {
+    let command = |command: String| json!({"type": "command", "command": command});
+    let mut entries = vec![
+        ("Stop", STOP_MARKERS, stop_hook_entry(harness)),
+        (
+            "SessionStart",
+            SESSION_START_MARKERS,
+            command(session_start_hook_command()),
+        ),
+        (
+            USER_PROMPT_EVENT,
+            USER_PROMPT_MARKERS,
+            command(user_prompt_hook_command()),
+        ),
+    ];
     for (event, markers) in waiting_events(harness) {
-        waiting_changed |= upsert_hook(
-            &mut root,
-            event,
-            markers,
-            json!({"type": "command", "command": waiting_hook_command(harness)}),
-        )?;
+        entries.push((event, markers, command(waiting_hook_command(harness))));
     }
     for (event, markers) in dialog_events(harness) {
         // As long as the Stop hook's: a dialog may wait on the user that long.
-        waiting_changed |= upsert_hook(
-            &mut root,
+        entries.push((
             event,
             markers,
             json!({
@@ -326,9 +329,38 @@ fn install_global(harness: Harness, user_file: &Path, dry_run: bool) -> Result<b
                 "command": dialog_hook_command(harness),
                 "timeout": STOP_HOOK_TIMEOUT_SECS,
             }),
-        )?;
+        ));
     }
-    if !(stop_changed || session_start_changed || user_prompt_changed || waiting_changed) {
+    entries
+}
+
+/// What this release installs as `harness`'s never-idle loop — its hook
+/// entries and plugin files — as one string that changes whenever they do.
+pub fn loop_fingerprint(harness: Harness) -> String {
+    let mut out = String::new();
+    for (event, _, entry) in pm_entries(harness) {
+        out.push_str(&format!("{event}\t{entry}\n"));
+    }
+    for (path, content) in harness.plugin_files(Path::new("")) {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        out.push_str(&format!(
+            "{name}\t{}\n",
+            crate::hash::sha256_hex(content.as_bytes())
+        ));
+    }
+    out
+}
+
+/// Upsert every pm entry of `harness` into its user-level file. Returns
+/// whether the file changed (or would).
+fn install_global(harness: Harness, user_file: &Path, dry_run: bool) -> Result<bool> {
+    let mut root =
+        load_settings(user_file)?.unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+    let mut changed = false;
+    for (event, markers, entry) in pm_entries(harness) {
+        changed |= upsert_hook(&mut root, event, markers, entry)?;
+    }
+    if !changed {
         return Ok(false);
     }
     if !dry_run {

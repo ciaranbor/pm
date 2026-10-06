@@ -44,6 +44,9 @@
 //! The **dialog record** is a dialog that can be answered remotely
 //! ([`DialogRecord`]).
 //!
+//! The **launch stamp** is what the agent's last spawn launched with
+//! ([`launch_stamp`](crate::commands::launch_stamp)).
+//!
 //! They live in `<project>/.pm/runtime/<scope>/<agent>/` and last as long
 //! as the agent's registry entry. Every spawn rewrites what it hands the
 //! harness, so a deleted file is restored by the next spawn. The directory
@@ -70,6 +73,7 @@ const WAITER_FILE: &str = "waiter";
 const BREAKER_FILE: &str = "breaker.json";
 const TRIPPED_FILE: &str = "loop-tripped";
 const STOP_LOG: &str = "stop-hook.log";
+const LAUNCH_STAMP_FILE: &str = "launch-stamp";
 /// The size past which the Stop hook's log keeps only its newer half.
 const STOP_LOG_MAX: u64 = 64 * 1024;
 
@@ -337,6 +341,21 @@ pub fn reset_loop(project_root: &Path, scope: &str, agent: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+pub fn write_launch_stamp(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    stamp: &str,
+) -> Result<()> {
+    let file = agent_dir(project_root, scope, agent)?.join(LAUNCH_STAMP_FILE);
+    write_atomic(&file, stamp.as_bytes())
+}
+
+/// The agent's launch stamp; `None` when its spawn wrote none.
+pub fn read_launch_stamp(project_root: &Path, scope: &str, agent: &str) -> Option<String> {
+    std::fs::read_to_string(agent_file(project_root, scope, agent, LAUNCH_STAMP_FILE)).ok()
 }
 
 /// Append `line` to the agent's Stop hook log, stamped with the time and

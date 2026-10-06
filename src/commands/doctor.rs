@@ -6,7 +6,7 @@ use crate::commands::bundled_disable::Disabled;
 use crate::commands::feat_delete::{self, CleanupParams};
 use crate::commands::harness_check::{self, Problem, ProblemKind};
 use crate::commands::running_agents::Windows;
-use crate::commands::{agent_spawn, hooks_install, skills, vanilla_rename};
+use crate::commands::{agent_spawn, hooks_install, launch_stamp, skills, vanilla_rename};
 use crate::error::Result;
 use crate::harness::{Harness, Probe};
 use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
@@ -118,6 +118,9 @@ pub enum IssueKind {
     /// A harness in use reports a problem with its `[harness.<name>]`
     /// settings.
     HarnessConfigInvalid,
+    /// A running agent would launch differently now than it did: it runs
+    /// on an outdated definition, prompt, config row or never-idle loop.
+    AgentLaunchStale,
     /// A feature's or main's worktree has a rebase paused, so its branch
     /// does not yet hold the rebased commits and `pm feat merge` refuses it.
     RebaseInProgress,
@@ -1217,6 +1220,8 @@ fn agent_issues(
     let windows = Windows::read(tmux_server)?;
     // What the attention snapshot reads each agent as; unreadable, none.
     let states = attention::scope_agents_in(project_root, scope, &windows).unwrap_or_default();
+    let config = ProjectConfig::load(&paths::pm_dir(project_root)).ok();
+    let global = GlobalConfig::load_or_default();
     let mut issues = Vec::new();
     for (agent_name, entry) in &registry.agents {
         if entry.agent_type != AgentType::Agent || !entry.active {
@@ -1249,6 +1254,20 @@ fn agent_issues(
             continue;
         }
         issues.extend(loop_issue(project_root, scope, agent_name, entry));
+        if let Some(config) = &config
+            && launch_stamp::is_stale(project_root, scope, agent_name, entry, config, &global)
+                .unwrap_or(false)
+        {
+            issues.push(Issue {
+                kind: IssueKind::AgentLaunchStale,
+                message: format!(
+                    "agent '{agent_name}' runs on what it was launched with, which has changed \
+                     since (its definition, the baseline, a notice board, a config row, or pm's \
+                     hooks); `pm agent restart {agent_name} --scope {scope}` relaunches it"
+                ),
+                fix: Fix::None,
+            });
+        }
         if past_grace(entry) {
             if entry.session_id.is_empty() {
                 issues.push(Issue {
@@ -3264,6 +3283,31 @@ mod tests {
             .unwrap()
             .lines();
         assert!(lines[0].contains("all healthy"), "got: {lines:?}");
+    }
+
+    #[test]
+    fn running_agent_launched_with_what_has_changed_is_flagged() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let projects_dir = TestServer::registry_dir(&project_path);
+        let session_name = tmux::session_name(&project_name, "login");
+        server.spawn_fake_agent(&project_path, &session_name, "login", "reviewer");
+        crate::state::runtime::write_launch_stamp(&project_path, "login", "reviewer", "old")
+            .unwrap();
+
+        let findings = diagnose(&project_path, &projects_dir, server.name(), Depth::Quick).unwrap();
+        let stale: Vec<&str> = findings
+            .iter()
+            .flat_map(Finding::issues)
+            .filter(|i| i.kind() == IssueKind::AgentLaunchStale)
+            .map(Issue::message)
+            .collect();
+        assert_eq!(stale.len(), 1, "{stale:?}");
+        assert!(
+            stale[0].contains("`pm agent restart reviewer --scope login`"),
+            "{stale:?}"
+        );
     }
 
     #[test]

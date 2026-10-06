@@ -15,6 +15,8 @@
 //! in `pm harness hooks stop` and prompts the session with the answer. It
 //! also appends pm's composed prompt to the system prompt of every model
 //! request, which is how the baseline and notice boards arrive.
+//! The plugin is loaded at launch: a running session keeps the one it
+//! started with.
 //!
 //! opencode has no UserPromptSubmit hook either. The plugin watches
 //! `session.inbox.enqueued` for `user` items instead and runs `pm harness

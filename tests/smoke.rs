@@ -691,6 +691,49 @@ fn restart_all_global_from_inside_an_agents_own_window_restarts_it_last() {
     assert!(s.find_window("proj/main", "scout").is_some());
 }
 
+/// Catches: `pm upgrade` run from a stale agent's own pane — as the
+/// post-merge hook runs it — killing that agent mid-command instead of
+/// reporting it, while restarting the other stale agents.
+#[test]
+#[ignore]
+fn upgrade_from_inside_a_stale_agents_window_reports_it_and_restarts_the_rest() {
+    let s = Smoke::new();
+    s.init_with_spawned_reviewer();
+    let main = s.proj().join("main");
+    s.pm(&main)
+        .args(["agent", "spawn", "scout", "--agent", "implementer"])
+        .assert()
+        .success();
+    s.argv_records("reviewer", 1);
+    s.argv_records("scout", 1);
+    std::fs::write(s.proj().join(".pm/notices.md"), "Be terse.").unwrap();
+
+    let old = s.find_window("proj/main", "scout").expect("scout window");
+    let old = s.tmux_ok(&["display", "-p", "-t", &old, "#{pane_id}"]);
+    s.tmux_ok(&["send-keys", "-t", &old, "C-c", ""]);
+    s.wait_for_shell(&old);
+
+    let outcome = s.run_in(&old, "pm upgrade");
+    assert!(outcome.alive, "the caller's pane was killed: {outcome:?}");
+    assert!(
+        outcome.log.contains(
+            "proj/main: Skipped agent 'scout': it is stale, and runs this command; restart it \
+             with `pm agent restart scout --scope main`"
+        ),
+        "{}",
+        outcome.log
+    );
+    assert!(
+        outcome
+            .log
+            .contains("proj/login: Restarted agent 'reviewer'"),
+        "{}",
+        outcome.log
+    );
+    assert_eq!(s.argv_records("reviewer", 2).len(), 2);
+    assert_eq!(s.argv_records("scout", 1).len(), 1);
+}
+
 /// Catches: tmux output parsed under launchd's environment — no UTF-8
 /// locale and no `$TMUX` — where tmux prints tabs as `_` and every live
 /// session reads as closed.

@@ -2,12 +2,13 @@ use std::path::{Path, PathBuf};
 
 use crate::error::Result;
 use crate::state::paths;
-use crate::state::project::ProjectEntry;
+use crate::state::project::{GlobalConfig, ProjectEntry};
 use crate::state::workflow::VANILLA_AGENT;
 
 use super::hooks_install;
 use super::serve_install::{self, Refresh};
 use super::skills;
+use super::upgrade_restart;
 
 /// Upgrade a single project: reinstall hooks, bootstrap state, migrate any
 /// pre-global-tier bundled copies away, and project the project's own
@@ -69,9 +70,7 @@ pub fn upgrade_project(project_root: &Path) -> Result<Vec<String>> {
 
 /// Dry-run variant of [`upgrade_project`]: report what would change without
 /// writing anything. Returns one `Would …` line per action that would be
-/// taken; an empty `Vec` means the project is fully up to date. The public
-/// [`upgrade`] dispatcher is responsible for translating an empty result
-/// into the user-facing `Up to date` line.
+/// taken; an empty `Vec` means the project is fully up to date.
 pub fn upgrade_project_dry_run(project_root: &Path) -> Result<Vec<String>> {
     let mut actions = Vec::new();
 
@@ -316,34 +315,48 @@ fn install_global_lines(dry_run: bool) -> Vec<String> {
     lines
 }
 
-/// Upgrade either the current project (default) or all projects (--all).
-/// When `dry_run` is `true`, preview changes without writing anything.
-pub fn upgrade(all: bool, dry_run: bool) -> Result<Vec<String>> {
-    if all {
-        if dry_run {
-            upgrade_all_dry_run()
-        } else {
-            upgrade_all()
-        }
+/// Upgrade either the current project (default) or all projects (--all),
+/// then restart the agents left stale ([`upgrade_restart`]). When `dry_run`
+/// is `true`, preview changes without writing anything.
+pub fn upgrade(all: bool, dry_run: bool, tmux_server: Option<&str>) -> Result<Vec<String>> {
+    let project_root = if all {
+        None
     } else {
-        let project_root = paths::find_project_root(&std::env::current_dir()?)?;
-        if dry_run {
-            upgrade_dry_run_at(&project_root)
-        } else {
-            let mut lines = install_global_lines(false);
-            lines.extend(upgrade_project(&project_root)?);
-            Ok(lines)
-        }
-    }
+        Some(paths::find_project_root(&std::env::current_dir()?)?)
+    };
+    upgrade_at(project_root.as_deref(), dry_run, tmux_server)
 }
 
-/// The global tier's pending actions plus the project's, with the
-/// `Up to date` fallback the dispatcher prints. Lifted out of [`upgrade`]
-/// so it can be tested without mutating the process-wide cwd.
-fn upgrade_dry_run_at(project_root: &Path) -> Result<Vec<String>> {
-    let mut lines = install_global_lines(true);
-    lines.extend(upgrade_project_dry_run(project_root)?);
-    if lines.is_empty() {
+/// [`upgrade`] of the project at `project_root`, or of every project, with
+/// the `Up to date` line a dry run that finds nothing to do prints.
+fn upgrade_at(
+    project_root: Option<&Path>,
+    dry_run: bool,
+    tmux_server: Option<&str>,
+) -> Result<Vec<String>> {
+    let mut lines = match (project_root, dry_run) {
+        (None, true) => upgrade_all_dry_run()?,
+        (None, false) => upgrade_all()?,
+        (Some(root), true) => {
+            let mut lines = install_global_lines(true);
+            lines.extend(upgrade_project_dry_run(root)?);
+            lines
+        }
+        (Some(root), false) => {
+            let mut lines = install_global_lines(false);
+            lines.extend(upgrade_project(root)?);
+            lines
+        }
+    };
+    let (scopes, unread) = upgrade_restart::scopes(&paths::global_projects_dir()?, project_root);
+    lines.extend(unread);
+    lines.extend(upgrade_restart::restart_stale(
+        &scopes,
+        &GlobalConfig::load_or_default(),
+        dry_run,
+        tmux_server,
+    ));
+    if dry_run && lines.is_empty() {
         lines.push("Up to date".to_string());
     }
     Ok(lines)
@@ -718,16 +731,23 @@ last_active = "2026-01-01T00:00:00Z"
     }
 
     #[test]
-    fn dry_run_at_reports_up_to_date_only_when_nothing_is_pending() {
+    fn dry_run_reports_up_to_date_only_when_nothing_is_pending() {
+        let server = crate::testing::TestServer::new();
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
-
-        let lines = upgrade_dry_run_at(&root).unwrap();
-        assert!(!lines.is_empty() && lines.iter().all(|l| l != "Up to date"));
-
+        let (root, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let session = crate::tmux::session_name(&project_name, "login");
+        server.spawn_idle_fake_agent(&root, &session, "login", "reviewer");
         skills::install_global().unwrap();
         upgrade_project(&root).unwrap();
-        assert_eq!(upgrade_dry_run_at(&root).unwrap(), vec!["Up to date"]);
+        let dry_run = || upgrade_at(Some(&root), true, server.name()).unwrap();
+        assert_eq!(dry_run(), ["Up to date"]);
+
+        crate::state::runtime::write_launch_stamp(&root, "login", "reviewer", "old").unwrap();
+        assert_eq!(
+            dry_run(),
+            [format!("{session}: Would restart agent 'reviewer'")],
+            "a stale agent alone is something to do"
+        );
     }
 
     // --- upgrade_all_with_dir tests ---

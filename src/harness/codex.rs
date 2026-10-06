@@ -15,6 +15,8 @@
 //! prompt — definition body, baseline, notice boards — is injected by the
 //! SessionStart hook as `hookSpecificOutput.additionalContext`; SessionStart
 //! also fires on `codex resume`, so the role re-applies without extra flags.
+//! `hooks.json` is read at launch: a running session keeps the entries it
+//! started with.
 //! Hooks live in `$CODEX_HOME/hooks.json` in Claude Code's nested shape (a
 //! flat shape parses and registers nothing). Codex reads skills from the
 //! canonical `.agents/skills/` directly, so nothing is projected for it.

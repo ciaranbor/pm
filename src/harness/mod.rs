@@ -279,6 +279,24 @@ impl Harness {
         }
     }
 
+    /// This harness's own `[harness.<name>]` section of `config`.
+    pub fn config_section(self, config: &HarnessConfig) -> serde_json::Value {
+        match self {
+            Harness::ClaudeCode => serde_json::Value::Null,
+            Harness::Codex => serde_json::to_value(&config.codex).unwrap_or_default(),
+            Harness::OpenCode => serde_json::to_value(&config.opencode).unwrap_or_default(),
+        }
+    }
+
+    /// Whether a running session picks up an edit to pm's never-idle loop
+    /// — its hook entries or plugin files — without a restart.
+    pub fn hooks_reload_live(self) -> bool {
+        match self {
+            Harness::ClaudeCode => true,
+            Harness::Codex | Harness::OpenCode => false,
+        }
+    }
+
     /// Files pm owns outright in the harness's user-level dir and writes
     /// verbatim, once per machine, with their bundled content — the
     /// counterpart of [`user_settings_file`](Self::user_settings_file) for a

@@ -12,6 +12,11 @@
 //! a prompt UserPromptSubmit sees wrapped ([`rewake_reason`]). Esc does not
 //! end it, nor does a new turn; `/exit` ends it with SIGTERM (verified on
 //! 2.1.289).
+//!
+//! A running session picks up edits to the user-level hooks file through
+//! its file watcher (verified on 2.1.272), so a new release's hook entries
+//! need no restart. Its definition, `--append-system-prompt-file` and flags
+//! are read only at launch.
 
 pub(super) mod chat;
 pub(super) mod dialog;
