@@ -45,9 +45,12 @@ pub const VERSION: u32 = 1;
 /// How recent a busy agent's activity must be for its scope to be working.
 pub const WORKING_SECS: i64 = 20 * 60;
 
-/// How long after its spawn an agent whose window runs no harness reads as
-/// starting rather than dead: long enough for the window's shell to start
-/// the harness, short enough that one that exits at once soon reads dead.
+/// How long after its window ran the launch line an agent whose window runs
+/// no harness reads as starting rather than dead: long enough for the
+/// harness to start, short enough that one that exits at once soon reads
+/// dead. Before the line has run, the window's shell may still be in its
+/// startup files, and the agent reads as starting for as long as its spawn
+/// waits on it ([`launch_check::START_WITHIN`](super::launch_check::START_WITHIN)).
 const STARTING_SECS: i64 = 10;
 
 /// A scope quiet for less than this is shown as neither working nor quiet,
@@ -602,13 +605,22 @@ impl ScopeReader<'_> {
         })
     }
 
-    /// Whether `agent` was spawned in the last [`STARTING_SECS`] and its
-    /// harness has not started a session: its window may still run only the
-    /// shell its command was typed into.
+    /// Whether `agent`'s harness has not started a session and its window,
+    /// running only the shell its launch line was typed into, may yet start
+    /// it ([`STARTING_SECS`]).
     fn starting(&self, scope: &str, agent: &str, now: DateTime<Utc>) -> bool {
-        runtime::read_waiting(self.project_root, scope, agent).is_some_and(|w| {
-            w.kind == WaitingKind::Startup && (now - w.since).num_seconds() <= STARTING_SECS
-        })
+        let Some(spawned) = runtime::read_waiting(self.project_root, scope, agent)
+            .filter(|w| w.kind == WaitingKind::Startup)
+            .map(|w| w.since)
+        else {
+            return false;
+        };
+        match runtime::launched_at(self.project_root, scope, agent) {
+            Some(launched) => (now - launched).num_seconds() <= STARTING_SECS,
+            None => {
+                (now - spawned).num_seconds() <= super::launch_check::START_WITHIN.as_secs() as i64
+            }
+        }
     }
 
     /// A busy agent, refined by what it is `at` or a stopped loop. A
@@ -1088,6 +1100,8 @@ mod tests {
         server.spawn_dead_fake_agent(&project, &session, "login", "dead");
         server.spawn_dead_fake_agent(&project, &session, "login", "spawned");
         server.spawn_dead_fake_agent(&project, &session, "login", "never-started");
+        server.spawn_dead_fake_agent(&project, &session, "login", "in-rc");
+        server.spawn_dead_fake_agent(&project, &session, "login", "stuck-in-rc");
         let mark = |agent: &str, kind: WaitingKind| {
             let waiting = runtime::Waiting::now(kind, Some("Which DB?".into()));
             runtime::write_waiting(&project, "login", agent, &waiting).unwrap();
@@ -1096,9 +1110,23 @@ mod tests {
         mark("starting", WaitingKind::Startup);
         mark("dead", WaitingKind::Question);
         mark("spawned", WaitingKind::Startup);
-        let mut stale = runtime::Waiting::now(WaitingKind::Startup, None);
-        stale.since -= chrono::Duration::seconds(STARTING_SECS + 1);
-        runtime::write_waiting(&project, "login", "never-started", &stale).unwrap();
+        let spawned_ago = |agent: &str, secs: i64| {
+            let mut stale = runtime::Waiting::now(WaitingKind::Startup, None);
+            stale.since -= chrono::Duration::seconds(secs);
+            runtime::write_waiting(&project, "login", agent, &stale).unwrap();
+        };
+        let past_starting = STARTING_SECS + 1;
+        spawned_ago("never-started", past_starting);
+        let launched = runtime::reset_launched(&project, "login", "never-started").unwrap();
+        std::fs::File::create(&launched)
+            .unwrap()
+            .set_modified(
+                std::time::SystemTime::now() - std::time::Duration::from_secs(past_starting as u64),
+            )
+            .unwrap();
+        spawned_ago("in-rc", past_starting);
+        let past_launch = super::super::launch_check::START_WITHIN.as_secs() as i64 + 1;
+        spawned_ago("stuck-in-rc", past_launch);
         runtime::touch_activity(&project, "login", "asking").unwrap();
 
         let login = &super::project(&project, server.name()).unwrap().features[0];
@@ -1117,9 +1145,11 @@ mod tests {
                 ("asking", AgentState::Asking, Some("Which DB?")),
                 ("dead", AgentState::Dead, None),
                 ("idle", AgentState::Idle, None),
+                ("in-rc", AgentState::Busy, None),
                 ("never-started", AgentState::Dead, None),
                 ("spawned", AgentState::Busy, None),
                 ("starting", AgentState::Busy, None),
+                ("stuck-in-rc", AgentState::Dead, None),
             ]
         );
         assert_eq!(login.attention.kind, AttentionKind::Asking);

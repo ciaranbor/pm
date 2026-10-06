@@ -26,6 +26,11 @@
 //! The **activity stamp** is a file whose mtime is the agent's last sign of
 //! life: every pm hook invocation touches it.
 //!
+//! The **launch stamp** is a file the line a spawn types into the agent's
+//! window creates before it starts the harness, so its existence says the
+//! window's shell got through its startup files and ran the line, and its
+//! mtime says when. Every spawn removes it before typing the line.
+//!
 //! The **session paths** are what the current session reported at its
 //! start: its transcript, for a harness that records an interrupt or a
 //! failed turn only there
@@ -59,6 +64,7 @@ pub use dialog::*;
 
 const WAITING_FILE: &str = "waiting.json";
 const ACTIVITY_FILE: &str = "activity";
+const LAUNCHED_FILE: &str = "launched";
 const TURN_END_CLAIM: &str = "turn-end-claimed-";
 const WAITER_FILE: &str = "waiter";
 const BREAKER_FILE: &str = "breaker.json";
@@ -501,6 +507,22 @@ pub(crate) fn set_activity(project_root: &Path, scope: &str, agent: &str, when: 
 /// When the agent was last stamped active; `None` if it never was.
 pub fn last_activity(project_root: &Path, scope: &str, agent: &str) -> Option<DateTime<Utc>> {
     let file = agent_file(project_root, scope, agent, ACTIVITY_FILE);
+    Some(std::fs::metadata(file).ok()?.modified().ok()?.into())
+}
+
+/// The launch stamp's path, its directory created and the stamp removed:
+/// what a spawn's typed line creates.
+pub fn reset_launched(project_root: &Path, scope: &str, agent: &str) -> Result<PathBuf> {
+    let file = agent_dir(project_root, scope, agent)?.join(LAUNCHED_FILE);
+    match std::fs::remove_file(&file) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+        _ => Ok(file),
+    }
+}
+
+/// When the agent's window ran its spawn's typed line; `None` until it has.
+pub fn launched_at(project_root: &Path, scope: &str, agent: &str) -> Option<DateTime<Utc>> {
+    let file = agent_file(project_root, scope, agent, LAUNCHED_FILE);
     Some(std::fs::metadata(file).ok()?.modified().ok()?.into())
 }
 
