@@ -17,8 +17,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledIconButton
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -28,6 +26,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -110,14 +109,24 @@ internal fun ScreenPanel(
     modifier: Modifier = Modifier,
 ) {
     var text by rememberSaveable { mutableStateOf("") }
+    var typing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val submit = {
-        val typing = text
-        if (typing.isNotEmpty()) scope.launch { if (type(typing) && text == typing) text = "" }
+        val typed = text
+        if (typed.isNotEmpty() && !typing) {
+            typing = true
+            scope.launch {
+                try {
+                    if (type(typed) && text == typed) text = ""
+                } finally {
+                    typing = false
+                }
+            }
+        }
     }
     Column(
-        modifier.fillMaxWidth().fillMaxHeight(0.9f).imePadding().padding(horizontal = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier.fillMaxWidth().fillMaxHeight(0.9f).imePadding().padding(horizontal = Spacing.m),
+        verticalArrangement = Arrangement.spacedBy(Spacing.s),
     ) {
         Box(
             Modifier.weight(1f)
@@ -150,13 +159,15 @@ internal fun ScreenPanel(
                 keyboardActions = KeyboardActions(onSend = { submit() }),
                 modifier = Modifier.weight(1f),
             )
-            FilledIconButton(
+            PendingIconButton(
+                painterResource(R.drawable.ic_send),
+                "Type",
                 onClick = { submit() },
-                enabled = text.isNotEmpty(),
-                modifier = Modifier.padding(start = 4.dp),
-            ) {
-                Icon(painterResource(R.drawable.ic_send), "Type")
-            }
+                pending = typing,
+                enabled = typing || text.isNotEmpty(),
+                filled = true,
+                modifier = Modifier.padding(start = Spacing.xs),
+            )
         }
     }
 }
@@ -165,8 +176,8 @@ internal fun ScreenPanel(
 @Composable
 private fun Keys(keys: List<Key>, press: (String) -> Unit) {
     FlowRow(
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+        verticalArrangement = Arrangement.spacedBy(Spacing.xs),
     ) {
         keys.forEach { key ->
             val primary = key == Enter
@@ -185,7 +196,7 @@ private fun Keys(keys: List<Key>, press: (String) -> Unit) {
                     Text(
                         key.label,
                         style = MaterialTheme.typography.labelLarge,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        modifier = Modifier.padding(horizontal = Spacing.m, vertical = Spacing.s),
                     )
                 }
             }

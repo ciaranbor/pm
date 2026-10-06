@@ -10,12 +10,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
@@ -35,8 +33,6 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.mikepenz.markdown.m3.Markdown
-import com.mikepenz.markdown.m3.markdownTypography
 import dev.pm.app.R
 import dev.pm.app.model.Dialog
 
@@ -49,6 +45,7 @@ import dev.pm.app.model.Dialog
 internal fun DialogCard(
     dialog: Dialog,
     answering: Boolean,
+    interrupting: Boolean,
     notice: String?,
     answer: (choice: String, answers: Map<String, List<String>>, message: String?) -> Unit,
     interrupt: () -> Unit,
@@ -59,9 +56,14 @@ internal fun DialogCard(
     val typed = remember(dialog.id) { mutableStateMapOf<String, String>() }
     var messaging by rememberSaveable(dialog.id) { mutableStateOf<String?>(null) }
     var message by rememberSaveable(dialog.id) { mutableStateOf("") }
+    var tapped by rememberSaveable(dialog.id) { mutableStateOf<String?>(null) }
+    val send = { choice: String, answers: Map<String, List<String>>, message: String? ->
+        tapped = choice
+        answer(choice, answers, message)
+    }
     val answers = answersOf(dialog, picked, typed)
     Surface(modifier.fillMaxWidth(), tonalElevation = 2.dp) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Column(Modifier.padding(horizontal = Spacing.m, vertical = Spacing.s)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     title(dialog),
@@ -71,9 +73,13 @@ internal fun DialogCard(
                 IconButton(onClick = openTerminal) {
                     Icon(painterResource(R.drawable.ic_terminal), "Show the terminal")
                 }
-                IconButton(onClick = interrupt) {
-                    Icon(painterResource(R.drawable.ic_stop), "Interrupt")
-                }
+                PendingIconButton(
+                    painterResource(R.drawable.ic_stop),
+                    "Interrupt",
+                    onClick = interrupt,
+                    pending = interrupting,
+                    enabled = !answering,
+                )
             }
             if (notice != null) {
                 Text(
@@ -84,7 +90,7 @@ internal fun DialogCard(
             }
             Column(
                 Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(Spacing.s),
             ) {
                 when (dialog.kind) {
                     "question" ->
@@ -97,22 +103,11 @@ internal fun DialogCard(
                                 type = { typed[q.question] = it },
                             )
                         }
-                    "plan" -> {
-                        // Headings at title size: the card has little room.
-                        val type = MaterialTheme.typography
-                        Markdown(
+                    "plan" ->
+                        PmMarkdown(
                             dialog.plan.orEmpty(),
-                            typography =
-                                markdownTypography(
-                                    h1 = type.titleLarge,
-                                    h2 = type.titleMedium,
-                                    h3 = type.titleSmall,
-                                    h4 = type.titleSmall,
-                                    h5 = type.titleSmall,
-                                    h6 = type.titleSmall,
-                                ),
+                            text = MaterialTheme.typography.bodyMedium,
                         )
-                    }
                     else -> PermissionView(dialog)
                 }
             }
@@ -123,40 +118,44 @@ internal fun DialogCard(
                     onValueChange = { message = it },
                     placeholder = { Text("Tell the agent what to do instead (optional)") },
                     maxLines = 4,
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(top = Spacing.s),
                 )
                 Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                    TextButton(onClick = { messaging = null }) { Text("Cancel") }
-                    Button(
-                        onClick = { answer(pending, emptyMap(), message) },
-                        enabled = !answering,
-                    ) {
-                        Text(dialog.choices.find { it.id == pending }?.label ?: pending)
+                    TextButton(onClick = { messaging = null }, enabled = !answering) {
+                        Text("Cancel")
                     }
+                    PendingButton(
+                        dialog.choices.find { it.id == pending }?.label ?: pending,
+                        onClick = { send(pending, emptyMap(), message) },
+                        pending = answering,
+                        enabled = !interrupting,
+                    )
                 }
             } else {
                 Column(
-                    Modifier.padding(top = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    Modifier.padding(top = Spacing.s),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                 ) {
                     dialog.choices.forEachIndexed { i, choice ->
-                        val enabled = !answering && (choice.id != Dialog.ANSWER || answers != null)
-                        val onClick = {
-                            when {
-                                choice.takesMessage -> messaging = choice.id
-                                choice.id == Dialog.ANSWER -> answer(choice.id, answers!!, null)
-                                else -> answer(choice.id, emptyMap(), null)
-                            }
-                        }
-                        if (i == 0) {
-                            Button(onClick, Modifier.fillMaxWidth(), enabled = enabled) {
-                                Text(choice.label)
-                            }
-                        } else {
-                            OutlinedButton(onClick, Modifier.fillMaxWidth(), enabled = enabled) {
-                                Text(choice.label)
-                            }
-                        }
+                        val mine = answering && tapped == choice.id
+                        PendingButton(
+                            choice.label,
+                            onClick = {
+                                when {
+                                    choice.takesMessage -> messaging = choice.id
+                                    choice.id == Dialog.ANSWER -> send(choice.id, answers!!, null)
+                                    else -> send(choice.id, emptyMap(), null)
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            pending = mine,
+                            enabled =
+                                mine ||
+                                    !answering &&
+                                        !interrupting &&
+                                        (choice.id != Dialog.ANSWER || answers != null),
+                            emphasis = if (i == 0) Emphasis.Filled else Emphasis.Outlined,
+                        )
                     }
                 }
             }
@@ -224,9 +223,12 @@ private fun QuestionView(
                         type("")
                     }
                 }
-            Row(row.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.Top) {
+            Row(
+                row.fillMaxWidth().padding(vertical = Spacing.xxs),
+                verticalAlignment = Alignment.Top,
+            ) {
                 if (question.multiSelect) Checkbox(on, null) else RadioButton(on, null)
-                Column(Modifier.padding(start = 8.dp)) {
+                Column(Modifier.padding(start = Spacing.s)) {
                     Text(option.label, fontWeight = FontWeight.Medium)
                     if (option.description.isNotBlank()) {
                         Text(
@@ -261,7 +263,7 @@ private fun PermissionView(dialog: Dialog) {
         Text(
             it,
             style = terminalStyle(13.sp),
-            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.xs),
         )
     }
 }

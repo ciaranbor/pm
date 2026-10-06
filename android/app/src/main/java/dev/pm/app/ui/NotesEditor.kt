@@ -19,18 +19,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -62,10 +61,16 @@ internal fun NotesEditor(
     var previewing by rememberSaveable { mutableStateOf(false) }
     var confirming by rememberSaveable { mutableStateOf(false) }
     val changed = state.changed
+    val feedback = LocalFeedback.current
+    LaunchedEffect(model) {
+        model.failures.collect { error ->
+            feedback.failed(error, if (error != NotesModel.TOO_LONG) model::save else null)
+        }
+    }
     TopBarActions(topBar) {
         if (changed) {
             Box(
-                Modifier.padding(horizontal = 8.dp)
+                Modifier.padding(horizontal = Spacing.s)
                     .size(8.dp)
                     .background(MaterialTheme.colorScheme.primary, CircleShape)
                     .semantics { contentDescription = "Unsaved changes" }
@@ -77,17 +82,17 @@ internal fun NotesEditor(
         ) {
             Icon(painterResource(R.drawable.ic_close), if (changed) "Discard" else "Close")
         }
-        IconButton(onClick = model::save, enabled = changed && !state.saving) {
-            if (state.saving) {
-                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-            } else {
-                Icon(painterResource(R.drawable.ic_check), "Save")
-            }
-        }
+        PendingIconButton(
+            painterResource(R.drawable.ic_check),
+            "Save",
+            onClick = model::save,
+            pending = state.saving,
+            enabled = changed || state.saving,
+        )
     }
     Column(modifier.fillMaxSize().imePadding()) {
         SingleChoiceSegmentedButtonRow(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+            Modifier.fillMaxWidth().padding(horizontal = Spacing.l, vertical = Spacing.s)
         ) {
             listOf("Edit", "Preview").forEachIndexed { i, label ->
                 SegmentedButton(
@@ -99,26 +104,12 @@ internal fun NotesEditor(
                 }
             }
         }
-        if (state.error != null) {
-            Surface(
-                color = MaterialTheme.colorScheme.errorContainer,
-                shape = MaterialTheme.shapes.small,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            ) {
-                Text(
-                    state.error,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onErrorContainer,
-                    modifier = Modifier.padding(12.dp),
-                )
-            }
-        }
         if (previewing) {
             val text = remember { model.text.toString() }
             if (text.isBlank()) {
-                Centered { Text("Nothing to preview yet.") }
+                EmptyState("Nothing to preview yet.")
             } else {
-                MarkdownPage(text, "Notes")
+                MarkdownPage(text)
             }
         } else {
             Field(model, readOnly = state.saving)

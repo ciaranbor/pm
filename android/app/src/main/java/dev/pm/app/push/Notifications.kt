@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Bundle
 import android.provider.Settings
 import android.service.notification.StatusBarNotification
 import androidx.core.app.NotificationCompat
@@ -14,7 +15,6 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.Person
 import androidx.core.app.RemoteInput
 import androidx.core.net.toUri
-import androidx.core.os.bundleOf
 import dev.pm.app.MainActivity
 import dev.pm.app.R
 import dev.pm.app.model.AttentionKind
@@ -193,7 +193,7 @@ object Notifications {
                 .setAutoCancel(true)
                 .setGroup(GROUP)
                 .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_SUMMARY)
-                .addExtras(bundleOf(EXTRA_TRANSITION to encoded))
+                .addExtras(Bundle().apply { putString(EXTRA_TRANSITION, encoded) })
         val agent = transition.agent
         val waiting =
             transition.kindOf == AttentionKind.Blocked || transition.kindOf == AttentionKind.Ready

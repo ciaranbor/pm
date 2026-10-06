@@ -103,7 +103,7 @@ fun ToolOutputScreen(model: ToolOutputModel, modifier: Modifier = Modifier) {
     when (val shown = state) {
         OutputState.Loading -> Centered(modifier) { CircularProgressIndicator() }
         is OutputState.Failed ->
-            Retryable("Couldn't load the output: ${shown.reason}", model::retry, modifier)
+            ErrorState("Couldn't load the output", model::retry, modifier, hint = shown.reason)
         is OutputState.Shown -> {
             val size = 12.sp
             val cell = rememberCellWidth()

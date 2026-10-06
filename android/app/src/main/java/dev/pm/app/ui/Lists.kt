@@ -26,9 +26,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import dev.pm.app.model.Activity
 import dev.pm.app.model.AgentSnapshot
+import dev.pm.app.model.AgentState
 import dev.pm.app.model.Attention
 import dev.pm.app.model.AttentionKind
 import dev.pm.app.model.FeatureSnapshot
@@ -37,6 +37,8 @@ import dev.pm.app.model.Need
 import dev.pm.app.model.ProjectSnapshot
 import dev.pm.app.model.Snapshot
 import dev.pm.app.model.activity
+import dev.pm.app.model.prLabel
+import dev.pm.app.model.progressLabel
 import java.time.Instant
 
 /** `n` and the noun, plural unless `n` is one. */
@@ -61,32 +63,41 @@ fun Home(
         if (needs.isEmpty()) {
             item(key = "nothing") {
                 val working = snapshot.workingFeatures()
+                val word = AgentState.Busy.label
                 val line =
                     when {
-                        !stale -> " · ${count(working, "feature")} working"
                         working == 0 -> ""
+                        !stale -> " · ${count(working, "feature")} $word"
                         else ->
-                            " · ${count(working, "feature")} ${if (working == 1) "was" else "were"} working"
+                            " · ${count(working, "feature")} ${if (working == 1) "was" else "were"} $word"
                     }
                 Text(
                     "Nothing needs you$line",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    modifier = Modifier.padding(Rows.padding),
                 )
             }
         }
         items(needs, key = { "need/${it.project}/${it.scope}" }) { need ->
             NeedRow(need, open = { openNeed(need) })
-            HorizontalDivider()
+            RowDivider()
         }
         item(key = "projects") { Heading("Projects") }
         items(snapshot.projectsByUrgency(), key = { "project/${it.name}" }) { project ->
             ProjectRow(snapshot, project, now, stale, open = { openProject(project.name) })
-            HorizontalDivider()
+            RowDivider()
         }
     }
 }
+
+/** Between list rows: inset, so the rows read as one list rather than boxes. */
+@Composable
+private fun RowDivider() =
+    HorizontalDivider(
+        Modifier.padding(horizontal = Rows.dividerInset),
+        color = MaterialTheme.colorScheme.outlineVariant,
+    )
 
 @Composable
 private fun Heading(text: String) {
@@ -95,9 +106,13 @@ private fun Heading(text: String) {
         style = MaterialTheme.typography.titleSmall,
         color = MaterialTheme.colorScheme.primary,
         modifier =
-            Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 4.dp).semantics {
-                heading()
-            },
+            Modifier.padding(
+                    start = Spacing.gutter,
+                    end = Spacing.gutter,
+                    top = Spacing.l,
+                    bottom = Spacing.xs,
+                )
+                .semantics { heading() },
     )
 }
 
@@ -115,7 +130,7 @@ private fun NeedRow(need: Need, open: () -> Unit) {
     val description =
         listOfNotNull(
                 name,
-                need.attention.kind,
+                need.attention.kindOf.label,
                 line,
                 agent?.let(::describe) ?: need.attention.agent,
             )
@@ -124,7 +139,7 @@ private fun NeedRow(need: Need, open: () -> Unit) {
         Modifier.fillMaxWidth()
             .clickable(onClick = open)
             .clearAndSetSemantics { contentDescription = description }
-            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .padding(Rows.padding)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -134,7 +149,7 @@ private fun NeedRow(need: Need, open: () -> Unit) {
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            AttentionBadge(need.attention.kindOf, need.attention.kind)
+            AttentionBadge(need.attention.kindOf)
         }
         if (line != null) {
             Text(
@@ -145,12 +160,12 @@ private fun NeedRow(need: Need, open: () -> Unit) {
             )
         }
         when {
-            agent != null -> AgentBadge(agent, Modifier.padding(top = 4.dp))
+            agent != null -> AgentBadge(agent, Modifier.padding(top = Spacing.xs))
             need.attention.agent != null ->
                 Text(
                     need.attention.agent,
                     style = MaterialTheme.typography.labelMedium,
-                    modifier = Modifier.padding(top = 4.dp),
+                    modifier = Modifier.padding(top = Spacing.xs),
                 )
         }
     }
@@ -187,7 +202,7 @@ private fun ProjectRow(
                 project.skipped != null -> Text(status, color = MaterialTheme.colorScheme.error)
                 counts.isEmpty() -> Text(status)
                 else ->
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.m)) {
                         counts.forEach { (kind, n) ->
                             val mark = Marks.attention(kind) ?: return@forEach
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -219,10 +234,13 @@ fun ScopesList(
     val main = snapshot.project(project)?.main
     LazyColumn(modifier) {
         item(key = "header") {
-            OutlinedButton(openNotes, Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+            OutlinedButton(
+                openNotes,
+                Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s),
+            ) {
                 Text("Notes")
             }
-            HorizontalDivider()
+            RowDivider()
         }
         if (main != null) {
             item(key = "main") {
@@ -236,7 +254,7 @@ fun ScopesList(
                     stale = stale,
                     open = { open(Snapshot.MAIN) },
                 )
-                HorizontalDivider()
+                RowDivider()
             }
         }
         items(snapshot.featuresOf(project), key = { it.name }) { feature ->
@@ -251,14 +269,14 @@ fun ScopesList(
                 stale = stale,
                 open = { open(feature.name) },
             )
-            HorizontalDivider()
+            RowDivider()
         }
     }
 }
 
 /** What a feature row says under its name: the attention's detail, else its status. */
 fun featureLine(feature: FeatureSnapshot): String? =
-    needLine(feature.attention) ?: feature.progress.takeIf { it.isNotEmpty() }
+    needLine(feature.attention) ?: progressLabel(feature.progress).takeIf { it.isNotEmpty() }
 
 @Composable
 private fun ScopeRow(
@@ -275,7 +293,7 @@ private fun ScopeRow(
     val description =
         listOfNotNull(
                 name,
-                attention.kind.takeIf { attention.kindOf != AttentionKind.None },
+                attention.kindOf.label.takeIf { attention.kindOf != AttentionKind.None },
                 detail,
                 if (closed) "no session" else agents.joinToString(", ", transform = ::describe),
                 describe(activity, stale),
@@ -286,11 +304,11 @@ private fun ScopeRow(
         Modifier.fillMaxWidth()
             .clickable(onClick = open)
             .clearAndSetSemantics { contentDescription = description }
-            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .padding(Rows.padding)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-            AttentionBadge(attention.kindOf, attention.kind)
+            AttentionBadge(attention.kindOf)
         }
         if (detail != null) {
             Text(
@@ -300,10 +318,10 @@ private fun ScopeRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        Spacer(Modifier.padding(top = 4.dp))
+        Spacer(Modifier.padding(top = Spacing.xs))
         Row(verticalAlignment = Alignment.CenterVertically) {
             FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.s),
                 modifier = Modifier.weight(1f),
             ) {
                 if (closed) Text("no session", style = MaterialTheme.typography.labelMedium)
@@ -331,16 +349,21 @@ fun AgentsList(
     val agents = snapshot.agents(project, scope)
     LazyColumn(modifier) {
         item(key = "header") {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(
+                Modifier.padding(Spacing.gutter),
+                verticalArrangement = Arrangement.spacedBy(Spacing.s),
+            ) {
                 val attention = feature?.attention ?: main?.attention
-                if (attention != null) AttentionBadge(attention.kindOf, attention.kind)
+                if (attention != null) AttentionBadge(attention.kindOf)
                 SelectionContainer {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(Spacing.s)) {
                         attention
                             ?.let { headerNeedLine(it, feature) }
                             ?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
-                        if (feature != null)
-                            Text(statusLine(feature), style = MaterialTheme.typography.bodyMedium)
+                        feature
+                            ?.let(::statusLine)
+                            ?.takeIf { it.isNotEmpty() }
+                            ?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
                     }
                 }
                 if (feature != null) {
@@ -353,7 +376,7 @@ fun AgentsList(
                         ),
                         stale,
                     )
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
                         OutlinedButton({ openPage(Route.Summary(project, scope)) }) {
                             Text("Summary")
                         }
@@ -371,10 +394,10 @@ fun AgentsList(
                 if (feature == null && main == null)
                     Text("This scope is no longer in the snapshot.")
             }
-            HorizontalDivider()
+            RowDivider()
         }
         items(agents, key = { it.name }) { agent ->
-            val line = listOfNotNull(agent.state, agent.waiting?.detail).joinToString(": ")
+            val line = listOfNotNull(agent.stateOf.label, agent.waiting?.detail).joinToString(": ")
             ListItem(
                 modifier =
                     Modifier.clickable { openAgent(agent.name) }
@@ -393,7 +416,7 @@ fun AgentsList(
                 supportingContent = { Text(line, maxLines = 2, overflow = TextOverflow.Ellipsis) },
                 trailingContent = { if (agent.unread > 0) AgentBadge(agent, showName = false) },
             )
-            HorizontalDivider()
+            RowDivider()
         }
     }
 }
@@ -411,23 +434,17 @@ fun headerNeedLine(attention: Attention, feature: FeatureSnapshot?): String? =
         "Ready for review"
     else needLine(attention)
 
-/** A feature's status and its PR's, in words: `Status wip · PR #12 open`. */
+/**
+ * A feature's status and its PR's, in words: `In progress · PR #12 open`. A status its attention
+ * badge already says (ready, blocked) is left out.
+ */
 fun statusLine(feature: FeatureSnapshot): String =
     listOfNotNull(
-            "Status ${feature.progress}".takeIf { feature.progress.isNotEmpty() },
+            feature.progress
+                .takeIf { it.isNotEmpty() && it != feature.attention.kindOf.wire }
+                ?.let { progressLabel(it).replaceFirstChar { c -> c.uppercase() } },
             feature.pr?.let { pr ->
-                listOfNotNull("PR #$pr", prState(feature.lifecycle)).joinToString(" ")
+                listOfNotNull("PR #$pr", prLabel(feature.lifecycle)).joinToString(" ")
             },
         )
         .joinToString(" · ")
-
-/** What `pm feat sync` last saw of the PR, as `pm feat info` words it. */
-private fun prState(lifecycle: String): String? =
-    when (lifecycle) {
-        "wip" -> "draft"
-        "review" -> "open"
-        "approved" -> "approved"
-        "merged" -> "merged"
-        "stale" -> "closed"
-        else -> null
-    }

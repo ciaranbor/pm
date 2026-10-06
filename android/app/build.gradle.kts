@@ -176,6 +176,7 @@ dependencies {
     implementation(libs.zxing.core)
     implementation(libs.androidx.work.runtime)
     implementation(libs.markdown.m3)
+    implementation(libs.material.color.utilities)
     implementation(libs.unifiedpush.connector)
     "googleImplementation"(libs.unifiedpush.fcm)
 

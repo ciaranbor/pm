@@ -12,6 +12,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.TestScope
@@ -281,6 +282,43 @@ class AgentModelTest {
         assertEquals(
             "The dialog can no longer be answered here; answer it at the terminal",
             model.notice.value,
+        )
+    }
+
+    @Test
+    fun an_interrupt_is_sent_once_while_on_its_way_and_says_why_it_failed() = modelTest {
+        val outcomes = mutableListOf<String?>()
+        backgroundScope.launch { model.interrupted.collect { outcomes += it } }
+        server.enqueue(
+            MockResponse.Builder()
+                .code(409)
+                .body("""{"error":"the agent isn't running","refused":"dead"}""")
+                .build()
+        )
+
+        model.interrupt()
+        model.interrupt()
+        assertEquals(true, model.interrupting.value)
+        eventually { outcomes.isNotEmpty() }
+
+        assertEquals(listOf<String?>("the agent isn't running"), outcomes)
+        assertEquals(false, model.interrupting.value)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun an_interrupt_that_goes_through_reports_no_failure() = modelTest {
+        val outcomes = mutableListOf<String?>()
+        backgroundScope.launch { model.interrupted.collect { outcomes += it } }
+        server.enqueue(MockResponse.Builder().body("{}").build())
+
+        model.interrupt()
+        eventually { outcomes.isNotEmpty() }
+
+        assertEquals(listOf<String?>(null), outcomes)
+        assertEquals(
+            "/v1/agents/app/login/implementer/interrupt",
+            server.takeRequest().url.encodedPath,
         )
     }
 }

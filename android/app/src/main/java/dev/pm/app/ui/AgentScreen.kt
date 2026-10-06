@@ -70,6 +70,14 @@ fun AgentScreen(
     val notice by model.notice.collectAsStateWithLifecycle()
     val dialog by model.dialog.collectAsStateWithLifecycle()
     val answering by model.answering.collectAsStateWithLifecycle()
+    val interrupting by model.interrupting.collectAsStateWithLifecycle()
+    val feedback = LocalFeedback.current
+    LaunchedEffect(model) {
+        model.interrupted.collect { failure ->
+            if (failure == null) feedback.done("Interrupted $agent")
+            else feedback.failed("Couldn't interrupt: $failure", model::interrupt)
+        }
+    }
     var terminal by rememberSaveable { mutableStateOf(false) }
     val openTerminal = { terminal = true }
     Column(modifier.fillMaxSize().imePadding()) {
@@ -79,6 +87,7 @@ fun AgentScreen(
             DialogCard(
                 shown,
                 answering,
+                interrupting,
                 notice,
                 answer = model::answer,
                 interrupt = model::interrupt,
@@ -90,6 +99,7 @@ fun AgentScreen(
                 waiting,
                 outbox,
                 notice,
+                interrupting,
                 send = model::send,
                 interrupt = model::interrupt,
                 openTerminal = openTerminal,
@@ -104,14 +114,13 @@ private fun Chat(model: AgentModel, openResult: (tool: String, ref: String) -> U
     val chat by model.chat.collectAsStateWithLifecycle()
     when (val state = chat) {
         ChatState.Loading -> Centered { CircularProgressIndicator() }
-        is ChatState.Unsupported -> Centered { Text(state.advice, textAlign = TextAlign.Center) }
+        is ChatState.Unsupported -> EmptyState("No conversation to show", hint = state.advice)
         is ChatState.Failed ->
-            Centered {
-                Text(
-                    "Couldn't load the conversation: ${state.reason}",
-                    textAlign = TextAlign.Center,
-                )
-            }
+            ErrorState(
+                "Couldn't load the conversation",
+                onAction = null,
+                hint = "${state.reason}\nRetrying…",
+            )
         is ChatState.Shown ->
             ChatView(state.conversation, state.live, older = model::older, openResult = openResult)
     }
@@ -166,12 +175,12 @@ internal fun ChatView(
                 modifier =
                     Modifier.fillMaxWidth()
                         .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .padding(4.dp),
+                        .padding(Spacing.xs),
                 textAlign = TextAlign.Center,
             )
         }
         if (items.isEmpty()) {
-            Centered { Text("Nothing said yet.") }
+            EmptyState("Nothing said yet.")
             return
         }
         Box(Modifier.weight(1f)) {
@@ -179,7 +188,7 @@ internal fun ChatView(
                 state = list,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(Spacing.s),
             ) {
                 if (conversation.before == null) {
                     item(key = "start", contentType = "start") {
@@ -193,7 +202,7 @@ internal fun ChatView(
             if (!follow) {
                 val unseen = newSince(items, seen)
                 val down = { follow = true }
-                val placed = Modifier.align(Alignment.BottomEnd).padding(16.dp)
+                val placed = Modifier.align(Alignment.BottomEnd).padding(Spacing.l)
                 val arrow = painterResource(R.drawable.ic_arrow_down)
                 if (unseen > 0) {
                     ExtendedFloatingActionButton(
@@ -232,8 +241,3 @@ private suspend fun LazyListState.scrollToEnd() {
 }
 
 private const val MAX_END_STEPS = 50
-
-@Composable
-fun Centered(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
-    Box(modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) { content() }
-}

@@ -50,7 +50,8 @@ sealed interface ActionState {
     /** Asked to confirm a merge, a delete, or a restart that would interrupt a turn. */
     data class Confirming(val action: Action) : ActionState
 
-    data class Running(val action: Action) : ActionState
+    /** On its way; `confirmed` if it was confirmed first, so its confirmation shows it going. */
+    data class Running(val action: Action, val confirmed: Boolean = false) : ActionState
 
     /** A merge or delete went through, but with `warnings`, in the server's words. */
     data class Warned(val action: Action, val warnings: List<String>) : ActionState
@@ -108,7 +109,7 @@ class Lifecycle(private val scope: CoroutineScope, private val client: () -> PmC
 
     private fun run(action: Action) {
         val client = client() ?: return
-        _state.value = ActionState.Running(action)
+        _state.value = ActionState.Running(action, _state.value is ActionState.Confirming)
         scope.launch {
             _state.value =
                 try {

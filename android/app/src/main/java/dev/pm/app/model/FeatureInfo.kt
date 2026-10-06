@@ -28,13 +28,12 @@ data class FeatureInfo(
     val rows: List<Pair<String, String>>
         get() =
             listOfNotNull(
-                "Status" to progress,
-                "Lifecycle" to lifecycle,
+                "Status" to progressLabel(progress),
                 "Branch" to branch,
                 ("Rebase" to "in progress").takeIf { rebaseInProgress },
                 "Remote" to (remote ?: "none"),
                 "Base" to base,
-                pr?.let { "PR" to "#$it" },
+                pr?.let { "PR" to listOfNotNull("#$it", prLabel(lifecycle)).joinToString(" ") },
                 divergence?.let { "Divergence" to "$it $base" },
                 workflow?.let {
                     "Workflow" to listOfNotNull(it.name, it.description).joinToString(" — ")
@@ -42,10 +41,6 @@ data class FeatureInfo(
                 created?.let { "Created" to stamp(it) },
                 lastActive?.let { "Last active" to stamp(it) },
             )
-
-    /** [rows] as `label: value` lines, for the clipboard. */
-    val text: String
-        get() = rows.joinToString("\n") { (label, value) -> "$label: $value" }
 }
 
 private val STAMP =

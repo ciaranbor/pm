@@ -93,66 +93,25 @@ val Action.done: String
 fun ActionDialog(state: ActionState, confirm: () -> Unit, dismiss: () -> Unit) {
     when (state) {
         ActionState.Idle -> Unit
-        is ActionState.Confirming -> {
-            val action = state.action
-            val (title, text, verb) =
-                when (action) {
-                    is Action.Merge ->
-                        Triple(
-                            "Merge ${action.feature}?",
-                            "Merges it into its base, then deletes its worktree, branch and " +
-                                "session. The project's post-merge hook runs on the server.",
-                            "Merge",
-                        )
-                    is Action.Delete ->
-                        Triple(
-                            "Delete ${action.feature}?",
-                            "Deletes its worktree, branch and session. pm refuses while it " +
-                                "holds uncommitted, unmerged or unpushed work.",
-                            "Delete",
-                        )
-                    is Action.Restart ->
-                        Triple(
-                            "Restart ${action.agent} anyway?",
-                            "${action.agent} is working, asking, or waiting on background " +
-                                "work. Restarting interrupts it; once back, it is told to resume.",
-                            "Restart anyway",
-                        )
-                }
-            val destructive = action !is Action.Merge
-            AlertDialog(
-                onDismissRequest = dismiss,
-                title = { Text(title) },
-                text = { Text(text) },
-                confirmButton = {
-                    TextButton(onClick = confirm) {
-                        Text(
-                            verb,
-                            color =
-                                if (destructive) MaterialTheme.colorScheme.error
-                                else MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                },
-                dismissButton = { TextButton(onClick = dismiss) { Text("Cancel") } },
-            )
-        }
+        is ActionState.Confirming -> Confirmation(state.action, false, confirm, dismiss)
         is ActionState.Running ->
-            AlertDialog(
-                onDismissRequest = {},
-                properties =
-                    DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
-                confirmButton = {},
-                text = {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        CircularProgressIndicator(Modifier.size(24.dp))
-                        Text("${state.action.running} ${state.action.subject}…")
-                    }
-                },
-            )
+            if (state.confirmed) Confirmation(state.action, true, confirm, dismiss)
+            else
+                AlertDialog(
+                    onDismissRequest = {},
+                    properties =
+                        DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+                    confirmButton = {},
+                    text = {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.l),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            CircularProgressIndicator(Modifier.size(24.dp))
+                            Text("${state.action.running} ${state.action.subject}…")
+                        }
+                    },
+                )
         is ActionState.Warned ->
             AlertDialog(
                 onDismissRequest = dismiss,
@@ -187,4 +146,58 @@ fun ActionDialog(state: ActionState, confirm: () -> Unit, dismiss: () -> Unit) {
                 confirmButton = { TextButton(onClick = dismiss) { Text("OK") } },
             )
     }
+}
+
+/** Asks to confirm `action`; once confirmed, its button shows it `running` until it ends. */
+@Composable
+private fun Confirmation(
+    action: Action,
+    running: Boolean,
+    confirm: () -> Unit,
+    dismiss: () -> Unit,
+) {
+    val (title, text, verb) =
+        when (action) {
+            is Action.Merge ->
+                Triple(
+                    "Merge ${action.feature}?",
+                    "Merges it into its base, then deletes its worktree, branch and " +
+                        "session. The project's post-merge hook runs on the server.",
+                    "Merge",
+                )
+            is Action.Delete ->
+                Triple(
+                    "Delete ${action.feature}?",
+                    "Deletes its worktree, branch and session. pm refuses while it " +
+                        "holds uncommitted, unmerged or unpushed work.",
+                    "Delete",
+                )
+            is Action.Restart ->
+                Triple(
+                    "Restart ${action.agent} anyway?",
+                    "${action.agent} is working, asking, or waiting on background " +
+                        "work. Restarting interrupts it; once back, it is told to resume.",
+                    "Restart anyway",
+                )
+        }
+    val destructive = action !is Action.Merge
+    AlertDialog(
+        onDismissRequest = dismiss,
+        properties =
+            DialogProperties(dismissOnBackPress = !running, dismissOnClickOutside = !running),
+        title = { Text(title) },
+        text = { Text(text) },
+        confirmButton = {
+            PendingButton(
+                verb,
+                onClick = confirm,
+                pending = running,
+                emphasis = Emphasis.Text,
+                color =
+                    if (destructive) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.primary,
+            )
+        },
+        dismissButton = { TextButton(onClick = dismiss, enabled = !running) { Text("Cancel") } },
+    )
 }

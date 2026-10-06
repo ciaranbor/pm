@@ -13,6 +13,7 @@ camerax = "1.6.2"
 zxing = "3.5.4"
 work = "2.12.0"
 markdown = "0.45.0"
+materialColorUtilities = "5.0.1"
 unifiedpush = "3.3.5"
 unifiedpushFcm = "3.1.0"
 junit = "4.13.2"
@@ -49,6 +50,7 @@ zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 androidx-work-runtime = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
 androidx-work-testing = { module = "androidx.work:work-testing", version.ref = "work" }
 markdown-m3 = { module = "com.mikepenz:multiplatform-markdown-renderer-m3", version.ref = "markdown" }
+material-color-utilities = { module = "com.materialkolor:material-color-utilities", version.ref = "materialColorUtilities" }
 unifiedpush-connector = { module = "org.unifiedpush.android:connector", version.ref = "unifiedpush" }
 unifiedpush-fcm = { module = "org.unifiedpush.android:embedded-fcm-distributor", version.ref = "unifiedpushFcm" }
 junit = { module = "junit:junit", version.ref = "junit" }

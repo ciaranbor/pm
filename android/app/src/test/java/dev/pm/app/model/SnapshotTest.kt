@@ -103,9 +103,9 @@ class ActivityTest {
     fun working_wins_and_quiet_shows_only_after_ten_minutes() {
         assertEquals(Activity.Working, activity(true, null, "2026-10-01T00:00:00Z", now))
         assertNull(activity(false, null, "2026-10-02T11:51:00Z", now))
-        assertEquals(Activity.Quiet("10m"), activity(false, null, "2026-10-02T11:50:00Z", now))
-        assertEquals(Activity.Quiet("3h"), activity(false, null, "2026-10-02T08:59:00Z", now))
-        assertEquals(Activity.Quiet("2d"), activity(false, null, "2026-09-30T11:00:00Z", now))
+        assertEquals(Activity.Idle("10m"), activity(false, null, "2026-10-02T11:50:00Z", now))
+        assertEquals(Activity.Idle("3h"), activity(false, null, "2026-10-02T08:59:00Z", now))
+        assertEquals(Activity.Idle("2d"), activity(false, null, "2026-09-30T11:00:00Z", now))
         assertNull(activity(false, null, null, now))
         assertNull(activity(false, null, "yesterday", now))
     }

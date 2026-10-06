@@ -27,6 +27,10 @@ enum class AttentionKind(val wire: String) {
     }
 }
 
+/**
+ * The states an agent can be in. [label] is the app's word for each, the same everywhere it shows:
+ * an agent taking a turn is working, as is a scope with one that is, and one waiting is idle.
+ */
 enum class AgentState(val wire: String) {
     Idle("idle"),
     Busy("busy"),
@@ -39,6 +43,15 @@ enum class AgentState(val wire: String) {
 
     /** A state newer than this app. */
     Unknown("");
+
+    val label: String
+        get() =
+            when (this) {
+                Busy -> "working"
+                Background -> "background work"
+                Unknown -> "other"
+                else -> wire
+            }
 
     companion object {
         fun of(wire: String): AgentState =
@@ -62,16 +75,28 @@ enum class Glyph {
     Unknown,
 }
 
-/** The badge colours pm's tmux badges use. */
+/**
+ * What a badge's colour says. The glyphs match pm's tmux badges; the colours are the app's own, so
+ * asking (a turn waiting on the user) reads apart from dead.
+ */
 enum class Tone {
-    Red,
-    Green,
-    Magenta,
-    Yellow,
-    Grey,
+    /** Waiting on the user: asking, blocked. */
+    Attention,
+
+    /** Something broke: dead. */
+    Danger,
+
+    /** Going well: working, ready. */
+    Positive,
+
+    /** Worth a look, nothing broken: stalled, unarmed, unread messages. */
+    Caution,
+
+    /** Nothing to act on. */
+    Neutral,
 }
 
-/** A badge: a glyph in a colour; `strong` where tmux draws it bold. */
+/** A badge: a glyph in a tone; `strong` where tmux draws it bold. */
 data class Mark(val glyph: Glyph, val tone: Tone, val strong: Boolean = false)
 
 /**
@@ -82,31 +107,49 @@ data class Mark(val glyph: Glyph, val tone: Tone, val strong: Boolean = false)
 object Marks {
     fun agent(state: AgentState): Mark =
         when (state) {
-            AgentState.Busy -> Mark(Glyph.Gear, Tone.Green)
-            AgentState.Asking -> Mark(Glyph.QuestionCircle, Tone.Red, strong = true)
-            AgentState.Unarmed -> Mark(Glyph.BellSlash, Tone.Magenta)
-            AgentState.Background -> Mark(Glyph.Spinner, Tone.Green)
-            AgentState.Idle -> Mark(Glyph.Hourglass, Tone.Grey)
-            AgentState.Dead -> Mark(Glyph.Skull, Tone.Red)
+            AgentState.Busy -> Mark(Glyph.Gear, Tone.Positive)
+            AgentState.Asking -> Mark(Glyph.QuestionCircle, Tone.Attention, strong = true)
+            AgentState.Unarmed -> Mark(Glyph.BellSlash, Tone.Caution)
+            AgentState.Background -> Mark(Glyph.Spinner, Tone.Positive)
+            AgentState.Idle -> Mark(Glyph.Hourglass, Tone.Neutral)
+            AgentState.Dead -> Mark(Glyph.Skull, Tone.Danger)
             AgentState.Stopped,
-            AgentState.Closed -> Mark(Glyph.Stop, Tone.Grey)
-            AgentState.Unknown -> Mark(Glyph.Unknown, Tone.Grey)
+            AgentState.Closed -> Mark(Glyph.Stop, Tone.Neutral)
+            AgentState.Unknown -> Mark(Glyph.Unknown, Tone.Neutral)
         }
 
     /** `null` for [AttentionKind.None]: nothing needed, no badge. */
     fun attention(kind: AttentionKind): Mark? =
         when (kind) {
-            AttentionKind.Blocked -> Mark(Glyph.Hand, Tone.Red, strong = true)
+            AttentionKind.Blocked -> Mark(Glyph.Hand, Tone.Attention, strong = true)
             AttentionKind.Asking -> agent(AgentState.Asking)
-            AttentionKind.Cleanup -> Mark(Glyph.Broom, Tone.Grey)
-            AttentionKind.Ready -> Mark(Glyph.CheckCircle, Tone.Green, strong = true)
+            AttentionKind.Cleanup -> Mark(Glyph.Broom, Tone.Neutral)
+            AttentionKind.Ready -> Mark(Glyph.CheckCircle, Tone.Positive, strong = true)
             AttentionKind.Dead -> agent(AgentState.Dead)
             AttentionKind.Unarmed -> agent(AgentState.Unarmed)
-            AttentionKind.Stalled -> Mark(Glyph.Pause, Tone.Yellow)
-            AttentionKind.Unknown -> Mark(Glyph.Unknown, Tone.Grey)
+            AttentionKind.Stalled -> Mark(Glyph.Pause, Tone.Caution)
+            AttentionKind.Unknown -> Mark(Glyph.Unknown, Tone.Neutral)
             AttentionKind.None -> null
         }
 }
+
+/** A feature's team status (`pm feat status`) in the app's words; one newer than the app, as is. */
+fun progressLabel(progress: String): String =
+    when (progress) {
+        "wip" -> "in progress"
+        else -> progress
+    }
+
+/** What `pm feat sync` last saw of a feature's PR, from its lifecycle; null for none known. */
+fun prLabel(lifecycle: String): String? =
+    when (lifecycle) {
+        "wip" -> "draft"
+        "review" -> "open"
+        "approved" -> "approved"
+        "merged" -> "merged"
+        "stale" -> "closed"
+        else -> null
+    }
 
 /** What a scope's activity line shows. */
 sealed interface Activity {
@@ -115,13 +158,13 @@ sealed interface Activity {
     /** Waiting on background work for `span`, as pm writes it. */
     data class Background(val span: String) : Activity
 
-    /** Quiet for `span`, as pm writes it: `12m`, `3h`, `2d`. */
-    data class Quiet(val span: String) : Activity
+    /** Idle for `span`, as pm writes it: `12m`, `3h`, `2d`. */
+    data class Idle(val span: String) : Activity
 }
 
 /**
  * pm's rule (`attention::activity`): working while an agent showed activity recently; else waiting
- * on background work since its oldest wait began; otherwise quiet once that was [QUIET] or longer
+ * on background work since its oldest wait began; otherwise idle once that was [QUIET] or longer
  * ago, and nothing in between, so the gaps between turns don't flicker.
  */
 fun activity(
@@ -137,7 +180,7 @@ fun activity(
     val then = instant(lastActivity) ?: return null
     val secs = Duration.between(then, now).seconds.coerceAtLeast(0)
     if (secs < QUIET.seconds) return null
-    return Activity.Quiet(span(secs))
+    return Activity.Idle(span(secs))
 }
 
 private fun instant(text: String?): Instant? = text?.let {
