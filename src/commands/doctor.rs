@@ -112,9 +112,8 @@ pub enum IssueKind {
     /// An agent has a model or permission row its harness refuses to spawn
     /// with.
     AgentRowInvalid,
-    /// An agent's model or permission row has a consequence worth knowing
-    /// (a model its provider does not declare, a sandbox it cannot report
-    /// from); the spawn goes ahead.
+    /// An agent's model row has a consequence worth knowing (a model its
+    /// provider does not declare); the spawn goes ahead.
     AgentRowRemark,
     /// A harness in use reports a problem with its `[harness.<name>]`
     /// settings.
@@ -892,11 +891,10 @@ fn harness_config_issues(project_root: &Path) -> Result<Vec<Issue>> {
         if let Some(model) = &settings.model {
             rows.push((settings.harness, model.clone()));
         }
-        for note in settings.harness.row_notes(
-            &config,
-            settings.model.as_deref(),
-            settings.permission_mode.as_deref(),
-        ) {
+        for note in settings
+            .harness
+            .row_notes(&config, settings.model.as_deref())
+        {
             issues.push(Issue {
                 kind: IssueKind::AgentRowRemark,
                 message: format!("agent '{definition}': {note}"),

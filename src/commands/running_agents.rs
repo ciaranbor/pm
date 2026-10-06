@@ -31,6 +31,8 @@
 
 use std::path::Path;
 
+use chrono::{DateTime, Utc};
+
 use crate::commands::hooks_install::runs_blocking_stop_hook;
 use crate::error::Result;
 use crate::harness::Harness;
@@ -107,6 +109,52 @@ pub fn liveness(
     } else {
         Liveness::Dead
     }
+}
+
+/// How long after its window ran the launch line an agent whose window runs
+/// no harness reads as starting rather than dead: long enough for the
+/// harness to start, short enough that one that exits at once soon reads
+/// dead. Before the line has run, the window's shell may still be in its
+/// startup files, and the agent reads as starting for as long as its spawn
+/// waits on it ([`launch_check::START_WITHIN`](super::launch_check::START_WITHIN)).
+pub const STARTING_SECS: i64 = 10;
+
+/// Whether `agent`'s harness has not started a session and its window,
+/// running only the shell its launch line was typed into, may yet start
+/// it ([`STARTING_SECS`]).
+pub fn starting(project_root: &Path, scope: &str, agent: &str, now: DateTime<Utc>) -> bool {
+    let Some(spawned) = runtime::read_waiting(project_root, scope, agent)
+        .filter(|w| w.kind == WaitingKind::Startup)
+        .map(|w| w.since)
+    else {
+        return false;
+    };
+    match runtime::launched_at(project_root, scope, agent) {
+        Some(launched) => (now - launched).num_seconds() <= STARTING_SECS,
+        None => (now - spawned).num_seconds() <= super::launch_check::START_WITHIN.as_secs() as i64,
+    }
+}
+
+/// The agent pane of `agent`'s window `window_name` in `session` when its
+/// harness exited to the shell there ([`Liveness::Dead`]), past its start
+/// ([`starting`]), and no one may be using the pane
+/// ([`tmux::panes::in_use`]): a pane to start the agent in again.
+pub fn exited_pane(
+    agent: AgentAt<'_>,
+    session: &str,
+    window_name: &str,
+    config: &HarnessConfig,
+    tmux_server: Option<&str>,
+) -> Result<Option<String>> {
+    let windows = Windows::read(tmux_server)?;
+    let Some(pane) = windows.find(session, window_name) else {
+        return Ok(None);
+    };
+    let dead = liveness(windows.processes(pane).as_deref(), agent.harness, config)
+        == Liveness::Dead
+        && !starting(agent.project_root, agent.scope, agent.name, Utc::now())
+        && !tmux::panes::in_use(tmux_server, &pane.id)?;
+    Ok(dead.then(|| pane.id.clone()))
 }
 
 /// What an agent its window reads as busy is at: its waiting marker, unless

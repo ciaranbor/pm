@@ -10,8 +10,7 @@
 //! Text is then refused while a dialog is up — the paste's Enter would
 //! answer it — and unless the input line reads as empty, once any key its
 //! harness names to make the line take text has been pressed (vim NORMAL
-//! mode): a draft at the keyboard is never merged into or cleared. A
-//! harness whose input line pm can't read takes the text as it is.
+//! mode): a draft at the keyboard is never merged into or cleared.
 //!
 //! An idle agent sits at its prompt, pm's waiter running beside it, so
 //! text submits at once and Escape or a key does no harm. Text typed
@@ -182,16 +181,14 @@ pub fn send_text(
     {
         return Ok(Err(Refusal::Asking(asking.describe())));
     }
-    if target.harness.reads_input_line()
-        && !input_line_ready(
-            project_root,
-            scope,
-            agent,
-            target.harness,
-            &target.pane,
-            tmux_server,
-        )?
-    {
+    if !input_line_ready(
+        project_root,
+        scope,
+        agent,
+        target.harness,
+        &target.pane,
+        tmux_server,
+    )? {
         return Ok(Err(Refusal::NotAtPrompt));
     }
     let after = conversation_end(project_root, scope, agent)?;

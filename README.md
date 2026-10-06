@@ -373,7 +373,8 @@ A bare `read` takes one sender: the one whose earliest unread message is
 oldest, ending with `N more senders pending: b, c — pm msg read --from b`
 when others wait. History stays on disk. `pm msg send` never spawns an
 agent: it errors on an inactive recipient, and respawns one whose window
-died. To an `unarmed` recipient it types the prompt the waiter would have
+died, or whose harness exited to the shell in a window nobody is looking
+at. To an `unarmed` recipient it types the prompt the waiter would have
 given, but only when that agent's input line is empty; elsewhere the
 message waits.
 

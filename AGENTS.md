@@ -62,10 +62,10 @@ Design decisions you can't recover by reading the tree. Preserve them.
   the whole team (refused up front if a member's harness can't run it) and
   brief only `brief_agents` (none is an error); `agent spawn --context`
   enqueues, then spawns or no-ops — ungated, as the heal path; `msg send` never
-  spawns, errors on an inactive recipient, heals a dead window, re-arms an
-  unarmed one only at an empty prompt in an unused pane, pressing no mode key.
-  Remote input is typed into the pane like local input — never a pm message or
-  continuation; the harness answers a dialog via its hook — never keys.
+  spawns, errors on an inactive recipient, heals a dead window; in an unused
+  pane heals an exited harness, re-arms an unarmed one at an empty prompt,
+  pressing no mode key. Remote input is typed like local input — never a message
+  or continuation; a dialog is answered via its harness's hook — never keys.
 
 ### Workflows vs agents
 

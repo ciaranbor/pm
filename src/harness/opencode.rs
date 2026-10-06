@@ -76,6 +76,7 @@
 mod bounded;
 pub(super) mod chat;
 pub(super) mod dialog;
+pub(super) mod input;
 mod messages;
 mod provider_check;
 mod providers;

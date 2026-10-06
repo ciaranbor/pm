@@ -202,17 +202,11 @@ impl Harness {
         }
     }
 
-    /// What is worth remarking on about an agent's `[agents.models]` and
-    /// `[agents.permissions]` rows that a spawn still takes.
-    pub fn row_notes(
-        self,
-        config: &HarnessConfig,
-        model: Option<&str>,
-        permission_mode: Option<&str>,
-    ) -> Vec<String> {
+    /// What a spawn remarks on about an agent's `[agents.models]` row
+    /// without refusing it.
+    pub fn row_notes(self, config: &HarnessConfig, model: Option<&str>) -> Vec<String> {
         match self {
-            Harness::ClaudeCode => Vec::new(),
-            Harness::Codex => codex::row_notes(&config.codex, permission_mode),
+            Harness::ClaudeCode | Harness::Codex => Vec::new(),
             Harness::OpenCode => opencode::row_notes(&config.opencode, model),
         }
     }
@@ -322,9 +316,7 @@ impl Harness {
 
     /// Whether the input line on this harness's `screen`, captured with its
     /// escape sequences, is empty and takes typed keys as text; `None` when
-    /// it can't tell. `home` holds the harness's config. opencode's never
-    /// stays unarmed — its plugin waits again after any turn and stops only
-    /// on purpose — so its screen is never read.
+    /// it can't tell. `home` holds the harness's config.
     ///
     /// `config_dir` is the value the agent's environment gave
     /// [`config_dir_env`](Self::config_dir_env), if any.
@@ -337,7 +329,7 @@ impl Harness {
         match self {
             Harness::ClaudeCode => claude_code::input::is_empty(screen, home, config_dir),
             Harness::Codex => codex::input::is_empty(screen),
-            Harness::OpenCode => None,
+            Harness::OpenCode => opencode::input::is_empty(screen),
         }
     }
 
@@ -356,15 +348,6 @@ impl Harness {
             Harness::ClaudeCode => claude_code::input::text_mode_key(screen, home, config_dir),
             Harness::Codex => codex::input::text_mode_key(screen),
             Harness::OpenCode => None,
-        }
-    }
-
-    /// Whether pm reads this harness's input line off its screen
-    /// ([`input_is_empty`](Self::input_is_empty)).
-    pub fn reads_input_line(self) -> bool {
-        match self {
-            Harness::ClaudeCode | Harness::Codex => true,
-            Harness::OpenCode => false,
         }
     }
 
