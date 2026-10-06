@@ -462,7 +462,12 @@ impl Harness {
                 agent.name,
                 SessionPath::Transcript,
             )
-            .filter(|path| path.is_file() && path.to_string_lossy().contains(agent.session_id))
+            .filter(|path| {
+                path.is_file()
+                    && path
+                        .file_name()
+                        .is_some_and(|name| name.to_string_lossy().contains(agent.session_id))
+            })
         };
         let jsonl = |path, parse| Location::Jsonl { path, parse };
         let location = match self {

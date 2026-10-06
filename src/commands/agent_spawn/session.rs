@@ -9,7 +9,6 @@ use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
 use crate::state::paths;
 use crate::state::project::{GlobalConfig, ProjectConfig};
 use crate::state::runtime;
-use crate::state::workflow;
 use crate::tmux;
 
 use super::launch::{definition_flag, effective_definition, resolve_launch};
@@ -18,16 +17,13 @@ use super::launch::{definition_flag, effective_definition, resolve_launch};
 /// ([`runtime::launched_at`]) created, then its identity — its worktree
 /// ([`paths::AGENT_WORKTREE_ENV`]) and `PM_AGENT_NAME` (so `pm msg` calls
 /// auto-identify) — exported ahead of the harness command.
-fn window_command(agent: Option<(&str, &Path)>, worktree: &Path, cmd: &str) -> String {
-    match agent {
-        Some((name, launched)) => format!(
-            "touch {} && export {}={} PM_AGENT_NAME={name} && {cmd}",
-            tmux::shell_quote(&launched.to_string_lossy()),
-            paths::AGENT_WORKTREE_ENV,
-            tmux::shell_quote(&worktree.to_string_lossy())
-        ),
-        None => cmd.to_string(),
-    }
+fn window_command(name: &str, launched: &Path, worktree: &Path, cmd: &str) -> String {
+    format!(
+        "touch {} && export {}={} PM_AGENT_NAME={name} && {cmd}",
+        tmux::shell_quote(&launched.to_string_lossy()),
+        paths::AGENT_WORKTREE_ENV,
+        tmux::shell_quote(&worktree.to_string_lossy())
+    )
 }
 
 /// The prompt a named agent is launched with when none is given, so its
@@ -53,15 +49,12 @@ pub struct SpawnParams<'a> {
     pub feature: &'a str,
     /// Display name for the agent. Used as the tmux window name, the
     /// `PM_AGENT_NAME` env var (so `pm msg` calls auto-identify), and the
-    /// registry key. `None` produces a plain session with no definition
-    /// and no registry entry.
-    pub agent_name: Option<&'a str>,
-    /// Agent definition to launch. When `None` and `agent_name` is
-    /// `Some(x)`, defaults to `x` (back-compat: display name doubles as
-    /// definition name). When `Some(def)` with `agent_name = Some(name)`,
-    /// you get a "named agent": registry key / window / `PM_AGENT_NAME` are
-    /// all `name`, but the harness launches definition `def`. Ignored when
-    /// `agent_name` is `None`.
+    /// registry key.
+    pub agent_name: &'a str,
+    /// Agent definition to launch, defaulting to `agent_name` (back-compat:
+    /// display name doubles as definition name). When `Some(def)` you get a
+    /// "named agent": registry key / window / `PM_AGENT_NAME` are all
+    /// `agent_name`, but the harness launches definition `def`.
     pub agent_definition: Option<&'a str>,
     pub prompt: Option<&'a str>,
     pub resume_session: Option<&'a str>,
@@ -76,8 +69,7 @@ pub struct SpawnParams<'a> {
     pub tmux_server: Option<&'a str>,
 }
 
-/// Spawn an agent session in a tmux window. Works for both named agents
-/// and plain sessions (when `agent_name` is None). If `resume_session` is
+/// Spawn an agent session in a tmux window. If `resume_session` is
 /// provided, the harness resumes it. Sets `PM_AGENT_NAME` in the spawned
 /// shell so the agent auto-identifies in `pm msg send/check/read` without
 /// `--as-agent`.
@@ -133,29 +125,24 @@ pub(super) fn spawn_session_with_config(
     )?;
     let settings = &launch.settings;
 
-    // Named agents need a sentinel prompt when none is explicitly provided:
+    // An agent needs a sentinel prompt when none is explicitly provided:
     // a harness with no positional prompt just waits for user input and never
     // completes a turn, so the Stop hook never fires. A trivial "continue"
     // prompt causes an immediate first turn, whose end starts pm's waiter.
-    // Plain (unnamed) sessions don't need this since they're interactive by
-    // design.
-    let effective_prompt = match (params.prompt, params.agent_name) {
-        (Some(p), _) => Some(p),
-        (None, Some(_)) if params.resume_session.is_some() && !params.fork_session => {
-            Some(RESUME_PROMPT)
-        }
-        (None, Some(_)) => Some(SPAWN_PROMPT),
-        (None, None) => None,
+    let effective_prompt = match params.prompt {
+        Some(p) => p,
+        None if params.resume_session.is_some() && !params.fork_session => RESUME_PROMPT,
+        None => SPAWN_PROMPT,
     };
 
-    let window_name = params.agent_name.unwrap_or(workflow::VANILLA_AGENT);
+    let name = params.agent_name;
 
     // Compose the single `--append-system-prompt-file`: shared baseline plus
     // any non-empty notice boards. When no board has content this returns the
     // baseline path unchanged (or None when the baseline is also absent), so
     // older projects keep spawning exactly as before.
     let append_file =
-        crate::notice::compose_spawn_prompt(params.project_root, params.feature, window_name)?;
+        crate::notice::compose_spawn_prompt(params.project_root, params.feature, name)?;
     for dir in &launch.edit_dirs {
         std::fs::create_dir_all(dir)?;
     }
@@ -167,7 +154,7 @@ pub(super) fn spawn_session_with_config(
     let spec = SpawnSpec {
         definition: definition_flag(effective_definition),
         append_prompt_file: append_file.as_deref(),
-        prompt: effective_prompt,
+        prompt: Some(effective_prompt),
         resume_session: params.resume_session,
         fork_session: params.fork_session,
         permission_mode: settings.permission_mode.as_deref(),
@@ -182,7 +169,7 @@ pub(super) fn spawn_session_with_config(
                 project_root: params.project_root,
                 feature: params.feature,
                 worktree: &worktree_path,
-                agent: window_name,
+                agent: name,
             },
             &spec,
             &launch.harness_config,
@@ -199,14 +186,14 @@ pub(super) fn spawn_session_with_config(
         .harness
         .build_cmd(&spec, &launch.harness_config, &pre);
     let window_target = if let Some(target) = params.reuse_window {
-        tmux::rename_window(params.tmux_server, target, window_name)?;
+        tmux::rename_window(params.tmux_server, target, name)?;
         target.to_string()
     } else {
         tmux::new_window(
             params.tmux_server,
             &session_name,
             &worktree_path,
-            Some(window_name),
+            Some(name),
             true,
         )?
     };
@@ -215,65 +202,49 @@ pub(super) fn spawn_session_with_config(
     // Register before the command is sent: the harness's SessionStart hook
     // reads the entry, and a hook that fires first would find no agent —
     // on codex that means no role and no baseline, silently.
-    if let Some(name) = params.agent_name {
-        let agents_dir = paths::agents_dir(params.project_root);
-        let mut registry = AgentRegistry::load(&agents_dir, params.feature)?;
-        // Only persist `agent_definition` when it explicitly differs from
-        // the registry key — keeps existing on-disk TOML clean for the
-        // common case where display name == definition.
-        let stored_definition = match params.agent_definition {
-            Some(def) if def != name => Some(def.to_string()),
-            _ => None,
-        };
-        registry.register(
-            name,
-            AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: registered_session(&pre.session_id, &spec),
-                window_name: name.to_string(),
-                active: true,
-                agent_definition: stored_definition,
-                harness: settings.harness,
-                spawned_at: Some(chrono::Utc::now()),
-            },
-        );
-        registry.save(&agents_dir, params.feature)?;
-        // Replaces whatever an earlier spawn left; the session's start
-        // clears it, so one that outlives the start grace is a dialog
-        // before the session (README, "Follow what needs you").
-        let startup = runtime::Waiting::now(runtime::WaitingKind::Startup, None);
-        runtime::write_waiting(params.project_root, params.feature, name, &startup)?;
-        runtime::reset_loop(params.project_root, params.feature, name)?;
-        let stamp = crate::commands::launch_stamp::stamp(
-            params.project_root,
-            effective_definition,
-            &launch,
-        )?;
-        runtime::write_launch_stamp(params.project_root, params.feature, name, &stamp)?;
-        for which in [
-            runtime::SessionPath::Transcript,
-            runtime::SessionPath::ConfigDir,
-        ] {
-            runtime::write_session_path(params.project_root, params.feature, name, which, None)?;
-        }
+    let agents_dir = paths::agents_dir(params.project_root);
+    let mut registry = AgentRegistry::load(&agents_dir, params.feature)?;
+    // Only persist `agent_definition` when it explicitly differs from
+    // the registry key — keeps existing on-disk TOML clean for the
+    // common case where display name == definition.
+    let stored_definition = match params.agent_definition {
+        Some(def) if def != name => Some(def.to_string()),
+        _ => None,
+    };
+    registry.register(
+        name,
+        AgentEntry {
+            agent_type: AgentType::Agent,
+            session_id: registered_session(&pre.session_id, &spec),
+            window_name: name.to_string(),
+            active: true,
+            agent_definition: stored_definition,
+            harness: settings.harness,
+            spawned_at: Some(chrono::Utc::now()),
+        },
+    );
+    registry.save(&agents_dir, params.feature)?;
+    // Replaces whatever an earlier spawn left; the session's start
+    // clears it, so one that outlives the start grace is a dialog
+    // before the session (README, "Follow what needs you").
+    let startup = runtime::Waiting::now(runtime::WaitingKind::Startup, None);
+    runtime::write_waiting(params.project_root, params.feature, name, &startup)?;
+    runtime::reset_loop(params.project_root, params.feature, name)?;
+    let stamp =
+        crate::commands::launch_stamp::stamp(params.project_root, effective_definition, &launch)?;
+    runtime::write_launch_stamp(params.project_root, params.feature, name, &stamp)?;
+    for which in [
+        runtime::SessionPath::Transcript,
+        runtime::SessionPath::ConfigDir,
+    ] {
+        runtime::write_session_path(params.project_root, params.feature, name, which, None)?;
     }
 
-    let launched = match params.agent_name {
-        Some(name) => Some(runtime::reset_launched(
-            params.project_root,
-            params.feature,
-            name,
-        )?),
-        None => None,
-    };
+    let launched = runtime::reset_launched(params.project_root, params.feature, name)?;
     tmux::send_line(
         params.tmux_server,
         &window_target,
-        &window_command(
-            params.agent_name.zip(launched.as_deref()),
-            &worktree_path,
-            &cmd,
-        ),
+        &window_command(name, &launched, &worktree_path, &cmd),
     )?;
 
     let resumed = match (params.resume_session, &pre.session_id) {
@@ -459,7 +430,7 @@ mod tests {
             &SpawnParams {
                 project_root: dir.path(),
                 feature: &feature,
-                agent_name: Some("reviewer"),
+                agent_name: "reviewer",
                 agent_definition: None,
                 prompt: None,
                 resume_session: None,
@@ -685,7 +656,7 @@ package = "second-pkg"
             &SpawnParams {
                 project_root: dir.path(),
                 feature: &feature,
-                agent_name: Some("reviewer"),
+                agent_name: "reviewer",
                 agent_definition: None,
                 prompt: None,
                 resume_session: None,
@@ -918,22 +889,16 @@ package = "second-pkg"
     }
 
     #[test]
-    fn window_command_exports_agent_name_for_named_agents_only() {
+    fn window_command_exports_agent_name() {
         assert_eq!(
             window_command(
-                Some((
-                    "reviewer",
-                    Path::new("/p/.pm/runtime/login/reviewer/launched")
-                )),
+                "reviewer",
+                Path::new("/p/.pm/runtime/login/reviewer/launched"),
                 Path::new("/p/login"),
                 "claude --agent reviewer"
             ),
             "touch '/p/.pm/runtime/login/reviewer/launched' && \
              export PM_AGENT_WORKTREE='/p/login' PM_AGENT_NAME=reviewer && claude --agent reviewer"
-        );
-        assert_eq!(
-            window_command(None, Path::new("/p/login"), "claude"),
-            "claude"
         );
     }
 }

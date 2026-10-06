@@ -175,7 +175,7 @@ mod tests {
             messages(&issues, IssueKind::HarnessUnusable),
             vec![
                 "agents configured for opencode cannot run: installed opencode is `opencode \
-                 v2.0.17`; pm's never-idle plugin needs 2.0.18 or later"
+                 v2.0.17`; pm needs 2.0.23 or later"
             ]
         );
         let plugin = messages(&issues, IssueKind::HooksNotInstalled)
@@ -199,7 +199,7 @@ mod tests {
                     && i.kind() != IssueKind::HookUntrusted)
         );
 
-        use_opencode(&project_path, "reviewer", "opencode v2.0.18");
+        use_opencode(&project_path, "reviewer", "opencode v2.0.23");
         for (path, content) in Harness::OpenCode.plugin_files(&home) {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, content).unwrap();

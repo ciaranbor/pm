@@ -43,7 +43,7 @@ pub const LAUNCH_EPOCH: u32 = 1;
 /// The stamp of a spawn of `definition` (the effective one) with `launch`.
 pub(crate) fn stamp(
     project_root: &Path,
-    definition: Option<&str>,
+    definition: &str,
     launch: &LaunchConfig,
 ) -> Result<String> {
     let harness = launch.settings.harness;
@@ -99,7 +99,7 @@ pub fn current(
     config: &ProjectConfig,
     global: &GlobalConfig,
 ) -> Result<String> {
-    let definition = Some(entry.effective_definition(name));
+    let definition = entry.effective_definition(name);
     let launch = resolve_launch(project_root, scope, definition, config, global)?;
     stamp(project_root, definition, &launch)
 }

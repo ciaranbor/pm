@@ -737,7 +737,7 @@ fn interrupting_pm_mid_migration_kills_its_opencode_server() {
         &fake,
         format!(
             "#!/bin/sh\ncase \"$*\" in\n\
-             --version*) echo 2.0.18 ;;\n\
+             --version*) echo 2.0.23 ;;\n\
              serve*) echo $$ > {server}; echo 'server listening on http://127.0.0.1:9'\n\
              sleep 300 & echo $! > {child}; wait ;;\n\
              *session.list*) echo '{{\"data\":[{{\"id\":\"ses_a\"}}],\"cursor\":{{}}}}' ;;\n\
@@ -1225,7 +1225,8 @@ fn serve_dir(dir: &Path) -> String {
 
 /// Catches: the install script against a real HOME and PATH — a first
 /// install into `~/.local/bin` off PATH, a re-run finding that pm on PATH
-/// and upgrading in place, and a checksum mismatch installing nothing.
+/// and upgrading in place, a checksum mismatch installing nothing, and a
+/// missing binary naming what to do.
 #[test]
 #[ignore]
 fn the_install_script_installs_reinstalls_and_refuses_a_bad_checksum() {
@@ -1293,4 +1294,14 @@ fn the_install_script_installs_reinstalls_and_refuses_a_bad_checksum() {
         .map(|e| e.unwrap().file_name())
         .collect();
     assert_eq!(left, ["pm"]);
+
+    std::fs::remove_file(release.path().join(&asset)).unwrap();
+    let missing = install(&on_path).assert().failure();
+    let stderr = String::from_utf8_lossy(&missing.get_output().stderr).into_owned();
+    assert!(stderr.contains("build from source"), "{stderr}");
+    assert_eq!(
+        stderr.contains("try again later"),
+        pm::version::TARGET.contains("apple-darwin"),
+        "{stderr}"
+    );
 }

@@ -1263,7 +1263,7 @@ mod tests {
         }
         config.harness.opencode.binary = Some(crate::testing::fake_opencode(
             dir.path(),
-            "opencode v2.0.18",
+            "opencode v2.0.23",
             0,
         ));
         config.save(&pm_dir).unwrap();

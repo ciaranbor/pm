@@ -417,8 +417,8 @@ mod tests {
                     "reviewer (codex): codex has not trusted pm's SessionStart hook, so it \
                      silently does not run: {remedy}"
                 ),
-                "qa (opencode): installed opencode is `opencode v2.0.17`; pm's never-idle \
-                 plugin needs 2.0.18 or later"
+                "qa (opencode): installed opencode is `opencode v2.0.17`; pm needs 2.0.23 \
+                 or later"
                     .to_string(),
                 "qa (opencode): no [agents.models] row, which opencode agents need; set \
                  `[agents.models] qa = \"<provider>/<model>\"`"
@@ -432,7 +432,7 @@ mod tests {
     fn a_team_whose_harnesses_are_all_ready_passes() {
         let dir = tempdir().unwrap();
         let home = home_with_hooks(dir.path());
-        let mut config = opencode_reporting(dir.path(), "opencode v2.0.18");
+        let mut config = opencode_reporting(dir.path(), "opencode v2.0.23");
         config.codex.bypass_hook_trust = Some(true);
         let mut agents = mixed_agents();
         agents.models.insert("qa".into(), "local/qwen".into());
@@ -574,7 +574,7 @@ mod tests {
     fn rows_the_harness_would_refuse_at_spawn_are_problems() {
         let dir = tempdir().unwrap();
         let home = home_with_hooks(dir.path());
-        let config = opencode_reporting(dir.path(), "opencode v2.0.18");
+        let config = opencode_reporting(dir.path(), "opencode v2.0.23");
         let mut agents = mixed_agents();
         agents.models.insert("qa".into(), "qwen".into());
         agents.permissions.insert("qa".into(), "plan".into());
@@ -617,7 +617,7 @@ mod tests {
     fn a_definition_the_harness_would_not_find_is_a_problem_of_its_member() {
         let dir = tempdir().unwrap();
         let home = home_with_hooks(dir.path());
-        let config = opencode_reporting(dir.path(), "opencode v2.0.18");
+        let config = opencode_reporting(dir.path(), "opencode v2.0.23");
         let mut agents = mixed_agents();
         agents.models.insert("qa".into(), "local/qwen".into());
         agents.models.insert("plain".into(), "local/qwen".into());
@@ -686,7 +686,7 @@ mod tests {
     fn a_model_row_bound_to_another_harness_is_named_as_the_reason() {
         let dir = tempdir().unwrap();
         let home = home_with_hooks(dir.path());
-        let config = opencode_reporting(dir.path(), "opencode v2.0.18");
+        let config = opencode_reporting(dir.path(), "opencode v2.0.23");
         let mut agents = mixed_agents();
         agents.models.insert("*".into(), "opus".into());
 

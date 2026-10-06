@@ -101,8 +101,10 @@ use crate::tmux;
 pub(super) const CONFIG_DIR: &str = ".opencode";
 pub(super) const PROJECTED_DIRS: &[&str] = &["agents"];
 
-/// Earliest release with the events and plugin API the loop relies on.
-pub(super) const MIN_VERSION: (u32, u32, u32) = (2, 0, 18);
+/// Earliest release verified against the events and plugin API the loop
+/// relies on and the prompt box [`input`] reads; an older box reads as
+/// unknown, which refuses remote input.
+pub(super) const MIN_VERSION: (u32, u32, u32) = (2, 0, 23);
 
 const DEFAULT_BINARY: &str = "opencode";
 const PLUGIN_DIR: &str = "plugins/pm-never-idle";
@@ -678,7 +680,7 @@ pub(super) fn unusable_reason(cfg: &OpenCodeConfig, probe: Probe) -> Option<Stri
     match parse_version(&found) {
         Some(version) if version >= MIN_VERSION => None,
         _ => Some(format!(
-            "installed opencode is `{found}`; pm's never-idle plugin needs {} or later",
+            "installed opencode is `{found}`; pm needs {} or later",
             min_version_string()
         )),
     }
@@ -1579,15 +1581,14 @@ mod tests {
         assert!(reason.contains("could not be run"), "{reason}");
         assert_eq!(version_supported(&missing, Probe::Fresh), None);
 
-        let old = fake_opencode(dir.path(), "opencode v2.0.17", 0);
+        let old = fake_opencode(dir.path(), "opencode v2.0.22", 0);
         assert_eq!(
             unusable_reason(&old, Probe::Fresh).unwrap(),
-            "installed opencode is `opencode v2.0.17`; pm's never-idle plugin needs 2.0.18 or \
-             later"
+            "installed opencode is `opencode v2.0.22`; pm needs 2.0.23 or later"
         );
         assert_eq!(version_supported(&old, Probe::Fresh), Some(false));
 
-        let current = fake_opencode(dir.path(), "opencode v2.0.18", 0);
+        let current = fake_opencode(dir.path(), "opencode v2.0.23", 0);
         assert_eq!(unusable_reason(&current, Probe::Fresh), None);
         assert_eq!(version_supported(&current, Probe::Fresh), Some(true));
     }
@@ -1598,7 +1599,7 @@ mod tests {
         assert_eq!(parse_version("opencode v2.1.0-beta.2\n"), Some((2, 1, 0)));
         assert_eq!(parse_version("2.0.18"), Some((2, 0, 18)));
         assert_eq!(parse_version("opencode"), None);
-        assert!(parse_version("opencode v2.0.17").unwrap() < MIN_VERSION);
-        assert!(parse_version("opencode v2.0.18").unwrap() >= MIN_VERSION);
+        assert!(parse_version("opencode v2.0.22").unwrap() < MIN_VERSION);
+        assert!(parse_version("opencode v2.0.23").unwrap() >= MIN_VERSION);
     }
 }

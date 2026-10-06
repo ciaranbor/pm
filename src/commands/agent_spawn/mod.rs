@@ -180,7 +180,7 @@ fn spawn_agent(
             &SpawnParams {
                 project_root,
                 feature,
-                agent_name: Some(agent_name),
+                agent_name,
                 agent_definition: resolved_definition.as_deref(),
                 prompt,
                 resume_session: resume,

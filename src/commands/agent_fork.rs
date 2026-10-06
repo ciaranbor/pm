@@ -91,7 +91,7 @@ pub fn agent_fork(
     let spawned = spawn_session(&SpawnParams {
         project_root,
         feature,
-        agent_name: Some(new_name),
+        agent_name: new_name,
         agent_definition: Some(&inherited_definition),
         prompt: None,
         resume_session: Some(&source_session_id),

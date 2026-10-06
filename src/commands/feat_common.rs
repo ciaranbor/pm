@@ -171,7 +171,7 @@ pub fn spawn_team(
         let spawned = agent_spawn::spawn_session(&agent_spawn::SpawnParams {
             project_root,
             feature: feature_name,
-            agent_name: Some(agent.as_str()),
+            agent_name: agent.as_str(),
             // Workflow team spawn has no concept of aliasing — the
             // workflow's `agents` entry doubles as the definition.
             // `spawn_session` falls back to `agent_name` when this

@@ -243,7 +243,7 @@ mod tests {
         };
         assert_eq!(file(Harness::ClaudeCode.conversation(&agent)), derived);
 
-        let recorded = dir.path().join("elsewhere/s1.jsonl");
+        let recorded = dir.path().join("s2/s1.jsonl");
         std::fs::create_dir_all(recorded.parent().unwrap()).unwrap();
         std::fs::write(&recorded, "").unwrap();
         runtime::write_session_path(
