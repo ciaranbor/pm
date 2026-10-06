@@ -6,6 +6,9 @@ import dev.pm.app.model.NotesDraft
 import dev.pm.app.model.Pairing
 import dev.pm.app.model.PushedTransition
 import java.io.File
+import java.net.URLEncoder
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 
@@ -17,6 +20,7 @@ import kotlinx.serialization.json.Json
 class Store(context: Context) : NotesDrafts {
     private val prefs = context.getSharedPreferences("pm", Context.MODE_PRIVATE)
     private val snapshotFile = File(context.filesDir, "snapshot.json")
+    private val draftsDir = File(context.filesDir, "notes_drafts")
 
     var pairing: Pairing?
         get() = prefs.getString(PAIRING, null)?.let(Pairing::parse)
@@ -92,19 +96,39 @@ class Store(context: Context) : NotesDrafts {
         get() = prefs.getString(NOTIFIED_UPDATE, null)
         set(value) = prefs.edit { putString(NOTIFIED_UPDATE, value) }
 
-    override fun draft(project: String): NotesDraft? =
-        prefs.getString(DRAFT + project, null)?.let {
+    override fun draft(project: String): NotesDraft? {
+        val file = draftFile(project)
+        val kept =
+            if (file.exists()) runCatching { file.readText() }.getOrNull()
+            else prefs.getString(DRAFT + project, null)
+        return kept?.let {
             runCatching { json.decodeFromString(NotesDraft.serializer(), it) }.getOrNull()
-        }
-
-    override fun keep(project: String, draft: NotesDraft?) {
-        prefs.edit {
-            if (draft == null) remove(DRAFT + project)
-            else putString(DRAFT + project, json.encodeToString(NotesDraft.serializer(), draft))
         }
     }
 
+    override fun keep(project: String, draft: NotesDraft?) {
+        val file = draftFile(project)
+        if (draft == null) {
+            file.delete()
+        } else {
+            file.parentFile?.mkdirs()
+            val tmp = File(file.parentFile, "${file.name}.tmp")
+            tmp.writeText(json.encodeToString(NotesDraft.serializer(), draft))
+            Files.move(
+                tmp.toPath(),
+                file.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        }
+        if (prefs.contains(DRAFT + project)) prefs.edit { remove(DRAFT + project) }
+    }
+
+    private fun draftFile(project: String) =
+        File(draftsDir, URLEncoder.encode(project, "UTF-8") + ".json")
+
     private companion object {
+        /** A legacy draft key: still read, removed on the next keep. */
         const val DRAFT = "notes_draft/"
         val json = Json { ignoreUnknownKeys = true }
         val alerts = ListSerializer(PushedTransition.serializer())
@@ -130,6 +154,6 @@ data class Subscription(
 interface NotesDrafts {
     fun draft(project: String): NotesDraft?
 
-    /** Keep `draft` as `project`'s, or forget it with null. */
+    /** Keep `draft` as `project`'s, or forget it with null; throws if it can't be written. */
     fun keep(project: String, draft: NotesDraft?)
 }

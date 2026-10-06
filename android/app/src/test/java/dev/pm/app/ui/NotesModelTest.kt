@@ -1,5 +1,6 @@
 package dev.pm.app.ui
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import dev.pm.app.api.PmClient
 import dev.pm.app.data.NotesDrafts
@@ -8,6 +9,7 @@ import dev.pm.app.model.MAX_NOTES_BYTES
 import dev.pm.app.model.Notes
 import dev.pm.app.model.NotesDraft
 import dev.pm.app.model.Pairing
+import java.io.IOException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel
@@ -15,6 +17,7 @@ import kotlinx.coroutines.job
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
@@ -23,6 +26,7 @@ import mockwebserver3.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
@@ -55,7 +59,10 @@ class NotesModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun model() = NotesModel(client, "app", drafts).also { models += it }
+    private fun model() =
+        NotesModel(client, "app", drafts, SavedStateHandle(), Dispatchers.Unconfined).also {
+            models += it
+        }
 
     private fun modelTest(body: suspend TestScope.() -> Unit): TestResult = runTest {
         body()
@@ -81,7 +88,7 @@ class NotesModelTest {
         val model = model()
         eventually { model.state.value is NotesState.Viewing }
         model.edit()
-        model.type("old\nfrom the phone\n")
+        model.edited("old\nfrom the phone\n")
 
         server.enqueue(changed("old\\nfrom the Mac\\n", "v2"))
         model.save()
@@ -98,10 +105,10 @@ class NotesModelTest {
 
         model.merge()
         val merging = model.state.value as NotesState.Editing
-        assertEquals("v2", merging.draft.base.version)
+        assertEquals("v2", merging.base.version)
         assertEquals(
             NotesModel.merged("old\nfrom the phone\n", "old\nfrom the Mac\n"),
-            merging.draft.text,
+            model.text.toString(),
         )
 
         server.enqueue(MockResponse.Builder().body("""{"version":"v3"}""").build())
@@ -119,16 +126,14 @@ class NotesModelTest {
         val first = model()
         eventually { first.state.value is NotesState.Viewing }
         first.edit()
-        first.type("unsaved\n")
+        first.edited("unsaved\n")
         server.close()
         first.save()
         eventually { (first.state.value as? NotesState.Editing)?.error != null }
 
         val again = model()
-        assertEquals(
-            NotesState.Editing(NotesDraft(Notes("old\n", "v1"), "unsaved\n")),
-            again.state.value,
-        )
+        assertEquals(NotesState.Editing(Notes("old\n", "v1"), changed = true), again.state.value)
+        assertEquals("unsaved\n", again.text.toString())
     }
 
     @Test
@@ -137,7 +142,7 @@ class NotesModelTest {
         val model = model()
         eventually { model.state.value is NotesState.Viewing }
         model.edit()
-        model.type("phone\n")
+        model.edited("phone\n")
         val grown = "x".repeat(MAX_NOTES_BYTES + 1)
         server.enqueue(changed(grown, "v2"))
         model.save()
@@ -153,12 +158,54 @@ class NotesModelTest {
         assertEquals(true, model.state.value is NotesState.Viewing)
 
         server.enqueue(notes("small\n", "v3"))
-        val fresh = NotesModel(client, "other", drafts).also { models += it }
+        val fresh =
+            NotesModel(client, "other", drafts, SavedStateHandle(), Dispatchers.Unconfined).also {
+                models += it
+            }
         eventually { fresh.state.value is NotesState.Viewing }
         fresh.edit()
-        fresh.type(grown)
+        fresh.edited(grown)
         fresh.save()
         assertEquals(NotesModel.TOO_LONG, (fresh.state.value as NotesState.Editing).error)
         assertEquals(3, server.requestCount)
+    }
+
+    @Test
+    fun an_edit_is_kept_once_typing_pauses_and_typing_it_back_forgets_it() = modelTest {
+        server.enqueue(notes("old\n", "v1"))
+        val model = model()
+        eventually { model.state.value is NotesState.Viewing }
+        model.edit()
+        model.edited("old\nnew\n")
+        advanceTimeBy(NotesModel.KEEP_AFTER_MS - 1)
+        assertNull("kept only once typing pauses", drafts.kept["app"])
+        advanceTimeBy(2)
+        assertEquals(NotesDraft(Notes("old\n", "v1"), "old\nnew\n"), drafts.kept["app"])
+
+        model.edited("old\n")
+        advanceTimeBy(NotesModel.KEEP_AFTER_MS + 1)
+        assertNull(drafts.kept["app"])
+    }
+
+    @Test
+    fun an_edit_the_phone_cannot_keep_says_so_in_the_editor() = modelTest {
+        server.enqueue(notes("old\n", "v1"))
+        val full =
+            object : NotesDrafts {
+                override fun draft(project: String): NotesDraft? = null
+
+                override fun keep(project: String, draft: NotesDraft?) =
+                    throw IOException("No space left on device")
+            }
+        val model =
+            NotesModel(client, "app", full, SavedStateHandle(), Dispatchers.Unconfined).also {
+                models += it
+            }
+        eventually { model.state.value is NotesState.Viewing }
+        model.edit()
+        model.edited("new\n")
+        advanceTimeBy(NotesModel.KEEP_AFTER_MS + 1)
+        val error = (model.state.value as NotesState.Editing).error
+        assertTrue(error, error?.contains("No space left on device") == true)
     }
 }

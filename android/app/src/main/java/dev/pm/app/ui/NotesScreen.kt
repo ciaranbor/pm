@@ -4,40 +4,47 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mikepenz.markdown.compose.components.CurrentComponentsBridge
+import com.mikepenz.markdown.compose.components.MarkdownComponentModel
+import com.mikepenz.markdown.compose.components.MarkdownComponents
+import com.mikepenz.markdown.compose.components.markdownComponents
+import dev.pm.app.R
 
-/** A project's notes: rendered to read, raw to edit, and a refused save's two texts to settle. */
+/**
+ * A project's notes: rendered to read, raw to edit, and a refused save's two texts to settle. Edit
+ * opens at the section being read.
+ */
 @Composable
-fun NotesScreen(model: NotesModel, modifier: Modifier = Modifier) {
+fun NotesScreen(model: NotesModel, topBar: TopBarSlot, modifier: Modifier = Modifier) {
     val state by model.state.collectAsStateWithLifecycle()
     LifecycleStartEffect(model) {
         model.reload()
@@ -47,7 +54,7 @@ fun NotesScreen(model: NotesModel, modifier: Modifier = Modifier) {
         when (val shown = state) {
             NotesState.Loading -> Centered { CircularProgressIndicator() }
             is NotesState.Viewing -> NotesView(shown, model::edit)
-            is NotesState.Editing -> NotesEditor(shown, model::type, model::save, model::discard)
+            is NotesState.Editing -> NotesEditor(model, shown, topBar)
             is NotesState.Conflict ->
                 NotesConflict(shown, model::keepTheirs, model::keepMine, model::merge)
             NotesState.Unreachable ->
@@ -59,7 +66,7 @@ fun NotesScreen(model: NotesModel, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun NotesView(state: NotesState.Viewing, edit: () -> Unit) {
+private fun NotesView(state: NotesState.Viewing, edit: (Int) -> Unit) {
     if (state.tooLong) {
         Column(
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -73,75 +80,68 @@ private fun NotesView(state: NotesState.Viewing, edit: () -> Unit) {
             Version("How they start", state.notes.text)
         }
     } else if (state.notes.text.isBlank()) {
-        EmptyState("No notes yet", "Notes written here or with pm notes show here.", "Edit", edit)
-    } else {
-        MarkdownPage(state.notes.text, "Notes") { TextButton(onClick = edit) { Text("Edit") } }
-    }
-}
-
-@Composable
-private fun NotesEditor(
-    state: NotesState.Editing,
-    type: (String) -> Unit,
-    save: () -> Unit,
-    discard: () -> Unit,
-) {
-    var confirming by rememberSaveable { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize().imePadding()) {
-        OutlinedTextField(
-            value = state.draft.text,
-            onValueChange = type,
-            readOnly = state.saving,
-            textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-            placeholder = { Text("Markdown") },
-            modifier = Modifier.weight(1f).fillMaxWidth().padding(8.dp),
+        EmptyState(
+            "No notes yet",
+            "Notes written here or with pm notes show here.",
+            "Edit",
+            onAction = { edit(0) },
         )
-        Surface(tonalElevation = 2.dp) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
-                if (state.error != null) {
-                    Text(
-                        state.error,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(4.dp),
-                    )
-                }
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    if (state.saving) CircularProgressIndicator(Modifier.padding(4.dp))
-                    TextButton(
-                        onClick = { if (state.changed) confirming = true else discard() },
-                        enabled = !state.saving,
-                    ) {
-                        Text(if (state.changed) "Discard" else "Cancel")
-                    }
-                    Button(onClick = save, enabled = !state.saving) { Text("Save") }
-                }
+    } else {
+        val sections = remember(state.notes.text) { Sections() }
+        val slack = with(LocalDensity.current) { 24.dp.toPx() }
+        Box(Modifier.fillMaxSize()) {
+            MarkdownPage(
+                state.notes.text,
+                "Notes",
+                modifier = Modifier.onGloballyPositioned { sections.page = it },
+                components = remember(sections) { sections.components() },
+                bottom = 88.dp,
+            )
+            ExtendedFloatingActionButton(
+                onClick = { edit(sections.reading(slack)) },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+            ) {
+                Icon(painterResource(R.drawable.ic_edit), null)
+                Text("Edit", Modifier.padding(start = 12.dp))
             }
         }
     }
-    if (confirming) {
-        AlertDialog(
-            onDismissRequest = { confirming = false },
-            title = { Text("Discard the edit?") },
-            text = { Text("What you wrote here since the last save is lost.") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        confirming = false
-                        discard()
-                    }
-                ) {
-                    Text("Discard")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirming = false }) { Text("Keep editing") }
-            },
+}
+
+/** Where the rendered notes' headings are, to tell which section is being read. */
+private class Sections {
+    var page: LayoutCoordinates? = null
+    private val headings = mutableMapOf<Int, LayoutCoordinates>()
+
+    /** The source offset of the heading of the section at the top of the page, `slack` px down. */
+    fun reading(slack: Float): Int {
+        val page = page?.takeIf { it.isAttached } ?: return 0
+        return headings
+            .filterValues { it.isAttached }
+            .mapValues { (_, at) -> page.localPositionOf(at, Offset.Zero).y }
+            .filterValues { it <= slack }
+            .maxByOrNull { it.value }
+            ?.key ?: 0
+    }
+
+    fun components(): MarkdownComponents {
+        val bridge = CurrentComponentsBridge
+        return markdownComponents(
+            heading1 = tracked(bridge.heading1),
+            heading2 = tracked(bridge.heading2),
+            heading3 = tracked(bridge.heading3),
+            heading4 = tracked(bridge.heading4),
+            heading5 = tracked(bridge.heading5),
+            heading6 = tracked(bridge.heading6),
+            setextHeading1 = tracked(bridge.setextHeading1),
+            setextHeading2 = tracked(bridge.setextHeading2),
         )
+    }
+
+    private fun tracked(
+        draw: @Composable (MarkdownComponentModel) -> Unit
+    ): @Composable (MarkdownComponentModel) -> Unit = { model ->
+        Box(Modifier.onGloballyPositioned { headings[model.node.startOffset] = it }) { draw(model) }
     }
 }
 
@@ -154,22 +154,38 @@ private fun NotesConflict(
 ) {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text("The notes changed on the server", style = MaterialTheme.typography.titleMedium)
-        Text(
-            "They were saved elsewhere while you edited here, so your edit was not saved. " +
-                "Keep one version, or merge the two by hand.",
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        if (!state.mergeable) {
-            Text(
-                "Together they are over 256 KB, too long to merge here.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        Surface(
+            color = MaterialTheme.colorScheme.tertiaryContainer,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "The notes changed on the server",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                )
+                Text(
+                    "They were saved elsewhere while you edited here, so your edit was not " +
+                        "saved. Keep one version, or merge the two by hand.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                )
+                if (!state.mergeable) {
+                    Text(
+                        "Together they are over 256 KB, too long to merge here.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                    )
+                }
+            }
         }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             Button(onClick = merge, enabled = state.mergeable) { Text("Merge") }
             OutlinedButton(onClick = keepMine) { Text("Keep mine") }
             OutlinedButton(onClick = keepTheirs) { Text("Keep the server's") }
