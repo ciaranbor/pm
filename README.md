@@ -172,6 +172,16 @@ When an agent misbehaves, `pm agent restart <name>` respawns it on the same
 conversation; `pm agent spawn <name>` adds one to the feature. `pm doctor`
 reports an agent whose harness has exited.
 
+`pm agent restart --all` restarts every active agent of the scope, and
+`--all --global` every scope of every project — after an upgrade, say, so
+every agent runs under pm's new hooks. Idle agents restart and dead ones
+are respawned. One mid-turn, asking, or waiting on background work is
+skipped unless `--force`, which interrupts it and tells it to resume; an
+agent whose session is closed (a closed feature, a project not opened) is
+skipped, leaving the session closed. Run from an agent's own pane, that
+agent restarts last. Each agent gets a line and the run ends with a count;
+only a failed restart makes it exit non-zero.
+
 ### Project notes
 
 `pm notes` opens the project's notes in `$VISUAL` or `$EDITOR`: one

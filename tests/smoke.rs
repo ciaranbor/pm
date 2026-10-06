@@ -649,6 +649,48 @@ fn restart_from_inside_an_agents_own_window() {
         .stdout(predicate::str::contains("reviewer (active"));
 }
 
+/// Catches: `agent restart --all --global` run from an agent's own pane
+/// killing it before the agents of later scopes restart: the caller's
+/// scope, `main`, comes before `login` but must restart last.
+#[test]
+#[ignore]
+fn restart_all_global_from_inside_an_agents_own_window_restarts_it_last() {
+    let s = Smoke::new();
+    s.init_with_spawned_reviewer();
+    let main = s.proj().join("main");
+    s.pm(&main)
+        .args(["agent", "spawn", "scout", "--agent", "implementer"])
+        .assert()
+        .success();
+    s.argv_records("reviewer", 1);
+    s.argv_records("scout", 1);
+
+    let old = s.find_window("proj/main", "scout").expect("scout window");
+    let old = s.tmux_ok(&["display", "-p", "-t", &old, "#{pane_id}"]);
+    s.tmux_ok(&["send-keys", "-t", &old, "C-c", ""]);
+    s.wait_for_shell(&old);
+
+    let outcome = s.run_in(&old, "pm agent restart --all --global");
+    assert!(!outcome.alive, "old pane survived the restart: {outcome:?}");
+    let lines: Vec<&str> = outcome.log.lines().collect();
+    assert_eq!(lines.len(), 3, "{}", outcome.log);
+    assert!(
+        lines[0].starts_with("proj/login: Restarted agent 'reviewer'"),
+        "{}",
+        outcome.log
+    );
+    assert!(
+        lines[1].starts_with("proj/main: Restarted agent 'scout'"),
+        "{}",
+        outcome.log
+    );
+    assert_eq!(lines[2], "Restarted 2, skipped 0, failed 0");
+    for agent in ["reviewer", "scout"] {
+        assert_eq!(s.argv_records(agent, 2).len(), 2, "{agent}");
+    }
+    assert!(s.find_window("proj/main", "scout").is_some());
+}
+
 /// Catches: tmux output parsed under launchd's environment — no UTF-8
 /// locale and no `$TMUX` — where tmux prints tabs as `_` and every live
 /// session reads as closed.

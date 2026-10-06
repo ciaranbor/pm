@@ -112,6 +112,14 @@ pub(super) fn restarted_line(agent_name: &str, outcome: SpawnOutcome, notes: &[S
 #[derive(Debug)]
 pub struct Restarted {
     pub results: Vec<Result<String>>,
+    /// The agent each of `results` is for.
+    pub(super) agents: Vec<String>,
+    /// The agents refused as mid-turn, each with why, in a clause naming
+    /// no agent.
+    pub(super) refused: Vec<(String, String)>,
+    /// The agents other than the caller restarted mid-turn, each told to
+    /// resume.
+    pub(super) interrupted: Vec<String>,
     /// Each restarted agent but the caller, by its index in `results`: the
     /// caller's report prints in its old pane, which is killed right after,
     /// so its launch is not waited for.
@@ -135,7 +143,12 @@ impl Restarted {
         self.record_failures(failed);
     }
 
-    fn record_failures(&mut self, failed: Vec<FailedLaunch>) {
+    /// The agents whose launch [`Restarted::confirm_launches`] would watch.
+    pub(super) fn launched(&self) -> impl Iterator<Item = &str> {
+        self.launched.iter().map(|(_, n)| n.as_str())
+    }
+
+    pub(super) fn record_failures(&mut self, failed: Vec<FailedLaunch>) {
         for failure in failed {
             if let Some((at, _)) = self
                 .launched
@@ -157,7 +170,7 @@ impl Restarted {
 }
 
 /// The sender of the message that tells an interrupted agent to resume.
-const RESUME_SENDER: &str = "no-reply-restart";
+pub(super) const RESUME_SENDER: &str = "no-reply-restart";
 
 /// Restart multiple agents. Continues on error. An agent whose turn the
 /// restart would cut short — busy, asking, or running background work — is
@@ -176,32 +189,44 @@ pub fn agent_restart_many(
     tmux_server: Option<&str>,
 ) -> Restarted {
     let caller = callers_agent(project_root, feature, names, tmux_server);
-    // Unreadable states count as mid-turn: the guard fails closed.
+    // Unreadable states count as mid-turn: the guard fails closed. Each
+    // reason comes as the refusal and as a clause naming no agent.
     let states = scope_agents(project_root, feature, tmux_server).map_err(|e| e.to_string());
     let mid_turn_reason = |name: &str| match &states {
         Ok(agents) => agents
             .iter()
             .find(|a| a.name == name)
             .filter(|a| mid_turn(a.state))
-            .map(|_| format!("agent '{name}' is mid-turn; wait until it is idle")),
-        Err(e) => Some(format!(
-            "could not tell whether agent '{name}' is mid-turn ({e})"
+            .map(|_| {
+                (
+                    format!("agent '{name}' is mid-turn; wait until it is idle"),
+                    "it is mid-turn".to_string(),
+                )
+            }),
+        Err(e) => Some((
+            format!("could not tell whether agent '{name}' is mid-turn ({e})"),
+            format!("could not tell whether it is mid-turn ({e})"),
         )),
     };
-    let mut launched = Vec::new();
-    let mut results: Vec<Result<String>> = names
-        .iter()
-        .filter(|n| Some(*n) != caller)
-        .enumerate()
-        .map(|(at, name)| {
-            let reason = mid_turn_reason(name);
-            let resume = reason.is_some();
-            if let Some(reason) = reason.filter(|_| !force) {
-                return Err(PmError::SafetyCheck(format!(
+    let mut restarted = Restarted {
+        results: Vec::new(),
+        agents: Vec::new(),
+        refused: Vec::new(),
+        interrupted: Vec::new(),
+        launched: Vec::new(),
+        caller_pane: None,
+    };
+    for name in names.iter().filter(|n| Some(*n) != caller) {
+        let reason = mid_turn_reason(name);
+        let resume = reason.is_some();
+        let result = match reason {
+            Some((reason, clause)) if !force => {
+                restarted.refused.push((name.clone(), clause));
+                Err(PmError::SafetyCheck(format!(
                     "{reason}, or pass --force to interrupt it and have it resume"
-                )));
+                )))
             }
-            let line = restart_one(
+            _ => restart_one(
                 project_root,
                 feature,
                 name,
@@ -209,27 +234,31 @@ pub fn agent_restart_many(
                 false,
                 resume,
                 focus,
-            )?
-            .0;
-            launched.push((at, name.clone()));
-            Ok(line)
-        })
-        .collect();
-    let mut caller_pane = None;
+            )
+            .map(|(line, _)| {
+                restarted
+                    .launched
+                    .push((restarted.results.len(), name.clone()));
+                if resume {
+                    restarted.interrupted.push(name.clone());
+                }
+                line
+            }),
+        };
+        restarted.agents.push(name.clone());
+        restarted.results.push(result);
+    }
     if let Some(name) = caller {
-        match restart_one(project_root, feature, name, tmux_server, true, true, focus) {
-            Ok((line, kept)) => {
-                caller_pane = kept;
-                results.push(Ok(line));
-            }
-            Err(e) => results.push(Err(e)),
-        }
+        let result = restart_one(project_root, feature, name, tmux_server, true, true, focus).map(
+            |(line, kept)| {
+                restarted.caller_pane = kept;
+                line
+            },
+        );
+        restarted.agents.push(name.clone());
+        restarted.results.push(result);
     }
-    Restarted {
-        results,
-        launched,
-        caller_pane,
-    }
+    restarted
 }
 
 /// Whether a restart would cut short what an agent in `state` is doing.
@@ -251,25 +280,25 @@ fn resume_body(caller: bool) -> &'static str {
     }
 }
 
-/// The one of `names` whose agent pane this process runs in.
-fn callers_agent<'a>(
+/// The one of `names` whose agent pane this process runs in. Only the
+/// agent `PM_AGENT_NAME` names is looked for: every agent pane exports it.
+pub(super) fn callers_agent<'a>(
     project_root: &Path,
     feature: &str,
     names: &'a [String],
     tmux_server: Option<&str>,
 ) -> Option<&'a String> {
+    let own = std::env::var("PM_AGENT_NAME").ok()?;
+    let name = names.iter().find(|name| **name == own)?;
     let config = ProjectConfig::load(&paths::pm_dir(project_root)).ok()?;
     let session_name = tmux::session_name(&config.project.name, feature);
+    let window = tmux::find_window(tmux_server, &session_name, name).ok()??;
     let pid = std::process::id();
-    names.iter().find(|name| {
-        let Ok(Some(window)) = tmux::find_window(tmux_server, &session_name, name) else {
-            return false;
-        };
-        tmux::pane_processes(tmux_server, &window)
-            .unwrap_or_default()
-            .iter()
-            .any(|p| p.pid == pid)
-    })
+    tmux::pane_processes(tmux_server, &window)
+        .unwrap_or_default()
+        .iter()
+        .any(|p| p.pid == pid)
+        .then_some(name)
 }
 
 #[cfg(test)]

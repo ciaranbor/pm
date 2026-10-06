@@ -129,6 +129,36 @@ fn report_agent_op_results(
     }
 }
 
+/// Run `pm agent restart --all` over `scopes`: a line per agent and a
+/// summary, then the caller's old pane is killed. Skips aren't failures.
+fn report_restart_all(
+    scopes: &[commands::agent_restart_all::Scope],
+    unread: Vec<commands::agent_restart_all::Report>,
+    force: bool,
+    server: Option<&str>,
+) -> pm::error::Result<()> {
+    use commands::agent_restart_all::Outcome;
+    let mut done = commands::agent_restart_all::restart_all(scopes, force, server)?;
+    done.confirm_launches(server);
+    let mut sweep = done.sweep();
+    sweep.reports.splice(0..0, unread);
+    for report in &sweep.reports {
+        match report.outcome {
+            Outcome::Failed(_) => eprintln!("{report}"),
+            _ => println!("{report}"),
+        }
+    }
+    println!("{}", sweep.summary());
+    let failed = sweep.count(|o| matches!(o, Outcome::Failed(_))) > 0;
+    std::io::Write::flush(&mut std::io::stdout())?;
+    done.finish(server);
+    push();
+    if failed {
+        return Err(PmError::Agent("some agents failed to restart".to_string()));
+    }
+    Ok(())
+}
+
 /// Print what a send did, reporting a respawned recipient only once its
 /// harness has stayed up. The message is queued either way, so a failed
 /// launch is a warning.
@@ -388,6 +418,16 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             push();
             Ok(())
         }
+        Commands::Agent(AgentCommands::Restart {
+            all: true,
+            global: true,
+            force,
+            ..
+        }) => {
+            let (scopes, unread) =
+                commands::agent_restart_all::global_scopes(&paths::global_projects_dir()?)?;
+            report_restart_all(&scopes, unread, force, server)
+        }
         Commands::Agent(agent_cmd) => {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
             match agent_cmd {
@@ -469,10 +509,17 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
                 }
                 AgentCommands::Restart {
                     names,
+                    all,
                     force,
                     scope,
+                    ..
                 } => {
                     let target_scope = resolve_scope_with_flag(&project_root, scope)?;
+                    if all {
+                        let scope =
+                            commands::agent_restart_all::Scope::of(&project_root, &target_scope)?;
+                        return report_restart_all(&[scope], Vec::new(), force, server);
+                    }
                     let mut restarted = commands::agent_restart::agent_restart_many(
                         &project_root,
                         &target_scope,

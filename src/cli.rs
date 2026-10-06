@@ -532,10 +532,19 @@ pub enum AgentCommands {
     /// Restart one or more agents (stop then respawn, preserving active flag and session)
     Restart {
         /// Agent name(s)
-        #[arg(required = true)]
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
         names: Vec<String>,
+        /// Restart every active agent of the scope; agents that are
+        /// mid-turn, asking, or running background work, and those of a
+        /// closed feature, are skipped and reported
+        #[arg(long)]
+        all: bool,
+        /// With --all: every scope of every registered project
+        #[arg(long, requires = "all", conflicts_with = "scope")]
+        global: bool,
         /// Restart an agent that is mid-turn, asking, or running background
-        /// work; it is sent a message telling it to resume
+        /// work; it is sent a message telling it to resume. With --all, every
+        /// such agent is interrupted
         #[arg(long)]
         force: bool,
         /// Target scope (feature name or "main"; defaults to current scope)
