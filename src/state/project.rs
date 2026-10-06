@@ -120,6 +120,30 @@ pub struct GlobalConfig {
     pub harness: HarnessConfig,
     #[serde(default, skip_serializing_if = "is_default")]
     pub serve: ServeConfig,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub bundled: BundledConfig,
+}
+
+/// `[bundled.disable]`: settings for the bundled assets. Global only: the global
+/// tier is the machine's, installed with no project in view.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BundledConfig {
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub disable: BundledDisable,
+}
+
+/// `[bundled.disable]`: bundled items kept out of the global tier and its
+/// harness projections (`commands::bundled_disable`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BundledDisable {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workflows: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub baseline: bool,
 }
 
 /// `pm serve`'s settings; global only, as the server is the machine's.

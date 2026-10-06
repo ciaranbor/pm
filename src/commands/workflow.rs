@@ -10,6 +10,7 @@
 
 use std::path::Path;
 
+use crate::commands::bundled_disable::Disabled;
 use crate::error::{PmError, Result};
 use crate::state::feature::FeatureState;
 use crate::state::paths;
@@ -77,7 +78,12 @@ pub fn show(project_root: &Path, scope: &str) -> Result<Option<String>> {
                 p.display()
             )));
         }
-        None => return Err(PmError::WorkflowNotFound(workflow_name.to_string())),
+        None => {
+            return Err(Disabled::load().explain(
+                project_root,
+                PmError::WorkflowNotFound(workflow_name.to_string()),
+            ));
+        }
     };
     let mut body = std::fs::read_to_string(&md_path)?;
     // Append the status and summary guidance so it reaches whoever runs the
@@ -104,14 +110,30 @@ pub struct ListOutput {
 /// `pm upgrade`, and a project entry shadowing a same-named global one —
 /// plus a warning per broken `config.toml` so users don't discover the
 /// breakage only when `pm feat new --workflow <name>` fails. Outside a
-/// project (`None`) only the global tier is listed.
+/// project (`None`) only the global tier is listed. A workflow whose team
+/// names an agent `[bundled.disable]` lists, with no custom resolving it, is
+/// marked unavailable.
 pub fn list_rows(project_root: Option<&Path>) -> Result<ListOutput> {
-    list_rows_in(project_root, &workflow::global_dir()?)
+    list_rows_in(
+        project_root,
+        &workflow::global_dir()?,
+        paths::home_dir().ok().as_deref(),
+        &Disabled::load(),
+    )
 }
 
-/// [`list_rows`] against an explicit global workflow tier.
-pub fn list_rows_in(project_root: Option<&Path>, global_dir: &Path) -> Result<ListOutput> {
+/// [`list_rows`] against explicit tiers.
+pub fn list_rows_in(
+    project_root: Option<&Path>,
+    global_dir: &Path,
+    home: Option<&Path>,
+    disabled: &Disabled,
+) -> Result<ListOutput> {
     let installed = workflow::list_installed_in(project_root, global_dir)?;
+    let resolves = |agent: &str| match project_root {
+        Some(root) => workflow::definition_exists(root, agent, home),
+        None => home.is_some_and(|h| workflow::global_definition_path(h, agent).exists()),
+    };
 
     let max_name = installed
         .workflows
@@ -142,14 +164,23 @@ pub fn list_rows_in(project_root: Option<&Path>, global_dir: &Path) -> Result<Li
 
     let mut rows = Vec::new();
     for (w, tag) in installed.workflows.iter().zip(&tags) {
-        rows.push(format!(
+        let mut row = format!(
             "  {:<name_w$}  {:<tag_w$}  — {}",
             w.name,
             tag,
             w.def.description,
             name_w = max_name,
             tag_w = max_tag,
-        ));
+        );
+        if let Some(agent) = w
+            .def
+            .effective_team()
+            .iter()
+            .find(|a| disabled.agent(a) && !resolves(a))
+        {
+            row.push_str(&format!(" (unavailable: agent '{agent}' disabled)"));
+        }
+        rows.push(row);
         if let Some(hint) = &w.def.when_to_use {
             rows.push(format!("{hint_indent}use when: {hint}"));
         }
@@ -192,7 +223,7 @@ mod tests {
     /// Rows for the project tier alone, against an empty global tier.
     fn project_rows(root: &Path) -> ListOutput {
         let empty = tempdir().unwrap();
-        list_rows_in(Some(root), empty.path()).unwrap()
+        list_rows_in(Some(root), empty.path(), None, &Disabled::default()).unwrap()
     }
 
     fn write_workflow(project_root: &Path, name: &str, body: &str, md: &str) {
@@ -219,6 +250,36 @@ mod tests {
             blocked_by: None,
         };
         state.save(features_dir, name).unwrap();
+    }
+
+    #[test]
+    fn list_marks_a_workflow_whose_disabled_member_has_no_custom() {
+        let (_dir, root) = setup_project_root();
+        let empty = tempdir().unwrap();
+        let disabled = Disabled::from_config(toml::from_str("agents = [\"qa\"]").unwrap());
+        write_workflow(
+            &root,
+            "demo",
+            "description = \"d\"\nagents = [\"qa\"]\n",
+            "",
+        );
+        let rows = |d: &Disabled| {
+            list_rows_in(Some(&root), empty.path(), None, d)
+                .unwrap()
+                .rows
+        };
+
+        assert!(
+            rows(&disabled)[0].ends_with("— d (unavailable: agent 'qa' disabled)"),
+            "{:?}",
+            rows(&disabled)
+        );
+        assert!(rows(&Disabled::default())[0].ends_with("— d"));
+
+        let agents = paths::main_worktree(&root).join(".agents/agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(agents.join("qa.md"), "# my qa").unwrap();
+        assert!(rows(&disabled)[0].ends_with("— d"));
     }
 
     #[test]

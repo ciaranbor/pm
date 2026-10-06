@@ -389,6 +389,8 @@ pub enum HarnessAgentsCommands {
     /// List bundled agent definitions, their global install status, and any project override
     List,
     /// Uninstall bundled agent definitions from ~/.agents/agents/ (and its projections)
+    ///
+    /// `pm upgrade` reinstalls them; `[bundled.disable]` in the global config keeps them off.
     Uninstall {
         /// Agent name (required unless --all is passed)
         name: Option<String>,
@@ -445,6 +447,8 @@ pub enum HarnessSkillsCommands {
         name: Option<String>,
     },
     /// Uninstall bundled skills from ~/.agents/skills/ (and its projections)
+    ///
+    /// `pm upgrade` reinstalls them; `[bundled.disable]` in the global config keeps them off.
     Uninstall {
         /// Skill name (required unless --all is passed)
         name: Option<String>,

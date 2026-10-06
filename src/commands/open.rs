@@ -99,7 +99,11 @@ fn is_open_recoverable(kind: IssueKind) -> bool {
         | IssueKind::AgentRowInvalid
         | IssueKind::AgentModelUndeclared
         | IssueKind::HarnessConfigInvalid
-        | IssueKind::RebaseInProgress => false,
+        | IssueKind::RebaseInProgress
+        | IssueKind::BundledDisabled
+        | IssueKind::BundledUnknown
+        | IssueKind::DisabledStillInstalled
+        | IssueKind::BundledDisabledDangling => false,
     }
 }
 
@@ -122,7 +126,8 @@ fn collect_drift_warnings(
     let mut warnings: Vec<String> = Vec::new();
     for finding in &findings {
         for issue in finding.issues() {
-            if is_open_recoverable(issue.kind()) {
+            // `BundledDisabled` reports a deliberate setting, not drift.
+            if is_open_recoverable(issue.kind()) || issue.kind() == IssueKind::BundledDisabled {
                 continue;
             }
             let suffix = if issue.auto_fixable() {

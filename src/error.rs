@@ -115,6 +115,18 @@ pub enum PmError {
     WorkflowNotFound(String),
 
     #[error(
+        "{kind} '{name}' is bundled but disabled by `[bundled.disable] {key}` in the global pm config.\n  \
+         Hint: add a project custom at {custom}, or remove '{name}' from that list and run \
+         `pm upgrade`."
+    )]
+    BundledDisabled {
+        kind: &'static str,
+        key: &'static str,
+        name: String,
+        custom: String,
+    },
+
+    #[error(
         "Workflow '{workflow}' lists '{agent}' in its agent team, but no agent definition was found at \
          {}. Install the definition or fix the workflow.",
         display_paths(.searched)

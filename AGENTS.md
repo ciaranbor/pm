@@ -23,9 +23,9 @@ docs (`//!`) hold each mechanism. What follows is only what the tree doesn't say
   — except Claude Code skills, where personal outranks project, so `pm
   doctor` reports the shadow instead. No harness reads pm's canonical store,
   so each tier is *projected* into the harness's layout: same-named files
-  are overwritten; nothing is deleted but pm's abandoned temp files and a
-  feature's projection of a skill its branch deleted (`commands/seed.rs`).
-  Bundled workflows are never git-backed (`commands/state_gitignore.rs`).
+  are overwritten; nothing is deleted but pm's temp files, a feature's
+  projection of a skill its branch deleted (`seed.rs`), and what global
+  config disables. Bundled workflows are never git-backed (`state_gitignore.rs`).
 - **Portability** — `path_utils.rs` swaps `~/` ↔ `$HOME` so registry state moves.
 - **Releases** — one version for pm and app, Cargo.toml's; one APK signing key, ever;
   a removed `pm serve` path joins `RETIRED` (`serve/routes.rs`) so old apps blame themselves.

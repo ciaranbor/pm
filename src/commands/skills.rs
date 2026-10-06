@@ -11,7 +11,9 @@
 //! [`Harness::project_assets`]; the canonical copy always wins over a
 //! same-named projected file, and projection never deletes. A feature
 //! worktree's projection is [`seed`](super::seed)'s, which removes that of a
-//! skill the feature's branch deleted.
+//! skill the feature's branch deleted. An item the global `[bundled.disable]` table
+//! disables ([`bundled_disable`](super::bundled_disable)) is removed from the
+//! global tier and its projections by every global install.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,6 +24,7 @@ use crate::harness::{self, Harness, ProjectionScope};
 use crate::state::paths;
 use crate::state::project::{GlobalConfig, ProjectConfig};
 
+use super::bundled_disable::Disabled;
 use super::state_gitignore;
 
 /// The canonical asset store, relative to the main worktree or home.
@@ -36,7 +39,7 @@ const MIGRATION_MARKER: &str = "global-assets";
 // --- Unified bundled item system ---
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum BundledKind {
+pub(crate) enum BundledKind {
     Skill,
     Agent,
     Workflow,
@@ -48,7 +51,7 @@ enum BundledKind {
 impl BundledKind {
     const ALL: [BundledKind; 4] = [Self::Skill, Self::Agent, Self::Baseline, Self::Workflow];
 
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Skill => "Skill",
             Self::Agent => "Agent",
@@ -249,6 +252,16 @@ const BUNDLED_ITEMS: &[BundledItem] = &[
 
 fn items_of_kind(kind: BundledKind) -> impl Iterator<Item = &'static BundledItem> {
     BUNDLED_ITEMS.iter().filter(move |i| i.kind == kind)
+}
+
+/// Whether pm bundles an item of `kind` named `name`.
+pub(crate) fn is_bundled(kind: BundledKind, name: &str) -> bool {
+    items_of_kind(kind).any(|i| i.name == name)
+}
+
+/// Every bundled item's kind and name.
+pub(crate) fn bundled_items() -> impl Iterator<Item = (BundledKind, &'static str)> {
+    BUNDLED_ITEMS.iter().map(|i| (i.kind, i.name))
 }
 
 fn find_item(kind: BundledKind, name: &str) -> Result<&'static BundledItem> {
@@ -463,27 +476,17 @@ fn is_bundled_asset(rel: &Path) -> bool {
     })
 }
 
-/// Remove the projected copies of `kind`/`name` from every supported
-/// harness's global dir. Only the explicit uninstall commands do this —
-/// projection itself never deletes.
-fn uninstall_projected_global(
-    store: &GlobalStore,
-    kind: BundledKind,
-    name: Option<&str>,
-) -> Result<()> {
+/// Where `kind` is projected in each supported harness's global dir; empty
+/// for kinds that aren't projected.
+fn global_projection_dirs(store: &GlobalStore, kind: BundledKind) -> Vec<PathBuf> {
     let Some(subdir) = kind.store_subdir() else {
-        return Ok(());
+        return Vec::new();
     };
-    for h in Harness::SUPPORTED {
-        let Some(target) = h.global_config_dir(&store.home) else {
-            continue;
-        };
-        let dir = target.join(subdir);
-        if dir.is_dir() {
-            uninstall_in(&dir, kind, name)?;
-        }
-    }
-    Ok(())
+    Harness::SUPPORTED
+        .iter()
+        .filter_map(|h| h.global_config_dir(&store.home))
+        .map(|dir| dir.join(subdir))
+        .collect()
 }
 
 // --- Install / uninstall primitives ---
@@ -498,14 +501,24 @@ fn status_label(dir: &Path, item: &BundledItem) -> &'static str {
     }
 }
 
-/// One line per bundled item of `kind`: its global status, and — inside a
-/// project — whether a same-named project custom shadows it.
+/// One line per bundled item of `kind`: its global status (or that
+/// `[bundled.disable]` lists it), and — inside a project — whether a same-named
+/// project custom shadows it.
 fn list_kind(kind: BundledKind, project_root: Option<&Path>) -> Result<Vec<String>> {
     let store = GlobalStore::resolve()?;
+    let disabled = Disabled::load_in(&store.config_dir).unwrap_or_default();
     let global = store.dir(kind);
     let mut lines = Vec::new();
     for item in items_of_kind(kind) {
-        let mut line = format!("  {} — {}", item.name, status_label(&global, item));
+        let status = match (
+            disabled.contains(kind, item.name),
+            is_installed(&global, item),
+        ) {
+            (true, true) => "disabled (still installed; run `pm upgrade`)",
+            (true, false) => "disabled",
+            (false, _) => status_label(&global, item),
+        };
+        let mut line = format!("  {} — {status}", item.name);
         if project_root.is_some_and(|r| is_installed(&project_dir(r, kind), item)) {
             line.push_str(" (overridden by project custom)");
         }
@@ -534,8 +547,15 @@ fn install_in(
     kind: BundledKind,
     name: Option<&str>,
 ) -> Result<Vec<(&'static BundledItem, Applied)>> {
+    install_items(dir, items_to_install(kind, name)?)
+}
+
+fn install_items(
+    dir: &Path,
+    items: impl IntoIterator<Item = &'static BundledItem>,
+) -> Result<Vec<(&'static BundledItem, Applied)>> {
     let mut applied = Vec::new();
-    for item in items_to_install(kind, name)? {
+    for item in items {
         if is_up_to_date(dir, item) {
             applied.push((item, Applied::UpToDate));
             continue;
@@ -567,13 +587,16 @@ fn install_messages(dir: &Path, kind: BundledKind, name: Option<&str>) -> Result
         .collect())
 }
 
-/// Dry-run companion to [`install_in`]: one `Would …` line per item whose
+/// Dry-run companion to [`install_items`]: one `Would …` line per item whose
 /// on-disk content does not match the bundle; up-to-date items produce no
 /// output, so every returned line is an action that would be taken.
-fn install_in_dry_run(dir: &Path, kind: BundledKind, name: Option<&str>) -> Result<Vec<String>> {
-    let label = kind.label();
+fn install_items_dry_run(
+    dir: &Path,
+    items: impl IntoIterator<Item = &'static BundledItem>,
+) -> Result<Vec<String>> {
     let mut messages = Vec::new();
-    for item in items_to_install(kind, name)? {
+    for item in items {
+        let label = item.kind.label();
         if is_up_to_date(dir, item) {
             continue;
         }
@@ -585,6 +608,14 @@ fn install_in_dry_run(dir: &Path, kind: BundledKind, name: Option<&str>) -> Resu
         messages.push(format!("Would {verb} {label} '{}'", item.name));
     }
     Ok(messages)
+}
+
+/// The items of `kind` that `disabled` leaves enabled.
+fn enabled_items(
+    kind: BundledKind,
+    disabled: &Disabled,
+) -> impl Iterator<Item = &'static BundledItem> + '_ {
+    items_of_kind(kind).filter(move |i| !disabled.contains(kind, i.name))
 }
 
 fn items_to_install(kind: BundledKind, name: Option<&str>) -> Result<Vec<&'static BundledItem>> {
@@ -631,6 +662,55 @@ fn prune_empty_parents(path: &Path, stop: &Path) {
 
 // --- Global tier ---
 
+/// Remove every item `disabled` names from the global tier and from each
+/// supported harness's global projection, returning (as `Kind 'name'`) each
+/// item that had a copy anywhere; `dry_run` deletes nothing. Only the
+/// bundle's own file paths are removed.
+fn remove_disabled(store: &GlobalStore, disabled: &Disabled, dry_run: bool) -> Result<Vec<String>> {
+    let mut removed = Vec::new();
+    for item in BUNDLED_ITEMS
+        .iter()
+        .filter(|i| disabled.contains(i.kind, i.name))
+    {
+        let mut roots = vec![store.dir(item.kind)];
+        roots.extend(global_projection_dirs(store, item.kind));
+        let present: Vec<(PathBuf, &PathBuf)> = roots
+            .iter()
+            .flat_map(|root| {
+                item.files
+                    .iter()
+                    .map(move |(rel, _)| (root.join(rel), root))
+            })
+            .filter(|(path, _)| path.exists())
+            .collect();
+        if present.is_empty() {
+            continue;
+        }
+        if !dry_run {
+            for (path, root) in &present {
+                fs::remove_file(path)?;
+                prune_empty_parents(path, root);
+            }
+        }
+        removed.push(format!("{} '{}'", item.kind.label(), item.name));
+    }
+    Ok(removed)
+}
+
+/// Items `[bundled.disable]` lists that still have a copy in the global tier or
+/// a harness's global projection (as `Kind 'name'`): what the next install
+/// removes.
+/// A config that doesn't parse disables nothing here, so `pm doctor` keeps
+/// running to report it.
+pub fn disabled_still_installed() -> Result<Vec<String>> {
+    disabled_still_installed_in(&GlobalStore::resolve()?)
+}
+
+pub fn disabled_still_installed_in(store: &GlobalStore) -> Result<Vec<String>> {
+    let disabled = Disabled::load_in(&store.config_dir).unwrap_or_default();
+    remove_disabled(store, &disabled, true)
+}
+
 /// Install every bundled kind into the global tier and project the
 /// canonical store into each supported harness's global dir. Idempotent.
 pub fn install_global() -> Result<Vec<String>> {
@@ -638,10 +718,14 @@ pub fn install_global() -> Result<Vec<String>> {
 }
 
 pub fn install_global_in(store: &GlobalStore) -> Result<Vec<String>> {
-    let mut lines = Vec::new();
+    let disabled = Disabled::load_in(&store.config_dir)?;
+    let mut lines: Vec<String> = remove_disabled(store, &disabled, false)?
+        .into_iter()
+        .map(|item| format!("Removed disabled {item} (global)"))
+        .collect();
     for kind in BundledKind::ALL {
         let label = kind.label();
-        for (item, applied) in install_in(&store.dir(kind), kind, None)? {
+        for (item, applied) in install_items(&store.dir(kind), enabled_items(kind, &disabled))? {
             let verb = match applied {
                 Applied::Installed => "Installed",
                 Applied::Rewrote => "Rewrote",
@@ -665,9 +749,13 @@ pub fn install_global_dry_run() -> Result<Vec<String>> {
 }
 
 pub fn install_global_dry_run_in(store: &GlobalStore) -> Result<Vec<String>> {
-    let mut lines = Vec::new();
+    let disabled = Disabled::load_in(&store.config_dir)?;
+    let mut lines: Vec<String> = remove_disabled(store, &disabled, true)?
+        .into_iter()
+        .map(|item| format!("Would remove disabled {item} (global)"))
+        .collect();
     for kind in BundledKind::ALL {
-        for line in install_in_dry_run(&store.dir(kind), kind, None)? {
+        for line in install_items_dry_run(&store.dir(kind), enabled_items(kind, &disabled))? {
             lines.push(format!("{line} (global)"));
         }
     }
@@ -684,8 +772,9 @@ pub fn install_global_dry_run_in(store: &GlobalStore) -> Result<Vec<String>> {
         if kind.store_subdir().is_some() && src.is_dir() {
             copy_dir_recursive(&src, &staged_store.dir(kind))?;
         }
-        install_in(&staged_store.dir(kind), kind, None)?;
+        install_items(&staged_store.dir(kind), enabled_items(kind, &disabled))?;
     }
+    remove_disabled(&staged_store, &disabled, false)?;
     lines.extend(project_global_from(
         &staged_store.canonical(),
         &store.home,
@@ -700,10 +789,11 @@ pub fn global_store_missing() -> Result<Vec<String>> {
 }
 
 pub fn global_store_missing_in(store: &GlobalStore) -> Vec<String> {
+    let disabled = Disabled::load_in(&store.config_dir).unwrap_or_default();
     let mut out = Vec::new();
     for kind in BundledKind::ALL {
         let dir = store.dir(kind);
-        for item in items_of_kind(kind) {
+        for item in enabled_items(kind, &disabled) {
             if !is_installed(&dir, item) {
                 out.push(format!("{} '{}'", kind.label(), item.name));
             }
@@ -951,17 +1041,64 @@ pub fn skills_uninstall(name: Option<&str>) -> Result<Vec<String>> {
     uninstall_global(BundledKind::Skill, name)
 }
 
+/// Install `name` (or every item) of `kind` into the global tier. A named
+/// item `[bundled.disable]` lists is refused; without a name, disabled items are
+/// skipped with a line saying so.
 fn install_kind_global(kind: BundledKind, name: Option<&str>) -> Result<Vec<String>> {
-    let store = GlobalStore::resolve()?;
-    let mut messages = install_messages(&store.dir(kind), kind, name)?;
-    messages.extend(project_global(&store, false)?);
+    install_kind_global_in(&GlobalStore::resolve()?, kind, name)
+}
+
+fn install_kind_global_in(
+    store: &GlobalStore,
+    kind: BundledKind,
+    name: Option<&str>,
+) -> Result<Vec<String>> {
+    let disabled = Disabled::load_in(&store.config_dir)?;
+    let mut messages = Vec::new();
+    match name {
+        Some(n) if disabled.contains(kind, n) => {
+            return Err(PmError::SafetyCheck(format!(
+                "{} '{n}' is disabled by `[bundled.disable]` in the global pm config; remove it from \
+                 that list to install it.",
+                kind.label()
+            )));
+        }
+        Some(_) => messages.extend(install_messages(&store.dir(kind), kind, name)?),
+        None => {
+            for item in items_of_kind(kind).filter(|i| disabled.contains(kind, i.name)) {
+                messages.push(format!(
+                    "Skipped {} '{}' (disabled by [bundled.disable])",
+                    kind.label(),
+                    item.name
+                ));
+            }
+            let dir = store.dir(kind);
+            for item in enabled_items(kind, &disabled) {
+                messages.extend(install_messages(&dir, kind, Some(item.name))?);
+            }
+        }
+    }
+    messages.extend(project_global(store, false)?);
     Ok(messages)
 }
 
+/// Uninstall `name` (or every item) of `kind` from the global tier and its
+/// projections, reporting on the global tier.
 fn uninstall_global(kind: BundledKind, name: Option<&str>) -> Result<Vec<String>> {
-    let store = GlobalStore::resolve()?;
+    uninstall_global_in(&GlobalStore::resolve()?, kind, name)
+}
+
+fn uninstall_global_in(
+    store: &GlobalStore,
+    kind: BundledKind,
+    name: Option<&str>,
+) -> Result<Vec<String>> {
     let messages = uninstall_in(&store.dir(kind), kind, name)?;
-    uninstall_projected_global(&store, kind, name)?;
+    for dir in global_projection_dirs(store, kind) {
+        if dir.is_dir() {
+            uninstall_in(&dir, kind, name)?;
+        }
+    }
     Ok(messages)
 }
 
@@ -985,7 +1122,9 @@ pub fn agents_uninstall(name: Option<&str>) -> Result<Vec<String>> {
 /// global `~/.agents/pm-baseline.md`. A project spawning on a new binary
 /// before its `pm upgrade` ran may only have the pre-migration project copy
 /// (`main/.agents/`, or the older `main/.claude/`), so those are returned
-/// when the global one is absent; the caller checks existence either way.
+/// when the global one is absent — unless `[bundled.disable]` lists the
+/// baseline, when only the global path (gone after `pm upgrade`) is. The
+/// caller checks existence either way.
 pub fn baseline_path(project_root: &Path) -> PathBuf {
     baseline_path_in(project_root, GlobalStore::resolve().ok().as_ref())
 }
@@ -996,6 +1135,11 @@ pub fn baseline_path_in(project_root: &Path, store: Option<&GlobalStore>) -> Pat
         && g.exists()
     {
         return g.clone();
+    }
+    if let Some(s) = store
+        && Disabled::load_in(&s.config_dir).is_ok_and(|d| d.baseline())
+    {
+        return s.baseline_path();
     }
     let canonical = project_dir(project_root, BundledKind::Baseline).join(BASELINE_FILE);
     if canonical.exists() {
@@ -1083,7 +1227,7 @@ mod tests {
         let second = install_messages(&dir, BundledKind::Skill, Some("pm")).unwrap();
         assert!(second[0].contains("already up to date"));
         assert!(
-            install_in_dry_run(&dir, BundledKind::Skill, Some("pm"))
+            install_items_dry_run(&dir, [item(BundledKind::Skill, "pm")])
                 .unwrap()
                 .is_empty()
         );
@@ -1094,7 +1238,7 @@ mod tests {
             "outdated"
         );
         assert_eq!(
-            install_in_dry_run(&dir, BundledKind::Skill, Some("pm")).unwrap(),
+            install_items_dry_run(&dir, [item(BundledKind::Skill, "pm")]).unwrap(),
             vec!["Would update Skill 'pm'".to_string()]
         );
         let third = install_messages(&dir, BundledKind::Skill, Some("pm")).unwrap();
@@ -1346,19 +1490,134 @@ mod tests {
         );
     }
 
+    fn write_global_config(store: &GlobalStore, toml: &str) {
+        fs::create_dir_all(&store.config_dir).unwrap();
+        fs::write(store.config_dir.join("config.toml"), toml).unwrap();
+    }
+
+    #[test]
+    fn install_global_removes_disabled_items_everywhere_and_reinstalls_when_reenabled() {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        let store = GlobalStore::at(h);
+        install_global_in(&store).unwrap();
+        let gone = [
+            ".agents/agents/qa.md",
+            ".claude/agents/qa.md",
+            ".config/opencode/agents/qa.md",
+            ".agents/skills/pm",
+            ".claude/skills/pm",
+            ".config/pm/workflows/research-only",
+            ".agents/pm-baseline.md",
+        ];
+        for path in gone {
+            assert!(h.join(path).exists(), "{path}");
+        }
+        write_global_config(
+            &store,
+            "[bundled.disable]\nagents = [\"qa\"]\nskills = [\"pm\"]\nworkflows = [\"research-only\"]\n\
+             baseline = true\n",
+        );
+
+        let dry = install_global_dry_run_in(&store).unwrap();
+        assert_eq!(
+            dry,
+            vec![
+                "Would remove disabled Skill 'pm' (global)",
+                "Would remove disabled Agent 'qa' (global)",
+                "Would remove disabled Baseline 'pm-baseline' (global)",
+                "Would remove disabled Workflow 'research-only' (global)",
+            ]
+        );
+        assert!(h.join(".claude/agents/qa.md").exists());
+
+        let lines = install_global_in(&store).unwrap();
+        assert_eq!(
+            lines,
+            dry.iter()
+                .map(|l| l.replace("Would remove", "Removed"))
+                .collect::<Vec<_>>()
+        );
+        for path in gone {
+            assert!(!h.join(path).exists(), "{path}");
+        }
+        for path in [
+            ".agents/agents/reviewer.md",
+            ".claude/agents/reviewer.md",
+            ".agents/skills/messaging/SKILL.md",
+            ".config/pm/workflows/solo/config.toml",
+        ] {
+            assert!(h.join(path).exists(), "{path}");
+        }
+        assert!(global_store_missing_in(&store).is_empty());
+        assert!(install_global_in(&store).unwrap().is_empty());
+        assert!(install_global_dry_run_in(&store).unwrap().is_empty());
+
+        write_global_config(&store, "[bundled.disable]\nagents = [\"qa\"]\n");
+        assert_eq!(
+            global_store_missing_in(&store),
+            vec![
+                "Skill 'pm'",
+                "Baseline 'pm-baseline'",
+                "Workflow 'research-only'"
+            ]
+        );
+        install_global_in(&store).unwrap();
+        assert!(h.join(".claude/skills/pm/SKILL.md").exists());
+        assert!(!h.join(".claude/agents/qa.md").exists());
+    }
+
+    #[test]
+    fn explicit_install_refuses_a_disabled_name_and_skips_disabled_ones_for_all() {
+        let home = tempfile::tempdir().unwrap();
+        let store = GlobalStore::at(home.path());
+        write_global_config(&store, "[bundled.disable]\nagents = [\"qa\"]\n");
+
+        let err = install_kind_global_in(&store, BundledKind::Agent, Some("qa")).unwrap_err();
+        assert!(err.to_string().contains("'qa' is disabled"), "{err}");
+        assert!(!home.path().join(".agents/agents/qa.md").exists());
+
+        let lines = install_kind_global_in(&store, BundledKind::Agent, None).unwrap();
+        assert!(
+            lines.contains(&"Skipped Agent 'qa' (disabled by [bundled.disable])".to_string()),
+            "{lines:?}"
+        );
+        assert!(home.path().join(".agents/agents/reviewer.md").exists());
+        assert!(!home.path().join(".agents/agents/qa.md").exists());
+        assert!(!home.path().join(".claude/agents/qa.md").exists());
+    }
+
+    #[test]
+    fn still_installed_report_survives_a_malformed_config() {
+        let home = tempfile::tempdir().unwrap();
+        let store = GlobalStore::at(home.path());
+        install_global_in(&store).unwrap();
+        write_global_config(&store, "[bundled.disable]\nagents = [\"qa\"]\n");
+        assert_eq!(
+            disabled_still_installed_in(&store).unwrap(),
+            vec!["Agent 'qa'"]
+        );
+        write_global_config(&store, "[bundled.disable]\nagents = \"qa\"\n");
+        assert!(disabled_still_installed_in(&store).unwrap().is_empty());
+    }
+
+    #[test]
+    fn install_global_refuses_a_malformed_config_rather_than_reinstall_everything() {
+        let home = tempfile::tempdir().unwrap();
+        let store = GlobalStore::at(home.path());
+        write_global_config(&store, "[bundled.disable]\nagents = \"qa\"\n");
+        assert!(install_global_in(&store).is_err());
+        assert!(install_global_dry_run_in(&store).is_err());
+        assert!(!home.path().join(".agents").exists());
+    }
+
     #[test]
     fn global_uninstall_removes_projections_and_reports_unprojected_customs() {
         let home = tempfile::tempdir().unwrap();
         let store = GlobalStore::at(home.path());
         install_global_in(&store).unwrap();
 
-        uninstall_in(
-            &store.dir(BundledKind::Agent),
-            BundledKind::Agent,
-            Some("reviewer"),
-        )
-        .unwrap();
-        uninstall_projected_global(&store, BundledKind::Agent, Some("reviewer")).unwrap();
+        uninstall_global_in(&store, BundledKind::Agent, Some("reviewer")).unwrap();
         for h in Harness::SUPPORTED {
             assert!(
                 !h.global_config_dir(home.path())
@@ -1524,6 +1783,23 @@ mod tests {
         }
         // No resolvable home: the project chain still applies.
         assert_eq!(baseline_path_in(project_root, None), canonical);
+    }
+
+    #[test]
+    fn a_disabled_baseline_never_falls_back_to_a_project_copy() {
+        let home = tempfile::tempdir().unwrap();
+        let store = GlobalStore::at(home.path());
+        let tmp = tempfile::tempdir().unwrap();
+        let main = paths::main_worktree(tmp.path());
+        for copy in [".agents/pm-baseline.md", ".claude/pm-baseline.md"] {
+            fs::create_dir_all(main.join(copy).parent().unwrap()).unwrap();
+            fs::write(main.join(copy), "stale").unwrap();
+        }
+        write_global_config(&store, "[bundled.disable]\nbaseline = true\n");
+        assert_eq!(
+            baseline_path_in(tmp.path(), Some(&store)),
+            store.baseline_path()
+        );
     }
 
     // --- Migration ---
