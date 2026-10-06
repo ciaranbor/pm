@@ -14,9 +14,8 @@ docs (`//!`) hold each mechanism. What follows is only what the tree doesn't say
 - **Layering** — `cli.rs`/`main.rs`/`dispatch.rs` parse and dispatch,
   `commands/` handlers orchestrate, and all shelling-out is funnelled through
   wrappers (`git/`, `tmux.rs`, `gh.rs`, `editor.rs`, …) — never inline in a handler.
-- **State** (`state/`, TOML) — the pm config dir holds the global registry
-  and global config; `<project>/.pm/` is per-project state. Config precedence
-  is project > global > unset.
+- **State** (`state/`, TOML) — the pm config dir holds the global registry and
+  config; `<project>/.pm/` is per-project state. Precedence: project > global > unset.
 - **Bundled assets** (`commands/skills.rs`) — two tiers. Bundled skills,
   agent defs, workflows, and the baseline install into the **global tier**,
   where bundled names are reserved and rewritten on upgrade; the **project
@@ -28,7 +27,8 @@ docs (`//!`) hold each mechanism. What follows is only what the tree doesn't say
   feature's projection of a skill its branch deleted (`commands/seed.rs`).
   Bundled workflows are never git-backed (`commands/state_gitignore.rs`).
 - **Portability** — `path_utils.rs` swaps `~/` ↔ `$HOME` so registry state moves.
-- **Releases** — one version for pm and app, Cargo.toml's; one APK signing key, ever.
+- **Releases** — one version for pm and app, Cargo.toml's; one APK signing key, ever;
+  a removed `pm serve` path joins `RETIRED` (`serve/routes.rs`) so old apps blame themselves.
 - **Harness** (`harness/`) — the agent CLI pm launches, behind a `Harness`
   enum: each seam is a `match` in `harness/mod.rs`, never a trait, and
   harness-specific knowledge lives only in `harness/<name>.rs` (read its

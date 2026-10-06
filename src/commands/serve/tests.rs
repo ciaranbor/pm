@@ -116,6 +116,17 @@ fn a_request_without_a_live_token_is_refused() {
 }
 
 #[test]
+fn a_retired_path_is_gone_not_missing_so_an_older_app_blames_itself() {
+    let f = fixture();
+    let token = pair(&f.config, "phone");
+
+    assert_eq!(get(&f.config, "/v1/device", None).0, 401);
+    let (status, body) = get(&f.config, "/v1/device", Some(&token));
+    assert_eq!(status, 410, "{body}");
+    assert_eq!(get(&f.config, "/v1/nowhere", Some(&token)).0, 404);
+}
+
+#[test]
 fn the_endpoints_serve_the_snapshot_a_features_details_and_summary_and_an_agents_screen() {
     let f = fixture();
     let token = pair(&f.config, "reader");

@@ -124,7 +124,7 @@ class Lifecycle(private val scope: CoroutineScope, private val client: () -> PmC
                         ActionState.Confirming(action.copy(force = true))
                     else ActionState.Failed(action, e.message.orEmpty())
                 } catch (e: PmError.Unsupported) {
-                    ActionState.Failed(action, UNSUPPORTED)
+                    ActionState.Failed(action, e.advice("do this here"))
                 } catch (e: PmError.Unreachable) {
                     ActionState.Failed(action, UNREACHABLE, Outcome.Lost)
                 } catch (e: Exception) {
@@ -135,7 +135,6 @@ class Lifecycle(private val scope: CoroutineScope, private val client: () -> PmC
 
     companion object {
         const val MID_TURN = "mid-turn"
-        const val UNSUPPORTED = "pm on the Mac is older than this app; upgrade it to do this here."
         const val UNREACHABLE =
             "pm serve stopped answering, so it isn't known whether this went through. " +
                 "The app shows the outcome once it reconnects."

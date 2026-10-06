@@ -58,7 +58,9 @@ fun PairScreen(paired: (Pairing) -> Unit, modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("Pair with pm serve", style = MaterialTheme.typography.headlineSmall)
-        Text("On the Mac, run `pm serve pair --name <this phone>` and scan the QR code it prints.")
+        Text(
+            "On the server, run `pm serve pair --name <this phone>` and scan the QR code it prints."
+        )
         if (granted) {
             Scanner(onPairing = paired, onOther = { problem = "That QR code is not a pm pairing." })
         } else {

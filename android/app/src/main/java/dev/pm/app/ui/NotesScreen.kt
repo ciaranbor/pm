@@ -67,7 +67,7 @@ private fun NotesView(state: NotesState.Viewing, edit: () -> Unit) {
         ) {
             Text("These notes are over 256 KB", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Too long to edit or render here: edit them with pm notes on the Mac.",
+                "Too long to edit or render here: edit them with pm notes on the server.",
                 style = MaterialTheme.typography.bodyMedium,
             )
             Version("How they start", state.notes.text)
@@ -156,7 +156,7 @@ private fun NotesConflict(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("The notes changed on the Mac", style = MaterialTheme.typography.titleMedium)
+        Text("The notes changed on the server", style = MaterialTheme.typography.titleMedium)
         Text(
             "They were saved elsewhere while you edited here, so your edit was not saved. " +
                 "Keep one version, or merge the two by hand.",
@@ -172,16 +172,16 @@ private fun NotesConflict(
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = merge, enabled = state.mergeable) { Text("Merge") }
             OutlinedButton(onClick = keepMine) { Text("Keep mine") }
-            OutlinedButton(onClick = keepTheirs) { Text("Keep the Mac's") }
+            OutlinedButton(onClick = keepTheirs) { Text("Keep the server's") }
         }
-        Version("On the Mac", state.theirs.text)
+        Version("On the server", state.theirs.text)
         Version("Yours", state.mine)
     }
 }
 
 @Composable
 private fun Version(label: String, text: String) {
-    // Text this long stalls layout for seconds; the rest is read on the Mac.
+    // Text this long stalls layout for seconds; the rest is read on the server.
     val shown =
         remember(text) {
             if (text.length <= PREVIEW) text.ifEmpty { "(empty)" }

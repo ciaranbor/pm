@@ -53,7 +53,7 @@ On an arm64 phone, open the
 `pm-android-arm64-v8a.apk`, and open it; Android asks once to allow
 installs from the browser. Google Play Protect then says "App blocked to
 protect your device": that is expected for this app, so tap "Install
-anyway". Pair it by running `pm serve install --pair <device>` on the Mac
+anyway". Pair it by running `pm serve install --pair <device>` on the server
 and scanning the QR code in the app (or pasting its `url`, `device` and
 `token` lines). After that, the app tells you when a new release is out:
 tapping its notification downloads the APK, which you install over the app.

@@ -69,7 +69,7 @@ class ScreenModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: PmError.Unsupported) {
-                _notice.value = "Upgrade pm on the Mac to type here"
+                _notice.value = e.advice("type here")
                 false
             } catch (e: Exception) {
                 _notice.value = e.message ?: e.javaClass.simpleName

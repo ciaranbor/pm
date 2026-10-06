@@ -454,14 +454,14 @@ internal fun Shown(
         connection is Connection.Unreachable ->
             EmptyState(
                 "Can't reach pm serve",
-                "Tailscale off, or pm serve not running on the Mac?",
+                "Tailscale off, or pm serve not running on the server?",
                 "Retry",
                 retry,
             )
         connection == Connection.Unauthorized ->
             EmptyState(
                 "Not paired",
-                "The Mac revoked this phone's token.",
+                "The server revoked this phone's token.",
                 "Pair again",
                 pairAgain,
             )

@@ -98,7 +98,7 @@ fun ActionDialog(state: ActionState, confirm: () -> Unit, dismiss: () -> Unit) {
                         Triple(
                             "Merge ${action.feature}?",
                             "Merges it into its base, then deletes its worktree, branch and " +
-                                "session. The project's post-merge hook runs on the Mac.",
+                                "session. The project's post-merge hook runs on the server.",
                             "Merge",
                         )
                     is Action.Delete ->

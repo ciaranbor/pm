@@ -52,6 +52,10 @@ pub(super) const JSON: &str = "application/json";
 pub(super) const MARKDOWN: &str = "text/markdown; charset=utf-8";
 const TEXT: &str = "text/plain; charset=utf-8";
 
+/// Paths a released app may still ask for that this server no longer
+/// serves. See docs/remote-api.md.
+const RETIRED: &[&str] = &["/v1/device"];
+
 pub(super) fn error(status: u16, message: &str) -> Reply {
     Reply::Body {
         status,
@@ -135,6 +139,7 @@ pub(super) fn route(config: &Config, vapid: &str, request: &Request<'_>) -> Hand
     }
     let mut detail = None;
     let served = match (method, path) {
+        (_, _) if RETIRED.contains(&path) => Ok(error(410, "this endpoint was retired")),
         (_, "/v1/push") => push_route(config, vapid, method, device, body),
         (_, _) if path.starts_with("/v1/projects/") => {
             notes_route(config, method, path, if_match, body).map(|(reply, written)| {

@@ -134,14 +134,14 @@ class NotesModel(
         }
     }
 
-    /** Settle a conflict with the notes as they are on the Mac, dropping the edit. */
+    /** Settle a conflict with the notes as they are on the server, dropping the edit. */
     fun keepTheirs() {
         val now = _state.value as? NotesState.Conflict ?: return
         drafts.keep(project, null)
         _state.value = NotesState.Viewing(now.theirs)
     }
 
-    /** Settle a conflict by saving the edit over the notes as they are on the Mac. */
+    /** Settle a conflict by saving the edit over the notes as they are on the server. */
     fun keepMine() {
         val now = _state.value as? NotesState.Conflict ?: return
         open(NotesDraft(now.theirs, now.mine))
@@ -176,12 +176,12 @@ class NotesModel(
 
     companion object {
         const val TOO_LONG =
-            "Notes over ${MAX_NOTES_BYTES / 1024} KB are edited with pm notes on the Mac."
+            "Notes over ${MAX_NOTES_BYTES / 1024} KB are edited with pm notes on the server."
 
         /** Both texts in one, each between conflict markers, as git writes them. */
         fun merged(mine: String, theirs: String): String =
             "<<<<<<< this phone\n${mine.withNewline()}=======\n" +
-                "${theirs.withNewline()}>>>>>>> the Mac\n"
+                "${theirs.withNewline()}>>>>>>> the server\n"
 
         private fun String.withNewline() = if (isEmpty() || endsWith("\n")) this else "$this\n"
     }

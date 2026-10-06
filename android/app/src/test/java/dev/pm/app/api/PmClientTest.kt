@@ -64,6 +64,20 @@ class PmClientTest {
     }
 
     @Test
+    fun a_server_without_an_endpoint_is_told_apart_from_one_that_retired_it() = runBlocking {
+        reply(405, """{"error":"no such endpoint for this method"}""")
+        reply(410, """{"error":"this endpoint was retired"}""")
+        reply(405, """{"error":"something else"}""")
+
+        val older = runCatching { client.merge("app", "login") }.exceptionOrNull()
+        assertTrue("$older", older is PmError.Unsupported && !older.retired)
+        val newer = runCatching { client.merge("app", "login") }.exceptionOrNull()
+        assertTrue("$newer", newer is PmError.Unsupported && newer.retired)
+        val other = runCatching { client.merge("app", "login") }.exceptionOrNull()
+        assertTrue("$other", other is PmError.Status && other.code == 405)
+    }
+
+    @Test
     fun notes_are_saved_against_the_version_read_and_a_stale_save_returns_the_current_notes() =
         runBlocking {
             server.enqueue(

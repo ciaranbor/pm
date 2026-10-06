@@ -46,7 +46,7 @@ opened and subscribes again.
 
 A subscription must be https on a known push service — Google's
 (`fcm.googleapis.com`) or `ntfy.sh` — so a token can't aim `pm serve` at a
-service on the tailnet or the Mac. A self-hosted distributor's host goes
+service on the tailnet or the server. A self-hosted distributor's host goes
 in the global config, read as `pm serve` starts:
 
 ```toml
@@ -81,6 +81,12 @@ The API is under `/v1`; every path needs a paired device's token:
 | `features/{project}/{feature}/delete` | `POST`: `pm feat delete`; `{"deleted": true}` |
 | `agents/{project}/{scope}/{agent}/restart` | `POST {"force"?}`: `pm agent restart`; `{"restarted": <what it did>}` |
 
+A client learns what the server serves from the request itself, never
+from a version string: a request the server doesn't know is `404`
+`{"error": "no such endpoint"}` or `405` `{"error": "no such endpoint for
+this method"}`, so the server predates it; a path it served once and
+dropped is `410`, so the client predates the server.
+
 Merge, delete and restart run pm's own handlers without `--force`, to the
 end however long they take (the post-merge hook runs in the base session's
 `hook` window, not in the request). A refusal changed nothing and comes
@@ -102,7 +108,7 @@ user's prompt: it resets a blocked feature, and the conversation shows it as
 An `input` the agent can't take now is refused with `409` and
 `{"error", "refused"}`: `asking` (a dialog is up; answer it through
 `dialog`, or with `keys`), `not-at-prompt` (a draft in its input line, or
-no input line on screen), `not-running`, `no-window` or `inactive`. Text is never merged into a draft typed at the Mac.
+no input line on screen), `not-running`, `no-window` or `inactive`. Text is never merged into a draft typed at the terminal.
 
 A question, a permission prompt or a plan approval on a Claude Code
 agent's screen, and a permission ask on an opencode agent's, can be

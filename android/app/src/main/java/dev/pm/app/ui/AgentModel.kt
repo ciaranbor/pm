@@ -28,8 +28,8 @@ sealed interface ChatState {
 
     data class Shown(val conversation: Conversation, val live: Boolean) : ChatState
 
-    /** The server predates transcripts. */
-    data object Unsupported : ChatState
+    /** The server doesn't serve transcripts; `advice` says which side to update. */
+    data class Unsupported(val advice: String) : ChatState
 
     data class Failed(val reason: String) : ChatState
 }
@@ -132,7 +132,7 @@ class AgentModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: PmError.Unsupported) {
-                _chat.value = ChatState.Unsupported
+                _chat.value = ChatState.Unsupported(e.advice("see the conversation"))
                 return
             } catch (e: Exception) {
                 val shown = _chat.value
