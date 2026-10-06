@@ -52,8 +52,7 @@ pub use migration::{
 pub(crate) use migration::{scoped_worktrees_on_disk, worktrees_on_disk};
 pub use projection::{global_customs_in, harnesses_in_use, project_assets};
 
-use bundled::is_installed;
-use bundled::items_of_kind;
+use bundled::{is_installed, items_of_kind};
 use global_store::{install_kind_global, uninstall_global};
 use install::status_label;
 use projection::project_dir;
