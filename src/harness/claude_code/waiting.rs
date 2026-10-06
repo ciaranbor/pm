@@ -14,7 +14,7 @@
 //!   own, never the main thread's or another subagent's.
 //! - `Notification` follows 6s after any dialog opens, tool or not (plan
 //!   approval, MCP elicitation), and `idle_prompt` once the agent has sat at
-//!   its prompt for 60s with no Stop hook running.
+//!   its prompt for 60s; it never replaces an idle marker.
 //! - `StopFailure` fires instead of Stop when an API error ends the turn.
 //!
 //! Its stdout is read as a decision by `PermissionRequest`, so the handler

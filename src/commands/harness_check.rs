@@ -127,6 +127,17 @@ pub fn harness_problems(
             ProblemKind::LoopNotInstalled,
             format!("pm hooks not installed in {shown} (run `pm harness hooks install`)"),
         );
+    } else if let Some(root) = root.as_ref()
+        && harness.user_settings_file(home).is_some()
+        && !hooks_install::stop_hook_current(harness, root)
+    {
+        push(
+            ProblemKind::LoopNotInstalled,
+            format!(
+                "pm's Stop hook in {shown} is from an earlier release and blocks the agent's \
+                 turn (run `pm harness hooks install`)"
+            ),
+        );
     } else if harness.user_settings_file(home).is_some() {
         let missing = hooks_install::missing_status_hooks(harness, root.as_ref());
         if !missing.is_empty() {
@@ -445,6 +456,39 @@ mod tests {
         )
         .unwrap();
         assert_eq!(problems, TeamProblems::default());
+    }
+
+    #[test]
+    fn a_stop_hook_an_earlier_release_installed_is_a_problem_install_fixes() {
+        let dir = tempdir().unwrap();
+        let home = home_with_hooks(dir.path());
+        let settings = home.join(".claude/settings.json");
+        let mut root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        root["hooks"]["Stop"] = serde_json::json!([{"hooks": [{"type": "command",
+            "command": "[ -n \"$PM_AGENT_NAME\" ] || exit 0; exec pm harness hooks stop",
+            "timeout": 31_536_000}]}]);
+        std::fs::write(&settings, root.to_string()).unwrap();
+        let problems = || {
+            harness_problems(
+                Harness::ClaudeCode,
+                &HarnessConfig::default(),
+                &home,
+                Probe::Fresh,
+            )
+            .unwrap()
+        };
+
+        let stale = problems();
+        assert_eq!(stale.len(), 1, "{stale:?}");
+        assert_eq!(stale[0].kind, ProblemKind::LoopNotInstalled);
+        assert!(
+            stale[0].message.contains("from an earlier release"),
+            "{stale:?}"
+        );
+
+        crate::commands::hooks_install::install_in(&home, None, false).unwrap();
+        assert_eq!(problems(), Vec::new());
     }
 
     #[test]

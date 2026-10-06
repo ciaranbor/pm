@@ -33,7 +33,7 @@ use crate::fs_utils;
 use crate::state::paths;
 use crate::state::project::{AgentsConfig, HarnessConfig, layered};
 use crate::state::runtime::{
-    self, Answer, Dialog, DialogRecord, SessionPath, Waiting, WaitingClass,
+    self, Answer, Dialog, DialogRecord, SessionPath, Waiting, WaitingClass, WaitingKind,
 };
 
 use transcript::items::{Body, Page, Tail};
@@ -338,51 +338,63 @@ impl Harness {
         }
     }
 
-    /// Whether text typed while pm's Stop hook runs is held until the hook
-    /// returns, rather than submitted at once: the hook must then yield for
-    /// the harness to take it (`runtime::request_yield`). opencode's plugin
-    /// kills its waiter when a prompt starts, and counts any answer but
-    /// `block` as a failed hook, so it is never asked to yield (verified on
-    /// Claude Code 2.1.289, codex 0.160 and opencode 2.0.23).
-    pub fn holds_input_behind_stop_hook(self) -> bool {
+    /// How pm's Stop hook, installed for this harness, gets the
+    /// continuation to the agent.
+    pub fn wake(self) -> Wake {
         match self {
-            Harness::ClaudeCode | Harness::Codex => true,
-            Harness::OpenCode => false,
+            Harness::ClaudeCode => Wake::Rewake,
+            Harness::Codex => Wake::Queue,
+            Harness::OpenCode => Wake::Block,
         }
     }
 
-    /// Whether UserPromptSubmit runs for text the harness [holds behind
-    /// pm's Stop hook](Self::holds_input_behind_stop_hook) as it is queued,
-    /// so that hook can ask the Stop hook to yield. codex runs it only as
-    /// held text is submitted (verified on Claude Code 2.1.289 and codex
-    /// 0.160).
-    pub fn prompt_hook_runs_when_held(self) -> bool {
+    /// The keys pm's Stop hook entry carries beyond its command and
+    /// timeout, which make the harness run it once the turn has ended.
+    pub fn stop_hook_options(self) -> serde_json::Map<String, serde_json::Value> {
         match self {
-            Harness::ClaudeCode => true,
-            Harness::Codex | Harness::OpenCode => false,
+            Harness::ClaudeCode => claude_code::STOP_HOOK_OPTIONS,
+            Harness::Codex => codex::STOP_HOOK_OPTIONS,
+            Harness::OpenCode => &[],
+        }
+        .iter()
+        .map(|(key, value)| (key.to_string(), serde_json::Value::Bool(*value)))
+        .collect()
+    }
+
+    /// Put `text` on the queue of the session `session_id`, which starts it
+    /// as a turn once the session is idle ([`Wake::Queue`]).
+    pub fn queue_prompt(self, session_id: &str, text: &str) -> Result<()> {
+        match self {
+            Harness::Codex => codex::queue_prompt(session_id, text),
+            Harness::ClaudeCode | Harness::OpenCode => {
+                Err(PmError::Agent(format!("{self} has no prompt queue")))
+            }
         }
     }
 
-    /// A watch on input the user submits while pm's Stop hook waits, for a
-    /// harness that [holds it](Self::holds_input_behind_stop_hook) without
-    /// running any hook for it; `session_id` is from the Stop payload.
-    pub fn watch_held_input(self, home: &Path, session_id: &str) -> Option<HeldInput> {
+    /// What a prompt UserPromptSubmit reports says: the continuation of a
+    /// Stop hook's [rewake](Wake::Rewake) comes wrapped.
+    pub fn prompt_said(self, prompt: &str) -> &str {
         match self {
-            Harness::Codex => Some(HeldInput(codex::history::Steers::watch(
-                &codex::home_dir(home),
-                session_id,
-            ))),
-            Harness::ClaudeCode | Harness::OpenCode => None,
+            Harness::ClaudeCode => claude_code::rewake_reason(prompt).unwrap_or(prompt),
+            Harness::Codex | Harness::OpenCode => prompt,
         }
     }
 
-    /// The text the user typed, from the prompt UserPromptSubmit reports.
-    /// Claude Code reports a long paste wrapped in `<pasted_content>` tags,
-    /// as its transcript records it (verified on 2.1.289).
-    pub fn typed_prompt(self, prompt: &str) -> String {
-        match self {
-            Harness::ClaudeCode => claude_code::chat::unpasted(prompt),
-            Harness::Codex | Harness::OpenCode => prompt.to_string(),
+    /// Whether this harness's waiter, alive, wakes an agent at `kind`. A
+    /// rewake reaches a session however its turn ended; codex's queue
+    /// skips an interrupted thread; a waiter that blocks inside the turn
+    /// waits only where it marked the agent idle.
+    pub fn waiter_wakes(self, kind: WaitingKind) -> bool {
+        match self.wake() {
+            Wake::Rewake => matches!(
+                kind,
+                WaitingKind::Idle
+                    | WaitingKind::Interrupted
+                    | WaitingKind::Error
+                    | WaitingKind::Prompt
+            ),
+            Wake::Queue | Wake::Block => kind == WaitingKind::Idle,
         }
     }
 
@@ -469,11 +481,13 @@ impl Harness {
         })
     }
 
-    /// Why this agent's never-idle loop stopped itself, if it did. Only a
-    /// harness whose loop pm emulates can report one.
+    /// Why this agent's never-idle loop stopped itself, if it did: pm's
+    /// waiter records it, opencode's plugin in a file of its own.
     pub fn loop_stopped(self, project_root: &Path, scope: &str, agent: &str) -> Option<String> {
         match self {
-            Harness::ClaudeCode | Harness::Codex => None,
+            Harness::ClaudeCode | Harness::Codex => {
+                runtime::loop_tripped(project_root, scope, agent)
+            }
             Harness::OpenCode => {
                 let file = opencode::trip_file(project_root, scope, agent).ok()?;
                 let reason = std::fs::read_to_string(file).ok()?;
@@ -833,23 +847,19 @@ impl Harness {
     }
 }
 
-/// A watch from [`Harness::watch_held_input`].
-#[derive(Debug)]
-pub struct HeldInput(codex::history::Steers);
-
-impl HeldInput {
-    /// The latest input submitted since the last check.
-    pub fn arrived(&mut self) -> Option<HeldText> {
-        self.0.arrived()
-    }
-}
-
-/// Input a [`HeldInput`] saw submitted.
-#[derive(Debug, Clone, PartialEq)]
-pub struct HeldText {
-    pub text: String,
-    /// When it was submitted, to the second.
-    pub at: chrono::DateTime<chrono::Utc>,
+/// How pm's Stop hook gets the continuation to an agent
+/// ([`Harness::wake`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Wake {
+    /// It waits inside the turn and answers `block`, which the harness, or
+    /// the plugin that ran it, delivers.
+    Block,
+    /// It runs on once the turn has ended, and exits 2 with the
+    /// continuation on stderr, which wakes the session.
+    Rewake,
+    /// It runs on once the turn has ended, and puts the continuation on the
+    /// session's queue ([`Harness::queue_prompt`]).
+    Queue,
 }
 
 /// How the session seams reach a harness's store.

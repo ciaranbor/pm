@@ -233,12 +233,15 @@ export class Loop {
    * the hook returned, so a wait still blocked means a turn the plugin did
    * not prompt (the user's, or one opencode started itself): the hook is
    * killed, or not asked if the pump is between asks, so the agent does
-   * not read as idle through it, and the turn's end waits again.
+   * not read as idle through it, and the turn's end waits again. Returns
+   * whether it was, for the plugin to report the agent busy: the killed
+   * hook can't.
    */
-  turnStarted(sessionID: string): void {
-    if (!this.pumping.has(sessionID) || this.prompting.has(sessionID)) return
+  turnStarted(sessionID: string): boolean {
+    if (!this.pumping.has(sessionID) || this.prompting.has(sessionID)) return false
     this.cancelling.add(sessionID)
     this.waits.get(sessionID)?.abort()
+    return true
   }
 
   toolRan(tool: unknown, command: unknown, result: unknown): void {
@@ -349,7 +352,7 @@ export class Loop {
 
 /** What `pm harness hooks waiting opencode` reads. */
 export type WaitingPayload = {
-  hook_event_name: "PermissionRequest" | "Question" | "Dialog" | "TurnFailed" | "Resolved"
+  hook_event_name: "PermissionRequest" | "Question" | "Dialog" | "TurnFailed" | "Resolved" | "TurnStarted"
   detail?: string
 }
 

@@ -24,9 +24,6 @@
 //! is recorded without passing through `inspect_pending_input`; not
 //! verified live). Its stdout becomes developer context.
 //!
-//! Nor does any hook run for text the user steers or queues while pm's Stop
-//! hook waits; [`history`] has how the hook learns of a steer.
-//!
 //! Two trust gates in `$CODEX_HOME/config.toml` stand between a spawn and a
 //! working agent: `[projects."<dir>"] trust_level = "trusted"`, which pm writes
 //! per worktree before launching, and `[hooks.state."<hooks.json>:<event>:<i>:<j>"]
@@ -46,7 +43,6 @@
 //! session then continues in the window's directory.
 
 pub(super) mod chat;
-pub(super) mod history;
 pub(super) mod input;
 pub(super) mod sessions;
 pub(super) mod transcript;
@@ -81,6 +77,32 @@ const DEFAULT_SANDBOX: &str = FULL_ACCESS;
 const DEFAULT_APPROVAL: &str = "never";
 
 const RESUME_IN_CURRENT_DIR: &str = "tui.resume_cwd=\"current\"";
+
+/// pm's Stop hook is `async`: codex runs it in the background once the
+/// turn has ended, and it outlives the turn and Esc. Its continuation goes
+/// on the session's queue ([`queue_prompt`]).
+pub(super) const STOP_HOOK_OPTIONS: &[(&str, bool)] = &[("async", true)];
+
+/// `codex queue`: add `text` to the persistent queue (`queue_*.sqlite`)
+/// of thread `session_id`. A running TUI, `--no-daemon` too, starts it as
+/// a turn once the thread is idle — at once when a turn completes, else
+/// within its 10 s poll — and never for an interrupted thread; an item it
+/// has not started survives a restart and runs on resume (codex 0.160;
+/// the app-server's `thread/queue/add` is `#[experimental]`). It writes the
+/// queue itself, starting no daemon.
+pub(super) fn queue_prompt(session_id: &str, text: &str) -> Result<()> {
+    let output = std::process::Command::new(BINARY)
+        .args(["queue", "--thread", session_id, "--message", text])
+        .stdin(std::process::Stdio::null())
+        .output()?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(PmError::Agent(format!(
+        "`codex queue` failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    )))
+}
 
 pub(super) const HOOK_TRUST_REMEDY: &str = "start `codex` once in a trusted directory and \
     choose \"Trust all and continue\" (or set `[harness.codex] bypass_hook_trust = true`)";

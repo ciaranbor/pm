@@ -41,21 +41,21 @@ Design decisions you can't recover by reading the tree. Preserve them.
 
 ### Agents are never-idle message processors
 
-- An agent is a message processor, not a one-shot script: a Stop hook blocks
-  until its inbox has unread messages, then returns a `block` decision the
-  harness delivers as a continuation prompt. The first turn is identical to
+- An agent is a message processor, not a one-shot script: after each turn
+  pm's waiter waits on its inbox, then wakes it with a continuation through
+  the harness's own input path — never keystrokes. The first turn is like
   every later one — a spawn-time context only queues the first message.
 - That prompt instructs a bare `pm msg read`, so a bare read must never
   error when several senders have unread messages: it takes the oldest
   sender's (README has the selection rule).
-- With nothing queued the hook yields (`{}`) only to background work or held input.
-- Only the harness or a terminal ends the hook undecided — never pm state.
-- A waiting marker only refines busy; a running Stop hook or dead harness wins.
+- Idle is a marker plus a live waiter (the newest wins; one superseded or
+  orphaned writes nothing), else unarmed; a dead harness wins over both. A
+  continuation reaching an empty inbox is dropped, never handled twice.
 - Hooks are installed once per machine for **every supported harness**;
   `pm doctor` checks only those the project's agents run on, deliberately.
 - Hooks read the agent's name and worktree from their env (cwd is only a fallback),
   so a spawn never attaches to a shared harness server, whose hooks run in its own.
-- opencode's Stop hook is a bundled plugin; a loop that stops itself must say so.
+- Every waiter has a breaker; a loop that stops itself must say so.
 - An opencode agent never spawns without a model row and reaches only the
   providers pm config names; keys are named by env var, never stored.
 - Three context-delivery contracts: `feat new`/`feat adopt --workflow` spawn

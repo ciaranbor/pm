@@ -30,11 +30,11 @@
 //! missing trust entry), and pm appends its entries so existing ones keep
 //! their positions — codex keys trust on the entry's index.
 //!
-//! The Stop hook is `pm harness hooks stop`, which blocks until the agent has
-//! unread messages (by calling `agent_wait` internally), then returns
-//! `{"decision":"block","reason":"You have new messages…"}`. Claude Code
-//! delivers the reason as a continuation prompt, the agent reads its
-//! messages, the turn ends, and the hook fires again.
+//! The Stop hook is `pm harness hooks stop <harness>`, with the keys that
+//! make the harness run it in the background once the turn has ended
+//! ([`Harness::stop_hook_options`]): it waits until the agent has unread
+//! messages, then wakes it with the continuation (see
+//! [`super::hooks_stop`]).
 //!
 //! The SessionStart hook is `pm harness hooks session-start`, which captures
 //! the session ID from the harness's JSON input and writes it to the agent
@@ -59,9 +59,9 @@
 //! `pm harness hooks …`) are recognised as pm-owned: rewritten in place in
 //! the user file, removed from project files.
 //!
-//! `{"decision":"block"}` loops indefinitely across real turns (verified
-//! over 82 consecutive turns with no hard cap); `stop_hook_active` is
-//! advisory or auto-resetting.
+//! A rewake loops across turns with no cap (12 consecutive wakes verified on
+//! Claude Code 2.1.289, where `stop_hook_active` then reads true), so the
+//! waiter's own breaker is what stops a loop that reads nothing.
 
 use std::path::{Path, PathBuf};
 
@@ -94,12 +94,6 @@ const LEGACY_SESSION_START_MARKER: &str = "pm claude hooks session-start";
 
 const STOP_MARKERS: &[&str] = &[PM_HOOK_MARKER, LEGACY_HOOK_MARKER];
 const SESSION_START_MARKERS: &[&str] = &[PM_SESSION_START_MARKER, LEGACY_SESSION_START_MARKER];
-
-/// Whether a process command line runs pm's Stop hook, of either
-/// generation.
-pub fn runs_stop_hook(command: &str) -> bool {
-    STOP_MARKERS.iter().any(|marker| command.contains(marker))
-}
 
 /// The event of pm's hook that resets a blocked feature. Not part of the
 /// never-idle loop: without it an agent still runs and wakes.
@@ -161,10 +155,31 @@ pub fn waiting_events(
 /// module doc).
 const GUARD: &str = "[ -n \"$PM_AGENT_NAME\" ] || exit 0; exec ";
 
-/// The shell command registered as the Stop hook. It blocks until unread
-/// messages are available, printing the JSON decision to stdout.
-pub fn stop_hook_command() -> String {
-    format!("{GUARD}{PM_HOOK_MARKER}")
+/// pm's Stop hook entry for `harness`.
+fn stop_hook_entry(harness: Harness) -> Value {
+    let mut entry = json!({
+        "type": "command",
+        "command": stop_hook_command(harness),
+        "timeout": STOP_HOOK_TIMEOUT_SECS,
+    });
+    if let Value::Object(fields) = &mut entry {
+        fields.extend(harness.stop_hook_options());
+    }
+    entry
+}
+
+/// Whether pm's Stop hook entry in `root` is the one this release
+/// installs for `harness`. One an earlier release wrote still runs, but
+/// blocking, inside the turn.
+pub fn stop_hook_current(harness: Harness, root: &Value) -> bool {
+    pm_hook_position(root, "Stop", STOP_MARKERS).is_some_and(|(i, j)| {
+        root.pointer(&format!("/hooks/Stop/{i}/hooks/{j}")) == Some(&stop_hook_entry(harness))
+    })
+}
+
+/// The shell command registered as `harness`'s Stop hook.
+pub fn stop_hook_command(harness: Harness) -> String {
+    format!("{GUARD}{PM_HOOK_MARKER} {harness}")
 }
 
 /// The shell command registered as the SessionStart hook.
@@ -278,16 +293,7 @@ pub(crate) fn install_in(
 fn install_global(harness: Harness, user_file: &Path, dry_run: bool) -> Result<bool> {
     let mut root =
         load_settings(user_file)?.unwrap_or_else(|| Value::Object(serde_json::Map::new()));
-    let stop_changed = upsert_hook(
-        &mut root,
-        "Stop",
-        STOP_MARKERS,
-        json!({
-            "type": "command",
-            "command": stop_hook_command(),
-            "timeout": STOP_HOOK_TIMEOUT_SECS,
-        }),
-    )?;
+    let stop_changed = upsert_hook(&mut root, "Stop", STOP_MARKERS, stop_hook_entry(harness))?;
     let session_start_changed = upsert_hook(
         &mut root,
         "SessionStart",
@@ -659,7 +665,7 @@ mod tests {
         assert_eq!(parsed["hooks"]["Stop"].as_array().unwrap().len(), 1);
         assert_eq!(
             command_at(&parsed, "/hooks/Stop/0/hooks/0/command"),
-            stop_hook_command()
+            stop_hook_command(Harness::ClaudeCode)
         );
         assert_eq!(
             parsed
@@ -720,7 +726,19 @@ mod tests {
             command_at(&parsed, "/hooks/StopFailure/0/hooks/0/command"),
             waiting_hook_command(Harness::ClaudeCode)
         );
-        assert_eq!(codex["hooks"]["Stop"], parsed["hooks"]["Stop"]);
+        // Each runs the Stop hook as its waiter, once the turn has ended.
+        assert_eq!(
+            parsed.pointer("/hooks/Stop/0/hooks/0/asyncRewake"),
+            Some(&json!(true))
+        );
+        assert_eq!(
+            command_at(&codex, "/hooks/Stop/0/hooks/0/command"),
+            stop_hook_command(Harness::Codex)
+        );
+        assert_eq!(
+            codex.pointer("/hooks/Stop/0/hooks/0/async"),
+            Some(&json!(true))
+        );
         // The dialog hook blocks, so it gets an entry of its own beside the
         // status hook's, which must answer at once, and the Stop hook's
         // timeout; codex gets none.
@@ -838,7 +856,7 @@ mod tests {
         );
         assert_eq!(
             command_at(&parsed, "/hooks/Stop/1/hooks/0/command"),
-            stop_hook_command()
+            stop_hook_command(Harness::Codex)
         );
         assert_eq!(
             parsed
@@ -901,7 +919,7 @@ mod tests {
         );
         assert_eq!(
             command_at(&parsed, "/hooks/Stop/1/hooks/0/command"),
-            stop_hook_command()
+            stop_hook_command(Harness::ClaudeCode)
         );
         let ss = parsed["hooks"]["SessionStart"].as_array().unwrap();
         assert_eq!(ss.len(), 2);
@@ -957,7 +975,7 @@ mod tests {
             );
             assert_eq!(
                 command_at(&parsed, "/hooks/Stop/0/hooks/0/command"),
-                stop_hook_command()
+                stop_hook_command(Harness::ClaudeCode)
             );
             assert_eq!(
                 parsed
@@ -981,7 +999,7 @@ mod tests {
             &codex_file(&home),
             &json!({"hooks": {
                 "PostToolUse": [hook("log tool".into())],
-                "Stop": [{"hooks": [{"type": "command", "command": stop_hook_command(), "timeout": 86400}]}],
+                "Stop": [{"hooks": [{"type": "command", "command": stop_hook_command(Harness::ClaudeCode), "timeout": 86400}]}],
                 "SessionStart": [hook(session_start_hook_command())],
                 "UserPromptSubmit": [hook(user_prompt_hook_command())]
             }}),
@@ -1087,7 +1105,7 @@ mod tests {
         assert_eq!(only_pm, json!({"model": "opus"}));
 
         let mut bundled = json!({"hooks": {"Stop": [{"matcher": "x", "hooks": [
-            {"type": "command", "command": stop_hook_command()},
+            {"type": "command", "command": stop_hook_command(Harness::ClaudeCode)},
             {"type": "command", "command": "echo mine"}
         ]}]}});
         assert!(strip_pm_entries(&mut bundled));
@@ -1155,7 +1173,7 @@ mod tests {
         assert_eq!(stop[0]["matcher"], "x");
         assert_eq!(
             command_at(&parsed, "/hooks/Stop/0/hooks/0/command"),
-            stop_hook_command()
+            stop_hook_command(Harness::ClaudeCode)
         );
         assert_eq!(
             command_at(&parsed, "/hooks/Stop/0/hooks/1/command"),
@@ -1192,7 +1210,7 @@ mod tests {
         // without PM_AGENT_NAME they exit 0 with no output and never reach
         // `pm` (PATH is emptied so a resolution attempt would fail).
         for command in [
-            stop_hook_command(),
+            stop_hook_command(Harness::ClaudeCode),
             session_start_hook_command(),
             user_prompt_hook_command(),
             waiting_hook_command(Harness::ClaudeCode),
@@ -1222,7 +1240,10 @@ mod tests {
         fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
 
         for (command, args) in [
-            (stop_hook_command(), "harness hooks stop"),
+            (
+                stop_hook_command(Harness::ClaudeCode),
+                "harness hooks stop claude-code",
+            ),
             (session_start_hook_command(), "harness hooks session-start"),
             (user_prompt_hook_command(), "harness hooks user-prompt"),
             (

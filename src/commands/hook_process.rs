@@ -1,9 +1,9 @@
-//! The process a blocking hook runs as: who ran it, and the signals it
+//! The process a waiting hook runs as: who ran it, and the signals it
 //! catches (`Signals`). Shared by the hooks that wait — the Stop hook and
 //! the dialog hook — which must end once the harness that ran them is gone,
-//! since a hook blocked in its wait outlives a harness that dies without
-//! killing it: codex never kills it, and Claude Code kills the hook's
-//! process group on a clean exit but not when it is SIGKILLed.
+//! since a hook in its wait outlives a harness that dies without killing
+//! it: codex never kills it, and Claude Code kills the hook's process group
+//! on a clean exit but not when it is SIGKILLed.
 //!
 //! Two signals, either sufficient: our parent pid changes (the installed
 //! command execs pm, so the harness is our parent and its death reparents

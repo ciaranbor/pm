@@ -6,8 +6,8 @@
 //! ([`Windows`]), takes the PR state `pm feat sync` last recorded, and
 //! never calls `gh` or a harness, so it is cheap enough to poll.
 //!
-//! An agent the window reads as busy is refined by its waiting marker, or
-//! an interrupt no hook reported ([`running_agents::waiting`]), into
+//! An agent is classified by its window and what it is at
+//! ([`classify`]); one busy is refined by that into
 //! asking, unarmed or background. One it reads as dead is busy for a few
 //! seconds after its spawn: its harness may not have started yet. A scope
 //! is working while a busy agent showed activity in the last
@@ -29,12 +29,12 @@ use crate::state::paths;
 use crate::state::project::{
     GlobalConfig, HarnessConfig, ProjectConfig, ProjectEntry, resolve_harness_config,
 };
-use crate::state::runtime::{self, WaitingClass, WaitingKind};
+use crate::state::runtime::{self, Waiting, WaitingClass, WaitingKind};
 use crate::tmux;
 
 use super::feat_status_view::first_line;
 use super::hooks_dialog;
-use super::running_agents::{self, Liveness, Windows, liveness};
+use super::running_agents::{AgentAt, Liveness, Windows, classify};
 
 pub mod transition;
 
@@ -551,17 +551,22 @@ impl ScopeReader<'_> {
                     _ if !entry.active => (AgentState::Stopped, None),
                     _ if !session_exists => (AgentState::Closed, None),
                     None => (AgentState::Dead, None),
-                    Some(pane) => match liveness(
+                    Some(pane) => match classify(
+                        AgentAt {
+                            project_root: self.project_root,
+                            scope,
+                            name: agent,
+                            harness: entry.harness,
+                        },
                         self.windows.processes(pane).as_deref(),
-                        entry.harness,
                         self.config,
                     ) {
-                        Liveness::Idle => (AgentState::Idle, None),
-                        Liveness::Busy => self.busy(scope, agent, entry.harness, now),
-                        Liveness::Dead if self.starting(scope, agent, now) => {
+                        (Liveness::Idle, _) => (AgentState::Idle, None),
+                        (Liveness::Busy, at) => self.busy(scope, agent, entry.harness, at, now),
+                        (Liveness::Dead, _) if self.starting(scope, agent, now) => {
                             (AgentState::Busy, None)
                         }
-                        Liveness::Dead => (AgentState::Dead, None),
+                        (Liveness::Dead, _) => (AgentState::Dead, None),
                     },
                 };
                 let active = runtime::last_activity(self.project_root, scope, agent);
@@ -603,17 +608,18 @@ impl ScopeReader<'_> {
         })
     }
 
-    /// A busy agent, refined by its waiting marker or a stopped loop. A
+    /// A busy agent, refined by what it is `at` or a stopped loop. A
     /// startup marker counts only once the start has had time to finish.
     fn busy(
         &self,
         scope: &str,
         agent: &str,
         harness: Harness,
+        at: Option<Waiting>,
         now: DateTime<Utc>,
     ) -> (AgentState, Option<WaitingSnapshot>) {
         let grace = super::doctor::START_GRACE.as_secs() as i64;
-        let waiting = running_agents::waiting(self.project_root, scope, agent, harness)
+        let waiting = at
             .filter(|w| w.kind != WaitingKind::Startup || (now - w.since).num_seconds() > grace)
             .map(|w| WaitingSnapshot {
                 kind: w.kind,
@@ -1062,7 +1068,6 @@ mod tests {
         };
         mark("asking", WaitingKind::Question);
         mark("starting", WaitingKind::Startup);
-        mark("idle", WaitingKind::Interrupted);
         mark("dead", WaitingKind::Question);
         mark("spawned", WaitingKind::Startup);
         let mut stale = runtime::Waiting::now(WaitingKind::Startup, None);
@@ -1131,7 +1136,11 @@ mod tests {
         let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         let started = |agent: &str, hours| {
-            server.spawn_fake_agent(&project, &session, "login", agent);
+            let target = server.spawn_fake_agent(&project, &session, "login", agent);
+            // The harness itself stands for its background work's waiter.
+            let processes = tmux::pane_processes(server.name(), &target).unwrap();
+            let waiter = processes.last().unwrap().pid;
+            runtime::take_waiter(&project, "login", agent, waiter, None).unwrap();
             let mut waiting = runtime::Waiting::now(WaitingKind::Background, None);
             waiting.since -= chrono::Duration::hours(hours);
             runtime::write_waiting(&project, "login", agent, &waiting).unwrap();

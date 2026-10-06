@@ -154,12 +154,10 @@ scripts ([docs/remote-api.md](docs/remote-api.md#attention-snapshot)).
 
 Type straight into an agent's window to answer a question, redirect, or
 add work. Typing into a blocked feature's agent sets the feature back to
-`wip`. Text typed into an *idle* agent — one waiting for its next message —
-starts a turn at once, and the agent waits for messages again after it.
-In codex, send it with Enter: a follow-up queued with Tab stays queued
-until a message arrives, or Esc submits it now
-([docs/harnesses.md](docs/harnesses.md#codex)). `pm msg send <agent> "…"`
-from any pane reaches an agent either way.
+`wip`. An *idle* agent — one waiting for its next message — sits at its
+prompt, so what you type starts a turn at once, and the agent waits for
+messages again after it. `pm msg send <agent> "…"` from any pane reaches an
+agent either way.
 
 You can split an agent's window to work beside it: pm watches and jumps to
 the pane it started the agent in, whichever pane is active. Restarting the
@@ -306,15 +304,18 @@ or deleted. [Customising](#customising) covers writing your own.
 
 ### Agents are message processors
 
-Agents never sit idle: after every turn, pm's Stop hook waits until the
-agent has unread messages, then prompts it to read them, so the brief at
-feature creation is just the first message. An agent whose turn ends some
-other way — an interrupt, a rejected dialog, an API error, or Esc while it
-waits — is `unarmed`: no message wakes it until something prompts it.
-[`pm msg send`](#messaging) re-arms it when its input line is empty and
-takes text (not vim NORMAL mode) and no one is using its pane (a tmux mode
-such as copy or tree mode, or shown on an attached client); otherwise the
-message waits for a later send. pm installs the hooks once per machine
+Agents never sit idle: after every turn, pm's waiter waits until the agent
+has unread messages, then wakes it to read them, so the brief at feature
+creation is just the first message. The turn has ended meanwhile, so the
+agent's prompt is yours. An agent left with no waiter — interrupted or
+failed in a turn a message started, its harness ending the waiter, or a
+codex turn interrupted at all — is `unarmed`: no message wakes it until
+something prompts it. [`pm msg send`](#messaging) re-arms it when its input
+line is empty and takes text (not vim NORMAL mode) and no one is using its
+pane (a tmux mode such as copy or tree mode, or shown on an attached
+client); otherwise the message waits for a later send. A loop that wakes an
+agent turn after turn without its inbox draining stops itself and says so;
+`pm agent restart` starts it again. pm installs the hooks once per machine
 ([docs/harnesses.md](docs/harnesses.md#hooks)); `pm doctor --fix` restores a
 missing one.
 
@@ -342,8 +343,8 @@ A bare `read` takes one sender: the one whose earliest unread message is
 oldest, ending with `N more senders pending: b, c — pm msg read --from b`
 when others wait. History stays on disk. `pm msg send` never spawns an
 agent: it errors on an inactive recipient, and respawns one whose window
-died. To an `unarmed` recipient it types the prompt the Stop hook would
-have given, but only when that agent's input line is empty; elsewhere the
+died. To an `unarmed` recipient it types the prompt the waiter would have
+given, but only when that agent's input line is empty; elsewhere the
 message waits.
 
 Identity resolves as `PM_AGENT_NAME` (set at spawn) > `$USER` > `"user"`, so

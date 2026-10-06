@@ -1299,10 +1299,10 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
                 println!("{msg}");
                 Ok(())
             }
-            HarnessHooksCommands::Stop => {
+            HarnessHooksCommands::Stop { harness } => {
                 let mut window = running_agent()
                     .and_then(|agent| agent_window(tmux_server_from_env().as_deref(), &agent));
-                exit_unless_ok(commands::hooks_stop::stop(&mut |state, unread| {
+                exit_unless_ok(commands::hooks_stop::stop(harness, &mut |state, unread| {
                     if let Some(window) = window.as_mut() {
                         window.publish(state, unread);
                     }
@@ -1321,13 +1321,10 @@ fn dispatch_harness(cmd: HarnessCommands) -> pm::error::Result<()> {
                 exit_unless_ok(code)
             }
             HarnessHooksCommands::UserPrompt => {
-                exit_unless_ok(commands::hooks_user_prompt::user_prompt(
-                    tmux_server_from_env().as_deref(),
-                    |unread| {
-                        publish(AgentState::Busy, unread);
-                        push();
-                    },
-                ))
+                exit_unless_ok(commands::hooks_user_prompt::user_prompt(|unread| {
+                    publish(AgentState::Busy, unread);
+                    push();
+                }))
             }
             HarnessHooksCommands::Waiting { harness } => exit_unless_ok(
                 commands::hooks_waiting::waiting(harness, |state, unread| {

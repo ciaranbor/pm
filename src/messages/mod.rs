@@ -196,6 +196,14 @@ pub fn unread_count(messages_dir: &Path, feature: &str, agent: &str) -> u32 {
         .unwrap_or(0)
 }
 
+/// How many messages the agent has read, over every sender; 0 when its
+/// inbox cannot be read. It only grows, so a change means a read.
+pub fn read_count(messages_dir: &Path, feature: &str, agent: &str) -> u32 {
+    cursor::load_cursor(&cursor::cursor_path(messages_dir, feature, agent))
+        .map(|cursor| cursor.values().sum())
+        .unwrap_or(0)
+}
+
 /// Check for unread messages in an agent's inbox. Returns unread counts per sender.
 pub fn check(messages_dir: &Path, feature: &str, agent: &str) -> Result<Vec<UnreadSummary>> {
     let inbox = inbox_dir(messages_dir, feature, agent);

@@ -167,7 +167,9 @@ export default {
               continue
             }
             if (event.type === TURN_STARTED) {
-              if (await drivesSession(own, sessionID, parentOf)) loop.turnStarted(sessionID)
+              if ((await drivesSession(own, sessionID, parentOf)) && loop.turnStarted(sessionID)) {
+                waiting({ hook_event_name: "TurnStarted" })
+              }
               continue
             }
             if (!TURN_END.has(event.type)) continue

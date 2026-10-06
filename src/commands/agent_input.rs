@@ -13,28 +13,21 @@
 //! mode): a draft at the keyboard is never merged into or cleared. A
 //! harness whose input line pm can't read takes the text as it is.
 //!
-//! An agent waiting in pm's Stop hook gets the text queued behind the hook
-//! on a harness that [holds it](Harness::holds_input_behind_stop_hook), so
-//! a yield request goes first ([`runtime::request_yield`]); it is written
-//! before the paste, so a turn that ends meanwhile yields too, and only for
-//! an agent whose next turn end runs the hook — one at its prompt submits
-//! the text at once. Text typed mid-turn may be taken in at a step's end
-//! instead; the hook finds it in the conversation ([`said`]) and waits on.
+//! An idle agent sits at its prompt, pm's waiter running beside it, so
+//! text submits at once and Escape or a key does no harm. Text typed
+//! mid-turn the harness holds until a step of the turn ends.
 
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
-
 use crate::error::Result;
-use crate::harness::transcript::items::{Body, Item};
 use crate::harness::{Conversation, Harness};
 use crate::state::agent::{self as registry, AgentRegistry};
 use crate::state::paths;
 use crate::state::project::{GlobalConfig, ProjectConfig, resolve_harness_config};
-use crate::state::runtime::{self, SessionPath, Waiting, WaitingClass, YieldRequest};
+use crate::state::runtime::{self, SessionPath, Waiting, WaitingClass};
 use crate::tmux::{self, Pane};
 
-use super::running_agents::{Liveness, Windows, liveness, waiting};
+use super::running_agents::{AgentAt, Liveness, Windows, classify};
 
 /// The keys a device may press, by tmux's names for them.
 pub const KEYS: &[&str] = &[
@@ -82,8 +75,6 @@ pub enum Refusal {
     Asking(String),
     /// The input line holds a draft, or isn't on screen.
     NotAtPrompt,
-    /// It waits for a message in pm's Stop hook, which a key would end.
-    Idle,
 }
 
 impl Refusal {
@@ -95,7 +86,6 @@ impl Refusal {
             Self::NotRunning => "not-running",
             Self::Asking(_) => "asking",
             Self::NotAtPrompt => "not-at-prompt",
-            Self::Idle => "idle",
         }
     }
 }
@@ -110,7 +100,6 @@ impl std::fmt::Display for Refusal {
             Self::NotAtPrompt => {
                 f.write_str("the agent's input line is not empty, or not on screen")
             }
-            Self::Idle => f.write_str("the agent is between turns, waiting for a message"),
         }
     }
 }
@@ -120,6 +109,8 @@ struct Target {
     harness: Harness,
     pane: String,
     liveness: Liveness,
+    /// What a busy one is at ([`classify`]).
+    at: Option<Waiting>,
 }
 
 /// The pane of `agent`, once it is out of any tmux mode, if it runs the
@@ -146,7 +137,13 @@ fn target(
         ps.iter()
             .any(|p| entry.harness.runs_as(&p.command, &config))
     });
-    let state = liveness(processes.as_deref(), entry.harness, &config);
+    let agent = AgentAt {
+        project_root,
+        scope,
+        name: agent,
+        harness: entry.harness,
+    };
+    let (state, at) = classify(agent, processes.as_deref(), &config);
     if state == Liveness::Dead || !runs_harness {
         return Ok(Err(Refusal::NotRunning));
     }
@@ -155,6 +152,7 @@ fn target(
         harness: entry.harness,
         pane: pane.id.clone(),
         liveness: state,
+        at,
     }))
 }
 
@@ -177,10 +175,7 @@ pub fn send_text(
         Ok(target) => target,
         Err(refusal) => return Ok(Err(refusal)),
     };
-    let at = match target.liveness {
-        Liveness::Busy => waiting(project_root, scope, agent, target.harness),
-        _ => None,
-    };
+    let at = target.at;
     if let Some(asking) = at
         .as_ref()
         .filter(|w| w.kind.class() == WaitingClass::Asking)
@@ -201,30 +196,13 @@ pub fn send_text(
     }
     let after = conversation_end(project_root, scope, agent)?;
     let mid_turn = target.liveness == Liveness::Busy && at.is_none();
-    let requested = target.harness.holds_input_behind_stop_hook()
-        && hook_runs_next(target.liveness, at.as_ref());
-    if requested {
-        request_yield(project_root, scope, agent, text, after.clone())?;
-    }
-    if let Err(e) = tmux::paste::paste_text(tmux_server, &target.pane, text) {
-        if requested {
-            let _ = runtime::take_yield_request(project_root, scope, agent);
-        }
-        return Err(e);
-    }
+    tmux::paste::paste_text(tmux_server, &target.pane, text)?;
     let delivery = if mid_turn {
         Delivery::Queued
     } else {
         Delivery::Sent
     };
     Ok(Ok(Typed { delivery, after }))
-}
-
-/// Whether pm's Stop hook runs at the next turn end of an agent its window
-/// reads as `liveness`, at `at` ([`waiting`]): it runs now, or the agent is
-/// mid-turn, at no waiting marker or recorded turn end.
-pub(super) fn hook_runs_next(liveness: Liveness, at: Option<&Waiting>) -> bool {
-    liveness == Liveness::Idle || (liveness == Liveness::Busy && at.is_none())
 }
 
 /// Where `agent`'s conversation ends now; `None` when it has none.
@@ -239,34 +217,9 @@ pub(super) fn conversation_end(
     })
 }
 
-/// Ask `agent`'s next Stop hook to yield for `text`, typed once its
-/// conversation ended at `after` ([`runtime::request_yield`]).
-pub(super) fn request_yield(
-    project_root: &Path,
-    scope: &str,
-    agent: &str,
-    text: &str,
-    after: Option<String>,
-) -> Result<()> {
-    let request = YieldRequest {
-        text_sha256: sha256(text),
-        after,
-    };
-    runtime::request_yield(project_root, scope, agent, &request)
-}
-
 /// The SHA-256 of `text`, trimmed, in hex: what [`said`] matches.
 pub fn sha256(text: &str) -> String {
     crate::hash::sha256_hex(text.trim().as_bytes())
-}
-
-/// Whether `items` hold the user saying `text` at or after `since`.
-pub fn said_since(items: &[Item], since: DateTime<Utc>, text: &str) -> bool {
-    let text_sha256 = sha256(text);
-    items.iter().any(|item| {
-        item.at.is_some_and(|at| at >= since)
-            && matches!(&item.body, Body::User { text } if sha256(text) == text_sha256)
-    })
 }
 
 /// Whether `conversation` took in the text whose [`sha256`] is
@@ -275,8 +228,7 @@ pub fn said(conversation: &Conversation, after: &str, text_sha256: &str) -> Resu
     conversation.took_in(after, |text| sha256(text) == text_sha256)
 }
 
-/// Press Escape in `agent`'s pane, unless it waits between turns: there
-/// Escape would end pm's Stop hook and leave the agent unarmed.
+/// Press Escape in `agent`'s pane.
 pub fn interrupt(
     project_root: &Path,
     scope: &str,
@@ -287,16 +239,11 @@ pub fn interrupt(
         Ok(target) => target,
         Err(refusal) => return Ok(Err(refusal)),
     };
-    if target.liveness == Liveness::Idle {
-        return Ok(Err(Refusal::Idle));
-    }
     tmux::send_key(tmux_server, &target.pane, "Escape")?;
     Ok(Ok(()))
 }
 
-/// Press `keys`, each one of [`KEYS`], in `agent`'s pane, in order, unless
-/// it waits between turns: nothing is on screen to answer, and Escape or
-/// Ctrl-C would end pm's Stop hook.
+/// Press `keys`, each one of [`KEYS`], in `agent`'s pane, in order.
 pub fn send_keys(
     project_root: &Path,
     scope: &str,
@@ -308,9 +255,6 @@ pub fn send_keys(
         Ok(target) => target,
         Err(refusal) => return Ok(Err(refusal)),
     };
-    if target.liveness == Liveness::Idle {
-        return Ok(Err(Refusal::Idle));
-    }
     for key in keys {
         tmux::send_key(tmux_server, &target.pane, key)?;
     }
@@ -359,9 +303,8 @@ fn redrawn(tmux_server: Option<&str>, pane: &str, done: impl Fn(&str) -> bool) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::running_agents::Liveness;
     use crate::state::runtime::{Waiting, WaitingKind};
-    use crate::testing::{TestServer, fake_harness_binary};
+    use crate::testing::TestServer;
     use std::path::PathBuf;
     use tempfile::tempdir;
 
@@ -426,8 +369,12 @@ mod tests {
             runtime::write_waiting(&self.project, "login", "implementer", &waiting).unwrap();
         }
 
-        fn yield_requested(&self) -> bool {
-            runtime::yield_requested(&self.project, "login", "implementer")
+        /// Mark the agent idle, its pane's program standing for its waiter.
+        fn idle(&self) {
+            let processes = tmux::pane_processes(self.server.name(), &self.target).unwrap();
+            let waiter = processes.last().unwrap().pid;
+            runtime::take_waiter(&self.project, "login", "implementer", waiter, None).unwrap();
+            self.mark(WaitingKind::Idle);
         }
     }
 
@@ -436,18 +383,17 @@ mod tests {
     }
 
     #[test]
-    fn text_reaches_a_busy_agent_byte_for_byte_and_asks_its_stop_hook_to_yield() {
+    fn text_reaches_a_busy_agent_byte_for_byte_queued() {
         let agent = Recording::new(Harness::ClaudeCode);
 
         assert_eq!(agent.send(TEXT), Ok(Delivery::Queued));
 
         let want = pasted(TEXT);
         assert_eq!(agent.received(want.len()), want);
-        assert!(agent.yield_requested());
     }
 
     #[test]
-    fn an_agent_at_its_prompt_takes_the_text_at_once_with_no_yield() {
+    fn an_agent_at_its_prompt_takes_the_text_at_once() {
         let agent = Recording::new(Harness::ClaudeCode);
         agent.mark(WaitingKind::Prompt);
 
@@ -455,18 +401,22 @@ mod tests {
 
         let want = pasted("hello");
         assert_eq!(agent.received(want.len()), want);
-        assert!(!agent.yield_requested());
     }
 
     #[test]
-    fn an_opencode_agent_is_never_asked_to_yield() {
-        let agent = Recording::new(Harness::OpenCode);
+    fn an_idle_agent_takes_text_at_once_and_keys() {
+        let agent = Recording::new(Harness::ClaudeCode);
+        agent.idle();
 
-        assert_eq!(agent.send("hello"), Ok(Delivery::Queued));
-
+        assert_eq!(agent.send("hello"), Ok(Delivery::Sent));
         let want = pasted("hello");
         assert_eq!(agent.received(want.len()), want);
-        assert!(!agent.yield_requested());
+
+        let interrupted = interrupt(&agent.project, "login", "implementer", agent.server.name());
+        assert_eq!(interrupted.unwrap(), Ok(()));
+        let mut want = want;
+        want.push(0x1b);
+        assert_eq!(agent.received(want.len()), want);
     }
 
     fn a_pane_in_a_mode_leaves_it_and_takes_the_text(enter: &str) {
@@ -501,7 +451,6 @@ mod tests {
             agent.send("hello"),
             Err(Refusal::Asking("permission prompt".into()))
         );
-        assert!(!agent.yield_requested());
 
         let pressed = send_keys(
             &agent.project,
@@ -531,7 +480,6 @@ mod tests {
         assert_eq!(sent, Err(Refusal::NotAtPrompt));
         let screen = tmux::capture_pane(server.name(), &target).unwrap();
         assert!(!screen.contains("hello"), "{screen}");
-        assert!(!runtime::yield_requested(&project, "login", "implementer"));
     }
 
     #[test]
@@ -549,36 +497,6 @@ mod tests {
         assert_eq!(interrupted, Err(Refusal::NotRunning));
         let screen = tmux::capture_pane(server.name(), &target).unwrap();
         assert!(!screen.contains("hello"), "{screen}");
-    }
-
-    #[test]
-    fn an_agent_between_turns_is_neither_interrupted_nor_sent_keys() {
-        let server = TestServer::new();
-        let dir = tempdir().unwrap();
-        let (project, name) = server.setup_project_with_feature(dir.path(), "login");
-        let session = tmux::session_name(&name, "login");
-        let shell = fake_harness_binary(Harness::ClaudeCode, Path::new("/bin/bash"));
-        let command = format!(
-            "{} -c \"sh -c 'sleep 999; :' {}; :\"",
-            shell.display(),
-            crate::commands::hooks_install::PM_HOOK_MARKER
-        );
-        server.spawn_harness_agent(
-            &project,
-            &session,
-            "login",
-            "implementer",
-            Harness::ClaudeCode,
-            &command,
-            Liveness::Idle,
-        );
-
-        let interrupted = interrupt(&project, "login", "implementer", server.name()).unwrap();
-        let pressed =
-            send_keys(&project, "login", "implementer", &["Escape"], server.name()).unwrap();
-
-        assert_eq!(interrupted, Err(Refusal::Idle));
-        assert_eq!(pressed, Err(Refusal::Idle));
     }
 
     #[test]
