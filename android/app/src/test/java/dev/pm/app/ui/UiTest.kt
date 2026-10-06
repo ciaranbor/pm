@@ -74,6 +74,7 @@ class UiTest {
         compose.waitUntil(5_000) { model.snapshot.value != null }
         compose.onNodeWithText("login").assertIsDisplayed()
         compose.onNodeWithText("app").assertIsDisplayed()
+        compose.onNodeWithText("Updated just now", substring = true).assertIsDisplayed()
         compose
             .onNodeWithContentDescription("implementer, asking: Postgres or SQLite?, 2 unread")
             .assertIsDisplayed()
@@ -178,33 +179,44 @@ class UiTest {
     }
 
     @Test
-    fun the_status_strip_says_how_old_the_snapshot_is_and_offers_the_fix() {
-        var retries = 0
+    fun a_retry_from_the_status_strip_shows_progress_then_the_outcome() {
         var pairings = 0
-        val now = Instant.parse("2026-10-02T10:00:00Z")
         val connection = MutableStateFlow<Connection>(Connection.Unreachable("refused"))
+        val retry = { connection.value = Connection.Connecting }
+        compose.mainClock.autoAdvance = false
         compose.setContent {
             PmTheme {
                 val state by connection.collectAsState()
-                StatusStrip(
-                    state,
-                    readAt = now.toEpochMilli() - 12 * 60_000,
-                    now = now,
-                    retry = { retries++ },
-                    pairAgain = { pairings++ },
-                )
+                StatusStrip(state, retry = retry, pairAgain = { pairings++ })
             }
         }
-        compose.onNodeWithText("Offline · last update 12 min ago").assertIsDisplayed()
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNodeWithText("Offline").assertIsDisplayed()
+
         compose.onNodeWithText("Retry").performClick()
-        assertEquals(1, retries)
+        connection.value = Connection.Unreachable("refused")
+        compose.mainClock.advanceTimeBy(100)
+        compose.onNodeWithText("Connecting…").assertIsDisplayed()
+        compose.onNodeWithText("Retry").assertDoesNotExist()
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.onNodeWithText("Still can't reach pm serve. Tailscale off?").assertIsDisplayed()
+
+        compose.onNodeWithText("Retry").performClick()
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.onNodeWithText("Connecting…").assertIsDisplayed()
+        connection.value = Connection.Live
+        compose.mainClock.advanceTimeBy(100)
+        compose.onNodeWithText("Offline", substring = true).assertDoesNotExist()
+        compose.onNodeWithText("Connecting…").assertDoesNotExist()
+
+        connection.value = Connection.Unreachable("refused")
+        compose.mainClock.advanceTimeBy(100)
+        compose.onNodeWithText("Can't reach pm serve. Tailscale off?").assertIsDisplayed()
 
         connection.value = Connection.Unauthorized
+        compose.mainClock.advanceTimeBy(100)
         compose.onNodeWithText("Pair again").performClick()
         assertEquals(1, pairings)
-
-        connection.value = Connection.Live
-        compose.onNodeWithText("last update", substring = true).assertDoesNotExist()
     }
 
     @Test

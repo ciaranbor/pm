@@ -8,6 +8,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -156,6 +157,8 @@ fun App(
     modifier: Modifier = Modifier,
     networkChanges: Flow<Unit> = emptyFlow(),
 ) {
+    val loaded by model.loaded.collectAsStateWithLifecycle()
+    if (!loaded) return
     val context = LocalContext.current
     val activity = LocalActivity.current
     val pairing by model.pairing.collectAsStateWithLifecycle()
@@ -200,6 +203,11 @@ fun App(
 
     val pairAgain: () -> Unit = { backStack.add(Route.Pair) }
     val (title, subtitle) = top?.heading ?: ("pm" to null)
+    val stale = connection != Connection.Live && connection != Connection.Unpaired
+    val updated =
+        readAt
+            ?.takeIf { stale && top != Route.Pair && top != Route.Settings }
+            ?.let { "Updated ${ago(it, now)}" }
     val actions =
         top?.actions().orEmpty().filter {
             it !is Action.Merge && it !is Action.Delete ||
@@ -213,14 +221,8 @@ fun App(
                 title = {
                     Column {
                         Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        if (subtitle != null) {
-                            Text(
-                                subtitle,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                        if (subtitle != null || updated != null) {
+                            Subtitle(subtitle, updated)
                         }
                     }
                 },
@@ -246,7 +248,7 @@ fun App(
     ) { padding ->
         Column(Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize()) {
             if (snapshot != null && top != Route.Pair && top != Route.Settings)
-                StatusStrip(connection, readAt, now, model::retry, pairAgain)
+                StatusStrip(connection, model::retry, pairAgain)
             if (snapshot?.understood == false) {
                 Text(
                     "pm serve sends a newer snapshot than this app knows; update the app.",
@@ -293,6 +295,7 @@ fun App(
                                         )
                                     },
                                     openProject = { p -> backStack.add(Route.Project(p)) },
+                                    stale = stale,
                                 )
                             }
                         }
@@ -304,6 +307,7 @@ fun App(
                                     now,
                                     open = { s -> backStack.add(Route.Scope(key.project, s)) },
                                     openNotes = { backStack.add(Route.Notes(key.project)) },
+                                    stale = stale,
                                 )
                             }
                         }
@@ -318,6 +322,7 @@ fun App(
                                         backStack.add(Route.Agent(key.project, key.scope, a))
                                     },
                                     openPage = { backStack.add(it) },
+                                    stale = stale,
                                 )
                             }
                         }
@@ -429,6 +434,35 @@ fun App(
 }
 
 /**
+ * The top bar's second line: the heading's, which gives way first, then how old the snapshot is.
+ */
+@Composable
+private fun Subtitle(heading: String?, updated: String?) {
+    val style = MaterialTheme.typography.bodySmall
+    val color = MaterialTheme.colorScheme.onSurfaceVariant
+    Row {
+        if (heading != null) {
+            Text(
+                heading,
+                style = style,
+                color = color,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+        }
+        if (updated != null) {
+            Text(
+                if (heading != null) " · $updated" else updated,
+                style = style,
+                color = color,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+/**
  * The snapshot's content, on a tinted background while it may be stale; with none yet, why not and
  * what to do.
  */
@@ -440,6 +474,7 @@ internal fun Shown(
     pairAgain: () -> Unit,
     content: @Composable (Snapshot) -> Unit,
 ) {
+    val manual = rememberRetry(connection, retry)
     when {
         snapshot != null ->
             Box(
@@ -451,12 +486,13 @@ internal fun Shown(
             ) {
                 content(snapshot)
             }
+        manual.pending -> Centered { CircularProgressIndicator() }
         connection is Connection.Unreachable ->
             EmptyState(
-                "Can't reach pm serve",
+                if (manual.failedAgain) "Still can't reach pm serve" else "Can't reach pm serve",
                 "Tailscale off, or pm serve not running on the server?",
                 "Retry",
-                retry,
+                manual::start,
             )
         connection == Connection.Unauthorized ->
             EmptyState(

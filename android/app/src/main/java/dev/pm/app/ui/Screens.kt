@@ -61,32 +61,32 @@ fun ago(then: Long, now: Instant): String {
 
 /**
  * How the app stands with the server, over the content it qualifies, with what to do about it;
- * nothing while live.
+ * nothing while live. A retry shows progress in place of its button, then the outcome.
  */
 @Composable
 fun StatusStrip(
     connection: Connection,
-    readAt: Long?,
-    now: Instant,
     retry: () -> Unit,
     pairAgain: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val updated = readAt?.let { " · last update ${ago(it, now)}" }.orEmpty()
+    val manual = rememberRetry(connection, retry)
     val (title, hint, action) =
-        when (connection) {
-            Connection.Live,
-            Connection.Unpaired -> return
-            Connection.Connecting -> Triple("Connecting…$updated", null, null)
-            is Connection.Unreachable ->
-                Triple("Offline$updated", "Can't reach pm serve. Tailscale off?", "Retry" to retry)
-            Connection.Unauthorized ->
-                Triple(
-                    "Not paired$updated",
-                    "The server revoked this phone's token.",
-                    "Pair again" to pairAgain,
-                )
-        }
+        if (manual.pending) Triple("Connecting…", "Trying pm serve again.", null)
+        else
+            when (connection) {
+                Connection.Live,
+                Connection.Unpaired -> return
+                Connection.Connecting -> Triple("Connecting…", null, null)
+                is Connection.Unreachable ->
+                    Triple("Offline", unreachable(manual.failedAgain), "Retry" to manual::start)
+                Connection.Unauthorized ->
+                    Triple(
+                        "Not paired",
+                        "The server revoked this phone's token.",
+                        "Pair again" to pairAgain,
+                    )
+            }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier =
@@ -114,9 +114,24 @@ fun StatusStrip(
                 )
             }
         }
-        if (action != null) TextButton(onClick = action.second) { Text(action.first) }
+        when {
+            manual.pending ->
+                Box(Modifier.padding(horizontal = 12.dp).size(48.dp), Alignment.Center) {
+                    CircularProgressIndicator(
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            action != null -> TextButton(onClick = action.second) { Text(action.first) }
+        }
     }
 }
+
+/** Why the server can't be reached; `again` after a retry the user asked for failed. */
+internal fun unreachable(again: Boolean): String =
+    if (again) "Still can't reach pm serve. Tailscale off?"
+    else "Can't reach pm serve. Tailscale off?"
 
 /** A screen with nothing to show yet: why, and the one thing to do about it. */
 @Composable

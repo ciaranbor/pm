@@ -51,8 +51,6 @@ class AccessibilityTest {
             Column {
                 StatusStrip(
                     Connection.Unreachable("refused"),
-                    readAt = now.toEpochMilli() - 12 * 60_000,
-                    now = now,
                     retry = {},
                     pairAgain = {},
                 )

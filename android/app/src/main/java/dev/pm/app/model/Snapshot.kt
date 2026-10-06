@@ -125,6 +125,7 @@ data class ScopeSnapshot(
     val agents: List<AgentSnapshot> = emptyList(),
     val attention: Attention = Attention(),
     val working: Boolean = false,
+    @SerialName("background_since") val backgroundSince: String? = null,
     @SerialName("last_activity") val lastActivity: String? = null,
 )
 
@@ -143,6 +144,7 @@ data class FeatureSnapshot(
     @SerialName("session_exists") val sessionExists: Boolean = false,
     val agents: List<AgentSnapshot> = emptyList(),
     val working: Boolean = false,
+    @SerialName("background_since") val backgroundSince: String? = null,
     @SerialName("last_activity") val lastActivity: String? = null,
 )
 

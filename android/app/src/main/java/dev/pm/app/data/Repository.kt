@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -41,7 +42,8 @@ sealed interface Connection {
 /**
  * The snapshot and how fresh it is. While the app is in the foreground it holds the event stream
  * open, reconnecting with backoff, and at once when `networkChanges` emits; each snapshot it
- * receives is cached, so an unreachable server shows the last one known.
+ * receives is cached, so an unreachable server shows the last one known. The pairing is read from
+ * disk, not on the caller's thread: until it is, [loaded] is false and the pairing reads as none.
  */
 class Repository(
     private val store: Store,
@@ -49,17 +51,33 @@ class Repository(
     private val scope: CoroutineScope,
     networkChanges: Flow<Unit> = emptyFlow(),
     io: CoroutineDispatcher = Dispatchers.IO,
+    /**
+     * Where the pairing is read: apart from the snapshot cache's `io`, so neither waits on the
+     * other.
+     */
+    prefs: CoroutineDispatcher = Dispatchers.IO,
 ) {
     /** The snapshot cache's reads, writes and deletes, run in the order they're asked for. */
     private val disk = io.limitedParallelism(1)
 
-    private val _pairing = MutableStateFlow(store.pairing)
+    private val _pairing = MutableStateFlow<Pairing?>(null)
     val pairing: StateFlow<Pairing?> = _pairing.asStateFlow()
 
-    private val _client = MutableStateFlow(_pairing.value?.let { PmClient(it, http) })
+    private val _loaded = MutableStateFlow(false)
 
-    /** The paired server's client, made once per pairing. */
+    /** Whether [pairing] has been read from disk, or set since. */
+    val loaded: StateFlow<Boolean> = _loaded.asStateFlow()
+
+    private val _client = MutableStateFlow<PmClient?>(null)
+
+    /** The paired server's client, made once per pairing; null until [loaded]. */
     val client: StateFlow<PmClient?> = _client.asStateFlow()
+
+    /** The paired server's client, once the pairing has been read: for readers outside the UI. */
+    suspend fun loadedClient(): PmClient? {
+        _loaded.first { it }
+        return _client.value
+    }
 
     private val _snapshot = MutableStateFlow<Snapshot?>(null)
     val snapshot: StateFlow<Snapshot?> = _snapshot.asStateFlow()
@@ -74,13 +92,22 @@ class Repository(
     private val _readAt = MutableStateFlow<Long?>(null)
     val readAt: StateFlow<Long?> = _readAt.asStateFlow()
 
-    private val _connection =
-        MutableStateFlow<Connection>(
-            if (_pairing.value == null) Connection.Unpaired else Connection.Connecting
-        )
+    private val _connection = MutableStateFlow<Connection>(Connection.Connecting)
     val connection: StateFlow<Connection> = _connection.asStateFlow()
 
     private var stream: Job? = null
+
+    /** Between [start] and [stop]: the stream opens once the pairing is loaded. */
+    private var started = false
+
+    init {
+        scope.launch {
+            val stored = withContext(prefs) { store.pairing }
+            if (_loaded.value) return@launch
+            paired(stored)
+            if (started) start()
+        }
+    }
 
     /** Reading the cached snapshot; a newer one, or a change of pairing, supersedes it. */
     private var cacheLoad: Job? = scope.launch {
@@ -97,11 +124,19 @@ class Repository(
     }
 
     init {
-        scope.launch { networkChanges.collect { if (stream != null) retry() } }
+        scope.launch { networkChanges.collect { if (stream != null) reconnect() } }
+    }
+
+    private fun paired(pairing: Pairing?) {
+        _pairing.value = pairing
+        _client.value = pairing?.let { PmClient(it, http) }
+        _connection.value = if (pairing == null) Connection.Unpaired else Connection.Connecting
+        _loaded.value = true
     }
 
     /** Hold the event stream open until [stop]. */
     fun start() {
+        started = true
         if (stream?.isActive == true) return
         val client = _client.value ?: return
         stream = scope.launch {
@@ -131,14 +166,20 @@ class Repository(
     }
 
     fun stop() {
+        started = false
         stream?.cancel()
         stream = null
     }
 
-    /** Reconnect now rather than after the backoff. */
-    fun retry() {
+    private fun reconnect() {
         stop()
         start()
+    }
+
+    /** Reconnect now rather than after the backoff, as [Connection.Connecting] until it settles. */
+    fun retry() {
+        if (_connection.value is Connection.Unreachable) _connection.value = Connection.Connecting
+        reconnect()
     }
 
     private suspend fun accept(json: String) {
@@ -164,9 +205,7 @@ class Repository(
     fun pair(pairing: Pairing) {
         forget()
         store.pairing = pairing
-        _pairing.value = pairing
-        _connection.value = Connection.Connecting
-        _client.value = PmClient(pairing, http)
+        paired(pairing)
         start()
     }
 
@@ -176,9 +215,7 @@ class Repository(
         forget()
         scope.launch { runCatching { client?.unregisterPush() } }
         store.pairing = null
-        _pairing.value = null
-        _connection.value = Connection.Unpaired
-        _client.value = null
+        paired(null)
     }
 
     /** A subscription from the push distributor: kept, then sent once the server is reachable. */

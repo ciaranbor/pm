@@ -4,13 +4,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.pm.app.api.PmClient
 import dev.pm.app.api.PmError
+import dev.pm.app.data.Backoff
 import dev.pm.app.model.Conversation
 import dev.pm.app.model.Dialog
 import dev.pm.app.model.DialogAnswer
 import dev.pm.app.model.Item
 import dev.pm.app.model.TranscriptEvent
 import dev.pm.app.model.Transcripts
-import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -54,7 +54,8 @@ sealed interface Outbox {
 
 /**
  * One agent's conversation, kept current while its view is open: the latest page, then a watched
- * event stream from where that page ended, reopened at once when `networkChanges` emits.
+ * event stream from where that page ended, reopened with backoff, and at once when `networkChanges`
+ * emits.
  */
 class AgentModel(
     private val client: PmClient,
@@ -88,6 +89,7 @@ class AgentModel(
     private val arrivedSinceSend = mutableListOf<Item>()
 
     private var watching: Job? = null
+    private val backoff = Backoff()
     private var reconnecting: Job? = null
     private var fetchingDialog: Job? = null
     private var paging = false
@@ -140,7 +142,7 @@ class AgentModel(
                     if (shown is ChatState.Shown) shown.copy(live = false)
                     else ChatState.Failed(e.message ?: e.javaClass.simpleName)
             }
-            delay(3.seconds)
+            delay(backoff.next())
         }
     }
 
@@ -155,7 +157,10 @@ class AgentModel(
         client.events(watch = "$project/$scope/$agent", after = after).collect { event ->
             val shown = _chat.value as? ChatState.Shown ?: return@collect
             if (event.name != "transcript") {
-                if (!shown.live) _chat.value = shown.copy(live = true)
+                if (!shown.live) {
+                    _chat.value = shown.copy(live = true)
+                    backoff.reset()
+                }
                 if (recheck) {
                     recheck = false
                     viewModelScope.launch { recheckStarted() }

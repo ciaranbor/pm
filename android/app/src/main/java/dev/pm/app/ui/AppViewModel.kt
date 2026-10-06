@@ -28,6 +28,7 @@ import kotlinx.coroutines.launch
 class AppViewModel(private val repository: Repository, private val unsubscribePush: () -> Unit) :
     ViewModel() {
     val pairing: StateFlow<Pairing?> = repository.pairing
+    val loaded: StateFlow<Boolean> = repository.loaded
     val client: StateFlow<PmClient?> = repository.client
     val snapshot = repository.snapshot
     val connection: StateFlow<Connection> = repository.connection

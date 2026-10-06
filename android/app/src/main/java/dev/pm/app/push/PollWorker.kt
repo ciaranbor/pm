@@ -21,7 +21,7 @@ import kotlinx.coroutines.CancellationException
 class PollWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val container = applicationContext.container
-        val client = container.repository.client.value ?: return Result.success()
+        val client = container.repository.loadedClient() ?: return Result.success()
         if (container.store.subscription != null) {
             // Pushes arrive; a later poll starts afresh rather than from what pushes superseded.
             container.store.polled = null
