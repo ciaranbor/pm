@@ -422,6 +422,29 @@ so a project copy under a bundled skill's name never applies. Customise a
 bundled skill globally (accepting that `pm upgrade` rewrites it) or copy it
 to a name of your own; `pm doctor` flags a shadowed project skill.
 
+**Disabling bundled items.** To keep a bundled agent, workflow, skill or
+the baseline off the machine, list it under `[bundled.disable]` in the global
+`config.toml` (see [Configuration](#configuration)):
+
+```toml
+[bundled.disable]
+agents    = ["qa"]
+workflows = ["research-only"]
+skills    = ["pm"]
+baseline  = true             # unset or false keeps it
+```
+
+The next `pm upgrade` removes each from the global tier and its harness
+projections, and later upgrades leave it out; remove the entry to get it
+back. A project custom under the same name still applies, and a disabled
+skill's name becomes free for a project skill. A command that needs a
+disabled item with no custom in its place refuses with an error naming the
+setting, and `pm doctor` reports what still references one: a workflow team,
+the `solo` default, `pm feat review`'s `pr-review` and `reviewer`, the `main`
+orchestrator. A workflow whose team needs a disabled agent stays in `pm
+workflow list`, marked unavailable. Without the baseline, agents aren't told
+to run `pm workflow show` or how to use `pm msg`.
+
 Project-specific procedures — how to run, test, or review *here* — go in a
 project skill, `main/.agents/skills/<name>/`. Only a skill's description is
 in view when the agent decides whether to load it, so put the trigger and
@@ -565,6 +588,9 @@ that produced it, so after a harness change the next respawn starts fresh
 harnesses, `pm agent list` each agent's. **codex needs one interactive
 hook-trust step per machine** and fails silently without it;
 [docs/harnesses.md](docs/harnesses.md) has that and what each harness needs.
+
+**`[bundled.disable]`** is global only; see [Disabling bundled
+items](#agents-workflows-and-skills).
 
 **`[project] max_features`** caps a project's in-flight features (any not
 merged or stale); the project value beats the global one, and unset means

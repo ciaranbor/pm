@@ -2,6 +2,7 @@ use std::path::Path;
 
 use chrono::Utc;
 
+use crate::commands::bundled_disable::Disabled;
 use crate::commands::feat_common::{self, InitStateFields};
 use crate::commands::{agent_spawn, feat_new, seed};
 use crate::error::{PmError, Result};
@@ -10,7 +11,11 @@ use crate::hooks;
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
 use crate::state::project::ProjectConfig;
+use crate::state::workflow;
 use crate::{gh, git, tmux};
+
+/// The workflow every review feature is tagged with.
+pub const REVIEW_WORKFLOW: &str = "pr-review";
 
 /// Check out a PR for review: fetch PR commits, create worktree + tmux session, enqueue PR context.
 ///
@@ -18,6 +23,17 @@ use crate::{gh, git, tmux};
 /// In production, pass `None` to use the default server.
 pub fn feat_review(project_root: &Path, pr_arg: &str, tmux_server: Option<&str>) -> Result<String> {
     let main_worktree = paths::main_worktree(project_root);
+
+    // Every review runs this workflow and `reviewer`; refuse before fetching
+    // when `[bundled.disable]` lists the workflow or the agent doesn't resolve.
+    let disabled = Disabled::load();
+    if disabled.workflow(REVIEW_WORKFLOW) && !workflow::exists(project_root, REVIEW_WORKFLOW) {
+        return Err(disabled.explain(
+            project_root,
+            PmError::WorkflowNotFound(REVIEW_WORKFLOW.into()),
+        ));
+    }
+    agent_spawn::validate_definition_resolves(project_root, "reviewer")?;
 
     // Fetch PR details from GitHub (gh pr view accepts both numbers and URLs)
     let details = gh::pr_details(&main_worktree, pr_arg)?;
@@ -80,7 +96,7 @@ fn setup_review(
             base: "",
             pr: &details.number,
             context: &context,
-            workflow: Some("pr-review"),
+            workflow: Some(REVIEW_WORKFLOW),
         },
     )?;
 
@@ -97,11 +113,6 @@ fn setup_review(
 
         // Step 2.5: Seed harness assets and settings from main worktree
         seed::seed_feature_assets(project_root, &worktree_path)?;
-
-        // Step 2.6: this path spawns via `spawn_session` directly,
-        // bypassing `agent_spawn`'s validation chokepoint — validate here too,
-        // before queuing context so a failure leaves no dead-letter.
-        agent_spawn::validate_definition_resolves(project_root, "reviewer")?;
 
         // Step 2.7: Enqueue PR-review context to the reviewer agent's inbox.
         // The pm Stop hook will deliver it on the reviewer's empty first turn.

@@ -285,10 +285,15 @@ pub fn definition_paths(project_root: &Path, agent: &str, home: Option<&Path>) -
     vec![
         main.join(".agents/agents").join(&filename),
         match home {
-            Some(h) => h.join(".agents/agents").join(&filename),
+            Some(h) => global_definition_path(h, agent),
             None => PathBuf::from("~/.agents/agents").join(&filename),
         },
     ]
+}
+
+/// Where agent definition `agent` lives in the global tier under `home`.
+pub fn global_definition_path(home: &Path, agent: &str) -> PathBuf {
+    home.join(".agents/agents").join(format!("{agent}.md"))
 }
 
 /// The body of the first definition file found at [`definition_paths`],

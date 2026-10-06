@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::commands::attention::{self, AgentState};
+use crate::commands::bundled_disable::Disabled;
 use crate::commands::feat_delete::{self, CleanupParams};
 use crate::commands::harness_check::{self, Problem, ProblemKind};
 use crate::commands::running_agents::Windows;
@@ -62,6 +63,15 @@ pub enum IssueKind {
     GlobalStoreMissing,
     /// Pre-migration bundled copies in the project shadow the global tier.
     StaleBundledCopies,
+    /// The global config's `[bundled.disable]` table disables bundled items.
+    BundledDisabled,
+    /// `[bundled.disable]` names something pm doesn't bundle.
+    BundledUnknown,
+    /// A bundled item `[bundled.disable]` lists is still in the global tier or a
+    /// harness's projection of it.
+    DisabledStillInstalled,
+    /// Something pm or a workflow needs is disabled and no custom provides it.
+    BundledDisabledDangling,
     /// A project override whose content equals the bundled asset it shadows.
     RedundantOverride,
     /// A project custom skill the harness resolves its global namesake over.
@@ -435,12 +445,20 @@ pub fn diagnose(
         if let Some(wf) = &state.workflow
             && !workflow::exists(project_root, wf)
         {
-            issues.push(Issue {
-                kind: IssueKind::WorkflowDirMissing,
-                message: format!(
+            let message = if Disabled::load().workflow(wf) {
+                format!(
+                    "workflow '{wf}' is disabled by `[bundled.disable]` in the global pm config, so its \
+                     agents' `pm workflow show` fails (add a project custom or re-enable it)"
+                )
+            } else {
+                format!(
                     "workflow '{wf}' directory missing from .pm/workflows/ \
                      (deleted or not installed on this machine)"
-                ),
+                )
+            };
+            issues.push(Issue {
+                kind: IssueKind::WorkflowDirMissing,
+                message,
                 fix: Fix::None,
             });
         }
@@ -968,6 +986,24 @@ fn asset_issues(project_root: &Path, projections: &DefinitionProjections) -> Res
         });
     }
 
+    issues.extend(bundled_issues(
+        project_root,
+        &workflow::global_dir()?,
+        paths::home_dir().ok().as_deref(),
+        &Disabled::load(),
+    )?);
+    let still_installed = skills::disabled_still_installed()?;
+    if !still_installed.is_empty() {
+        issues.push(Issue {
+            kind: IssueKind::DisabledStillInstalled,
+            message: format!(
+                "disabled by `[bundled.disable]` but still installed: {} (run `pm upgrade`)",
+                still_installed.join(", ")
+            ),
+            fix: Fix::Auto(FixAction::InstallGlobalAssets),
+        });
+    }
+
     if !skills::is_migrated(project_root) {
         let stale = skills::stale_bundled_copies(project_root)?;
         if !stale.is_empty() {
@@ -1016,6 +1052,47 @@ fn asset_issues(project_root: &Path, projections: &DefinitionProjections) -> Res
         });
     }
 
+    Ok(issues)
+}
+
+/// Findings about the global config's `[bundled.disable]` table: what it disables,
+/// names in it pm doesn't bundle, and references to a disabled name that no
+/// custom resolves.
+fn bundled_issues(
+    project_root: &Path,
+    global_dir: &Path,
+    home: Option<&Path>,
+    disabled: &Disabled,
+) -> Result<Vec<Issue>> {
+    let mut issues = Vec::new();
+    let items = disabled.items();
+    if !items.is_empty() {
+        issues.push(Issue {
+            kind: IssueKind::BundledDisabled,
+            message: format!("disabled by `[bundled.disable]`: {}", items.join(", ")),
+            fix: Fix::None,
+        });
+    }
+    let unknown = disabled.unknown();
+    if !unknown.is_empty() {
+        issues.push(Issue {
+            kind: IssueKind::BundledUnknown,
+            message: format!(
+                "`[bundled.disable]` names nothing pm bundles: {}",
+                unknown.join(", ")
+            ),
+            fix: Fix::None,
+        });
+    }
+    for reference in disabled.dangling(project_root, global_dir, home)? {
+        issues.push(Issue {
+            kind: IssueKind::BundledDisabledDangling,
+            message: format!(
+                "{reference}, which `[bundled.disable]` lists (add a project custom or re-enable it)"
+            ),
+            fix: Fix::None,
+        });
+    }
     Ok(issues)
 }
 
@@ -1424,6 +1501,69 @@ mod tests {
     use crate::state::project::HarnessConfig;
     use crate::testing::TestServer;
     use tempfile::tempdir;
+
+    #[test]
+    fn bundled_issues_report_dangling_references_and_unknown_names() {
+        let root = tempdir().unwrap();
+        let global = tempdir().unwrap();
+        let home = tempdir().unwrap();
+        let wf = global.path().join("research-implement-review");
+        std::fs::create_dir_all(&wf).unwrap();
+        std::fs::write(
+            wf.join("config.toml"),
+            "description = \"d\"\nagents = [\"researcher\", \"reviewer\"]\n",
+        )
+        .unwrap();
+        let disabled = Disabled::from_config(
+            toml::from_str("agents = [\"researcher\", \"planner\"]\nworkflows = [\"solo\"]")
+                .unwrap(),
+        );
+        let messages = |d: &Disabled| -> Vec<(IssueKind, String)> {
+            bundled_issues(root.path(), global.path(), Some(home.path()), d)
+                .unwrap()
+                .into_iter()
+                .map(|i| (i.kind, i.message))
+                .collect()
+        };
+
+        let issues = messages(&disabled);
+        let of = |kind| {
+            issues
+                .iter()
+                .filter(|(k, _)| *k == kind)
+                .map(|(_, m)| m.as_str())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            of(IssueKind::BundledDisabled),
+            vec!["disabled by `[bundled.disable]`: Agent 'researcher', Workflow 'solo'"]
+        );
+        assert_eq!(
+            of(IssueKind::BundledUnknown),
+            vec!["`[bundled.disable]` names nothing pm bundles: agents 'planner'"]
+        );
+        let dangling = of(IssueKind::BundledDisabledDangling);
+        assert_eq!(dangling.len(), 2, "{dangling:?}");
+        assert!(
+            dangling[0]
+                .starts_with("workflow 'research-implement-review' needs agent 'researcher'"),
+            "{dangling:?}"
+        );
+        assert!(
+            dangling[1].contains("needs workflow 'solo'"),
+            "{dangling:?}"
+        );
+
+        let agents = paths::main_worktree(root.path()).join(".agents/agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(agents.join("researcher.md"), "# mine").unwrap();
+        assert!(
+            !messages(&disabled)
+                .iter()
+                .any(|(_, m)| m.contains("needs agent")),
+        );
+        assert!(messages(&Disabled::default()).is_empty());
+    }
 
     fn unprojected(project_root: &Path) -> Result<Vec<(String, Harness)>> {
         unprojected_definitions(&DefinitionProjections::load(project_root)?)

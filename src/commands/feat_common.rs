@@ -9,6 +9,7 @@ use std::path::Path;
 
 use chrono::Utc;
 
+use crate::commands::bundled_disable::Disabled;
 use crate::commands::{agent_spawn, feat_delete, harness_check};
 use crate::error::{PmError, Result};
 use crate::messages;
@@ -36,6 +37,7 @@ pub fn resolve_workflow<'a>(
         workflow,
         context,
         &crate::state::workflow::global_dir()?,
+        &Disabled::load(),
     )
 }
 
@@ -45,6 +47,7 @@ pub fn resolve_workflow_in<'a>(
     workflow: Option<&'a str>,
     context: Option<&str>,
     global_dir: &Path,
+    disabled: &Disabled,
 ) -> Result<Option<&'a str>> {
     match (workflow, context) {
         (Some(w), _) => Ok(Some(w)),
@@ -52,6 +55,12 @@ pub fn resolve_workflow_in<'a>(
             if crate::state::workflow::resolve_dir(Some(project_root), DEFAULT_WORKFLOW, global_dir)
                 .is_none()
             {
+                if disabled.workflow(DEFAULT_WORKFLOW) {
+                    return Err(disabled.explain(
+                        project_root,
+                        PmError::WorkflowNotFound(DEFAULT_WORKFLOW.to_string()),
+                    ));
+                }
                 return Err(PmError::SafetyCheck(format!(
                     "default workflow '{DEFAULT_WORKFLOW}' is not installed. \
                      Run `pm upgrade`, or pass --workflow <name>."
@@ -189,9 +198,32 @@ pub fn require_feature(project_root: &Path, feature_name: &str) -> Result<()> {
 /// so callers can surface the workflow problem before any filesystem side
 /// effects.
 pub fn load_and_validate_workflow(project_root: &Path, name: &str) -> Result<WorkflowDef> {
-    let def = WorkflowDef::load(project_root, name)?;
-    def.validate(project_root, name)?;
+    let def = load_and_validate_team(
+        project_root,
+        name,
+        &crate::state::workflow::global_dir()?,
+        paths::home_dir().ok().as_deref(),
+        &Disabled::load(),
+    )?;
     harness_check::check_team(project_root, name, def.effective_team())?;
+    Ok(def)
+}
+
+/// Load workflow `name` and validate its team against explicit tiers. A
+/// workflow or member that fails to resolve because `[bundled.disable]` lists it
+/// is reported as such.
+fn load_and_validate_team(
+    project_root: &Path,
+    name: &str,
+    global_dir: &Path,
+    home: Option<&Path>,
+    disabled: &Disabled,
+) -> Result<WorkflowDef> {
+    let explain = |e| disabled.explain(project_root, e);
+    let def =
+        WorkflowDef::load_with_global(Some(project_root), name, global_dir).map_err(explain)?;
+    def.validate_with_home(project_root, name, home)
+        .map_err(explain)?;
     Ok(def)
 }
 
@@ -276,9 +308,15 @@ mod tests {
 
         // Nothing installed: the default is actionable rather than a
         // generic not-found.
-        let err = resolve_workflow_in(project_root, None, Some("brief"), global.path())
-            .unwrap_err()
-            .to_string();
+        let err = resolve_workflow_in(
+            project_root,
+            None,
+            Some("brief"),
+            global.path(),
+            &Disabled::default(),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(
             err.contains("'solo'") && err.contains("pm upgrade"),
             "{err}"
@@ -289,17 +327,104 @@ mod tests {
         std::fs::create_dir_all(&solo).unwrap();
         std::fs::write(solo.join("config.toml"), "description = \"solo\"\n").unwrap();
         assert_eq!(
-            resolve_workflow_in(project_root, None, Some("brief"), global.path()).unwrap(),
+            resolve_workflow_in(
+                project_root,
+                None,
+                Some("brief"),
+                global.path(),
+                &Disabled::default()
+            )
+            .unwrap(),
             Some(DEFAULT_WORKFLOW)
         );
         // … an explicit --workflow always wins, and no context stays agentless.
         assert_eq!(
-            resolve_workflow_in(project_root, Some("other"), None, global.path()).unwrap(),
+            resolve_workflow_in(
+                project_root,
+                Some("other"),
+                None,
+                global.path(),
+                &Disabled::default()
+            )
+            .unwrap(),
             Some("other")
         );
         assert_eq!(
-            resolve_workflow_in(project_root, None, None, global.path()).unwrap(),
+            resolve_workflow_in(
+                project_root,
+                None,
+                None,
+                global.path(),
+                &Disabled::default()
+            )
+            .unwrap(),
             None
         );
+    }
+    #[test]
+    fn a_disabled_default_workflow_says_so_instead_of_pm_upgrade() {
+        let dir = tempdir().unwrap();
+        let global = tempdir().unwrap();
+        let disabled = Disabled::from_config(toml::from_str("workflows = [\"solo\"]").unwrap());
+        let err = resolve_workflow_in(dir.path(), None, Some("brief"), global.path(), &disabled)
+            .unwrap_err();
+        assert!(matches!(err, PmError::BundledDisabled { .. }), "{err}");
+    }
+
+    #[test]
+    fn disabled_bundled_workflows_and_members_are_refused_unless_customs_resolve() {
+        let dir = tempdir().unwrap();
+        let project_root = dir.path();
+        let global = tempdir().unwrap();
+        let home = tempdir().unwrap();
+        let disabled = Disabled::from_config(
+            toml::from_str("agents = [\"qa\"]\nworkflows = [\"research-only\"]").unwrap(),
+        );
+        let load = |name| {
+            load_and_validate_team(
+                project_root,
+                name,
+                global.path(),
+                Some(home.path()),
+                &disabled,
+            )
+        };
+
+        let err = load("research-only").unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                PmError::BundledDisabled {
+                    key: "workflows",
+                    ..
+                }
+            ),
+            "{err}"
+        );
+
+        let workflow = |name: &str| {
+            let wf = paths::workflows_dir(project_root).join(name);
+            std::fs::create_dir_all(&wf).unwrap();
+            std::fs::write(
+                wf.join("config.toml"),
+                "description = \"d\"\nagents = [\"qa\"]\n",
+            )
+            .unwrap();
+        };
+        workflow("research-only");
+        workflow("mine");
+        for name in ["research-only", "mine"] {
+            let err = load(name).unwrap_err();
+            assert!(
+                matches!(&err, PmError::BundledDisabled { key: "agents", .. }),
+                "{name}: {err}"
+            );
+        }
+
+        let agents = paths::main_worktree(project_root).join(".agents/agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(agents.join("qa.md"), "# my qa").unwrap();
+        load("research-only").unwrap();
+        load("mine").unwrap();
     }
 }
