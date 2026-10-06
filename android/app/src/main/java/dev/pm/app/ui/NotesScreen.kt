@@ -58,9 +58,9 @@ fun NotesScreen(model: NotesModel, topBar: TopBarSlot, modifier: Modifier = Modi
             is NotesState.Conflict ->
                 NotesConflict(shown, model::keepTheirs, model::keepMine, model::merge)
             NotesState.Unreachable ->
-                Retryable("Can't reach pm serve. Tailscale off?", model::reload)
+                ErrorState("Can't reach pm serve", model::reload, hint = UNREACHABLE_HINT)
             is NotesState.Failed ->
-                Retryable("Couldn't load the notes: ${shown.reason}", model::reload)
+                ErrorState("Couldn't load the notes", model::reload, hint = shown.reason)
         }
     }
 }
@@ -69,8 +69,8 @@ fun NotesScreen(model: NotesModel, topBar: TopBarSlot, modifier: Modifier = Modi
 private fun NotesView(state: NotesState.Viewing, edit: (Int) -> Unit) {
     if (state.tooLong) {
         Column(
-            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(Spacing.l),
+            verticalArrangement = Arrangement.spacedBy(Spacing.m),
         ) {
             Text("These notes are over 256 KB", style = MaterialTheme.typography.titleMedium)
             Text(
@@ -82,8 +82,8 @@ private fun NotesView(state: NotesState.Viewing, edit: (Int) -> Unit) {
     } else if (state.notes.text.isBlank()) {
         EmptyState(
             "No notes yet",
-            "Notes written here or with pm notes show here.",
-            "Edit",
+            hint = "Notes written here or with pm notes show here.",
+            action = "Edit",
             onAction = { edit(0) },
         )
     } else {
@@ -92,17 +92,16 @@ private fun NotesView(state: NotesState.Viewing, edit: (Int) -> Unit) {
         Box(Modifier.fillMaxSize()) {
             MarkdownPage(
                 state.notes.text,
-                "Notes",
                 modifier = Modifier.onGloballyPositioned { sections.page = it },
                 components = remember(sections) { sections.components() },
                 bottom = 88.dp,
             )
             ExtendedFloatingActionButton(
                 onClick = { edit(sections.reading(slack)) },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+                modifier = Modifier.align(Alignment.BottomEnd).padding(Spacing.l),
             ) {
                 Icon(painterResource(R.drawable.ic_edit), null)
-                Text("Edit", Modifier.padding(start = 12.dp))
+                Text("Edit", Modifier.padding(start = Spacing.m))
             }
         }
     }
@@ -153,15 +152,18 @@ private fun NotesConflict(
     merge: () -> Unit,
 ) {
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(Spacing.l),
+        verticalArrangement = Arrangement.spacedBy(Spacing.l),
     ) {
         Surface(
             color = MaterialTheme.colorScheme.tertiaryContainer,
             shape = MaterialTheme.shapes.medium,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                Modifier.padding(Spacing.l),
+                verticalArrangement = Arrangement.spacedBy(Spacing.s),
+            ) {
                 Text(
                     "The notes changed on the server",
                     style = MaterialTheme.typography.titleMedium,
@@ -183,8 +185,8 @@ private fun NotesConflict(
             }
         }
         FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.s),
+            verticalArrangement = Arrangement.spacedBy(Spacing.s),
         ) {
             Button(onClick = merge, enabled = state.mergeable) { Text("Merge") }
             OutlinedButton(onClick = keepMine) { Text("Keep mine") }
@@ -203,7 +205,7 @@ private fun Version(label: String, text: String) {
             if (text.length <= PREVIEW) text.ifEmpty { "(empty)" }
             else text.take(PREVIEW) + "\n… and ${text.length - PREVIEW} more characters"
         }
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
         Text(
             label,
             style = MaterialTheme.typography.labelLarge,
@@ -220,7 +222,7 @@ private fun Version(label: String, text: String) {
                     style =
                         MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                     textAlign = TextAlign.Start,
-                    modifier = Modifier.padding(8.dp),
+                    modifier = Modifier.padding(Spacing.s),
                 )
             }
         }

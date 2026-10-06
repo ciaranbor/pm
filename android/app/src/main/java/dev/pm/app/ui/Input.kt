@@ -4,9 +4,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -37,6 +35,7 @@ internal fun Composer(
     waiting: Waiting?,
     outbox: Outbox?,
     notice: String?,
+    interrupting: Boolean,
     send: (String) -> Unit,
     interrupt: () -> Unit,
     openTerminal: () -> Unit,
@@ -54,7 +53,7 @@ internal fun Composer(
             else -> null
         }
     Surface(modifier.fillMaxWidth(), tonalElevation = 2.dp) {
-        Column(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+        Column(Modifier.padding(horizontal = Spacing.s, vertical = Spacing.xs)) {
             val status = notice ?: blocked ?: outbox?.let(::describe)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (status != null) {
@@ -65,13 +64,13 @@ internal fun Composer(
                             if (notice != null || outbox is Outbox.Failed)
                                 MaterialTheme.colorScheme.error
                             else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f).padding(4.dp),
+                        modifier = Modifier.weight(1f).padding(Spacing.xs),
                     )
                 }
                 if (state == AgentState.Asking) {
                     TextButton(onClick = openTerminal) {
                         Icon(painterResource(R.drawable.ic_terminal), null)
-                        Text("Show the terminal", Modifier.padding(start = 8.dp))
+                        Text("Show the terminal", Modifier.padding(start = Spacing.s))
                     }
                 }
             }
@@ -84,21 +83,28 @@ internal fun Composer(
                     maxLines = 6,
                     modifier = Modifier.weight(1f),
                 )
+                val sending = outbox is Outbox.Sending
                 if (state == AgentState.Busy || state == AgentState.Asking) {
-                    IconButton(onClick = interrupt) {
-                        Icon(painterResource(R.drawable.ic_stop), "Interrupt")
-                    }
+                    PendingIconButton(
+                        painterResource(R.drawable.ic_stop),
+                        "Interrupt",
+                        onClick = interrupt,
+                        pending = interrupting,
+                        enabled = !sending,
+                    )
                 }
-                FilledIconButton(
+                PendingIconButton(
+                    painterResource(R.drawable.ic_send),
+                    "Send",
                     onClick = {
                         send(draft)
                         draft = ""
                     },
-                    enabled = blocked == null && draft.isNotBlank() && outbox !is Outbox.Sending,
-                    modifier = Modifier.padding(start = 4.dp),
-                ) {
-                    Icon(painterResource(R.drawable.ic_send), "Send")
-                }
+                    pending = sending,
+                    enabled = sending || !interrupting && blocked == null && draft.isNotBlank(),
+                    filled = true,
+                    modifier = Modifier.padding(start = Spacing.xs),
+                )
             }
         }
     }

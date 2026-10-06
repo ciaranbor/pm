@@ -1,6 +1,5 @@
 package dev.pm.app.ui
 
-import android.content.ClipboardManager
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -8,22 +7,25 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasScrollToIndexAction
+import androidx.compose.ui.test.hasStateDescription
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.test.core.app.ApplicationProvider
 import dev.pm.app.SNAPSHOT
-import dev.pm.app.api.PmClient
 import dev.pm.app.data.Connection
 import dev.pm.app.data.Repository
 import dev.pm.app.data.Store
+import dev.pm.app.model.AgentState
 import dev.pm.app.model.Conversation
-import dev.pm.app.model.FeatureInfo
 import dev.pm.app.model.Item
 import dev.pm.app.model.Pairing
 import dev.pm.app.model.Snapshot
@@ -147,21 +149,7 @@ class UiTest {
         }
         compose.onNodeWithText("Ready for review").assertIsDisplayed()
         compose.onNodeWithText("Adds search").assertDoesNotExist()
-        compose.onNodeWithText("Status ready · PR #12 open").assertIsDisplayed()
-    }
-
-    @Test
-    fun copy_puts_the_brief_on_the_clipboard() {
-        val brief = "# Login\n\nUse **OAuth**."
-        val client = PmClient(Pairing("http://127.0.0.1:9", "pixel", "tok"))
-        val model = ReadModel(client) { FeatureInfo(name = "login", context = brief) }
-        compose.setContent { PmTheme { BriefScreen(model) } }
-        compose.onNodeWithText("Copy").performClick()
-        compose.waitForIdle()
-
-        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
-        val clip = context.getSystemService(ClipboardManager::class.java).primaryClip!!
-        assertEquals(brief, clip.getItemAt(0).text)
+        compose.onNodeWithText("PR #12 open").assertIsDisplayed()
     }
 
     @Test
@@ -197,9 +185,9 @@ class UiTest {
         connection.value = Connection.Unreachable("refused")
         compose.mainClock.advanceTimeBy(100)
         compose.onNodeWithText("Connecting…").assertIsDisplayed()
-        compose.onNodeWithText("Retry").assertDoesNotExist()
+        compose.onNode(hasText("Retry") and hasStateDescription("In progress")).assertIsDisplayed()
         compose.mainClock.advanceTimeBy(1_000)
-        compose.onNodeWithText("Still can't reach pm serve. Tailscale off?").assertIsDisplayed()
+        compose.onNodeWithText("Still can't reach pm serve. $UNREACHABLE_HINT").assertIsDisplayed()
 
         compose.onNodeWithText("Retry").performClick()
         compose.mainClock.advanceTimeBy(1_000)
@@ -211,7 +199,7 @@ class UiTest {
 
         connection.value = Connection.Unreachable("refused")
         compose.mainClock.advanceTimeBy(100)
-        compose.onNodeWithText("Can't reach pm serve. Tailscale off?").assertIsDisplayed()
+        compose.onNodeWithText("Can't reach pm serve. $UNREACHABLE_HINT").assertIsDisplayed()
 
         connection.value = Connection.Unauthorized
         compose.mainClock.advanceTimeBy(100)
@@ -327,5 +315,31 @@ class UiTest {
             listOf("menu", "", "> 1. Yes", "", "input"),
             screenRows("menu\n   \n\n> 1. Yes   \n\n\n\ninput\n\n  \n"),
         )
+    }
+
+    @Test
+    fun a_send_or_an_interrupt_on_its_way_disables_the_other() {
+        var outbox by mutableStateOf<Outbox?>(Outbox.Sending("hi"))
+        var interrupting by mutableStateOf(false)
+        compose.setContent {
+            PmTheme {
+                Composer(
+                    AgentState.Busy,
+                    null,
+                    outbox,
+                    null,
+                    interrupting,
+                    send = {},
+                    interrupt = {},
+                    openTerminal = {},
+                )
+            }
+        }
+        compose.onNodeWithContentDescription("Interrupt").assertIsNotEnabled()
+
+        outbox = null
+        interrupting = true
+        compose.onNodeWithText("Message the agent").performTextInput("stop that")
+        compose.onNodeWithContentDescription("Send").assertIsNotEnabled()
     }
 }

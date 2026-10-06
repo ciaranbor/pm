@@ -73,8 +73,8 @@ fun SettingsScreen(
     modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier.verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        modifier.verticalScroll(rememberScrollState()).padding(Spacing.l),
+        verticalArrangement = Arrangement.spacedBy(Spacing.m),
     ) {
         Text("Server", style = MaterialTheme.typography.titleMedium)
         if (pairing == null) {
@@ -128,7 +128,7 @@ private fun NotificationSettings(
         }
         choosing = null
     }
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
         Text("Notifications", style = MaterialTheme.typography.titleMedium)
         Text(
             "pm serve pushes through a UnifiedPush distributor, which reaches the phone without " +
@@ -169,7 +169,7 @@ private fun NotificationSettings(
                     )
                     Text(
                         if (name == context.packageName) "Google (built in)" else name,
-                        modifier = Modifier.padding(start = 8.dp),
+                        modifier = Modifier.padding(start = Spacing.s),
                     )
                 }
             }
@@ -197,7 +197,7 @@ private fun UpdateSettings(
                 Checked.Failed(e.message ?: e.javaClass.simpleName)
             }
     }
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
         Text("About", style = MaterialTheme.typography.titleMedium)
         Text("App ${versions.app} · Server ${versions.server ?: "unknown"}")
         if (versions.mismatched) {
@@ -222,12 +222,12 @@ private fun UpdateSettings(
             Text("Check for updates", modifier = Modifier.weight(1f))
             Switch(checked = updates.enabled, onCheckedChange = null)
         }
-        OutlinedButton(
+        PendingButton(
+            "Check now",
             onClick = { checked = Checked.Checking },
-            enabled = checked != Checked.Checking,
-        ) {
-            Text("Check now")
-        }
+            pending = checked == Checked.Checking,
+            emphasis = Emphasis.Outlined,
+        )
         when (val shown = checked) {
             null,
             Checked.Checking -> {}

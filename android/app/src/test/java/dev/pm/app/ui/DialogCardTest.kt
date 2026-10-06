@@ -1,6 +1,14 @@
 package dev.pm.app.ui
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.hasStateDescription
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
@@ -66,6 +74,7 @@ class DialogCardTest {
                 DialogCard(
                     prompt,
                     false,
+                    false,
                     null,
                     answer = { c, a, m -> sent += Triple(c, a, m) },
                     {},
@@ -83,5 +92,47 @@ class DialogCardTest {
             listOf(Triple("deny", emptyMap<String, List<String>>(), "clean with cargo")),
             sent,
         )
+    }
+
+    @Test
+    fun only_the_tapped_choice_shows_its_answer_on_the_way_and_nothing_more_is_sent() {
+        val sent = mutableListOf<String>()
+        val prompt =
+            Dialog(
+                "d3",
+                "permission",
+                tool = "Bash",
+                choices =
+                    listOf(
+                        Dialog.Choice("allow", "Yes"),
+                        Dialog.Choice("always", "Always"),
+                        Dialog.Choice("deny", "No"),
+                    ),
+            )
+        compose.setContent {
+            var answering by remember { mutableStateOf(false) }
+            PmTheme {
+                DialogCard(
+                    prompt,
+                    answering,
+                    false,
+                    null,
+                    answer = { c, _, _ ->
+                        sent += c
+                        answering = true
+                    },
+                    {},
+                    {},
+                )
+            }
+        }
+        compose.onNodeWithText("Yes").performClick()
+
+        compose.onNode(hasText("Yes") and hasStateDescription("In progress")).assertExists()
+        compose.onNodeWithText("Always").assertIsNotEnabled()
+        compose.onNodeWithText("No").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Interrupt").assertIsNotEnabled()
+        compose.onNodeWithText("Yes").performClick()
+        assertEquals(listOf("allow"), sent)
     }
 }

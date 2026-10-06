@@ -126,8 +126,7 @@ class PmClientTest {
         assertEquals(null, info.pr)
         assertEquals(
             listOf(
-                "Status" to "wip",
-                "Lifecycle" to "wip",
+                "Status" to "in progress",
                 "Branch" to "login",
                 "Remote" to "none",
                 "Base" to "main",

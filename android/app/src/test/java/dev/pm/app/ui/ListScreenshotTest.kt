@@ -30,6 +30,7 @@ class ListScreenshotTest {
     private val snapshot = Snapshot.parse(SNAPSHOT)
     private val calm = Snapshot.parse("""{"version": 1, "projects": [{"name": "app"}]}""")
     private val now = Instant.parse("2026-10-02T10:00:00Z")
+    private val client = PmClient(Pairing("http://127.0.0.1:9", "pixel", "tok"))
 
     private fun capture(content: @Composable () -> Unit) = captureRoboImage {
         PmTheme(dynamic = false) { Surface(content) }
@@ -76,25 +77,28 @@ class ListScreenshotTest {
         AgentsList(snapshot, "app", "login", now, openAgent = {}, openPage = {})
     }
 
-    @Test
-    fun details_light() = capture {
-        val info =
-            FeatureInfo(
-                name = "login",
-                progress = "wip",
-                lifecycle = "review",
-                branch = "login",
-                base = "main",
-                divergence = Divergence(ahead = 3, behind = 1),
-                remote = "origin/login",
-                pr = "42",
-                workflow = WorkflowInfo("research-implement-qa-review", "Researcher briefs."),
-                created = "2026-10-01T09:00:00Z",
-                lastActive = "2026-10-02T09:30:00Z",
-            )
-        val client = PmClient(Pairing("http://127.0.0.1:9", "pixel", "tok"))
-        DetailsScreen(viewModel { ReadModel(client) { info } })
-    }
+    private val details =
+        @Composable {
+            val info =
+                FeatureInfo(
+                    name = "login",
+                    progress = "wip",
+                    lifecycle = "review",
+                    branch = "login",
+                    base = "main",
+                    divergence = Divergence(ahead = 3, behind = 1),
+                    remote = "origin/login",
+                    pr = "42",
+                    workflow = WorkflowInfo("research-implement-qa-review", "Researcher briefs."),
+                    created = "2026-10-01T09:00:00Z",
+                    lastActive = "2026-10-02T09:30:00Z",
+                )
+            DetailsScreen(viewModel { ReadModel(client) { info } })
+        }
+
+    @Test fun details_light() = capture(details)
+
+    @Test @Config(qualifiers = "+night") fun details_dark() = capture(details)
 }
 
 @Composable

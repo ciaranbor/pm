@@ -4,6 +4,9 @@ import android.os.SystemClock
 import android.view.MotionEvent
 import android.widget.EditText
 import androidx.activity.ComponentActivity
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -61,7 +64,12 @@ class NotesEditorTest {
     private fun editing(saved: SavedStateHandle = SavedStateHandle()): EditText {
         drafts.kept["app"] = NotesDraft(base, base.text)
         val model = NotesModel(null, "app", drafts, saved, Dispatchers.Unconfined)
-        compose.setContent { NotesScreen(model, TopBarSlot()) }
+        compose.setContent {
+            val scope = rememberCoroutineScope()
+            CompositionLocalProvider(LocalFeedback provides Feedback(SnackbarHostState(), scope)) {
+                NotesScreen(model, TopBarSlot())
+            }
+        }
         return field()
     }
 
@@ -148,7 +156,12 @@ class NotesEditorTest {
         server.start()
         val client = PmClient(Pairing(server.url("/").toString().trimEnd('/'), "pixel", "tok"))
         val model = NotesModel(client, "app", drafts, SavedStateHandle(), Dispatchers.Unconfined)
-        compose.setContent { NotesScreen(model, TopBarSlot()) }
+        compose.setContent {
+            val scope = rememberCoroutineScope()
+            CompositionLocalProvider(LocalFeedback provides Feedback(SnackbarHostState(), scope)) {
+                NotesScreen(model, TopBarSlot())
+            }
+        }
         compose.waitUntil(5_000) {
             compose.onAllNodesWithText("Section 4").fetchSemanticsNodes().isNotEmpty()
         }

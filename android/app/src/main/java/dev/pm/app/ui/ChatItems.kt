@@ -10,12 +10,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -26,13 +28,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.mikepenz.markdown.m3.Markdown
-import com.mikepenz.markdown.model.rememberMarkdownState
+import dev.pm.app.R
 import dev.pm.app.model.Item
 import java.time.LocalDate
 
@@ -60,7 +64,7 @@ private fun ItemView(item: Item, openResult: (tool: String, ref: String) -> Unit
                             MaterialTheme.colorScheme.primaryContainer,
                             RoundedCornerShape(12.dp),
                         )
-                        .padding(10.dp)
+                        .padding(Spacing.m)
                 ) {
                     SelectionContainer {
                         Text(item.text, color = MaterialTheme.colorScheme.onPrimaryContainer)
@@ -76,18 +80,9 @@ private fun ItemView(item: Item, openResult: (tool: String, ref: String) -> Unit
     }
 }
 
-/** Markdown, parsed off the main thread; the plain text holds its place until then. */
 @Composable
 private fun AssistantText(text: String) {
-    val state = rememberMarkdownState(text, retainState = true)
-    SelectionContainer {
-        Markdown(
-            markdownState = state,
-            loading = { modifier ->
-                Text(text, modifier, style = MaterialTheme.typography.bodyMedium)
-            },
-        )
-    }
+    SelectionContainer { PmMarkdown(text, text = MaterialTheme.typography.bodyMedium) }
 }
 
 @Composable
@@ -101,7 +96,7 @@ internal fun Wakes(items: List<Item.Continuation>) {
     val title = if (items.size == 1) "pm woke the agent" else "pm woke the agent ×${items.size}"
     Collapsible(title, Modifier.fillMaxWidth()) {
         SelectionContainer {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                 items.forEach {
                     Text(
                         it.text,
@@ -122,7 +117,7 @@ private fun DayDivider(label: String) {
             label,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 8.dp),
+            modifier = Modifier.padding(horizontal = Spacing.s),
         )
         HorizontalDivider(Modifier.weight(1f))
     }
@@ -150,12 +145,28 @@ private fun Collapsible(
 ) {
     var open by rememberSaveable { mutableStateOf(false) }
     Column(modifier.animateContentSize()) {
-        Text(
-            if (open) "▾ $title" else "▸ $title",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.clickable { open = !open }.padding(vertical = 4.dp),
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+            modifier =
+                Modifier.clickable { open = !open }
+                    .semantics { stateDescription = if (open) "Expanded" else "Collapsed" }
+                    .padding(vertical = Spacing.xs),
+        ) {
+            Icon(
+                painterResource(
+                    if (open) R.drawable.ic_expand_more else R.drawable.ic_chevron_right
+                ),
+                null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+            Text(
+                title,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         if (open) body()
     }
 }
@@ -170,8 +181,8 @@ internal fun ToolCard(tool: Item.Tool, openResult: (tool: String, ref: String) -
     val result = tool.result
     Card(Modifier.fillMaxWidth().animateContentSize()) {
         Column(
-            Modifier.fillMaxWidth().clickable { open = !open }.padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+            Modifier.fillMaxWidth().clickable { open = !open }.padding(Spacing.m),
+            verticalArrangement = Arrangement.spacedBy(Spacing.xs),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(tool.name, style = MaterialTheme.typography.labelLarge)
@@ -199,11 +210,11 @@ internal fun ToolCard(tool: Item.Tool, openResult: (tool: String, ref: String) -
         }
         if (open) {
             Column(
-                Modifier.padding(start = 10.dp, end = 10.dp, bottom = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                Modifier.padding(start = Spacing.m, end = Spacing.m, bottom = Spacing.m),
+                verticalArrangement = Arrangement.spacedBy(Spacing.xs),
             ) {
                 SelectionContainer {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                         Text(
                             tool.input,
                             style = MaterialTheme.typography.bodySmall,

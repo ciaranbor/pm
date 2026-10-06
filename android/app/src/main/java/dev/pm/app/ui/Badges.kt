@@ -57,16 +57,16 @@ fun MarkIcon(mark: Mark, description: String?, modifier: Modifier = Modifier) {
 
 /** A scope's attention: its glyph and kind; nothing for `none`. */
 @Composable
-fun AttentionBadge(kind: AttentionKind, wire: String, modifier: Modifier = Modifier) {
+fun AttentionBadge(kind: AttentionKind, modifier: Modifier = Modifier) {
     val mark = Marks.attention(kind) ?: return
     Row(
         modifier = modifier,
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
     ) {
         MarkIcon(mark, null)
         Text(
-            wire,
+            kind.label,
             color = mark.tone.color(),
             fontWeight = if (mark.strong) FontWeight.Bold else FontWeight.Normal,
             style = MaterialTheme.typography.labelLarge,
@@ -77,7 +77,7 @@ fun AttentionBadge(kind: AttentionKind, wire: String, modifier: Modifier = Modif
 /** What TalkBack reads for an agent: its name, state, and unread messages. */
 fun describe(agent: AgentSnapshot): String =
     listOfNotNull(
-            "${agent.name} ${agent.state}",
+            "${agent.name} ${agent.stateOf.label}",
             agent.unread.takeIf { it > 0 }?.let { "$it unread" },
         )
         .joinToString(", ")
@@ -88,7 +88,7 @@ fun AgentBadge(agent: AgentSnapshot, modifier: Modifier = Modifier, showName: Bo
     Row(
         modifier = modifier.clearAndSetSemantics { contentDescription = describe(agent) },
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.xxs),
     ) {
         MarkIcon(Marks.agent(agent.stateOf), null)
         if (showName) Text(agent.name, style = MaterialTheme.typography.labelMedium)
@@ -96,13 +96,13 @@ fun AgentBadge(agent: AgentSnapshot, modifier: Modifier = Modifier, showName: Bo
             Icon(
                 painterResource(R.drawable.ic_mail),
                 null,
-                tint = Tone.Yellow.color(),
+                tint = Tone.Caution.color(),
                 modifier = Modifier.size(14.dp),
             )
             Text(
                 "${agent.unread}",
                 style = MaterialTheme.typography.labelSmall,
-                color = Tone.Yellow.color(),
+                color = Tone.Caution.color(),
             )
         }
     }
@@ -114,9 +114,9 @@ fun AgentBadge(agent: AgentSnapshot, modifier: Modifier = Modifier, showName: Bo
  */
 fun describe(activity: Activity?, stale: Boolean): String? =
     when (activity) {
-        Activity.Working -> if (stale) "was working" else "working"
-        is Activity.Background -> "background ${activity.span}"
-        is Activity.Quiet -> "quiet ${activity.span}"
+        Activity.Working -> if (stale) "was ${AgentState.Busy.label}" else AgentState.Busy.label
+        is Activity.Background -> "${AgentState.Background.label} ${activity.span}"
+        is Activity.Idle -> "${AgentState.Idle.label} ${activity.span}"
         null -> null
     }
 
@@ -126,7 +126,7 @@ fun ActivityLabel(activity: Activity?, stale: Boolean, modifier: Modifier = Modi
     Row(
         modifier = modifier,
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.xxs),
     ) {
         val state =
             when (activity) {
@@ -135,15 +135,15 @@ fun ActivityLabel(activity: Activity?, stale: Boolean, modifier: Modifier = Modi
                 else -> null
             }
         if (state != null) {
-            val mark = Marks.agent(state).let { if (stale) it.copy(tone = Tone.Grey) else it }
+            val mark = Marks.agent(state).let { if (stale) it.copy(tone = Tone.Neutral) else it }
             MarkIcon(mark, null, Modifier.size(14.dp))
         }
         Text(
             text,
             style = MaterialTheme.typography.labelSmall,
             color =
-                if (activity == Activity.Working && !stale) Tone.Green.color()
-                else Tone.Grey.color(),
+                if (activity == Activity.Working && !stale) Tone.Positive.color()
+                else Tone.Neutral.color(),
         )
     }
 }

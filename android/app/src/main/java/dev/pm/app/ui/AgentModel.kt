@@ -13,12 +13,14 @@ import dev.pm.app.model.TranscriptEvent
 import dev.pm.app.model.Transcripts
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 
@@ -78,7 +80,16 @@ class AgentModel(
     private val _outbox = MutableStateFlow<Outbox?>(null)
     val outbox: StateFlow<Outbox?> = _outbox.asStateFlow()
 
-    /** Why the last interrupt or answer failed; cleared by the next. */
+    /** An interrupt is on its way. */
+    private val _interrupting = MutableStateFlow(false)
+    val interrupting: StateFlow<Boolean> = _interrupting.asStateFlow()
+
+    private val _interrupted = Channel<String?>(Channel.BUFFERED)
+
+    /** How each interrupt went, once: null once sent, else why it wasn't. */
+    val interrupted: Flow<String?> = _interrupted.receiveAsFlow()
+
+    /** Why the last answer failed; cleared by the next. */
     private val _notice = MutableStateFlow<String?>(null)
     val notice: StateFlow<String?> = _notice.asStateFlow()
 
@@ -225,18 +236,22 @@ class AgentModel(
         if (_outbox.value !is Outbox.Sending) _outbox.value = null
     }
 
-    fun interrupt() = act { client.interrupt(project, scope, agent) }
-
-    private fun act(action: suspend () -> Unit) {
-        _notice.value = null
+    fun interrupt() {
+        if (_interrupting.value) return
+        _interrupting.value = true
         viewModelScope.launch {
-            try {
-                action()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                _notice.value = e.message ?: e.javaClass.simpleName
-            }
+            val failure =
+                try {
+                    client.interrupt(project, scope, agent)
+                    null
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    e.message ?: e.javaClass.simpleName
+                } finally {
+                    _interrupting.value = false
+                }
+            _interrupted.send(failure)
         }
     }
 
