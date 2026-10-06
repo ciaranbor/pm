@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Keep a USB-connected Android phone awake while something tests on it, then
-# put its stay-awake setting back. Holders are refcounted per device under
+# put its stay-awake setting back; or build the release-signed app from this
+# checkout and install it on the phone. Holders are refcounted per device under
 # the state dir: holders/<pid> holds the pid's start time, so a reused pid
 # is not mistaken for the holder, then its watcher's pid and start time.
 # The phone's original value is recorded by the first holder and restored
@@ -13,6 +14,7 @@ usage() {
 Usage: scripts/phone hold [--pid PID] [-- CMD...]
        scripts/phone release [--pid PID]
        scripts/phone status
+       scripts/phone install [--port PORT] [--no-build]
 
   hold -- CMD...   hold the phone awake while CMD runs, then release, also
                    on error and Ctrl-C; exits with CMD's status
@@ -22,6 +24,12 @@ Usage: scripts/phone hold [--pid PID] [-- CMD...]
                    commands, pass a PID that outlives them
   release          drop PID's hold (default: the calling shell)
   status           the device, its recorded original setting, and holders
+  install          build the google release from this checkout, check it is
+                   signed with pm's key, and `adb install -r` it on the
+                   phone, keeping the installed app's data and pairing.
+                   --port: the adb server to use (default:
+                   ANDROID_ADB_SERVER_PORT, else 5037); --no-build: install
+                   the APK the last build left
 
 A hold records the phone's `stay_on_while_plugged_in` setting (first holder
 only), keeps the screen on while USB-powered (`svc power stayon usb`) and
@@ -37,6 +45,10 @@ reaching the phone through its own adb server) are not coordinated.
 The device is the one adb picks: set ANDROID_SERIAL when several are
 attached, and ANDROID_ADB_SERVER_PORT for a forwarded adb server.
 
+install never starts an adb server: with none on the port it fails. Its
+build needs the Gradle property pmReleaseSigning (docs/android.md); it uses
+JAVA_HOME, else Homebrew's openjdk@21, else /usr/libexec/java_home.
+
 Environment:
   PM_PHONE_STATE   state dir (default: ${XDG_STATE_HOME:-~/.local/state}/pm-phone)
 USAGE
@@ -48,6 +60,7 @@ self=$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")
 state_root=${PM_PHONE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/pm-phone}
 setting=stay_on_while_plugged_in
 watch_interval=${PM_PHONE_WATCH_INTERVAL:-5}
+android=${PM_PHONE_ANDROID:-$(dirname "$(dirname "$self")")/android}
 
 # The start time of PID, empty if it is not running.
 started() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//' || true; }
@@ -215,6 +228,109 @@ hold() {
   return "$status"
 }
 
+# Also in .github/workflows/release.yml (SIGNER_SHA256).
+release_signer=088ab70bc5d231494e285b9255ab6b73551abc23c0556e5ec0e5cee20123abec
+
+# The serial and state of each device the adb server on PORT lists, asked
+# over adb's own protocol: the adb CLI starts a server when it finds none.
+# No connect Timeout: with one, macOS's perl reports a refused connect as made.
+server_devices() {
+  perl -MIO::Socket::INET -e '
+    alarm 10;
+    my $s = IO::Socket::INET->new(PeerAddr => "127.0.0.1", PeerPort => shift, Proto => "tcp")
+      or exit 2;
+    my $req = "host:devices";
+    printf $s "%04x%s", length $req, $req;
+    sub take { my $n = shift; my $b = ""; while (length $b < $n) {
+      read($s, my $c, $n - length $b) or exit 3; $b .= $c } $b }
+    take(4) eq "OKAY" or exit 3;
+    print take(hex take(4));
+  ' "$1"
+}
+
+# The value of the Gradle property pmReleaseSigning, as Gradle resolves it.
+signing_property() {
+  local f v
+  if [ -n "${ORG_GRADLE_PROJECT_pmReleaseSigning:-}" ]; then
+    echo "$ORG_GRADLE_PROJECT_pmReleaseSigning"
+    return
+  fi
+  for f in "${GRADLE_USER_HOME:-$HOME/.gradle}/gradle.properties" "$android/gradle.properties"; do
+    v=$(sed -n 's/^[[:space:]]*pmReleaseSigning[[:space:]]*[=:][[:space:]]*//p' "$f" 2>/dev/null \
+      | tail -n 1 | sed 's/[[:space:]]*$//')
+    [ -z "$v" ] || { echo "$v"; return; }
+  done
+}
+
+jdk() {
+  if [ -n "${JAVA_HOME:-}" ]; then echo "$JAVA_HOME"; return; fi
+  [ -x /opt/homebrew/opt/openjdk@21/bin/java ] && echo /opt/homebrew/opt/openjdk@21 && return
+  /usr/libexec/java_home 2>/dev/null || die "no JDK found: set JAVA_HOME"
+}
+
+build_tools() {
+  local sdk dir
+  sdk=${ANDROID_HOME:-$(sed -n 's/^sdk\.dir=//p' "$android/local.properties" 2>/dev/null)}
+  sdk=${sdk:-$HOME/Library/Android/sdk}
+  dir=$(ls -d "$sdk"/build-tools/* 2>/dev/null | sort -V | tail -n 1)
+  [ -n "$dir" ] || die "no Android build-tools in $sdk (set ANDROID_HOME)"
+  echo "$dir"
+}
+
+install_app() {
+  local port=${ANDROID_ADB_SERVER_PORT:-5037} build=1 devices status=0 serial signing tools certs badging
+  while [ "$#" -gt 0 ]; do
+    case $1 in
+      --port) [ "$#" -ge 2 ] || die "--port needs a value"; port=$2; shift 2 ;;
+      --no-build) build=0; shift ;;
+      -h|--help) usage; exit 0 ;;
+      *) usage >&2; die "unexpected argument: $1" ;;
+    esac
+  done
+  case $port in ""|*[!0-9]*) die "--port takes a number" ;; esac
+  command -v adb >/dev/null || die "adb not found on PATH"
+  command -v perl >/dev/null || die "perl not found on PATH"
+
+  devices=$(server_devices "$port") || status=$?
+  case $status in
+    0) ;;
+    2) die "no adb server on port $port: phone not connected: is the MacBook ssh session up? (a forwarded server needs --port or ANDROID_ADB_SERVER_PORT)" ;;
+    *) die "the adb server on port $port did not answer a device listing" ;;
+  esac
+  serial=$(awk -F '\t' -v want="${ANDROID_SERIAL:-}" \
+    '$2 == "device" && (want == "" || $1 == want) { print $1 }' <<<"$devices")
+  case $serial in
+    "") die "phone not connected: is the MacBook ssh session up? (adb server on port $port lists no${ANDROID_SERIAL:+ ready} device${ANDROID_SERIAL:+ $ANDROID_SERIAL})" ;;
+    *$'\n'*) die "several devices on port $port: set ANDROID_SERIAL" ;;
+  esac
+
+  local apk=$android/app/build/outputs/apk/google/release/app-google-release.apk
+  if [ "$build" = 1 ]; then
+    signing=$(signing_property)
+    [ -n "$signing" ] || die "release signing is not configured: set the Gradle property pmReleaseSigning (docs/android.md); an APK signed with another key does not install over the released app"
+    # Gradle's file() in the app module: relative to android/app, no ~.
+    case $signing in /*) ;; *) signing=$android/app/$signing ;; esac
+    [ -r "$signing" ] || die "pmReleaseSigning names $signing, which is not readable"
+    rm -f "$apk"
+    JAVA_HOME=$(jdk) "$android/gradlew" -p "$android" assembleGoogleRelease \
+      || die "the build failed"
+  fi
+  [ -f "$apk" ] || die "no signed APK at $apk: build it (drop --no-build)"
+
+  tools=$(build_tools)
+  certs=$("$tools/apksigner" verify --print-certs "$apk" 2>&1) || true
+  grep -q "certificate SHA-256 digest: $release_signer" <<<"$certs" || {
+    echo "$certs" >&2
+    die "$apk is not signed with pm's release key, so it would not install over the released app"
+  }
+  badging=$("$tools/aapt2" dump badging "$apk") || die "cannot read $apk's version"
+  echo "phone: $(sed -n "/^package:/s/.*versionCode='\([^']*\)'.*versionName='\([^']*\)'.*/versionName \2, versionCode \1/p" <<<"$badging")" >&2
+
+  ANDROID_ADB_SERVER_PORT=$port adb -s "$serial" install -r "$apk" \
+    || die "adb install failed on $serial"
+  echo "phone: installed on $serial" >&2
+}
+
 cmd=${1:-}
 [ "$#" -gt 0 ] && shift
 case $cmd in
@@ -229,6 +345,7 @@ case $cmd in
     esac
     exit ;;
   -h|--help|help) usage; exit 0 ;;
+  install) install_app "$@"; exit ;;
   hold|release|status) ;;
   "") usage >&2; exit 2 ;;
   *) usage >&2; die "unknown command: $cmd" ;;
