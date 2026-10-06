@@ -6,12 +6,35 @@ notes.
 
 ## Unreleased
 
+- Agents are woken through each harness's own input path instead of a
+Stop hook that waits inside the turn: Claude Code's `asyncRewake`,
+codex's `codex queue`, opencode's plugin as before. Typing, Esc and
+keys act at once in an agent's window — no more Esc to type into a
+waiting agent — and a Claude Code agent with a background task still
+running takes a message straight away. A loop that wakes an agent five
+times without it reading anything stops and says so. After upgrading,
+restart codex agents; codex asks once to trust the changed hook.
 - The definition-less vanilla agent is now `plain` (it was `default`,
 which read like a catch-all in `[agents.*]`, where that is `"*"`).
 `default` is an ordinary name. `pm upgrade` keeps an agent already
 running as `default` under that name and relaunches it as `plain`.
 Rename `default` to `plain` in your own workflows and `[agents.*]` rows;
 `pm doctor` reports rows still keyed `default`.
+- `pm agent restart --all [--global]` restarts every idle agent of a
+scope, or of every project; busy, asking and background agents are
+skipped and listed.
+- `pm notes [project]` edits a per-project notes file in `$EDITOR`; the
+Android app reads and edits the same notes, and refuses to overwrite a
+newer version.
+- From the Android app: merge and delete a feature, restart an agent,
+and "Show the terminal" for a dialog no hook can answer, with a key
+grid and a text line.
+- A feature shows ready only while none of its agents is busy.
+- Input from the phone works while the agent's pane shows the tmux tree
+or copy mode, and `pm msg send` no longer types into a pane you are
+using.
+- The app tells "update the app" from "update pm on the server" by the
+server's answer, never by comparing versions.
 
 ## 0.3.0 — 2026-10-05
 
