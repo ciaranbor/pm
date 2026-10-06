@@ -33,6 +33,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
@@ -52,6 +53,17 @@ enum class Emphasis {
 private const val PENDING = "In progress"
 
 /**
+ * While `pending`, the button's `label` and that it is in progress: the label is hidden then, and
+ * accessibility skips what is drawn transparent.
+ */
+private fun Modifier.pendingSemantics(pending: Boolean, label: String) = semantics {
+    if (pending) {
+        contentDescription = label
+        stateDescription = PENDING
+    }
+}
+
+/**
  * A button for a network action. While `pending` it shows progress in place of its label, at the
  * same size, and ignores taps; the screen disables the buttons beside it (`enabled`) meanwhile, so
  * one action runs at a time.
@@ -68,7 +80,7 @@ fun PendingButton(
     color: Color = Color.Unspecified,
 ) {
     val click = { if (!pending) onClick() }
-    val shown = modifier.semantics { if (pending) stateDescription = PENDING }
+    val shown = modifier.pendingSemantics(pending, text)
     val content: @Composable () -> Unit = {
         Box(contentAlignment = Alignment.Center) {
             Text(text, Modifier.alpha(if (pending) 0f else 1f))
@@ -124,7 +136,7 @@ fun PendingIconButton(
     filled: Boolean = false,
 ) {
     val click = { if (!pending) onClick() }
-    val shown = modifier.semantics { if (pending) stateDescription = PENDING }
+    val shown = modifier.pendingSemantics(pending, description)
     val content: @Composable () -> Unit = {
         if (pending) {
             CircularProgressIndicator(
@@ -151,16 +163,20 @@ private data class Report(
 
 /**
  * The app's one place for the outcome of an action: a snackbar saying it was done, or that it
- * failed, with Retry where trying again makes sense.
+ * failed, with Retry where trying again makes sense. The latest outcome replaces the one showing.
  */
 @Stable
 class Feedback(val host: SnackbarHostState, private val scope: CoroutineScope) {
     fun done(message: String) {
-        scope.launch { host.showSnackbar(Report(message, null, error = false)) }
+        scope.launch {
+            host.currentSnackbarData?.dismiss()
+            host.showSnackbar(Report(message, null, error = false))
+        }
     }
 
     fun failed(message: String, retry: (() -> Unit)? = null) {
         scope.launch {
+            host.currentSnackbarData?.dismiss()
             val result = host.showSnackbar(Report(message, retry?.let { "Retry" }, error = true))
             if (result == SnackbarResult.ActionPerformed) retry?.invoke()
         }

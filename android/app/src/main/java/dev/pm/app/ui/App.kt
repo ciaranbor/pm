@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -218,7 +219,7 @@ fun App(
     CompositionLocalProvider(LocalFeedback provides feedback) {
         Scaffold(
             modifier = modifier,
-            snackbarHost = { FeedbackHost(feedback) },
+            snackbarHost = { FeedbackHost(feedback, Modifier.imePadding()) },
             topBar = {
                 TopAppBar(
                     title = {

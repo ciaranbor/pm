@@ -16,10 +16,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -60,7 +63,7 @@ sealed interface NotesState {
  * leaving the screen, the process dying, or failing to reach the server loses nothing; opening the
  * notes again resumes it. Writes run on `writes`, by default one dispatcher every model shares, so
  * they land one at a time and in order across models, and outlive the model so the last one lands.
- * A failed write shows as the edit's error.
+ * A failed write shows as the edit's error, and is sent on [failures].
  */
 class NotesModel(
     private val client: PmClient?,
@@ -71,6 +74,15 @@ class NotesModel(
 ) : ViewModel() {
     private val _state = MutableStateFlow<NotesState>(NotesState.Loading)
     val state: StateFlow<NotesState> = _state.asStateFlow()
+
+    private val _failures = Channel<String>(Channel.BUFFERED)
+
+    /** Each edit's error once, as it happens: a save failing the same way twice is sent twice. */
+    val failures: Flow<String> = _failures.receiveAsFlow()
+
+    private fun fail(error: String) {
+        _failures.trySend(error)
+    }
 
     /** The text being edited, while [state] is [NotesState.Editing]. */
     var text: CharSequence = ""
@@ -170,6 +182,7 @@ class NotesModel(
         val draft = NotesDraft(now.base, text.toString())
         if (overNotesLimit(draft.text)) {
             _state.value = now.copy(error = TOO_LONG)
+            fail(TOO_LONG)
             return
         }
         pending?.cancel()
@@ -191,6 +204,7 @@ class NotesModel(
                 } catch (e: Exception) {
                     now.copy(error = e.message ?: e.javaClass.simpleName)
                 }
+            (_state.value as? NotesState.Editing)?.error?.let(::fail)
         }
     }
 
@@ -240,14 +254,10 @@ class NotesModel(
             try {
                 drafts.keep(project, draft)
             } catch (e: Exception) {
-                _state.update {
-                    if (it is NotesState.Editing)
-                        it.copy(
-                            error =
-                                "Couldn't keep the edit on this phone: ${e.message ?: e.javaClass.simpleName}"
-                        )
-                    else it
-                }
+                val error =
+                    "Couldn't keep the edit on this phone: ${e.message ?: e.javaClass.simpleName}"
+                _state.update { if (it is NotesState.Editing) it.copy(error = error) else it }
+                if (_state.value is NotesState.Editing) fail(error)
             }
         }
     }

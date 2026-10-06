@@ -62,9 +62,10 @@ internal fun NotesEditor(
     var confirming by rememberSaveable { mutableStateOf(false) }
     val changed = state.changed
     val feedback = LocalFeedback.current
-    LaunchedEffect(state.error) {
-        val error = state.error ?: return@LaunchedEffect
-        feedback.failed(error, if (error != NotesModel.TOO_LONG) model::save else null)
+    LaunchedEffect(model) {
+        model.failures.collect { error ->
+            feedback.failed(error, if (error != NotesModel.TOO_LONG) model::save else null)
+        }
     }
     TopBarActions(topBar) {
         if (changed) {

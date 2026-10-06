@@ -5,8 +5,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasStateDescription
-import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -128,7 +128,9 @@ class DialogCardTest {
         }
         compose.onNodeWithText("Yes").performClick()
 
-        compose.onNode(hasText("Yes") and hasStateDescription("In progress")).assertExists()
+        compose
+            .onNode(hasContentDescription("Yes") and hasStateDescription("In progress"))
+            .assertExists()
         compose.onNodeWithText("Always").assertIsNotEnabled()
         compose.onNodeWithText("No").assertIsNotEnabled()
         compose.onNodeWithContentDescription("Interrupt").assertIsNotEnabled()

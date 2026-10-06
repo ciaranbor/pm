@@ -14,6 +14,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.TestScope
@@ -207,5 +208,24 @@ class NotesModelTest {
         advanceTimeBy(NotesModel.KEEP_AFTER_MS + 1)
         val error = (model.state.value as NotesState.Editing).error
         assertTrue(error, error?.contains("No space left on device") == true)
+    }
+
+    @Test
+    fun a_save_that_fails_the_same_way_twice_reports_both() = modelTest {
+        server.enqueue(notes("old\n", "v1"))
+        val model = model()
+        eventually { model.state.value is NotesState.Viewing }
+        model.edit()
+        model.edited("unsaved\n")
+        val failures = mutableListOf<String>()
+        backgroundScope.launch { model.failures.collect { failures += it } }
+        server.close()
+
+        model.save()
+        eventually { failures.size == 1 }
+        model.save()
+        eventually { failures.size == 2 }
+
+        assertEquals(List(2) { "Can't reach pm serve. The edit is kept on this phone." }, failures)
     }
 }
