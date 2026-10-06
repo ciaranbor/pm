@@ -6,6 +6,8 @@ notes.
 
 ## Unreleased
 
+## 0.4.0 — 2026-10-06
+
 - Agents are woken through each harness's own input path instead of a
 Stop hook that waits inside the turn: Claude Code's `asyncRewake`,
 codex's `codex queue`, opencode's plugin as before. Typing, Esc and
