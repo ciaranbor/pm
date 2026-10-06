@@ -63,7 +63,14 @@ class DialogCardTest {
             )
         compose.setContent {
             PmTheme {
-                DialogCard(prompt, false, null, answer = { c, a, m -> sent += Triple(c, a, m) }, {})
+                DialogCard(
+                    prompt,
+                    false,
+                    null,
+                    answer = { c, a, m -> sent += Triple(c, a, m) },
+                    {},
+                    {},
+                )
             }
         }
         compose.onNodeWithText("No").performClick()

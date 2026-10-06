@@ -11,6 +11,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -27,7 +28,8 @@ import dev.pm.app.model.Waiting
 
 /**
  * Where the user writes to the agent: a draft, sent as one prompt, and how the last send went. A
- * dialog up, or an agent not running, takes no text; the draft of a failed send comes back.
+ * dialog up, or an agent not running, takes no text; the draft of a failed send comes back. A
+ * dialog up offers the terminal, where it can be answered with keys.
  */
 @Composable
 internal fun Composer(
@@ -37,6 +39,7 @@ internal fun Composer(
     notice: String?,
     send: (String) -> Unit,
     interrupt: () -> Unit,
+    openTerminal: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var draft by rememberSaveable { mutableStateOf("") }
@@ -53,16 +56,24 @@ internal fun Composer(
     Surface(modifier.fillMaxWidth(), tonalElevation = 2.dp) {
         Column(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
             val status = notice ?: blocked ?: outbox?.let(::describe)
-            if (status != null) {
-                Text(
-                    status,
-                    style = MaterialTheme.typography.labelMedium,
-                    color =
-                        if (notice != null || outbox is Outbox.Failed)
-                            MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(4.dp),
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (status != null) {
+                    Text(
+                        status,
+                        style = MaterialTheme.typography.labelMedium,
+                        color =
+                            if (notice != null || outbox is Outbox.Failed)
+                                MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f).padding(4.dp),
+                    )
+                }
+                if (state == AgentState.Asking) {
+                    TextButton(onClick = openTerminal) {
+                        Icon(painterResource(R.drawable.ic_terminal), null)
+                        Text("Show the terminal", Modifier.padding(start = 8.dp))
+                    }
+                }
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(

@@ -972,6 +972,43 @@ fn typed_text_is_confirmed_from_the_conversation_and_keys_are_checked() {
 }
 
 #[test]
+fn typed_keys_are_checked_and_logged_by_their_hash() {
+    let f = fixture();
+    let typist = pair(&f.config, "typist");
+    let session = crate::tmux::session_name(&f.project_name, "login");
+    let window = f
+        .server
+        .spawn_prompting_fake_agent(&f.project, &session, "login", "implementer");
+    f.server.wait_for_pane_text(&window, "❯");
+    let path = format!("/v1/agents/{}/login/implementer/type", f.project_name);
+    let post = |text: &str| {
+        let body = serde_json::json!({ "text": text }).to_string();
+        let authorization = format!("Bearer {typist}");
+        route(
+            &f.config,
+            VAPID,
+            &request("POST", &path, "", Some(&authorization), &body),
+        )
+    };
+    let status = |text: &str| match post(text).reply {
+        Reply::Body { status, .. } => status,
+        Reply::Events(_) => unreachable!(),
+    };
+
+    assert_eq!(status(""), 400);
+    assert_eq!(status("code\n"), 400);
+    assert_eq!(status("a\x1b[A"), 400);
+    assert_eq!(status(&"x".repeat(4097)), 400);
+
+    let routed = post("4821-secret");
+    assert!(matches!(routed.reply, Reply::Body { status: 200, .. }));
+    let detail = routed.detail.unwrap();
+    assert!(detail.contains("sha256:"), "{detail}");
+    assert!(!detail.contains("secret"), "{detail}");
+    f.server.wait_for_pane_text(&window, "❯ 4821-secret");
+}
+
+#[test]
 fn a_dialog_is_served_while_its_hook_waits_and_an_answer_reaches_the_hook() {
     use crate::harness::Harness;
     use crate::state::runtime::{self, DialogRecord, Waiting, WaitingKind};

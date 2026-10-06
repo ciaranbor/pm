@@ -260,7 +260,7 @@ pub fn list_windows(server: Option<&str>, session: &str) -> Result<usize> {
 /// Type `text` into `target` as literal keys, then press Enter: a command
 /// line for a shell.
 pub fn send_line(server: Option<&str>, target: &str, text: &str) -> Result<()> {
-    run_tmux(server, &["send-keys", "-t", &exact(target), "-l", text])?;
+    send_literal(server, target, text)?;
     send_key(server, target, "Enter")
 }
 
@@ -268,7 +268,7 @@ pub fn send_line(server: Option<&str>, target: &str, text: &str) -> Result<()> {
 /// makes it submit: codex takes an Enter arriving right after a burst of
 /// keys as part of a paste, a newline.
 pub fn send_text(server: Option<&str>, target: &str, text: &str) -> Result<()> {
-    run_tmux(server, &["send-keys", "-t", &exact(target), "-l", text])?;
+    send_literal(server, target, text)?;
     std::thread::sleep(std::time::Duration::from_millis(300));
     send_key(server, target, "Enter")
 }
@@ -276,6 +276,15 @@ pub fn send_text(server: Option<&str>, target: &str, text: &str) -> Result<()> {
 /// Press one key, by tmux's name for it (`Enter`, `C-c`), in `target`.
 pub fn send_key(server: Option<&str>, target: &str, key: &str) -> Result<()> {
     run_tmux(server, &["send-keys", "-t", &exact(target), key])?;
+    Ok(())
+}
+
+/// Type `text` into `target` as literal keys, pressing nothing after it.
+pub fn send_literal(server: Option<&str>, target: &str, text: &str) -> Result<()> {
+    run_tmux(
+        server,
+        &["send-keys", "-t", &exact(target), "-l", "--", text],
+    )?;
     Ok(())
 }
 
@@ -874,18 +883,20 @@ mod tests {
     }
 
     #[test]
-    fn a_line_that_names_a_key_is_typed_as_text() {
+    fn a_line_that_names_a_key_or_a_flag_is_typed_as_text() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
         let name = server.scope("literal");
         create_session(server.name(), &name, dir.path()).unwrap();
 
         send_line(server.name(), &name, "C-c").unwrap();
+        send_line(server.name(), &name, "-N 2").unwrap();
         send_line(server.name(), &name, "echo typed-after").unwrap();
 
         server.wait_for_pane_text(&name, "typed-after\n");
         let text = capture_pane(server.name(), &name).unwrap();
         assert!(text.lines().any(|l| l.ends_with("C-c")), "{text}");
+        assert!(text.lines().any(|l| l.ends_with("-N 2")), "{text}");
     }
 
     #[test]

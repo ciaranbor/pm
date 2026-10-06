@@ -52,6 +52,7 @@ internal fun DialogCard(
     notice: String?,
     answer: (choice: String, answers: Map<String, List<String>>, message: String?) -> Unit,
     interrupt: () -> Unit,
+    openTerminal: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val picked = remember(dialog.id) { mutableStateMapOf<String, Set<String>>() }
@@ -67,6 +68,9 @@ internal fun DialogCard(
                     style = MaterialTheme.typography.titleSmall,
                     modifier = Modifier.weight(1f),
                 )
+                IconButton(onClick = openTerminal) {
+                    Icon(painterResource(R.drawable.ic_terminal), "Show the terminal")
+                }
                 IconButton(onClick = interrupt) {
                     Icon(painterResource(R.drawable.ic_stop), "Interrupt")
                 }

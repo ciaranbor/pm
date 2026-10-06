@@ -261,6 +261,23 @@ pub fn send_keys(
     Ok(Ok(()))
 }
 
+/// Type `text` into `agent`'s pane as keys, pressing nothing after it: for
+/// a dialog that takes text, such as a login code.
+pub fn type_text(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    text: &str,
+    tmux_server: Option<&str>,
+) -> Result<std::result::Result<(), Refusal>> {
+    let target = match target(project_root, scope, agent, tmux_server)? {
+        Ok(target) => target,
+        Err(refusal) => return Ok(Err(refusal)),
+    };
+    tmux::send_literal(tmux_server, &target.pane, text)?;
+    Ok(Ok(()))
+}
+
 /// Whether the input line in `pane` is empty and takes typed keys as text,
 /// once any key its harness names to make it take text has been pressed;
 /// that key is undone should the line have taken it as text.
@@ -497,6 +514,27 @@ mod tests {
         assert_eq!(interrupted, Err(Refusal::NotRunning));
         let screen = tmux::capture_pane(server.name(), &target).unwrap();
         assert!(!screen.contains("hello"), "{screen}");
+    }
+
+    #[test]
+    fn typed_text_reaches_a_dialog_as_keys_with_nothing_pressed_after() {
+        let agent = Recording::new(Harness::ClaudeCode);
+        agent.mark(WaitingKind::Startup);
+        let code = "-t Enter ab#1é";
+
+        let typed = type_text(
+            &agent.project,
+            "login",
+            "implementer",
+            code,
+            agent.server.name(),
+        )
+        .unwrap();
+
+        assert_eq!(typed, Ok(()));
+        assert_eq!(agent.received(code.len()), code.as_bytes());
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(std::fs::read(&agent.received).unwrap(), code.as_bytes());
     }
 
     #[test]

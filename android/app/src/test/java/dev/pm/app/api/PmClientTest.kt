@@ -189,6 +189,20 @@ class PmClientTest {
     }
 
     @Test
+    fun typed_text_is_posted_and_a_server_without_it_is_unsupported() = runBlocking {
+        reply(200, "{}")
+        reply(404, """{"error":"no such endpoint"}""")
+
+        client.typeText("app", "login", "implementer", "4821")
+        val old = runCatching { client.typeText("app", "login", "implementer", "4821") }
+
+        val sent = server.takeRequest()
+        assertEquals("/v1/agents/app/login/implementer/type", sent.url.encodedPath)
+        assertEquals("""{"text":"4821"}""", sent.body?.utf8())
+        assertTrue("$old", old.exceptionOrNull() is PmError.Unsupported)
+    }
+
+    @Test
     fun a_dialog_is_read_and_answered_and_none_is_null() = runBlocking {
         reply(
             200,
