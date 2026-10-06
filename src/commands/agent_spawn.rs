@@ -14,6 +14,8 @@ use crate::state::runtime;
 use crate::state::workflow;
 use crate::tmux;
 
+use super::running_agents::{AgentAt, exited_pane};
+
 /// Pre-spawn check that the agent definition resolves to a real file, so a
 /// typo'd or nonexistent `--agent <def>` fails loudly instead of printing
 /// "Spawned …" over a tmux window whose harness errors out immediately — the
@@ -464,6 +466,8 @@ impl SpawnOutcome {
 
 /// Spawn a named agent in a tmux window within the feature session.
 /// Handles three cases: new agent, already-active agent, and dead-but-resumable agent.
+/// An agent whose harness exited to the shell in its window is dead
+/// ([`exited_pane`]) and starts again in that pane.
 ///
 /// `agent_name` is the display name (registry key, tmux window, `PM_AGENT_NAME`).
 /// `agent_definition` is the agent definition the harness launches. When
@@ -580,7 +584,7 @@ fn spawn_agent(
     };
 
     // Use _with_config helper to avoid reloading config in spawn_session
-    let spawn = |prompt: Option<&str>, resume: Option<&str>| {
+    let spawn = |prompt: Option<&str>, resume: Option<&str>, reuse_window: Option<&str>| {
         spawn_session_with_config(
             &SpawnParams {
                 project_root,
@@ -590,7 +594,7 @@ fn spawn_agent(
                 prompt,
                 resume_session: resume,
                 fork_session: false,
-                reuse_window: pane,
+                reuse_window,
                 tmux_server,
             },
             &config,
@@ -600,33 +604,65 @@ fn spawn_agent(
 
     // Check if this agent already exists in the registry
     if let Some(entry) = registry.get(agent_name) {
-        // Window still exists → agent is running. No respawn, so skip
-        // validation: a healthy agent shouldn't go unreachable just because its
-        // def file moved since it started. Context is still queued.
+        // Window still exists → agent is running, unless its harness exited
+        // to the shell there. No respawn, so skip validation: a healthy agent
+        // shouldn't go unreachable just because its def file moved since it
+        // started. Context is still queued.
         let window = match pane {
             Some(_) => None,
             None => tmux::find_window(tmux_server, &session_name, agent_name)?,
         };
+        // The pane whose harness exited, and the window it is in.
+        let mut exited: Option<(String, String)> = None;
         if let Some(target) = window {
-            queue_context()?;
-            let msg = if context.is_some() {
-                format!("Agent '{agent_name}' already active in {target} — sent context as message")
-            } else {
-                format!("Agent '{agent_name}' already active in {target}")
+            let agent = AgentAt {
+                project_root,
+                scope: feature,
+                name: agent_name,
+                harness: entry.harness,
             };
-            return Ok((SpawnOutcome::AlreadyActive, msg, Vec::new()));
+            let harness_config = resolve_harness_config(&config.harness, &global.harness);
+            match exited_pane(
+                agent,
+                &session_name,
+                &entry.window_name,
+                &harness_config,
+                tmux_server,
+            )? {
+                Some(pane) => exited = Some((pane, target)),
+                None => {
+                    queue_context()?;
+                    let msg = if context.is_some() {
+                        format!(
+                            "Agent '{agent_name}' already active in {target} — sent context as message"
+                        )
+                    } else {
+                        format!("Agent '{agent_name}' already active in {target}")
+                    };
+                    return Ok((SpawnOutcome::AlreadyActive, msg, Vec::new()));
+                }
+            }
         }
 
-        // Agent existed but window is gone — respawn.
+        // Agent existed but its window is gone or its harness exited — respawn.
         validate_definition_resolves(project_root, effective_definition)?;
         let harness = configured_harness(effective_definition, &config.agents, &global.agents)?;
         let resume_id = harness::resumable_session(&entry.session_id, entry.harness, harness);
         queue_context()?;
+        let reuse = match &exited {
+            Some((exited_id, _)) => {
+                tmux::panes::respawn(tmux_server, exited_id, &project_root.join(feature))?;
+                Some(exited_id.as_str())
+            }
+            None => pane,
+        };
         let SpawnedSession {
             window_target,
             mut notes,
             resumed,
-        } = spawn(None, resume_id.as_deref())?;
+        } = spawn(None, resume_id.as_deref(), reuse)?;
+        // A pane respawned in reports the window it is in.
+        let window_target = exited.map_or(window_target, |(_, exited_window)| exited_window);
         if entry.harness != harness && !entry.session_id.is_empty() {
             notes.insert(
                 0,
@@ -660,7 +696,7 @@ fn spawn_agent(
         window_target,
         notes,
         ..
-    } = spawn(None, None)?;
+    } = spawn(None, None, pane)?;
 
     Ok((
         SpawnOutcome::Spawned,

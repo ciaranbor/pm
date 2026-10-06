@@ -36,8 +36,9 @@
 //! pm's tmux socket is unreachable from inside any codex sandbox (macOS
 //! Seatbelt blocks `AF_UNIX` connect), so the default sandbox is
 //! `danger-full-access` — the same blast radius as pm's Claude Code agents.
-//! A sandboxed agent (`workspace-write` + writable roots) can still read,
-//! run git, and send messages; it cannot spawn, heal, or stop agents.
+//! A sandboxed agent (`workspace-write` + writable roots, or `read-only` as
+//! [`READ_ONLY_PROFILE`]) can still read, run git, and send messages; it
+//! cannot spawn, heal, or stop agents.
 //!
 //! A resume or fork carries `-c tui.resume_cwd="current"`: when a session
 //! was last run in another directory the TUI otherwise stops at an
@@ -74,10 +75,17 @@ const CONFIG_FILE: &str = "config.toml";
 /// command line outright.
 pub(super) const MIN_VERSION: (u32, u32, u32) = (0, 156, 0);
 
-/// The sandbox mode with nothing to open up.
-const FULL_ACCESS: &str = "danger-full-access";
+/// The only sandbox mode that takes `--add-dir`.
+const WORKSPACE_WRITE: &str = "workspace-write";
+/// Codex refuses to start given `--add-dir` under this mode, and without
+/// the writable roots `pm msg read` and `send` fail, so pm swaps it for
+/// [`READ_ONLY_PROFILE`].
 const READ_ONLY: &str = "read-only";
-const DEFAULT_SANDBOX: &str = FULL_ACCESS;
+/// The permission profile pm defines on the command line for a
+/// `read-only` agent: the whole disk readable, only the writable roots
+/// writable.
+const READ_ONLY_PROFILE: &str = "pm-read-only";
+const DEFAULT_SANDBOX: &str = "danger-full-access";
 const DEFAULT_APPROVAL: &str = "never";
 
 const RESUME_IN_CURRENT_DIR: &str = "tui.resume_cwd=\"current\"";
@@ -134,18 +142,6 @@ fn sandbox_mode<'a>(cfg: &'a CodexConfig, permission_mode: Option<&'a str>) -> &
         .unwrap_or(DEFAULT_SANDBOX)
 }
 
-/// What is worth remarking on about an agent's sandbox mode.
-pub(super) fn row_notes(cfg: &CodexConfig, permission_mode: Option<&str>) -> Vec<String> {
-    if sandbox_mode(cfg, permission_mode) != READ_ONLY {
-        return Vec::new();
-    }
-    vec![
-        "runs in codex's read-only sandbox, where it cannot write pm's state, so it can \
-         neither read nor send messages and never reports back; use workspace-write"
-            .to_string(),
-    ]
-}
-
 pub(super) fn build_cmd(spec: &SpawnSpec<'_>, cfg: &CodexConfig) -> String {
     let SpawnSpec {
         definition: _,
@@ -169,17 +165,23 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>, cfg: &CodexConfig) -> String {
         "--no-daemon".to_string(),
         "-a".to_string(),
         tmux::shell_quote(approval),
-        "-s".to_string(),
-        tmux::shell_quote(sandbox),
     ];
+    if sandbox == READ_ONLY {
+        parts.extend(
+            read_only_profile(writable_dirs)
+                .into_iter()
+                .flat_map(|kv| ["-c".to_string(), tmux::shell_quote(&kv)]),
+        );
+    } else {
+        parts.push("-s".to_string());
+        parts.push(tmux::shell_quote(sandbox));
+    }
 
     if cfg.bypass_hook_trust == Some(true) {
         parts.push("--dangerously-bypass-hook-trust".to_string());
     }
 
-    // Full access needs no extra roots, and codex refuses to start a
-    // read-only session that is given any.
-    if sandbox != FULL_ACCESS && sandbox != READ_ONLY {
+    if sandbox == WORKSPACE_WRITE {
         for dir in writable_dirs {
             parts.push("--add-dir".to_string());
             parts.push(tmux::shell_quote(&dir.to_string_lossy()));
@@ -207,6 +209,19 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>, cfg: &CodexConfig) -> String {
     }
 
     parts.join(" ")
+}
+
+/// The `-c` overrides that define [`READ_ONLY_PROFILE`] and select it.
+fn read_only_profile(writable_dirs: &[PathBuf]) -> [String; 2] {
+    let mut filesystem = toml_edit::InlineTable::new();
+    filesystem.insert(":root", "read".into());
+    for dir in writable_dirs {
+        filesystem.insert(dir.to_string_lossy(), "write".into());
+    }
+    [
+        format!("default_permissions=\"{READ_ONLY_PROFILE}\""),
+        format!("permissions.{READ_ONLY_PROFILE}.filesystem={filesystem}"),
+    ]
 }
 
 /// The SessionStart hook's stdout: `context` becomes developer instructions
@@ -431,18 +446,6 @@ mod tests {
     }
 
     #[test]
-    fn a_read_only_agent_is_remarked_on_whichever_tier_sets_it() {
-        let read_only = CodexConfig {
-            sandbox: Some("read-only".into()),
-            ..Default::default()
-        };
-        assert_eq!(row_notes(&read_only, None).len(), 1);
-        assert!(row_notes(&read_only, Some("workspace-write")).is_empty());
-        assert_eq!(row_notes(&cfg(), Some("read-only")).len(), 1);
-        assert!(row_notes(&cfg(), None).is_empty());
-    }
-
-    #[test]
     fn build_cmd_sandboxed_agent_gets_writable_dirs_and_permission_row_wins() {
         let dirs = vec![PathBuf::from("/proj/.pm"), PathBuf::from("/proj/main/.git")];
         let config = CodexConfig {
@@ -465,8 +468,8 @@ mod tests {
              --add-dir '/proj/main/.git' -m 'gpt-5'"
         );
 
-        // Without a permission row the harness-wide sandbox applies; under
-        // full access the roots are redundant and omitted.
+        // Without a permission row the harness-wide sandbox applies; outside
+        // workspace-write the roots are omitted.
         let cmd = build_cmd(
             &SpawnSpec {
                 writable_dirs: &dirs,
@@ -478,12 +481,18 @@ mod tests {
 
         let cmd = build_cmd(
             &SpawnSpec {
+                permission_mode: Some("read-only"),
                 writable_dirs: &dirs,
                 ..Default::default()
             },
-            &config,
+            &cfg(),
         );
-        assert_eq!(cmd, "codex --no-daemon -a 'on-request' -s 'read-only'");
+        assert_eq!(
+            cmd,
+            "codex --no-daemon -a 'never' -c 'default_permissions=\"pm-read-only\"' \
+             -c 'permissions.pm-read-only.filesystem={ \":root\" = \"read\", \
+             \"/proj/.pm\" = \"write\", \"/proj/main/.git\" = \"write\" }'"
+        );
     }
 
     #[test]

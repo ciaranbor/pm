@@ -117,9 +117,9 @@ pub struct Heal {
 /// `agent_send` is a near-pure queue: it never spawns a *new* agent. If the
 /// recipient isn't registered or is flagged inactive (`active = false`), it
 /// errors — delivering a message nobody can ever read is a mistake. If the
-/// recipient is active but its tmux window has died, the message is queued
-/// and the window is healed via `agent_spawn` (a no-op if the window is
-/// alive).
+/// recipient is active but its tmux window has died, or its harness exited
+/// to the shell there, the message is queued and the agent is healed via
+/// `agent_spawn` (a no-op if its harness runs).
 ///
 /// `target_scope` is the scope (feature or "main") the message is delivered
 /// to. When `None`, defaults to `sender_scope` (same-scope message).
@@ -173,9 +173,9 @@ pub fn agent_send(
     };
 
     // The agent is active, but its tmux window may have died (crash,
-    // accidental kill). Call `agent_spawn` to heal it: a no-op
-    // (`AlreadyActive`) if the window is alive, a respawn/resume if it's
-    // gone. Pass `None` for `agent_definition` so `agent_spawn` reads the
+    // accidental kill) or its harness exited. Call `agent_spawn` to heal it:
+    // a no-op (`AlreadyActive`) if the harness runs, a respawn/resume if
+    // not. Pass `None` for `agent_definition` so `agent_spawn` reads the
     // stored definition from the registry entry — preserving aliases. Only
     // report a heal when one actually happened, keeping the common-case
     // output byte-identical.
@@ -544,6 +544,120 @@ mod tests {
             tmux::find_window(server.name(), &session_name, "reviewer")
                 .unwrap()
                 .is_some()
+        );
+    }
+
+    /// The agent pane of `agent`'s window, and the windows of its session.
+    fn agent_pane_and_windows(server: &TestServer, session: &str, agent: &str) -> (String, String) {
+        let window = tmux::find_window(server.name(), session, agent)
+            .unwrap()
+            .unwrap();
+        let pane = tmux::panes::agent_pane(server.name(), &window)
+            .unwrap()
+            .unwrap();
+        let windows = server.tmux_stdout(&["list-windows", "-t", session, "-F", "#{window_name}"]);
+        (pane, windows)
+    }
+
+    #[test]
+    fn send_to_agent_whose_harness_exited_relaunches_it_in_its_pane() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (root, session_name, feature) = setup_project_with_tmux(dir.path(), &server);
+        create_agent_definition(&root, "reviewer");
+        server.spawn_dead_fake_agent(&root, &session_name, &feature, "reviewer");
+        let before = agent_pane_and_windows(&server, &session_name, "reviewer");
+
+        let sent = agent_send(
+            &root,
+            &feature,
+            None,
+            "reviewer",
+            "implementer",
+            "review this",
+            server.name(),
+        )
+        .unwrap();
+
+        let heal = sent.heal.unwrap();
+        assert!(
+            heal.report
+                .contains(&format!("agent 'reviewer' in {session_name}:")),
+            "{}",
+            heal.report
+        );
+        assert_eq!(
+            agent_pane_and_windows(&server, &session_name, "reviewer"),
+            before
+        );
+        let launched = || {
+            server
+                .tmux_stdout(&["capture-pane", "-p", "-t", &before.0])
+                .contains("PM_AGENT_NAME=reviewer")
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !launched() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(launched());
+    }
+
+    #[test]
+    fn send_leaves_an_exited_harness_alone_while_its_pane_is_watched() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (root, session_name, feature) = setup_project_with_tmux(dir.path(), &server);
+        create_agent_definition(&root, "reviewer");
+        let target = server.spawn_dead_fake_agent(&root, &session_name, &feature, "reviewer");
+        server.tmux_stdout(&["select-window", "-t", &target]);
+        let _viewing = crate::testing::ControlClient::attach(server.name(), &session_name);
+
+        let sent = agent_send(
+            &root,
+            &feature,
+            None,
+            "reviewer",
+            "implementer",
+            "review this",
+            server.name(),
+        )
+        .unwrap();
+
+        assert!(sent.heal.is_none(), "{sent:?}");
+        assert!(
+            !server
+                .tmux_stdout(&["capture-pane", "-p", "-t", &target])
+                .contains("PM_AGENT_NAME")
+        );
+    }
+
+    #[test]
+    fn send_leaves_an_agent_whose_harness_is_still_starting_alone() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (root, session_name, feature) = setup_project_with_tmux(dir.path(), &server);
+        create_agent_definition(&root, "reviewer");
+        let target = server.spawn_dead_fake_agent(&root, &session_name, &feature, "reviewer");
+        let startup =
+            crate::state::runtime::Waiting::now(crate::state::runtime::WaitingKind::Startup, None);
+        crate::state::runtime::write_waiting(&root, &feature, "reviewer", &startup).unwrap();
+
+        let sent = agent_send(
+            &root,
+            &feature,
+            None,
+            "reviewer",
+            "implementer",
+            "review this",
+            server.name(),
+        )
+        .unwrap();
+
+        assert!(sent.heal.is_none(), "{sent:?}");
+        assert!(
+            !server
+                .tmux_stdout(&["capture-pane", "-p", "-t", &target])
+                .contains("PM_AGENT_NAME")
         );
     }
 

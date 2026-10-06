@@ -112,12 +112,12 @@ unattended:
   writable_roots = ["main/target"]   # extra --add-dir; a project [] masks global
   ```
 
-  pm adds `--add-dir` for its state dir, the shared `main/.git`, and the pm
-  config dir, so a sandboxed agent can read, run git, and message; every
-  tmux-touching command fails. Under `read-only` it adds none, since codex
-  refuses to start a read-only session with extra roots — so a read-only
-  agent cannot read or send messages and never reports back; `pm doctor`
-  remarks on one.
+  pm always makes its state dir, the shared `main/.git`, and the pm config
+  dir writable, so a sandboxed agent can read, run git, and message; every
+  tmux-touching command fails. Under `workspace-write` that is `--add-dir`;
+  codex refuses `--add-dir` under `read-only`, so pm swaps `read-only` for a
+  permission profile of its own (`pm-read-only`: the disk readable, only
+  those dirs writable) and the worktree stays read-only.
 - **Role delivery.** Codex has no `--agent`; the definition, baseline, and
   notice boards reach it through the SessionStart hook, on start and on
   every resume.
