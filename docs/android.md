@@ -59,3 +59,7 @@ For the same reason, installing a release over the debug build
 dev.pm.app` and a new pairing. The version code is the minute of the last
 commit, so a build of an earlier commit cannot replace a later one, a
 release included.
+
+To run an unreleased build on a phone that has the released app,
+`scripts/phone install` (`--help`) builds this checkout signed with pm's key
+and installs it over the app, keeping its pairing.

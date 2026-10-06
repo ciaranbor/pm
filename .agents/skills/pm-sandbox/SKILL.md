@@ -57,3 +57,5 @@ description: Exercise a pm build by hand or end to end without touching the real
   across several tool calls, `hold --pid $PPID` (see `--help`) and
   `release` the same pid when done. When it reports the phone locked, ask
   the user to unlock it once; never type or ask for a PIN.
+- Installing this checkout's app on the user's phone: `scripts/phone install`
+  (`--help`), only when the user asks.
