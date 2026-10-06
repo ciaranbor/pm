@@ -1,0 +1,31 @@
+name: Build pm
+description: Build the release binary for a target, check its version, and upload it as the artifact pm-<target>.
+inputs:
+  target:
+    description: The Rust target triple.
+    required: true
+  version:
+    description: The version the binary must report.
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ inputs.target }}
+    - name: Build
+      shell: bash
+      env:
+        PM_RELEASE: "1"
+        TARGET: ${{ inputs.target }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        cargo build --release --locked --target "$TARGET"
+        mkdir dist
+        cp "target/$TARGET/release/pm" "dist/pm-$TARGET"
+        "dist/pm-$TARGET" --version
+        test "$("dist/pm-$TARGET" --version)" = "pm $VERSION"
+    - uses: actions/upload-artifact@v7
+      with:
+        name: pm-${{ inputs.target }}
+        path: dist/

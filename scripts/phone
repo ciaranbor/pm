@@ -42,10 +42,10 @@ started with its hold, and by any later run of this script.
 Holders on one machine share state; holds from different machines (each
 reaching the phone through its own adb server) are not coordinated.
 
-The device is the one adb picks: set ANDROID_SERIAL when several are
-attached, and ANDROID_ADB_SERVER_PORT for a forwarded adb server.
-
-install never starts an adb server: with none on the port it fails. Its
+The device is the one ready device the adb server lists: set
+ANDROID_SERIAL when several are attached. The server is the one on
+ANDROID_ADB_SERVER_PORT, else 5037 (install: --port); no command starts
+one, and with none on the port a command fails. install's
 build needs the Gradle property pmReleaseSigning (docs/android.md); it uses
 JAVA_HOME, else Homebrew's openjdk@21, else /usr/libexec/java_home.
 
@@ -65,7 +65,14 @@ android=${PM_PHONE_ANDROID:-$(dirname "$(dirname "$self")")/android}
 # The start time of PID, empty if it is not running.
 started() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//' || true; }
 
-padb() { adb -s "$serial" "$@"; }
+port=${ANDROID_ADB_SERVER_PORT:-5037}
+
+# adb on the device, only while its server is up: the adb CLI starts a
+# server when it finds none.
+padb() {
+  server_devices "$port" >/dev/null || return 1
+  ANDROID_ADB_SERVER_PORT=$port adb -s "$serial" "$@"
+}
 shell_out() { padb shell "$@" | tr -d '\r'; }
 
 select_device() {
@@ -277,20 +284,11 @@ build_tools() {
   echo "$dir"
 }
 
-install_app() {
-  local port=${ANDROID_ADB_SERVER_PORT:-5037} build=1 devices status=0 serial signing tools certs badging
-  while [ "$#" -gt 0 ]; do
-    case $1 in
-      --port) [ "$#" -ge 2 ] || die "--port needs a value"; port=$2; shift 2 ;;
-      --no-build) build=0; shift ;;
-      -h|--help) usage; exit 0 ;;
-      *) usage >&2; die "unexpected argument: $1" ;;
-    esac
-  done
-  case $port in ""|*[!0-9]*) die "--port takes a number" ;; esac
-  command -v adb >/dev/null || die "adb not found on PATH"
-  command -v perl >/dev/null || die "perl not found on PATH"
-
+# The one ready device (ANDROID_SERIAL's, when set) the adb server on PORT
+# lists; dies when there is none or several.
+connected_serial() {
+  local port=$1 devices status=0 serial
+  case $port in ""|*[!0-9]*) die "adb server port '$port' is not a number" ;; esac
   devices=$(server_devices "$port") || status=$?
   case $status in
     0) ;;
@@ -303,6 +301,23 @@ install_app() {
     "") die "phone not connected: is the MacBook ssh session up? (adb server on port $port lists no${ANDROID_SERIAL:+ ready} device${ANDROID_SERIAL:+ $ANDROID_SERIAL})" ;;
     *$'\n'*) die "several devices on port $port: set ANDROID_SERIAL" ;;
   esac
+  echo "$serial"
+}
+
+install_app() {
+  local build=1 serial signing tools certs badging
+  while [ "$#" -gt 0 ]; do
+    case $1 in
+      --port) [ "$#" -ge 2 ] || die "--port needs a value"; port=$2; shift 2 ;;
+      --no-build) build=0; shift ;;
+      -h|--help) usage; exit 0 ;;
+      *) usage >&2; die "unexpected argument: $1" ;;
+    esac
+  done
+  case $port in ""|*[!0-9]*) die "--port takes a number" ;; esac
+  command -v adb >/dev/null || die "adb not found on PATH"
+  command -v perl >/dev/null || die "perl not found on PATH"
+  serial=$(connected_serial "$port") || exit 1
 
   local apk=$android/app/build/outputs/apk/google/release/app-google-release.apk
   if [ "$build" = 1 ]; then
@@ -326,8 +341,7 @@ install_app() {
   badging=$("$tools/aapt2" dump badging "$apk") || die "cannot read $apk's version"
   echo "phone: $(sed -n "/^package:/s/.*versionCode='\([^']*\)'.*versionName='\([^']*\)'.*/versionName \2, versionCode \1/p" <<<"$badging")" >&2
 
-  ANDROID_ADB_SERVER_PORT=$port adb -s "$serial" install -r "$apk" \
-    || die "adb install failed on $serial"
+  padb install -r "$apk" || die "adb install failed on $serial"
   echo "phone: installed on $serial" >&2
 }
 
@@ -368,10 +382,7 @@ pid=${pid:-$PPID}
 
 command -v adb >/dev/null || die "adb not found on PATH"
 command -v perl >/dev/null || die "perl not found on PATH"
-serial=$(adb get-serialno 2>/dev/null | tr -d '\r') || serial=""
-case $serial in
-  ""|unknown) die "no single device: adb devices lists none or several (set ANDROID_SERIAL)" ;;
-esac
+serial=$(connected_serial "$port") || exit 1
 select_device "$serial"
 
 case $cmd in

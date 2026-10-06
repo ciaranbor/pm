@@ -1,6 +1,9 @@
 # Publishes a release when `scripts/release` pushes its tag: the pm binaries,
 # the signed Android APK (`pm-<version>-android-<abi>.apk`), install.sh, and
-# SHA256SUMS over them all.
+# SHA256SUMS over them all. The macOS binary joins the published release once
+# built, since a macOS runner can stay queued for hours and would otherwise
+# hold back the whole release; until then install.sh and `pm self-update`
+# on macOS find no binary and install nothing.
 name: release
 
 on:
@@ -43,37 +46,30 @@ jobs:
 
   build:
     needs: verify
-    strategy:
-      matrix:
-        include:
-          - os: macos-latest
-            target: aarch64-apple-darwin
-          # The oldest supported runner, for the oldest glibc the binary needs.
-          - os: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-    runs-on: ${{ matrix.os }}
+    # The oldest supported runner, for the oldest glibc the binary needs.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/build-pm
         with:
-          targets: ${{ matrix.target }}
-      - name: Build
-        env:
-          PM_RELEASE: "1"
-        run: |
-          cargo build --release --locked --target ${{ matrix.target }}
-          mkdir dist
-          cp target/${{ matrix.target }}/release/pm dist/pm-${{ matrix.target }}
-          dist/pm-${{ matrix.target }} --version
-          test "$(dist/pm-${{ matrix.target }} --version)" = "pm ${{ needs.verify.outputs.version }}"
-      - uses: actions/upload-artifact@v7
+          target: x86_64-unknown-linux-gnu
+          version: ${{ needs.verify.outputs.version }}
+
+  # Not awaited by publish (see the top).
+  build-macos:
+    needs: verify
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/build-pm
         with:
-          name: pm-${{ matrix.target }}
-          path: dist/
+          target: aarch64-apple-darwin
+          version: ${{ needs.verify.outputs.version }}
 
   android:
     needs: verify
-    runs-on: ubuntu-latest
+    # Pinned: the build uses the Android SDK the runner image ships.
+    runs-on: ubuntu-24.04
     env:
       # The certificate every pm APK is signed with; phones refuse an update
       # signed with any other.
@@ -152,3 +148,29 @@ jobs:
           [ "$PRERELEASE" = true ] && flags+=(--prerelease)
           gh release create "$GITHUB_REF_NAME" --verify-tag --title "pm $VERSION" \
             --notes-file notes.md "${flags[@]}" dist/*
+
+  # The macOS binary, added to the published release: the binary first, so a
+  # SHA256SUMS listing it never names a missing asset.
+  publish-macos:
+    needs: [publish, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      ASSET: pm-aarch64-apple-darwin
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: pm-aarch64-apple-darwin
+          path: dist
+      - name: Add to the release
+        run: |
+          gh release download "$GITHUB_REF_NAME" --pattern SHA256SUMS --dir published
+          # publish included it when build-macos finished first.
+          if grep -q "  $ASSET\$" published/SHA256SUMS; then exit 0; fi
+          { cat published/SHA256SUMS; (cd dist && sha256sum "$ASSET"); } > SHA256SUMS
+          cat SHA256SUMS
+          gh release upload "$GITHUB_REF_NAME" "dist/$ASSET" --clobber
+          gh release upload "$GITHUB_REF_NAME" SHA256SUMS --clobber

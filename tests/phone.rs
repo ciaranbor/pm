@@ -1,5 +1,6 @@
-//! `scripts/phone`'s holder bookkeeping, against a fake `adb` that keeps the
-//! phone's `stay_on_while_plugged_in` in a file (absent = unset).
+//! `scripts/phone`'s holder bookkeeping, against a fake adb server and a
+//! fake `adb` that keeps the phone's `stay_on_while_plugged_in` in a file
+//! (absent = unset) and logs each call.
 
 use std::fs;
 use std::os::unix::process::CommandExt;
@@ -10,13 +11,16 @@ use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
 
+mod common;
+use common::{AdbServer, closed_port};
+
 const SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/phone");
 
 const FAKE_ADB: &str = r#"#!/bin/sh
 f="$FAKE_PHONE/stay_on"
+echo "$*" >> "$FAKE_PHONE/adb.log"
 [ "$1" = -s ] && shift 2
 case "$*" in
-  get-serialno) echo FAKE123 ;;
   "shell settings get global stay_on_while_plugged_in") cat "$f" 2>/dev/null || echo null ;;
   "shell settings put global stay_on_while_plugged_in "*) echo "$6" > "$f" ;;
   "shell settings delete global stay_on_while_plugged_in") rm -f "$f" ;;
@@ -29,6 +33,7 @@ esac
 
 struct Phone {
     tmp: TempDir,
+    server: AdbServer,
 }
 
 impl Phone {
@@ -40,7 +45,10 @@ impl Phone {
         let adb = bin.join("adb");
         fs::write(&adb, FAKE_ADB).unwrap();
         Command::new("chmod").arg("+x").arg(&adb).status().unwrap();
-        let phone = Phone { tmp };
+        let phone = Phone {
+            tmp,
+            server: AdbServer::start("FAKE123\tdevice\n"),
+        };
         if let Some(v) = stay_on {
             fs::write(phone.stay_on_file(), format!("{v}\n")).unwrap();
         }
@@ -70,6 +78,7 @@ impl Phone {
             .env("FAKE_PHONE", self.path("phone"))
             .env("PM_PHONE_STATE", self.path("state"))
             .env("PM_PHONE_WATCH_INTERVAL", "0.1")
+            .env("ANDROID_ADB_SERVER_PORT", self.server.port.to_string())
             .env_remove("ANDROID_SERIAL");
         cmd
     }
@@ -106,6 +115,29 @@ impl Phone {
             .unwrap()
     }
 
+    /// The fake `adb` calls made so far.
+    fn adb_calls(&self) -> usize {
+        fs::read_to_string(self.path("phone/adb.log"))
+            .map(|log| log.lines().count())
+            .unwrap_or(0)
+    }
+
+    /// The pid of the watcher of holder PID, once it has registered.
+    fn watcher(&self, pid: &str) -> String {
+        let record = self.path("state/FAKE123/holders").join(pid);
+        let mut watcher = String::new();
+        wait_for("the watcher to register", || {
+            watcher = fs::read_to_string(&record)
+                .unwrap_or_default()
+                .lines()
+                .nth(1)
+                .unwrap_or_default()
+                .to_string();
+            !watcher.is_empty()
+        });
+        watcher
+    }
+
     fn holders(&self) -> usize {
         fs::read_dir(self.path("state/FAKE123/holders"))
             .map(|d| d.count())
@@ -119,6 +151,14 @@ fn ok(out: &Output) {
         "scripts/phone failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+fn alive(pid: &str) -> bool {
+    Command::new("kill")
+        .args(["-0", pid])
+        .status()
+        .unwrap()
+        .success()
 }
 
 fn sleeper() -> Child {
@@ -294,24 +334,7 @@ fn release_stops_the_holders_watcher() {
     let mut a = sleeper();
     let a_pid = a.id().to_string();
     ok(&phone.run(&["hold", "--pid", &a_pid]));
-    let record = phone.path("state/FAKE123/holders").join(&a_pid);
-    let mut watcher = String::new();
-    wait_for("the watcher to register", || {
-        watcher = fs::read_to_string(&record)
-            .unwrap_or_default()
-            .lines()
-            .nth(1)
-            .unwrap_or_default()
-            .to_string();
-        !watcher.is_empty()
-    });
-    let alive = |pid: &str| {
-        Command::new("kill")
-            .args(["-0", pid])
-            .status()
-            .unwrap()
-            .success()
-    };
+    let watcher = phone.watcher(&a_pid);
     assert!(alive(&watcher));
 
     ok(&phone.run(&["release", "--pid", &a_pid]));
@@ -319,4 +342,47 @@ fn release_stops_the_holders_watcher() {
     assert_eq!(phone.stay_on().as_deref(), Some("0"));
     a.kill().unwrap();
     a.wait().unwrap();
+}
+
+/// The adb CLI starts a server when it finds none, so with none on the
+/// port no command may run it.
+#[test]
+fn without_an_adb_server_no_command_runs_adb() {
+    let phone = Phone::new(Some("0"));
+    let port = closed_port().to_string();
+    for args in [&["status"][..], &["hold", "--", "true"], &["release"]] {
+        let out = phone
+            .command(args)
+            .env("ANDROID_ADB_SERVER_PORT", &port)
+            .output()
+            .unwrap();
+        assert!(!out.status.success(), "{args:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains("no adb server on port"), "{stderr}");
+    }
+    assert_eq!(phone.adb_calls(), 0);
+}
+
+/// The watcher outlives the session that took the hold, so the server it
+/// restores through may be gone by then.
+#[test]
+fn a_watcher_release_without_a_server_restores_on_the_next_run() {
+    let phone = Phone::new(Some("0"));
+    let mut a = sleeper();
+    let a_pid = a.id().to_string();
+    ok(&phone.run(&["hold", "--pid", &a_pid]));
+    let watcher = phone.watcher(&a_pid);
+
+    phone.server.set_up(false);
+    let calls = phone.adb_calls();
+    a.kill().unwrap();
+    a.wait().unwrap();
+    wait_for("the watcher to exit", || !alive(&watcher));
+    assert_eq!(phone.holders(), 0);
+    assert_eq!(phone.adb_calls(), calls);
+    assert_eq!(phone.stay_on().as_deref(), Some("2"));
+
+    phone.server.set_up(true);
+    ok(&phone.run(&["status"]));
+    assert_eq!(phone.stay_on().as_deref(), Some("0"));
 }
