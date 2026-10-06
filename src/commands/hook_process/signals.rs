@@ -148,29 +148,66 @@ mod tests {
     use super::*;
     use std::time::Instant;
 
+    /// Handlers are process-wide, and another test's code may install its
+    /// own for SIGHUP while this one waits on it, letting the signal kill
+    /// the test binary; so the handlers live in a forked child, and the
+    /// signal comes from its parent. SIGHUP is blocked across the fork so
+    /// one sent before the child's handler is up waits for it.
     #[test]
     fn a_caught_signal_ends_the_pause_at_once_and_names_its_sender() {
-        let signals = Signals::install().unwrap();
-        assert!(signals.pause(Duration::from_millis(1)).is_empty());
+        // SAFETY: a zeroed sigset_t is initialised by sigemptyset; the mask
+        // changes only this thread's, and is restored after the fork. The
+        // child makes async-signal-safe calls but for `pause`'s allocation,
+        // and malloc is fork-safe on macOS and glibc.
+        let pid = unsafe {
+            let mut hup: libc::sigset_t = std::mem::zeroed();
+            let mut old: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut hup);
+            libc::sigaddset(&mut hup, libc::SIGHUP);
+            libc::pthread_sigmask(libc::SIG_BLOCK, &hup, &mut old);
+            let pid = libc::fork();
+            if pid == 0 {
+                libc::_exit(i32::from(!caught_from_parent(&hup)));
+            }
+            libc::pthread_sigmask(libc::SIG_SETMASK, &old, std::ptr::null_mut());
+            pid
+        };
+        assert!(pid > 0, "fork failed");
+        std::thread::sleep(Duration::from_millis(50));
+        let mut status = 0;
+        // SAFETY: signalling and then waiting on the child just forked.
+        unsafe {
+            libc::kill(pid, libc::SIGHUP);
+            assert_eq!(libc::waitpid(pid, &mut status, 0), pid);
+        }
+        assert!(
+            libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
+            "status {status}"
+        );
+        let caught = Caught {
+            signal: libc::SIGHUP,
+            sender: 42,
+        };
+        assert_eq!(caught.to_string(), "SIGHUP from pid 42");
+    }
+
+    /// In the forked child: whether a pause ends promptly with the one
+    /// SIGHUP its parent sends.
+    fn caught_from_parent(hup: &libc::sigset_t) -> bool {
+        let Some(signals) = Signals::install() else {
+            return false;
+        };
+        // SAFETY: unblocking the SIGHUP the parent blocked for the fork.
+        unsafe { libc::pthread_sigmask(libc::SIG_UNBLOCK, hup, std::ptr::null_mut()) };
         let start = Instant::now();
-        let sender = std::thread::spawn(|| {
-            std::thread::sleep(Duration::from_millis(50));
-            // SAFETY: signalling this process, which now handles SIGHUP.
-            unsafe { libc::kill(libc::getpid(), libc::SIGHUP) };
-        });
         let caught = signals.pause(Duration::from_secs(30));
-        assert!(start.elapsed() < Duration::from_secs(5));
-        sender.join().unwrap();
-        assert_eq!(
-            caught,
-            [Caught {
-                signal: libc::SIGHUP,
-                sender: std::process::id() as libc::pid_t,
-            }]
-        );
-        assert_eq!(
-            caught[0].to_string(),
-            format!("SIGHUP from pid {}", std::process::id())
-        );
+        // SAFETY: getppid() takes no arguments and cannot fail.
+        let parent = unsafe { libc::getppid() };
+        start.elapsed() < Duration::from_secs(5)
+            && caught
+                == [Caught {
+                    signal: libc::SIGHUP,
+                    sender: parent,
+                }]
     }
 }

@@ -1,9 +1,10 @@
 #!/bin/sh
 # Stand-in for `claude`/`codex`/`opencode` inside a pm sandbox: answers pm's
 # capability probes and pre-launch calls, otherwise records how it was
-# invoked and holds the window open like an agent between turns would: with
-# `pm harness hooks stop`, pm's Stop hook, on a command line in its pane. One
-# record per invocation (pid suffix) so a respawn leaves a second one.
+# invoked and holds the window open like an agent between turns: pm's Stop
+# hook is its waiter, so it reads idle until a message arrives, then busy. One
+# record per invocation (pid suffix) so a respawn leaves a second one, renamed
+# into place once complete so a reader never sees it half written.
 name=$(basename "$0")
 case $1 in
   --help) echo "  --append-system-prompt-file <file>"; exit 0 ;;
@@ -27,7 +28,8 @@ if [ "$name" = opencode ]; then
       printf 'cwd=%s\nPM_AGENT_NAME=%s\n' "$PWD" "$PM_AGENT_NAME"
       printf 'OPENCODE_CONFIG=%s\nOPENCODE_CONFIG_CONTENT=%s\n' \
         "$OPENCODE_CONFIG" "$OPENCODE_CONFIG_CONTENT"
-    } > "$HOME/log/$name-api-$$.api"
+    } > "$HOME/log/$name-api-$$.tmp"
+    mv "$HOME/log/$name-api-$$.tmp" "$HOME/log/$name-api-$$.api"
     echo "{\"data\":{\"id\":\"ses_shim$$\"}}"
     exit 0
   fi
@@ -57,6 +59,9 @@ fi
     printf 'OPENCODE_CONFIG=%s\nOPENCODE_CONFIG_CONTENT=%s\n' \
       "$OPENCODE_CONFIG" "$OPENCODE_CONFIG_CONTENT"
   fi
-} > "$HOME/log/$name-${PM_AGENT_NAME:-default}-$$.argv"
-# The `; :` keeps `sh` from exec'ing `sleep` in its own place.
-exec sh -c 'sleep 600; :' pm harness hooks stop
+} > "$HOME/log/$name-$$.tmp"
+mv "$HOME/log/$name-$$.tmp" "$HOME/log/$name-${PM_AGENT_NAME:-default}-$$.argv"
+# The hook catches Ctrl-C and exits cleanly, which alone would not end `sh`.
+trap 'exit 130' INT
+pm harness hooks stop </dev/null >/dev/null 2>&1
+exec sleep 600

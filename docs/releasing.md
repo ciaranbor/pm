@@ -5,7 +5,9 @@ change under `## Unreleased` in `CHANGELOG.md` as it lands. On an
 up-to-date `main`, `scripts/release 0.2.0` bumps the version, makes the
 Unreleased notes the release's, commits, tags `v0.2.0` and pushes; CI
 (`.github/workflows/release.yml`) builds the binaries and the signed APK
-and publishes the release with those notes. `--dry-run` checks everything
+and publishes the release with those notes. The macOS binary is added to
+the published release once its runner gets to it; if its job fails,
+re-running the run's failed jobs adds it. `--dry-run` checks everything
 first. A version such as `0.2.0-rc.1` is published as a prerelease, which
 the install script, `pm self-update` and the app all pass over. CI signs
 the APK with secrets that `scripts/release --setup-secrets` sets from

@@ -211,8 +211,12 @@ SHIM
   # the server's environment, not the client's.
   stmux new-session -d -s keepalive -c /tmp
   # Windows would otherwise run a login shell, whose profile (macOS
-  # path_helper) moves system dirs ahead of the sandbox's bin/.
-  stmux set -g default-command "${shell_bin:-${SHELL:-/bin/sh}}"
+  # path_helper) moves system dirs ahead of the sandbox's bin/. The PATH is
+  # explicit because tmux gives a window that an unattached client creates
+  # (`tmux -L <server> new-window` from the caller's own shell) that
+  # client's PATH, which lacks the sandbox's bin/.
+  stmux set -g default-command \
+    "env PATH=$(printf %q "$home/bin:$caller_path") ${shell_bin:-${SHELL:-/bin/sh}}"
   echo "pm=$pm_bin" >> "$home/.sandbox"
   echo "sandbox '$name' up: HOME=$home  tmux -L $server"
   local own=()

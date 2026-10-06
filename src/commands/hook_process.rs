@@ -78,17 +78,39 @@ pub(crate) fn pid_alive(pid: u32) -> bool {
 mod tests {
     use super::*;
 
+    /// Any child another test spawns holds a copy of every fd this
+    /// process has open until it execs, close-on-exec or not, which keeps
+    /// the pipe open past `close`. A forked child has one thread, so
+    /// nothing spawns while its pipe exists.
     #[test]
     fn peer_closed_tracks_the_reading_end() {
-        let mut fds = [0; 2];
-        // SAFETY: fds has room for the two descriptors pipe() writes.
-        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
-        let [read, write] = fds;
-        assert!(!peer_closed(write));
-        // SAFETY: closing descriptors this test owns.
-        unsafe { libc::close(read) };
-        assert!(peer_closed(write));
-        unsafe { libc::close(write) };
+        // SAFETY: the child only makes async-signal-safe calls (pipe, poll,
+        // close, _exit) before exiting.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork failed");
+        if pid == 0 {
+            let mut fds = [0; 2];
+            // SAFETY: as above; fds has room for the two descriptors.
+            let code = unsafe {
+                if libc::pipe(fds.as_mut_ptr()) != 0 {
+                    libc::_exit(2);
+                }
+                let [read, write] = fds;
+                let open = !peer_closed(write);
+                libc::close(read);
+                let closed = peer_closed(write);
+                i32::from(!(open && closed))
+            };
+            // SAFETY: as above.
+            unsafe { libc::_exit(code) };
+        }
+        let mut status = 0;
+        // SAFETY: waiting on the child just forked.
+        assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
+        assert!(
+            libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
+            "status {status}"
+        );
     }
 
     #[test]
