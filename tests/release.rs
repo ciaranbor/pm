@@ -74,6 +74,9 @@ fn untracked_files_do_not_block_a_release() {
     fs::create_dir(work.join("notes")).unwrap();
     fs::write(work.join("notes/a.md"), "a").unwrap();
     fs::write(work.join("notes/b.md"), "b").unwrap();
+    fs::create_dir_all(work.join(".claude/skills/x")).unwrap();
+    fs::write(work.join(".claude/skills/x/SKILL.md"), "x").unwrap();
+    fs::write(work.join(".git/info/exclude"), "/.claude/skills/\n").unwrap();
     let out = dry_run(&work);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(

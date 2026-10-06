@@ -103,7 +103,7 @@ release() {
   [ -z "$("${git[@]}" status --porcelain --untracked-files=no)" ] \
     || die "the working tree has uncommitted changes to tracked files"
   local untracked
-  untracked=$("${git[@]}" ls-files --others --exclude-standard --directory | paste -sd ' ' -)
+  untracked=$("${git[@]}" ls-files --others --exclude-standard --directory --no-empty-directory | paste -sd ' ' -)
   [ -z "$untracked" ] || echo "Note: untracked files are left out of the release: $untracked"
   [ "$("${git[@]}" symbolic-ref --short -q HEAD)" = main ] || die "not on main"
   "${git[@]}" rev-parse -q --verify "refs/tags/$tag" >/dev/null && die "tag $tag already exists"

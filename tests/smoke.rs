@@ -1247,7 +1247,7 @@ fn the_install_script_installs_reinstalls_and_refuses_a_bad_checksum() {
     };
     sums(&binary);
     let url = serve_dir(release.path());
-    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/install.sh");
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/install.sh");
     let installed = s.home().join(".local/bin/pm");
     let install = |path: &str| {
         let mut cmd = Command::from_std(s.run_cmd(s.home(), "env"));
