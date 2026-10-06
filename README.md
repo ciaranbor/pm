@@ -486,6 +486,30 @@ the hook process (concurrent projects never see each other's values):
 `[ -n "$PM_FEATURE" ]`. For a `post-merge` of a stacked feature it names the
 base feature, not the merged one.
 
+A `post-create.sh` that gives each new feature the main worktree's secrets,
+if it has any, and its own dependencies:
+
+```sh
+#!/bin/sh
+set -eu
+if [ -f "$PM_MAIN_WORKTREE/.env" ]; then cp "$PM_MAIN_WORKTREE/.env" "$PM_WORKTREE/"; fi
+npm install
+```
+
+A `post-merge.sh` that installs the merged main and pushes it, skipping
+merges into a stacked feature's base. This one is pm's own, so it also
+refreshes the projects' pm assets:
+
+```sh
+#!/bin/sh
+set -eu
+[ -z "$PM_FEATURE" ] || exit 0
+echo "merged $PM_MERGED_FEATURE; installing and pushing"
+cargo install --path .
+pm upgrade --all
+git push
+```
+
 ## Configuration
 
 Settings live in `<project>/.pm/config.toml`, or `config.toml` in the pm
