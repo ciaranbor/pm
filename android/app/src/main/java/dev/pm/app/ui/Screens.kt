@@ -83,7 +83,7 @@ fun StatusStrip(
             Connection.Unauthorized ->
                 Triple(
                     "Not paired$updated",
-                    "The Mac revoked this phone's token.",
+                    "The server revoked this phone's token.",
                     "Pair again" to pairAgain,
                 )
         }

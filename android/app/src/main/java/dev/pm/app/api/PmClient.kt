@@ -40,14 +40,20 @@ import okhttp3.sse.EventSources
 
 /** Why a request to `pm serve` failed. */
 sealed class PmError(message: String) : Exception(message) {
-    /** The server can't be reached: the phone is off the tailnet, or the Mac is. */
+    /** The server can't be reached: the phone or the server is off the tailnet. */
     class Unreachable(cause: IOException) : PmError(cause.message ?: "unreachable")
 
     /** The token was refused: the device was revoked. */
     class Unauthorized : PmError("this device's token was refused")
 
-    /** The server has no such endpoint: it predates what was asked of it. */
-    class Unsupported : PmError("the server doesn't serve this yet")
+    /**
+     * The server doesn't serve what was asked: it predates it, or, when `retired`, it served it
+     * once and dropped it, so this app predates the server.
+     */
+    class Unsupported(val retired: Boolean = false) :
+        PmError(
+            if (retired) "the server no longer serves this" else "the server doesn't serve this yet"
+        )
 
     /** The agent's session hasn't started, or its transcript is gone. */
     class NoConversation : PmError("the agent has no conversation yet")
@@ -395,6 +401,8 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
             response.code == 409 && refused != null ->
                 PmError.Refused(refused, message ?: "the agent can't take input now")
             response.code == 404 && message == NO_SUCH_ENDPOINT -> PmError.Unsupported()
+            response.code == 405 && message == NO_SUCH_METHOD -> PmError.Unsupported()
+            response.code == 410 -> PmError.Unsupported(retired = true)
             response.code == 404 && message == NO_CONVERSATION -> PmError.NoConversation()
             else -> PmError.Status(response.code, message ?: "HTTP ${response.code}")
         }
@@ -424,6 +432,7 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
         val JSON = "application/json".toMediaType()
         val MARKDOWN = "text/markdown; charset=utf-8".toMediaType()
         const val NO_SUCH_ENDPOINT = "no such endpoint"
+        const val NO_SUCH_METHOD = "no such endpoint for this method"
         const val NO_CONVERSATION = "the agent has no conversation yet"
         val json = Json { ignoreUnknownKeys = true }
     }

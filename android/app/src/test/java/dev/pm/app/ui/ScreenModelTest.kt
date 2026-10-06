@@ -79,7 +79,10 @@ class ScreenModelTest {
 
         eventually { job.isCompleted }
         assertFalse(typed)
-        assertEquals("Upgrade pm on the Mac to type here", model.notice.value)
+        assertEquals(
+            "pm on the server is older than this app; update it to type here.",
+            model.notice.value,
+        )
         assertEquals("Paste code here if prompted >", model.screen.value)
     }
 }

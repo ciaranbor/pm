@@ -104,13 +104,7 @@ private fun Chat(model: AgentModel, openResult: (tool: String, ref: String) -> U
     val chat by model.chat.collectAsStateWithLifecycle()
     when (val state = chat) {
         ChatState.Loading -> Centered { CircularProgressIndicator() }
-        ChatState.Unsupported ->
-            Centered {
-                Text(
-                    "This pm serve has no transcripts yet. Upgrade pm on the Mac to see the conversation.",
-                    textAlign = TextAlign.Center,
-                )
-            }
+        is ChatState.Unsupported -> Centered { Text(state.advice, textAlign = TextAlign.Center) }
         is ChatState.Failed ->
             Centered {
                 Text(

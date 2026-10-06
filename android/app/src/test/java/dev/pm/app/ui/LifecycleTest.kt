@@ -72,6 +72,40 @@ class LifecycleTest {
     }
 
     @Test
+    fun an_action_the_server_lacks_asks_to_update_the_server_and_one_it_retired_the_app() =
+        runTest {
+            val lifecycle = Lifecycle(backgroundScope) { client }
+            val merge = Action.Merge("app", "login")
+            reply(404, """{"error":"no such endpoint"}""")
+            reply(410, """{"error":"this endpoint was retired"}""")
+
+            lifecycle.ask(merge)
+            lifecycle.confirm()
+            eventually { lifecycle.state.value is ActionState.Failed }
+            assertEquals(
+                ActionState.Failed(
+                    merge,
+                    "pm on the server is older than this app; update it to do this here.",
+                ),
+                lifecycle.state.value,
+            )
+
+            lifecycle.ask(merge)
+            lifecycle.confirm()
+            eventually {
+                (lifecycle.state.value as? ActionState.Failed)?.reason?.startsWith("This app") ==
+                    true
+            }
+            assertEquals(
+                ActionState.Failed(
+                    merge,
+                    "This app is older than pm on the server; update the app to do this here.",
+                ),
+                lifecycle.state.value,
+            )
+        }
+
+    @Test
     fun a_failure_that_is_not_a_refusal_is_told_apart_as_possibly_partway() = runTest {
         val lifecycle = Lifecycle(backgroundScope) { client }
         val delete = Action.Delete("app", "login")
