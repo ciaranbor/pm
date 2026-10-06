@@ -368,6 +368,37 @@ fn a_background_task_the_payload_lists_never_keeps_a_message_from_waking_the_age
     assert!(log.contains("background_tasks=[bash_7:running]"), "{log}");
 }
 
+#[test]
+fn a_subagents_dialog_open_as_the_turn_ends_keeps_the_agent_asking() {
+    let dir = tempdir().unwrap();
+    project(dir.path());
+    let ask = serde_json::json!({"hook_event_name": "PermissionRequest", "agent_id": "a1",
+                                 "tool_name": "Bash", "tool_input": {"command": "touch a"}});
+    let (dialog, reply_context) = Harness::ClaudeCode.dialog(&ask).unwrap();
+    let record = runtime::DialogRecord {
+        dialog,
+        // This process stands in for the dialog's hook.
+        pid: std::process::id(),
+        reply_context,
+    };
+    runtime::write_dialog(dir.path(), "main", AGENT, &record).unwrap();
+
+    let payload = r#"{"background_tasks":[{"id":"a1","status":"running"}],"session_crons":[]}"#;
+    let mut hook = start_with(dir.path(), &stop_hook_command(Harness::ClaudeCode), payload);
+    let start = Instant::now();
+    while runtime::read_waiter(dir.path(), "main", AGENT).is_none() || kind(dir.path()).is_none() {
+        assert!(start.elapsed() < Duration::from_secs(10), "never waited");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let marker = runtime::read_waiting(dir.path(), "main", AGENT).unwrap();
+    assert_eq!(marker.kind, WaitingKind::Permission, "not background");
+    assert_eq!(marker.subagent.as_deref(), Some("a1"));
+    assert_eq!(marker.describe(), "Bash: touch a");
+
+    hook.kill().unwrap();
+    hook.wait().unwrap();
+}
+
 /// A stand-in `codex` that records its arguments, one per line, in
 /// `codex-args`, and exits with `code`.
 fn stub_codex(dir: &Path, code: i32) {

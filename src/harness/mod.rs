@@ -555,6 +555,17 @@ impl Harness {
         }
     }
 
+    /// Whether a payload of `pm harness hooks waiting` says `record`'s
+    /// dialog was answered at the terminal. Only Claude Code needs it: it
+    /// leaves the hook of a dialog approved there running, while opencode's
+    /// plugin ends the hook of an ask settled at the TUI.
+    pub fn dialog_resolved(self, record: &DialogRecord, payload: &serde_json::Value) -> bool {
+        match self {
+            Harness::ClaudeCode => claude_code::dialog::resolved(record, payload),
+            Harness::Codex | Harness::OpenCode => false,
+        }
+    }
+
     /// What the dialog hook prints for `answer`, which `record` accepts: the
     /// decision its harness, or plugin, applies.
     pub fn dialog_decision(self, record: &DialogRecord, answer: &Answer) -> serde_json::Value {

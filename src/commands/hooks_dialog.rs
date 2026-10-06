@@ -7,13 +7,20 @@
 //! answer goes back the way a local one would, through the harness.
 //!
 //! The terminal's dialog stays up while it waits, and the first answer
-//! wins. It ends without printing anything once the dialog is no longer
-//! up: the agent's waiting marker stops standing for it (answered or
-//! rejected at the terminal, the turn ended, a newer dialog), a newer
-//! dialog's record replaced its own, or its harness ended it or is gone
-//! ([`hook_process`]). The marker is written by the waiting hook, which
-//! runs beside this one, so it is looked for only once it has had time to
-//! appear. Only the latest of several dialogs open at once is answerable.
+//! wins. Each dialog open at once has its own hook, so each is answerable,
+//! including one the terminal queues behind another (Claude Code shows
+//! parallel subagents' dialogs one at a time, and applies a decision for
+//! one not yet shown). The hook ends without printing anything once its
+//! dialog closes another way:
+//!
+//! - its harness ends it, or is gone ([`hook_process`]): Claude Code
+//!   signals the hook of a dialog rejected or cancelled at the terminal,
+//!   and opencode's plugin that of an ask settled at the TUI;
+//! - the waiting hook closes its record, on the event that says it was
+//!   answered at the terminal ([`resolve`]);
+//! - for the agent's own dialog (not a subagent's), its turn has ended
+//!   since it opened, which catches one answered at the terminal in a way
+//!   no event ties back to it.
 //!
 //! Its stdout is the decision, so it prints nothing else.
 
@@ -22,16 +29,14 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crate::commands::hook_process::{self, Caller, Signals};
-use crate::commands::running_agents;
+use crate::commands::{hooks_waiting, running_agents};
 use crate::error::Result;
 use crate::harness::Harness;
 use crate::state::paths;
-use crate::state::runtime::{self, Answer, DialogRecord, Waiting};
+use crate::state::runtime::{self, Answer, DialogRecord, Waiting, WaitingClass};
 
 /// How often the wait checks for an answer.
 const POLL: Duration = Duration::from_millis(250);
-/// How long the waiting marker may take to stand for the dialog.
-const MARKER_GRACE: Duration = Duration::from_secs(5);
 
 /// Run the hook. `on_change` is told when the dialog becomes answerable
 /// and when it stops being.
@@ -61,13 +66,19 @@ pub fn dialog(harness: Harness, mut on_change: impl FnMut()) -> i32 {
             !caller.alive()
         },
     );
-    if let Ok(Ended::Answered(decision)) = &ended {
+    if let Ok(Some(decision)) = &ended {
         print!("{decision}");
     }
-    if !matches!(ended, Ok(Ended::Replaced)) {
-        let _ = runtime::remove_dialog(&project_root, &scope, &agent, &record.dialog.id);
-        on_change();
+    let taken = matches!(ended, Ok(Some(_)));
+    let id = &record.dialog.id;
+    if runtime::read_dialog(&project_root, &scope, &agent, id).is_some() {
+        let _ = runtime::close_dialog(&project_root, &scope, &agent, id, taken);
+        let _ =
+            hooks_waiting::dialog_closed(&project_root, &scope, &agent, harness, &record.dialog);
+    } else if taken {
+        let _ = runtime::close_dialog(&project_root, &scope, &agent, id, taken);
     }
+    on_change();
     0
 }
 
@@ -98,18 +109,8 @@ fn open(harness: Harness) -> Result<Option<Opened>> {
     Ok(Some((project_root, scope, agent, record)))
 }
 
-/// Why the wait ended.
-#[derive(Debug, PartialEq)]
-enum Ended {
-    /// An answer arrived: the decision to print.
-    Answered(serde_json::Value),
-    /// A newer dialog's record replaced this one's.
-    Replaced,
-    /// The dialog is no longer up, or the harness ended the hook.
-    Gone,
-}
-
-/// Wait for an answer to `record`'s dialog. `pause` sleeps up to the
+/// Wait for an answer to `record`'s dialog: the decision to print, or
+/// `None` once the dialog closed another way. `pause` sleeps up to the
 /// interval between checks and returns whether the harness ended the hook.
 fn wait(
     project_root: &Path,
@@ -119,89 +120,82 @@ fn wait(
     record: &DialogRecord,
     poll: Duration,
     mut pause: impl FnMut(Duration) -> bool,
-) -> Result<Ended> {
+) -> Result<Option<serde_json::Value>> {
     let id = &record.dialog.id;
-    let start = Instant::now();
-    let mut marked = false;
     loop {
-        match runtime::read_dialog(project_root, scope, agent) {
-            Some(current) if &current.dialog.id != id => return Ok(Ended::Replaced),
-            Some(_) => {}
-            // Removed by an older dialog's hook as it ended.
-            None => runtime::write_dialog(project_root, scope, agent, record)?,
+        if let Some(answer) = runtime::take_answer(project_root, scope, agent, id)? {
+            return Ok(Some(harness.dialog_decision(record, &answer)));
         }
-        if let Some(answer) = take_own_answer(project_root, scope, agent, id)? {
-            return Ok(Ended::Answered(harness.dialog_decision(record, &answer)));
+        if runtime::read_dialog(project_root, scope, agent, id).is_none() {
+            return Ok(None);
         }
-        let marks = marker_matches(project_root, scope, agent, harness, record);
-        if marked && !marks || !marked && start.elapsed() > MARKER_GRACE {
-            return Ok(Ended::Gone);
-        }
-        marked |= marks;
-        if pause(poll) {
-            return Ok(Ended::Gone);
+        let waiting = running_agents::waiting(project_root, scope, agent, harness);
+        if turn_ended(waiting.as_ref(), record) || pause(poll) {
+            return Ok(None);
         }
     }
 }
 
-/// Take the answer left for dialog `id`. One left for the dialog whose
-/// record replaced it since is left for that dialog's hook; any other is
-/// stale and dropped.
-fn take_own_answer(
-    project_root: &Path,
-    scope: &str,
-    agent: &str,
-    id: &str,
-) -> Result<Option<Answer>> {
-    let Some(answer) = runtime::take_answer(project_root, scope, agent)? else {
-        return Ok(None);
-    };
-    if answer.id == id {
-        return Ok(Some(answer));
-    }
-    if runtime::read_dialog(project_root, scope, agent).is_some_and(|r| r.dialog.id == answer.id) {
-        runtime::leave_answer(project_root, scope, agent, &answer)?;
-    }
-    Ok(None)
+/// Whether `waiting` says the turn `record`'s dialog held up has ended.
+fn turn_ended(waiting: Option<&Waiting>, record: &DialogRecord) -> bool {
+    record.dialog.subagent.is_none()
+        && waiting.is_some_and(|w| {
+            w.kind.class() == WaitingClass::Unarmed && w.since > record.dialog.since
+        })
 }
 
-/// Whether the agent's waiting marker stands for `record`'s dialog.
-fn marker_matches(
+/// Close each of the agent's dialogs that `payload`, from `pm harness
+/// hooks waiting`, says was answered at the terminal.
+pub fn resolve(
     project_root: &Path,
     scope: &str,
     agent: &str,
     harness: Harness,
-    record: &DialogRecord,
-) -> bool {
-    running_agents::waiting(project_root, scope, agent, harness)
-        .is_some_and(|w| stands_for(&w, record))
+    payload: &serde_json::Value,
+) -> Result<()> {
+    for record in runtime::read_dialogs(project_root, scope, agent) {
+        if harness.dialog_resolved(&record, payload) {
+            runtime::close_dialog(project_root, scope, agent, &record.dialog.id, false)?;
+        }
+    }
+    Ok(())
 }
 
-/// The agent's dialog that can be answered now: recorded, its hook alive,
-/// and the waiting marker standing for it.
-pub fn current(
+/// The agent's dialogs that can be answered now, oldest first: recorded,
+/// their hooks alive, and not ended with the turn.
+pub fn open_dialogs(
     project_root: &Path,
     scope: &str,
     agent: &str,
     harness: Harness,
-) -> Option<DialogRecord> {
-    let waiting = running_agents::waiting(project_root, scope, agent, harness)?;
-    current_for(project_root, scope, agent, &waiting)
+) -> Vec<DialogRecord> {
+    let records = runtime::read_dialogs(project_root, scope, agent);
+    if records.is_empty() {
+        return records;
+    }
+    let waiting = running_agents::waiting(project_root, scope, agent, harness);
+    records
+        .into_iter()
+        .filter(|r| hook_process::pid_alive(r.pid) && !turn_ended(waiting.as_ref(), r))
+        .collect()
 }
 
-/// [`current`] for an agent already known to be at `waiting`.
+/// The open dialog an agent already known to be at `waiting` is asking
+/// about: the newest the marker stands for.
 pub fn current_for(
     project_root: &Path,
     scope: &str,
     agent: &str,
     waiting: &Waiting,
 ) -> Option<DialogRecord> {
-    runtime::read_dialog(project_root, scope, agent)
-        .filter(|r| stands_for(waiting, r) && hook_process::pid_alive(r.pid))
-}
-
-fn stands_for(waiting: &Waiting, record: &DialogRecord) -> bool {
-    waiting.kind == record.dialog.kind && waiting.subagent == record.dialog.subagent
+    runtime::read_dialogs(project_root, scope, agent)
+        .into_iter()
+        .rev()
+        .find(|r| {
+            waiting.kind == r.dialog.kind
+                && waiting.subagent == r.dialog.subagent
+                && hook_process::pid_alive(r.pid)
+        })
 }
 
 /// What became of an answer.
@@ -211,15 +205,17 @@ pub enum Answered {
     Taken,
     /// The answer doesn't fit the dialog: why.
     Invalid(String),
-    /// The dialog it names is no longer up: answered at the terminal, or
-    /// replaced by a newer one.
+    /// The dialog it names has closed: answered at the terminal or by
+    /// another answer.
     Elsewhere,
     /// The dialog's hook is gone, or never took the answer.
     Gone,
+    /// No dialog of the agent's ever had the id it names.
+    Unknown,
 }
 
-/// Leave `answer` for the agent's dialog and wait up to `within` for its
-/// hook to take it.
+/// Leave `answer` for the agent's dialog it names and wait up to `within`
+/// for its hook to take it.
 pub fn answer(
     project_root: &Path,
     scope: &str,
@@ -228,12 +224,19 @@ pub fn answer(
     answer: &Answer,
     within: Duration,
 ) -> Result<Answered> {
-    let Some(record) = runtime::read_dialog(project_root, scope, agent)
-        .filter(|r| r.dialog.id == answer.id)
-        .filter(|r| marker_matches(project_root, scope, agent, harness, r))
-    else {
-        return Ok(Answered::Elsewhere);
+    let id = &answer.id;
+    let Some(record) = runtime::read_dialog(project_root, scope, agent, id) else {
+        return Ok(
+            match runtime::dialog_closed(project_root, scope, agent, id) {
+                true => Answered::Elsewhere,
+                false => Answered::Unknown,
+            },
+        );
     };
+    let waiting = running_agents::waiting(project_root, scope, agent, harness);
+    if turn_ended(waiting.as_ref(), &record) {
+        return Ok(Answered::Elsewhere);
+    }
     if !hook_process::pid_alive(record.pid) {
         return Ok(Answered::Gone);
     }
@@ -245,20 +248,31 @@ pub fn answer(
     }
     let deadline = Instant::now() + within;
     loop {
-        let pending = runtime::answer_pending(project_root, scope, agent);
-        let held = runtime::read_dialog(project_root, scope, agent)
-            .is_some_and(|r| r.dialog.id == answer.id);
-        if !pending && !held {
+        let pending = runtime::answer_pending(project_root, scope, agent, id);
+        let held = runtime::read_dialog(project_root, scope, agent, id).is_some();
+        let hook_alive = hook_process::pid_alive(record.pid);
+        if !held && runtime::dialog_answer_taken(project_root, scope, agent, id) {
             return Ok(Answered::Taken);
         }
-        if pending && (Instant::now() >= deadline || !hook_process::pid_alive(record.pid)) {
-            // Withdrawn, unless the hook took it meanwhile.
-            return Ok(match runtime::take_answer(project_root, scope, agent)? {
-                Some(_) => Answered::Gone,
-                None => Answered::Taken,
-            });
+        // Closed another way, which dropped the answer, unless its hook
+        // took it first and is about to say so.
+        if !held && (!hook_alive || Instant::now() >= deadline) {
+            return Ok(Answered::Elsewhere);
         }
-        if !pending && Instant::now() >= deadline {
+        if pending && (Instant::now() >= deadline || !hook_alive) {
+            // Withdrawn, unless the hook took it meanwhile.
+            if runtime::take_answer(project_root, scope, agent, id)?.is_some() {
+                return Ok(Answered::Gone);
+            }
+            let held = runtime::read_dialog(project_root, scope, agent, id).is_some();
+            return Ok(
+                match held || runtime::dialog_answer_taken(project_root, scope, agent, id) {
+                    true => Answered::Taken,
+                    false => Answered::Elsewhere,
+                },
+            );
+        }
+        if !pending && held && Instant::now() >= deadline {
             return Ok(Answered::Taken);
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -268,18 +282,13 @@ pub fn answer(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::runtime::{ANSWER_CHOICE, Waiting, WaitingKind};
+    use crate::state::runtime::{ANSWER_CHOICE, WaitingKind};
     use serde_json::json;
     use tempfile::tempdir;
 
     const AGENT: &str = "implementer";
 
-    fn question(root: &Path) -> DialogRecord {
-        let payload = json!({
-            "hook_event_name": "PermissionRequest", "tool_name": "AskUserQuestion",
-            "tool_input": {"questions": [{"question": "Which DB?", "header": "DB",
-                "multiSelect": false, "options": [{"label": "SQLite", "description": ""}]}]}
-        });
+    fn open_dialog(root: &Path, payload: serde_json::Value) -> DialogRecord {
         let (dialog, reply_context) = Harness::ClaudeCode.dialog(&payload).unwrap();
         let record = DialogRecord {
             dialog,
@@ -290,11 +299,39 @@ mod tests {
         record
     }
 
-    fn mark(root: &Path, kind: WaitingKind) {
-        runtime::write_waiting(root, "login", AGENT, &Waiting::now(kind, None)).unwrap();
+    fn question(root: &Path) -> DialogRecord {
+        open_dialog(
+            root,
+            json!({
+                "hook_event_name": "PermissionRequest", "tool_name": "AskUserQuestion",
+                "tool_input": {"questions": [{"question": "Which DB?", "header": "DB",
+                    "multiSelect": false, "options": [{"label": "SQLite", "description": ""}]}]}
+            }),
+        )
     }
 
-    fn run(root: &Path, record: &DialogRecord, mut each: impl FnMut(u32)) -> Ended {
+    fn bash(root: &Path, subagent: &str, command: &str) -> DialogRecord {
+        open_dialog(
+            root,
+            json!({"hook_event_name": "PermissionRequest", "agent_id": subagent,
+                   "tool_name": "Bash", "tool_input": {"command": command}}),
+        )
+    }
+
+    fn decline(id: &str) -> Answer {
+        Answer {
+            id: id.into(),
+            choice: "decline".into(),
+            answers: Default::default(),
+            message: None,
+        }
+    }
+
+    fn run(
+        root: &Path,
+        record: &DialogRecord,
+        mut each: impl FnMut(u32),
+    ) -> Option<serde_json::Value> {
         let mut polls = 0;
         wait(
             root,
@@ -317,115 +354,153 @@ mod tests {
     fn the_wait_ends_with_the_decision_for_its_own_answer_only() {
         let dir = tempdir().unwrap();
         let root = dir.path();
+        let other = question(root);
         let record = question(root);
-        mark(root, WaitingKind::Question);
-        let answer = |id: &str| Answer {
-            id: id.into(),
-            choice: ANSWER_CHOICE.into(),
-            answers: [("Which DB?".to_string(), vec!["SQLite".to_string()])].into(),
-            message: None,
-        };
-        let ended = run(root, &record, |poll| {
-            let id = if poll == 1 {
-                "stale"
-            } else {
-                &record.dialog.id
+        let decision = run(root, &record, |poll| {
+            let id = match poll {
+                1 => &other.dialog.id,
+                _ => &record.dialog.id,
             };
-            runtime::leave_answer(root, "login", AGENT, &answer(id)).unwrap();
-        });
-        let Ended::Answered(decision) = ended else {
-            panic!("{ended:?}")
-        };
+            let answer = Answer {
+                id: id.clone(),
+                choice: ANSWER_CHOICE.into(),
+                answers: [("Which DB?".to_string(), vec!["SQLite".to_string()])].into(),
+                message: None,
+            };
+            runtime::leave_answer(root, "login", AGENT, &answer).unwrap();
+        })
+        .unwrap();
         assert_eq!(
             decision["hookSpecificOutput"]["decision"]["updatedInput"]["answers"],
             json!({"Which DB?": "SQLite"})
         );
+        assert!(
+            runtime::answer_pending(root, "login", AGENT, &other.dialog.id),
+            "left for the other dialog's hook"
+        );
     }
 
     #[test]
-    fn an_answer_taken_for_a_newer_dialog_is_left_for_its_hook() {
+    fn the_wait_ends_once_its_dialog_is_closed() {
         let dir = tempdir().unwrap();
         let root = dir.path();
-        let older = question(root);
-        let newer = question(root);
-        let answer = |id: &str| Answer {
-            id: id.into(),
-            choice: "decline".into(),
-            answers: Default::default(),
-            message: None,
+        let record = question(root);
+        let ended = run(root, &record, |_| {
+            runtime::close_dialog(root, "login", AGENT, &record.dialog.id, false).unwrap();
+        });
+        assert_eq!(ended, None);
+    }
+
+    #[test]
+    fn the_agents_own_dialog_ends_with_its_turn_and_a_subagents_outlives_it() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let own = question(root);
+        let subagents = bash(root, "a1", "cargo test");
+        let older_turn = Waiting {
+            since: own.dialog.since - chrono::Duration::seconds(1),
+            ..Waiting::now(WaitingKind::Interrupted, None)
         };
-        runtime::leave_answer(root, "login", AGENT, &answer(&newer.dialog.id)).unwrap();
+        runtime::write_waiting(root, "login", AGENT, &older_turn).unwrap();
         assert_eq!(
-            take_own_answer(root, "login", AGENT, &older.dialog.id).unwrap(),
-            None
+            open_dialogs(root, "login", AGENT, Harness::ClaudeCode).len(),
+            2,
+            "a turn end from before they opened"
         );
+        runtime::write_waiting(
+            root,
+            "login",
+            AGENT,
+            &Waiting::now(WaitingKind::Interrupted, None),
+        )
+        .unwrap();
+        let open = open_dialogs(root, "login", AGENT, Harness::ClaudeCode);
+        assert_eq!(open, std::slice::from_ref(&subagents));
+        assert_eq!(run(root, &own, |_| panic!("ended at once")), None);
         assert_eq!(
-            runtime::take_answer(root, "login", AGENT).unwrap(),
-            Some(answer(&newer.dialog.id)),
-            "left for the newer dialog's hook"
+            answer(
+                root,
+                "login",
+                AGENT,
+                Harness::ClaudeCode,
+                &decline(&own.dialog.id),
+                Duration::ZERO
+            )
+            .unwrap(),
+            Answered::Elsewhere
         );
-
-        runtime::leave_answer(root, "login", AGENT, &answer("stale")).unwrap();
-        assert_eq!(
-            take_own_answer(root, "login", AGENT, &older.dialog.id).unwrap(),
-            None
-        );
-        assert!(!runtime::answer_pending(root, "login", AGENT), "dropped");
     }
 
     #[test]
-    fn a_record_removed_under_the_wait_is_written_again() {
+    fn a_tool_finishing_closes_its_own_dialog_and_leaves_the_others_open() {
         let dir = tempdir().unwrap();
         let root = dir.path();
-        let record = question(root);
-        mark(root, WaitingKind::Question);
-        let ended = run(root, &record, |poll| match poll {
-            1 => runtime::remove_dialog(root, "login", AGENT, &record.dialog.id).unwrap(),
-            2 => {
-                assert_eq!(
-                    runtime::read_dialog(root, "login", AGENT).map(|r| r.dialog.id),
-                    Some(record.dialog.id.clone())
-                );
-                runtime::clear_waiting(root, "login", AGENT).unwrap();
-            }
-            _ => {}
-        });
-        assert_eq!(ended, Ended::Gone);
+        let a = bash(root, "a1", "touch a");
+        let b = bash(root, "a2", "touch b");
+        let mark = |r: &DialogRecord| {
+            runtime::write_waiting(root, "login", AGENT, &r.dialog.waiting()).unwrap();
+        };
+        mark(&b);
+        let marker = runtime::read_waiting(root, "login", AGENT).unwrap();
+        assert_eq!(marker.describe(), "Bash: touch b");
+        assert_eq!(
+            current_for(root, "login", AGENT, &marker).map(|r| r.dialog.id),
+            Some(b.dialog.id.clone())
+        );
+
+        let done = json!({"hook_event_name": "PostToolUse", "agent_id": "a2",
+                          "tool_name": "Bash", "tool_input": {"command": "touch b"}});
+        resolve(root, "login", AGENT, Harness::ClaudeCode, &done).unwrap();
+        assert_eq!(
+            open_dialogs(root, "login", AGENT, Harness::ClaudeCode),
+            std::slice::from_ref(&a)
+        );
+        assert!(runtime::dialog_closed(root, "login", AGENT, &b.dialog.id));
     }
 
     #[test]
-    fn the_wait_ends_once_the_marker_stops_standing_for_the_dialog() {
+    fn an_answer_dropped_by_the_dialog_closing_another_way_is_not_reported_taken() {
         let dir = tempdir().unwrap();
-        let root = dir.path();
-        let record = question(root);
-        mark(root, WaitingKind::Question);
-        let ended = run(root, &record, |_| {
-            runtime::clear_waiting(root, "login", AGENT).unwrap();
-        });
-        assert_eq!(ended, Ended::Gone);
-
-        let record = question(root);
-        mark(root, WaitingKind::Question);
-        let ended = run(root, &record, |_| mark(root, WaitingKind::Plan));
-        assert_eq!(ended, Ended::Gone, "another dialog's marker");
-
-        let record = question(root);
-        let ended = run(root, &record, |_| {
-            question(root);
-        });
-        assert_eq!(ended, Ended::Replaced);
+        let root = dir.path().to_path_buf();
+        let race = |taken: bool| {
+            let record = question(&root);
+            let id = record.dialog.id.clone();
+            let closer = {
+                let (root, id) = (root.clone(), id.clone());
+                std::thread::spawn(move || {
+                    while !runtime::answer_pending(&root, "login", AGENT, &id) {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    if taken {
+                        runtime::take_answer(&root, "login", AGENT, &id).unwrap();
+                    }
+                    runtime::close_dialog(&root, "login", AGENT, &id, taken).unwrap();
+                })
+            };
+            let answered = answer(
+                &root,
+                "login",
+                AGENT,
+                Harness::ClaudeCode,
+                &decline(&id),
+                Duration::from_millis(300),
+            )
+            .unwrap();
+            closer.join().unwrap();
+            answered
+        };
+        assert_eq!(race(false), Answered::Elsewhere, "rejected at the terminal");
+        assert_eq!(race(true), Answered::Taken);
     }
 
     #[test]
-    fn an_answer_is_refused_for_a_dialog_no_longer_up_or_one_it_does_not_fit() {
+    fn an_answer_is_refused_for_a_dialog_unknown_closed_or_gone_or_one_it_does_not_fit() {
         let dir = tempdir().unwrap();
         let root = dir.path();
         let record = question(root);
         let reply = |choice: &str| Answer {
-            id: record.dialog.id.clone(),
             choice: choice.into(),
-            answers: Default::default(),
-            message: None,
+            ..decline(&record.dialog.id)
         };
         let send = |answer: &Answer| {
             super::answer(
@@ -438,8 +513,7 @@ mod tests {
             )
             .unwrap()
         };
-        assert_eq!(send(&reply("decline")), Answered::Elsewhere, "no marker");
-        mark(root, WaitingKind::Question);
+        assert_eq!(send(&decline("0123abcd")), Answered::Unknown);
         assert!(matches!(send(&reply("maybe")), Answered::Invalid(_)));
         runtime::leave_answer(root, "login", AGENT, &reply("decline")).unwrap();
         assert_eq!(
@@ -447,19 +521,24 @@ mod tests {
             Answered::Elsewhere,
             "a second answer while the first waits"
         );
-        runtime::take_answer(root, "login", AGENT).unwrap();
+        runtime::take_answer(root, "login", AGENT, &record.dialog.id).unwrap();
         assert_eq!(
             send(&reply("decline")),
             Answered::Gone,
             "nothing takes it in time"
         );
-        assert!(!runtime::answer_pending(root, "login", AGENT), "withdrawn");
-        assert!(current(root, "login", AGENT, Harness::ClaudeCode).is_some());
+        assert!(
+            !runtime::answer_pending(root, "login", AGENT, &record.dialog.id),
+            "withdrawn"
+        );
 
         let mut dead = record.clone();
         dead.pid = u32::MAX / 2;
         runtime::write_dialog(root, "login", AGENT, &dead).unwrap();
         assert_eq!(send(&reply("decline")), Answered::Gone);
-        assert!(current(root, "login", AGENT, Harness::ClaudeCode).is_none());
+        assert!(open_dialogs(root, "login", AGENT, Harness::ClaudeCode).is_empty());
+
+        runtime::close_dialog(root, "login", AGENT, &record.dialog.id, false).unwrap();
+        assert_eq!(send(&reply("decline")), Answered::Elsewhere, "closed");
     }
 }

@@ -392,12 +392,16 @@ fn get(config: &Config, path: &str, query: &Query) -> Result<Reply> {
                 Err(e) => Err(e.into()),
             }
         }
-        ["agents", project, scope, agent, "dialog"] => {
-            match find_agent(config, project, scope, agent)? {
-                Ok(agent) => super::dialog::get(&agent),
-                Err(reply) => Ok(reply),
-            }
-        }
+        [
+            "agents",
+            project,
+            scope,
+            agent,
+            which @ ("dialog" | "dialogs"),
+        ] => match find_agent(config, project, scope, agent)? {
+            Ok(agent) => super::dialog::get(&agent, which == "dialogs"),
+            Err(reply) => Ok(reply),
+        },
         ["agents", project, scope, agent, "screen"] => {
             let Some(root) = project_root(config, project)? else {
                 return Ok(error(404, "no such project"));

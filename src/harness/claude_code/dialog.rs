@@ -23,10 +23,15 @@
 //! - A tool prompt's "don't ask again" is `allow` with the payload's
 //!   `permission_suggestions` (allow rules and directories) as
 //!   `updatedPermissions`; it is offered only when there are some, and the
-//!   label approximates the CLI's. Its "switch to auto mode" or "switch to
-//!   accept edits" is left out: which one the CLI shows doesn't follow the
-//!   suggestions (a Bash prompt suggested `acceptEdits` while the CLI
-//!   offered auto mode).
+//!   label approximates the CLI's. Its "switch to `<mode>`" is `allow` with
+//!   the suggested `setMode`, offered only when one is suggested (a file
+//!   write suggests `acceptEdits`, and the CLI offers it). The CLI's
+//!   "switch to auto mode" on a Bash prompt comes with no suggestion, so it
+//!   is left out: nothing in the payload says auto mode is available.
+//! - The CLI's "No" denies and interrupts the turn; "No" with feedback
+//!   (Tab to amend) denies with the feedback as a message and lets the
+//!   agent carry on. A remote "No" does the same, by whether it has a
+//!   message.
 
 use serde_json::{Value, json};
 
@@ -39,6 +44,7 @@ use crate::state::runtime::{
 const DECLINE: &str = "decline";
 const ALLOW: &str = "allow";
 const ALWAYS: &str = "always";
+const MODE: &str = "mode";
 const DENY: &str = "deny";
 const AUTO: &str = "auto";
 const MANUAL: &str = "manual";
@@ -72,6 +78,11 @@ pub(in crate::harness) fn dialog(payload: &Value) -> Option<(Dialog, Value)> {
             if let Some(label) = always_label(&remembered(payload)) {
                 choices.push(Choice::new(ALWAYS, label, false));
             }
+            if let Some(mode) = mode_switch(payload) {
+                let mode = mode.get("mode").and_then(Value::as_str).unwrap_or("");
+                let label = format!("Yes, and switch to {} for this session", mode_label(mode));
+                choices.push(Choice::new(MODE, label, false));
+            }
             choices.push(Choice::new(DENY, "No", true));
             Dialog {
                 tool: Some(tool.to_string()),
@@ -91,7 +102,7 @@ pub(in crate::harness) fn dialog(payload: &Value) -> Option<(Dialog, Value)> {
         .unwrap_or(json!([]));
     Some((
         dialog,
-        json!({"tool_input": input, "permission_suggestions": suggestions}),
+        json!({"tool_name": tool, "tool_input": input, "permission_suggestions": suggestions}),
     ))
 }
 
@@ -156,6 +167,28 @@ fn remembered(context: &Value) -> Vec<Value> {
         .collect()
 }
 
+/// The mode switch a prompt suggests, if any.
+fn mode_switch(context: &Value) -> Option<&Value> {
+    context
+        .get("permission_suggestions")?
+        .as_array()?
+        .iter()
+        .find(|s| s.get("type").and_then(Value::as_str) == Some("setMode"))
+}
+
+/// The CLI's name for a permission mode.
+fn mode_label(mode: &str) -> &str {
+    match mode {
+        "acceptEdits" => "accept edits",
+        "auto" => "auto mode",
+        "plan" => "plan mode",
+        "default" => "default mode",
+        "dontAsk" => "don't ask",
+        "bypassPermissions" => "bypass permissions",
+        other => other,
+    }
+}
+
 fn always_label(suggestions: &[Value]) -> Option<String> {
     if suggestions.is_empty() {
         return None;
@@ -201,17 +234,33 @@ fn always_label(suggestions: &[Value]) -> Option<String> {
     })
 }
 
+/// Whether `payload` is the `PostToolUse` (or `PostToolUseFailure`) of
+/// `record`'s tool call: the same thread, tool and input, as the payloads
+/// carry no id that ties them.
+pub(in crate::harness) fn resolved(record: &DialogRecord, payload: &Value) -> bool {
+    let event = payload.get("hook_event_name").and_then(Value::as_str);
+    if !matches!(event, Some("PostToolUse" | "PostToolUseFailure")) {
+        return false;
+    }
+    let context = &record.reply_context;
+    payload.get("agent_id").and_then(Value::as_str) == record.dialog.subagent.as_deref()
+        && context
+            .get("tool_name")
+            .is_some_and(|t| payload.get("tool_name") == Some(t))
+        && context.get("tool_input") == payload.get("tool_input")
+}
+
 /// The `PermissionRequest` output that applies `answer` to `record`'s
 /// dialog, which [`Dialog::invalid`] has accepted it for.
 pub(in crate::harness) fn decision(record: &DialogRecord, answer: &Answer) -> Value {
     let context = &record.reply_context;
     let input = context.get("tool_input").cloned().unwrap_or(json!({}));
-    let deny = || {
-        let mut d = json!({"behavior": "deny"});
-        if let Some(message) = &answer.message {
-            d["message"] = json!(message);
-        }
-        d
+    // With a message the agent is told why and carries on; without, a
+    // denial that interrupts stops the turn.
+    let deny = |interrupt: bool| match &answer.message {
+        Some(message) => json!({"behavior": "deny", "message": message}),
+        None if interrupt => json!({"behavior": "deny", "interrupt": true}),
+        None => json!({"behavior": "deny"}),
     };
     let decision = match answer.choice.as_str() {
         ANSWER_CHOICE => {
@@ -234,8 +283,10 @@ pub(in crate::harness) fn decision(record: &DialogRecord, answer: &Answer) -> Va
         }),
         MANUAL => json!({"behavior": "allow", "updatedInput": input}),
         ALWAYS => json!({"behavior": "allow", "updatedPermissions": remembered(context)}),
+        MODE => json!({"behavior": "allow", "updatedPermissions": [mode_switch(context)]}),
         ALLOW => json!({"behavior": "allow"}),
-        _ => deny(),
+        KEEP_PLANNING => deny(false),
+        _ => deny(true),
     };
     json!({
         "hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": decision}
@@ -335,12 +386,16 @@ mod tests {
     }
 
     #[test]
-    fn dont_ask_again_is_offered_only_with_suggestions_and_applies_them() {
+    fn a_tool_prompt_offers_the_suggested_rules_and_mode_and_no_interrupts_unless_told_why() {
         let bare = record(&request("Bash", json!({"command": "rm -rf build"})));
         assert_eq!(bare.dialog.kind, WaitingKind::Permission);
         assert_eq!(bare.dialog.tool.as_deref(), Some("Bash"));
         assert_eq!(bare.dialog.detail.as_deref(), Some("rm -rf build"));
         assert_eq!(ids(&bare.dialog), [ALLOW, DENY]);
+        assert_eq!(
+            decided(&bare, &answer(&bare, DENY, &[])),
+            json!({"behavior": "deny", "interrupt": true})
+        );
 
         let rule = json!({"type": "addRules", "behavior": "allow", "destination": "localSettings",
                           "rules": [{"toolName": "Bash", "ruleContent": "npm test:*"}]});
@@ -348,14 +403,22 @@ mod tests {
         let mut payload = request("Bash", json!({"command": "npm test"}));
         payload["permission_suggestions"] = json!([rule, mode]);
         let r = record(&payload);
-        assert_eq!(ids(&r.dialog), [ALLOW, ALWAYS, DENY]);
+        assert_eq!(ids(&r.dialog), [ALLOW, ALWAYS, MODE, DENY]);
         assert_eq!(
             r.dialog.choices[1].label,
             "Yes, and don't ask again for Bash(npm test:*)"
         );
         assert_eq!(
+            r.dialog.choices[2].label,
+            "Yes, and switch to accept edits for this session"
+        );
+        assert_eq!(
             decided(&r, &answer(&r, ALWAYS, &[])),
             json!({"behavior": "allow", "updatedPermissions": [rule]})
+        );
+        assert_eq!(
+            decided(&r, &answer(&r, MODE, &[])),
+            json!({"behavior": "allow", "updatedPermissions": [mode]})
         );
         assert_eq!(
             decided(&r, &answer(&r, ALLOW, &[])),
@@ -371,7 +434,38 @@ mod tests {
 
         let mut only_mode = request("Write", json!({"file_path": "/a"}));
         only_mode["permission_suggestions"] = json!([mode]);
-        assert_eq!(ids(&record(&only_mode).dialog), [ALLOW, DENY]);
+        assert_eq!(ids(&record(&only_mode).dialog), [ALLOW, MODE, DENY]);
+    }
+
+    #[test]
+    fn only_the_same_threads_call_of_the_same_tool_and_input_resolves_a_dialog() {
+        let input = json!({"command": "cargo test"});
+        let mut payload = request("Bash", input.clone());
+        payload["agent_id"] = json!("a1");
+        let r = record(&payload);
+        let post = |event: &str, agent: Option<&str>, tool: &str, input: &Value| {
+            let mut p = json!({"hook_event_name": event, "tool_name": tool,
+                               "tool_input": input, "tool_use_id": "t"});
+            if let Some(agent) = agent {
+                p["agent_id"] = json!(agent);
+            }
+            resolved(&r, &p)
+        };
+        assert!(post("PostToolUse", Some("a1"), "Bash", &input));
+        assert!(post("PostToolUseFailure", Some("a1"), "Bash", &input));
+        assert!(
+            !post("PostToolUse", None, "Bash", &input),
+            "the main thread"
+        );
+        assert!(!post("PostToolUse", Some("a2"), "Bash", &input));
+        assert!(!post(
+            "PostToolUse",
+            Some("a1"),
+            "Bash",
+            &json!({"command": "ls"})
+        ));
+        assert!(!post("PostToolUse", Some("a1"), "Read", &input));
+        assert!(!post("PermissionRequest", Some("a1"), "Bash", &input));
     }
 
     #[test]
@@ -391,6 +485,11 @@ mod tests {
             decided(&r, &answer(&r, AUTO, &[])),
             json!({"behavior": "allow", "updatedInput": input, "updatedPermissions": [
                 {"type": "setMode", "mode": "auto", "destination": "session"}]})
+        );
+        assert_eq!(
+            decided(&r, &answer(&r, KEEP_PLANNING, &[])),
+            json!({"behavior": "deny"}),
+            "keeps planning: no interrupt"
         );
         let mut keep = answer(&r, KEEP_PLANNING, &[]);
         keep.message = Some("split step 2".into());

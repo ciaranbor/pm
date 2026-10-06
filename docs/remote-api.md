@@ -79,7 +79,8 @@ The API is under `/v1`; every path needs a paired device's token:
 | `agents/{project}/{scope}/{agent}/interrupt` | `POST`: presses Escape, ending the agent's turn |
 | `agents/{project}/{scope}/{agent}/keys` | `POST {"keys": [...]}`: presses each of `Escape Enter Tab BTab Up Down Left Right Space BSpace C-c 0`–`9` |
 | `agents/{project}/{scope}/{agent}/type` | `POST {"text"}` (up to 4 KB, no control characters): typed into the pane as keys with nothing pressed after, for a dialog that takes text (a login code) |
-| `agents/{project}/{scope}/{agent}/dialog` | `GET`: the dialog on the agent's screen, when it can be answered remotely (below), else `404`; `POST {"id", "choice", "answers"?, "message"?}`: answers it, `{"answered": true}` once its harness has the answer |
+| `agents/{project}/{scope}/{agent}/dialog` | `GET`: the oldest of the agent's dialogs that can be answered remotely (below), the one its terminal shows first, else `404`; `POST {"id", "choice", "answers"?, "message"?}`: answers the open dialog `id` names, `{"answered": true}` once its harness has the answer |
+| `agents/{project}/{scope}/{agent}/dialogs` | `GET`: `{"dialogs": [Dialog, …]}`, every dialog of the agent's that can be answered remotely, oldest first; empty when none |
 | `features/{project}/{feature}/merge` | `POST`: `pm feat merge`, so merges and deletes the feature; `{"merged": true, "warnings"}` |
 | `features/{project}/{feature}/delete` | `POST`: `pm feat delete`; `{"deleted": true, "warnings"}` |
 | `agents/{project}/{scope}/{agent}/restart` | `POST {"force"?}`: `pm agent restart`; `{"restarted": <what it did>}` |
@@ -125,19 +126,33 @@ decision, the way one given at the terminal does — pm's dialog hook
 hands it the answer — never as keys. The terminal's dialog stays up
 meanwhile and the first answer wins: one already answered, at the terminal
 or by another device, gets `409` with `refused: "answered"`, one whose hook
-has ended `"gone"`. A dialog's `choices` are those its harness's CLI
-offers (`id`, `label`, and `takes_message` for one that takes a `message`
-for the agent); a question dialog's `questions` are answered by the
-`answer` choice with `answers`, question text → an option's label or the
-user's own words (a list for a multi-select). The snapshot names an
-answerable dialog by its id (`waiting.dialog`). Of several dialogs open at
-once only the latest can be answered remotely. Everything else — every
-codex dialog, an opencode question, a startup dialog (trust, login), an
-MCP server's request, an error — is answered at the terminal: codex runs
-its hooks before it shows a dialog, so a hook waiting on the phone would
-hide the terminal's, and opencode's question form has no reply a plugin
-can give. An opencode agent approves its own permission asks unless
-`[harness.opencode] auto = false`.
+has ended `"gone"`; an `id` that never named one of the agent's dialogs
+gets `404`. A dialog's `choices` are those its harness's CLI offers (`id`,
+`label`, and `takes_message` for one that takes a `message` for the
+agent); a question dialog's `questions` are answered by the `answer`
+choice with `answers`, question text → an option's label or the user's
+own words (a list for a multi-select).
+
+Several dialogs can be open at once — parallel subagents each asking, or
+several opencode permission asks — and each can be answered, in any
+order, including one the terminal queues behind another: `dialogs` lists
+them, `dialog` serves only the oldest. The snapshot's `waiting.dialog` is
+the id of the dialog the agent's state describes: the one that opened
+last, or once that one closes, the oldest still open.
+
+A Claude Code permission prompt's "No" (`deny`) stops the agent's turn, as
+the CLI's does; with a `message` it instead tells the agent why and lets
+it carry on, as the CLI's "No" with feedback does. Its "Yes, and switch to
+…" (`mode`) is offered when Claude Code suggests a mode for the prompt (a
+file edit suggests accept edits); the CLI's "switch to auto mode" on a
+shell command is not, since nothing says whether auto mode is available.
+
+Any other dialog — every codex dialog, an opencode question, a startup
+dialog (trust, login), an MCP server's request, an error — is answered at
+the terminal: codex runs its hooks before it shows a dialog, so a hook
+waiting on the phone would hide the terminal's, and opencode's question
+form has no reply a plugin can give. An opencode agent approves its own
+permission asks unless `[harness.opencode] auto = false`.
 
 ## Transcript contract (version 1)
 
@@ -212,8 +227,9 @@ GitHub, so it is cheap to poll.
 An agent is `idle` (waiting for a message), `busy` (mid-turn), `asking`,
 `unarmed`, `background` (its turn ended for background work that will wake
 it), `dead`, `stopped` (`pm agent stop`), or `closed` (its feature's
-session is closed; `pm open` respawns it). A dialog you reject can read
-`asking` until you next type, since Claude Code reports no rejection. A
+session is closed; `pm open` respawns it). A dialog you reject that pm's
+dialog hook doesn't hold (an MCP server's request, say) can read `asking`
+until you next type, since Claude Code reports no rejection. A
 scope is working while a busy agent showed activity in the last 20
 minutes. Background work is not working: a scope with a `background` agent
 shows how long its oldest has waited (`background 1d`), since only the
