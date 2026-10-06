@@ -108,9 +108,7 @@ pub fn probe_line(harness: Harness, project_root: Option<&Path>) -> String {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
-
     use tempfile::tempdir;
 
     #[test]

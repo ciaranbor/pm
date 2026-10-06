@@ -115,11 +115,8 @@ pub(crate) fn resolve_launch(
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::harness::{self, Harness, SpawnSpec};
-
     use crate::state::project::{AgentSettings, AgentsConfig, HarnessConfig};
-
     use std::path::PathBuf;
 
     #[test]

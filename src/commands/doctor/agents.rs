@@ -182,14 +182,13 @@ pub(super) fn legacy_vanilla_agent_issues(project_root: &Path, scope: &str) -> V
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::commands::doctor::test_support::*;
-    use crate::commands::doctor::*;
-    use crate::tmux;
-
+    use crate::commands::doctor::{Depth, Finding, diagnose, doctor};
+    use crate::harness::Harness;
     use crate::state::project::HarnessConfig;
     use crate::testing::TestServer;
+    use crate::tmux;
     use tempfile::tempdir;
 
     #[test]

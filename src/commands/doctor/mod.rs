@@ -245,11 +245,10 @@ impl Depth {
 /// Helpers the submodules' tests share.
 #[cfg(test)]
 mod test_support {
-    use std::path::Path;
-
     use super::{Issue, IssueKind};
     use crate::state::paths;
     use crate::state::project::ProjectConfig;
+    use std::path::Path;
 
     /// Put `definition` on opencode, played by a stand-in reporting `version`.
     pub(super) fn use_opencode(project_path: &Path, definition: &str, version: &str) {

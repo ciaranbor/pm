@@ -194,12 +194,9 @@ pub(super) fn legacy_vanilla_row_issues(project_root: &Path) -> Result<Vec<Issue
 
 #[cfg(test)]
 mod tests {
-
-    use crate::state::agent::{AgentRegistry, AgentType};
-
     use super::*;
     use crate::commands::doctor::test_support::*;
-
+    use crate::state::agent::{AgentRegistry, AgentType};
     use crate::testing::TestServer;
     use tempfile::tempdir;
 

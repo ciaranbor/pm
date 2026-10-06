@@ -305,14 +305,10 @@ fn registered_session(opened: &Option<String>, spec: &SpawnSpec) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::agent_spawn::*;
-
     use crate::commands::agent_spawn::test_support::*;
-
+    use crate::commands::agent_spawn::*;
     use crate::harness::Harness;
-
     use crate::testing::TestServer;
-
     use tempfile::tempdir;
 
     #[test]

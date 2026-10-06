@@ -160,9 +160,7 @@ fn persist_state_remote_to_registry(project_root: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::commands::state_cmd::test_support::*;
-
     use tempfile::tempdir;
 
     fn setup_project(dir: &std::path::Path) -> std::path::PathBuf {

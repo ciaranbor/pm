@@ -350,12 +350,9 @@ fn main_branch_issue(main_repo: &Path, recorded: &str) -> Option<Issue> {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
-    use crate::commands::doctor::*;
-
+    use crate::commands::doctor::doctor;
     use crate::commands::feat_new;
-
     use crate::testing::TestServer;
     use tempfile::tempdir;
 

@@ -85,17 +85,14 @@ fn hook_issues_in(project_root: &Path, home: &Path, probe: Probe) -> Result<Vec<
 
 #[cfg(test)]
 mod tests {
-
+    use super::*;
+    use crate::commands::doctor::test_support::*;
+    use crate::commands::doctor::{Depth, Finding, diagnose, doctor};
     use crate::commands::hooks_install;
-
+    use crate::harness::Harness;
     use crate::state::agent::{AgentRegistry, AgentType};
     use crate::state::feature::FeatureState;
     use crate::state::project::ProjectConfig;
-
-    use super::*;
-    use crate::commands::doctor::test_support::*;
-    use crate::commands::doctor::*;
-
     use crate::testing::TestServer;
     use tempfile::tempdir;
 

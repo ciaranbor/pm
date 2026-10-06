@@ -205,9 +205,7 @@ pub fn global_status() -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::commands::state_cmd::test_support::*;
-
     use tempfile::tempdir;
 
     // -- init --remote tests (global) --

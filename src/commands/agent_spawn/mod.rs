@@ -302,16 +302,14 @@ fn spawn_agent(
 /// Helpers the submodules' tests share.
 #[cfg(test)]
 pub(crate) mod test_support {
-    use std::path::Path;
-
     use crate::harness::Harness;
-
     use crate::state::feature::{FeatureState, FeatureStatus};
     use crate::state::paths;
     use crate::state::project::ProjectConfig;
     use crate::testing::TestServer;
     use crate::tmux;
     use chrono::Utc;
+    use std::path::Path;
 
     /// Write stub `.agents/agents/<name>.md` files in the main worktree so
     /// `agent_spawn`'s pre-spawn definition check resolves in tests that
@@ -397,17 +395,11 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::commands::agent_spawn::test_support::*;
-
     use crate::error::PmError;
-
     use crate::state::agent::{AgentRegistry, AgentType};
-
     use crate::state::runtime;
-
     use crate::testing::TestServer;
-
     use tempfile::tempdir;
 
     #[test]

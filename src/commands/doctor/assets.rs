@@ -237,11 +237,9 @@ pub(super) fn feature_projection_issues(
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
+    use crate::commands::doctor::doctor;
     use crate::commands::doctor::test_support::*;
-    use crate::commands::doctor::*;
-
     use crate::testing::TestServer;
     use tempfile::tempdir;
 

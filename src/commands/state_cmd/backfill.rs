@@ -81,7 +81,6 @@ pub fn backfill_with_dir(projects_dir: &Path) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::state::project::ProjectEntry;
     use tempfile::tempdir;
 

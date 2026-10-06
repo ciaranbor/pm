@@ -119,17 +119,12 @@ pub fn agent_spawn_all(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::agent_spawn::*;
-
     use crate::commands::agent_spawn::test_support::*;
-
+    use crate::commands::agent_spawn::*;
+    use crate::commands::launch_check::Launch;
     use crate::harness::Harness;
     use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
-
-    use crate::commands::launch_check::Launch;
-
     use crate::testing::TestServer;
-
     use tempfile::tempdir;
 
     #[test]

@@ -257,11 +257,8 @@ fn apply_fix(
 
 #[cfg(test)]
 mod tests {
-
-    use crate::state::feature::{FeatureState, FeatureStatus};
-
     use super::*;
-
+    use crate::state::feature::{FeatureState, FeatureStatus};
     use crate::testing::TestServer;
     use tempfile::tempdir;
 
