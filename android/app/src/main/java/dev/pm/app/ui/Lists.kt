@@ -53,14 +53,23 @@ fun Home(
     openNeed: (Need) -> Unit,
     openProject: (String) -> Unit,
     modifier: Modifier = Modifier,
+    stale: Boolean = false,
 ) {
     val needs = snapshot.needsYou()
     LazyColumn(modifier) {
         item(key = "needs") { Heading("Needs you") }
         if (needs.isEmpty()) {
             item(key = "nothing") {
+                val working = snapshot.workingFeatures()
+                val line =
+                    when {
+                        !stale -> " · ${count(working, "feature")} working"
+                        working == 0 -> ""
+                        else ->
+                            " · ${count(working, "feature")} ${if (working == 1) "was" else "were"} working"
+                    }
                 Text(
-                    "Nothing needs you · ${count(snapshot.workingFeatures(), "feature")} working",
+                    "Nothing needs you$line",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
@@ -73,7 +82,7 @@ fun Home(
         }
         item(key = "projects") { Heading("Projects") }
         items(snapshot.projectsByUrgency(), key = { "project/${it.name}" }) { project ->
-            ProjectRow(snapshot, project, now, open = { openProject(project.name) })
+            ProjectRow(snapshot, project, now, stale, open = { openProject(project.name) })
             HorizontalDivider()
         }
     }
@@ -152,12 +161,13 @@ private fun ProjectRow(
     snapshot: Snapshot,
     project: ProjectSnapshot,
     now: Instant,
+    stale: Boolean,
     open: () -> Unit,
 ) {
     val counts = snapshot.attentionCounts(project.name)
     val features = snapshot.featuresOf(project.name)
     val working =
-        project.main?.let { activity(it.working || features.any { f -> f.working }, null, now) }
+        activity(project.main?.working == true || features.any { it.working }, null, null, now)
     val status =
         when {
             project.skipped != null -> "unreadable: ${project.skipped}"
@@ -168,7 +178,7 @@ private fun ProjectRow(
         modifier =
             Modifier.clickable(onClick = open).clearAndSetSemantics {
                 contentDescription =
-                    listOfNotNull(project.name, status, describe(working)).joinToString(", ")
+                    listOfNotNull(project.name, status, describe(working, stale)).joinToString(", ")
             },
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         headlineContent = { Text(project.name) },
@@ -191,7 +201,7 @@ private fun ProjectRow(
                     }
             }
         },
-        trailingContent = { ActivityLabel(working) },
+        trailingContent = { ActivityLabel(working, stale) },
     )
 }
 
@@ -204,6 +214,7 @@ fun ScopesList(
     open: (String) -> Unit,
     openNotes: () -> Unit,
     modifier: Modifier = Modifier,
+    stale: Boolean = false,
 ) {
     val main = snapshot.project(project)?.main
     LazyColumn(modifier) {
@@ -221,7 +232,8 @@ fun ScopesList(
                     line = null,
                     agents = main.agents,
                     closed = !main.sessionExists,
-                    activity = activity(main.working, main.lastActivity, now),
+                    activity = activity(main.working, main.backgroundSince, main.lastActivity, now),
+                    stale = stale,
                     open = { open(Snapshot.MAIN) },
                 )
                 HorizontalDivider()
@@ -234,7 +246,9 @@ fun ScopesList(
                 line = featureLine(feature),
                 agents = feature.agents,
                 closed = !feature.sessionExists,
-                activity = activity(feature.working, feature.lastActivity, now),
+                activity =
+                    activity(feature.working, feature.backgroundSince, feature.lastActivity, now),
+                stale = stale,
                 open = { open(feature.name) },
             )
             HorizontalDivider()
@@ -254,6 +268,7 @@ private fun ScopeRow(
     agents: List<AgentSnapshot>,
     closed: Boolean,
     activity: Activity?,
+    stale: Boolean,
     open: () -> Unit,
 ) {
     val detail = attention.detail?.takeIf { attention.kindOf != AttentionKind.None } ?: line
@@ -263,7 +278,7 @@ private fun ScopeRow(
                 attention.kind.takeIf { attention.kindOf != AttentionKind.None },
                 detail,
                 if (closed) "no session" else agents.joinToString(", ", transform = ::describe),
-                describe(activity),
+                describe(activity, stale),
             )
             .filter { it.isNotEmpty() }
             .joinToString(", ")
@@ -294,7 +309,7 @@ private fun ScopeRow(
                 if (closed) Text("no session", style = MaterialTheme.typography.labelMedium)
                 else agents.forEach { AgentBadge(it) }
             }
-            ActivityLabel(activity)
+            ActivityLabel(activity, stale)
         }
     }
 }
@@ -309,6 +324,7 @@ fun AgentsList(
     openAgent: (String) -> Unit,
     openPage: (Route) -> Unit,
     modifier: Modifier = Modifier,
+    stale: Boolean = false,
 ) {
     val feature = snapshot.feature(project, scope)
     val main = snapshot.project(project)?.main?.takeIf { scope == Snapshot.MAIN }
@@ -328,7 +344,15 @@ fun AgentsList(
                     }
                 }
                 if (feature != null) {
-                    ActivityLabel(activity(feature.working, feature.lastActivity, now))
+                    ActivityLabel(
+                        activity(
+                            feature.working,
+                            feature.backgroundSince,
+                            feature.lastActivity,
+                            now,
+                        ),
+                        stale,
+                    )
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton({ openPage(Route.Summary(project, scope)) }) {
                             Text("Summary")
@@ -339,7 +363,10 @@ fun AgentsList(
                         }
                     }
                 } else if (main != null) {
-                    ActivityLabel(activity(main.working, main.lastActivity, now))
+                    ActivityLabel(
+                        activity(main.working, main.backgroundSince, main.lastActivity, now),
+                        stale,
+                    )
                 }
                 if (feature == null && main == null)
                     Text("This scope is no longer in the snapshot.")

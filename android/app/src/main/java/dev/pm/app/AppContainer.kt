@@ -12,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
@@ -36,6 +37,7 @@ class AppContainer(context: Context) {
     init {
         val app = context.applicationContext
         scope.launch {
+            repository.loaded.first { it }
             repository.pairing.collect {
                 if (it == null) PollWorker.cancel(app) else PollWorker.schedule(app)
             }

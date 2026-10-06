@@ -116,8 +116,11 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
      */
     private val lifecycle = http.newBuilder().readTimeout(2, TimeUnit.MINUTES).build()
 
-    /** Longer than the server's 25 s heartbeat, so a silent stream is a dead one. */
-    private val streaming = http.newBuilder().readTimeout(60, TimeUnit.SECONDS).build()
+    /**
+     * Longer than the server's 25 s heartbeat, so a silent stream is a dead one, and shorter than
+     * two of them, so one missed heartbeat is enough to tell.
+     */
+    private val streaming = http.newBuilder().readTimeout(35, TimeUnit.SECONDS).build()
 
     private val api: HttpUrl = "${pairing.url}/v1/".toHttpUrl()
 

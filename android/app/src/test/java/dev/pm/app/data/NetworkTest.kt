@@ -67,11 +67,33 @@ class NetworkTest {
 
         validated(tailscale)
         assertEquals(2, changes())
-
-        callback.onLost(tailscale)
-        validated(tailscale)
-        assertEquals(3, changes())
     }
+
+    @Test
+    fun losing_the_validated_network_or_its_validation_emits_and_regaining_it_emits_again() =
+        runTest {
+            shadowOf(connectivity).setActiveNetworkInfo(null)
+            val changes = follow()
+            val wifi = ShadowNetwork.newInstance(1)
+            val cell = ShadowNetwork.newInstance(2)
+            validated(wifi)
+
+            callback.onLost(cell)
+            assertEquals(1, changes())
+            callback.onLost(wifi)
+            assertEquals(2, changes())
+            callback.onLost(wifi)
+            assertEquals(2, changes())
+            validated(wifi)
+            assertEquals(3, changes())
+
+            callback.onCapabilitiesChanged(wifi, capabilities(validated = false))
+            assertEquals(4, changes())
+            callback.onCapabilitiesChanged(wifi, capabilities(validated = false))
+            assertEquals(4, changes())
+            validated(wifi)
+            assertEquals(5, changes())
+        }
 
     @Test
     fun the_network_already_validated_at_the_start_is_no_change() = runTest {

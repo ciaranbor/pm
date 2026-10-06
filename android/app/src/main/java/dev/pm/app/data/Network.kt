@@ -10,8 +10,9 @@ import kotlinx.coroutines.flow.callbackFlow
 
 /**
  * Emits each time a different default network is validated, such as a switch from one VPN to
- * another. A stream opened over the previous network may be dead without having failed yet, so it
- * is worth reopening.
+ * another, and each time the validated one is lost or loses validation. A stream opened over the
+ * previous network may be dead without having failed yet: reopening it either moves it to the new
+ * network or fails at once, so the loss shows without waiting out a read timeout.
  */
 fun Context.defaultNetworkChanges(): Flow<Unit> = callbackFlow {
     val connectivity = getSystemService(ConnectivityManager::class.java)
@@ -27,17 +28,20 @@ fun Context.defaultNetworkChanges(): Flow<Unit> = callbackFlow {
                 network: Network,
                 capabilities: NetworkCapabilities,
             ) {
-                if (
-                    network == last ||
-                        !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-                )
-                    return
-                last = network
+                val validated =
+                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                when {
+                    validated && network != last -> last = network
+                    !validated && network == last -> last = null
+                    else -> return
+                }
                 trySend(Unit)
             }
 
             override fun onLost(network: Network) {
-                if (network == last) last = null
+                if (network != last) return
+                last = null
+                trySend(Unit)
             }
         }
     connectivity.registerDefaultNetworkCallback(callback)

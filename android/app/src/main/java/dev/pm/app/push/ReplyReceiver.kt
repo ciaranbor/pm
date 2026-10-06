@@ -33,7 +33,7 @@ class ReplyReceiver : BroadcastReceiver() {
         val pending = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val failure = reply(app.container.repository.client.value, transition, text)
+                val failure = reply(app.container.repository.loadedClient(), transition, text)
                 Notifications.replied(app, transition, text, failure)
             } finally {
                 pending.finish()

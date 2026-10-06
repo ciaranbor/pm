@@ -108,28 +108,42 @@ fun AgentBadge(agent: AgentSnapshot, modifier: Modifier = Modifier, showName: Bo
     }
 }
 
-/** What an [ActivityLabel] says, for a row's composed description. */
-fun describe(activity: Activity?): String? =
+/**
+ * What an [ActivityLabel] says, for a row's composed description. While `stale` (`pm serve` isn't
+ * live, so the snapshot may be out of date) working reads as what it was.
+ */
+fun describe(activity: Activity?, stale: Boolean): String? =
     when (activity) {
-        Activity.Working -> "working"
+        Activity.Working -> if (stale) "was working" else "working"
+        is Activity.Background -> "background ${activity.span}"
         is Activity.Quiet -> "quiet ${activity.span}"
         null -> null
     }
 
 @Composable
-fun ActivityLabel(activity: Activity?, modifier: Modifier = Modifier) {
-    val text = describe(activity) ?: return
+fun ActivityLabel(activity: Activity?, stale: Boolean, modifier: Modifier = Modifier) {
+    val text = describe(activity, stale) ?: return
     Row(
         modifier = modifier,
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        val working = activity == Activity.Working
-        if (working) MarkIcon(Marks.agent(AgentState.Busy), null, Modifier.size(14.dp))
+        val state =
+            when (activity) {
+                Activity.Working -> AgentState.Busy
+                is Activity.Background -> AgentState.Background
+                else -> null
+            }
+        if (state != null) {
+            val mark = Marks.agent(state).let { if (stale) it.copy(tone = Tone.Grey) else it }
+            MarkIcon(mark, null, Modifier.size(14.dp))
+        }
         Text(
             text,
             style = MaterialTheme.typography.labelSmall,
-            color = if (working) Tone.Green.color() else Tone.Grey.color(),
+            color =
+                if (activity == Activity.Working && !stale) Tone.Green.color()
+                else Tone.Grey.color(),
         )
     }
 }

@@ -112,21 +112,36 @@ object Marks {
 sealed interface Activity {
     data object Working : Activity
 
+    /** Waiting on background work for `span`, as pm writes it. */
+    data class Background(val span: String) : Activity
+
     /** Quiet for `span`, as pm writes it: `12m`, `3h`, `2d`. */
     data class Quiet(val span: String) : Activity
 }
 
 /**
- * pm's rule (`attention::quiet_since`): working while an agent showed activity recently; otherwise
- * quiet once that was [QUIET] or longer ago, and nothing in between, so the gaps between turns
- * don't flicker.
+ * pm's rule (`attention::activity`): working while an agent showed activity recently; else waiting
+ * on background work since its oldest wait began; otherwise quiet once that was [QUIET] or longer
+ * ago, and nothing in between, so the gaps between turns don't flicker.
  */
-fun activity(working: Boolean, lastActivity: String?, now: Instant): Activity? {
+fun activity(
+    working: Boolean,
+    backgroundSince: String?,
+    lastActivity: String?,
+    now: Instant,
+): Activity? {
     if (working) return Activity.Working
-    val then = lastActivity?.let { runCatching { Instant.parse(it) }.getOrNull() } ?: return null
+    instant(backgroundSince)?.let {
+        return Activity.Background(span(Duration.between(it, now).seconds.coerceAtLeast(0)))
+    }
+    val then = instant(lastActivity) ?: return null
     val secs = Duration.between(then, now).seconds.coerceAtLeast(0)
     if (secs < QUIET.seconds) return null
     return Activity.Quiet(span(secs))
+}
+
+private fun instant(text: String?): Instant? = text?.let {
+    runCatching { Instant.parse(it) }.getOrNull()
 }
 
 val QUIET: Duration = Duration.ofMinutes(10)

@@ -13,6 +13,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -23,6 +24,7 @@ import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -52,8 +54,10 @@ class RepositoryTest {
         server.close()
     }
 
-    private fun TestScope.repository(io: CoroutineDispatcher = Dispatchers.IO) =
-        Repository(store, OkHttpClient(), backgroundScope, network, io)
+    private fun TestScope.repository(
+        io: CoroutineDispatcher = Dispatchers.IO,
+        prefs: CoroutineDispatcher = Dispatchers.IO,
+    ) = Repository(store, OkHttpClient(), backgroundScope, network, io, prefs)
 
     /** A disk that runs nothing until opened, then everything in order. */
     private class HeldDisk {
@@ -116,6 +120,58 @@ class RepositoryTest {
         eventually { repository.connection.value == Connection.Live }
         assertEquals(2, eventsRequests())
     }
+
+    @Test
+    fun losing_the_network_while_live_shows_offline_without_waiting_for_the_stream_to_time_out() =
+        runTest {
+            server.enqueue(stream.response("snapshot" to SNAPSHOT))
+            val repository = repository()
+            repository.start()
+            eventually { repository.connection.value == Connection.Live }
+
+            server.enqueue(MockResponse.Builder().code(502).build())
+            network.tryEmit(Unit)
+            eventually { repository.connection.value is Connection.Unreachable }
+        }
+
+    @Test
+    fun a_retry_asked_for_while_unreachable_is_connecting_until_it_settles() = runTest {
+        server.enqueue(MockResponse.Builder().code(502).build())
+        val repository = repository()
+        repository.start()
+        eventually { repository.connection.value is Connection.Unreachable }
+
+        server.enqueue(MockResponse.Builder().code(502).build())
+        repository.retry()
+        assertEquals(Connection.Connecting, repository.connection.value)
+        eventually { repository.connection.value is Connection.Unreachable }
+
+        server.enqueue(stream.response("snapshot" to SNAPSHOT))
+        repository.retry()
+        eventually { repository.connection.value == Connection.Live }
+        assertEquals(3, eventsRequests())
+    }
+
+    @Test
+    fun the_pairing_is_read_off_the_callers_thread_and_a_start_asked_for_meanwhile_holds() =
+        runTest {
+            server.enqueue(stream.response("snapshot" to SNAPSHOT))
+            val disk = HeldDisk()
+            val repository = repository(prefs = disk.dispatcher)
+            repository.start()
+            runCurrent()
+            assertEquals(false, repository.loaded.value)
+            assertNull(repository.pairing.value)
+            val client = async { repository.loadedClient() }
+            runCurrent()
+            assertFalse(client.isCompleted)
+
+            disk.drain()
+            eventually { client.isCompleted }
+            assertNotNull(client.await())
+            eventually { repository.connection.value == Connection.Live }
+            assertEquals("tok", repository.pairing.value?.token)
+        }
 
     @Test
     fun a_failure_is_retried_after_the_backoff() = runTest {
