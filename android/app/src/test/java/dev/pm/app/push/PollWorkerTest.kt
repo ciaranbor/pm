@@ -68,12 +68,12 @@ class PollWorkerTest {
             .create()
             .get()
             .onRegistrationFailed(FailedReason.INTERNAL_ERROR, "default")
-        // A poll that has read before, so login's standing blocked alert is new to it.
+        // A poll that has read before, so login's blocked and search's ready alerts are new to it.
         context.container.store.polled = emptySet()
         poll()
         assertEquals(listOf("/v1/snapshot"), snapshots.toList())
         val shown = alerts().filter { it.tag != null }
-        assertEquals(2, shown.size)
+        assertEquals(3, shown.size)
         val blocked = shown.single {
             it.notification.channelId == "needs-input" && it.notification.actions != null
         }

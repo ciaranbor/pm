@@ -6,7 +6,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PollTest {
-    // login: blocked, its implementer asking; search: ready, its team working.
+    // login: blocked, its implementer asking; search: ready.
     private val snapshot = Snapshot.parse(SNAPSHOT)
 
     private fun push(kind: String, scope: String = "login", agent: String? = null) =
@@ -41,10 +41,19 @@ class PollTest {
     }
 
     @Test
-    fun a_ready_feature_alerts_once_its_team_is_quiet() {
-        val (owed, none) = Poll.judge(Poll.judge(null, snapshot).first, snapshot)
-        assertTrue(none.isEmpty())
-        val quiet = snapshot.withFeature("search") { it.copy(working = false) }
-        assertEquals(listOf(push("ready", scope = "search")), Poll.judge(owed, quiet).second)
+    fun a_ready_feature_alerts_once_no_agent_is_busy_however_quiet_its_team() {
+        val reviewer = AgentSnapshot("reviewer", state = "busy")
+        val busy =
+            snapshot.withFeature("search") { it.copy(agents = listOf(reviewer), working = false) }
+        val idle =
+            busy.withFeature("search") { it.copy(agents = listOf(reviewer.copy(state = "idle"))) }
+
+        val (calm, _) = Poll.judge(null, busy.withFeature("search") { it.copy(progress = "wip") })
+        val (owed, none) = Poll.judge(calm, busy)
+        assertTrue("held back while its agent is busy", none.isEmpty())
+        assertEquals(listOf(push("ready", scope = "search")), Poll.judge(owed, idle).second)
+
+        val (standing, _) = Poll.judge(null, busy)
+        assertTrue("a standing ready, held back", Poll.judge(standing, idle).second.isEmpty())
     }
 }
