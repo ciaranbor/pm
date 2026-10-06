@@ -8,11 +8,14 @@
 //! A scope alerts as it enters blocked, asking or ready. A kind's episode
 //! lasts while its condition holds, not while it is the scope's attention:
 //! a ready feature whose agent asks, then is answered, reads ready again
-//! without being newly ready. A feature that turns ready while its team is
-//! busy owes its alert until the team goes quiet. A scope judged for the
-//! first time — a session just opened, or a watcher just started — shows a
-//! standing blocked or ready without alerting it: it was set before, and
-//! alerted then if anyone was watching. A dialog up now still alerts.
+//! without being newly ready, and neither does one whose agent turns busy
+//! and goes idle again: a busy agent holds back only the attention, not the
+//! episode, so a feature marked ready mid-turn alerts once, when its team
+//! is next not busy. A scope judged for the first time — a session just
+//! opened, or a watcher just started — shows a standing blocked or ready
+//! without alerting it, even while a busy agent holds it back: it was set
+//! before, and alerted then if anyone was watching. A dialog up now still
+//! alerts.
 
 use std::collections::{HashMap, HashSet};
 
@@ -35,12 +38,10 @@ const ALERTING: [AttentionKind; 3] = [
 /// What a scope's last judgement left behind.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Judged {
-    /// The attention the scope showed as needing the user ([`needs_user`]).
+    /// The attention the scope showed.
     pub attention: Option<AttentionKind>,
     /// The kinds alerted on whose condition still held.
     pub alerted: Vec<AttentionKind>,
-    /// A ready alert deferred while the team is busy.
-    pub owed: bool,
 }
 
 impl Judged {
@@ -78,35 +79,24 @@ pub struct Verdict {
     pub alert: bool,
 }
 
-/// The attention `feature` shows as needing the user: a ready feature whose
-/// team is busy isn't waiting on the user yet.
-pub fn needs_user(feature: &FeatureSnapshot) -> Option<AttentionKind> {
-    let kind = feature.attention.kind;
-    let waiting = !(kind == AttentionKind::Ready && feature.working);
-    (kind != AttentionKind::None && waiting).then_some(kind)
-}
-
 /// Judge `feature` against what its last judgement left, `None` when it has
 /// had none.
 pub fn judge_feature(previous: Option<&Judged>, feature: &FeatureSnapshot) -> Verdict {
     let kind = feature.attention.kind;
     let mut judged = carried(previous, |k| feature_holds(feature, k));
-    if previous.is_none() && matches!(kind, AttentionKind::Blocked | AttentionKind::Ready) {
-        judged.record(kind);
+    if previous.is_none() {
+        for standing in [AttentionKind::Blocked, AttentionKind::Ready] {
+            if feature_holds(feature, standing) {
+                judged.record(standing);
+            }
+        }
     }
     let shown = previous.and_then(|p| p.attention);
-    let new = shown != Some(kind) && !judged.alerted.contains(&kind);
-    let owed = kind == AttentionKind::Ready && (new || previous.is_some_and(|p| p.owed));
-    let alert = match kind {
-        AttentionKind::Blocked | AttentionKind::Asking => new,
-        AttentionKind::Ready => owed && !feature.working,
-        _ => false,
-    };
+    let alert = ALERTING.contains(&kind) && shown != Some(kind) && !judged.alerted.contains(&kind);
     if alert {
         judged.record(kind);
     }
-    judged.attention = needs_user(feature);
-    judged.owed = owed && feature.working;
+    judged.attention = (kind != AttentionKind::None).then_some(kind);
     Verdict { judged, alert }
 }
 
@@ -426,6 +416,16 @@ mod tests {
             ],
             "known before it went unreadable"
         );
+    }
+
+    #[test]
+    fn a_standing_ready_first_judged_while_an_agent_is_busy_never_alerts() {
+        let busy = judge_feature(None, &feature(Progress::Ready, true, AgentState::Busy));
+        assert_eq!(busy.judged.attention, None);
+        let idle = feature(Progress::Ready, false, AgentState::Idle);
+        let verdict = judge_feature(Some(&busy.judged), &idle);
+        assert_eq!(verdict.judged.attention, Some(AttentionKind::Ready));
+        assert!(!verdict.alert);
     }
 
     #[test]
