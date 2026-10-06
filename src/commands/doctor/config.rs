@@ -207,7 +207,7 @@ mod tests {
         let (project_path, _, _) = server.setup_project_no_tmux(dir.path());
         assert!(harness_config_issues(&project_path).unwrap().is_empty());
 
-        use_opencode(&project_path, "*", "opencode v2.0.18");
+        use_opencode(&project_path, "*", "opencode v2.0.23");
         let pm_dir = paths::pm_dir(&project_path);
         let mut config = ProjectConfig::load(&pm_dir).unwrap();
         let agents = &mut config.agents;
@@ -278,7 +278,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project_no_tmux(dir.path());
-        use_opencode(&project_path, "reviewer", "opencode v2.0.18");
+        use_opencode(&project_path, "reviewer", "opencode v2.0.23");
         let pm_dir = paths::pm_dir(&project_path);
         let mut config = ProjectConfig::load(&pm_dir).unwrap();
         config
@@ -302,7 +302,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project_no_tmux(dir.path());
-        use_opencode(&project_path, "reviewer", "opencode v2.0.18");
+        use_opencode(&project_path, "reviewer", "opencode v2.0.23");
         let pm_dir = paths::pm_dir(&project_path);
         let mut config = ProjectConfig::load(&pm_dir).unwrap();
         config

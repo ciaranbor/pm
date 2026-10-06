@@ -81,7 +81,14 @@ fi
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-fetch "$url/$asset" "$work/$asset" || fail "could not download $url/$asset"
+if ! fetch "$url/$asset" "$work/$asset"; then
+    # The release workflow adds the macOS binary after the rest.
+    pending=
+    case "$target" in
+        *apple-darwin) pending="if it was published in the last hour, try again later; otherwise " ;;
+    esac
+    fail "could not download $url/$asset; ${pending}build from source: cargo install --git $repo"
+fi
 fetch "$url/SHA256SUMS" "$work/SHA256SUMS" || fail "could not download $url/SHA256SUMS"
 expected=$(awk -v name="$asset" '$2 == name || $2 == "*" name { print $1 }' "$work/SHA256SUMS")
 [ -n "$expected" ] || fail "SHA256SUMS lists no $asset"

@@ -373,7 +373,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project_no_tmux(dir.path());
-        use_opencode(&project_path, "planner", "opencode v2.0.18");
+        use_opencode(&project_path, "planner", "opencode v2.0.23");
         let planner = paths::main_worktree(&project_path).join(".agents/agents/planner.md");
         std::fs::create_dir_all(planner.parent().unwrap()).unwrap();
         std::fs::write(&planner, "# planner").unwrap();

@@ -56,7 +56,9 @@ pub fn init_in(
     git_url: Option<&str>,
     tmux_server: Option<&str>,
 ) -> Result<PathBuf> {
-    if path.exists() {
+    // Not `exists`, which follows symlinks: a dangling one would pass, and
+    // the cleanup below would then remove it.
+    if std::fs::symlink_metadata(path).is_ok() {
         return Err(PmError::PathAlreadyExists(path.to_path_buf()));
     }
 
@@ -84,31 +86,28 @@ pub fn init_in(
     let path = path_buf.as_path();
     ProjectEntry::ensure_name_free(projects_dir, &name, path)?;
 
-    // A failure before the registry save removes what this call created, so
-    // a retry finds no path in the way. `path` was absent, so its outermost
-    // missing ancestor and everything under it are new.
+    // A failure removes what this call created, so a retry finds no path in
+    // the way. `path` was absent, so its outermost missing ancestor and
+    // everything under it are new. The registry is saved last, so a failure
+    // leaves no entry to undo.
     let created = topmost_missing(path);
-    let main_branch = match populate(path, &name, global, git_url) {
-        Ok(branch) => branch,
-        Err(e) => {
-            let _ = std::fs::remove_dir_all(&created);
-            return Err(e);
-        }
-    };
-    let main_path = paths::main_worktree(path);
-
-    // Register in global registry
-    let entry = ProjectEntry {
-        root: crate::path_utils::to_portable(path),
-        main_branch,
-        repo_url: git_url.map(|u| u.to_string()),
-        state_remote: None,
-    };
-    entry.save(projects_dir, &name)?;
-
-    // Create main tmux session
     let session_name = tmux::session_name(&name, "main");
-    tmux::create_session(tmux_server, &session_name, &main_path)?;
+    let built = populate(path, &name, global, git_url).and_then(|main_branch| {
+        tmux::create_session(tmux_server, &session_name, &paths::main_worktree(path))?;
+        let entry = ProjectEntry {
+            root: crate::path_utils::to_portable(path),
+            main_branch,
+            repo_url: git_url.map(|u| u.to_string()),
+            state_remote: None,
+        };
+        entry.save(projects_dir, &name).inspect_err(|_| {
+            let _ = tmux::kill_session(tmux_server, &session_name);
+        })
+    });
+    if let Err(e) = built {
+        let _ = std::fs::remove_dir_all(&created);
+        return Err(e);
+    }
 
     Ok(path_buf)
 }
@@ -464,6 +463,39 @@ mod tests {
         assert!(dir.path().exists());
         assert!(home.is_file());
         assert!(ProjectEntry::list(&projects_dir).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_failed_session_leaves_no_registry_entry_or_directory() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let name = server.scope("myapp");
+        let project_path = dir.path().join(&name);
+        let projects_dir = dir.path().join("registry");
+        let session = tmux::session_name(&name, "main");
+        tmux::create_session(server.name(), &session, dir.path()).unwrap();
+
+        let result = init(&project_path, &projects_dir, None, server.name());
+
+        assert!(matches!(result, Err(PmError::Tmux(_))), "{result:?}");
+        assert!(!project_path.exists());
+        assert!(ProjectEntry::list(&projects_dir).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_dangling_symlink_at_the_path_is_refused_and_kept() {
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().join("myapp");
+        let projects_dir = dir.path().join("registry");
+        std::os::unix::fs::symlink(dir.path().join("gone"), &project_path).unwrap();
+
+        let result = init(&project_path, &projects_dir, None, None);
+
+        assert!(
+            matches!(result, Err(PmError::PathAlreadyExists(_))),
+            "{result:?}"
+        );
+        assert!(std::fs::symlink_metadata(&project_path).is_ok());
     }
 
     #[test]

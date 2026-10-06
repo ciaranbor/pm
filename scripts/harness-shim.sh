@@ -10,7 +10,7 @@ case $1 in
   --help) echo "  --append-system-prompt-file <file>"; exit 0 ;;
   --version)
     case $name in
-      opencode) echo "opencode v2.0.18" ;;
+      opencode) echo "opencode v2.0.23" ;;
       *) echo "$name 0.156.0" ;;
     esac
     exit 0 ;;

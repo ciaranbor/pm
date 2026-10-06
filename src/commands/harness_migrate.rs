@@ -202,7 +202,7 @@ mod tests {
         config.harness.opencode.binary = Some(fake_opencode_sequence(
             fake.path(),
             &[
-                "opencode v2.0.18",
+                "opencode v2.0.23",
                 listing,
                 listing,
                 "server listening on http://127.0.0.1:9",

@@ -17,23 +17,9 @@ use crate::state::workflow;
 /// otherwise the display name doubles as the definition (back-compat).
 pub(super) fn effective_definition<'a>(
     agent_definition: Option<&'a str>,
-    agent_name: Option<&'a str>,
-) -> Option<&'a str> {
-    agent_definition.or(agent_name)
-}
-
-/// The settings a spawn actually launches with: config resolved for this
-/// agent's definition. A `None` definition (a plain, unregistered session)
-/// takes no config at all.
-fn spawn_settings(
-    definition: Option<&str>,
-    project: &AgentsConfig,
-    global: &AgentsConfig,
-) -> Result<AgentSettings> {
-    Ok(definition
-        .map(|def| resolve_agent_settings(project, global, def))
-        .transpose()?
-        .unwrap_or_default())
+    agent_name: &'a str,
+) -> &'a str {
+    agent_definition.unwrap_or(agent_name)
 }
 
 /// The harness config selects for `definition`, checked before a respawn
@@ -73,8 +59,8 @@ pub(super) fn writable_dirs(
 /// The definition that reaches the harness: the effective definition, except
 /// the reserved vanilla name (any alias), which launches a definition-less
 /// session even if a matching definition file happens to exist.
-pub(crate) fn definition_flag(effective_definition: Option<&str>) -> Option<&str> {
-    effective_definition.filter(|d| !workflow::is_vanilla(d))
+pub(crate) fn definition_flag(effective_definition: &str) -> Option<&str> {
+    (!workflow::is_vanilla(effective_definition)).then_some(effective_definition)
 }
 
 /// What config has a spawn of `definition` (the effective one) in `scope`
@@ -92,11 +78,11 @@ pub(crate) struct LaunchConfig {
 pub(crate) fn resolve_launch(
     project_root: &Path,
     scope: &str,
-    definition: Option<&str>,
+    definition: &str,
     config: &ProjectConfig,
     global: &GlobalConfig,
 ) -> Result<LaunchConfig> {
-    let settings = spawn_settings(definition, &config.agents, &global.agents)?;
+    let settings = resolve_agent_settings(&config.agents, &global.agents, definition)?;
     let harness_config = resolve_harness_config(&config.harness, &global.harness);
     let writable_dirs = writable_dirs(project_root, &harness_config);
     let edit_dirs = if scope == "main" {
@@ -116,7 +102,7 @@ pub(crate) fn resolve_launch(
 mod tests {
     use super::*;
     use crate::harness::{self, Harness, SpawnSpec};
-    use crate::state::project::{AgentSettings, AgentsConfig, HarnessConfig};
+    use crate::state::project::{AgentsConfig, HarnessConfig};
     use std::path::PathBuf;
 
     #[test]
@@ -124,10 +110,10 @@ mod tests {
         // The reserved name is filtered out of the definition flag; any
         // other definition passes through.
         let alias = "plain";
-        assert_eq!(definition_flag(Some(alias)), None, "{alias}");
+        assert_eq!(definition_flag(alias), None, "{alias}");
         let cmd = Harness::ClaudeCode.build_cmd(
             &SpawnSpec {
-                definition: definition_flag(Some(alias)),
+                definition: definition_flag(alias),
                 ..Default::default()
             },
             &HarnessConfig::default(),
@@ -137,7 +123,7 @@ mod tests {
             !cmd.contains("--agent"),
             "vanilla spawn must not pass --agent, got: {cmd}"
         );
-        assert_eq!(definition_flag(Some("reviewer")), Some("reviewer"));
+        assert_eq!(definition_flag("reviewer"), Some("reviewer"));
     }
 
     #[test]
@@ -163,7 +149,7 @@ mod tests {
     }
 
     #[test]
-    fn spawn_settings_keyed_by_definition_not_display_name() {
+    fn settings_are_keyed_by_definition_not_display_name() {
         // A named agent (display `backend-dev`, definition `implementer`)
         // takes the definition's settings, not the display name's.
         let project = AgentsConfig {
@@ -175,29 +161,13 @@ mod tests {
             .collect(),
             ..Default::default()
         };
-        let named = effective_definition(Some("implementer"), Some("backend-dev"));
-        let settings = spawn_settings(named, &project, &AgentsConfig::default()).unwrap();
+        let named = effective_definition(Some("implementer"), "backend-dev");
+        let settings = resolve_agent_settings(&project, &AgentsConfig::default(), named).unwrap();
         assert_eq!(settings.model.as_deref(), Some("opus"));
 
         // With no override the display name doubles as the definition.
-        let plain = effective_definition(None, Some("backend-dev"));
-        let settings = spawn_settings(plain, &project, &AgentsConfig::default()).unwrap();
+        let plain = effective_definition(None, "backend-dev");
+        let settings = resolve_agent_settings(&project, &AgentsConfig::default(), plain).unwrap();
         assert_eq!(settings.model.as_deref(), Some("haiku"));
-    }
-
-    #[test]
-    fn spawn_settings_without_definition_takes_no_config() {
-        // A plain claude session has no definition to key on.
-        let project = AgentsConfig {
-            permissions: [("claude".to_string(), "plan".to_string())]
-                .into_iter()
-                .collect(),
-            models: [("claude".to_string(), "opus".to_string())]
-                .into_iter()
-                .collect(),
-            ..Default::default()
-        };
-        let settings = spawn_settings(None, &project, &AgentsConfig::default()).unwrap();
-        assert_eq!(settings, AgentSettings::default());
     }
 }

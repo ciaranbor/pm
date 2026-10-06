@@ -8,7 +8,7 @@
 //! `.cargo/config.toml` caps runs at 4 threads. A budget failure means leaked
 //! sessions. To recover from a runaway run, kill its server with
 //! `tmux -L pm-test-<pid> kill-server`, or every test server with
-//! `for s in /tmp/tmux-$(id -u)/pm-test-*; do tmux -L $(basename "$s") kill-server; rm -f "$s"; done`.
+//! [`KILL_ALL_TEST_SERVERS`].
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::OnceLock;
@@ -223,6 +223,9 @@ const MAX_TEST_SESSIONS: usize = 200;
 /// sessions and agents.
 const MAX_SYSTEM_PTYS: usize = 300;
 
+/// Shell command that kills every test server and unlinks its socket.
+const KILL_ALL_TEST_SERVERS: &str = r#"for s in /tmp/tmux-$(id -u)/pm-test-*; do tmux -L $(basename "$s") kill-server; rm -f "$s"; done"#;
+
 /// Count system-wide allocated ptys by reading `/dev/ttys*` entries.
 /// Returns `None` if the count cannot be determined.
 fn system_pty_count() -> Option<usize> {
@@ -248,7 +251,7 @@ fn enforce_system_pty_cap() -> Result<(), String> {
             "system-wide pty count is {count} (threshold: {MAX_SYSTEM_PTYS}, macOS limit: 511). \
                  Aborting test to prevent pty exhaustion. \
                  Check for leaked tmux sessions: tmux list-sessions; \
-                 kill test servers: for s in /tmp/tmux-$(id -u)/pm-test-*; do tmux -L $(basename \"$s\") kill-server; done"
+                 kill test servers: {KILL_ALL_TEST_SERVERS}"
         ));
     }
     Ok(())

@@ -130,7 +130,7 @@ fn setup_review(
         let spawned = agent_spawn::spawn_session(&agent_spawn::SpawnParams {
             project_root,
             feature: feature_name,
-            agent_name: Some("reviewer"),
+            agent_name: "reviewer",
             // The reviewer flow always uses the `reviewer` definition; no
             // alias support needed here.
             agent_definition: None,

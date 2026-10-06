@@ -140,7 +140,7 @@ unattended:
 ## opencode
 
 Set `[agents.harness] <def> = "opencode"` and pm spawns that agent in the
-opencode TUI (2.0.18 or later; `pm harness probe --harness opencode`
+opencode TUI (2.0.23 or later; `pm harness probe --harness opencode`
 checks). opencode's stable channel is still v1 — `opencode upgrade` stays
 on 1.18.x — so install v2 with `curl -fsSL https://opencode.ai/v2/install |
 bash`. What differs:
