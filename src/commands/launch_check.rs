@@ -28,7 +28,7 @@ use crate::state::paths;
 use crate::state::project::{GlobalConfig, HarnessConfig, ProjectConfig, resolve_harness_config};
 use crate::tmux::{self, Process};
 
-use super::running_agents::{Liveness, Windows, is_idle, liveness};
+use super::running_agents::{AgentAt, Liveness, Windows, classify, liveness};
 
 /// How long a harness must run before its launch counts as a success.
 const STAY_UP: Duration = Duration::from_secs(2);
@@ -210,7 +210,13 @@ fn watch(
             let Some(processes) = windows.processes(pane) else {
                 continue;
             };
-            if is_idle(&processes) {
+            let agent = AgentAt {
+                project_root: &watched.launch.project_root,
+                scope: &watched.launch.scope,
+                name: &watched.launch.agent,
+                harness: watched.harness,
+            };
+            if classify(agent, Some(&processes), &watched.harness_config).0 == Liveness::Idle {
                 continue;
             }
             let running = processes

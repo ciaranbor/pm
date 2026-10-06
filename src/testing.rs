@@ -889,8 +889,12 @@ impl TestServer {
         harness: crate::harness::Harness,
         want: crate::commands::running_agents::Liveness,
     ) {
-        use crate::commands::running_agents::liveness;
+        use crate::commands::running_agents::{Liveness, liveness};
         let config = crate::state::project::HarnessConfig::default();
+        // `mark_idle` waits for an idle one's hook.
+        if want == Liveness::Idle {
+            return;
+        }
         // Under heavy load (parallel tests) this can take longer than
         // usual, so we poll generously.
         for _ in 0..500 {
@@ -933,8 +937,35 @@ impl TestServer {
             agent_name,
             crate::commands::running_agents::Liveness::Idle,
         );
+        self.mark_idle(project_root, feature, agent_name, &target);
         self.register_fake_agent(project_root, feature, agent_name);
         target
+    }
+
+    /// Make the process in `target`'s pane that carries pm's Stop hook the
+    /// agent's waiter, and mark the agent idle.
+    fn mark_idle(
+        &self,
+        project_root: &std::path::Path,
+        feature: &str,
+        agent_name: &str,
+        target: &str,
+    ) {
+        use crate::state::runtime::{self, Waiting, WaitingKind};
+        for _ in 0..500 {
+            let processes = crate::tmux::pane_processes(self.name(), target).unwrap_or_default();
+            if let Some(hook) = processes.iter().find(|p| {
+                p.command
+                    .contains(crate::commands::hooks_install::PM_HOOK_MARKER)
+            }) {
+                runtime::take_waiter(project_root, feature, agent_name, hook.pid, None).unwrap();
+                let idle = Waiting::now(WaitingKind::Idle, None);
+                runtime::write_waiting(project_root, feature, agent_name, &idle).unwrap();
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("no process in '{target}' carries pm's Stop hook");
     }
 
     /// An agent of `harness` whose pane runs `command` with `exec`, once the
@@ -954,6 +985,9 @@ impl TestServer {
         let target = self.fake_agent_window(project_root, session_name, feature, agent_name);
         crate::tmux::send_line(self.name(), &target, &format!("exec {command}")).unwrap();
         self.await_harness_liveness(&target, agent_name, harness, want);
+        if want == crate::commands::running_agents::Liveness::Idle {
+            self.mark_idle(project_root, feature, agent_name, &target);
+        }
         self.register_harness_agent(project_root, feature, agent_name, harness);
         target
     }

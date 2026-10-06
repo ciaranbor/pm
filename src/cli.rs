@@ -459,7 +459,11 @@ pub enum HarnessHooksCommands {
     /// Install pm hooks into each harness's user-level hooks file, moving any out of project files
     Install,
     /// Stop hook handler — called by the harness on every Stop event (not for direct use)
-    Stop,
+    Stop {
+        /// The harness whose hook entry runs it once the turn has ended;
+        /// omitted, it blocks inside the turn (opencode's plugin)
+        harness: Option<pm::harness::Harness>,
+    },
     /// SessionStart hook handler — called by the harness on session start (not for direct use)
     SessionStart,
     /// UserPromptSubmit hook handler — unblocks a feature on the user's input (not for direct use)

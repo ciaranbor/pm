@@ -1,15 +1,23 @@
 //! The agents of a scope that are running, and what each one's window is
 //! doing ([`Liveness`]).
 //!
-//! An agent is idle only while it waits in pm's Stop hook. A window whose
-//! agent pane ([`tmux::mark_agent_pane`]) has its shell back at the prompt
-//! — in the terminal's foreground, running no job — and no process of the
-//! agent's harness ([`Harness::runs_as`]) is dead: the harness exited to
-//! the shell and nothing will wake it. A foreground job is the harness
-//! whatever it is named, so a wrapper with another name doesn't read dead,
-//! and a shell's own background helpers don't read busy. Anything else is
-//! busy, a harness that yielded for background work included. A pane whose
-//! processes cannot be read counts as busy.
+//! A window whose agent pane ([`tmux::mark_agent_pane`]) has its shell back
+//! at the prompt — in the terminal's foreground, running no job — and no
+//! process of the agent's harness ([`Harness::runs_as`]) is dead: the
+//! harness exited to the shell and nothing will wake it. A foreground job
+//! is the harness whatever it is named, so a wrapper with another name
+//! doesn't read dead, and a shell's own background helpers don't read busy.
+//! A pane whose processes cannot be read counts as busy.
+//!
+//! An agent whose harness runs is idle when it is at what its marker or
+//! transcript says ([`waiting`]), a state its harness's waiter wakes it
+//! from ([`Harness::waiter_wakes`]), and its waiter
+//! ([`runtime::read_waiter`]) is one of the pane's processes: a message
+//! wakes it — unless that waiter waits on background work too, which the
+//! agent then reads as. Anything else is busy, refined by what it is at; an idle
+//! or background marker whose waiter is gone is unarmed: nothing pm runs
+//! will wake it, and a background task the harness reported may have ended
+//! already.
 //!
 //! [`Windows`] reads every pane on the server and the process table once,
 //! so classifying any number of agents costs one `tmux` and one `ps` call.
@@ -21,10 +29,8 @@ use crate::harness::Harness;
 use crate::state::agent::{AgentEntry, AgentRegistry};
 use crate::state::paths;
 use crate::state::project::HarnessConfig;
-use crate::state::runtime::{self, SessionPath, Waiting};
+use crate::state::runtime::{self, SessionPath, Waiting, WaitingKind};
 use crate::tmux::{self, Pane, Process, ProcessTable};
-
-use super::hooks_install::runs_stop_hook;
 
 /// An active agent with a window.
 pub struct RunningAgent {
@@ -64,7 +70,7 @@ pub fn running_in_scope(
 /// What an agent's window is doing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Liveness {
-    /// Waiting in pm's Stop hook, between turns.
+    /// Between turns, a live waiter waiting on its inbox ([`classify`]).
     Idle,
     /// Mid-turn, or running background work.
     Busy,
@@ -72,8 +78,9 @@ pub enum Liveness {
     Dead,
 }
 
-/// Classify a window by the processes of its pane, the pane's own first;
-/// `None`, processes that could not be read, counts as busy.
+/// Classify a window as busy or dead by the processes of its pane, the
+/// pane's own first; `None`, processes that could not be read, counts as
+/// busy. Never idle: that takes [`classify`].
 pub fn liveness(
     processes: Option<&[Process]>,
     harness: Harness,
@@ -83,9 +90,7 @@ pub fn liveness(
         return Liveness::Busy;
     };
     let at_prompt = processes.first().is_some_and(|shell| shell.foreground);
-    if is_idle(processes) {
-        Liveness::Idle
-    } else if !at_prompt
+    if !at_prompt
         || processes
             .iter()
             .any(|p| harness.runs_as(&p.command, config))
@@ -119,10 +124,58 @@ pub fn waiting(project_root: &Path, scope: &str, agent: &str, harness: Harness) 
     }
 }
 
-/// Whether an agent's pane processes show it waiting in pm's Stop hook,
-/// between turns.
-pub fn is_idle(processes: &[Process]) -> bool {
-    processes.iter().any(|p| runs_stop_hook(&p.command))
+/// An agent, for [`classify`].
+#[derive(Debug, Clone, Copy)]
+pub struct AgentAt<'a> {
+    pub project_root: &'a Path,
+    pub scope: &'a str,
+    pub name: &'a str,
+    pub harness: Harness,
+}
+
+/// What `agent`'s window, whose pane runs `processes`, is doing, and for
+/// one busy what it is at ([`waiting`]).
+pub fn classify(
+    agent: AgentAt<'_>,
+    processes: Option<&[Process]>,
+    config: &HarnessConfig,
+) -> (Liveness, Option<Waiting>) {
+    let AgentAt {
+        project_root,
+        scope,
+        name,
+        harness,
+    } = agent;
+    let at = waiting(project_root, scope, name, harness);
+    let waiter = waiter_runs(project_root, scope, name, processes.unwrap_or_default());
+    if waiter && at.as_ref().is_some_and(|w| harness.waiter_wakes(w.kind)) {
+        return match runtime::waiter_background(project_root, scope, name) {
+            Some(since) => {
+                let mut background = Waiting::now(WaitingKind::Background, None);
+                background.since = since;
+                (Liveness::Busy, Some(background))
+            }
+            None => (Liveness::Idle, None),
+        };
+    }
+    if liveness(processes, harness, config) == Liveness::Dead {
+        return (Liveness::Dead, None);
+    }
+    let at = at.map(|w| match w.kind {
+        WaitingKind::Background if !waiter => Waiting {
+            kind: WaitingKind::Idle,
+            detail: Some("its waiter for background work is gone".into()),
+            ..w
+        },
+        _ => w,
+    });
+    (Liveness::Busy, at)
+}
+
+/// Whether `agent`'s waiter is one of `processes`.
+fn waiter_runs(project_root: &Path, scope: &str, agent: &str, processes: &[Process]) -> bool {
+    runtime::read_waiter(project_root, scope, agent)
+        .is_some_and(|pid| processes.iter().any(|p| p.pid == pid))
 }
 
 /// Every window on a tmux server with the processes of its agent pane, read
@@ -175,20 +228,96 @@ mod tests {
         server.spawn_idle_fake_agent(&project, &session, "login", "idle");
         server.spawn_dead_fake_agent(&project, &session, "login", "dead");
 
-        let windows = Windows::read(server.name()).unwrap();
         let config = HarnessConfig::default();
         let state = |name: &str| {
-            liveness(
-                windows
-                    .processes(windows.find(&session, name).unwrap())
-                    .as_deref(),
-                Harness::ClaudeCode,
-                &config,
-            )
+            let windows = Windows::read(server.name()).unwrap();
+            let agent = AgentAt {
+                project_root: &project,
+                scope: "login",
+                name,
+                harness: Harness::ClaudeCode,
+            };
+            let processes = windows.processes(windows.find(&session, name).unwrap());
+            let (liveness, at) = classify(agent, processes.as_deref(), &config);
+            (liveness, at.map(|w| w.kind))
         };
-        assert_eq!(state("busy"), Liveness::Busy);
-        assert_eq!(state("idle"), Liveness::Idle);
-        assert_eq!(state("dead"), Liveness::Dead);
+        assert_eq!(state("busy"), (Liveness::Busy, None));
+        assert_eq!(state("idle"), (Liveness::Idle, None));
+        assert_eq!(state("dead"), (Liveness::Dead, None));
+    }
+
+    #[test]
+    fn an_idle_marker_needs_its_waiter_and_a_waiter_marks_nothing_idle_by_itself() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let session = tmux::session_name(&project_name, "login");
+        let shell = crate::testing::fake_harness_binary(Harness::ClaudeCode, Path::new("/bin/sh"));
+        let hook = format!(
+            "{} -c \"sh -c 'sleep 999; :' {}; :\"",
+            shell.display(),
+            crate::commands::hooks_install::PM_HOOK_MARKER
+        );
+        server.spawn_harness_agent(
+            &project,
+            &session,
+            "login",
+            "qa",
+            Harness::ClaudeCode,
+            &hook,
+            Liveness::Idle,
+        );
+        let config = HarnessConfig::default();
+        let state = || {
+            let windows = Windows::read(server.name()).unwrap();
+            let agent = AgentAt {
+                project_root: &project,
+                scope: "login",
+                name: "qa",
+                harness: Harness::ClaudeCode,
+            };
+            let processes = windows.processes(windows.find(&session, "qa").unwrap());
+            let (liveness, at) = classify(agent, processes.as_deref(), &config);
+            (liveness, at.map(|w| w.kind.class()))
+        };
+        assert_eq!(state(), (Liveness::Idle, None));
+        let waiter = runtime::read_waiter(&project, "login", "qa").unwrap();
+
+        runtime::take_waiter(&project, "login", "qa", u32::MAX, None).unwrap();
+        assert_eq!(
+            state(),
+            (Liveness::Busy, Some(runtime::WaitingClass::Unarmed)),
+            "at its prompt with nothing to wake it"
+        );
+
+        // Background work with no waiter left may have ended already.
+        let background = Waiting::now(WaitingKind::Background, None);
+        runtime::write_waiting(&project, "login", "qa", &background).unwrap();
+        assert_eq!(
+            state(),
+            (Liveness::Busy, Some(runtime::WaitingClass::Unarmed))
+        );
+        runtime::take_waiter(&project, "login", "qa", waiter, None).unwrap();
+        assert_eq!(
+            state(),
+            (Liveness::Busy, Some(runtime::WaitingClass::Background))
+        );
+
+        // Interrupted after a prompt cleared its marker, an agent whose
+        // waiter also waits on background work is at that work.
+        let since = chrono::Utc::now() - chrono::Duration::minutes(3);
+        runtime::take_waiter(&project, "login", "qa", waiter, Some(since)).unwrap();
+        let prompt = Waiting::now(WaitingKind::Prompt, None);
+        runtime::write_waiting(&project, "login", "qa", &prompt).unwrap();
+        assert_eq!(
+            state(),
+            (Liveness::Busy, Some(runtime::WaitingClass::Background))
+        );
+        runtime::take_waiter(&project, "login", "qa", waiter, None).unwrap();
+        assert_eq!(state(), (Liveness::Idle, None));
+
+        runtime::clear_waiting(&project, "login", "qa").unwrap();
+        assert_eq!(state(), (Liveness::Busy, None), "mid-turn");
     }
 
     #[test]

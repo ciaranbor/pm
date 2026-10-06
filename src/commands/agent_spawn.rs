@@ -229,9 +229,9 @@ fn spawn_session_with_config(
     // Named agents need a sentinel prompt when none is explicitly provided:
     // a harness with no positional prompt just waits for user input and never
     // completes a turn, so the Stop hook never fires. A trivial "continue"
-    // prompt causes an immediate first turn, letting the blocking Stop hook
-    // wait for messages. Plain (unnamed) sessions don't need this since
-    // they're interactive by design.
+    // prompt causes an immediate first turn, whose end starts pm's waiter.
+    // Plain (unnamed) sessions don't need this since they're interactive by
+    // design.
     let effective_prompt = match (params.prompt, params.agent_name) {
         (Some(p), _) => Some(p),
         (None, Some(_)) if params.resume_session.is_some() && !params.fork_session => {
@@ -340,6 +340,7 @@ fn spawn_session_with_config(
         // before the session (README, "Follow what needs you").
         let startup = runtime::Waiting::now(runtime::WaitingKind::Startup, None);
         runtime::write_waiting(params.project_root, params.feature, name, &startup)?;
+        runtime::reset_loop(params.project_root, params.feature, name)?;
         for which in [
             runtime::SessionPath::Transcript,
             runtime::SessionPath::ConfigDir,
@@ -594,8 +595,8 @@ fn spawn_agent(
         return Ok((outcome, msg, notes));
     }
 
-    // New agent, no positional prompt — the Stop hook blocks until any queued
-    // context is available, then tells the agent to read it.
+    // New agent, no positional prompt — the waiter wakes it for any queued
+    // context.
     validate_definition_resolves(project_root, effective_definition)?;
     queue_context()?;
     let SpawnedSession {

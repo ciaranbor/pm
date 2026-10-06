@@ -10,16 +10,18 @@ file of every supported harness (`~/.claude/settings.json` for Claude Code,
 `$CODEX_HOME/hooks.json` for codex; opencode gets a
 [plugin](#opencode) that does the same), once per machine:
 
-- the **Stop hook**, which after every turn waits until the agent has
-  unread messages and then prompts it to read them. While a Claude Code
-  background task or session cron is running and nothing is queued, it
-  lets the turn end so that work isn't stalled; its completion wakes the
-  agent, which reads `background` until then. Codex and opencode agents
-  wait every turn.
+- the **Stop hook**, pm's waiter: the harness runs it in the background
+  once the turn has ended (Claude Code `asyncRewake`, codex `async`), and
+  it waits until the agent has unread messages, then wakes it to read
+  them — on Claude Code by exiting 2, which the harness delivers as a
+  prompt; on codex through the session's queue (`codex queue`). The agent
+  reads `background` while a Claude Code background task or session cron
+  runs; a message wakes it all the same. Each turn's end starts a new
+  waiter, which supersedes the last.
 - a **UserPromptSubmit** hook, which sets a blocked feature back to `wip`
-  when you type into one of its agents; pm's own prompts don't count. On
-  Claude Code it also lets a Stop hook that is waiting end its turn, so
-  text you type while the agent waits is submitted at once.
+  when you type into one of its agents; pm's own prompts don't count. It
+  also drops a wake that arrives once its messages are read — a duplicate
+  — so no turn runs for it.
 - the **status hook** (`pm harness hooks waiting`), on the events that open
   and close a harness's dialogs and end its turns without Stop, which keeps
   each agent's `asking`/`unarmed` state; opencode's plugin reports the
@@ -36,7 +38,10 @@ file of every supported harness (`~/.claude/settings.json` for Claude Code,
 The hooks apply to every session of that harness on the machine, so each is
 guarded on `PM_AGENT_NAME`: a session pm didn't spawn exits it at once,
 without needing `pm` on its `PATH`. Reinstall with `pm harness hooks
-install`; `pm doctor --fix` restores a missing one.
+install`; `pm doctor --fix` restores a missing or outdated one. Each Stop
+hook run notes what it did, and the background work the harness reported,
+in `.pm/runtime/<scope>/<agent>/stop-hook.log`: start there when an agent
+didn't wake.
 
 ## Mixed teams
 
@@ -116,15 +121,12 @@ unattended:
   attached to codex's background server run in the server's environment,
   not the agent's. `pm doctor` reports a running agent that has recorded no
   session id after a grace period; `pm agent restart` it.
-- **Text typed while idle** (README, [Work with the
-  agents](../README.md#work-with-the-agents)) shows in codex as "Messages
-  to be submitted after next tool call". No codex hook reports it, so pm
-  watches codex's `$CODEX_HOME/history.jsonl` for text sent with Enter and
-  starts the turn within a couple of seconds — a workaround until codex
-  has such a hook. It needs codex's history on: with `[history]
-  persistence = "none"` Enter waits like Tab. A follow-up queued with Tab
-  is written nowhere pm can see, and is not delivered with a message's
-  continuation either; it waits for a turn that really ends, or Esc.
+- **Wakes come through codex's queue**, which the TUI polls every 10 s, so
+  an idle codex agent takes a message up to about 10 s after it arrives.
+  The queue skips an interrupted thread, so Esc leaves a codex agent
+  unarmed until `pm msg send` re-arms it. A queued wake survives a restart
+  and runs on resume; if its messages were read meanwhile it is dropped.
+  The queue is an experimental codex API.
 - **Removing a model row keeps the session's model.** `codex resume` with
   no `-m` reuses the model the session last ran, so deleting an
   `[agents.models]` row changes nothing on restart; set the row to the

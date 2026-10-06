@@ -1,12 +1,12 @@
 //! Re-arms an agent no message can wake (unarmed, at its prompt) by typing
-//! the prompt the Stop hook would have returned, so it reads its messages
-//! and its next turn ends in the hook again.
+//! the prompt its waiter would have given, so it reads its messages and its
+//! next turn's end starts a waiter again.
 //!
 //! Keystrokes reach whatever the window shows, so every condition guards
 //! against typing into something other than an empty prompt: the marker
 //! must say unarmed (never asking — the keys would answer the dialog — nor
 //! a loop that stopped itself on purpose), the window must run its harness
-//! and not the hook, the pane must not be in use ([`tmux::panes::in_use`]:
+//! with no live waiter, the pane must not be in use ([`tmux::panes::in_use`]:
 //! in a mode, or in front of an attached client — never cancelled, since
 //! either is the user's), and the harness must read its input line as empty
 //! and taking text. No key is pressed to change the harness's own mode: a
@@ -30,7 +30,7 @@ use crate::state::runtime::{self, SessionPath, Waiting, WaitingClass, WaitingKin
 use crate::tmux;
 
 use super::hooks_stop;
-use super::running_agents::{Liveness, Windows, liveness, waiting};
+use super::running_agents::{AgentAt, Liveness, Windows, classify};
 
 /// Re-arm `agent` if it is unarmed at an empty prompt. Returns the marker
 /// it was re-armed from, or `None` when it was left alone.
@@ -45,11 +45,6 @@ pub fn rearm(
         return Ok(None);
     };
     let harness = entry.harness;
-    let Some(waiting) = waiting(project_root, scope, agent, harness)
-        .filter(|w| w.kind.class() == WaitingClass::Unarmed && w.kind != WaitingKind::Tripped)
-    else {
-        return Ok(None);
-    };
     if harness.loop_stopped(project_root, scope, agent).is_some() {
         return Ok(None);
     }
@@ -60,12 +55,23 @@ pub fn rearm(
     let Some(pane) = windows.find(&session, &entry.window_name) else {
         return Ok(None);
     };
-    if liveness(windows.processes(pane).as_deref(), harness, &config) != Liveness::Busy {
+    let agent_at = AgentAt {
+        project_root,
+        scope,
+        name: agent,
+        harness,
+    };
+    let Some(waiting) = (match classify(agent_at, windows.processes(pane).as_deref(), &config) {
+        (Liveness::Busy, at) => at,
+        _ => None,
+    })
+    .filter(|w| w.kind.class() == WaitingClass::Unarmed && w.kind != WaitingKind::Tripped) else {
         return Ok(None);
-    }
-    let from_marker = runtime::read_waiting(project_root, scope, agent).as_ref() == Some(&waiting);
+    };
+    let marker = runtime::read_waiting(project_root, scope, agent)
+        .filter(|m| m.since == waiting.since && waiting.entry.is_none());
     let entry = waiting.entry.as_deref().unwrap_or_default();
-    let claimed = if from_marker {
+    let claimed = if marker.is_some() {
         runtime::clear_waiting(project_root, scope, agent)?
     } else {
         !entry.is_empty() && runtime::claim_turn_end(project_root, scope, agent, entry)?
@@ -74,8 +80,8 @@ pub fn rearm(
         return Ok(None);
     }
     let release = || {
-        if from_marker {
-            runtime::write_waiting(project_root, scope, agent, &waiting)
+        if let Some(marker) = &marker {
+            runtime::write_waiting(project_root, scope, agent, marker)
         } else {
             runtime::release_turn_end(project_root, scope, agent, entry)
         }
@@ -118,6 +124,7 @@ fn type_prompt(
 mod tests {
     use super::*;
     use crate::commands::agent_send::agent_send;
+    use crate::commands::running_agents::waiting;
     use crate::testing::{ControlClient, TestServer};
     use tempfile::tempdir;
 
@@ -230,6 +237,25 @@ mod tests {
         let _viewing = ControlClient::attach(server.name(), &session);
 
         assert_left_alone(&server, &project);
+    }
+
+    #[test]
+    fn an_agent_marked_background_with_no_waiter_is_re_armed() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (project, target) = at_prompt(&server, dir.path(), WaitingKind::Background);
+
+        let status = send(&server, &project);
+
+        assert!(
+            status.ends_with("\nRe-armed 'implementer' (its waiter for background work is gone)"),
+            "{status}"
+        );
+        assert_eq!(
+            runtime::read_waiting(&project, "login", "implementer"),
+            None
+        );
+        server.wait_for_pane_text(&target, &format!("❯ {PROMPT}"));
     }
 
     #[test]

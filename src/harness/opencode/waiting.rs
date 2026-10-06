@@ -4,7 +4,8 @@
 //! `detail`: `TurnFailed` when a turn fails, and for the dialogs, which it
 //! tracks while open, `PermissionRequest`, `Question` (the question tool's
 //! form) or `Dialog` (any other form) when one opens, `Resolved` once none
-//! is left.
+//! is left; and `TurnStarted` when a turn it did not prompt kills its wait,
+//! which leaves no idle marker standing for a waiter gone.
 //!
 //! In opencode 2.0.18 a permission ask and a form are the only waits on the
 //! user with an event: every form the server raises (the question tool, the
@@ -26,7 +27,7 @@ pub(in crate::harness) fn event(payload: &Value) -> Option<WaitingEvent> {
         "Question" => WaitingKind::Question,
         "Dialog" => WaitingKind::Dialog,
         "TurnFailed" => WaitingKind::Error,
-        "Resolved" => return Some(WaitingEvent::Clear),
+        "Resolved" | "TurnStarted" => return Some(WaitingEvent::Clear),
         _ => return None,
     };
     Some(WaitingEvent::Set(Waiting::now(kind, detail)))

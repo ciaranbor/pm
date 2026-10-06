@@ -73,8 +73,8 @@ The API is under `/v1`; every path needs a paired device's token:
 | `agents/{project}/{scope}/{agent}/transcript/result?ref={full}` | a tool result's whole output, plain text |
 | `push` | `GET`: `{"vapid": <public key>}`, to subscribe against; `PUT` a Web Push subscription (`{"endpoint": <https URL>, "keys": {"p256dh", "auth"}}`) to push to this device; `DELETE` to stop |
 | `agents/{project}/{scope}/{agent}/input` | `POST {"text"}` (up to 128 KB): typed into the agent's input line and submitted; `{"delivery": "sent", "confirmed"}` once submitted (`confirmed`: seen in the conversation within 5 s), or `{"delivery": "queued"}` when the agent is mid-turn and takes it as a step ends |
-| `agents/{project}/{scope}/{agent}/interrupt` | `POST`: presses Escape, ending the agent's turn; refused while it waits for a message |
-| `agents/{project}/{scope}/{agent}/keys` | `POST {"keys": [...]}`: presses each of `Escape Enter Tab BTab Up Down Left Right Space BSpace C-c 0`–`9`; refused while it waits for a message |
+| `agents/{project}/{scope}/{agent}/interrupt` | `POST`: presses Escape, ending the agent's turn |
+| `agents/{project}/{scope}/{agent}/keys` | `POST {"keys": [...]}`: presses each of `Escape Enter Tab BTab Up Down Left Right Space BSpace C-c 0`–`9` |
 | `agents/{project}/{scope}/{agent}/dialog` | `GET`: the dialog on the agent's screen, when it can be answered remotely (below), else `404`; `POST {"id", "choice", "answers"?, "message"?}`: answers it, `{"answered": true}` once its harness has the answer |
 | `features/{project}/{feature}/merge` | `POST`: `pm feat merge`, so merges and deletes the feature; `{"merged": true}` |
 | `features/{project}/{feature}/delete` | `POST`: `pm feat delete`; `{"deleted": true}` |
@@ -97,14 +97,11 @@ The log records a save's new version, never its text.
 
 Input is typed into the agent's pane as if at its keyboard, so it is the
 user's prompt: it resets a blocked feature, and the conversation shows it as
-`user`. An agent between turns waiting in pm's Stop hook gets it too:
-Claude Code and codex hold what is typed there, so the hook lets the turn
-end for them to submit it. An `input` the agent can't take now is refused
-with `409` and `{"error", "refused"}`: `asking` (a dialog is up; answer it
-through `dialog`, or with `keys`), `not-at-prompt` (a draft in its input
-line, or no input line on screen), `not-running`, `no-window`, `inactive`,
-or for `interrupt` and `keys`, `idle` (between turns, where a key would only
-end pm's Stop hook). Text is never merged into a draft typed at the Mac.
+`user`. An idle agent sits at its prompt, so text starts a turn at once.
+An `input` the agent can't take now is refused with `409` and
+`{"error", "refused"}`: `asking` (a dialog is up; answer it through
+`dialog`, or with `keys`), `not-at-prompt` (a draft in its input line, or
+no input line on screen), `not-running`, `no-window` or `inactive`. Text is never merged into a draft typed at the Mac.
 
 A question, a permission prompt or a plan approval on a Claude Code
 agent's screen, and a permission ask on an opencode agent's, can be

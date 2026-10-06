@@ -2,21 +2,26 @@
 //! prompt, opencode's config) and what the harness leaves for pm (opencode's
 //! stopped-loop marker, the waiting marker, the activity stamp).
 //!
-//! The **waiting marker** says what an agent whose Stop hook isn't running
-//! is at: a dialog waiting on the user, its prompt with nothing to wake it,
-//! or background work that will. pm's hooks write and clear it, and every
-//! spawn replaces it. It only refines an agent the window reads as busy: a
-//! running Stop hook or an exited harness says more, so a stale marker
-//! never hides either.
+//! The **waiting marker** says what an agent between turns, or held up in
+//! one, is at: idle (its turn ended and pm's waiter waits on its inbox), a
+//! dialog waiting on the user, its prompt with nothing to wake it, or
+//! background work that will. pm's hooks write and clear it, and every
+//! spawn replaces it. An exited harness says more, so a stale marker never
+//! hides it.
 //!
-//! The **yield request** asks the agent's next Stop hook to let its turn
-//! end (`{}`) rather than wait, for text typed into a harness that holds
-//! typing queued behind a running hook, so the harness submits it. `pm
-//! serve` writes it before typing, and Claude Code's UserPromptSubmit as
-//! the user's text is queued, naming the text and where the agent's
-//! conversation ended then; the Stop hook takes it. UserPromptSubmit can't
-//! clear it: Claude Code runs that hook as text is queued, not as it is
-//! submitted (verified on 2.1.289).
+//! The **waiter** file names the process of pm's Stop hook that waits on
+//! the agent's inbox: each one takes it over as it starts, so the newest
+//! wins and an older one, finding another named, ends. Idle needs it alive
+//! ([`running_agents`](crate::commands::running_agents)): a marker whose
+//! waiter is gone leaves the agent at its prompt with nothing to wake it.
+//!
+//! The **breaker** counts the waiter's wakes in a row that found the inbox
+//! unread since the last one; once it trips, the **stopped-loop** file
+//! says why, and no waiter wakes the agent again until a spawn forgets both.
+//!
+//! The **Stop hook log** records each Stop hook's path and why it took it
+//! — the payload's background work included — for diagnosing an agent
+//! left waiting. Best-effort, and capped.
 //!
 //! The **activity stamp** is a file whose mtime is the agent's last sign of
 //! life: every pm hook invocation touches it.
@@ -55,7 +60,12 @@ pub use dialog::*;
 const WAITING_FILE: &str = "waiting.json";
 const ACTIVITY_FILE: &str = "activity";
 const TURN_END_CLAIM: &str = "turn-end-claimed-";
-const YIELD_REQUEST: &str = "yield-requested";
+const WAITER_FILE: &str = "waiter";
+const BREAKER_FILE: &str = "breaker.json";
+const TRIPPED_FILE: &str = "loop-tripped";
+const STOP_LOG: &str = "stop-hook.log";
+/// The size past which the Stop hook's log keeps only its newer half.
+const STOP_LOG_MAX: u64 = 64 * 1024;
 
 fn root(project_root: &Path) -> PathBuf {
     paths::pm_dir(project_root).join("runtime")
@@ -76,10 +86,13 @@ pub fn agent_dir(project_root: &Path, scope: &str, agent: &str) -> Result<PathBu
     Ok(dir)
 }
 
-/// What an agent whose Stop hook isn't running is at.
+/// What an agent between turns, or held up in one, is at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum WaitingKind {
+    /// Its turn ended and pm's waiter waits on its inbox; unarmed once the
+    /// waiter is gone.
+    Idle,
     /// A question to the user.
     Question,
     /// A tool-permission prompt.
@@ -122,9 +135,12 @@ impl WaitingKind {
             Self::Question | Self::Permission | Self::Plan | Self::Dialog | Self::Startup => {
                 WaitingClass::Asking
             }
-            Self::Interrupted | Self::HookEnded | Self::Error | Self::Prompt | Self::Tripped => {
-                WaitingClass::Unarmed
-            }
+            Self::Idle
+            | Self::Interrupted
+            | Self::HookEnded
+            | Self::Error
+            | Self::Prompt
+            | Self::Tripped => WaitingClass::Unarmed,
             Self::Background => WaitingClass::Background,
         }
     }
@@ -132,6 +148,7 @@ impl WaitingKind {
     /// What the kind says when the marker carries no detail.
     pub fn label(self) -> &'static str {
         match self {
+            Self::Idle => "its waiter is gone",
             Self::Question => "question",
             Self::Permission => "permission prompt",
             Self::Plan => "plan approval",
@@ -212,65 +229,138 @@ pub fn clear_waiting(project_root: &Path, scope: &str, agent: &str) -> Result<bo
     }
 }
 
-/// Text typed into an agent that asks its next Stop hook to yield.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct YieldRequest {
-    /// The SHA-256 of the text, trimmed, in hex.
-    pub text_sha256: String,
-    /// Where the agent's conversation ended as the text was typed; `None`
-    /// when it had none.
-    pub after: Option<String>,
-}
-
-/// Ask the agent's next Stop hook to yield ([`take_yield_request`]),
-/// replacing any request already made: a harness submits what it holds in
-/// order, so the latest text is the one still held if any is.
-pub fn request_yield(
+/// Name `pid` as the agent's waiter, replacing whichever was;
+/// `background` is when it began waiting on background work as well as the
+/// inbox, if it does.
+pub fn take_waiter(
     project_root: &Path,
     scope: &str,
     agent: &str,
-    request: &YieldRequest,
+    pid: u32,
+    background: Option<DateTime<Utc>>,
 ) -> Result<()> {
-    let file = agent_dir(project_root, scope, agent)?.join(YIELD_REQUEST);
-    write_atomic(&file, serde_json::to_string(request)?.as_bytes())
+    let file = agent_dir(project_root, scope, agent)?.join(WAITER_FILE);
+    let text = match background {
+        Some(since) => format!("{pid} {}", since.to_rfc3339()),
+        None => pid.to_string(),
+    };
+    write_atomic(&file, text.as_bytes())
 }
 
-/// Whether a yield is requested.
-pub fn yield_requested(project_root: &Path, scope: &str, agent: &str) -> bool {
-    agent_file(project_root, scope, agent, YIELD_REQUEST).exists()
+fn waiter_file(project_root: &Path, scope: &str, agent: &str) -> Option<String> {
+    std::fs::read_to_string(agent_file(project_root, scope, agent, WAITER_FILE)).ok()
 }
 
-/// Remove the yield request, returning it, so of two callers only one
-/// takes it. One that can't be read is removed and taken as asking with
-/// nothing known of its text.
-pub fn take_yield_request(
+/// The pid of the agent's waiter; `None` when none was named.
+pub fn read_waiter(project_root: &Path, scope: &str, agent: &str) -> Option<u32> {
+    waiter_file(project_root, scope, agent)?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// When the agent's waiter began waiting on background work, if it does.
+pub fn waiter_background(project_root: &Path, scope: &str, agent: &str) -> Option<DateTime<Utc>> {
+    let text = waiter_file(project_root, scope, agent)?;
+    let since = text.split_whitespace().nth(1)?;
+    DateTime::parse_from_rfc3339(since)
+        .ok()
+        .map(|t| t.with_timezone(&Utc))
+}
+
+/// Remove the agent's marker if it is of `kind`, leaving any other a hook
+/// wrote since. Returns whether it removed one.
+pub fn clear_waiting_if(
     project_root: &Path,
     scope: &str,
     agent: &str,
-) -> Result<Option<YieldRequest>> {
-    let file = agent_file(project_root, scope, agent, YIELD_REQUEST);
-    // Renamed away first, so a request written meanwhile is a new file.
-    static TAKES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-    let taken = file.with_file_name(format!(
-        "{YIELD_REQUEST}.taken-{}-{}",
-        std::process::id(),
-        TAKES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
-    match std::fs::rename(&file, &taken) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e.into()),
+    kind: WaitingKind,
+) -> Result<bool> {
+    if read_waiting(project_root, scope, agent).is_some_and(|w| w.kind == kind) {
+        clear_waiting(project_root, scope, agent)
+    } else {
+        Ok(false)
     }
-    let text = std::fs::read_to_string(&taken);
-    let _ = std::fs::remove_file(&taken);
-    Ok(Some(
-        text.ok()
-            .and_then(|t| serde_json::from_str(&t).ok())
-            .unwrap_or(YieldRequest {
-                text_sha256: String::new(),
-                after: None,
-            }),
-    ))
+}
+
+/// What the waiter's breaker knew at its last wake.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Breaker {
+    /// Wakes in a row that read nothing since the one before.
+    pub wasted: u32,
+    /// How many of its messages the agent had read at the last wake.
+    pub read: u32,
+}
+
+pub fn read_breaker(project_root: &Path, scope: &str, agent: &str) -> Option<Breaker> {
+    let text =
+        std::fs::read_to_string(agent_file(project_root, scope, agent, BREAKER_FILE)).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+pub fn write_breaker(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    breaker: &Breaker,
+) -> Result<()> {
+    let file = agent_dir(project_root, scope, agent)?.join(BREAKER_FILE);
+    write_atomic(&file, serde_json::to_string(breaker)?.as_bytes())
+}
+
+/// Record that the agent's never-idle loop stopped itself, and why.
+pub fn trip_loop(project_root: &Path, scope: &str, agent: &str, reason: &str) -> Result<()> {
+    let file = agent_dir(project_root, scope, agent)?.join(TRIPPED_FILE);
+    write_atomic(&file, reason.as_bytes())
+}
+
+/// Why the agent's never-idle loop stopped itself, if it did.
+pub fn loop_tripped(project_root: &Path, scope: &str, agent: &str) -> Option<String> {
+    let text =
+        std::fs::read_to_string(agent_file(project_root, scope, agent, TRIPPED_FILE)).ok()?;
+    Some(text.trim().to_string())
+}
+
+/// Forget the breaker and a stopped loop, for a new session.
+pub fn reset_loop(project_root: &Path, scope: &str, agent: &str) -> Result<()> {
+    for name in [BREAKER_FILE, TRIPPED_FILE] {
+        match std::fs::remove_file(agent_file(project_root, scope, agent, name)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Append `line` to the agent's Stop hook log, stamped with the time and
+/// this process's pid. Best-effort: a log that can't be written is skipped.
+pub fn log_stop_hook(project_root: &Path, scope: &str, agent: &str, line: &str) {
+    let Ok(dir) = agent_dir(project_root, scope, agent) else {
+        return;
+    };
+    let file = dir.join(STOP_LOG);
+    if std::fs::metadata(&file).is_ok_and(|m| m.len() > STOP_LOG_MAX)
+        && let Ok(text) = std::fs::read_to_string(&file)
+    {
+        let bytes = text.as_bytes();
+        let half = bytes.len() / 2;
+        let start = bytes[half..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .map_or(bytes.len(), |i| half + i + 1);
+        let _ = write_atomic(&file, &bytes[start..]);
+    }
+    let line = format!(
+        "{} [{}] {line}\n",
+        Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ"),
+        std::process::id()
+    );
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&file)
+        .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
 }
 
 /// A path the agent's current session reported at its start.

@@ -5,6 +5,13 @@
 //! prompt included, but not for a Stop hook's `block` continuation (verified
 //! on 2.1.286). Its stdout on exit 0 is added to the model's context, and
 //! exit 2 refuses the prompt.
+//!
+//! pm's Stop hook is `asyncRewake`: Claude Code runs it in the background
+//! once the turn has ended, and its exit 2 wakes the session with its
+//! stderr — a new turn when idle, after the next tool result mid-turn — as
+//! a prompt UserPromptSubmit sees wrapped ([`rewake_reason`]). Esc does not
+//! end it, nor does a new turn; `/exit` ends it with SIGTERM (verified on
+//! 2.1.289).
 
 pub(super) mod chat;
 pub(super) mod dialog;
@@ -33,6 +40,28 @@ pub(super) const SEEDED_FILES: &[&str] = &["settings.json"];
 
 /// Applies to every session on the machine; pm's hooks live here.
 pub(super) const USER_SETTINGS_FILE: &str = "settings.json";
+
+/// See the module docs.
+pub(super) const STOP_HOOK_OPTIONS: &[(&str, bool)] = &[("asyncRewake", true)];
+
+const REWAKE_SUMMARY: &str = "<summary>Stop hook feedback</summary>";
+const REWAKE_ERROR: &str = "Stop hook blocking error from command";
+
+/// The reason a Stop hook's rewake carries, from the prompt it wakes the
+/// session with: `<task-notification>…<summary>Stop hook feedback</summary>
+/// …Stop hook blocking error from command[:] "…": <reason>`, the quoted
+/// part naming the event or the hook's command (2.1.289). `None` for any
+/// other prompt.
+pub(super) fn rewake_reason(prompt: &str) -> Option<&str> {
+    let prompt = prompt.trim_start();
+    if !prompt.starts_with("<task-notification>") || !prompt.contains(REWAKE_SUMMARY) {
+        return None;
+    }
+    let after = &prompt[prompt.find(REWAKE_ERROR)? + REWAKE_ERROR.len()..];
+    let reason = &after[after.find("\": ")? + 3..];
+    let end = reason.find(['\n', '<']).unwrap_or(reason.len());
+    Some(reason[..end].trim())
+}
 
 pub(super) const PROJECTED_DIRS: &[&str] = &["agents", "skills"];
 

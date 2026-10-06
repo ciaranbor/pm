@@ -220,7 +220,7 @@ test("a turn the plugin did not prompt cancels the wait, which is no failure, an
   const blocking = blockingHook()
   const { loop, seen } = harness((cancel) => (answers++ === 0 ? blocking(cancel) : Promise.resolve(BLOCK)))
   const waiting = loop.arm("ses_1")
-  loop.turnStarted("ses_1")
+  assert.equal(loop.turnStarted("ses_1"), true, "reported, the killed hook unable to")
   await waiting
   assert.deepEqual(seen.prompts, [])
   assert.deepEqual(seen.sleeps, [], "no retry after a cancelled wait")
@@ -286,7 +286,7 @@ test("a turn that starts while the loop backs off is not waited through, and its
 test("a turn starting with no wait blocked is the plugin's own prompt and cancels nothing", async () => {
   const { loop, seen } = harness([BLOCK, BLOCK])
   await loop.arm("ses_1")
-  loop.turnStarted("ses_1")
+  assert.equal(loop.turnStarted("ses_1"), false)
   await loop.turnEnded("ses_1", SUCCEEDED)
   assert.deepEqual(seen.prompts, Array(2).fill("You have new messages"))
 })
