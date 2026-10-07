@@ -166,12 +166,31 @@ impl Restarted {
         }
     }
 
+    /// The restart's closing error when agents left running without coming
+    /// up change what it says ([`not_up_failure`]).
+    pub fn not_up_failure(&self) -> Option<&'static str> {
+        let failed = self.results.iter().filter(|r| r.is_err()).count();
+        not_up_failure(failed, self.not_up.len())
+    }
+
     /// Kill the old pane the restart ran from, if it ran from one. That
     /// ends the calling process, so it comes after the results are printed.
     pub fn finish(self, tmux_server: Option<&str>) {
         if let Some(pane) = self.caller_pane {
             let _ = panes::kill(tmux_server, &pane);
         }
+    }
+}
+
+/// The closing error of a restart with `failed` failures, `not_up` of them
+/// agents restarted but not come up; `None` when none is. An agent that
+/// didn't come up was still restarted, so failures that are all such don't
+/// say the restart failed.
+pub fn not_up_failure(failed: usize, not_up: usize) -> Option<&'static str> {
+    match (failed, not_up) {
+        (_, 0) => None,
+        (f, n) if f == n => Some("restarted, but some agents did not come up"),
+        _ => Some("some agents failed to restart or did not come up"),
     }
 }
 
@@ -708,6 +727,47 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .starts_with("Restarted agent 'qa'")
+        );
+    }
+
+    #[test]
+    fn a_restart_whose_only_failures_did_not_come_up_says_it_restarted() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let session = tmux::session_name(&project_name, "login");
+        server.spawn_dead_fake_agent(&project, &session, "login", "reviewer");
+        server.spawn_dead_fake_agent(&project, &session, "login", "qa");
+        let names = ["reviewer", "qa"].map(String::from);
+        let failed = |agent: &str, failure| FailedLaunch {
+            launch: Launch {
+                project_root: project.clone(),
+                scope: "login".to_string(),
+                agent: agent.into(),
+            },
+            failure,
+            output: String::new(),
+        };
+        let not_up = || crate::commands::launch_check::Failure::NotUp {
+            harness: Harness::ClaudeCode,
+            after: std::time::Duration::from_secs(20),
+        };
+
+        let mut restarted =
+            agent_restart_many(&project, "login", &names, false, true, server.name());
+        assert_eq!(restarted.not_up_failure(), None);
+        restarted.record_failures(vec![failed("reviewer", not_up())]);
+        assert_eq!(
+            restarted.not_up_failure(),
+            Some("restarted, but some agents did not come up")
+        );
+        restarted.record_failures(vec![failed(
+            "qa",
+            crate::commands::launch_check::Failure::Exited,
+        )]);
+        assert_eq!(
+            restarted.not_up_failure(),
+            Some("some agents failed to restart or did not come up")
         );
     }
 

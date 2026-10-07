@@ -52,7 +52,9 @@ use serde::{Deserialize, Serialize};
 use crate::error::PmError;
 use crate::state::project::{AgentsConfig, layered};
 
-/// `text`'s first line, cut to a length that fits a status line.
+/// `text`'s first line, cut to a length that fits a status line: at its
+/// end, or for a line without spaces (a path), at its start, since a
+/// path's end names the file.
 pub(crate) fn one_line(text: &str) -> String {
     const MAX: usize = 120;
     let line = text
@@ -60,9 +62,19 @@ pub(crate) fn one_line(text: &str) -> String {
         .map(str::trim)
         .find(|l| !l.is_empty())
         .unwrap_or("");
-    match line.char_indices().nth(MAX) {
-        Some((cut, _)) => format!("{}…", &line[..cut]),
-        None => line.to_string(),
+    let chars = line.chars().count();
+    if chars <= MAX {
+        return line.to_string();
+    }
+    if line.contains(char::is_whitespace) {
+        let (cut, _) = line.char_indices().nth(MAX).expect("longer than MAX");
+        format!("{}…", &line[..cut])
+    } else {
+        let (cut, _) = line
+            .char_indices()
+            .nth(chars - MAX)
+            .expect("longer than MAX");
+        format!("…{}", &line[cut..])
     }
 }
 
@@ -142,6 +154,22 @@ impl FromStr for Harness {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_line_is_cut_at_its_end_and_a_long_path_at_its_start() {
+        let words = format!("{} end", "word ".repeat(40));
+        let cut = one_line(&words);
+        assert!(cut.starts_with("word word") && cut.ends_with('…'), "{cut}");
+        assert_eq!(cut.chars().count(), 121);
+
+        let path = format!("/tmp/{}/important_file_name.txt", "deep/".repeat(40));
+        let cut = one_line(&path);
+        assert!(
+            cut.starts_with('…') && cut.ends_with("/important_file_name.txt"),
+            "{cut}"
+        );
+        assert_eq!(cut.chars().count(), 121);
+    }
 
     #[test]
     fn parses_and_displays_supported_names() {

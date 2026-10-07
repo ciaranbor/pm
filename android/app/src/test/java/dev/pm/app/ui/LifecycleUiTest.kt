@@ -7,7 +7,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -108,7 +108,7 @@ class LifecycleUiTest {
         model = AppViewModel(Repository(store, OkHttpClient(), scope)) {}
         shown = target
         compose.setContent { PmTheme { App(model, shown, targetShown = {}) } }
-        compose.waitUntil(5_000) { model.snapshot.value != null }
+        compose.waitUntil(WAIT) { model.snapshot.value != null }
     }
 
     @Test
@@ -121,7 +121,7 @@ class LifecycleUiTest {
         assertEquals(emptyList<String>(), synchronized(posted) { posted.toList() })
         compose.onNodeWithText("Merge").performClick()
 
-        compose.waitUntil(5_000) {
+        compose.waitUntil(WAIT) {
             compose.onAllNodesWithText("Merged login").fetchSemanticsNodes().isNotEmpty()
         }
         assertEquals(
@@ -138,7 +138,7 @@ class LifecycleUiTest {
         compose.onNodeWithText("Merge").performClick()
         compose.onNodeWithText("Merge search?").assertIsDisplayed()
         compose.onAllNodesWithText("Merge").onLast().performClick()
-        compose.waitUntil(5_000) {
+        compose.waitUntil(WAIT) {
             compose.onAllNodesWithText("Merged search").fetchSemanticsNodes().isNotEmpty()
         }
         assertEquals(
@@ -151,7 +151,7 @@ class LifecycleUiTest {
     fun a_feature_newer_than_any_snapshot_yet_stays_open() {
         events = { stream.response("snapshot" to SNAPSHOT) }
         open(Target("app", "fresh", "implementer"))
-        compose.waitUntil(5_000) { model.connection.value == Connection.Live }
+        compose.waitUntil(WAIT) { model.connection.value == Connection.Live }
         compose.waitForIdle()
 
         compose.onNodeWithText("fresh").assertIsDisplayed()
@@ -163,11 +163,11 @@ class LifecycleUiTest {
         val without = SNAPSHOT.replace(""""name": "login"""", """"name": "login-gone"""")
         events = { stream.response("snapshot" to SNAPSHOT, later = listOf("snapshot" to without)) }
         open(Target("app", "login", null))
-        compose.waitUntil(5_000) { model.connection.value == Connection.Live }
+        compose.waitUntil(WAIT) { model.connection.value == Connection.Live }
         compose.onNodeWithText("Message the agent").assertIsDisplayed()
 
         stream.sendLater()
-        compose.waitUntil(5_000) {
+        compose.waitUntil(WAIT) {
             compose
                 .onAllNodesWithText("login was merged or deleted")
                 .fetchSemanticsNodes()
@@ -181,12 +181,12 @@ class LifecycleUiTest {
         val without = SNAPSHOT.replace(""""name": "search"""", """"name": "search-gone"""")
         events = { stream.response("snapshot" to SNAPSHOT, later = listOf("snapshot" to without)) }
         open(Target("app", "login", null))
-        compose.waitUntil(5_000) { model.connection.value == Connection.Live }
+        compose.waitUntil(WAIT) { model.connection.value == Connection.Live }
         shown = Target("app", "search", null)
         compose.onNodeWithText("Merge").assertIsDisplayed()
 
         stream.sendLater()
-        compose.waitUntil(5_000) {
+        compose.waitUntil(WAIT) {
             compose
                 .onAllNodesWithText("search was merged or deleted")
                 .fetchSemanticsNodes()
@@ -202,7 +202,7 @@ class LifecycleUiTest {
         compose.onNodeWithContentDescription("More actions").performClick()
         compose.onNodeWithText("Restart implementer").performClick()
 
-        compose.waitUntil(5_000) {
+        compose.waitUntil(WAIT) {
             compose.onAllNodesWithText("Restarted implementer").fetchSemanticsNodes().isNotEmpty()
         }
         assertEquals(
@@ -219,7 +219,7 @@ class LifecycleUiTest {
         compose.onNodeWithContentDescription("More actions").performClick()
         compose.onNodeWithText("Merge").performClick()
         compose.onNodeWithText("Merge").performClick()
-        compose.waitUntil(5_000) { synchronized(posted) { posted.isNotEmpty() } }
+        compose.waitUntil(WAIT) { synchronized(posted) { posted.isNotEmpty() } }
 
         compose
             .onNode(hasText("Merge") and hasStateDescription("In progress"))
@@ -227,7 +227,7 @@ class LifecycleUiTest {
             .performClick()
         compose.onNodeWithText("Cancel").assertIsNotEnabled()
         held.countDown()
-        compose.waitUntil(5_000) {
+        compose.waitUntil(WAIT) {
             compose.onAllNodesWithText("Merged login").fetchSemanticsNodes().isNotEmpty()
         }
         assertEquals(
@@ -241,9 +241,8 @@ class LifecycleUiTest {
         refusals = 1
         open(Target("app", "login", "implementer"))
 
-        compose.onNodeWithContentDescription("Agent actions").performClick()
-        compose.onNodeWithText("Interrupt").performClick()
-        compose.waitUntil(5_000) {
+        compose.onNodeWithContentDescription("Interrupt").performClick()
+        compose.waitUntil(WAIT) {
             compose
                 .onAllNodesWithText("Couldn't interrupt: no harness")
                 .fetchSemanticsNodes()
@@ -251,7 +250,7 @@ class LifecycleUiTest {
         }
         // The snackbar's, drawn after the offline strip's.
         compose.onAllNodesWithText("Retry").onLast().performClick()
-        compose.waitUntil(5_000) {
+        compose.waitUntil(WAIT) {
             compose.onAllNodesWithText("Interrupted implementer").fetchSemanticsNodes().isNotEmpty()
         }
         assertEquals(
@@ -260,3 +259,6 @@ class LifecycleUiTest {
         )
     }
 }
+
+/** How long a wait on the local server may take in a full, loaded test run. */
+private const val WAIT = 15_000L

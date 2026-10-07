@@ -77,39 +77,16 @@ fun AttentionBadge(kind: AttentionKind, modifier: Modifier = Modifier) {
     }
 }
 
-/** What TalkBack reads for an agent: its name, state, and unread messages. */
-fun describe(agent: AgentSnapshot): String =
+/**
+ * What TalkBack reads for an agent: its name, state (what it was while `stale`), and unread
+ * messages.
+ */
+fun describe(agent: AgentSnapshot, stale: Boolean = false): String =
     listOfNotNull(
-            "${agent.name} ${agent.stateOf.label}",
+            "${agent.name} ${if (stale) "was " else ""}${agent.stateOf.label}",
             agent.unread.takeIf { it > 0 }?.let { "$it unread" },
         )
         .joinToString(", ")
-
-/** An agent's state glyph, and an envelope when it has unread messages. */
-@Composable
-fun AgentBadge(agent: AgentSnapshot, modifier: Modifier = Modifier, showName: Boolean = true) {
-    Row(
-        modifier = modifier.clearAndSetSemantics { contentDescription = describe(agent) },
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.xxs),
-    ) {
-        MarkIcon(Marks.agent(agent.stateOf), null)
-        if (showName) Text(agent.name, style = MaterialTheme.typography.labelMedium)
-        if (agent.unread > 0) {
-            Icon(
-                painterResource(R.drawable.ic_mail),
-                null,
-                tint = Tone.Caution.color(),
-                modifier = Modifier.size(14.dp),
-            )
-            Text(
-                "${agent.unread}",
-                style = MaterialTheme.typography.labelSmall,
-                color = Tone.Caution.color(),
-            )
-        }
-    }
-}
 
 /**
  * What an [ActivityLabel] says, for a row's composed description. While `stale` (`pm serve` isn't

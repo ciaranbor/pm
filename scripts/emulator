@@ -37,7 +37,8 @@ Usage: scripts/emulator [-n NAME] COMMAND [ARGS]
   tap [--nth N] TEXT    tap the node whose text or content-desc is exactly
                         TEXT (a clickable Compose row merges its texts into
                         one content-desc: read `ui`); when several are,
-                        --nth picks one (dump order)
+                        --nth N picks the Nth, counting from 1 in `ui`
+                        dump order
   tap [--nth N] --class CLASS
                         tap the node of class CLASS, likewise
   type TEXT             type TEXT into the focused field
@@ -365,7 +366,7 @@ tap() {
   count=$(grep -c . <<<"$found" || true)
   [ "$count" -gt 0 ] || die "no node with ${attrs//|/ or } '$value' on screen"
   if [ -z "$nth" ]; then
-    [ "$count" -eq 1 ] || die "$count nodes with ${attrs//|/ or } '$value' on screen: pick one with --nth N (in dump order)"
+    [ "$count" -eq 1 ] || die "$count nodes with ${attrs//|/ or } '$value' on screen: pick one with --nth N (from 1, in dump order)"
     nth=1
   fi
   xy=$(sed -n "${nth}p" <<<"$found")

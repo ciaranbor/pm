@@ -1,5 +1,6 @@
 package dev.pm.app.ui
 
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -123,6 +124,7 @@ fun <T> ReadScreen(
     content: @Composable (T) -> Unit,
 ) {
     val state by model.uiState.collectAsStateWithLifecycle()
+    RetryOnReconnect(state is ReadState.Unreachable || state is ReadState.Failed, model::retry)
     Box(modifier) {
         when (val shown = state) {
             ReadState.Loading -> Centered { CircularProgressIndicator() }
@@ -167,12 +169,13 @@ internal fun MarkdownPage(
     modifier: Modifier = Modifier,
     components: MarkdownComponents = markdownComponents(),
     bottom: Dp = 0.dp,
+    scroll: ScrollState = rememberScrollState(),
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     Column(
         modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(scroll)
             .padding(Spacing.gutter)
             .padding(bottom = bottom)
     ) {

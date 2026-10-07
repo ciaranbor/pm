@@ -6,6 +6,7 @@ import android.os.Build
 import android.text.InputType
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.ViewTreeObserver
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -37,6 +39,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
@@ -50,7 +53,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import dev.pm.app.R
 
-/** An edit of the notes: raw Markdown, or how it renders. Save and Discard sit in the top bar. */
+/**
+ * An edit of the notes: raw Markdown, or how it renders, opened at the section being edited. Save
+ * and Discard sit in the top bar.
+ */
 @Composable
 internal fun NotesEditor(
     model: NotesModel,
@@ -63,8 +69,8 @@ internal fun NotesEditor(
     val changed = state.changed
     val feedback = LocalFeedback.current
     LaunchedEffect(model) {
-        model.failures.collect { error ->
-            feedback.failed(error, if (error != NotesModel.TOO_LONG) model::save else null)
+        model.failures.collect { failure ->
+            feedback.failed(failure.message, if (failure.saveAgain) model::save else null)
         }
     }
     TopBarActions(topBar) {
@@ -109,7 +115,17 @@ internal fun NotesEditor(
             if (text.isBlank()) {
                 EmptyState("Nothing to preview yet.")
             } else {
-                MarkdownPage(text)
+                val sections = remember(text) { Sections() }
+                val scroll = rememberScrollState()
+                // In the effect: the editor stores model.top as it is released, after this
+                // composition.
+                LaunchedEffect(sections) { sections.show(model.top, scroll) }
+                MarkdownPage(
+                    text,
+                    modifier = Modifier.onGloballyPositioned { sections.page = it },
+                    components = remember(sections) { sections.components() },
+                    scroll = scroll,
+                )
             }
         } else {
             Field(model, readOnly = state.saving)
@@ -154,6 +170,8 @@ private fun Field(model: NotesModel, readOnly: Boolean, modifier: Modifier = Mod
     fun leave(view: EditText) {
         view.layout?.let { model.top = it.getLineStart(it.getLineForVertical(view.scrollY)) }
         model.cursor = view.selectionStart.coerceAtLeast(0)
+        // A view being taken down has already lost focus; what it had while shown is kept.
+        if (view.isAttachedToWindow) model.focused = view.hasFocus()
         model.keep()
     }
     DisposableEffect(host) {
@@ -186,9 +204,11 @@ private fun Field(model: NotesModel, readOnly: Boolean, modifier: Modifier = Mod
                 setSelection(model.cursor.coerceIn(0, length()))
                 doAfterTextChanged { model.edited(it ?: "") }
                 val top = model.top
+                val focused = model.focused
                 post {
                     val laid = layout ?: return@post
                     scrollTo(0, laid.getLineTop(laid.getLineForOffset(top.coerceIn(0, length()))))
+                    if (focused && requestFocus()) showKeyboard()
                 }
                 shown = this
             }
@@ -220,6 +240,24 @@ private fun Field(model: NotesModel, readOnly: Boolean, modifier: Modifier = Mod
             shown = null
         },
         modifier = modifier.fillMaxSize(),
+    )
+}
+
+/** Show the keyboard for this view once its window has focus, as it lacks it while recreated. */
+private fun EditText.showKeyboard() {
+    val show = { context.getSystemService(InputMethodManager::class.java)?.showSoftInput(this, 0) }
+    if (hasWindowFocus()) {
+        show()
+        return
+    }
+    viewTreeObserver.addOnWindowFocusChangeListener(
+        object : ViewTreeObserver.OnWindowFocusChangeListener {
+            override fun onWindowFocusChanged(hasFocus: Boolean) {
+                if (!hasFocus) return
+                viewTreeObserver.removeOnWindowFocusChangeListener(this)
+                show()
+            }
+        }
     )
 }
 

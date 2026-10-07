@@ -9,9 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -24,11 +22,8 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import dev.pm.app.R
 import dev.pm.app.api.PmClient
 import dev.pm.app.model.AgentSnapshot
 import dev.pm.app.model.AgentState
@@ -36,9 +31,7 @@ import dev.pm.app.model.Attention
 import dev.pm.app.model.AttentionKind
 import dev.pm.app.model.FeatureInfo
 import dev.pm.app.model.FeatureSnapshot
-import dev.pm.app.model.Marks
 import dev.pm.app.model.Snapshot
-import dev.pm.app.model.Tone
 import dev.pm.app.model.activity
 import dev.pm.app.model.prLabel
 import dev.pm.app.model.progressLabel
@@ -82,24 +75,28 @@ fun Workspace(
         agents.find { it.name == shownAgent }?.let { StatePill(it.stateOf, stale) }
         val items = buildList {
             if (shownAgent != null && client != null) {
-                add(MenuItem("Terminal") { terminal = shownAgent })
+                add(MenuItem("Terminal", R.drawable.ic_terminal) { terminal = shownAgent })
                 add(
-                    MenuItem("Restart $shownAgent") {
+                    MenuItem("Restart $shownAgent", R.drawable.ic_autorenew) {
                         ask(Action.Restart(project, scope, shownAgent))
                     }
                 )
             }
             if (feature != null) {
-                add(MenuItem("Merge") { ask(Action.Merge(project, scope)) })
-                add(MenuItem("Delete", destructive = true) { ask(Action.Delete(project, scope)) })
+                add(MenuItem("Merge", R.drawable.ic_merge) { ask(Action.Merge(project, scope)) })
+                add(
+                    MenuItem("Delete", R.drawable.ic_delete, destructive = true) {
+                        ask(Action.Delete(project, scope))
+                    }
+                )
             }
         }
-        if (items.isNotEmpty()) OverflowMenu(items)
+        ActionMenu(items)
     }
 
     val pages = rememberSaveableStateHolder()
     Column(modifier.fillMaxSize()) {
-        if (tabs.size > 1) WorkspaceTabs(tabs, selected, agents, select = select)
+        if (tabs.size > 1) WorkspaceTabs(tabs, selected, agents, select = select, stale = stale)
         Box(Modifier.weight(1f)) {
             val tab = selected
             if (tab == null) {
@@ -184,61 +181,6 @@ internal fun defaultTab(
             ?: agents.find { it.stateOf == AgentState.Asking }
             ?: agents.firstOrNull()
     return agent?.let { Tab.Agent(it.name) } ?: feature?.let { Tab.Summary }
-}
-
-/** The workspace's tabs, `selected` marked; an agent's with its state and unread messages. */
-@Composable
-fun WorkspaceTabs(
-    tabs: List<Tab>,
-    selected: Tab?,
-    agents: List<AgentSnapshot>,
-    select: (Tab) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    PrimaryScrollableTabRow(
-        selectedTabIndex = tabs.indexOf(selected).coerceAtLeast(0),
-        modifier = modifier,
-        edgePadding = 0.dp,
-        minTabWidth = 64.dp,
-    ) {
-        tabs.forEach { tab ->
-            Tab(
-                selected = tab == selected,
-                onClick = { select(tab) },
-                text = { TabLabel(tab, agents) },
-            )
-        }
-    }
-}
-
-@Composable
-private fun TabLabel(tab: Tab, agents: List<AgentSnapshot>) {
-    when (tab) {
-        is Tab.Agent -> {
-            val agent = agents.find { it.name == tab.name }
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
-                modifier =
-                    Modifier.clearAndSetSemantics {
-                        contentDescription = agent?.let(::describe) ?: tab.name
-                    },
-            ) {
-                MarkIcon(Marks.agent(agent?.stateOf ?: AgentState.Unknown), null)
-                Text(tab.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (agent != null && agent.unread > 0) {
-                    Text(
-                        "${agent.unread}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Tone.Caution.color(),
-                    )
-                }
-            }
-        }
-        Tab.Summary -> Text("Summary")
-        Tab.Brief -> Text("Brief")
-        Tab.Details -> Text("Details")
-    }
 }
 
 /**

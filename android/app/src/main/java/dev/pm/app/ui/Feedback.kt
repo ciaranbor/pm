@@ -26,6 +26,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -156,9 +159,14 @@ private data class Report(
     override val actionLabel: String?,
     val error: Boolean,
 ) : SnackbarVisuals {
-    override val withDismissAction = false
+    /** A failure that offers Retry waits to be retried or dismissed. */
+    override val withDismissAction = error && actionLabel != null
     override val duration =
-        if (actionLabel != null) SnackbarDuration.Long else SnackbarDuration.Short
+        when {
+            withDismissAction -> SnackbarDuration.Indefinite
+            actionLabel != null -> SnackbarDuration.Long
+            else -> SnackbarDuration.Short
+        }
 }
 
 /**
@@ -167,6 +175,9 @@ private data class Report(
  */
 @Stable
 class Feedback(val host: SnackbarHostState, private val scope: CoroutineScope) {
+    /** How far above the bottom a page's own controls reach, for the snackbar to sit above. */
+    var lift by mutableStateOf(0.dp)
+
     /** Report `message`, with `action` offering a next step where there is one. */
     fun done(message: String, action: String? = null, onAction: () -> Unit = {}) =
         show(message, action, error = false, onAction)
@@ -190,7 +201,7 @@ val LocalFeedback = staticCompositionLocalOf<Feedback> { error("LocalFeedback no
 /** Where [Feedback] shows: failures in the error colours. */
 @Composable
 fun FeedbackHost(feedback: Feedback, modifier: Modifier = Modifier) {
-    SnackbarHost(feedback.host, modifier) { data ->
+    SnackbarHost(feedback.host, modifier.padding(bottom = feedback.lift)) { data ->
         if ((data.visuals as? Report)?.error == true) {
             Snackbar(
                 data,

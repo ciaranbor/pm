@@ -2,7 +2,7 @@ package dev.pm.app.ui
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.Surface
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onRoot
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -23,7 +23,7 @@ import org.robolectric.annotation.GraphicsMode
 /**
  * A Markdown page and a ready feature's workspace, compared with the images in
  * `src/test/screenshots` on every test run: headings at title sizes, inline code without wide
- * padding. `gradlew recordRoborazziDebug` records anew.
+ * padding. `gradlew recordRoborazziGoogleDebug` records anew.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)

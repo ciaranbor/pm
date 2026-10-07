@@ -13,7 +13,7 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.doubleClick
 import androidx.compose.ui.test.getBoundsInRoot
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -187,6 +187,13 @@ class TerminalTest {
     }
 
     @Test
+    fun a_link_whose_scheme_the_wrap_splits_is_found_whole() {
+        val link = "https://example.com/" + "z".repeat(30)
+        val rows = listOf("Open this: " + "x".repeat(61) + " https:/", "/" + link.drop(8) + " now")
+        assertEquals(listOf(link), screenLinks(rows + "─".repeat(80)))
+    }
+
+    @Test
     fun a_wrapped_link_ends_where_its_last_row_goes_on_in_words() {
         val link = "https://example.com/path?one=" + "1234567890".repeat(10)
         val other = "https://pm.dev/" + "y".repeat(20)
@@ -252,6 +259,29 @@ class TerminalTest {
         ctrl.performClick()
         up.performClick()
         assertEquals(listOf("C-r", "C-Up", "Up"), pressed)
+    }
+
+    @Test
+    fun a_pasted_line_break_is_typed_as_a_space() {
+        val typed = mutableListOf<String>()
+        compose.setContent {
+            PmTheme {
+                ScreenPanel(
+                    "❯",
+                    null,
+                    emptyList(),
+                    press = {},
+                    type = {
+                        typed += it
+                        true
+                    },
+                )
+            }
+        }
+        compose.onNodeWithText("Type at the terminal").performTextInput("git log\n  --oneline")
+        compose.onNodeWithContentDescription("Type").performClick()
+        compose.waitForIdle()
+        assertEquals(listOf("git log --oneline"), typed)
     }
 
     @Test

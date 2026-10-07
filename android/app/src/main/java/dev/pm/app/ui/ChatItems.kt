@@ -381,7 +381,7 @@ internal fun ToolLine(tool: Item.Tool, touch: ChatTouch) {
             fontFamily = FontFamily.Monospace,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            overflow = targetCut(tool.input),
             modifier = Modifier.weight(1f),
         )
         duration(tool)?.let {
@@ -393,6 +393,12 @@ internal fun ToolLine(tool: Item.Tool, touch: ChatTouch) {
         }
     }
 }
+
+/**
+ * Where a tool's target is cut to fit: a path's end names the file, a command's start what runs.
+ */
+internal fun targetCut(target: String): TextOverflow =
+    if (' ' in target) TextOverflow.Ellipsis else TextOverflow.StartEllipsis
 
 /** The model's reasoning, as one line of it; a tap reads it whole. */
 @Composable

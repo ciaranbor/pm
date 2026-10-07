@@ -153,6 +153,7 @@ fun ReaderView(
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     val text = (body as? ReaderBody.Shown)?.text
+    RetryOnReconnect(body is ReaderBody.Failed) { (body as? ReaderBody.Failed)?.retry?.invoke() }
     Scaffold(
         modifier = modifier,
         snackbarHost = { SnackbarHost(snackbar) },

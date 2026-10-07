@@ -6,7 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -23,7 +23,7 @@ import org.robolectric.annotation.GraphicsMode
 
 /**
  * A dialog card of each kind, compared with the images in `src/test/screenshots` on every test run;
- * `gradlew recordRoborazziDebug` records them anew.
+ * `gradlew recordRoborazziGoogleDebug` records them anew.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)

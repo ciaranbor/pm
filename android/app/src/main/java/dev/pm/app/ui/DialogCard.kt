@@ -144,13 +144,7 @@ internal fun DialogCard(
 private fun Target(dialog: Dialog) {
     val text = dialog.target ?: return
     if (dialog.kind == "permission") {
-        // A path's end names the file; a command's start names what runs.
-        Text(
-            text,
-            style = terminalStyle(13.sp),
-            maxLines = 1,
-            overflow = if (' ' in text) TextOverflow.Ellipsis else TextOverflow.StartEllipsis,
-        )
+        Text(text, style = terminalStyle(13.sp), maxLines = 1, overflow = targetCut(text))
     } else {
         Text(
             text,

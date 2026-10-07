@@ -1,5 +1,6 @@
 package dev.pm.app.ui
 
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,6 +21,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -49,6 +51,10 @@ fun NotesScreen(model: NotesModel, topBar: TopBarSlot, modifier: Modifier = Modi
         model.reload()
         onStopOrDispose {}
     }
+    RetryOnReconnect(
+        state is NotesState.Unreachable || state is NotesState.Failed,
+        model::reload,
+    )
     Box(modifier.fillMaxSize()) {
         when (val shown = state) {
             NotesState.Loading -> Centered { CircularProgressIndicator() }
@@ -106,8 +112,11 @@ private fun NotesView(state: NotesState.Viewing, edit: (Int) -> Unit) {
     }
 }
 
-/** Where the rendered notes' headings are, to tell which section is being read. */
-private class Sections {
+/**
+ * Where the rendered notes' headings are, to tell which section is being read, or to show one.
+ * [page] is the page's viewport, [headings] each heading by its source offset.
+ */
+internal class Sections {
     var page: LayoutCoordinates? = null
     private val headings = mutableMapOf<Int, LayoutCoordinates>()
 
@@ -120,6 +129,22 @@ private class Sections {
             .filterValues { it <= slack }
             .maxByOrNull { it.value }
             ?.key ?: 0
+    }
+
+    /**
+     * Scroll the page by `scroll` so the heading of the section holding source offset `at` is at
+     * its top, once the page has drawn it; the top of the page for a place before any heading.
+     */
+    suspend fun show(at: Int, scroll: ScrollState) {
+        repeat(SHOW_WITHIN_FRAMES) {
+            withFrameNanos {}
+            val page = page?.takeIf { it.isAttached } ?: return@repeat
+            if (headings.isEmpty()) return@repeat
+            val heading = headings.filterKeys { it <= at }.maxByOrNull { it.key }?.value ?: return
+            if (!heading.isAttached) return@repeat
+            scroll.scrollTo(scroll.value + page.localPositionOf(heading, Offset.Zero).y.toInt())
+            return
+        }
     }
 
     fun components(): MarkdownComponents {
@@ -230,3 +255,6 @@ private fun Version(label: String, text: String) {
 
 /** The most of a text a notes page shows. */
 private const val PREVIEW = 20_000
+
+/** How long [Sections.show] waits for long notes, parsed off the main thread, to draw. */
+private const val SHOW_WITHIN_FRAMES = 120
