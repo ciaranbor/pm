@@ -92,7 +92,7 @@ use crate::bounded;
 use crate::error::{PmError, Result};
 use crate::fs_utils::write_atomic;
 use crate::harness::probe::{self, Probe};
-use crate::harness::{LaunchContext, PreLaunch, Projection, ProjectionScope, SpawnSpec};
+use crate::harness::{LaunchContext, PreLaunch, Projection, ProjectionScope, SpawnSpec, Wake};
 use crate::state::paths;
 use crate::state::project::OpenCodeConfig;
 use crate::state::workflow::VANILLA_AGENT;
@@ -709,6 +709,16 @@ pub(super) fn credentials_step(cfg: &OpenCodeConfig) -> String {
             variables.join(", ")
         )
     }
+}
+
+pub(super) const EXPORT_TAG: &str = "opencode";
+pub(super) const WAKE: Wake = Wake::Block;
+
+pub(super) fn prompt_mechanism() -> String {
+    format!(
+        "the pm-never-idle plugin's context hook (needs opencode >= {})",
+        min_version_string()
+    )
 }
 
 pub(super) fn min_version_string() -> String {

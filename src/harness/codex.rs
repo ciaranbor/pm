@@ -59,8 +59,8 @@ use toml_edit::{DocumentMut, Item, Table, value};
 
 use crate::error::{PmError, Result};
 use crate::fs_utils::write_atomic;
-use crate::harness::SpawnSpec;
 use crate::harness::probe::{self, Probe};
+use crate::harness::{SpawnSpec, Wake};
 use crate::state::project::CodexConfig;
 use crate::tmux;
 
@@ -416,6 +416,16 @@ fn version_problem(found: Option<&str>) -> Option<String> {
 /// The manual step that gives a new machine's codex its credentials,
 /// which live in `$CODEX_HOME/auth.json`.
 pub(super) const CREDENTIALS_STEP: &str = "log in to codex (`codex login`)";
+pub(super) const EXPORT_TAG: &str = "codex";
+pub(super) const WAKE: Wake = Wake::Queue;
+
+pub(super) fn prompt_mechanism() -> String {
+    format!(
+        "SessionStart hook context injection outside the shared daemon \
+         (needs codex >= {})",
+        min_version_string()
+    )
+}
 
 pub(super) fn min_version_string() -> String {
     let (a, b, c) = MIN_VERSION;

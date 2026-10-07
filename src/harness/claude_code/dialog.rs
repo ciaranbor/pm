@@ -50,10 +50,14 @@ const AUTO: &str = "auto";
 const MANUAL: &str = "manual";
 const KEEP_PLANNING: &str = "keep-planning";
 
+const EVENT: &str = "PermissionRequest";
+/// The hook events whose payloads open a dialog.
+pub(in crate::harness) const EVENTS: &[&str] = &[EVENT];
+
 /// The dialog a `PermissionRequest` payload opens, with what its decision
 /// needs: the tool's input and the permission suggestions.
 pub(in crate::harness) fn dialog(payload: &Value) -> Option<(Dialog, Value)> {
-    if payload.get("hook_event_name")?.as_str()? != "PermissionRequest" {
+    if payload.get("hook_event_name")?.as_str()? != EVENT {
         return None;
     }
     let tool = payload.get("tool_name")?.as_str()?;
@@ -289,7 +293,7 @@ pub(in crate::harness) fn decision(record: &DialogRecord, answer: &Answer) -> Va
         _ => deny(true),
     };
     json!({
-        "hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": decision}
+        "hookSpecificOutput": {"hookEventName": EVENT, "decision": decision}
     })
 }
 

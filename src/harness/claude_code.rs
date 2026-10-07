@@ -29,7 +29,7 @@ use std::path::Path;
 
 use crate::error::Result;
 use crate::harness::probe::{self, Probe};
-use crate::harness::{Projection, ProjectionScope, SpawnSpec};
+use crate::harness::{Projection, ProjectionScope, SpawnSpec, Wake};
 use crate::tmux;
 
 pub(super) const CONFIG_DIR: &str = ".claude";
@@ -168,6 +168,10 @@ pub(super) fn installed_version(probe: Probe) -> Option<String> {
 /// `~/.claude.json`).
 pub(super) const CREDENTIALS_STEP: &str =
     "log in to Claude Code (run `claude`, then /login, or `claude setup-token`)";
+
+pub(super) const PROMPT_MECHANISM: &str = "appending a prompt file (--append-system-prompt-file)";
+pub(super) const EXPORT_TAG: &str = "claude";
+pub(super) const WAKE: Wake = Wake::Rewake;
 
 pub(super) fn unusable_reason(probe: Probe) -> Option<String> {
     let runs = run_probe("--version", probe).is_ok_and(|exit| exit.success);
