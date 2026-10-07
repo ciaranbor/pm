@@ -241,7 +241,8 @@ class LifecycleUiTest {
         refusals = 1
         open(Target("app", "login", "implementer"))
 
-        compose.onNodeWithContentDescription("Interrupt").performClick()
+        compose.onNodeWithContentDescription("Agent actions").performClick()
+        compose.onNodeWithText("Interrupt").performClick()
         compose.waitUntil(5_000) {
             compose
                 .onAllNodesWithText("Couldn't interrupt: no harness")

@@ -4,13 +4,15 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * A dialog on an agent's screen that can be answered from the phone (`GET …/dialog`): a question
+ * A dialog on an agent's screen that can be answered from the phone (`GET …/dialogs`): a question
  * form, a permission prompt or a plan, with the choices its harness's CLI offers.
  */
 @Serializable
 data class Dialog(
     val id: String,
     val kind: String,
+    /** The harness's id for the subagent asking; null for the agent's own dialog. */
+    val subagent: String? = null,
     val questions: List<Question> = emptyList(),
     val tool: String? = null,
     val detail: String? = null,

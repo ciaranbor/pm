@@ -57,6 +57,12 @@ sealed interface Outbox {
     data class Failed(override val text: String, val reason: String) : Outbox
 }
 
+/** Why an answer to the dialog `id` was refused. */
+data class DialogNotice(val id: String, val text: String)
+
+/** An answer on its way: to the dialog `id`, with the choice pressed. */
+data class Answering(val id: String, val choice: String)
+
 /**
  * One agent's conversation, kept current while its view is open: the latest page, then a watched
  * event stream from where that page ended, reopened with backoff, and at once when `networkChanges`
@@ -72,13 +78,29 @@ class AgentModel(
     private val _chat = MutableStateFlow<ChatState>(ChatState.Loading)
     val chat: StateFlow<ChatState> = _chat.asStateFlow()
 
-    /** The dialog the agent shows that can be answered here; null when none can. */
-    private val _dialog = MutableStateFlow<Dialog?>(null)
-    val dialog: StateFlow<Dialog?> = _dialog.asStateFlow()
+    /** The agent's dialogs that can be answered here, oldest first. */
+    private val _dialogs = MutableStateFlow<List<Dialog>>(emptyList())
+    val dialogs: StateFlow<List<Dialog>> = _dialogs.asStateFlow()
 
-    /** An answer to [dialog] is on its way. */
-    private val _answering = MutableStateFlow(false)
-    val answering: StateFlow<Boolean> = _answering.asStateFlow()
+    private val _answering = MutableStateFlow<Answering?>(null)
+    val answering: StateFlow<Answering?> = _answering.asStateFlow()
+
+    /** What the user last answered, until the conversation moves on past it. */
+    private val _answered = MutableStateFlow<String?>(null)
+    val answered: StateFlow<String?> = _answered.asStateFlow()
+
+    private val _answerFailed = Channel<String>(Channel.BUFFERED)
+
+    /** Why an answer didn't reach the server, once each; [retryAnswer] sends it again. */
+    val answerFailed: Flow<String> = _answerFailed.receiveAsFlow()
+    private var lastAnswer: DialogAnswer? = null
+
+    /**
+     * Dialogs answered, here or elsewhere as a refusal said: a read racing the answer may still
+     * list them, and the snapshot may still name one as the agent's until its harness moves on.
+     */
+    private val _answeredIds = MutableStateFlow<Set<String>>(emptySet())
+    val answeredIds: StateFlow<Set<String>> = _answeredIds.asStateFlow()
 
     private val _outbox = MutableStateFlow<Outbox?>(null)
     val outbox: StateFlow<Outbox?> = _outbox.asStateFlow()
@@ -92,9 +114,9 @@ class AgentModel(
     /** How each interrupt went, once: null once sent, else why it wasn't. */
     val interrupted: Flow<String?> = _interrupted.receiveAsFlow()
 
-    /** Why the last answer failed; cleared by the next. */
-    private val _notice = MutableStateFlow<String?>(null)
-    val notice: StateFlow<String?> = _notice.asStateFlow()
+    /** Why the last answer was refused; cleared by the next, or by another dialog opening. */
+    private val _notice = MutableStateFlow<DialogNotice?>(null)
+    val notice: StateFlow<DialogNotice?> = _notice.asStateFlow()
 
     /**
      * Items the stream appended since the last send began: only these can be what was sent. A page
@@ -113,7 +135,7 @@ class AgentModel(
     private var watching: Job? = null
     private val backoff = Backoff()
     private var reconnecting: Job? = null
-    private var fetchingDialog: Job? = null
+    private var fetchingDialogs: Job? = null
     private var paging = false
 
     private val conversation
@@ -206,6 +228,7 @@ class AgentModel(
                 arrivedSinceSend += items
                 seen()
             }
+            if (items.isNotEmpty() || update.reset) _answered.value = null
         }
     }
 
@@ -242,6 +265,12 @@ class AgentModel(
         }
     }
 
+    /** Send a failed text again. */
+    fun retrySend() {
+        val failed = _outbox.value as? Outbox.Failed ?: return
+        send(failed.text)
+    }
+
     /** Forget a failed or finished send. */
     fun dismissOutbox() {
         if (_outbox.value !is Outbox.Sending) _outbox.value = null
@@ -267,70 +296,89 @@ class AgentModel(
     }
 
     /**
-     * The snapshot names the agent's answerable dialog by `id`, null for none: read it when it is
-     * one not held.
+     * The snapshot names the agent's latest answerable dialog by `id`, null for none: read the list
+     * again when it is one not held.
      */
     fun dialogNamed(id: String?) {
         if (id == null) {
-            fetchingDialog?.cancel()
-            _dialog.value = null
+            fetchingDialogs?.cancel()
+            _dialogs.value = emptyList()
+            _notice.value = null
             return
         }
-        if (_dialog.value?.id == id) return
-        fetchDialog()
+        if (_dialogs.value.any { it.id == id } || id in _answeredIds.value) return
+        _notice.value = null
+        fetchDialogs()
     }
 
-    private fun fetchDialog() {
-        fetchingDialog?.cancel()
-        fetchingDialog = viewModelScope.launch {
-            _dialog.value =
+    private fun fetchDialogs() {
+        fetchingDialogs?.cancel()
+        fetchingDialogs = viewModelScope.launch {
+            _dialogs.value =
                 try {
-                    client.dialog(project, scope, agent)
+                    client.dialogs(project, scope, agent).filter { it.id !in _answeredIds.value }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    null
+                    emptyList()
                 }
         }
     }
 
     /**
-     * Answer [dialog] with `choice`, the `answers` to its questions, and a `message` for the agent.
-     * One refused (answered at the terminal first, or its hook gone) says why and is read again.
+     * Answer `dialog` with `choice`, the `answers` to its questions, and a `message` for the agent.
+     * One refused (answered at the terminal first, or its hook gone) says why, and the list is read
+     * again; one that didn't reach the server can be retried.
      */
     fun answer(
+        dialog: Dialog,
         choice: String,
         answers: Map<String, List<String>> = emptyMap(),
         message: String? = null,
     ) {
-        val shown = _dialog.value ?: return
-        if (_answering.value) return
-        _answering.value = true
+        val sent = DialogAnswer(dialog.id, choice, answers, message?.takeIf { it.isNotBlank() })
+        post(sent, answeredText(dialog, sent))
+    }
+
+    /** Send the answer that last failed to reach the server again, if its dialog is still up. */
+    fun retryAnswer() {
+        val sent = lastAnswer ?: return
+        val dialog = _dialogs.value.find { it.id == sent.id } ?: return
+        post(sent, answeredText(dialog, sent))
+    }
+
+    private fun post(sent: DialogAnswer, said: String) {
+        if (_answering.value != null) return
+        _answering.value = Answering(sent.id, sent.choice)
         _notice.value = null
+        lastAnswer = null
         viewModelScope.launch {
             try {
-                client.answerDialog(
-                    project,
-                    scope,
-                    agent,
-                    DialogAnswer(shown.id, choice, answers, message?.takeIf { it.isNotBlank() }),
-                )
-                if (_dialog.value?.id == shown.id) _dialog.value = null
+                client.answerDialog(project, scope, agent, sent)
+                _answeredIds.value += sent.id
+                _dialogs.value = _dialogs.value.filter { it.id != sent.id }
+                _answered.value = said
             } catch (e: CancellationException) {
                 throw e
             } catch (e: PmError.Refused) {
-                _notice.value =
+                val text =
                     when (e.code) {
                         "answered" -> "Answered elsewhere"
                         "gone" ->
                             "The dialog can no longer be answered here; answer it at the terminal"
-                        else -> e.message
+                        else -> e.message ?: e.code
                     }
-                fetchDialog()
+                _notice.value = DialogNotice(sent.id, text)
+                if (e.code == "answered") {
+                    _answeredIds.value += sent.id
+                    _dialogs.value = _dialogs.value.filter { it.id != sent.id }
+                }
+                fetchDialogs()
             } catch (e: Exception) {
-                _notice.value = e.message ?: e.javaClass.simpleName
+                lastAnswer = sent
+                _answerFailed.send(e.message ?: e.javaClass.simpleName)
             } finally {
-                _answering.value = false
+                _answering.value = null
             }
         }
     }
@@ -420,4 +468,16 @@ class AgentModel(
         const val MAX_EMPTY_PAGES = 20
         val json = Json { ignoreUnknownKeys = true }
     }
+}
+
+/**
+ * What the user said to `dialog` with `answer`, in a line: the answers to its questions, else the
+ * choice's label, and any message.
+ */
+internal fun answeredText(dialog: Dialog, answer: DialogAnswer): String {
+    if (answer.choice == Dialog.ANSWER) {
+        return "You answered: " + answer.answers.values.flatten().joinToString(", ")
+    }
+    val label = dialog.choices.find { it.id == answer.choice }?.label ?: answer.choice
+    return "You chose: $label" + (answer.message?.let { " \u2014 \u201c$it\u201d" } ?: "")
 }

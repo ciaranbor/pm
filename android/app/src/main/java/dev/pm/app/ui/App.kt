@@ -263,6 +263,7 @@ fun App(
                                         acting,
                                         model.lifecycle::ask,
                                         stale = stale,
+                                        drafts = model.drafts,
                                     )
                                 }
                             }

@@ -2,268 +2,248 @@ package dev.pm.app.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.toggleable
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Checkbox
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pm.app.R
 import dev.pm.app.model.Dialog
 
 /**
- * A dialog on the agent's screen, answered here in the composer's place: a question form, a
- * permission prompt, or a plan, with a button per choice its harness offers. A choice that takes a
- * message asks for it before it is sent.
+ * The agent's open dialogs, answered here in the composer's place, one at a time with a way to step
+ * between them: each a title, its target in a line, and its choices in a row. Review opens it
+ * whole, over the screen. A lone question's options answer it on a tap; a form of several waits for
+ * Submit. A choice that takes a message asks for it first.
  */
 @Composable
 internal fun DialogCard(
-    dialog: Dialog,
-    answering: Boolean,
+    dialogs: List<Dialog>,
+    answering: Answering?,
     interrupting: Boolean,
-    notice: String?,
-    answer: (choice: String, answers: Map<String, List<String>>, message: String?) -> Unit,
+    notice: DialogNotice?,
+    answer: (Dialog, choice: String, answers: Map<String, List<String>>, message: String?) -> Unit,
     interrupt: () -> Unit,
     openTerminal: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val picked = remember(dialog.id) { mutableStateMapOf<String, Set<String>>() }
-    val typed = remember(dialog.id) { mutableStateMapOf<String, String>() }
-    var messaging by rememberSaveable(dialog.id) { mutableStateOf<String?>(null) }
-    var message by rememberSaveable(dialog.id) { mutableStateOf("") }
-    var tapped by rememberSaveable(dialog.id) { mutableStateOf<String?>(null) }
-    val send = { choice: String, answers: Map<String, List<String>>, message: String? ->
-        tapped = choice
-        answer(choice, answers, message)
+    var at by rememberSaveable { mutableStateOf<String?>(null) }
+    val index = dialogs.indexOfFirst { it.id == at }.coerceAtLeast(0)
+    val dialog = dialogs.getOrNull(index) ?: return
+    val form = rememberDialogForm(dialog)
+    var reviewing by rememberSaveable { mutableStateOf<String?>(null) }
+    val busy = answering != null || interrupting
+    // A refused dialog may have left the list: its notice then shows on the one shown instead.
+    val said = notice?.takeIf { n -> n.id == dialog.id || dialogs.none { it.id == n.id } }?.text
+    val send = { choice: Dialog.Choice ->
+        when {
+            choice.takesMessage -> form.messaging = choice.id
+            choice.id == Dialog.ANSWER -> {
+                val answers = form.answers
+                if (answers == null) reviewing = dialog.id
+                else {
+                    form.tapped = choice.id
+                    answer(dialog, choice.id, answers, null)
+                }
+            }
+            else -> {
+                form.tapped = choice.id
+                answer(dialog, choice.id, emptyMap(), null)
+            }
+        }
     }
-    val answers = answersOf(dialog, picked, typed)
+    val sendMessage = { choice: String ->
+        form.tapped = choice
+        answer(dialog, choice, emptyMap(), form.message)
+    }
+    val pendingOn = answering?.takeIf { it.id == dialog.id }?.let { form.tapped }
+
     Surface(modifier.fillMaxWidth(), tonalElevation = 2.dp) {
-        Column(Modifier.padding(horizontal = Spacing.m, vertical = Spacing.s)) {
+        Column(Modifier.padding(start = Spacing.m, end = Spacing.xs, bottom = Spacing.s)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    title(dialog),
+                    titleOf(dialog),
                     style = MaterialTheme.typography.titleSmall,
                     modifier = Modifier.weight(1f),
                 )
-                IconButton(onClick = openTerminal) {
-                    Icon(painterResource(R.drawable.ic_terminal), "Show the terminal")
+                if (dialogs.size > 1) {
+                    Stepper(index, dialogs.size) { at = dialogs[it].id }
                 }
-                PendingIconButton(
-                    painterResource(R.drawable.ic_stop),
-                    "Interrupt",
-                    onClick = interrupt,
-                    pending = interrupting,
-                    enabled = !answering,
-                )
+                AgentActions(answering == null, interrupting, interrupt, openTerminal)
             }
-            if (notice != null) {
-                Text(
-                    notice,
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.labelMedium,
-                )
-            }
-            Column(
-                Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(Spacing.s),
-            ) {
-                when (dialog.kind) {
-                    "question" ->
-                        dialog.questions.forEach { q ->
-                            QuestionView(
-                                q,
-                                picked[q.question].orEmpty(),
-                                typed[q.question].orEmpty(),
-                                pick = { picked[q.question] = it },
-                                type = { typed[q.question] = it },
-                            )
-                        }
-                    "plan" ->
-                        PmMarkdown(
-                            dialog.plan.orEmpty(),
-                            text = MaterialTheme.typography.bodyMedium,
-                        )
-                    else -> PermissionView(dialog)
-                }
-            }
-            val pending = messaging
-            if (pending != null) {
-                OutlinedTextField(
-                    value = message,
-                    onValueChange = { message = it },
-                    placeholder = { Text("Tell the agent what to do instead (optional)") },
-                    maxLines = 4,
-                    modifier = Modifier.fillMaxWidth().padding(top = Spacing.s),
-                )
-                Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                    TextButton(onClick = { messaging = null }, enabled = !answering) {
-                        Text("Cancel")
-                    }
-                    PendingButton(
-                        dialog.choices.find { it.id == pending }?.label ?: pending,
-                        onClick = { send(pending, emptyMap(), message) },
-                        pending = answering,
-                        enabled = !interrupting,
+            Column(Modifier.padding(end = Spacing.s)) {
+                Target(dialog)
+                if (said != null) {
+                    Text(
+                        said,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.labelMedium,
                     )
                 }
-            } else {
-                Column(
-                    Modifier.padding(top = Spacing.s),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.xs),
-                ) {
-                    dialog.choices.forEachIndexed { i, choice ->
-                        val mine = answering && tapped == choice.id
-                        PendingButton(
-                            choice.label,
-                            onClick = {
-                                when {
-                                    choice.takesMessage -> messaging = choice.id
-                                    choice.id == Dialog.ANSWER -> send(choice.id, answers!!, null)
-                                    else -> send(choice.id, emptyMap(), null)
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            pending = mine,
-                            enabled =
-                                mine ||
-                                    !answering &&
-                                        !interrupting &&
-                                        (choice.id != Dialog.ANSWER || answers != null),
-                            emphasis = if (i == 0) Emphasis.Filled else Emphasis.Outlined,
+                val messaging = form.messaging
+                when {
+                    messaging != null ->
+                        MessageField(
+                            form,
+                            dialog.choices.find { it.id == messaging }?.label ?: messaging,
+                            pending = pendingOn == messaging,
+                            enabled = !busy,
+                            send = { sendMessage(messaging) },
                         )
-                    }
+                    isLoneChoice(dialog) ->
+                        LoneQuestion(dialog, form, pendingOn, busy, answer) {
+                            reviewing = dialog.id
+                        }
+                    else ->
+                        ChoiceRow(
+                            dialog,
+                            pendingOn,
+                            busy,
+                            review = { reviewing = dialog.id },
+                            onChoice = send,
+                        )
                 }
             }
         }
     }
+    if (reviewing == dialog.id) {
+        DialogReview(
+            form,
+            pendingOn,
+            busy,
+            said,
+            onChoice = send,
+            sendMessage = sendMessage,
+            close = { reviewing = null },
+        )
+    }
 }
 
-private fun title(dialog: Dialog): String =
-    when (dialog.kind) {
-        "question" -> "The agent asks"
-        "plan" -> "Approve the plan?"
-        else -> "Allow ${dialog.tool ?: "this"}?"
+/** What the dialog is about, in a line: the command or file, the plan's title, the question. */
+@Composable
+private fun Target(dialog: Dialog) {
+    val text =
+        when (dialog.kind) {
+            "question" -> dialog.questions.firstOrNull()?.question ?: dialog.detail
+            else -> dialog.detail
+        } ?: return
+    val more = dialog.questions.size - 1
+    if (dialog.kind == "permission") {
+        // A path's end names the file; a command's start names what runs.
+        Text(
+            text,
+            style = terminalStyle(13.sp),
+            maxLines = 1,
+            overflow = if (' ' in text) TextOverflow.Ellipsis else TextOverflow.StartEllipsis,
+        )
+    } else {
+        Text(
+            if (more > 0) "$text (+$more more)" else text,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = if (isLoneChoice(dialog)) 3 else 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
+    dialog.subagent?.let {
+        Text(
+            "From a subagent",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** "2 of 3", with steps back and on. */
+@Composable
+private fun Stepper(index: Int, count: Int, go: (Int) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = { go(index - 1) }, enabled = index > 0) {
+            Icon(painterResource(R.drawable.ic_chevron_left), "Previous dialog")
+        }
+        Text(
+            "${index + 1} of $count",
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.semantics { contentDescription = "Dialog ${index + 1} of $count" },
+        )
+        IconButton(onClick = { go(index + 1) }, enabled = index < count - 1) {
+            Icon(painterResource(R.drawable.ic_chevron_right), "Next dialog")
+        }
+    }
+}
 
 /**
- * The answers to `dialog`'s questions, per question text: the options picked, then the words typed;
- * null until every question has one.
+ * A lone single-select question: a tap on an option answers it. Review shows the options'
+ * descriptions, and takes the user's own words where the question does.
  */
-internal fun answersOf(
-    dialog: Dialog,
-    picked: Map<String, Set<String>>,
-    typed: Map<String, String>,
-): Map<String, List<String>>? {
-    val answers =
-        dialog.questions.associate { q ->
-            val own = typed[q.question]?.trim()?.takeIf { it.isNotEmpty() && q.custom }
-            val labels = q.options.map { it.label }.filter { it in picked[q.question].orEmpty() }
-            q.question to
-                when {
-                    q.multiSelect -> labels + listOfNotNull(own)
-                    own != null -> listOf(own)
-                    else -> labels.take(1)
-                }
-        }
-    return answers.takeIf { a -> a.values.all { it.isNotEmpty() } }
-}
-
 @Composable
-private fun QuestionView(
-    question: Dialog.Question,
-    picked: Set<String>,
-    typed: String,
-    pick: (Set<String>) -> Unit,
-    type: (String) -> Unit,
+private fun LoneQuestion(
+    dialog: Dialog,
+    form: DialogForm,
+    pendingOn: String?,
+    busy: Boolean,
+    answer: (Dialog, String, Map<String, List<String>>, String?) -> Unit,
+    review: () -> Unit,
 ) {
+    val question = dialog.questions.single()
     Column {
-        if (question.header.isNotBlank()) {
-            Text(
-                question.header,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary,
-            )
-        }
-        Text(question.question, style = MaterialTheme.typography.bodyLarge)
-        question.options.forEach { option ->
-            val on = option.label in picked
-            val row =
-                if (question.multiSelect) {
-                    Modifier.toggleable(on, role = Role.Checkbox) {
-                        pick(if (it) picked + option.label else picked - option.label)
-                    }
-                } else {
-                    Modifier.selectable(on, role = Role.RadioButton) {
-                        pick(setOf(option.label))
-                        type("")
-                    }
-                }
-            Row(
-                row.fillMaxWidth().padding(vertical = Spacing.xxs),
-                verticalAlignment = Alignment.Top,
-            ) {
-                if (question.multiSelect) Checkbox(on, null) else RadioButton(on, null)
-                Column(Modifier.padding(start = Spacing.s)) {
-                    Text(option.label, fontWeight = FontWeight.Medium)
-                    if (option.description.isNotBlank()) {
-                        Text(
-                            option.description,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        FlowRow(
+            Modifier.fillMaxWidth().padding(top = Spacing.s),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.s),
+        ) {
+            question.options.forEach { option ->
+                val mine = pendingOn == option.label
+                PendingButton(
+                    option.label,
+                    onClick = {
+                        form.tapped = option.label
+                        answer(
+                            dialog,
+                            Dialog.ANSWER,
+                            mapOf(question.question to listOf(option.label)),
+                            null,
                         )
-                    }
-                }
+                    },
+                    pending = mine,
+                    enabled = mine || !busy,
+                    emphasis = Emphasis.Outlined,
+                )
             }
         }
-        if (question.custom) {
-            OutlinedTextField(
-                value = typed,
-                onValueChange = {
-                    type(it)
-                    if (!question.multiSelect && it.isNotBlank()) pick(emptySet())
-                },
-                placeholder = {
-                    Text(if (question.options.isEmpty()) "Your answer" else "Something else")
-                },
-                maxLines = 4,
-                modifier = Modifier.fillMaxWidth(),
-            )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = review) { Text(if (question.custom) "Other answer" else "Review") }
+            Spacer(Modifier.weight(1f))
+            groupsOf(dialog.choices)?.negative?.let { decline ->
+                PendingButton(
+                    shortLabel(decline.label),
+                    onClick = {
+                        form.tapped = decline.id
+                        answer(dialog, decline.id, emptyMap(), null)
+                    },
+                    pending = pendingOn == decline.id,
+                    enabled = pendingOn == decline.id || !busy,
+                    emphasis = Emphasis.Text,
+                )
+            }
         }
-    }
-}
-
-@Composable
-private fun PermissionView(dialog: Dialog) {
-    dialog.detail?.let {
-        Text(
-            it,
-            style = terminalStyle(13.sp),
-            modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.xs),
-        )
     }
 }
