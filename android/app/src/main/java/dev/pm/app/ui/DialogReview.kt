@@ -74,7 +74,7 @@ internal fun DialogReviewView(
         modifier = modifier,
         topBar = {
             TopAppBar(
-                title = { Text(titleOf(dialog), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                title = { Text(dialog.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = {
                     IconButton(onClick = close) {
                         Icon(painterResource(R.drawable.ic_close), "Close")

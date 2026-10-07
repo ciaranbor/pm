@@ -37,7 +37,7 @@ class DialogScreenshotTest {
      */
     private fun card(
         vararg dialogs: Dialog,
-        shown: String = titleOf(dialogs.first()),
+        shown: String = dialogs.first().title,
         tap: String? = null,
     ) {
         compose.setContent {

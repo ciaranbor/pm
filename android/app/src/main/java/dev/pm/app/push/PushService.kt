@@ -30,6 +30,7 @@ class PushService : UnifiedPushService() {
         }
         val transition = PushedTransition.parse(message.content) ?: return
         Notifications.show(this, transition)
+        container.detail(transition)
     }
 
     /** No push will come, as when Google's distributor has no Play services: polling takes over. */

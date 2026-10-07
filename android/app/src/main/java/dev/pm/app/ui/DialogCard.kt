@@ -82,7 +82,7 @@ internal fun DialogCard(
         Column(Modifier.padding(start = Spacing.m, end = Spacing.xs, bottom = Spacing.s)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    titleOf(dialog),
+                    dialog.title,
                     style = MaterialTheme.typography.titleSmall,
                     modifier = Modifier.weight(1f),
                 )
@@ -142,12 +142,7 @@ internal fun DialogCard(
 /** What the dialog is about, in a line: the command or file, the plan's title, the question. */
 @Composable
 private fun Target(dialog: Dialog) {
-    val text =
-        when (dialog.kind) {
-            "question" -> dialog.questions.firstOrNull()?.question ?: dialog.detail
-            else -> dialog.detail
-        } ?: return
-    val more = dialog.questions.size - 1
+    val text = dialog.target ?: return
     if (dialog.kind == "permission") {
         // A path's end names the file; a command's start names what runs.
         Text(
@@ -158,7 +153,7 @@ private fun Target(dialog: Dialog) {
         )
     } else {
         Text(
-            if (more > 0) "$text (+$more more)" else text,
+            text,
             style = MaterialTheme.typography.bodyMedium,
             maxLines = if (isLoneChoice(dialog)) 3 else 1,
             overflow = TextOverflow.Ellipsis,
@@ -232,7 +227,7 @@ private fun LoneQuestion(
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = review) { Text(if (question.custom) "Other answer" else "Review") }
             Spacer(Modifier.weight(1f))
-            groupsOf(dialog.choices)?.negative?.let { decline ->
+            dialog.groups?.negative?.let { decline ->
                 PendingButton(
                     shortLabel(decline.label),
                     onClick = {

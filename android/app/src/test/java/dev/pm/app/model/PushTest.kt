@@ -26,7 +26,7 @@ class PushTest {
             text("""{"project":"app","scope":"main","kind":"asking","agent":"main"}"""),
         )
         assertEquals(
-            "reviewer died",
+            "reviewer stopped running",
             text("""{"project":"app","scope":"login","kind":"dead","agent":"reviewer"}"""),
         )
         assertEquals("Ready for review", text("""{"project":"app","scope":"s","kind":"ready"}"""))

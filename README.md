@@ -290,7 +290,8 @@ Notifications reach the phone off the tailnet through a push distributor:
 Google's, built into the app, or for notifications without Google, the
 [ntfy](https://ntfy.sh) app (F-Droid or Google Play), installed before
 pairing. With neither, the app polls the server only as often as Android
-lets it — hours apart once the phone dozes.
+lets it — hours apart once the phone dozes. A permission prompt can be
+answered from its notification ([docs/android.md](docs/android.md#notifications)).
 
 A paired device may do everything the app offers: read everything, type
 into agents, merge and delete features and restart agents, as `pm feat
