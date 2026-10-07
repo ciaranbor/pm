@@ -19,8 +19,8 @@
 //! an export leaves out a child whose parent is bound to another directory,
 //! and an import goes parent before child. A move covers both.
 //!
-//! A spawn's session is created, resumed or forked here too, with the
-//! agent's model row pinned on it.
+//! A spawn's session is also created or forked here, and the agent's model
+//! row pinned on it.
 
 use std::collections::HashSet;
 use std::hash::{BuildHasher, Hasher};
