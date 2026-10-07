@@ -186,15 +186,19 @@ fn format_message(m: &Message, current_scope: Option<&str>) -> Vec<String> {
     };
     let is_cross_project = m.meta.sender_project.is_some();
 
-    let mut lines = vec![
-        format!(
-            "--- from {} [{:03}] {} ---",
-            sender_display,
-            m.index,
-            m.meta.timestamp.format("%Y-%m-%d %H:%M:%S UTC")
-        ),
-        m.body.clone(),
-    ];
+    let timestamp = m.meta.timestamp.format("%Y-%m-%d %H:%M:%S UTC");
+    let note = if messages::is_no_reply(&m.sender) {
+        " (sent by pm, not an agent: no one to reply to; report as `pm workflow show` says)"
+    } else {
+        ""
+    };
+    // The opencode never-idle plugin's MESSAGE_HEADER matches this prefix to
+    // tell that a read took a message.
+    let header = format!(
+        "--- from {sender_display} [{:03}] {timestamp}{note} ---",
+        m.index
+    );
+    let mut lines = vec![header, m.body.clone()];
 
     if is_cross_scope || is_cross_project {
         lines.push(String::new());
@@ -284,6 +288,24 @@ mod tests {
         let lines = agent_read(&root, "login", "reviewer", None, None).unwrap();
         assert!(lines[0].starts_with("--- from implementer [001]"));
         assert_eq!(lines[1], "fix the bug");
+    }
+
+    #[test]
+    fn a_brief_reads_as_from_pm_with_nothing_to_reply_to() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        crate::commands::feat_common::enqueue_initial_context(
+            &root,
+            "login",
+            &["implementer".to_string()],
+            "the task",
+        )
+        .unwrap();
+
+        let lines = agent_read(&root, "login", "implementer", None, None).unwrap();
+        assert!(lines[0].starts_with("--- from no-reply-brief [001] "));
+        assert!(lines[0].contains("no one to reply to"), "{}", lines[0]);
+        assert_eq!(lines[1..], ["the task"]);
     }
 
     #[test]

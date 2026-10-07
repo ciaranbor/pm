@@ -143,6 +143,7 @@ fn assistant(row: &Row, data: &Value, at: Option<chrono::DateTime<chrono::Utc>>)
                                 .to_string(),
                             input: summarize_input(state.get("input").unwrap_or(&Value::Null)),
                             result,
+                            unfinished: false,
                         },
                     ));
                 }

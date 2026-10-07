@@ -28,6 +28,8 @@ sealed interface Item {
         val name: String,
         val input: String,
         val result: ToolResult?,
+        /** No result, and the conversation moved on: it will not finish. */
+        val unfinished: Boolean = false,
     ) : Item
 
     /** pm waking the agent (a Stop-hook continuation), not the human. */
@@ -105,7 +107,14 @@ object Transcripts {
                                 str("at", r),
                             )
                         }
-                Item.Tool(id, at, str("name").orEmpty(), str("input").orEmpty(), result)
+                Item.Tool(
+                    id,
+                    at,
+                    str("name").orEmpty(),
+                    str("input").orEmpty(),
+                    result,
+                    flag("unfinished"),
+                )
             }
             else -> null
         }

@@ -35,6 +35,12 @@ pub fn format_sender_display(
     display
 }
 
+/// Whether `sender` is one pm itself sends as (a feature brief, a forced
+/// restart's resume), which no agent answers to.
+pub fn is_no_reply(sender: &str) -> bool {
+    sender.starts_with("no-reply-")
+}
+
 /// Default identity: PM_AGENT_NAME (set by `pm agent spawn`) > $USER > "user".
 pub fn default_user_name() -> String {
     std::env::var("PM_AGENT_NAME")

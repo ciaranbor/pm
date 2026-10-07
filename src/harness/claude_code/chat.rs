@@ -276,6 +276,7 @@ fn assistant(line: &Value, id: &str, at: Option<chrono::DateTime<chrono::Utc>>) 
                             name: text("name").to_string(),
                             input: summarize_input(block.get("input").unwrap_or(&Value::Null)),
                             result: None,
+                            unfinished: false,
                         },
                     )));
                 }
