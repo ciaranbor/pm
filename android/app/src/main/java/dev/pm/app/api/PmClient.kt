@@ -258,6 +258,22 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
         }
 
     /**
+     * Every dialog of the agent's that can be answered from here, oldest first. A server that
+     * predates the list serves only the oldest.
+     */
+    suspend fun dialogs(project: String, scope: String, agent: String): List<Dialog> =
+        try {
+            json
+                .decodeFromString(
+                    DialogList.serializer(),
+                    get(url("agents", project, scope, agent, "dialogs")),
+                )
+                .dialogs
+        } catch (e: PmError.Unsupported) {
+            listOfNotNull(dialog(project, scope, agent))
+        }
+
+    /**
      * Answer the agent's dialog; returns once its harness has the answer. A dialog already answered
      * at the terminal is refused with `answered`, one whose hook has ended with `gone`.
      */
@@ -426,6 +442,8 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
     }
 
     @Serializable private data class TextBody(val text: String)
+
+    @Serializable private data class DialogList(val dialogs: List<Dialog>)
 
     @Serializable private data class KeysBody(val keys: List<String>)
 

@@ -1,5 +1,6 @@
 package dev.pm.app.ui
 
+import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -11,6 +12,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import com.github.takahirom.roborazzi.captureRoboImage
+import dev.pm.app.model.AgentState
 import dev.pm.app.model.Dialog
 import org.junit.Rule
 import org.junit.Test
@@ -30,30 +32,34 @@ class DialogScreenshotTest {
     @get:Rule val compose = createComposeRule()
 
     /**
-     * Once `shown` is on screen: a plan's Markdown is parsed off the main thread. `tap`, if given,
-     * is tapped first, and its answer left on its way.
+     * The card over `dialogs`, once `shown` is on screen. `tap`, if given, is tapped first, and its
+     * answer left on its way.
      */
-    private fun dialog(
-        dialog: Dialog,
-        shown: String = dialog.choices.first().label,
+    private fun card(
+        vararg dialogs: Dialog,
+        shown: String = titleOf(dialogs.first()),
         tap: String? = null,
     ) {
         compose.setContent {
-            var answering by remember { mutableStateOf(false) }
+            var answering by remember { mutableStateOf<Answering?>(null) }
             PmTheme(dynamic = false) {
                 Surface {
                     DialogCard(
-                        dialog,
+                        dialogs.toList(),
                         answering = answering,
                         interrupting = false,
                         notice = null,
-                        answer = { _, _, _ -> answering = true },
+                        answer = { d, c, _, _ -> answering = Answering(d.id, c) },
                         interrupt = {},
                         openTerminal = {},
                     )
                 }
             }
         }
+        capture(shown, tap)
+    }
+
+    private fun capture(shown: String, tap: String? = null) {
         compose.waitUntil(10_000) {
             compose.onAllNodesWithText(shown, substring = true).fetchSemanticsNodes().isNotEmpty()
         }
@@ -63,6 +69,24 @@ class DialogScreenshotTest {
             compose.mainClock.advanceTimeBy(100)
         }
         compose.onRoot().captureRoboImage()
+    }
+
+    /** The review over the whole screen; a plan's Markdown is parsed off the main thread. */
+    private fun review(dialog: Dialog, shown: String) {
+        compose.setContent {
+            PmTheme(dynamic = false) {
+                DialogReviewView(
+                    remember { DialogForm(dialog) },
+                    pendingOn = null,
+                    busy = false,
+                    notice = null,
+                    onChoice = {},
+                    sendMessage = {},
+                    close = {},
+                )
+            }
+        }
+        capture(shown)
     }
 
     private val question =
@@ -125,18 +149,75 @@ class DialogScreenshotTest {
                 ),
         )
 
-    @Test fun question_light() = dialog(question)
+    private val lone = question.copy(id = "d4", questions = question.questions.take(1))
 
-    @Test @Config(qualifiers = "+night") fun question_dark() = dialog(question)
+    @Test fun question_light() = card(question)
 
-    @Test fun permission_light() = dialog(permission)
+    @Test @Config(qualifiers = "+night") fun question_dark() = card(question)
 
-    @Test @Config(qualifiers = "+night") fun permission_dark() = dialog(permission)
+    /** One tap on an option answers a lone question. */
+    @Test fun lone_question_light() = card(lone)
+
+    @Test @Config(qualifiers = "+night") fun lone_question_dark() = card(lone)
+
+    @Test fun permission_light() = card(permission)
+
+    @Test @Config(qualifiers = "+night") fun permission_dark() = card(permission)
 
     /** The tapped choice shows its answer on the way; the others can't be tapped meanwhile. */
-    @Test fun permission_answering_light() = dialog(permission, tap = "Yes")
+    @Test fun permission_answering_light() = card(permission, tap = "Yes")
 
-    @Test fun plan_light() = dialog(plan, shown = "A form at /login")
+    @Test fun plan_light() = card(plan)
 
-    @Test @Config(qualifiers = "+night") fun plan_dark() = dialog(plan, shown = "A form at /login")
+    @Test @Config(qualifiers = "+night") fun plan_dark() = card(plan)
+
+    /** Several open dialogs: one shown, with steps to the others. */
+    @Test fun several_light() = card(permission, plan, lone)
+
+    @Test @Config(qualifiers = "+night") fun several_dark() = card(permission, plan, lone)
+
+    @Test fun plan_review_light() = review(plan, "A form at /login")
+
+    @Test @Config(qualifiers = "+night") fun plan_review_dark() = review(plan, "A form at /login")
+
+    @Test fun form_review_light() = review(question, "Which checks run on push?")
+
+    /** What the user answered, a send that failed, and the composer below them. */
+    private fun composer() {
+        compose.setContent {
+            PmTheme(dynamic = false) {
+                Surface {
+                    Column {
+                        AnsweredRow("You answered: Postgres")
+                        OutboxBubble(
+                            Outbox.Failed(
+                                "Use the cache from main, then run the whole test suite " +
+                                    "again before you open the pull request.",
+                                "unexpected end of stream on http://127.0.0.1:7843/v1/agents",
+                            ),
+                            retry = {},
+                            edit = {},
+                        )
+                        Composer(
+                            AgentState.Idle,
+                            null,
+                            sending = false,
+                            notice = null,
+                            interrupting = false,
+                            remember { Drafts() },
+                            "app/login/implementer",
+                            send = {},
+                            interrupt = {},
+                            openTerminal = {},
+                        )
+                    }
+                }
+            }
+        }
+        capture("Retry")
+    }
+
+    @Test fun composer_light() = composer()
+
+    @Test @Config(qualifiers = "+night") fun composer_dark() = composer()
 }

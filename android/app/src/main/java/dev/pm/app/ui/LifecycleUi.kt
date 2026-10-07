@@ -30,13 +30,17 @@ import dev.pm.app.R
 /** An overflow menu entry: `destructive` ones show in the error colour, after a divider. */
 data class MenuItem(val label: String, val destructive: Boolean = false, val onClick: () -> Unit)
 
-/** The top bar's overflow, holding `items`. */
+/** An overflow holding `items`, the top bar's unless `description` names another. */
 @Composable
-fun OverflowMenu(items: List<MenuItem>, modifier: Modifier = Modifier) =
+fun OverflowMenu(
+    items: List<MenuItem>,
+    modifier: Modifier = Modifier,
+    description: String = "More actions",
+) =
     Box(modifier) {
         var open by remember { mutableStateOf(false) }
         IconButton(onClick = { open = true }) {
-            Icon(painterResource(R.drawable.ic_more_vert), "More actions")
+            Icon(painterResource(R.drawable.ic_more_vert), description)
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             items.forEachIndexed { i, item ->

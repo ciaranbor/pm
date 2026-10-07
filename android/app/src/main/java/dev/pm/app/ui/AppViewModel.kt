@@ -42,6 +42,8 @@ class AppViewModel(private val repository: Repository, private val unsubscribePu
     }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), Instant.now())
 
+    val drafts = Drafts()
+
     /** Merge, delete and restart, for whichever server is paired when asked. */
     val lifecycle = Lifecycle(viewModelScope) { client.value }
 

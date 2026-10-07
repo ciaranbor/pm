@@ -18,6 +18,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
@@ -63,6 +64,7 @@ fun Workspace(
     ask: (Action) -> Unit,
     modifier: Modifier = Modifier,
     stale: Boolean = false,
+    drafts: Drafts = remember { Drafts() },
 ) {
     val project = route.project
     val scope = route.scope
@@ -120,6 +122,7 @@ fun Workspace(
                                     shown?.waiting,
                                     networkChanges,
                                     openTerminal = { terminal = tab.name },
+                                    drafts = drafts,
                                 )
                             }
                         }

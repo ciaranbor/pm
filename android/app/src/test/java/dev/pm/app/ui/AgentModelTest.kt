@@ -176,6 +176,20 @@ class AgentModelTest {
     }
 
     @Test
+    fun a_failed_send_is_sent_again_on_retry() = modelTest {
+        server.enqueue(MockResponse.Builder().code(502).body("""{"error":"bad gateway"}""").build())
+        model.send("yes")
+        eventually { model.outbox.value is Outbox.Failed }
+        server.enqueue(MockResponse.Builder().body("""{"delivery":"sent"}""").build())
+        model.retrySend()
+        eventually { model.outbox.value == Outbox.Sent("yes") }
+        assertEquals(
+            List(2) { "\"yes\"" in server.takeRequest().body?.utf8().orEmpty() },
+            listOf(true, true),
+        )
+    }
+
+    @Test
     fun the_same_words_said_before_the_send_are_not_taken_for_it() = modelTest {
         server.enqueue(page(listOf("yes"), before = null, after = "c1"))
         server.enqueue(stream.response("snapshot" to SNAPSHOT))
@@ -208,62 +222,111 @@ class AgentModelTest {
     private val permission =
         """{"id":"d1","kind":"permission","tool":"Bash","detail":"cargo publish",
         "choices":[{"id":"allow","label":"Yes"},{"id":"deny","label":"No","takes_message":true}]}"""
+    private val plan =
+        """{"id":"d2","kind":"plan","plan":"# Plan","subagent":"a1",
+        "choices":[{"id":"auto","label":"Yes"},{"id":"keep-planning","label":"No"}]}"""
+
+    private fun dialogs(vararg dialogs: String) =
+        MockResponse.Builder().body("""{"dialogs":[${dialogs.joinToString(",")}]}""").build()
+
+    private val open
+        get() = model.dialogs.value.map { it.id }
 
     @Test
-    fun a_dialog_the_snapshot_names_is_read_once_and_answered() = modelTest {
-        server.enqueue(MockResponse.Builder().body(permission).build())
-        model.dialogNamed("d1")
-        eventually { model.dialog.value?.id == "d1" }
+    fun several_dialogs_are_read_once_and_each_answered_as_itself() = modelTest {
+        server.enqueue(dialogs(permission, plan))
+        model.dialogNamed("d2")
+        eventually { open == listOf("d1", "d2") }
         model.dialogNamed("d1")
         assertEquals(
-            "/v1/agents/app/login/implementer/dialog",
+            "/v1/agents/app/login/implementer/dialogs",
             server.takeRequest().url.encodedPath,
         )
+        assertEquals("a1", model.dialogs.value[1].subagent)
 
         server.enqueue(MockResponse.Builder().body("""{"answered":true}""").build())
-        model.answer("deny", message = "dry-run first")
-        eventually { model.dialog.value == null && !model.answering.value }
+        model.answer(model.dialogs.value[0], "deny", message = "dry-run first")
+        eventually { open == listOf("d2") && model.answering.value == null }
         val posted = server.takeRequest()
         assertEquals("POST", posted.method)
         assertEquals(
             """{"id":"d1","choice":"deny","message":"dry-run first"}""",
             posted.body?.utf8(),
         )
+        assertEquals("You chose: No \u2014 \u201cdry-run first\u201d", model.answered.value)
         assertEquals(2, server.requestCount)
         assertNull(model.notice.value)
     }
 
     @Test
-    fun a_dialog_answered_at_the_terminal_first_says_so_and_is_read_again() = modelTest {
-        server.enqueue(MockResponse.Builder().body(permission).build())
+    fun a_read_racing_an_answer_does_not_bring_its_dialog_back() = modelTest {
+        server.enqueue(dialogs(permission))
         model.dialogNamed("d1")
-        eventually { model.dialog.value?.id == "d1" }
+        eventually { open == listOf("d1") }
+        server.enqueue(MockResponse.Builder().body("""{"answered":true}""").build())
+        model.answer(model.dialogs.value[0], "allow")
+        eventually { open.isEmpty() && model.answering.value == null }
 
-        server.enqueue(
-            MockResponse.Builder()
-                .code(409)
-                .body("""{"error":"the dialog is no longer up","refused":"answered"}""")
-                .build()
-        )
-        server.enqueue(
-            MockResponse.Builder()
-                .code(404)
-                .body("""{"error":"no dialog of the agent's can be answered"}""")
-                .build()
-        )
-        model.answer("allow")
-        eventually { server.requestCount == 3 && model.dialog.value == null }
-        assertEquals("Answered elsewhere", model.notice.value)
-
-        model.dialogNamed(null)
-        assertNull(model.dialog.value)
+        server.enqueue(dialogs(permission, plan))
+        model.dialogNamed("d2")
+        eventually { open == listOf("d2") }
     }
 
     @Test
-    fun a_dialog_whose_hook_is_gone_is_not_taken_for_answered_elsewhere() = modelTest {
-        server.enqueue(MockResponse.Builder().body(permission).build())
+    fun an_answer_that_fails_on_the_way_says_why_and_is_sent_again_on_retry() = modelTest {
+        val failures = mutableListOf<String>()
+        backgroundScope.launch { model.answerFailed.collect { failures += it } }
+        server.enqueue(dialogs(permission))
         model.dialogNamed("d1")
-        eventually { model.dialog.value?.id == "d1" }
+        eventually { open == listOf("d1") }
+
+        server.enqueue(MockResponse.Builder().code(502).body("""{"error":"bad gateway"}""").build())
+        model.answer(model.dialogs.value[0], "allow")
+        eventually { failures.size == 1 && model.answering.value == null }
+        assertEquals(listOf("d1"), open)
+
+        server.enqueue(MockResponse.Builder().body("""{"answered":true}""").build())
+        model.retryAnswer()
+        eventually { open.isEmpty() }
+        server.takeRequest()
+        val bodies = List(2) { server.takeRequest().body?.utf8() }
+        assertEquals(bodies[0], bodies[1])
+        assertEquals("You chose: Yes", model.answered.value)
+    }
+
+    @Test
+    fun a_dialog_answered_elsewhere_first_says_so_and_is_dropped_though_a_read_lists_it() =
+        modelTest {
+            server.enqueue(dialogs(permission))
+            model.dialogNamed("d1")
+            eventually { open == listOf("d1") }
+
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(409)
+                    .body("""{"error":"the dialog is no longer up","refused":"answered"}""")
+                    .build()
+            )
+            // The read after the refusal can race the server's closing of the dialog.
+            server.enqueue(dialogs(permission))
+            model.answer(model.dialogs.value[0], "allow")
+            eventually {
+                server.requestCount == 3 && model.answering.value == null && open.isEmpty()
+            }
+            assertEquals(DialogNotice("d1", "Answered elsewhere"), model.notice.value)
+            assertNull(model.answered.value)
+
+            server.enqueue(dialogs(permission, plan))
+            model.dialogNamed("d2")
+            eventually { server.requestCount == 4 && open == listOf("d2") }
+            assertNull("a new dialog was never refused", model.notice.value)
+        }
+
+    @Test
+    fun a_dialog_whose_hook_is_gone_is_not_taken_for_answered_elsewhere() = modelTest {
+        server.enqueue(dialogs(permission))
+        model.dialogNamed("d1")
+        eventually { open == listOf("d1") }
 
         server.enqueue(
             MockResponse.Builder()
@@ -271,17 +334,12 @@ class AgentModelTest {
                 .body("""{"error":"the dialog's hook is gone","refused":"gone"}""")
                 .build()
         )
-        server.enqueue(
-            MockResponse.Builder()
-                .code(404)
-                .body("""{"error":"no dialog of the agent's can be answered"}""")
-                .build()
-        )
-        model.answer("allow")
-        eventually { server.requestCount == 3 && model.dialog.value == null }
+        server.enqueue(dialogs())
+        model.answer(model.dialogs.value[0], "allow")
+        eventually { server.requestCount == 3 && open.isEmpty() }
         assertEquals(
             "The dialog can no longer be answered here; answer it at the terminal",
-            model.notice.value,
+            model.notice.value?.text,
         )
     }
 

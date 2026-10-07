@@ -6,6 +6,7 @@ import androidx.compose.foundation.text.selection.rememberSelectionState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.SemanticsActions
@@ -371,28 +372,59 @@ class UiTest {
     }
 
     @Test
-    fun a_send_or_an_interrupt_on_its_way_disables_the_other() {
-        var outbox by mutableStateOf<Outbox?>(Outbox.Sending("hi"))
+    fun a_send_or_an_interrupt_on_its_way_holds_the_other_and_a_draft_outlives_its_composer() {
+        val drafts = Drafts()
+        var sending by mutableStateOf(true)
         var interrupting by mutableStateOf(false)
+        var shown by mutableStateOf("implementer")
         compose.setContent {
             PmTheme {
-                Composer(
-                    AgentState.Busy,
-                    null,
-                    outbox,
-                    null,
-                    interrupting,
-                    send = {},
-                    interrupt = {},
-                    openTerminal = {},
-                )
+                key(shown) {
+                    Composer(
+                        AgentState.Busy,
+                        null,
+                        sending,
+                        notice = null,
+                        interrupting,
+                        drafts,
+                        "app/login/$shown",
+                        send = {},
+                        interrupt = {},
+                        openTerminal = {},
+                    )
+                }
             }
         }
-        compose.onNodeWithContentDescription("Interrupt").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Agent actions").performClick()
+        compose.onNodeWithText("Interrupt").assertDoesNotExist()
+        compose.onNodeWithText("Show the terminal").performClick()
 
-        outbox = null
+        sending = false
         interrupting = true
         compose.onNodeWithText("Message the agent").performTextInput("stop that")
         compose.onNodeWithContentDescription("Send").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Interrupting").assertIsDisplayed()
+
+        shown = "reviewer"
+        compose.onNodeWithText("stop that").assertDoesNotExist()
+        shown = "implementer"
+        compose.onNodeWithText("stop that").assertIsDisplayed()
+    }
+
+    @Test
+    fun a_failed_send_taken_back_goes_after_the_draft_already_there() {
+        val drafts = Drafts()
+        drafts["a"] = "first"
+        drafts.restore("a", "second")
+        drafts.restore("b", "only")
+        assertEquals("first\nsecond", drafts["a"])
+        assertEquals("only", drafts["b"])
+    }
+
+    @Test
+    fun a_dialog_answered_here_leaves_the_composer_as_for_a_busy_agent() {
+        assertEquals(AgentState.Busy, composerState(AgentState.Asking, "d1", setOf("d1")))
+        assertEquals(AgentState.Asking, composerState(AgentState.Asking, "d2", setOf("d1")))
+        assertEquals(AgentState.Idle, composerState(AgentState.Idle, null, setOf("d1")))
     }
 }

@@ -65,6 +65,7 @@ fun AgentScreen(
     networkChanges: Flow<Unit>,
     openTerminal: () -> Unit,
     modifier: Modifier = Modifier,
+    drafts: Drafts = remember { Drafts() },
     model: AgentModel =
         viewModel(key = "agent/$agent") {
             AgentModel(client, project, scope, agent, networkChanges)
@@ -75,12 +76,15 @@ fun AgentScreen(
         onStopOrDispose { model.stop() }
     }
     val asking = state == AgentState.Asking
+    val answeredIds by model.answeredIds.collectAsStateWithLifecycle()
     val dialogId = waiting?.dialog?.takeIf { asking }
+    val shownState = composerState(state, dialogId, answeredIds)
     LaunchedEffect(dialogId) { model.dialogNamed(dialogId) }
     val outbox by model.outbox.collectAsStateWithLifecycle()
     val notice by model.notice.collectAsStateWithLifecycle()
-    val dialog by model.dialog.collectAsStateWithLifecycle()
+    val dialogs by model.dialogs.collectAsStateWithLifecycle()
     val answering by model.answering.collectAsStateWithLifecycle()
+    val answered by model.answered.collectAsStateWithLifecycle()
     val interrupting by model.interrupting.collectAsStateWithLifecycle()
     val feedback = LocalFeedback.current
     LaunchedEffect(model) {
@@ -89,12 +93,27 @@ fun AgentScreen(
             else feedback.failed("Couldn't interrupt: $failure", model::interrupt)
         }
     }
+    LaunchedEffect(model) {
+        model.answerFailed.collect { feedback.failed("Couldn't answer: $it", model::retryAnswer) }
+    }
+    val draftKey = "$project/$scope/$agent"
     Column(modifier.fillMaxSize().imePadding()) {
         Box(Modifier.weight(1f)) { Chat(model) }
-        val shown = dialog
-        if (asking && shown != null) {
+        answered?.let { AnsweredRow(it) }
+        val sent = outbox?.takeUnless { it is Outbox.Seen }
+        if (sent != null) {
+            OutboxBubble(
+                sent,
+                retry = model::retrySend,
+                edit = {
+                    drafts.restore(draftKey, sent.text)
+                    model.dismissOutbox()
+                },
+            )
+        }
+        if (asking && dialogs.isNotEmpty()) {
             DialogCard(
-                shown,
+                dialogs,
                 answering,
                 interrupting,
                 notice,
@@ -104,11 +123,13 @@ fun AgentScreen(
             )
         } else {
             Composer(
-                state,
+                shownState,
                 waiting,
-                outbox,
-                notice,
+                sending = outbox is Outbox.Sending,
+                notice?.text,
                 interrupting,
+                drafts,
+                draftKey,
                 send = model::send,
                 interrupt = model::interrupt,
                 openTerminal = openTerminal,
@@ -116,6 +137,13 @@ fun AgentScreen(
         }
     }
 }
+
+/**
+ * The agent's state as the composer takes it: a dialog answered here stays the agent's state until
+ * its harness moves on, and meanwhile the agent is as good as busy.
+ */
+internal fun composerState(state: AgentState?, dialog: String?, answered: Set<String>) =
+    if (dialog != null && dialog in answered) AgentState.Busy else state
 
 @Composable
 private fun Chat(model: AgentModel) {

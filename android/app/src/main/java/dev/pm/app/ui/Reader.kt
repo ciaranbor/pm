@@ -107,6 +107,15 @@ fun ReaderDialog(
     close: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    FullScreen(close) { Surface(modifier.fillMaxSize()) { ReaderView(reading, body, close) } }
+}
+
+/**
+ * `content` over the whole screen, edge to edge, its system bars' icons set for the theme; Back
+ * calls `close`.
+ */
+@Composable
+fun FullScreen(close: () -> Unit, content: @Composable () -> Unit) {
     Dialog(
         onDismissRequest = close,
         properties =
@@ -121,7 +130,7 @@ fun ReaderDialog(
                 isAppearanceLightNavigationBars = light
             }
         }
-        Surface(modifier.fillMaxSize()) { ReaderView(reading, body, close) }
+        content()
     }
 }
 

@@ -220,6 +220,24 @@ class PmClientTest {
     }
 
     @Test
+    fun every_open_dialog_is_listed_and_a_server_without_the_list_gives_its_oldest() = runBlocking {
+        val dialog = """{"id":"%s","kind":"permission","choices":[]}"""
+        reply(200, """{"dialogs":[${dialog.format("d1")},${dialog.format("d2")}]}""")
+        reply(404, """{"error":"no such endpoint"}""")
+        reply(200, dialog.format("d1"))
+
+        assertEquals(
+            listOf("d1", "d2"),
+            client.dialogs("app", "login", "implementer").map { it.id },
+        )
+        assertEquals(listOf("d1"), client.dialogs("app", "login", "implementer").map { it.id })
+        assertEquals(
+            listOf("dialogs", "dialogs", "dialog"),
+            List(3) { server.takeRequest().url.encodedPath.substringAfterLast('/') },
+        )
+    }
+
+    @Test
     fun a_dialog_is_read_and_answered_and_none_is_null() = runBlocking {
         reply(
             200,
