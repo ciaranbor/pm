@@ -291,7 +291,9 @@ into agents, merge and delete features and restart agents, as `pm feat
 merge`, `pm feat delete` and `pm agent restart` do without `--force`. `pm
 serve pair --name <device>` pairs another phone, or one again after a
 reinstall; `pm serve devices` lists the paired devices and `pm serve revoke
-<device>` withdraws one at once.
+<device>` withdraws one at once, cutting it off mid-stream. The app's
+"Forget this server" unpairs the phone on the server too when it can reach
+it; when it can't, the server lists the phone until you revoke it.
 
 [docs/remote-api.md](docs/remote-api.md) has the server's API, push and
 logging; [docs/android.md](docs/android.md) has the app's updates,

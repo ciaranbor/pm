@@ -28,6 +28,10 @@
 //! it too, so the app reads a fresh snapshot. Reads stay a few seconds
 //! apart however often it is woken: busy agents push on every turn.
 //!
+//! Revoking a device (`pm serve revoke`, or the device unpairing itself)
+//! wakes the poller too, which ends the event streams of tokens no longer
+//! paired.
+//!
 //! One server runs per pm config dir, holding a lock ([`state`]); another
 //! waits for it to exit. Every request is logged to stderr with the device
 //! whose token it carried; launchd sends that to `serve.log` in the
@@ -42,6 +46,7 @@ use std::time::{Duration, Instant};
 use chrono::{SecondsFormat, Utc};
 
 use crate::error::{PmError, Result};
+use crate::state::devices::Devices;
 
 use super::attention::{self, transition::Watch};
 use super::reexec::Binary;
@@ -204,12 +209,15 @@ impl Server {
                 self.config.idle_poll
             };
             self.waker.wait(every);
+            self.cut_unpaired();
             // Wakes meanwhile are drained into this read.
             while let Some(left) =
                 (last + self.config.min_gap).checked_duration_since(Instant::now())
                 && !self.stopped.load(Ordering::SeqCst)
             {
-                self.waker.wait(left);
+                if self.waker.wait(left) {
+                    self.cut_unpaired();
+                }
             }
             if self.stopped.load(Ordering::SeqCst) {
                 return;
@@ -240,6 +248,17 @@ impl Server {
                     binary.exec()
                 ));
             }
+        }
+    }
+
+    /// End the event streams of tokens revoked since they opened.
+    fn cut_unpaired(&self) {
+        if !self.hub.watched() {
+            return;
+        }
+        match Devices::load(&self.config.devices) {
+            Ok(devices) => self.hub.cut(|token| devices.holds(token)),
+            Err(e) => log(&format!("devices unreadable: {e}")),
         }
     }
 
@@ -317,12 +336,21 @@ impl Server {
                 }
                 request.respond(response)
             }
-            Reply::Events(watch) => {
+            Reply::Events {
+                token_sha256,
+                watch,
+            } => {
                 drop(answering);
                 self.waker.notify();
                 let mut writer = request.into_writer();
                 let watch = watch.map(|w| (*w, self.config.transcript_poll));
-                events::stream(&mut writer, &self.hub, self.config.heartbeat, watch)
+                events::stream(
+                    &mut writer,
+                    &self.hub,
+                    &token_sha256,
+                    self.config.heartbeat,
+                    watch,
+                )
             }
         };
     }

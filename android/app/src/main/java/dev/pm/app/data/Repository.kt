@@ -209,14 +209,33 @@ class Repository(
         start()
     }
 
-    /** Forget the pairing; the server is asked to drop this device's push subscription first. */
-    fun unpair() {
-        val client = _client.value
+    /**
+     * Forget the pairing, once the server is asked to unpair this device. Returns whether it did;
+     * if not (unreachable, or too old to be asked), the server lists the device until it is revoked
+     * there.
+     */
+    suspend fun unpair(): Boolean {
+        val onServer = _client.value?.let { unpairOn(it) } ?: false
         forget()
-        scope.launch { runCatching { client?.unregisterPush() } }
         store.pairing = null
         paired(null)
+        return onServer
     }
+
+    private suspend fun unpairOn(client: PmClient): Boolean =
+        try {
+            client.unpair()
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: PmError.Unauthorized) {
+            true
+        } catch (e: PmError.Unsupported) {
+            runCatching { client.unregisterPush() }
+            false
+        } catch (e: Exception) {
+            false
+        }
 
     /** A subscription from the push distributor: kept, then sent once the server is reachable. */
     fun subscribed(endpoint: String, p256dh: String, auth: String) {
