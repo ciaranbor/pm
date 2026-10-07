@@ -319,9 +319,15 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
         send(Request.Builder().url(url("push")).delete().build())
     }
 
+    /** Unpair this device on the server: its token and push subscription are dropped. */
+    suspend fun unpair() {
+        send(Request.Builder().url(url("pairing")).delete().build())
+    }
+
     /**
-     * The event stream, until it fails or the collector stops. With `watch`
-     * (`project/scope/agent`), it also carries that agent's `transcript` events from `after` on.
+     * The event stream, until it fails or the collector stops; it fails with [PmError.Unauthorized]
+     * once the device is unpaired. With `watch` (`project/scope/agent`), it also carries that
+     * agent's `transcript` events from `after` on.
      */
     fun events(watch: String? = null, after: String? = null): Flow<ServerEvent> = callbackFlow {
         val request =
@@ -340,6 +346,10 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
                             type: String?,
                             data: String,
                         ) {
+                            if (type == "revoked") {
+                                close(PmError.Unauthorized())
+                                return
+                            }
                             // Blocks OkHttp's reader thread, never drops: a lost
                             // transcript event would be lost for good.
                             trySendBlocking(ServerEvent(type ?: "message", data))

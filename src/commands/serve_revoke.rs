@@ -1,6 +1,7 @@
 //! `pm serve revoke`: forget a device's token and push subscription. A
 //! running server checks every request and every push against the devices
-//! file, so both stop at once.
+//! file, so both stop at once; it is woken to end the device's open event
+//! streams too.
 
 use std::path::Path;
 
@@ -16,5 +17,7 @@ pub fn revoke(devices: &Path, device: &str) -> Result<()> {
                 "no device named {device} is paired"
             )))
         }
-    })
+    })?;
+    super::serve::wake(devices);
+    Ok(())
 }

@@ -17,7 +17,9 @@ import dev.pm.app.data.Connection
 import dev.pm.app.model.Pairing
 import dev.pm.app.update.Update
 import java.io.IOException
+import kotlinx.coroutines.awaitCancellation
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -30,7 +32,7 @@ class SettingsScreenTest {
     private fun show(
         updates: UpdateControls? = null,
         pairing: Pairing? = null,
-        unpair: () -> Unit = {},
+        unpair: suspend () -> Boolean = { true },
     ) = compose.setContent {
         PmTheme {
             val scope = rememberCoroutineScope()
@@ -63,7 +65,13 @@ class SettingsScreenTest {
     @Test
     fun forgetting_the_server_waits_for_confirmation() {
         var unpaired = 0
-        show(pairing = Pairing("http://host:7764", "phone", "token"), unpair = { unpaired++ })
+        show(
+            pairing = Pairing("http://host:7764", "phone", "token"),
+            unpair = {
+                unpaired++
+                true
+            },
+        )
 
         compose.onNodeWithText("Forget this server").performScrollTo().performClick()
         compose.onNodeWithText("Cancel").performClick()
@@ -72,6 +80,41 @@ class SettingsScreenTest {
         compose.onNodeWithText("Forget this server").performScrollTo().performClick()
         compose.onNodeWithText("Forget").performClick()
         assertEquals(1, unpaired)
+        compose.onNodeWithText("Forgot http://host:7764").assertIsDisplayed()
+    }
+
+    @Test
+    fun forgetting_a_server_that_did_not_unpair_the_phone_says_it_still_lists_it() {
+        show(pairing = Pairing("http://host:7764", "phone", "token"), unpair = { false })
+
+        compose.onNodeWithText("Forget this server").performScrollTo().performClick()
+        compose.onNodeWithText("Forget").performClick()
+        compose.onNodeWithText("pm serve revoke phone", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun cancelling_a_pending_forget_stops_it_and_reports_nothing() {
+        var cancelled = false
+        show(
+            pairing = Pairing("http://host:7764", "phone", "token"),
+            unpair = {
+                try {
+                    awaitCancellation()
+                } finally {
+                    cancelled = true
+                }
+            },
+        )
+
+        compose.onNodeWithText("Forget this server").performScrollTo().performClick()
+        compose.onNodeWithText("Forget").performClick()
+        compose.onNodeWithText("Cancel").performClick()
+        compose.waitForIdle()
+
+        assertTrue(cancelled)
+        compose.onNodeWithText("Forget this server?").assertDoesNotExist()
+        compose.onNodeWithText("Forgot", substring = true).assertDoesNotExist()
+        compose.onNodeWithText("Forgotten", substring = true).assertDoesNotExist()
     }
 
     @Test

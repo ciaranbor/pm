@@ -21,6 +21,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -35,6 +36,7 @@ import dev.pm.app.model.Pairing
 import dev.pm.app.model.Tone
 import dev.pm.app.update.Update
 import dev.pm.app.update.Updates
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /** The app's version and the server's, and whether they are of one release. */
@@ -58,7 +60,10 @@ class UpdateControls(
     val checkNow: suspend () -> Update?,
 )
 
-/** All of the screen's text is selectable; Forget asks first. */
+/**
+ * All of the screen's text is selectable; Forget asks first, then waits for the server to unpair
+ * the phone (`unpair` says whether it did) and reports which it was.
+ */
 @Composable
 fun SettingsScreen(
     pairing: Pairing?,
@@ -68,10 +73,18 @@ fun SettingsScreen(
     /** `null` in a build that never updates itself. */
     updates: UpdateControls?,
     pair: () -> Unit,
-    unpair: () -> Unit,
+    unpair: suspend () -> Boolean,
     modifier: Modifier = Modifier,
 ) {
     var forgetting by rememberSaveable { mutableStateOf(false) }
+    var unpairing by remember { mutableStateOf<Job?>(null) }
+    val scope = rememberCoroutineScope()
+    val feedback = LocalFeedback.current
+    val cancel = {
+        unpairing?.cancel()
+        unpairing = null
+        forgetting = false
+    }
     Selectable(modifier) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = Spacing.l)) {
             Section("Server")
@@ -99,25 +112,39 @@ fun SettingsScreen(
     }
     if (forgetting && pairing != null) {
         AlertDialog(
-            onDismissRequest = { forgetting = false },
+            onDismissRequest = cancel,
             title = { Text("Forget this server?") },
             text = {
                 Text(
                     "This phone stops reaching ${pairing.url} and gets no more notifications " +
-                        "from it. To reconnect, pair again with a new code from pm serve pair."
+                        "from it, and the server unpairs it. To reconnect, pair again with a new " +
+                        "code from pm serve pair."
                 )
             },
             confirmButton = {
-                TextButton(
+                PendingButton(
+                    "Forget",
                     onClick = {
-                        forgetting = false
-                        unpair()
-                    }
-                ) {
-                    Text("Forget", color = MaterialTheme.colorScheme.error)
-                }
+                        unpairing = scope.launch {
+                            val onServer = unpair()
+                            forgetting = false
+                            unpairing = null
+                            if (onServer) feedback.done("Forgot ${pairing.url}")
+                            else
+                                feedback.done(
+                                    "Forgotten on this phone only: the server lists " +
+                                        "“${pairing.device}” until pm serve revoke " +
+                                        pairing.device,
+                                    action = "OK",
+                                )
+                        }
+                    },
+                    pending = unpairing != null,
+                    emphasis = Emphasis.Text,
+                    color = MaterialTheme.colorScheme.error,
+                )
             },
-            dismissButton = { TextButton(onClick = { forgetting = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = cancel) { Text("Cancel") } },
         )
     }
 }

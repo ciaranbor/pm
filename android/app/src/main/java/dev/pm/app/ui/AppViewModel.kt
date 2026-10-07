@@ -89,10 +89,8 @@ class AppViewModel(private val repository: Repository, private val unsubscribePu
 
     fun pair(pairing: Pairing) = repository.pair(pairing)
 
-    fun unpair() {
-        unsubscribePush()
-        repository.unpair()
-    }
+    /** Forget the server; whether it unpaired this phone too ([Repository.unpair]). */
+    suspend fun unpair(): Boolean = repository.unpair().also { unsubscribePush() }
 
     suspend fun vapid(): String? = client.value?.let { vapidOf(it) }
 

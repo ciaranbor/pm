@@ -26,16 +26,20 @@ pub(super) enum Reply {
         /// The version the body is, sent as its `ETag`.
         etag: Option<String>,
     },
-    /// Hand the connection to an event stream, watching an agent's
-    /// conversation if the request named one.
-    Events(Option<Box<TranscriptWatch>>),
+    /// Hand the connection to an event stream for the token whose SHA-256
+    /// is `token_sha256`, watching an agent's conversation if the request
+    /// named one.
+    Events {
+        token_sha256: String,
+        watch: Option<Box<TranscriptWatch>>,
+    },
 }
 
 impl Reply {
     pub(super) fn status(&self) -> u16 {
         match self {
             Self::Body { status, .. } => *status,
-            Self::Events(_) => 200,
+            Self::Events { .. } => 200,
         }
     }
 }
@@ -118,7 +122,7 @@ pub(super) fn route(config: &Config, vapid: &str, request: &Request<'_>) -> Hand
             };
         }
     };
-    let Some(device) = token.and_then(|t| devices.authenticate(t.trim())) else {
+    let Some((device, paired)) = token.and_then(|t| devices.authenticate(t.trim())) else {
         return Handled {
             device: None,
             reply: error(401, "a paired device's bearer token is required"),
@@ -141,13 +145,17 @@ pub(super) fn route(config: &Config, vapid: &str, request: &Request<'_>) -> Hand
     let served = match (method, path) {
         (_, _) if RETIRED.contains(&path) => Ok(error(410, "this endpoint was retired")),
         (_, "/v1/push") => push_route(config, vapid, method, device, body),
+        ("DELETE", "/v1/pairing") => {
+            crate::commands::serve_revoke::revoke(&config.devices, device).map(|()| no_content())
+        }
+        (_, "/v1/pairing") => Ok(error(405, "DELETE is served here")),
         (_, _) if path.starts_with("/v1/projects/") => {
             notes_route(config, method, path, if_match, body).map(|(reply, written)| {
                 detail = written;
                 reply
             })
         }
-        ("GET", _) => get(config, path, &Query::parse(query)),
+        ("GET", _) => get(config, path, &Query::parse(query), &paired.token_sha256),
         ("POST", _) if path.starts_with("/v1/agents/") || path.starts_with("/v1/features/") => {
             post(config, path, body).map(|written| {
                 detail = Some(written.detail).filter(|d| !d.is_empty());
@@ -306,7 +314,9 @@ impl Query {
     }
 }
 
-fn get(config: &Config, path: &str, query: &Query) -> Result<Reply> {
+/// `token_sha256` is the SHA-256 of the request's token, which an event
+/// stream is held to.
+fn get(config: &Config, path: &str, query: &Query, token_sha256: &str) -> Result<Reply> {
     let segments = segments(path);
     let segments: Vec<&str> = segments.iter().map(String::as_str).collect();
     let server = config.tmux_server.as_deref();
@@ -317,16 +327,22 @@ fn get(config: &Config, path: &str, query: &Query) -> Result<Reply> {
         }
         ["events"] => {
             let Some(watch) = query.get("watch") else {
-                return Ok(Reply::Events(None));
+                return Ok(Reply::Events {
+                    token_sha256: token_sha256.to_string(),
+                    watch: None,
+                });
             };
             let [project, scope, agent] = watch.split('/').collect::<Vec<_>>()[..] else {
                 return Ok(error(400, "watch names <project>/<scope>/<agent>"));
             };
             Ok(match find_agent(config, project, scope, agent)? {
-                Ok(agent) => Reply::Events(Some(Box::new(TranscriptWatch::new(
-                    agent,
-                    query.get("after").map(str::to_string),
-                )))),
+                Ok(agent) => Reply::Events {
+                    token_sha256: token_sha256.to_string(),
+                    watch: Some(Box::new(TranscriptWatch::new(
+                        agent,
+                        query.get("after").map(str::to_string),
+                    ))),
+                },
                 Err(reply) => reply,
             })
         }

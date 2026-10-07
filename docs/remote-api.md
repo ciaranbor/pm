@@ -26,7 +26,9 @@ app reconnects.
 
 Every request needs a paired device's bearer token, local ones included —
 through `tailscale serve` every request arrives on loopback. `pair` prints
-the token once, beside the QR code. pm does not rely on Tailscale's
+the token once, beside the QR code. Revoking a device refuses its next
+request and ends its event streams at once; a request already being
+answered, such as a merge, runs to its end. pm does not rely on Tailscale's
 identity headers: a tagged device sends none. `pm serve` logs each request
 with its device to stderr — for input, the keys pressed or the SHA-256 of
 the text, for a dialog's answer its choice, never the text — which the LaunchAgent sends to `serve.log`
@@ -43,7 +45,8 @@ with `pm serve`, which sends each `transition` event to it as an encrypted
 Web Push (RFC 8030/8291, signed with the VAPID key). A push carries only
 `{project, scope, kind, agent}`; the app fetches the rest over the tailnet
 when opened. A push service answering that a subscription is gone drops
-it. `pm serve revoke` drops the device's subscription with its token.
+it. Revoking a device, or its unpairing itself (`DELETE pairing`), drops
+its subscription with its token.
 Deleting `vapid.pem` strands every subscription until the app is next
 opened and subscribes again.
 
@@ -67,7 +70,7 @@ The API is under `/v1`; every path needs a paired device's token:
 | Path | Returns |
 |---|---|
 | `snapshot` | `pm feat status --all --json` ([Attention snapshot](#attention-snapshot)) |
-| `events` | server-sent events: `snapshot` (the snapshot, at connect and on each change), `transition` (`{project, scope, kind, detail, agent}` as a feature or `main` becomes blocked, asking or ready — alerted as tmux alerts — or an agent dies); with `?watch={project}/{scope}/{agent}[&after={cursor}]`, also `transcript` (below); a comment line every 25 s of silence |
+| `events` | server-sent events: `snapshot` (the snapshot, at connect and on each change), `transition` (`{project, scope, kind, detail, agent}` as a feature or `main` becomes blocked, asking or ready — alerted as tmux alerts — or an agent dies); with `?watch={project}/{scope}/{agent}[&after={cursor}]`, also `transcript` (below); a comment line every 25 s of silence; `revoked` (`{}`) as the device is unpaired, after which the stream ends |
 | `features/{project}/{feature}` | the fields of `pm feat info`, with `lifecycle` as last synced (no GitHub query), and the feature's brief; JSON |
 | `features/{project}/{feature}/summary` | the feature's summary, Markdown |
 | `projects/{project}/notes` | `GET`: the project's [notes](../README.md#project-notes), Markdown (empty when there are none), with their version as the `ETag`; `PUT` the new Markdown with `If-Match: <that ETag>` (up to 256 KB; longer notes, which only `pm notes` can write, get `413`): `{"version"}`, the new `ETag`, or `409` with `{"error", "refused": "changed", "text", "version"}` (the notes as they are now) when they changed since; `428` without `If-Match` |
@@ -75,6 +78,7 @@ The API is under `/v1`; every path needs a paired device's token:
 | `agents/{project}/{scope}/{agent}/transcript?before={cursor}&limit={n}` | the agent's conversation, a page back from `before` (the end when absent); `limit` 1–200, default 50 |
 | `agents/{project}/{scope}/{agent}/transcript/result?ref={full}` | a tool result's whole output, plain text |
 | `push` | `GET`: `{"vapid": <public key>}`, to subscribe against; `PUT` a Web Push subscription (`{"endpoint": <https URL>, "keys": {"p256dh", "auth"}}`) to push to this device; `DELETE` to stop |
+| `pairing` | `DELETE`: unpairs the device, as `pm serve revoke` does: its token and push subscription are dropped, and its event streams end |
 | `agents/{project}/{scope}/{agent}/input` | `POST {"text"}` (up to 128 KB): typed into the agent's input line and submitted; `{"delivery": "sent", "confirmed"}` once submitted (`confirmed`: seen in the conversation within 5 s), or `{"delivery": "queued"}` when the agent is mid-turn and takes it as a step ends |
 | `agents/{project}/{scope}/{agent}/interrupt` | `POST`: presses Escape, ending the agent's turn |
 | `agents/{project}/{scope}/{agent}/keys` | `POST {"keys": [...]}`: presses each of `Escape Enter Tab BTab Up Down Left Right Space BSpace C-c 0`–`9` |

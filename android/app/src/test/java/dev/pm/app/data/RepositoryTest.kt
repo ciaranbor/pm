@@ -218,8 +218,73 @@ class RepositoryTest {
         val repository = repository(disk.dispatcher)
         repository.start()
         eventually { repository.connection.value == Connection.Live }
+        server.enqueue(MockResponse.Builder().code(204).build())
         repository.unpair()
         disk.drain()
         assertNull(store.cachedSnapshot())
+    }
+
+    @Test
+    fun a_stream_the_server_revokes_shows_unpaired_at_once_and_stops_reconnecting() = runTest {
+        server.enqueue(stream.response("snapshot" to SNAPSHOT, later = listOf("revoked" to "{}")))
+        val repository = repository()
+        repository.start()
+        eventually { repository.connection.value == Connection.Live }
+
+        stream.sendLater()
+        eventually { repository.connection.value == Connection.Unauthorized }
+        advanceTimeBy(5.minutes)
+        runCurrent()
+        assertEquals(1, eventsRequests())
+    }
+
+    @Test
+    fun forgetting_asks_the_server_to_unpair_the_phone() = runTest {
+        server.enqueue(MockResponse.Builder().code(204).build())
+        val repository = repository()
+        eventually { repository.loaded.value }
+
+        assertTrue(repository.unpair())
+        val request = server.takeRequest()
+        assertEquals("DELETE" to "/v1/pairing", request.method to request.url.encodedPath)
+        assertNull(repository.pairing.value)
+        assertNull(store.pairing)
+    }
+
+    @Test
+    fun forgetting_after_the_server_revoked_the_phone_counts_as_unpaired_there() = runTest {
+        server.enqueue(MockResponse.Builder().code(401).body("""{"error":"revoked"}""").build())
+        val repository = repository()
+        eventually { repository.loaded.value }
+
+        assertTrue(repository.unpair())
+        assertNull(store.pairing)
+    }
+
+    @Test
+    fun forgetting_with_a_server_too_old_to_unpair_drops_the_push_subscription_instead() = runTest {
+        server.enqueue(
+            MockResponse.Builder().code(404).body("""{"error":"no such endpoint"}""").build()
+        )
+        server.enqueue(MockResponse.Builder().code(204).build())
+        val repository = repository()
+        eventually { repository.loaded.value }
+
+        assertFalse(repository.unpair())
+        server.takeRequest()
+        val push = server.takeRequest()
+        assertEquals("DELETE" to "/v1/push", push.method to push.url.encodedPath)
+        assertNull(store.pairing)
+    }
+
+    @Test
+    fun forgetting_an_unreachable_server_forgets_it_on_the_phone_and_says_so() = runTest {
+        server.close()
+        val repository = repository()
+        eventually { repository.loaded.value }
+
+        assertFalse(repository.unpair())
+        assertNull(repository.pairing.value)
+        assertNull(store.pairing)
     }
 }

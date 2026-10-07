@@ -313,8 +313,9 @@ fun App(
                                             .takeIf { BuildConfig.SELF_UPDATE },
                                     pair = { backStack.add(Route.Pair) },
                                     unpair = {
-                                        model.unpair()
-                                        backStack.replaceWith(listOf(Route.Pair))
+                                        model.unpair().also {
+                                            backStack.replaceWith(listOf(Route.Pair))
+                                        }
                                     },
                                 )
                             }

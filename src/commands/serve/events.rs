@@ -6,6 +6,10 @@
 //! ([`TranscriptWatch`]). A comment line goes out whenever the stream has been
 //! silent for the heartbeat interval, so proxies keep it open and a client
 //! gone is found by the write that fails.
+//!
+//! Each stream belongs to the token that opened it. Once that token is no
+//! longer paired ([`Hub::cut`]), the stream gets a `revoked` event and
+//! ends, so the app shows it must pair again rather than reconnecting.
 
 use std::io::{self, Write};
 use std::sync::Mutex;
@@ -28,7 +32,13 @@ pub(super) struct Hub {
 struct Inner {
     /// The last snapshot, as JSON.
     snapshot: String,
-    streams: Vec<Sender<String>>,
+    streams: Vec<Stream>,
+}
+
+struct Stream {
+    /// The SHA-256 of the token the stream was opened with.
+    token_sha256: String,
+    events: Sender<String>,
 }
 
 impl Hub {
@@ -52,11 +62,26 @@ impl Hub {
     }
 
     /// A new stream's first event, and the receiver of the rest.
-    fn subscribe(&self) -> (String, Receiver<String>) {
+    fn subscribe(&self, token_sha256: &str) -> (String, Receiver<String>) {
         let (tx, rx) = mpsc::channel();
         let mut inner = self.lock();
-        inner.streams.push(tx);
+        inner.streams.push(Stream {
+            token_sha256: token_sha256.to_string(),
+            events: tx,
+        });
         (event("snapshot", &inner.snapshot), rx)
+    }
+
+    /// End every stream whose token `paired` no longer holds, each with a
+    /// `revoked` event.
+    pub(super) fn cut(&self, paired: impl Fn(&str) -> bool) {
+        self.lock().streams.retain(|s| {
+            let kept = paired(&s.token_sha256);
+            if !kept {
+                let _ = s.events.send(event("revoked", "{}"));
+            }
+            kept
+        });
     }
 
     /// Send every stream what changed from what `watch` last saw to
@@ -78,7 +103,7 @@ impl Hub {
             events.push(transition_event(transition)?);
         }
         for e in events {
-            inner.streams.retain(|s| s.send(e.clone()).is_ok());
+            inner.streams.retain(|s| s.events.send(e.clone()).is_ok());
         }
         Ok((next, transitions))
     }
@@ -93,15 +118,17 @@ fn event(name: &str, data: &str) -> String {
     format!("event: {name}\ndata: {data}\n\n")
 }
 
-/// Write an event stream to `out`, a raw response, until the client goes;
-/// with a watch, reading its conversation every given interval.
+/// Write an event stream to `out`, a raw response, for the token whose
+/// SHA-256 is `token_sha256` until the client goes or the token is
+/// revoked; with a watch, reading its conversation every given interval.
 pub(super) fn stream(
     out: &mut impl Write,
     hub: &Hub,
+    token_sha256: &str,
     heartbeat: Duration,
     mut watch: Option<(TranscriptWatch, Duration)>,
 ) -> io::Result<()> {
-    let (first, events) = hub.subscribe();
+    let (first, events) = hub.subscribe(token_sha256);
     hub.open.fetch_add(1, Ordering::SeqCst);
     let _open = Open(&hub.open);
     let mut failing: Option<String> = None;
@@ -116,15 +143,15 @@ pub(super) fn stream(
          Content-Type: text/event-stream\r\n\
          Cache-Control: no-cache\r\n\
          {}: {}\r\n\
+         Transfer-Encoding: chunked\r\n\
          Connection: close\r\n\r\n",
         super::VERSION_HEADER,
         crate::version::VERSION,
     )?;
-    out.write_all(first.as_bytes())?;
+    send(out, first.as_bytes())?;
     if let Some(opening) = opening {
-        out.write_all(opening.as_bytes())?;
+        send(out, opening.as_bytes())?;
     }
-    out.flush()?;
     let mut wrote = Instant::now();
     let mut next_poll = Instant::now() + watch.as_ref().map_or(Duration::ZERO, |(_, every)| *every);
     loop {
@@ -133,8 +160,7 @@ pub(super) fn stream(
         {
             next_poll = Instant::now() + *every;
             if let Some(e) = transcript_event(watch, &mut failing) {
-                out.write_all(e.as_bytes())?;
-                out.flush()?;
+                send(out, e.as_bytes())?;
                 wrote = Instant::now();
             }
         }
@@ -144,16 +170,25 @@ pub(super) fn stream(
             None => until_heartbeat,
         };
         match events.recv_timeout(wait) {
-            Ok(e) => out.write_all(e.as_bytes())?,
+            Ok(e) => send(out, e.as_bytes())?,
             Err(RecvTimeoutError::Timeout) if wrote.elapsed() >= heartbeat => {
-                out.write_all(b": heartbeat\n\n")?
+                send(out, b": heartbeat\n\n")?
             }
             Err(RecvTimeoutError::Timeout) => continue,
-            Err(RecvTimeoutError::Disconnected) => return Ok(()),
+            Err(RecvTimeoutError::Disconnected) => return send(out, b""),
         }
-        out.flush()?;
         wrote = Instant::now();
     }
+}
+
+/// Send `data` as one chunk of the response; empty, the last. The stream
+/// is chunked so the server can end it: tiny_http keeps a connection open
+/// after a response for the client's next request.
+fn send(out: &mut impl Write, data: &[u8]) -> io::Result<()> {
+    write!(out, "{:x}\r\n", data.len())?;
+    out.write_all(data)?;
+    out.write_all(b"\r\n")?;
+    out.flush()
 }
 
 /// A stream counted open until it ends.

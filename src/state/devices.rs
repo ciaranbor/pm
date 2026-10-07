@@ -119,13 +119,20 @@ impl Devices {
         self.devices.remove(name).is_some()
     }
 
-    /// The name of the device `token` belongs to.
-    pub fn authenticate(&self, token: &str) -> Option<&str> {
+    /// The name and entry of the device `token` belongs to.
+    pub fn authenticate(&self, token: &str) -> Option<(&str, &Device)> {
         let hash = digest(token);
         self.devices
             .iter()
             .find(|(_, d)| same(d.token_sha256.as_bytes(), hash.as_bytes()))
-            .map(|(name, _)| name.as_str())
+            .map(|(name, d)| (name.as_str(), d))
+    }
+
+    /// Whether the token whose SHA-256 is `token_sha256` is still paired.
+    pub fn holds(&self, token_sha256: &str) -> bool {
+        self.devices
+            .values()
+            .any(|d| d.token_sha256 == token_sha256)
     }
 }
 
@@ -157,7 +164,7 @@ mod tests {
         assert_eq!(mode & 0o777, 0o600);
 
         let devices = Devices::load(&path).unwrap();
-        assert_eq!(devices.authenticate(&token), Some("pixel"));
+        assert_eq!(devices.authenticate(&token).map(|(n, _)| n), Some("pixel"));
         assert!(devices.authenticate(&format!("{token}0")).is_none());
 
         let mut devices = devices;
@@ -190,6 +197,6 @@ mod tests {
         .unwrap();
 
         let devices = Devices::load(&path).unwrap();
-        assert_eq!(devices.authenticate(&token), Some("phone"));
+        assert_eq!(devices.authenticate(&token).map(|(n, _)| n), Some("phone"));
     }
 }
