@@ -8,11 +8,12 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
+use super::api::{CALL, command};
 use super::providers::{
     Providers, render, set_in_environment, split_model_id_notes, unset_key_notes,
 };
 use super::reach::Reach;
-use super::{CALL, CONFIG_ENV, ModelRef, command};
+use super::{CONFIG_ENV, ModelRef};
 use crate::bounded;
 use crate::harness::{ConfigIssue, ConfigIssueKind};
 use crate::state::project::OpenCodeConfig;

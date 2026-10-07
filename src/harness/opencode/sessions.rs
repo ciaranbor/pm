@@ -18,6 +18,9 @@
 //! opencode refuses to import one whose parent it lacks (`Not Found`). So
 //! an export leaves out a child whose parent is bound to another directory,
 //! and an import goes parent before child. A move covers both.
+//!
+//! A spawn's session is created, resumed or forked here too, with the
+//! agent's model row pinned on it.
 
 use std::collections::HashSet;
 use std::hash::{BuildHasher, Hasher};
@@ -29,15 +32,20 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use super::{TRANSFER, api, binary, command, detached, installed_version, refusal, run_api};
+use super::api::{TRANSFER, api, command, detached, refusal, run_api, try_api};
+use super::config::ModelRef;
+use super::{binary, installed_version};
 use crate::bounded;
 use crate::error::{PmError, Result};
-use crate::harness::Probe;
 use crate::harness::{ImportOutcome, InUse, per_session_outcome};
+use crate::harness::{LaunchContext, Probe};
 use crate::state::project::OpenCodeConfig;
 
 const PAGE_SIZE: &str = "limit=100";
 const ALREADY_EXISTS: &str = "Session already exists";
+
+/// The `_tag` of opencode's error for a session id its store does not hold.
+const SESSION_NOT_FOUND: &str = "SessionNotFoundError";
 
 const PASSWORD_ENV: &str = "OPENCODE_PASSWORD";
 const LISTENING: &str = "server listening on ";
@@ -409,6 +417,61 @@ pub(in crate::harness) fn import(
         }
     }
     Ok(per_session_outcome(imported, files.len()))
+}
+
+pub(super) fn create_session(
+    cfg: &OpenCodeConfig,
+    ctx: &LaunchContext<'_>,
+    definition: Option<&str>,
+    model: &ModelRef<'_>,
+) -> Result<String> {
+    // The TUI reports its location by the resolved cwd.
+    let directory = ctx
+        .worktree
+        .canonicalize()
+        .unwrap_or_else(|_| ctx.worktree.to_path_buf());
+    let mut body = json!({
+        "location": {"directory": directory},
+        "title": format!("pm:{}", ctx.agent),
+        "model": model.to_json(),
+    });
+    if let Some(def) = definition {
+        body["agent"] = json!(def);
+    }
+    let body = body.to_string();
+    session_id(&api(cfg, &["session.create", "--data", &body])?)
+}
+
+/// Pin `model` on `session`; false when opencode has no such session.
+pub(super) fn pin_model(cfg: &OpenCodeConfig, session: &str, model: &ModelRef<'_>) -> Result<bool> {
+    let param = format!("sessionID={session}");
+    let body = json!({"model": model.to_json()}).to_string();
+    let args = ["session.switchModel", "--param", &param, "--data", &body];
+    match try_api(command(cfg, &["api"], &args), &args)? {
+        Ok(_) => Ok(true),
+        Err(refusal) if refusal.tag.as_deref() == Some(SESSION_NOT_FOUND) => Ok(false),
+        Err(refusal) => Err(PmError::Agent(format!(
+            "opencode session.switchModel failed: {}",
+            refusal.message
+        ))),
+    }
+}
+
+pub(super) fn fork_session(cfg: &OpenCodeConfig, source: &str) -> Result<String> {
+    let param = format!("sessionID={source}");
+    session_id(&api(
+        cfg,
+        &["session.fork", "--param", &param, "--data", "{}"],
+    )?)
+}
+
+fn session_id(response: &Value) -> Result<String> {
+    response
+        .pointer("/data/id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| PmError::Agent(format!("opencode returned no session id: {response}")))
 }
 
 #[cfg(test)]
