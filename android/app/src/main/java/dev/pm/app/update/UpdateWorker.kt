@@ -31,8 +31,7 @@ class UpdateWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 return Result.success()
             }
         if (update != null && update.version != container.store.notifiedUpdate) {
-            Notifications.update(applicationContext, update)
-            container.store.notifiedUpdate = update.version
+            offer(applicationContext, update)
         }
         return Result.success()
     }
@@ -44,6 +43,16 @@ class UpdateWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         /** This app's update, if there is one. */
         suspend fun check(http: okhttp3.OkHttpClient): Update? =
             Updates(http).check(BuildConfig.VERSION_NAME, Build.SUPPORTED_ABIS.toList())
+
+        /**
+         * Post `update`'s notification, which the daily check then doesn't repeat; one that
+         * couldn't be posted, it posts once notifications are on.
+         */
+        fun offer(context: Context, update: Update) {
+            if (Notifications.update(context, update)) {
+                context.container.store.notifiedUpdate = update.version
+            }
+        }
 
         /** Check now and daily while `enabled`; otherwise stop checking. */
         fun schedule(context: Context, enabled: Boolean) {

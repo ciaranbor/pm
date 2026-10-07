@@ -398,8 +398,10 @@ pair() {
   # nothing can show the emulated camera a QR code.
   eadb shell pm revoke "$package" android.permission.CAMERA 2>/dev/null || true
   launch
-  on_screen class android.widget.EditText 15 \
+  on_screen text "Pair with pm serve" 15 \
     || die "the app is not on its pair screen (already paired? \`scripts/emulator adb shell pm clear $package\` resets it)"
+  # A phone with a camera offers Scan QR or Paste; one without shows the field.
+  [ -n "$(centers class android.widget.EditText)" ] || tap Paste
   eadb reverse "tcp:$port" "tcp:$port" >/dev/null
   out=$("$here/scripts/sandbox" -n "$sandbox" run -- \
     pm serve pair --name "$device" --url "http://127.0.0.1:$port") \
@@ -410,8 +412,7 @@ pair() {
   json=$(printf '{"url":"%s","device":"%s","token":"%s"}' "$url" "$device" "$token")
   tap --class android.widget.EditText
   type_text "$json"
-  # The button; the first "Pair" in dump order.
-  tap --nth 1 Pair
+  tap Pair
   on_screen text "Pair with pm serve" 15 0 \
     || die "still on the pair screen after pairing (scripts/emulator screenshot to see why)"
   echo "emulator: paired as '$device' with $url" >&2

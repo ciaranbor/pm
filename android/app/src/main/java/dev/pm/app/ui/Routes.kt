@@ -40,7 +40,7 @@ sealed interface Route : NavKey {
     val heading: kotlin.Pair<String, String?>
         get() =
             when (this) {
-                Pair -> "Pair" to null
+                Pair -> "Pair with pm serve" to null
                 Home -> "pm" to null
                 Settings -> "Settings" to null
                 is Project -> project to null

@@ -328,7 +328,11 @@ fun App(
                                                     container.store.checkUpdates = it
                                                     UpdateWorker.schedule(context, it)
                                                 },
-                                                checkNow = { UpdateWorker.check(container.http) },
+                                                checkNow = {
+                                                    UpdateWorker.check(container.http)?.also {
+                                                        UpdateWorker.offer(context, it)
+                                                    }
+                                                },
                                             )
                                             .takeIf { BuildConfig.SELF_UPDATE },
                                     pair = { backStack.add(Route.Pair) },
