@@ -22,11 +22,11 @@ docs (`//!`) hold each mechanism. What follows is only what the tree doesn't say
 - **Portability** — `path_utils.rs` swaps `~/` ↔ `$HOME` so registry state moves.
 - **Releases** — one version for pm and app, Cargo.toml's; one APK signing key, ever;
   a removed `pm serve` path joins `RETIRED` (`serve/routes.rs`) so old apps blame themselves.
-- **Harness** (`harness/`) — the agent CLI pm launches, behind a `Harness`
-  enum: each seam is a `match` in `harness/mod.rs`, never a trait, and
-  harness-specific knowledge lives only in `harness/<name>.rs` (read its
-  `//!` first). `agent_spawn` and the registry stay neutral. Model ids and
-  permission modes are the harness's own vocabulary, passed through unvalidated.
+- **Harness** (`harness/`) — the agent CLI pm launches, behind a `Harness` enum:
+  each seam is a `match` on `Harness` in `harness/seams/`, never a trait, and
+  harness-specific knowledge lives only in `harness/<name>.rs` (read its `//!`
+  first). `agent_spawn` and the registry stay neutral. Model ids and permission
+  modes are the harness's own vocabulary, passed through unvalidated.
 
 ## Invariants
 
