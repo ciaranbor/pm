@@ -6,11 +6,14 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onRoot
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.github.takahirom.roborazzi.RoborazziATFAccessibilityCheckOptions
 import com.github.takahirom.roborazzi.RoborazziATFAccessibilityChecker
 import com.github.takahirom.roborazzi.checkRoboAccessibility
 import dev.pm.app.SNAPSHOT
+import dev.pm.app.api.PmClient
 import dev.pm.app.data.Connection
+import dev.pm.app.model.Pairing
 import dev.pm.app.model.Snapshot
 import java.time.Instant
 import org.junit.Rule
@@ -21,10 +24,10 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * The start screen under an offline strip, a scope's screen, whose header shows a badge's text
- * unmerged, and the terminal sheet's keys, through Android's accessibility checks. Only errors
- * fail: its contrast warnings come from antialiased glyph edges on dark text; [ThemeTest] holds the
- * badge tones to 4.5:1.
+ * The start screen under an offline strip, a workspace's tabs and summary, whose header shows a
+ * badge's text unmerged, and the terminal sheet's keys, through Android's accessibility checks.
+ * Only errors fail: its contrast warnings come from antialiased glyph edges on dark text;
+ * [ThemeTest] holds the badge tones to 4.5:1.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -54,12 +57,33 @@ class AccessibilityTest {
                     retry = {},
                     pairAgain = {},
                 )
-                Home(snapshot, now, openNeed = {}, openProject = {})
+                Home(snapshot, now, openScope = { _, _ -> }, openProject = {})
             }
         }
 
+    private val client = PmClient(Pairing("http://127.0.0.1:9", "pixel", "tok"))
+
     private val scope =
-        @Composable { AgentsList(snapshot, "app", "login", now, openAgent = {}, openPage = {}) }
+        @Composable {
+            val login = snapshot.feature("app", "login")!!
+            Column {
+                WorkspaceTabs(
+                    tabsOf("login", login.agents, null),
+                    Tab.Summary,
+                    login.agents,
+                    select = {},
+                )
+                SummaryTab(
+                    login,
+                    viewModel { ReadModel(client) { "Adds login." } },
+                    now,
+                    stale = false,
+                    merging = false,
+                    busy = false,
+                    merge = {},
+                )
+            }
+        }
 
     private val terminal =
         @Composable {

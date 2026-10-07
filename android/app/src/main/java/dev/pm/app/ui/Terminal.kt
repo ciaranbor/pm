@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -117,7 +116,7 @@ internal fun TerminalView(text: String, modifier: Modifier = Modifier) {
     BoxWithConstraints(modifier.transformable(zooming, canPan = { false })) {
         val width = constraints.maxWidth - with(LocalDensity.current) { (padding * 2).toPx() }
         val columns = (width / (cell * size)).toInt()
-        SelectionContainer {
+        Selectable {
             Column(Modifier.fillMaxSize().verticalScroll(vertical).padding(padding)) {
                 for (row in rows) {
                     val rule = isRule(row)

@@ -1,13 +1,18 @@
 package dev.pm.app.ui
 
+import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.Surface
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onRoot
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.github.takahirom.roborazzi.captureRoboImage
+import dev.pm.app.SNAPSHOT
 import dev.pm.app.api.PmClient
+import dev.pm.app.model.AgentSnapshot
 import dev.pm.app.model.Pairing
+import dev.pm.app.model.Snapshot
+import java.time.Instant
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -16,8 +21,9 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * A Markdown page, compared with the images in `src/test/screenshots` on every test run: headings
- * at title sizes, inline code without wide padding. `gradlew recordRoborazziDebug` records anew.
+ * A Markdown page and a ready feature's workspace, compared with the images in
+ * `src/test/screenshots` on every test run: headings at title sizes, inline code without wide
+ * padding. `gradlew recordRoborazziDebug` records anew.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -48,4 +54,46 @@ class PageScreenshotTest {
     @Test fun summary_light() = page()
 
     @Test @Config(qualifiers = "+night") fun summary_dark() = page()
+
+    /**
+     * A ready feature's workspace: its agents' tabs, then its pages, open on Summary with Merge.
+     */
+    private fun ready() {
+        val snapshot = Snapshot.parse(SNAPSHOT)
+        val agents =
+            listOf(
+                AgentSnapshot("implementer", "idle"),
+                AgentSnapshot("reviewer", "busy", unread = 1),
+            )
+        val feature =
+            snapshot
+                .feature("app", "search")!!
+                .copy(summary = "Adds search", pr = "12", agents = agents, working = false)
+        compose.setContent {
+            PmTheme(dynamic = false) {
+                Surface {
+                    Column {
+                        WorkspaceTabs(tabsOf("search", agents, null), Tab.Summary, agents, {})
+                        SummaryTab(
+                            feature,
+                            viewModel { ReadModel(client) { summary } },
+                            Instant.parse("2026-10-02T10:00:00Z"),
+                            stale = false,
+                            merging = false,
+                            busy = false,
+                            merge = {},
+                        )
+                    }
+                }
+            }
+        }
+        compose.waitUntil(10_000) {
+            compose.onAllNodesWithText("Gaps").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onRoot().captureRoboImage()
+    }
+
+    @Test @Config(qualifiers = "w360dp-h640dp") fun workspace_ready_light() = ready()
+
+    @Test @Config(qualifiers = "w360dp-h640dp-night") fun workspace_ready_dark() = ready()
 }

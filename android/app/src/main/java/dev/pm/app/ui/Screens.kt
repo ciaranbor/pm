@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -142,12 +141,12 @@ fun SummaryScreen(model: ReadModel<String>, modifier: Modifier = Modifier) {
     ReadScreen(model, "summary", "No summary yet.", modifier) { MarkdownPage(it) }
 }
 
-/** The brief `pm feat new --context` gave the feature. */
+/** The brief `pm feat new --context` gave the feature, often plain text: its lines kept. */
 @Composable
 fun BriefScreen(model: ReadModel<FeatureInfo>, modifier: Modifier = Modifier) {
     ReadScreen(model, "brief", GONE, modifier) {
         val brief = it.context
-        if (brief == null) EmptyState("No brief.") else MarkdownPage(brief)
+        if (brief == null) EmptyState("No brief.") else MarkdownPage(keepLineBreaks(brief))
     }
 }
 
@@ -178,7 +177,7 @@ internal fun MarkdownPage(
             .padding(bottom = bottom)
     ) {
         Row(Modifier.align(Alignment.End), content = actions)
-        SelectionContainer { PmMarkdown(markdown, components = components) }
+        Selectable { PmMarkdown(markdown, components = components) }
     }
 }
 
@@ -186,9 +185,9 @@ internal fun MarkdownPage(
 @Composable
 private fun DetailsPage(info: FeatureInfo, modifier: Modifier = Modifier) {
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(Spacing.gutter)) {
-        SelectionContainer {
+        Selectable {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
-                info.rows.forEach { (label, value) ->
+                info.rows().forEach { (label, value) ->
                     Column {
                         Text(
                             label,
