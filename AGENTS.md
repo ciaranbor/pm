@@ -9,7 +9,7 @@ Rust CLI using clap (derive macros). The module name matches the command
 (`commands/agent_fork.rs` ↔ `pm agent fork`), so navigate by the tree; module
 docs (`//!`) hold each mechanism. What follows is only what the tree doesn't say.
 
-- **Layering** — `cli.rs`/`main.rs`/`dispatch.rs` parse and dispatch,
+- **Layering** — `cli.rs`/`main.rs`/`dispatch/` parse and dispatch,
   `commands/` handlers orchestrate, and all shelling-out is funnelled through
   wrappers (`git/`, `tmux.rs`, `gh.rs`, `editor.rs`, …) — never inline in a handler.
 - **State** (`state/`, TOML) — the pm config dir holds the global registry and
@@ -134,7 +134,7 @@ Before completing any task, always run:
 (opencode plugin).
 
 **Important:** Tests create real tmux sessions that consume ptys; a
-pty-budget abort means leaked sessions (`src/testing.rs` has the budget and
+pty-budget abort means leaked sessions (`src/testing/` has the budget and
 recovery). Always pass `-L` to a test server by hand.
 
 ### Sandbox and smoke tests

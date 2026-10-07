@@ -565,7 +565,7 @@ mod tests {
 
     #[test]
     fn init_with_git_url_clones_repo() {
-        // Read side of CWD_LOCK (serialises against the CWD mutator) — see testing.rs.
+        // Read side of CWD_LOCK (serialises against the CWD mutator) — see `testing::CWD_LOCK`.
         let _cwd = crate::testing::CWD_LOCK
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -605,7 +605,7 @@ mod tests {
 
     #[test]
     fn init_with_git_url_cloned_repo_has_remote() {
-        // Read side of CWD_LOCK (serialises against the CWD mutator) — see testing.rs.
+        // Read side of CWD_LOCK (serialises against the CWD mutator) — see `testing::CWD_LOCK`.
         let _cwd = crate::testing::CWD_LOCK
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -689,7 +689,7 @@ mod tests {
 
     #[test]
     fn init_with_git_url_detects_default_branch() {
-        // Read side of CWD_LOCK (serialises against the CWD mutator) — see testing.rs.
+        // Read side of CWD_LOCK (serialises against the CWD mutator) — see `testing::CWD_LOCK`.
         let _cwd = crate::testing::CWD_LOCK
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
