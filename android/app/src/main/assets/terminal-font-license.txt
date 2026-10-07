@@ -1,7 +1,43 @@
 res/font/terminal.ttf: a subset of FiraCode Nerd Font Mono Regular (Fira Code 6.002, Nerd Fonts 3.5.1),
-made with fonttools' pyftsubset, ligatures and hinting dropped. Licensed as follows.
+made with fonttools' pyftsubset, ligatures and hinting dropped.
+
+Its icon glyphs come from the sources Nerd Fonts (https://github.com/ryanoasis/nerd-fonts)
+patches in, under their own licences:
+
+- Powerline symbols (U+E0A0-E0A2, U+E0B0-E0B3), https://github.com/powerline/powerline:
+  Copyright 2013 Kim Silkebækken and other contributors. MIT License, below.
+- Powerline Extra Symbols (U+E0A3, U+E0B4-E0D7),
+  https://github.com/ryanoasis/powerline-extra-symbols:
+  Copyright (c) 2016 Ryan L McIntyre. MIT License, below.
+- Font Awesome (U+F013-F256), https://fontawesome.com: by Dave Gandy.
+  SIL Open Font License 1.1, below, with its copyright notice.
+- Material Design Icons (U+F00E2, U+F068C), https://pictogrammers.com: by Pictogrammers.
+  Apache License 2.0, in assets/apache-2.0.txt.
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+The font as a whole, Fira Code and the Font Awesome glyphs are licensed as follows.
 
 Copyright (c) 2014, The Fira Code Project Authors (https://github.com/tonsky/FiraCode)
+Font Awesome: Copyright (c) Dave Gandy / Fonticons, Inc. (https://fontawesome.com)
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:

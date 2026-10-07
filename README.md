@@ -645,3 +645,7 @@ no cap.
   machine
 - [docs/releasing.md](docs/releasing.md) — cutting a release
 - [AGENTS.md](AGENTS.md) — architecture, invariants, and development
+
+## License
+
+pm is released under the [MIT License](LICENSE).
