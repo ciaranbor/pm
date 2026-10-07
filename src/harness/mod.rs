@@ -765,6 +765,16 @@ impl Harness {
         }
     }
 
+    /// Whether the harness reads the macOS keychain as it starts, so a
+    /// keychain that does not answer holds it before its session starts.
+    pub fn reads_keychain(self) -> bool {
+        match self {
+            Harness::ClaudeCode => claude_code::READS_KEYCHAIN,
+            Harness::Codex => codex::READS_KEYCHAIN,
+            Harness::OpenCode => opencode::READS_KEYCHAIN,
+        }
+    }
+
     /// Whether `command`, a process's command line, is the harness itself:
     /// an agent's window whose pane runs no such process has a harness that
     /// exited.

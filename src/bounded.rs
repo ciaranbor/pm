@@ -1,10 +1,10 @@
-//! Every command pm runs opencode for returns within a limit. A hung call
-//! would otherwise hang the pm command that made it — a register or adopt
-//! whose own work is done — with nothing printed.
+//! Running an external command that may hang, within a limit: a hung call
+//! would otherwise hang the pm command that made it, with nothing printed.
 //!
 //! The call runs in a process group of its own, killed whole when it ends
 //! or at the limit, so nothing it started — a standalone server — outlives
-//! it. Being out of the terminal's foreground group, it would not see a
+//! it, and pm signals only that group, never processes found by name.
+//! Being out of the terminal's foreground group, it would not see a
 //! Ctrl-C that kills pm, so pm's SIGINT, SIGTERM and SIGHUP kill every
 //! running call's group before taking their default action; a server pm
 //! keeps up across calls is guarded the same way. A call's output is read
@@ -20,17 +20,11 @@ use std::time::{Duration, Instant};
 
 use crate::error::{PmError, Result};
 
-/// The limit for a call that answers from opencode's own store.
-pub(super) const CALL: Duration = crate::harness::CALL_LIMIT;
-
-/// The limit for a call that writes or reads a whole transcript.
-pub(super) const TRANSFER: Duration = Duration::from_secs(300);
-
 const POLL: Duration = Duration::from_millis(20);
 
 /// Why a call gave no output.
 #[derive(Debug)]
-pub(super) enum Failure {
+pub(crate) enum Failure {
     Unrunnable {
         program: String,
         error: std::io::Error,
@@ -42,20 +36,20 @@ pub(super) enum Failure {
 
 impl Failure {
     /// The failure as said of the call `what`.
-    pub(super) fn describe(&self, what: &str) -> String {
+    pub(crate) fn describe(&self, what: &str) -> String {
         match self {
             Failure::Unrunnable { program, error } => {
                 format!("could not run `{program}` for {what}: {error}")
             }
             Failure::TimedOut { limit } => {
-                format!("opencode {what} did not answer within {limit:?}; pm stopped it")
+                format!("{what} did not answer within {limit:?}; pm stopped it")
             }
         }
     }
 }
 
 /// Run `command` and collect its output, killing it once `limit` has passed.
-pub(super) fn run(command: &mut Command, limit: Duration) -> std::result::Result<Output, Failure> {
+pub(crate) fn run(command: &mut Command, limit: Duration) -> std::result::Result<Output, Failure> {
     let started = Instant::now();
     let program = command.get_program().to_string_lossy().into_owned();
     let unrunnable = |error| Failure::Unrunnable {
@@ -95,21 +89,21 @@ pub(super) fn run(command: &mut Command, limit: Duration) -> std::result::Result
     })
 }
 
-/// [`run`] for the opencode call `what`, its failure as pm's error.
-pub(super) fn output(command: &mut Command, what: &str, limit: Duration) -> Result<Output> {
+/// [`run`] for the call `what`, its failure as pm's error.
+pub(crate) fn output(command: &mut Command, what: &str, limit: Duration) -> Result<Output> {
     run(command, limit).map_err(|failure| PmError::Agent(failure.describe(what)))
 }
 
-/// A long-running opencode process pm talks to across several calls: in a
+/// A long-running process pm talks to across several calls: in a
 /// process group of its own, killed whole when dropped and, like a call's,
 /// by pm's fatal signals.
-pub(super) struct Guarded {
-    pub(super) child: Child,
+pub(crate) struct Guarded {
+    pub(crate) child: Child,
     _running: Running,
 }
 
 impl Guarded {
-    pub(super) fn spawn(command: &mut Command) -> std::io::Result<Self> {
+    pub(crate) fn spawn(command: &mut Command) -> std::io::Result<Self> {
         install_signal_handlers();
         let child = command.process_group(0).spawn()?;
         let _running = Running::register(child.id() as libc::pid_t);
@@ -225,10 +219,7 @@ mod tests {
             "{:?}",
             asked.elapsed()
         );
-        assert!(
-            err.contains("opencode session.list did not answer within"),
-            "{err}"
-        );
+        assert!(err.contains("session.list did not answer within"), "{err}");
     }
 
     #[test]
@@ -246,7 +237,7 @@ mod tests {
             "{:?}",
             asked.elapsed()
         );
-        assert!(err.contains("opencode session.get did not answer"), "{err}");
+        assert!(err.contains("session.get did not answer"), "{err}");
     }
 
     /// Whether the process whose pid `file` holds is still running, given a
@@ -278,7 +269,12 @@ mod tests {
 
     #[test]
     fn a_call_that_answers_in_time_returns_both_streams_and_its_status() {
-        let out = output(&mut sh("echo out; echo err >&2; exit 3"), "x", CALL).unwrap();
+        let out = output(
+            &mut sh("echo out; echo err >&2; exit 3"),
+            "x",
+            Duration::from_secs(10),
+        )
+        .unwrap();
         assert_eq!(out.stdout, b"out\n");
         assert_eq!(out.stderr, b"err\n");
         assert_eq!(out.status.code(), Some(3));

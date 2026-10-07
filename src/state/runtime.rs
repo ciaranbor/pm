@@ -31,6 +31,13 @@
 //! window's shell got through its startup files and ran the line, and its
 //! mtime says when. Every spawn removes it before typing the line.
 //!
+//! The **start stamp** is a file the harness's session start writes
+//! ([`hooks_session_start`](crate::commands::hooks_session_start)), every
+//! harness's, a resume's included, so its existence says the harness got
+//! through its own startup and is up, and its mtime says when; the launch
+//! check reads it ([`launch_check`](crate::commands::launch_check)). Every
+//! spawn removes it with the launch stamp.
+//!
 //! The **session paths** are what the current session reported at its
 //! start: its transcript, for a harness that records an interrupt or a
 //! failed turn only there
@@ -68,6 +75,7 @@ pub use dialog::*;
 const WAITING_FILE: &str = "waiting.json";
 const ACTIVITY_FILE: &str = "activity";
 const LAUNCHED_FILE: &str = "launched";
+const STARTED_FILE: &str = "started";
 const TURN_END_CLAIM: &str = "turn-end-claimed-";
 const WAITER_FILE: &str = "waiter";
 const BREAKER_FILE: &str = "breaker.json";
@@ -545,9 +553,40 @@ pub fn reset_launched(project_root: &Path, scope: &str, agent: &str) -> Result<P
     }
 }
 
+/// Where the agent's launch stamp is, whether or not it exists.
+pub fn launched_file(project_root: &Path, scope: &str, agent: &str) -> PathBuf {
+    agent_file(project_root, scope, agent, LAUNCHED_FILE)
+}
+
 /// When the agent's window ran its spawn's typed line; `None` until it has.
 pub fn launched_at(project_root: &Path, scope: &str, agent: &str) -> Option<DateTime<Utc>> {
     let file = agent_file(project_root, scope, agent, LAUNCHED_FILE);
+    Some(std::fs::metadata(file).ok()?.modified().ok()?.into())
+}
+
+/// Stamp the agent's harness session as started now.
+pub fn mark_started(project_root: &Path, scope: &str, agent: &str) -> Result<()> {
+    let file = agent_dir(project_root, scope, agent)?.join(STARTED_FILE);
+    std::fs::File::options()
+        .create(true)
+        .append(true)
+        .open(file)?
+        .set_modified(std::time::SystemTime::now())?;
+    Ok(())
+}
+
+/// Remove the start stamp, as a spawn does before it launches.
+pub fn reset_started(project_root: &Path, scope: &str, agent: &str) -> Result<()> {
+    match std::fs::remove_file(agent_file(project_root, scope, agent, STARTED_FILE)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+        _ => Ok(()),
+    }
+}
+
+/// When the agent's harness session last started since its spawn; `None`
+/// until it has.
+pub fn started_at(project_root: &Path, scope: &str, agent: &str) -> Option<DateTime<Utc>> {
+    let file = agent_file(project_root, scope, agent, STARTED_FILE);
     Some(std::fs::metadata(file).ok()?.modified().ok()?.into())
 }
 

@@ -1,11 +1,17 @@
-//! Whether the harnesses pm just launched stayed up.
+//! Whether the harnesses pm just launched came up.
 //!
 //! A launch is a command line typed into the window's shell, so a harness
 //! that exits at once — its CLI rejecting a flag pm passed from config —
-//! leaves the window open at a shell prompt, and the spawn that typed it has
-//! nothing to report but success. [`confirm_all`] watches each window until
-//! its harness process ([`Harness::runs_as`]) has stayed up for a couple of
-//! seconds, or the window reads dead ([`liveness`]) after it ran.
+//! leaves the window open at a shell prompt, and one blocked in its own
+//! startup — on a keychain that does not answer, a login or trust screen —
+//! sits in the window without ever starting its session; either way the
+//! spawn that typed it has nothing to report but success. [`confirm_all`]
+//! watches each window until its harness process ([`Harness::runs_as`]) is
+//! running and its session has started (the start stamp,
+//! [`runtime::started_at`]), or the window reads dead ([`liveness`]) after
+//! it ran: that launch exited. A harness that runs for [`UP_WITHIN`] without
+//! its session starting has not come up; it is left running, since it may
+//! yet, and what its window shows says why.
 //!
 //! Until the harness process has been seen the launch is still starting,
 //! whatever the window shows: a new shell runs its startup files' commands,
@@ -34,8 +40,9 @@ use crate::tmux::{self, Process};
 
 use super::running_agents::{AgentAt, Liveness, Windows, classify, liveness};
 
-/// How long a harness must run before its launch counts as a success.
-const STAY_UP: Duration = Duration::from_secs(2);
+/// How long a harness may run before its session starts, counted from
+/// when its process is first seen, so a slow shell does not use it up.
+pub const UP_WITHIN: Duration = Duration::from_secs(20);
 
 /// How long a window may go without showing its harness before its launch
 /// is judged by its liveness.
@@ -58,26 +65,73 @@ pub struct Launch {
     pub agent: String,
 }
 
-/// An agent whose harness did not stay up.
+/// An agent whose harness exited or did not come up.
 #[derive(Debug)]
 pub struct FailedLaunch {
     pub launch: Launch,
-    /// The last lines its window showed, where the harness says why.
+    pub failure: Failure,
+    /// The last lines its window showed, where the harness says why; empty
+    /// when it drew nothing.
     pub output: String,
 }
 
+/// How a launch failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Failure {
+    /// The harness exited: the window is back at its shell.
+    Exited,
+    /// The harness is running, but its session did not start within
+    /// `after`.
+    NotUp { harness: Harness, after: Duration },
+}
+
 impl FailedLaunch {
+    /// Whether the harness was left running without coming up.
+    pub fn not_up(&self) -> bool {
+        matches!(self.failure, Failure::NotUp { .. })
+    }
+
     pub fn message(&self) -> String {
         let Launch { agent, scope, .. } = &self.launch;
-        let mut message = format!(
-            "agent '{agent}': its harness exited at launch (fix the cause, then \
-             `pm agent restart {agent} --scope {scope}`)"
-        );
+        let restart = format!("`pm agent restart {agent} --scope {scope}`");
+        let mut message = match self.failure {
+            Failure::Exited => format!(
+                "agent '{agent}': its harness exited at launch (fix the cause, then {restart})"
+            ),
+            Failure::NotUp { harness, after } => {
+                let mut message = format!(
+                    "agent '{agent}': its {harness} harness started but has not come up after \
+                     {after:?}"
+                );
+                if self.output.is_empty() {
+                    message.push_str(&format!(
+                        ": it has drawn nothing, so it is blocked before its startup{}",
+                        blocked_hint(harness)
+                    ));
+                }
+                message.push_str(&format!(
+                    "; it is left running and may come up by itself (if not, {restart})"
+                ));
+                message
+            }
+        };
         if !self.output.is_empty() {
             message.push_str("; its window shows:\n");
             message.push_str(&self.output);
         }
         message
+    }
+}
+
+/// What most often blocks `harness` when it draws nothing.
+fn blocked_hint(harness: Harness) -> String {
+    if cfg!(target_os = "macos") && harness.reads_keychain() {
+        format!(
+            " (on macOS, often a login keychain that isn't answering: `{}`)",
+            crate::keychain::COMMAND
+        )
+    } else {
+        String::new()
     }
 }
 
@@ -131,23 +185,25 @@ pub fn confirm_scope(
     confirm(project_root, scope, &agents, tmux_server)
 }
 
-/// Wait until the harness of each of `launches`, made just now, has stayed
-/// up or exited; the ones that exited. All are watched together, so the
-/// wait does not grow with their number. Advisory: an agent pm cannot find
-/// (no readable config or registry entry, no window) is not watched, and
-/// windows that cannot be read report none, so a launch that worked is
-/// never failed by the check.
+/// Wait until the harness of each of `launches`, made just now, has come
+/// up, exited, or run [`UP_WITHIN`] without coming up; the ones that did
+/// not come up. All are watched together, so the wait does not grow with
+/// their number. Advisory: an agent pm cannot find (no readable config or
+/// registry entry, no window) is not watched, and windows that cannot be
+/// read report none, so a launch that worked is never failed by the check.
 pub fn confirm_all(launches: &[Launch], tmux_server: Option<&str>) -> Vec<FailedLaunch> {
-    confirm_within(launches, tmux_server, START_WITHIN)
+    confirm_within(launches, tmux_server, START_WITHIN, UP_WITHIN)
 }
 
-/// [`confirm_all`], with `start_deadline` in place of [`START_WITHIN`].
-fn confirm_within(
+/// [`confirm_all`], with `start_deadline` in place of [`START_WITHIN`] and
+/// `up_deadline` of [`UP_WITHIN`].
+pub(crate) fn confirm_within(
     launches: &[Launch],
     tmux_server: Option<&str>,
     start_deadline: Duration,
+    up_deadline: Duration,
 ) -> Vec<FailedLaunch> {
-    watch(launches, tmux_server, start_deadline).unwrap_or_default()
+    watch(launches, tmux_server, start_deadline, up_deadline).unwrap_or_default()
 }
 
 /// What watching one launch needs to know.
@@ -167,6 +223,7 @@ fn watch(
     launches: &[Launch],
     tmux_server: Option<&str>,
     start_deadline: Duration,
+    up_deadline: Duration,
 ) -> Result<Vec<FailedLaunch>> {
     if launches.is_empty() {
         return Ok(Vec::new());
@@ -240,9 +297,26 @@ fn watch(
             let settled = watched
                 .reading_since
                 .is_some_and(|since| now - since >= SETTLE);
+            let Launch {
+                project_root,
+                scope,
+                agent: name,
+            } = watched.launch;
+            let started = runtime::started_at(project_root, scope, name).is_some();
             match watched.up_since {
-                Some(since) if !dead && now - since >= STAY_UP => {}
-                Some(_) if !dead => still.push(watched),
+                _ if started && !dead && (running || watched.up_since.is_some()) => {}
+                Some(since) if !dead && now - since < up_deadline => still.push(watched),
+                Some(_) if !dead => {
+                    let launched = runtime::launched_file(project_root, scope, name);
+                    failed.push(FailedLaunch {
+                        launch: watched.launch.clone(),
+                        failure: Failure::NotUp {
+                            harness: watched.harness,
+                            after: up_deadline,
+                        },
+                        output: drawn(tmux_server, &pane.window, &launched),
+                    });
+                }
                 None if running => {
                     watched.up_since = Some(now);
                     still.push(watched);
@@ -251,6 +325,7 @@ fn watch(
                 None if !dead => {}
                 _ => failed.push(FailedLaunch {
                     launch: watched.launch.clone(),
+                    failure: Failure::Exited,
                     output: last_output(tmux_server, &pane.window),
                 }),
             }
@@ -274,7 +349,27 @@ fn reading_input(processes: &[Process]) -> bool {
 /// The last non-empty lines of `window`'s agent pane, indented.
 fn last_output(tmux_server: Option<&str>, window: &str) -> String {
     let text = tmux::capture_pane(tmux_server, window).unwrap_or_default();
-    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    tail(&non_empty(&text))
+}
+
+/// [`last_output`], from after the line the spawn typed, which creates
+/// `launched`: empty when the harness has drawn nothing below it.
+fn drawn(tmux_server: Option<&str>, window: &str, launched: &Path) -> String {
+    let text = tmux::capture_pane(tmux_server, window).unwrap_or_default();
+    let lines = non_empty(&text);
+    let launched = launched.to_string_lossy();
+    let from = lines
+        .iter()
+        .rposition(|l| l.contains(launched.as_ref()))
+        .map_or(0, |typed| typed + 1);
+    tail(&lines[from..])
+}
+
+fn non_empty(text: &str) -> Vec<&str> {
+    text.lines().filter(|l| !l.trim().is_empty()).collect()
+}
+
+fn tail(lines: &[&str]) -> String {
     lines[lines.len().saturating_sub(OUTPUT_LINES)..]
         .iter()
         .map(|l| format!("  {}", l.trim_end()))
@@ -296,20 +391,48 @@ mod tests {
         }
     }
 
+    /// A script named `claude` in a directory of its own, so a pane running
+    /// it runs the harness, that runs `body` and then execs [`fake_claude`].
+    fn fake_claude_doing(dir: &Path, name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = dir.join(name).join("claude");
+        std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+        std::fs::write(
+            &bin,
+            format!("#!/bin/sh\n{body}\nexec {} 999\n", fake_claude().display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        bin
+    }
+
     #[test]
-    fn launches_across_scopes_are_watched_together_and_only_the_exited_ones_reported() {
+    fn launches_across_scopes_are_watched_together_and_only_the_failed_ones_reported() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let login = tmux::session_name(&project_name, "login");
         let main = tmux::session_name(&project_name, "main");
         server.spawn_fake_agent(&project, &login, "login", "up");
+        runtime::mark_started(&project, "login", "up").unwrap();
         // What a spawn types: the launch stamp, then the harness.
         let type_launch = |scope: &str, agent: &str, window: &str, line: String| {
+            runtime::reset_started(&project, scope, agent).unwrap();
             let stamp = runtime::reset_launched(&project, scope, agent).unwrap();
             let stamp = tmux::shell_quote(&stamp.to_string_lossy());
             tmux::send_line(server.name(), window, &format!("touch {stamp} && {line}")).unwrap();
         };
+        let started = |scope: &str, agent: &str| {
+            let dir = runtime::agent_dir(&project, scope, agent).unwrap();
+            tmux::shell_quote(&dir.join("started").to_string_lossy())
+        };
+        // A harness whose session starts a moment after it does.
+        let comes_up = fake_claude_doing(dir.path(), "comes-up", r#"(sleep 0.3; touch "$1") &"#);
+        let talks = fake_claude_doing(
+            dir.path(),
+            "talks",
+            "echo 'Do you trust the files in this folder?'",
+        );
         let fake = fake_claude().display().to_string();
         let quits = server.spawn_dead_fake_agent(&project, &login, "login", "quits");
         type_launch(
@@ -328,12 +451,20 @@ mod tests {
              while [ \"$(date +%s)\" -lt $end ]; do :; done",
         )
         .unwrap();
-        type_launch("main", "slow", &slow, format!("{fake} 999"));
+        let line = format!("{} {}", comes_up.display(), started("main", "slow"));
+        type_launch("main", "slow", &slow, line);
         // A startup file waiting inside the shell, asleep with nothing in
         // the foreground, before the launch line runs.
         let waits = server.spawn_dead_fake_agent(&project, &main, "main", "waits");
         tmux::send_line(server.name(), &waits, "sleep 1.5 & wait").unwrap();
-        type_launch("main", "waits", &waits, format!("{fake} 999"));
+        let line = format!("{} {}", comes_up.display(), started("main", "waits"));
+        type_launch("main", "waits", &waits, line);
+        // Blocked before its startup, drawing nothing.
+        let silent = server.spawn_dead_fake_agent(&project, &main, "main", "silent");
+        type_launch("main", "silent", &silent, format!("{fake} 999"));
+        // Held on a screen of its own before its session starts.
+        let asks = server.spawn_dead_fake_agent(&project, &main, "main", "asks");
+        type_launch("main", "asks", &asks, talks.display().to_string());
 
         let launches = [
             launch(&project, "login", "up"),
@@ -341,20 +472,35 @@ mod tests {
             launch(&project, "main", "instant"),
             launch(&project, "main", "slow"),
             launch(&project, "main", "waits"),
+            launch(&project, "main", "silent"),
+            launch(&project, "main", "asks"),
         ];
-        let started = Instant::now();
-        let failed = confirm_within(&launches, server.name(), Duration::from_secs(30));
+        let asked = Instant::now();
+        let failed = confirm_within(
+            &launches,
+            server.name(),
+            Duration::from_secs(30),
+            Duration::from_secs(4),
+        );
 
         assert!(
-            started.elapsed() < Duration::from_secs(10),
+            asked.elapsed() < Duration::from_secs(12),
             "{:?}",
-            started.elapsed()
+            asked.elapsed()
         );
-        let names: Vec<(&str, &str)> = failed
+        let names: Vec<(&str, &str, bool)> = failed
             .iter()
-            .map(|f| (f.launch.scope.as_str(), f.launch.agent.as_str()))
+            .map(|f| (f.launch.scope.as_str(), f.launch.agent.as_str(), f.not_up()))
             .collect();
-        assert_eq!(names, [("login", "quits"), ("main", "instant")]);
+        assert_eq!(
+            names,
+            [
+                ("login", "quits", false),
+                ("main", "instant", false),
+                ("main", "silent", true),
+                ("main", "asks", true),
+            ]
+        );
         assert!(
             failed[0]
                 .output
@@ -362,5 +508,30 @@ mod tests {
             "{}",
             failed[0].output
         );
+        let silent = failed[2].message();
+        assert!(
+            silent.contains("has not come up after 4s: it has drawn nothing")
+                && silent.ends_with(
+                    "it is left running and may come up by itself (if not, \
+                     `pm agent restart silent --scope main`)"
+                ),
+            "{silent}"
+        );
+        assert!(
+            failed[3]
+                .message()
+                .ends_with("its window shows:\n  Do you trust the files in this folder?"),
+            "{}",
+            failed[3].message()
+        );
+        for agent in ["silent", "asks"] {
+            assert!(
+                tmux::pane_processes(server.name(), &format!("{main}:{agent}"))
+                    .unwrap()
+                    .iter()
+                    .any(|p| p.command.contains("999")),
+                "{agent} is left running"
+            );
+        }
     }
 }

@@ -27,8 +27,8 @@ pub struct SpawnAllResult {
 }
 
 impl SpawnAllResult {
-    /// Move each launched agent whose harness exited at launch from
-    /// `successes` to `errors`, saying why ([`launch_check`]).
+    /// Move each launched agent whose harness exited at launch or did not
+    /// come up from `successes` to `errors`, saying why ([`launch_check`]).
     pub fn confirm_launches(
         &mut self,
         project_root: &Path,
@@ -166,6 +166,7 @@ mod tests {
                 scope: feature.clone(),
                 agent: "tester".into(),
             },
+            failure: crate::commands::launch_check::Failure::Exited,
             output: "  error: bad flag".into(),
         }]);
 

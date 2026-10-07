@@ -120,6 +120,8 @@ pub struct Restarted {
     /// The agents other than the caller restarted mid-turn, each told to
     /// resume.
     pub(super) interrupted: Vec<String>,
+    /// The agents whose harness was left running without coming up.
+    pub(super) not_up: Vec<String>,
     /// Each restarted agent but the caller, by its index in `results`: the
     /// caller's report prints in its old pane, which is killed right after,
     /// so its launch is not waited for.
@@ -131,7 +133,8 @@ pub struct Restarted {
 
 impl Restarted {
     /// Turn the result of each launched agent whose harness exited at
-    /// launch into an error saying why ([`launch_check`]).
+    /// launch or did not come up into an error saying why
+    /// ([`launch_check`]).
     pub fn confirm_launches(
         &mut self,
         project_root: &Path,
@@ -150,12 +153,15 @@ impl Restarted {
 
     pub(super) fn record_failures(&mut self, failed: Vec<FailedLaunch>) {
         for failure in failed {
-            if let Some((at, _)) = self
+            if let Some((at, name)) = self
                 .launched
                 .iter()
                 .find(|(_, n)| *n == failure.launch.agent)
             {
                 self.results[*at] = Err(PmError::Agent(failure.message()));
+                if failure.not_up() {
+                    self.not_up.push(name.clone());
+                }
             }
         }
     }
@@ -213,6 +219,7 @@ pub fn agent_restart_many(
         agents: Vec::new(),
         refused: Vec::new(),
         interrupted: Vec::new(),
+        not_up: Vec::new(),
         launched: Vec::new(),
         caller_pane: None,
     };
@@ -678,6 +685,7 @@ mod tests {
                 scope: "login".to_string(),
                 agent: "reviewer".into(),
             },
+            failure: crate::commands::launch_check::Failure::Exited,
             output: "  error: bad flag".into(),
         }]);
 

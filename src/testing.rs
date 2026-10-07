@@ -158,6 +158,57 @@ pub(crate) fn fake_claude() -> std::path::PathBuf {
     .clone()
 }
 
+/// The file in an agent's runtime dir that holds a [`fake_harness_path`]
+/// harness before its session starts.
+pub(crate) const HOLD_START: &str = "hold-start";
+
+/// A directory of stand-ins for `claude` and `codex`, ahead of the rest of
+/// `PATH` in every test server's windows, so a spawn launches one: each
+/// stamps its session as started, as the harness's session-start hook
+/// would ([`runtime::started_at`](crate::state::runtime::started_at)), then
+/// runs as [`fake_claude`] does. One launched for an agent whose runtime
+/// dir holds [`HOLD_START`] never starts its session.
+fn fake_harness_path() -> &'static std::path::Path {
+    static DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = test_home().join("fake-path");
+        std::fs::create_dir_all(&dir).expect("create fake-path");
+        for harness in [
+            crate::harness::Harness::ClaudeCode,
+            crate::harness::Harness::Codex,
+        ] {
+            let program = fake_harness_binary(harness, std::path::Path::new("/bin/sleep"));
+            let name = program.file_name().unwrap().to_string_lossy().into_owned();
+            let script = format!(
+                "#!/bin/sh\nwt=$PM_AGENT_WORKTREE\n\
+                 dir=\"${{wt%/*}}/.pm/runtime/${{wt##*/}}/$PM_AGENT_NAME\"\n\
+                 [ -n \"$wt\" ] && [ -n \"$PM_AGENT_NAME\" ] && [ ! -e \"$dir/{HOLD_START}\" ] && \
+                 touch \"$dir/started\"\n\
+                 exec {} 999\n",
+                program.display()
+            );
+            let path = dir.join(&name);
+            std::fs::write(&path, script).expect("write fake harness");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod fake harness");
+        }
+        dir
+    })
+}
+
+/// The `PATH` of a test window: [`fake_harness_path`], then the test's own.
+pub(crate) fn window_path() -> &'static str {
+    static PATH: OnceLock<String> = OnceLock::new();
+    PATH.get_or_init(|| {
+        format!(
+            "{}:{}",
+            fake_harness_path().display(),
+            std::env::var("PATH").unwrap_or_default()
+        )
+    })
+}
+
 /// `program` under the name of `harness`'s binary, so a pane running it
 /// runs the harness.
 pub(crate) fn fake_harness_binary(
@@ -433,7 +484,8 @@ pub fn test_home() -> &'static std::path::Path {
 /// runs `sh` with no startup files. tmux starts a window as
 /// `$default-shell -c <default-command>`, and takes `default-shell` from
 /// `SHELL`, so both are set; with `ENV` unset the interactive `sh` reads
-/// nothing. The keepalive session keeps the server up: without it the
+/// nothing. Its windows find the [`fake_harness_path`] stand-ins first
+/// ([`window_path`]). The keepalive session keeps the server up: without it the
 /// server shuts down each time a test cleans up its sessions.
 fn start_hermetic_server(name: &str) -> bool {
     // A socket left under `name` by a dead run whose pid ours reuses would
@@ -442,6 +494,7 @@ fn start_hermetic_server(name: &str) -> bool {
     let _ = std::fs::remove_file(tmux_socket_dir().join(name));
     std::process::Command::new("tmux")
         .env("SHELL", HERMETIC_SHELL)
+        .env("PATH", window_path())
         .env_remove("ENV")
         .args(["-L", name, "-f", "/dev/null"])
         .args([

@@ -41,6 +41,10 @@ fn run_tmux(server: Option<&str>, args: &[&str]) -> Result<String> {
 fn tmux_command(server: Option<&str>) -> Command {
     let mut cmd = Command::new("tmux");
     cmd.arg("-u");
+    // tmux gives a new window or pane the environment of the client that
+    // asked for it.
+    #[cfg(test)]
+    cmd.env("PATH", crate::testing::window_path());
     if let Some(s) = server {
         cmd.args(["-L", s]);
     }

@@ -1,3 +1,4 @@
+pub mod bounded;
 pub mod commands;
 pub mod editor;
 pub mod error;
@@ -7,6 +8,7 @@ pub mod git;
 pub mod harness;
 pub mod hash;
 pub mod hooks;
+pub mod keychain;
 pub mod launchd;
 pub mod messages;
 pub mod notice;

@@ -22,7 +22,8 @@ pub struct OpenResult {
     project_root: PathBuf,
     /// The respawned agents, whose launches [`confirm_launches`] checks.
     launched: Vec<Launch>,
-    /// The respawned agents whose harness exited at launch.
+    /// The respawned agents whose harness exited at launch or did not come
+    /// up.
     pub failed_launches: Vec<FailedLaunch>,
 }
 
@@ -34,8 +35,8 @@ impl OpenResult {
 }
 
 /// Check the launches of every agent `results` respawned, together, and
-/// move each that exited at launch from its result's `agents_respawned` to
-/// its `failed_launches`.
+/// move each that exited at launch or did not come up from its result's
+/// `agents_respawned` to its `failed_launches`.
 pub fn confirm_launches<'a>(
     results: impl IntoIterator<Item = &'a mut OpenResult>,
     tmux_server: Option<&str>,
@@ -436,6 +437,7 @@ mod tests {
         ))
         .unwrap();
         server.spawn_fake_agent(&a, &tmux::session_name(&a_name, "login"), "login", "up");
+        crate::state::runtime::mark_started(&a, "login", "up").unwrap();
         let quits = server.spawn_dead_fake_agent(
             &b,
             &tmux::session_name(&b_name, "login"),

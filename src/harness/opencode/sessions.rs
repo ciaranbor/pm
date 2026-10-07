@@ -29,7 +29,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use super::{api, binary, bounded, command, detached, installed_version, refusal, run_api};
+use super::{TRANSFER, api, binary, command, detached, installed_version, refusal, run_api};
+use crate::bounded;
 use crate::error::{PmError, Result};
 use crate::harness::Probe;
 use crate::harness::{ImportOutcome, InUse, per_session_outcome};
@@ -123,7 +124,7 @@ fn list(cfg: &OpenCodeConfig, dir: &Path) -> Result<Vec<Session>> {
 /// either stream.
 fn session_command(cfg: &OpenCodeConfig, verb: &str, args: &[&str]) -> Result<(String, String)> {
     let mut command = command(cfg, &["session", verb], args);
-    let out = bounded::output(&mut command, &format!("session {verb}"), bounded::TRANSFER)?;
+    let out = bounded::output(&mut command, &format!("opencode session {verb}"), TRANSFER)?;
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     if !out.status.success() {
