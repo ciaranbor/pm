@@ -12,10 +12,13 @@ import {
   MAX_FAILURES,
   MAX_WASTED_TURNS,
   PM_PROMPT,
+  RELOAD_MS,
   RETRY_MS,
   RemoteAsks,
   TURN_FAILED,
   answeredOf,
+  newOrphans,
+  type Orphans,
   askOf,
   consumedMessage,
   drivesSession,
@@ -32,7 +35,20 @@ const SUCCEEDED = "session.execution.succeeded"
 const BLOCK: HookResult = { code: 0, out: '{"decision":"block","reason":"You have new messages"}' }
 
 /** A loop over scripted hook answers, recording what it did. */
-function harness(answers: HookResult[] | ((cancel: AbortSignal) => Promise<HookResult>)) {
+function harness(
+  answers: HookResult[] | ((cancel: AbortSignal) => Promise<HookResult>),
+  {
+    orphans = newOrphans(),
+    prompt,
+    sleep,
+    linger = async () => {},
+  }: {
+    orphans?: Orphans
+    prompt?: () => Promise<void>
+    sleep?: (ms: number) => Promise<void>
+    linger?: (ms: number) => Promise<void>
+  } = {},
+) {
   const seen = {
     prompts: [] as string[],
     sleeps: [] as number[],
@@ -52,12 +68,16 @@ function harness(answers: HookResult[] | ((cancel: AbortSignal) => Promise<HookR
     },
     prompt: async (_sessionID, text) => {
       seen.prompts.push(text)
+      await prompt?.()
     },
     sleep: async (ms) => {
       seen.sleeps.push(ms)
+      await sleep?.(ms)
     },
+    linger,
     report: (reason) => seen.reports.push(reason),
     lastTurn: (error) => seen.lastTurn.push(error),
+    orphans,
     now: () => 0,
   })
   return { loop, seen }
@@ -271,6 +291,8 @@ test("a turn that starts while the loop backs off is not waited through, and its
     sleep: () => new Promise<void>((resolve) => (wake = resolve)),
     report: () => {},
     lastTurn: () => {},
+    linger: async () => {},
+    orphans: newOrphans(),
     now: () => 0,
   })
   const failed = loop.turnEnded("ses_1", TURN_FAILED, { message: "down" })
@@ -361,6 +383,8 @@ test("a failed turn's error is recorded before the back-off, not after it", asyn
     sleep: () => new Promise<void>((resolve) => (release = resolve)),
     report: () => {},
     lastTurn: (error) => recorded.push(error),
+    linger: async () => {},
+    orphans: newOrphans(),
   }).turnEnded("ses_1", TURN_FAILED, { message: "down" })
   assert.deepEqual(recorded, ["down"])
   release()
@@ -619,4 +643,190 @@ test("a cancelled `pm` given a kill signal gets that one", async (t) => {
   cancel.abort()
   await running
   assert.equal(existsSync(caught), true)
+})
+
+/** Hook calls that block until answered or cancelled; a cancelled one answers as killed. */
+function heldHooks() {
+  const held: { answer: (result: HookResult) => void; cancelled: () => boolean }[] = []
+  const hook = (cancel: AbortSignal) =>
+    new Promise<HookResult>((resolve) => {
+      cancel.addEventListener("abort", () => resolve({ code: null, out: "" }))
+      held.push({ answer: resolve, cancelled: () => cancel.aborted })
+    })
+  return { hook, held }
+}
+
+const settle = () => new Promise((resolve) => setImmediate(resolve))
+
+test("a wait the plugin unloads in runs on, and its block prompts the session once", async () => {
+  const { hook, held } = heldHooks()
+  const { loop, seen } = harness(hook)
+  const waiting = loop.arm("ses_1")
+  loop.unload("ses_1")
+  assert.equal(held.length, 1, "no second wait for a session already waiting")
+  assert.equal(held[0].cancelled(), false)
+  held[0].answer(BLOCK)
+  await waiting
+  assert.deepEqual(seen.prompts, ["You have new messages"])
+  assert.equal(seen.asked, 1)
+})
+
+test("a load that follows an unload retires the orphaned wait and waits itself", async () => {
+  const orphans = newOrphans()
+  const first = heldHooks()
+  const old = harness(first.hook, { orphans })
+  const waiting = old.loop.arm("ses_1")
+  old.loop.unload("ses_1")
+
+  const second = heldHooks()
+  const next = harness(second.hook, { orphans })
+  void next.loop.takeOver("ses_1")
+  await waiting
+  await settle()
+  assert.equal(first.held[0].cancelled(), true)
+  assert.equal(second.held.length, 1)
+  assert.deepEqual(old.seen.prompts, [])
+  assert.deepEqual(old.seen.reports, [])
+})
+
+test("a load the orphan's prompt caused does not arm, so the message is not delivered twice", async () => {
+  const orphans = newOrphans()
+  const { hook, held } = heldHooks()
+  const reloaded = heldHooks()
+  const next = harness(reloaded.hook, { orphans })
+  // opencode loads the plugin again while serving the prompt.
+  const old = harness(hook, {
+    orphans,
+    prompt: async () => {
+      void next.loop.takeOver("ses_1")
+    },
+  })
+  const waiting = old.loop.arm("ses_1")
+  old.loop.unload("ses_1")
+  held[0].answer(BLOCK)
+  await waiting
+  await settle()
+  assert.deepEqual(old.seen.prompts, ["You have new messages"])
+  assert.equal(reloaded.held.length, 0)
+  assert.deepEqual(old.seen.reports, [], "the plugin loaded again")
+
+  // The prompted turn's end arms the new load.
+  void next.loop.turnEnded("ses_1", SUCCEEDED)
+  assert.equal(reloaded.held.length, 1)
+})
+
+test("a load during an orphan's prompt that then fails arms after all", async () => {
+  const orphans = newOrphans()
+  const { hook, held } = heldHooks()
+  const reloaded = heldHooks()
+  const next = harness(reloaded.hook, { orphans })
+  const old = harness(hook, {
+    orphans,
+    prompt: async () => {
+      void next.loop.takeOver("ses_1")
+      await settle()
+      throw new Error("stale handle")
+    },
+  })
+  const waiting = old.loop.arm("ses_1")
+  old.loop.unload("ses_1")
+  held[0].answer(BLOCK)
+  await waiting
+  await settle()
+  assert.equal(reloaded.held.length, 1)
+  assert.deepEqual(old.seen.reports, [], "the new load's loop runs")
+})
+
+test("an orphaned wait a newer one superseded ends without a report", async () => {
+  const { hook, held } = heldHooks()
+  const { loop, seen } = harness(hook)
+  const waiting = loop.arm("ses_1")
+  loop.unload("ses_1")
+  held[0].answer({ code: 0, out: "" })
+  await waiting
+  assert.deepEqual(seen.reports, [])
+  assert.deepEqual(seen.prompts, [])
+})
+
+test("an orphan's prompt that loads no plugin again says so", async () => {
+  const { hook, held } = heldHooks()
+  const lingered: number[] = []
+  const { loop, seen } = harness(hook, { linger: async (ms) => void lingered.push(ms) })
+  const waiting = loop.arm("ses_1")
+  loop.unload("ses_1")
+  held[0].answer(BLOCK)
+  await waiting
+  await settle()
+  assert.deepEqual(lingered, [RELOAD_MS])
+  assert.deepEqual(seen.reports, [
+    "opencode unloaded the plugin and did not load it again when the session was prompted",
+  ])
+})
+
+test("an orphaned wait that fails, or whose prompt throws, says so and does not retry", async () => {
+  const failing = heldHooks()
+  const first = harness(failing.hook)
+  const waiting = first.loop.arm("ses_1")
+  first.loop.unload("ses_1")
+  failing.held[0].answer({ code: 1, out: "" })
+  await waiting
+  assert.deepEqual(first.seen.reports, ["opencode unloaded the plugin and its wait then failed (exit 1)"])
+  assert.equal(first.seen.asked, 1)
+  assert.deepEqual(first.seen.sleeps, [])
+
+  const orphans = newOrphans()
+  const refusing = heldHooks()
+  const refused = harness(refusing.hook, {
+    orphans,
+    prompt: async () => {
+      throw new Error("location gone")
+    },
+  })
+  const refusedWaiting = refused.loop.arm("ses_1")
+  refused.loop.unload("ses_1")
+  refusing.held[0].answer(BLOCK)
+  await refusedWaiting
+  assert.deepEqual(refused.seen.reports, [
+    "opencode unloaded the plugin and the session could not be prompted (Error: location gone)",
+  ])
+  // No prompt went through, so the next load must arm.
+  const next = heldHooks()
+  void harness(next.hook, { orphans }).loop.takeOver("ses_1")
+  await settle()
+  assert.equal(next.held.length, 1)
+})
+
+test("an unload while the loop backs off starts the wait it would have asked", async () => {
+  let wake = () => {}
+  let answers = 0
+  const { hook, held } = heldHooks()
+  const { loop, seen } = harness((cancel) => (answers++ === 0 ? Promise.resolve({ code: 1, out: "" }) : hook(cancel)), {
+    sleep: () => new Promise<void>((resolve) => (wake = resolve)),
+  })
+  const pumping = loop.arm("ses_1")
+  await settle()
+  assert.deepEqual(seen.sleeps, [RETRY_MS[0]])
+  loop.unload("ses_1")
+  assert.equal(held.length, 1)
+  wake()
+  await pumping
+  assert.equal(seen.asked, 2, "the woken pump asks nothing")
+  held[0].answer(BLOCK)
+  await settle()
+  assert.deepEqual(seen.prompts, ["You have new messages"])
+})
+
+test("an unload mid-turn, or after the loop stopped itself, leaves no wait", async () => {
+  const midTurn = harness([BLOCK])
+  await midTurn.loop.arm("ses_1")
+  midTurn.loop.unload("ses_1")
+  await settle()
+  assert.equal(midTurn.seen.asked, 1)
+
+  const stopped = harness(Array(MAX_FAILURES).fill({ code: 1, out: "" }))
+  await stopped.loop.arm("ses_1")
+  assert.notEqual(stopped.loop.stopped, null)
+  stopped.loop.unload("ses_1")
+  await settle()
+  assert.equal(stopped.seen.asked, MAX_FAILURES)
 })
