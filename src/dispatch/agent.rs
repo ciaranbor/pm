@@ -115,8 +115,10 @@ pub(super) fn run(cmd: AgentCommands, server: Option<&str>) -> Result<()> {
                 server,
             );
             restarted.confirm_launches(&project_root, &target_scope, server);
+            let failure = restarted.not_up_failure();
             let reported =
-                report_agent_op_results(std::mem::take(&mut restarted.results), "restart");
+                report_agent_op_results(std::mem::take(&mut restarted.results), "restart")
+                    .map_err(|e| failure.map_or(e, |f| PmError::Agent(f.to_string())));
             std::io::Write::flush(&mut std::io::stdout())?;
             restarted.finish(server);
             push();

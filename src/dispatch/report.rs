@@ -62,14 +62,15 @@ pub(super) fn report_restart_all(
         }
     }
     println!("{}", sweep.summary());
-    let failed = sweep.count(|o| matches!(o, Outcome::Failed(_) | Outcome::NotUp(_))) > 0;
+    let failed = sweep.count(|o| matches!(o, Outcome::Failed(_) | Outcome::NotUp(_)));
+    let not_up = sweep.count(|o| matches!(o, Outcome::NotUp(_)));
     std::io::Write::flush(&mut std::io::stdout())?;
     done.finish(server);
     push();
-    if failed {
-        return Err(PmError::Agent(
-            "some agents failed to restart or did not come up".to_string(),
-        ));
+    if failed > 0 {
+        let failure = commands::agent_restart::not_up_failure(failed, not_up)
+            .unwrap_or("some agents failed to restart");
+        return Err(PmError::Agent(failure.to_string()));
     }
     Ok(())
 }
