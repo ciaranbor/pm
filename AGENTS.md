@@ -14,7 +14,7 @@ docs (`//!`) hold each mechanism. What follows is only what the tree doesn't say
   wrappers (`git/`, `tmux.rs`, `gh.rs`, `editor.rs`, …) — never inline in a handler.
 - **State** (`state/`, TOML) — the pm config dir holds the global registry and
   config; `<project>/.pm/` is per-project state. Precedence: project > global > unset.
-- **Bundled assets** (`assets/`, embedded by `commands/skills/`) — a global
+- **Bundled assets** (`bundled/`, embedded by `commands/skills/`) — a global
   tier, where bundled names are reserved, and a project tier of the user's
   customs that shadows it by name, each *projected* into the harness's layout.
   Projection deletes only what `skills/mod.rs`'s `//!` lists. Bundled workflows are
