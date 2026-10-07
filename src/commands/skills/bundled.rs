@@ -63,7 +63,7 @@ pub(super) const BUNDLED_ITEMS: &[BundledItem] = &[
         name: "pm",
         files: &[(
             "pm/SKILL.md",
-            include_str!("../../../assets/skills/pm/SKILL.md"),
+            include_str!("../../../bundled/skills/pm/SKILL.md"),
         )],
     },
     BundledItem {
@@ -71,7 +71,7 @@ pub(super) const BUNDLED_ITEMS: &[BundledItem] = &[
         name: "messaging",
         files: &[(
             "messaging/SKILL.md",
-            include_str!("../../../assets/skills/messaging/SKILL.md"),
+            include_str!("../../../bundled/skills/messaging/SKILL.md"),
         )],
     },
     BundledItem {
@@ -79,7 +79,7 @@ pub(super) const BUNDLED_ITEMS: &[BundledItem] = &[
         name: "pm-workflow",
         files: &[(
             "pm-workflow/SKILL.md",
-            include_str!("../../../assets/skills/pm-workflow/SKILL.md"),
+            include_str!("../../../bundled/skills/pm-workflow/SKILL.md"),
         )],
     },
     // Agents
@@ -88,7 +88,7 @@ pub(super) const BUNDLED_ITEMS: &[BundledItem] = &[
         name: "reviewer",
         files: &[(
             "reviewer.md",
-            include_str!("../../../assets/agents/reviewer.md"),
+            include_str!("../../../bundled/agents/reviewer.md"),
         )],
     },
     BundledItem {
@@ -96,7 +96,7 @@ pub(super) const BUNDLED_ITEMS: &[BundledItem] = &[
         name: "implementer",
         files: &[(
             "implementer.md",
-            include_str!("../../../assets/agents/implementer.md"),
+            include_str!("../../../bundled/agents/implementer.md"),
         )],
     },
     BundledItem {
@@ -104,18 +104,18 @@ pub(super) const BUNDLED_ITEMS: &[BundledItem] = &[
         name: "researcher",
         files: &[(
             "researcher.md",
-            include_str!("../../../assets/agents/researcher.md"),
+            include_str!("../../../bundled/agents/researcher.md"),
         )],
     },
     BundledItem {
         kind: BundledKind::Agent,
         name: "qa",
-        files: &[("qa.md", include_str!("../../../assets/agents/qa.md"))],
+        files: &[("qa.md", include_str!("../../../bundled/agents/qa.md"))],
     },
     BundledItem {
         kind: BundledKind::Agent,
         name: "main",
-        files: &[("main.md", include_str!("../../../assets/agents/main.md"))],
+        files: &[("main.md", include_str!("../../../bundled/agents/main.md"))],
     },
     // Baseline (shared operating prompt appended to every spawned agent)
     BundledItem {
@@ -123,7 +123,7 @@ pub(super) const BUNDLED_ITEMS: &[BundledItem] = &[
         name: "pm-baseline",
         files: &[(
             "pm-baseline.md",
-            include_str!("../../../assets/baseline/pm-baseline.md"),
+            include_str!("../../../bundled/baseline/pm-baseline.md"),
         )],
     },
     // Workflows
@@ -133,11 +133,11 @@ pub(super) const BUNDLED_ITEMS: &[BundledItem] = &[
         files: &[
             (
                 "implement-and-review/config.toml",
-                include_str!("../../../assets/workflows/implement-and-review/config.toml"),
+                include_str!("../../../bundled/workflows/implement-and-review/config.toml"),
             ),
             (
                 "implement-and-review/workflow.md",
-                include_str!("../../../assets/workflows/implement-and-review/workflow.md"),
+                include_str!("../../../bundled/workflows/implement-and-review/workflow.md"),
             ),
         ],
     },
@@ -147,11 +147,11 @@ pub(super) const BUNDLED_ITEMS: &[BundledItem] = &[
         files: &[
             (
                 "research-implement-review/config.toml",
-                include_str!("../../../assets/workflows/research-implement-review/config.toml"),
+                include_str!("../../../bundled/workflows/research-implement-review/config.toml"),
             ),
             (
                 "research-implement-review/workflow.md",
-                include_str!("../../../assets/workflows/research-implement-review/workflow.md"),
+                include_str!("../../../bundled/workflows/research-implement-review/workflow.md"),
             ),
         ],
     },
@@ -161,11 +161,11 @@ pub(super) const BUNDLED_ITEMS: &[BundledItem] = &[
         files: &[
             (
                 "implement-qa-review/config.toml",
-                include_str!("../../../assets/workflows/implement-qa-review/config.toml"),
+                include_str!("../../../bundled/workflows/implement-qa-review/config.toml"),
             ),
             (
                 "implement-qa-review/workflow.md",
-                include_str!("../../../assets/workflows/implement-qa-review/workflow.md"),
+                include_str!("../../../bundled/workflows/implement-qa-review/workflow.md"),
             ),
         ],
     },
@@ -175,11 +175,11 @@ pub(super) const BUNDLED_ITEMS: &[BundledItem] = &[
         files: &[
             (
                 "research-implement-qa-review/config.toml",
-                include_str!("../../../assets/workflows/research-implement-qa-review/config.toml"),
+                include_str!("../../../bundled/workflows/research-implement-qa-review/config.toml"),
             ),
             (
                 "research-implement-qa-review/workflow.md",
-                include_str!("../../../assets/workflows/research-implement-qa-review/workflow.md"),
+                include_str!("../../../bundled/workflows/research-implement-qa-review/workflow.md"),
             ),
         ],
     },
@@ -189,11 +189,11 @@ pub(super) const BUNDLED_ITEMS: &[BundledItem] = &[
         files: &[
             (
                 "research-only/config.toml",
-                include_str!("../../../assets/workflows/research-only/config.toml"),
+                include_str!("../../../bundled/workflows/research-only/config.toml"),
             ),
             (
                 "research-only/workflow.md",
-                include_str!("../../../assets/workflows/research-only/workflow.md"),
+                include_str!("../../../bundled/workflows/research-only/workflow.md"),
             ),
         ],
     },
@@ -203,11 +203,11 @@ pub(super) const BUNDLED_ITEMS: &[BundledItem] = &[
         files: &[
             (
                 "solo/config.toml",
-                include_str!("../../../assets/workflows/solo/config.toml"),
+                include_str!("../../../bundled/workflows/solo/config.toml"),
             ),
             (
                 "solo/workflow.md",
-                include_str!("../../../assets/workflows/solo/workflow.md"),
+                include_str!("../../../bundled/workflows/solo/workflow.md"),
             ),
         ],
     },
@@ -217,11 +217,11 @@ pub(super) const BUNDLED_ITEMS: &[BundledItem] = &[
         files: &[
             (
                 "pr-review/config.toml",
-                include_str!("../../../assets/workflows/pr-review/config.toml"),
+                include_str!("../../../bundled/workflows/pr-review/config.toml"),
             ),
             (
                 "pr-review/workflow.md",
-                include_str!("../../../assets/workflows/pr-review/workflow.md"),
+                include_str!("../../../bundled/workflows/pr-review/workflow.md"),
             ),
         ],
     },

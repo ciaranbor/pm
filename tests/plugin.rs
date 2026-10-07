@@ -1,4 +1,4 @@
-//! Runs the opencode plugin's own tests (`assets/plugins/opencode/pm-never-idle/
+//! Runs the opencode plugin's own tests (`bundled/plugins/opencode/pm-never-idle/
 //! loop.test.ts`) under `node --test`, which needs a node that runs
 //! TypeScript directly (22.18 or later).
 
@@ -6,7 +6,7 @@ use std::process::Command;
 
 const TESTS: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/assets/plugins/opencode/pm-never-idle/loop.test.ts"
+    "/bundled/plugins/opencode/pm-never-idle/loop.test.ts"
 );
 
 /// The installed node's `(major, minor)`.
