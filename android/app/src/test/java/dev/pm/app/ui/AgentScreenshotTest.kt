@@ -63,35 +63,36 @@ class AgentScreenshotTest {
 
     @Test @Config(qualifiers = "+night") fun chat_dark() = capture()
 
-    /** Claude Code's folder trust dialog, as `screen` returns it from a 229-column pane. */
+    /** Claude Code's folder trust dialog, as `screen` returns it from an 80-column pane. */
     private val trust =
         listOf(
                 "",
-                "─".repeat(229),
+                "─".repeat(80),
                 " Accessing workspace:",
                 "",
-                " /Users/me/Projects/app",
+                " /Users/me/Projects/应用 🙂",
                 "",
-                " Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what's in this folder first.",
+                " Quick safety check: Is this a project you created or one you trust? (Like your",
+                " own code, a well-known open source project, or work from your team). If not,",
+                " take a moment to review what's in this folder first.",
                 "",
                 " Claude Code'll be able to read, edit, and execute files here.",
                 "",
-                " \uf059 Security guide",
+                " \uf059 Security guide: https://code.claude.com/docs/en/security",
                 "",
                 " ❯ 1. Yes, I trust this folder",
                 "   2. No, exit",
                 "",
                 " Enter to confirm · Esc to cancel",
             )
-            .map { it.padEnd(229) }
-            .plus(List(24) { " ".repeat(229) })
+            .plus(List(6) { "" })
             .joinToString("\n")
 
     private fun terminal() = captureRoboImage {
-        PmTheme { Surface { ScreenPanel(trust, notice = null, press = {}, type = { true }) } }
+        PmTheme { Surface { ScreenPanel(trust, null, emptyList(), press = {}, type = { true }) } }
     }
 
-    /** Prose wraps, the rule stays one line, and the keys wrap at a phone's width. */
+    /** The pane's grid at the sheet's width, wide characters on two cells, and one row of keys. */
     @Test fun terminal_light() = terminal()
 
     @Test @Config(qualifiers = "+night") fun terminal_dark() = terminal()

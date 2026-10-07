@@ -81,7 +81,7 @@ The API is under `/v1`; every path needs a paired device's token:
 | `pairing` | `DELETE`: unpairs the device, as `pm serve revoke` does: its token and push subscription are dropped, and its event streams end |
 | `agents/{project}/{scope}/{agent}/input` | `POST {"text"}` (up to 128 KB): typed into the agent's input line and submitted; `{"delivery": "sent", "confirmed"}` once submitted (`confirmed`: seen in the conversation within 5 s), or `{"delivery": "queued"}` when the agent is mid-turn and takes it as a step ends |
 | `agents/{project}/{scope}/{agent}/interrupt` | `POST`: presses Escape, ending the agent's turn |
-| `agents/{project}/{scope}/{agent}/keys` | `POST {"keys": [...]}`: presses each of `Escape Enter Tab BTab Up Down Left Right Space BSpace C-c 0`–`9` |
+| `agents/{project}/{scope}/{agent}/keys` | `POST {"keys": [...]}`: presses each of `Escape Enter Tab BTab Up Down Left Right Space BSpace 0`–`9`, or Control with a lowercase letter or an arrow (`C-c`, `C-Left`) |
 | `agents/{project}/{scope}/{agent}/type` | `POST {"text"}` (up to 4 KB, no control characters): typed into the pane as keys with nothing pressed after, for a dialog that takes text (a login code) |
 | `agents/{project}/{scope}/{agent}/dialog` | `GET`: the oldest of the agent's dialogs that can be answered remotely (below), the one its terminal shows first, else `404`; `POST {"id", "choice", "answers"?, "message"?}`: answers the open dialog `id` names, `{"answered": true}` once its harness has the answer |
 | `agents/{project}/{scope}/{agent}/dialogs` | `GET`: `{"dialogs": [Dialog, …]}`, every dialog of the agent's that can be answered remotely, oldest first; empty when none |

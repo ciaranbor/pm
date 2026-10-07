@@ -32,9 +32,21 @@ use super::running_agents::{AgentAt, Liveness, Windows, classify};
 
 /// The keys a device may press, by tmux's names for them.
 pub const KEYS: &[&str] = &[
-    "Escape", "Enter", "Tab", "BTab", "Up", "Down", "Left", "Right", "Space", "BSpace", "C-c", "0",
-    "1", "2", "3", "4", "5", "6", "7", "8", "9",
+    "Escape", "Enter", "Tab", "BTab", "Up", "Down", "Left", "Right", "Space", "BSpace", "0", "1",
+    "2", "3", "4", "5", "6", "7", "8", "9",
 ];
+
+/// Whether a device may press `key`: one of [`KEYS`], or Control with a
+/// lowercase letter or an arrow (`C-r`, `C-Left`).
+pub fn pressable(key: &str) -> bool {
+    if KEYS.contains(&key) {
+        return true;
+    }
+    let Some(held) = key.strip_prefix("C-") else {
+        return false;
+    };
+    matches!(held.as_bytes(), [b'a'..=b'z']) || ["Up", "Down", "Left", "Right"].contains(&held)
+}
 
 /// How typed text reached the agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -274,7 +286,7 @@ pub fn interrupt(
     Ok(Ok(()))
 }
 
-/// Press `keys`, each one of [`KEYS`], in `agent`'s pane, in order.
+/// Press `keys`, each [`pressable`], in `agent`'s pane, in order.
 pub fn send_keys(
     project_root: &Path,
     scope: &str,
