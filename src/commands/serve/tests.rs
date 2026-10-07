@@ -972,7 +972,12 @@ fn typed_text_is_confirmed_from_the_conversation_and_keys_are_checked() {
     );
 
     assert_eq!(post(&typist, "keys", r#"{"keys":["F1"]}"#).0, 400);
-    assert_eq!(post(&typist, "keys", r#"{"keys":["Down","Enter"]}"#).0, 200);
+    assert_eq!(post(&typist, "keys", r#"{"keys":["C-1"]}"#).0, 400);
+    assert_eq!(post(&typist, "keys", r#"{"keys":["C-Enter"]}"#).0, 400);
+    assert_eq!(
+        post(&typist, "keys", r#"{"keys":["Down","C-Left","Enter"]}"#).0,
+        200
+    );
     assert_eq!(post(&typist, "input", r#"{"text":"  "}"#).0, 400);
 
     mark(WaitingKind::Permission);

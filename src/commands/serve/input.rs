@@ -89,11 +89,14 @@ pub(super) fn post(
                     detail,
                 });
             }
-            if let Some(key) = keys.iter().find(|k| !KEYS.contains(&k.as_str())) {
+            if let Some(key) = keys.iter().find(|k| !agent_input::pressable(k)) {
                 return Ok(Written {
                     reply: error(
                         400,
-                        &format!("{key} is not a key a device may press: {}", KEYS.join(" ")),
+                        &format!(
+                            "{key} is not a key a device may press: {}, or C- with a letter or arrow",
+                            KEYS.join(" ")
+                        ),
                     ),
                     detail,
                 });

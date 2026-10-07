@@ -90,6 +90,7 @@ class AccessibilityTest {
             ScreenPanel(
                 "Trust this folder?\n❯ 1. Yes\n  2. No",
                 notice = null,
+                pressing = emptyList(),
                 press = {},
                 type = { true },
             )

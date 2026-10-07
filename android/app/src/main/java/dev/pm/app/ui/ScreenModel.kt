@@ -11,6 +11,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -52,9 +53,20 @@ class ScreenModel(
         polling = null
     }
 
+    /** The keys pressed and not yet sent, in order; a key pressed twice is here twice. */
+    private val _pressing = MutableStateFlow<List<String>>(emptyList())
+    val pressing: StateFlow<List<String>> = _pressing.asStateFlow()
+
     /** Press `key`, by tmux's name for it. */
     fun press(key: String) {
-        viewModelScope.launch { send { client.pressKeys(project, scope, agent, listOf(key)) } }
+        _pressing.update { it + key }
+        viewModelScope.launch {
+            try {
+                send { client.pressKeys(project, scope, agent, listOf(key)) }
+            } finally {
+                _pressing.update { it - key }
+            }
+        }
     }
 
     /** Type `text` with nothing pressed after it; whether it was typed. */
