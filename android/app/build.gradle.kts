@@ -149,6 +149,8 @@ android {
         warningsAsErrors = true
         // Release ships arm64 only, the one APK a release publishes.
         disable += "ChromeOsAbiSupport"
+        // An upstream release must not fail a build that changed nothing.
+        informational += "NewerVersionAvailable"
         abortOnError = true
     }
 }
