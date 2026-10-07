@@ -839,6 +839,7 @@ mod tests {
                 project_root: Some(&source_root),
                 projects_dir: source_registry.path(),
                 all: false,
+                projects: &[],
                 output: Some(&out.path().join("opencode.tar.gz")),
                 home: source_project.path(),
                 global: &opencode(fake_opencode_sequence(

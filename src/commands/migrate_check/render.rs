@@ -170,7 +170,7 @@ fn plan_lines(report: &Report, plan: &[PlanStep], style: Style) -> Vec<String> {
         out.push(style.paint(
             "33",
             &format!(
-                "  In flight: {} — agents active, work uncommitted. Finishing and merging \
+                "  In flight: {} — work uncommitted or unmerged. Finishing and merging \
                  before the move beats committing work in progress.",
                 in_flight.join(", ")
             ),
@@ -353,7 +353,7 @@ mod tests {
                 "  3. pm state remote <new empty repo url> in exo-model-provider",
                 "  4. pm state push in pm, eco, exo-model-provider",
                 "  5. pm state backfill && pm state push --global",
-                "  In flight: pm android-plumbing — agents active, work uncommitted. Finishing \
+                "  In flight: pm android-plumbing — work uncommitted or unmerged. Finishing \
                  and merging before the move beats committing work in progress.",
             ]
         );

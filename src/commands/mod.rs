@@ -54,6 +54,7 @@ pub mod notes;
 pub mod open;
 pub mod reexec;
 pub mod register;
+pub mod restart_at_idle;
 pub mod restore;
 pub mod running_agents;
 pub mod seed;

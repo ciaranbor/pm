@@ -9,7 +9,7 @@
 mod sandbox;
 
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use assert_cmd::Command;
 
@@ -249,10 +249,10 @@ fn restart_all_global_from_inside_an_agents_own_window_restarts_it_last() {
 
 /// Catches: `pm upgrade` run from a stale agent's own pane — as the
 /// post-merge hook runs it — killing that agent mid-command instead of
-/// reporting it, while restarting the other stale agents.
+/// deferring it, while restarting the other stale agents.
 #[test]
 #[ignore]
-fn upgrade_from_inside_a_stale_agents_window_reports_it_and_restarts_the_rest() {
+fn upgrade_from_inside_a_stale_agents_window_defers_it_and_restarts_the_rest() {
     let s = Smoke::new();
     s.init_with_spawned_reviewer();
     let main = s.proj().join("main");
@@ -273,8 +273,8 @@ fn upgrade_from_inside_a_stale_agents_window_reports_it_and_restarts_the_rest() 
     assert!(outcome.alive, "the caller's pane was killed: {outcome:?}");
     assert!(
         outcome.log.contains(
-            "proj/main: Skipped agent 'scout': it is stale, and runs this command; restart it \
-             with `pm agent restart scout --scope main`"
+            "proj/main: Deferred agent 'scout': it runs this command; it restarts at its next \
+             idle"
         ),
         "{}",
         outcome.log
@@ -288,6 +288,47 @@ fn upgrade_from_inside_a_stale_agents_window_reports_it_and_restarts_the_rest() 
     );
     assert_eq!(s.argv_records("reviewer", 2).len(), 2);
     assert_eq!(s.argv_records("scout", 1).len(), 1);
+}
+
+/// Catches: the restart a sweep deferred, which the agent's waiter starts
+/// as the agent goes idle, dying with the pane it kills, or taking itself
+/// for the agent restarting itself.
+#[test]
+#[ignore]
+fn a_deferred_restart_runs_once_the_agent_is_idle_again() {
+    let s = Smoke::new();
+    std::fs::write(s.home().join("shim-turns"), "").unwrap();
+    let login = s.init_with_spawned_reviewer();
+    s.argv_records("reviewer", 1);
+    std::fs::write(s.proj().join(".pm/notices.md"), "Be terse.").unwrap();
+    // As `pm upgrade` marks an agent it found mid-turn.
+    std::fs::write(
+        s.proj().join(".pm/runtime/login/reviewer/restart-at-idle"),
+        "",
+    )
+    .unwrap();
+
+    s.pm(&login)
+        .args(["msg", "send", "reviewer", "hi"])
+        .assert()
+        .success();
+
+    let records = s.argv_records("reviewer", 2);
+    assert!(
+        records[1].argv.iter().any(|a| a == "--resume"),
+        "{records:?}"
+    );
+    let log = s.proj().join(".pm/runtime/login/reviewer/stop-hook.log");
+    let start = Instant::now();
+    loop {
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        if text.contains("restart at idle: Restarted agent 'reviewer'") {
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(20), "{text}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(s.find_window("proj/login", "reviewer").is_some());
 }
 
 /// Catches: tmux output parsed under launchd's environment — no UTF-8

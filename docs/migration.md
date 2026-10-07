@@ -10,8 +10,9 @@ through a `pm harness export` tarball.
 branches and state, uncommitted work, agents still running, and the
 machine-local things to redo by hand (harness logins, `pm serve` devices,
 your tmux config, your own global skills) — with the plan that clears it.
-A feature it marks in flight (active agents, uncommitted work) is better
-finished and merged before the move than committed half-done.
+A feature it marks in flight (uncommitted work, or commits not merged into
+its base) is better finished and merged before the move than committed
+half-done.
 
 On the old machine, once, each against a new, empty repo:
 
@@ -28,7 +29,7 @@ pm close --all                  # stop agents; they stay active, so the new mach
 pm state push                   # in each project, then:
 pm state push --global
 pm migrate check --project <name>…   # until it passes
-pm harness export --all --harness <h> -o pm-<h>.tar.gz   # once per harness your agents use
+pm harness export --all --project <name>… --harness <h> -o pm-<h>.tar.gz   # once per harness your agents use
 ```
 
 On the new machine, with pm ([Install](../README.md#install)), git with

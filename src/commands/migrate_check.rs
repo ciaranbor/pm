@@ -224,9 +224,11 @@ pub fn check(params: &CheckParams<'_>) -> Result<Report> {
             &[Step::Repair],
         );
         finding.detail.push(bad.error.to_string());
-        finding
-            .detail
-            .push("`pm harness export --all` refuses to run while it is there".to_string());
+        if params.projects.is_empty() || params.projects.contains(&bad.name) {
+            finding
+                .detail
+                .push("`pm harness export --all` refuses to run while it is there".to_string());
+        }
         global.push(finding);
     }
 

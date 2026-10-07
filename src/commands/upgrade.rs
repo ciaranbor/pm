@@ -334,7 +334,7 @@ fn upgrade_at(
     dry_run: bool,
     tmux_server: Option<&str>,
 ) -> Result<Vec<String>> {
-    let mut lines = match (project_root, dry_run) {
+    let mut lines: Vec<String> = match (project_root, dry_run) {
         (None, true) => upgrade_all_dry_run()?,
         (None, false) => upgrade_all()?,
         (Some(root), true) => {
@@ -348,14 +348,33 @@ fn upgrade_at(
             lines
         }
     };
-    let (scopes, unread) = upgrade_restart::scopes(&paths::global_projects_dir()?, project_root);
+    // What agents launch with that the upgrade would change: the global
+    // tier's definitions and baseline, and the hooks.
+    let launch_changes = dry_run
+        && (skills::install_global_dry_run().is_ok_and(|l| !l.is_empty())
+            || hooks_install::install_dry_run(project_root).is_ok_and(|l| !l.is_empty()));
+    let projects_dir = paths::global_projects_dir()?;
+    let global = GlobalConfig::load_or_default();
+    let (scopes, unread) = upgrade_restart::scopes(&projects_dir, project_root);
     lines.extend(unread);
     lines.extend(upgrade_restart::restart_stale(
         &scopes,
-        &GlobalConfig::load_or_default(),
+        &global,
         dry_run,
         tmux_server,
     ));
+    if launch_changes && global.upgrade.restarts_agents() {
+        lines.push(upgrade_restart::DRY_RUN_CAVEAT.to_string());
+    }
+    if let Some(root) = project_root
+        && global.upgrade.restarts_agents()
+    {
+        lines.extend(upgrade_restart::stale_elsewhere(
+            &projects_dir,
+            root,
+            tmux_server,
+        ));
+    }
     if dry_run && lines.is_empty() {
         lines.push("Up to date".to_string());
     }
@@ -457,7 +476,7 @@ last_active = "2026-01-01T00:00:00Z"
         assert!(hooks_install::is_installed_for(Harness::ClaudeCode).unwrap());
         assert!(skills::is_migrated(&root));
 
-        // Bundled assets live only in the global tier now.
+        // Bundled assets go to the global tier, never into the project.
         let main = paths::main_worktree(&root);
         assert!(!main.join(".agents").exists());
         assert!(!main.join(".claude/agents").exists());
@@ -747,6 +766,27 @@ last_active = "2026-01-01T00:00:00Z"
             dry_run(),
             [format!("{session}: Would restart agent 'reviewer'")],
             "a stale agent alone is something to do"
+        );
+
+        let custom = paths::main_worktree(&root).join(".agents/agents/custom.md");
+        fs::create_dir_all(custom.parent().unwrap()).unwrap();
+        fs::write(&custom, "custom def").unwrap();
+        assert!(
+            !dry_run().contains(&upgrade_restart::DRY_RUN_CAVEAT.to_string()),
+            "a projection changes nothing agents launch with"
+        );
+        let settings = paths::main_worktree(&root).join(".claude/settings.json");
+        fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        fs::write(
+            &settings,
+            r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"pm claude hooks stop"}]}]}}"#,
+        )
+        .unwrap();
+        let lines = dry_run();
+        assert_eq!(
+            lines.last().map(String::as_str),
+            Some(upgrade_restart::DRY_RUN_CAVEAT),
+            "{lines:#?}"
         );
     }
 

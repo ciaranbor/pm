@@ -49,7 +49,7 @@ pub(super) fn findings(
         registry: Line::default(),
     };
     p.out.extend(running(&agents));
-    p.branches(&agents)?;
+    p.branches()?;
     p.state(&pm_dir)?;
 
     let mut used = skills::harnesses_in_use(&root).unwrap_or_default();
@@ -106,6 +106,18 @@ fn uncheckable(name: &str, entry: &ProjectEntry, main: &Path) -> Option<Finding>
         return Some(finding);
     }
     None
+}
+
+/// Whether `branch` has commits its local `base` lacks.
+fn unmerged(repo: &Path, branch: &str, base: &str) -> Result<bool> {
+    if git::branch_commit(repo, branch)?.is_none() || git::branch_commit(repo, base)?.is_none() {
+        return Ok(false);
+    }
+    Ok(!git::branch_merged_into(
+        repo,
+        &format!("refs/heads/{branch}"),
+        &format!("refs/heads/{base}"),
+    )?)
 }
 
 /// The blocker for agents with a live window.
@@ -183,7 +195,7 @@ impl Project<'_> {
 
     /// main's, each feature's, and each outside base's branch and worktree,
     /// and the registry's repo_url.
-    fn branches(&mut self, agents: &Agents) -> Result<()> {
+    fn branches(&mut self) -> Result<()> {
         let origin = git::remote_url(self.main, "origin")?;
         match (&self.entry.repo_url, &origin) {
             (None, _) => {
@@ -263,7 +275,8 @@ impl Project<'_> {
             } else {
                 feature.clone()
             };
-            let in_flight = checked.dirty && agents.active_in(feature) > 0;
+            let in_flight = checked.dirty
+                || (state.status.is_active() && unmerged(self.main, &state.branch, base)?);
             lines.push((subject, checked, in_flight));
         }
         for (subject, checked, in_flight) in lines {
@@ -365,7 +378,6 @@ impl Project<'_> {
 mod tests {
     use super::super::Severity;
     use super::*;
-    use crate::state::agent::AgentRegistry;
     use crate::testing::TestServer;
     use std::path::Path;
     use tempfile::tempdir;
@@ -611,16 +623,27 @@ mod tests {
             Some("(cd login && git add <file>… && git commit -a && git push -u origin login)")
         );
         assert_eq!(finding.steps, [Step::Branches]);
-        assert!(!finding.in_flight);
+        assert!(
+            finding.in_flight,
+            "no agent is active, but the work is unfinished"
+        );
 
-        let agents = paths::agents_dir(&root);
-        let mut registry = AgentRegistry::load(&agents, "login").unwrap();
-        let mut agent: crate::state::agent::AgentEntry =
-            toml::from_str("type = \"agent\"").unwrap();
-        agent.active = true;
-        registry.register("implementer", agent);
-        registry.save(&agents, "login").unwrap();
-        assert!(login_line().in_flight);
+        git::add_all(&login).unwrap();
+        git::commit_with_message(&login, "b").unwrap();
+        let committed = login_line();
+        assert_eq!(committed.what, "not on origin");
+        assert!(committed.in_flight, "committed, but not merged into main");
+
+        let features = paths::features_dir(&root);
+        let mut state = FeatureState::load(&features, "login").unwrap();
+        state.status = FeatureStatus::Stale;
+        state.save(&features, "login").unwrap();
+        assert!(!login_line().in_flight, "work no one is finishing");
+        state.status = FeatureStatus::Wip;
+        state.save(&features, "login").unwrap();
+
+        git::merge_no_ff(&main, "login").unwrap();
+        assert!(!login_line().in_flight);
     }
 
     #[test]

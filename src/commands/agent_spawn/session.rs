@@ -233,6 +233,7 @@ pub(super) fn spawn_session_with_config(
     let stamp =
         crate::commands::launch_stamp::stamp(params.project_root, effective_definition, &launch)?;
     runtime::write_launch_stamp(params.project_root, params.feature, name, &stamp)?;
+    runtime::clear_restart_at_idle(params.project_root, params.feature, name)?;
     for which in [
         runtime::SessionPath::Transcript,
         runtime::SessionPath::ConfigDir,
