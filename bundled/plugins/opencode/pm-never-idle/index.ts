@@ -11,8 +11,9 @@
 // activity, and lets `pm serve` answer a permission ask.
 //
 // Installed by pm and overwritten on upgrade. opencode reloads it in every
-// running server when the file changes, so the cleanup must leave nothing
-// waiting and setup must arm again.
+// running server when the file changes, and unloads it from a directory
+// left idle, so the cleanup may leave the loop's wait running
+// (`Loop.unload`) and kills everything else.
 //
 // No `@opencode/plugin` import: it does not resolve for a local plugin.
 import type { ChildProcess } from "node:child_process"
@@ -24,18 +25,25 @@ import {
   INBOX_ENQUEUED,
   LOADED_FILE,
   Loop,
+  type Orphans,
   PM_PROMPT,
   RemoteAsks,
   TURN_END,
   TURN_ERROR_FILE,
   TURN_STARTED,
   answeredOf,
+  newOrphans,
   askOf,
   drivesSession,
   failedTurnOf,
   userInput,
 } from "./loop.ts"
 import { runPm } from "./pm.ts"
+
+// A load meets the registry an earlier version left, so a change to
+// `Orphans` changes the key. That version's orphan is then not retired;
+// pm ends it once the new load's wait takes the agent over.
+const ORPHANS = Symbol.for("pm.never-idle.orphans/1")
 
 export default {
   id: "pm.never-idle",
@@ -48,8 +56,11 @@ export default {
     const tripFile = process.env.PM_OPENCODE_TRIP_FILE
     const controller = new AbortController()
     const children = new Set<ChildProcess>()
+    // The launched session's waits, which the unload may leave running.
+    const waits = new Set<ChildProcess>()
     const pm = (args: string[], stdin: string, signal?: AbortSignal, killSignal?: NodeJS.Signals) =>
       runPm(args, stdin, { cwd: ctx.location.directory, env: process.env, children, signal, killSignal })
+    const orphans: Orphans = ((globalThis as any)[ORPHANS] ??= newOrphans())
 
     const stateFile = (name: string) => (tripFile ? join(dirname(tripFile), name) : undefined)
     const record = (file: string | undefined, text: string | null) => {
@@ -75,8 +86,6 @@ export default {
     const waiting = (payload: object) => {
       reported = reported.then(() => pm(["harness", "hooks", "waiting", "opencode"], JSON.stringify(payload)))
     }
-    // A restart's new TUI may write its marker before this one's cleanup runs.
-    const loadedMark = `${process.pid} ${new Date().toISOString()}`
 
     record(tripFile, null)
 
@@ -84,7 +93,13 @@ export default {
       agent,
       // Always `{}`: the plugin never holds a turn open, so the hook has no
       // running background work to yield to.
-      hook: (cancel) => pm(["harness", "hooks", "stop"], "{}", cancel),
+      hook: (cancel, sessionID) =>
+        runPm(["harness", "hooks", "stop"], "{}", {
+          cwd: ctx.location.directory,
+          env: process.env,
+          children: sessionID === own ? waits : children,
+          signal: cancel,
+        }),
       prompt: (sessionID, text) => ctx.session.prompt({ sessionID, text, metadata: PM_PROMPT }),
       sleep: (ms) =>
         new Promise((resolve) => {
@@ -94,8 +109,10 @@ export default {
             resolve()
           })
         }),
+      linger: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       report: (reason) => record(tripFile, reason),
       lastTurn: (error) => record(turnErrorFile, error),
+      orphans,
     })
 
     // The last text read stands in for a file deleted under a live agent.
@@ -126,7 +143,7 @@ export default {
     if (own) {
       void (async () => {
         await pm(["harness", "hooks", "session-start"], JSON.stringify({ session_id: own }))
-        void loop.arm(own)
+        void loop.takeOver(own)
       })()
     }
 
@@ -187,14 +204,12 @@ export default {
       }
     })()
 
-    // Last, so a setup that throws leaves no proof of having loaded.
-    record(loadedFile, loadedMark)
+    // Last, so a setup that throws leaves no proof of having loaded. It
+    // means loaded since the spawn, so an unload leaves it.
+    record(loadedFile, `${process.pid} ${new Date().toISOString()}`)
 
     return () => {
-      try {
-        if (loadedFile && readFileSync(loadedFile, "utf8").trim() === loadedMark) record(loadedFile, null)
-      } catch {}
-      loop.unload()
+      loop.unload(own)
       remote.unload()
       controller.abort()
       for (const child of children) child.kill("SIGTERM")

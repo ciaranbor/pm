@@ -171,16 +171,35 @@ export function hookDecision(result: HookResult): { block: string } | { failure:
   return { failure: "it did not recognise this agent" }
 }
 
+// How long opencode may take to load the plugin again after an orphan
+// prompted the session; it took 3 s in 2.0.24.
+export const RELOAD_MS = 60_000
+
+/**
+ * Shared by every load of the plugin in one opencode process, which
+ * re-imports the module on each: the waits an unload left running
+ * (orphans), and the prompts orphans sent, each resolving to whether it
+ * went through: the next load does not arm at setup for one that did,
+ * since the prompted turn's end arms it.
+ */
+export type Orphans = { waits: Map<string, AbortController>; handoff: Map<string, Promise<boolean>> }
+
+export function newOrphans(): Orphans {
+  return { waits: new Map(), handoff: new Map() }
+}
+
 export type LoopDeps = {
   agent: string
   /**
    * Block in `pm harness hooks stop` and return its answer; once `cancel`
    * aborts, kill it with SIGKILL, which it cannot catch to record its end.
    */
-  hook(cancel: AbortSignal): Promise<HookResult>
+  hook(cancel: AbortSignal, sessionID: string): Promise<HookResult>
   prompt(sessionID: string, text: string): Promise<void>
   /** Resolves early when the plugin unloads. */
   sleep(ms: number): Promise<void>
+  /** A sleep the unload does not cut short. */
+  linger(ms: number): Promise<void>
   /** Record why the loop stopped where `pm doctor` finds it. */
   report(reason: string): void
   /**
@@ -188,6 +207,7 @@ export type LoopDeps = {
    * it (null) after one that succeeded.
    */
   lastTurn(error: string | null): void
+  orphans: Orphans
   now?(): number
 }
 
@@ -221,6 +241,18 @@ export class Loop {
     return this.pump(sessionID, null)
   }
 
+  /**
+   * At setup, for the session pm launched: retires an earlier load's
+   * orphaned wait, and arms unless that orphan prompted the session.
+   */
+  async takeOver(sessionID: string): Promise<void> {
+    this.retireOrphan(sessionID)
+    const prompted = this.deps.orphans.handoff.get(sessionID)
+    this.deps.orphans.handoff.delete(sessionID)
+    if (prompted && (await prompted)) return
+    return this.arm(sessionID)
+  }
+
   /** `error` is what a failed turn's event carried. */
   turnEnded(sessionID: string, type: string, error?: unknown): Promise<void> {
     const failure = type === TURN_FAILED ? turnError(error) : null
@@ -248,9 +280,29 @@ export class Loop {
     if (consumedMessage(tool, command, result)) this.breaker.noteConsumed()
   }
 
-  unload(): void {
+  /**
+   * The plugin is unloading: on a file change a new load follows at once,
+   * but opencode also unloads an idle directory's plugins, and loads them
+   * again only when something needs that directory. So if `own` is
+   * between turns its wait is left running as an orphan, or started if
+   * the pump is backing off: the next load retires it, or, with none, its
+   * answer prompts the session once, which loads the plugin again. Not
+   * mid-turn, where the wait would mark the agent idle, nor once the loop
+   * stopped itself.
+   */
+  unload(own?: string): void {
+    const between =
+      own !== undefined &&
+      this.pumping.has(own) &&
+      !this.prompting.has(own) &&
+      !this.cancelling.has(own) &&
+      !this.stoppedFor
     this.unloaded = true
     this.pumping.clear()
+    if (!own || !between) return
+    const wait = this.waits.get(own)
+    if (wait) this.deps.orphans.waits.set(own, wait)
+    else void this.orphanWait(own)
   }
 
   eventReceived(): void {
@@ -291,18 +343,20 @@ export class Loop {
       }
       for (;;) {
         if (this.unloaded || this.cancelling.has(sessionID)) return
+        this.retireOrphan(sessionID)
         const asked = now()
         const wait = new AbortController()
         this.waits.set(sessionID, wait)
         let result: HookResult
         try {
-          result = await this.deps.hook(wait.signal)
+          result = await this.deps.hook(wait.signal, sessionID)
         } finally {
           this.waits.delete(sessionID)
         }
         // Not a failure, nor a turn the breaker counts: the turn that
         // cancelled it ends in a wait of its own.
-        if (this.unloaded || wait.signal.aborted) return
+        if (wait.signal.aborted) return
+        if (this.unloaded) return await this.orphanAnswered(sessionID, wait, result)
         const decision = hookDecision(result)
         if ("failure" in decision) {
           this.hookFailures += 1
@@ -335,6 +389,54 @@ export class Loop {
       this.deferred.delete(sessionID)
       if (deferred) void this.pump(sessionID, deferred.turn, deferred.failure)
     }
+  }
+
+  private retireOrphan(sessionID: string): void {
+    this.deps.orphans.waits.get(sessionID)?.abort()
+    this.deps.orphans.waits.delete(sessionID)
+  }
+
+  private async orphanWait(sessionID: string): Promise<void> {
+    this.retireOrphan(sessionID)
+    const wait = new AbortController()
+    this.deps.orphans.waits.set(sessionID, wait)
+    const result = await this.deps.hook(wait.signal, sessionID)
+    if (!wait.signal.aborted) await this.orphanAnswered(sessionID, wait, result)
+  }
+
+  // One-shot, so no breaker: at most one prompt, then the next load takes over.
+  private async orphanAnswered(sessionID: string, wait: AbortController, result: HookResult): Promise<void> {
+    const { orphans } = this.deps
+    if (orphans.waits.get(sessionID) !== wait) return
+    orphans.waits.delete(sessionID)
+    // How pm ends a wait a newer one took the agent over from.
+    if (result.code === 0 && result.out.trim() === "") return
+    const decision = hookDecision(result)
+    if ("failure" in decision) {
+      this.deps.report(`opencode unloaded the plugin and its wait then failed (${decision.failure})`)
+      return
+    }
+    // Set before prompting: the prompt is what loads the plugin again.
+    let sent: (through: boolean) => void = () => {}
+    const prompted = new Promise<boolean>((resolve) => (sent = resolve))
+    orphans.handoff.set(sessionID, prompted)
+    Promise.resolve()
+      .then(() => this.deps.prompt(sessionID, decision.block))
+      .then(
+        () => sent(true),
+        (e) => {
+          // A load that took the handoff arms, so the loop has not stopped.
+          if (orphans.handoff.get(sessionID) === prompted) {
+            this.deps.report(`opencode unloaded the plugin and the session could not be prompted (${String(e)})`)
+          }
+          sent(false)
+        },
+      )
+    if (!(await prompted)) return
+    await this.deps.linger(RELOAD_MS)
+    if (orphans.handoff.get(sessionID) !== prompted) return
+    orphans.handoff.delete(sessionID)
+    this.deps.report("opencode unloaded the plugin and did not load it again when the session was prompted")
   }
 
   private async stop(sessionID: string | undefined, reason: string): Promise<void> {

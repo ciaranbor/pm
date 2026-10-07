@@ -18,6 +18,16 @@
 //! The plugin is loaded at launch: a running session keeps the one it
 //! started with.
 //!
+//! opencode also unloads a directory's plugins after 60 minutes without a
+//! session event there (hardcoded, with no keep-alive a plugin can hold),
+//! and loads them again only when a request needs that directory. So an
+//! unload between turns leaves the plugin's wait running: the next load
+//! retires it, and with none its answer prompts the session through the
+//! unloaded plugin's handle, which loads the plugin again. That handle
+//! outliving its unload is opencode 2.0.24's behaviour, not a documented
+//! contract; if the prompt fails, or no load follows it, the plugin records
+//! why for `pm doctor`.
+//!
 //! opencode has no UserPromptSubmit hook either. The plugin watches
 //! `session.inbox.enqueued` for `user` items instead and runs `pm harness
 //! hooks user-prompt` for each. Its own prompts are `user` items too, so it
