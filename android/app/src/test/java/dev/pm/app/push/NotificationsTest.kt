@@ -9,10 +9,10 @@ import androidx.test.core.app.ApplicationProvider
 import dev.pm.app.SNAPSHOT
 import dev.pm.app.model.Alert
 import dev.pm.app.model.Dialog
+import dev.pm.app.model.PushedEnd
 import dev.pm.app.model.PushedTransition
 import dev.pm.app.model.Snapshot
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -129,24 +129,53 @@ class NotificationsTest {
     }
 
     @Test
-    fun a_snapshot_withdraws_the_alerts_it_shows_are_over_but_not_those_answered() {
+    fun a_snapshot_withdraws_the_alerts_it_shows_are_over_answered_or_not() {
         Notifications.createChannels(context)
         val snapshot = Snapshot.parse(SNAPSHOT)
         Notifications.show(context, PushedTransition("app", "login", "blocked"), now = 1)
         Notifications.show(context, PushedTransition("app", "login", "ready"), now = 2)
-        Notifications.acted(
-            context,
-            Alert.bare(PushedTransition("web", "x", "blocked", "a")).replied("ok"),
-        )
+        val answered = Alert.bare(PushedTransition("web", "x", "blocked", "a"))
+        Notifications.show(context, answered, now = 3)
+        Notifications.acted(context, answered.replied("ok"))
 
         Notifications.reconcile(context, snapshot)
-        assertEquals(setOf("app/login", "web/x"), byScope().keys)
-        val summaries = summaries().associateBy { it.tag }
-        assertEquals(1, summaries.getValue("app").notification.number)
+        assertEquals(setOf("app/login"), byScope().keys)
+        assertEquals(1, summaries().single { it.tag == "app" }.notification.number)
+        assertEquals(listOf("app"), summaries().map { it.tag })
 
         Notifications.reconcile(context, snapshot.copy(features = emptyList()))
-        assertEquals(setOf("web/x"), byScope().keys)
-        assertEquals(listOf("web"), summaries().map { it.tag })
+        assertTrue(showing().isEmpty())
+    }
+
+    @Test
+    fun an_end_push_withdraws_the_alerts_whose_need_it_ends_answered_or_not() {
+        Notifications.createChannels(context)
+        val asking = Alert.bare(PushedTransition("app", "login", "asking", "implementer"))
+        Notifications.show(context, asking, now = 1)
+        Notifications.show(context, PushedTransition("app", "login", "asking", "reviewer"), now = 2)
+        Notifications.show(context, PushedTransition("app", "login", "dead", "reviewer"), now = 3)
+        val answered = Alert.bare(blocked)
+        Notifications.show(context, answered, now = 4)
+        Notifications.acted(context, answered.replied("use postgres"), now = 5)
+        Notifications.show(context, PushedTransition("app", "search", "ready"), now = 6)
+
+        Notifications.withdraw(context, PushedEnd("app", "login", "asking"))
+        fun kinds() =
+            alerts().map { PushedTransition.parse(it.tag)!!.let { "${it.scope} ${it.kind}" } }
+        assertEquals(setOf("login dead", "login blocked", "search ready"), kinds().toSet())
+        assertEquals(3, summaries().single().notification.number)
+
+        Notifications.acted(context, asking.answered("Allowed", emptyList()), now = 7)
+        assertEquals(
+            "an action's outcome doesn't bring back what was withdrawn",
+            setOf("login dead", "login blocked", "search ready"),
+            kinds().toSet(),
+        )
+
+        Notifications.withdraw(context, PushedEnd("app", "login", "blocked"))
+        Notifications.withdraw(context, PushedEnd("app", "login", "dead", "reviewer"))
+        Notifications.withdraw(context, PushedEnd("app", "search", "ready"))
+        assertTrue(showing().isEmpty())
     }
 
     @Test
@@ -234,6 +263,6 @@ class NotificationsTest {
         )
 
         Notifications.reconcile(context, Snapshot.parse(SNAPSHOT))
-        assertNotNull("an answered alert stays", alerts().singleOrNull())
+        assertTrue("an answered alert goes once its need is over", showing().isEmpty())
     }
 }

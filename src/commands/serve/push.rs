@@ -3,7 +3,10 @@
 //! the push service (a UnifiedPush distributor's server) is on the public
 //! internet. The message is encrypted to the device's keys (RFC 8291) and
 //! carries only which scope entered which kind; the app fetches the rest
-//! over the tailnet when opened.
+//! over the tailnet when opened. An episode's end is pushed too, so the
+//! app withdraws its alert while closed; the [`queue`] decides when each
+//! goes. An end goes at normal urgency: it posts nothing, and FCM
+//! deprioritizes an app whose high-priority messages show nothing.
 //!
 //! The server signs each push with its VAPID key (RFC 8292), which some
 //! push services (FCM among them) require. The key is made on first use
@@ -16,8 +19,8 @@
 //! push service never holds up the poller.
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Sender};
-use std::time::Duration;
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::time::{Duration, Instant};
 
 use base64ct::{Base64UrlUnpadded, Encoding};
 use serde::Serialize;
@@ -25,7 +28,7 @@ use web_push_native::jwt_simple::algorithms::{ECDSAP256KeyPairLike, ES256KeyPair
 use web_push_native::{Auth, WebPushBuilder, p256};
 
 use crate::commands::attention::AttentionKind;
-use crate::commands::attention::transition::Transition;
+use crate::commands::attention::transition::{Ended, Transition};
 use crate::error::{PmError, Result};
 use crate::fs_utils::write_atomic;
 use crate::state::devices::{Devices, Push};
@@ -33,8 +36,10 @@ use crate::state::devices::{Devices, Push};
 use super::log;
 
 pub mod policy;
+mod queue;
 
 use policy::Policy;
+use queue::{Outgoing, Queue};
 
 const KEY_NAME: &str = "vapid.pem";
 
@@ -116,24 +121,67 @@ fn builder(push: &Push) -> std::result::Result<WebPushBuilder, String> {
     )
 }
 
-/// What a push says: the transition without its detail, which may be long
-/// and need not leave the tailnet.
+/// What a push says: a transition without its detail, which may be long
+/// and need not leave the tailnet, or an episode's end. An end has no
+/// `kind`, so an app that knows only transitions drops it.
 #[derive(Debug, Serialize)]
-struct Message<'a> {
-    project: &'a str,
-    scope: &'a str,
-    kind: AttentionKind,
-    agent: Option<&'a str>,
+#[serde(untagged)]
+enum Message<'a> {
+    Begun {
+        project: &'a str,
+        scope: &'a str,
+        kind: AttentionKind,
+        agent: Option<&'a str>,
+    },
+    Ended {
+        project: &'a str,
+        scope: &'a str,
+        ended: AttentionKind,
+        agent: Option<&'a str>,
+    },
 }
 
-/// Sends each batch of transitions it is given, on a thread of its own.
+impl<'a> From<&'a Outgoing> for Message<'a> {
+    fn from(push: &'a Outgoing) -> Self {
+        match push {
+            Outgoing::Begun(t) => Self::Begun {
+                project: &t.project,
+                scope: &t.scope,
+                kind: t.attention.kind,
+                agent: t.attention.agent.as_deref(),
+            },
+            Outgoing::Ended(e) => Self::Ended {
+                project: &e.project,
+                scope: &e.scope,
+                ended: e.kind,
+                agent: e.agent.as_deref(),
+            },
+        }
+    }
+}
+
+enum Order {
+    Push {
+        begun: Vec<Transition>,
+        ended: Vec<Ended>,
+    },
+    /// Send everything held now, then answer.
+    Flush(Sender<()>),
+}
+
+/// Sends what each poll found, on a thread of its own.
 pub(super) struct Pusher {
-    batches: Sender<Vec<Transition>>,
+    orders: Sender<Order>,
 }
 
 impl Pusher {
-    pub(super) fn start(devices: PathBuf, key: ES256KeyPair, policy: Policy) -> Self {
-        let (batches, rx) = mpsc::channel::<Vec<Transition>>();
+    pub(super) fn start(
+        devices: PathBuf,
+        key: ES256KeyPair,
+        policy: Policy,
+        grace: Duration,
+    ) -> Self {
+        let (orders, rx) = mpsc::channel::<Order>();
         std::thread::spawn(move || {
             let config = ureq::Agent::config_builder()
                 .http_status_as_error(false)
@@ -146,18 +194,52 @@ impl Pusher {
                 ureq::unversioned::transport::DefaultConnector::new(),
                 policy.resolver(),
             );
-            for transitions in rx {
-                if let Err(e) = deliver(&agent, &devices, &key, &policy, &transitions) {
+            let mut queue = Queue::new(grace);
+            loop {
+                let order = match queue.next_due() {
+                    Some(due) => {
+                        match rx.recv_timeout(due.saturating_duration_since(Instant::now())) {
+                            Ok(order) => Some(order),
+                            Err(RecvTimeoutError::Timeout) => None,
+                            Err(RecvTimeoutError::Disconnected) => return,
+                        }
+                    }
+                    None => match rx.recv() {
+                        Ok(order) => Some(order),
+                        Err(_) => return,
+                    },
+                };
+                let now = Instant::now();
+                let (mut pushes, flushed) = match order {
+                    Some(Order::Push { begun, ended }) => (queue.take(begun, ended, now), None),
+                    Some(Order::Flush(done)) => (queue.drain(), Some(done)),
+                    None => (Vec::new(), None),
+                };
+                pushes.extend(queue.due(now));
+                if !pushes.is_empty()
+                    && let Err(e) = deliver(&agent, &devices, &key, &policy, &pushes)
+                {
                     log(&format!("push: {e}"));
+                }
+                if let Some(done) = flushed {
+                    let _ = done.send(());
                 }
             }
         });
-        Self { batches }
+        Self { orders }
     }
 
-    pub(super) fn send(&self, transitions: Vec<Transition>) {
-        if !transitions.is_empty() {
-            let _ = self.batches.send(transitions);
+    pub(super) fn send(&self, begun: Vec<Transition>, ended: Vec<Ended>) {
+        if !begun.is_empty() || !ended.is_empty() {
+            let _ = self.orders.send(Order::Push { begun, ended });
+        }
+    }
+
+    /// Send every held transition now, returning once it has gone.
+    pub(super) fn flush(&self) {
+        let (done, sent) = mpsc::channel();
+        if self.orders.send(Order::Flush(done)).is_ok() {
+            let _ = sent.recv();
         }
     }
 }
@@ -167,7 +249,7 @@ fn deliver(
     devices: &Path,
     key: &ES256KeyPair,
     policy: &Policy,
-    transitions: &[Transition],
+    pushes: &[Outgoing],
 ) -> Result<()> {
     let paired = Devices::load(devices)?;
     for (name, device) in &paired.devices {
@@ -181,8 +263,8 @@ fn deliver(
             forget(devices, name, push)?;
             continue;
         }
-        for transition in transitions {
-            match send(agent, key, push, transition) {
+        for message in pushes {
+            match send(agent, key, push, message) {
                 Ok(status) if (200..300).contains(&status) => {}
                 Ok(404 | 410) => {
                     log(&format!("{name} push: subscription gone; dropped"));
@@ -197,27 +279,25 @@ fn deliver(
     Ok(())
 }
 
-/// Push `transition` to `push`, returning the push service's status.
+/// Push `message` to `push`, returning the push service's status.
 fn send(
     agent: &ureq::Agent,
     key: &ES256KeyPair,
     push: &Push,
-    transition: &Transition,
+    message: &Outgoing,
 ) -> std::result::Result<u16, String> {
-    let message = Message {
-        project: &transition.project,
-        scope: &transition.scope,
-        kind: transition.attention.kind,
-        agent: transition.attention.agent.as_deref(),
+    let urgency = match message {
+        Outgoing::Begun(_) => "high",
+        Outgoing::Ended(_) => "normal",
     };
-    let body = serde_json::to_vec(&message).map_err(|e| e.to_string())?;
+    let body = serde_json::to_vec(&Message::from(message)).map_err(|e| e.to_string())?;
     let mut request = builder(push)?
         .with_vapid(key, CONTACT)
         .build(body)
         .map_err(|e| e.to_string())?;
     request
         .headers_mut()
-        .insert("Urgency", http::HeaderValue::from_static("high"));
+        .insert("Urgency", http::HeaderValue::from_static(urgency));
     let response = agent.run(request).map_err(|e| e.to_string())?;
     Ok(response.status().as_u16())
 }

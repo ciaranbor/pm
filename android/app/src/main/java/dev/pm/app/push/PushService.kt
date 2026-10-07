@@ -2,6 +2,7 @@ package dev.pm.app.push
 
 import android.util.Log
 import dev.pm.app.container
+import dev.pm.app.model.PushedEnd
 import dev.pm.app.model.PushedTransition
 import org.unifiedpush.android.connector.FailedReason
 import org.unifiedpush.android.connector.PushService as UnifiedPushService
@@ -28,9 +29,13 @@ class PushService : UnifiedPushService() {
             Log.w(TAG, "dropped a push that didn't decrypt")
             return
         }
-        val transition = PushedTransition.parse(message.content) ?: return
-        Notifications.show(this, transition)
-        container.detail(transition)
+        val transition = PushedTransition.parse(message.content)
+        if (transition != null) {
+            Notifications.show(this, transition)
+            container.detail(transition)
+            return
+        }
+        PushedEnd.parse(message.content)?.let { Notifications.withdraw(this, it) }
     }
 
     /** No push will come, as when Google's distributor has no Play services: polling takes over. */

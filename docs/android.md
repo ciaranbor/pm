@@ -35,10 +35,10 @@ titled by its feature (a `main` by its project) and grouped under its
 project, and opens its agent. A permission prompt also has Allow and Deny,
 answered as the dialog card answers it (Deny stops the agent's turn), and
 a feature blocked on you has an inline reply to the agent that blocked it;
-both need the phone unlocked. What you sent stays in the notification
-until you dismiss it. The others are withdrawn once the server shows their
-need is over, which the app learns while it is open, on each push, and on
-each poll.
+both need the phone unlocked. What you sent shows in the notification
+until it is withdrawn, silently, once its need is over — answered at the
+terminal, say. The app learns that from the server's end push even while
+closed, and while open, on each push and each poll.
 
 Polling alerts what a push would: a scope's top-ranked need as it begins,
 so a ready feature whose agent asks alerts the question first and ready

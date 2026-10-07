@@ -154,6 +154,27 @@ pub struct Transition {
     pub attention: Attention,
 }
 
+/// An episode over: a kind a scope alerted on whose condition no longer
+/// holds, or an agent no longer dead. Asking is judged per scope, so its
+/// end names no agent.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Ended {
+    pub project: String,
+    pub scope: String,
+    pub kind: AttentionKind,
+    pub agent: Option<String>,
+}
+
+impl Ended {
+    /// Whether this is the end of the episode `transition` began.
+    pub fn ends(&self, transition: &Transition) -> bool {
+        self.project == transition.project
+            && self.scope == transition.scope
+            && self.kind == transition.attention.kind
+            && (self.agent.is_none() || self.agent == transition.attention.agent)
+    }
+}
+
 type ScopeKey = (String, String);
 
 /// What a watcher of every scope last judged. A scope it has not read
@@ -237,6 +258,41 @@ impl Watch {
             next.scopes.insert((project, scope), verdict.judged);
         }
         (next, transitions)
+    }
+
+    /// The episodes this watch knew of that `next`, the watch after it,
+    /// shows over, including those it started on: they may have alerted
+    /// before it started. A scope gone ends all of its own.
+    pub fn ended(&self, next: &Self) -> Vec<Ended> {
+        let mut ended: Vec<Ended> = self
+            .scopes
+            .iter()
+            .flat_map(|((project, scope), judged)| {
+                let after = next.scopes.get(&(project.clone(), scope.clone()));
+                judged
+                    .alerted
+                    .iter()
+                    .filter(move |k| !after.is_some_and(|j| j.alerted.contains(k)))
+                    .map(move |&kind| Ended {
+                        project: project.clone(),
+                        scope: scope.clone(),
+                        kind,
+                        agent: None,
+                    })
+            })
+            .chain(
+                self.dead
+                    .difference(&next.dead)
+                    .map(|(project, scope, agent)| Ended {
+                        project: project.clone(),
+                        scope: scope.clone(),
+                        kind: AttentionKind::Dead,
+                        agent: Some(agent.clone()),
+                    }),
+            )
+            .collect();
+        ended.sort();
+        ended
     }
 }
 
@@ -416,6 +472,72 @@ mod tests {
             ],
             "known before it went unreadable"
         );
+    }
+
+    fn ended(project: &str, scope: &str, kind: AttentionKind, agent: Option<&str>) -> Ended {
+        Ended {
+            project: project.into(),
+            scope: scope.into(),
+            kind,
+            agent: agent.map(Into::into),
+        }
+    }
+
+    #[test]
+    fn a_watch_ends_each_episode_it_knew_of_once_it_is_over() {
+        let watch = Watch::start(&snapshot(
+            vec![feature(Progress::Blocked, false, AgentState::Dead)],
+            Some(AgentState::Idle),
+        ));
+        let asking = snapshot(
+            vec![feature(Progress::Ready, false, AgentState::Dead)],
+            Some(AgentState::Asking),
+        );
+        let (next, _) = watch.observe(&asking);
+        assert_eq!(
+            watch.ended(&next),
+            [ended("app", "login", AttentionKind::Blocked, None)],
+            "standing when the watch started, so it may have alerted"
+        );
+
+        let (after, _) = next.observe(&snapshot(Vec::new(), Some(AgentState::Idle)));
+        assert_eq!(
+            next.ended(&after),
+            [
+                ended("app", "login", AttentionKind::Ready, None),
+                ended("app", "login", AttentionKind::Dead, Some("implementer")),
+                ended("app", "main", AttentionKind::Asking, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_watch_ends_nothing_that_never_alerted_or_that_it_could_not_read() {
+        let watch = Watch::start(&snapshot(
+            vec![feature(Progress::Wip, false, AgentState::Idle)],
+            Some(AgentState::Idle),
+        ));
+        let (busy, _) = watch.observe(&snapshot(
+            vec![feature(Progress::Ready, true, AgentState::Busy)],
+            Some(AgentState::Idle),
+        ));
+        let (wip, _) = busy.observe(&snapshot(
+            vec![feature(Progress::Wip, false, AgentState::Idle)],
+            Some(AgentState::Idle),
+        ));
+        assert!(
+            busy.ended(&wip).is_empty(),
+            "a ready held back never alerted"
+        );
+
+        let (blocked, _) = wip.observe(&snapshot(
+            vec![feature(Progress::Blocked, false, AgentState::Dead)],
+            Some(AgentState::Idle),
+        ));
+        let mut unreadable = snapshot(Vec::new(), None);
+        unreadable.projects[0].skipped = Some("broken".into());
+        let (unread, _) = blocked.observe(&unreadable);
+        assert!(blocked.ended(&unread).is_empty());
     }
 
     #[test]

@@ -38,6 +38,24 @@ class PushTest {
     }
 
     @Test
+    fun an_end_push_parses_only_as_an_end_and_ends_its_kind_for_any_agent_or_the_one_it_names() {
+        val end =
+            """{"project":"app","scope":"login","ended":"asking","agent":null}""".toByteArray()
+        assertNull(PushedTransition.parse(end))
+        assertNull(
+            PushedEnd.parse("""{"project":"app","scope":"login","kind":"asking"}""".toByteArray())
+        )
+        val asking = PushedEnd.parse(end)!!
+        assertTrue(asking.ends(push("asking", agent = "a")))
+        assertTrue(asking.ends(push("asking", agent = "b")))
+        assertFalse(asking.ends(push("blocked")))
+        assertFalse(asking.ends(push("asking", scope = "search", agent = "a")))
+        val dead = PushedEnd("app", "login", "dead", "a")
+        assertTrue(dead.ends(push("dead", agent = "a")))
+        assertFalse(dead.ends(push("dead", agent = "b")))
+    }
+
+    @Test
     fun a_scope_keeps_one_blocked_or_ready_alert_but_one_per_agent_asking_or_dying() {
         assertEquals(push("blocked", agent = "a").key, push("blocked", agent = "b").key)
         assertEquals(push("ready", agent = "a").key, push("ready").key)
