@@ -176,10 +176,10 @@ An `Item` is `{"id", "at": RFC 3339 | null, "kind", …}`:
 | `user` | `text` | a prompt the human typed |
 | `assistant` | `text` | the agent's reply, Markdown |
 | `thinking` | `text` | the model's reasoning, where the harness records it |
-| `tool` | `name`, `input`, `result` | a tool call: `input` is one line saying what it does; `result` is `null` until it returns, then `{"text", "error", "truncated", "full"?}`, `text` cut at 4 KB, `full` (only when cut) the `ref` that reads the whole |
+| `tool` | `name`, `input`, `result` | a tool call: `input` is one line saying what it does; `result` is `null` until it returns, then `{"text", "error", "truncated", "full"?, "at"?}`, `text` cut at 4 KB, `full` (only when cut) the `ref` that reads the whole, `at` when the call returned (where the harness records it) |
 | `continuation` | `text` | a prompt pm's never-idle loop sent the agent (a wake-up), not the human |
 | `compaction` | `summary` (or `null`) | the harness compacted the conversation's context |
-| `event` | `text` | anything else worth a row: an interrupt, a failed turn, a background task's end |
+| `event` | `text`, `failure`? | anything else worth a row: an interrupt, a failed turn, a background task's end; `failure: true` (else absent) when it reports a failed request, turn or compaction |
 
 An `id` is stable. An item sent again with an id already shown replaces
 it: a tool call is sent again once its result arrives, and an opencode

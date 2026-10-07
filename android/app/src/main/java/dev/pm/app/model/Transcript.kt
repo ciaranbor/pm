@@ -37,16 +37,22 @@ sealed interface Item {
     data class Compaction(override val id: String, override val at: String?, val summary: String?) :
         Item
 
-    /** Anything else the harness logged: an interrupt, an API error. */
-    data class Event(override val id: String, override val at: String?, val text: String) : Item
+    /** Anything else the harness logged: an interrupt, an API error; `failure` when it failed. */
+    data class Event(
+        override val id: String,
+        override val at: String?,
+        val text: String,
+        val failure: Boolean = false,
+    ) : Item
 }
 
-/** `full` names the whole output when `text` was cut short. */
+/** `full` names the whole output when `text` was cut short; `at` is when the call returned. */
 data class ToolResult(
     val text: String,
     val error: Boolean,
     val truncated: Boolean,
     val full: String?,
+    val at: String? = null,
 )
 
 @Serializable
@@ -77,27 +83,26 @@ object Transcripts {
         val id = str("id") ?: return null
         val at = str("at")
         val text = str("text").orEmpty()
+        fun flag(key: String, from: JsonObject = raw) =
+            from[key]?.let { runCatching { it.jsonPrimitive.booleanOrNull }.getOrNull() } ?: false
         return when (str("kind")) {
             "user" -> Item.User(id, at, text)
             "assistant" -> Item.Assistant(id, at, text)
             "thinking" -> Item.Thinking(id, at, text)
             "continuation" -> Item.Continuation(id, at, text)
-            "event" -> Item.Event(id, at, text)
+            "event" -> Item.Event(id, at, text, flag("failure"))
             "compaction" -> Item.Compaction(id, at, str("summary"))
             "tool" -> {
                 val result =
                     raw["result"]
                         ?.let { runCatching { it.jsonObject }.getOrNull() }
                         ?.let { r ->
-                            fun flag(key: String) =
-                                r[key]?.let {
-                                    runCatching { it.jsonPrimitive.booleanOrNull }.getOrNull()
-                                } ?: false
                             ToolResult(
                                 str("text", r).orEmpty(),
-                                flag("error"),
-                                flag("truncated"),
+                                flag("error", r),
+                                flag("truncated", r),
                                 str("full", r),
+                                str("at", r),
                             )
                         }
                 Item.Tool(id, at, str("name").orEmpty(), str("input").orEmpty(), result)

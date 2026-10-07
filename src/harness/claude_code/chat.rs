@@ -67,7 +67,7 @@ pub(in crate::harness) fn parse(line: &Value, offset: u64) -> Vec<Entry> {
     let id = id.as_str();
     let item = |body| vec![Entry::Item(Item::new(id, at, body))];
     match line.get("type").and_then(Value::as_str) {
-        Some("user") => user(line, &item),
+        Some("user") => user(line, at, &item),
         Some("assistant") => assistant(line, id, at),
         Some("attachment") => queued(line, &item),
         Some("system") => match line.get("subtype").and_then(Value::as_str) {
@@ -75,6 +75,7 @@ pub(in crate::harness) fn parse(line: &Value, offset: u64) -> Vec<Entry> {
                 match line.get("content").and_then(Value::as_str) {
                     Some(text) if !text.is_empty() => item(Body::Event {
                         text: text.to_string(),
+                        failure: false,
                     }),
                     _ => Vec::new(),
                 }
@@ -85,7 +86,11 @@ pub(in crate::harness) fn parse(line: &Value, offset: u64) -> Vec<Entry> {
     }
 }
 
-fn user(line: &Value, item: &dyn Fn(Body) -> Vec<Entry>) -> Vec<Entry> {
+fn user(
+    line: &Value,
+    at: Option<chrono::DateTime<chrono::Utc>>,
+    item: &dyn Fn(Body) -> Vec<Entry>,
+) -> Vec<Entry> {
     let flag = |key| line.get(key).and_then(Value::as_bool) == Some(true);
     let content = line.pointer("/message/content").unwrap_or(&Value::Null);
     if flag("isCompactSummary") {
@@ -102,6 +107,7 @@ fn user(line: &Value, item: &dyn Fn(Body) -> Vec<Entry>) -> Vec<Entry> {
                     call: b.get("tool_use_id")?.as_str()?.to_string(),
                     text: content_text(b.get("content").unwrap_or(&Value::Null)),
                     error: b.get("is_error").and_then(Value::as_bool) == Some(true),
+                    at,
                 })
             })
             .collect();
@@ -113,6 +119,7 @@ fn user(line: &Value, item: &dyn Fn(Body) -> Vec<Entry>) -> Vec<Entry> {
     if text.starts_with(INTERRUPTED) {
         return item(Body::Event {
             text: "Interrupted".to_string(),
+            failure: false,
         });
     }
     if flag("isMeta") {
@@ -128,9 +135,11 @@ fn user(line: &Value, item: &dyn Fn(Body) -> Vec<Entry>) -> Vec<Entry> {
             text: tag(&text, "summary")
                 .unwrap_or("Background task finished")
                 .to_string(),
+            failure: false,
         }),
         Some("peer") => item(Body::Event {
             text: crate::harness::one_line(&text),
+            failure: false,
         }),
         _ if text.trim().is_empty() => Vec::new(),
         _ => item(Body::User {
@@ -239,6 +248,7 @@ fn assistant(line: &Value, id: &str, at: Option<chrono::DateTime<chrono::Utc>>) 
             at,
             Body::Event {
                 text: content_text(&Value::Array(blocks.clone())),
+                failure: true,
             },
         ))];
     }
@@ -332,6 +342,19 @@ mod tests {
             .map(|(k, t)| (k.to_string(), t.to_string()))
             .collect();
         assert_eq!(rows, expected);
+        let failures: Vec<bool> = page
+            .items
+            .iter()
+            .filter_map(|item| match &item.body {
+                Body::Event { failure, .. } => Some(*failure),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            failures,
+            [false, false, true],
+            "only the failed request is a failure"
+        );
         let Body::Tool { result, name, .. } = &page.items[3].body else {
             panic!("not a tool: {:?}", page.items[3]);
         };

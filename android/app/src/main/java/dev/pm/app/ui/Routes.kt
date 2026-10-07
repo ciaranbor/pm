@@ -24,16 +24,6 @@ sealed interface Route : NavKey {
 
     @Serializable data class Notes(val project: String) : Route
 
-    /** A tool's whole output, by its result's `full` reference. */
-    @Serializable
-    data class Output(
-        val project: String,
-        val scope: String,
-        val agent: String,
-        val ref: String,
-        val tool: String,
-    ) : Route
-
     @Serializable data object Settings : Route
 
     /** The top bar's title, and the line under it that says where it is. */
@@ -46,7 +36,6 @@ sealed interface Route : NavKey {
                 is Project -> project to null
                 is Scope -> scope to project
                 is Notes -> "Notes" to project
-                is Output -> "$tool output" to "$project › $scope › $agent"
             }
 
     /** Where Up leads: the page this one belongs to. */
@@ -59,7 +48,6 @@ sealed interface Route : NavKey {
                 is Project -> Home
                 is Scope -> Project(project)
                 is Notes -> Project(project)
-                is Output -> Scope(project, scope, Tab.Agent(agent))
             }
 
     /** Whether this is the page `other` names: a workspace is one page whichever tab it is on. */
@@ -133,7 +121,6 @@ internal fun NavBackStack<NavKey>.leave(project: String, scope: String) {
 internal fun Route.scopeOf(): kotlin.Pair<String, String>? =
     when (this) {
         is Route.Scope -> project to scope
-        is Route.Output -> project to scope
         else -> null
     }
 

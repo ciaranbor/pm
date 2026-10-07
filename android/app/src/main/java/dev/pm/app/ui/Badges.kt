@@ -3,9 +3,12 @@ package dev.pm.app.ui
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -145,5 +148,35 @@ fun ActivityLabel(activity: Activity?, stale: Boolean, modifier: Modifier = Modi
                 if (activity == Activity.Working && !stale) Tone.Positive.color()
                 else Tone.Neutral.color(),
         )
+    }
+}
+
+/**
+ * An agent's state as a pill, for a screen given to that agent. While `stale` it is drawn neutral
+ * and read as what it was.
+ */
+@Composable
+fun StatePill(state: AgentState, stale: Boolean, modifier: Modifier = Modifier) {
+    val mark = Marks.agent(state).let { if (stale) it.copy(tone = Tone.Neutral) else it }
+    val label = if (stale) "was ${state.label}" else state.label
+    Surface(
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = modifier.clearAndSetSemantics { contentDescription = "Agent $label" },
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+            modifier = Modifier.padding(horizontal = Spacing.s, vertical = Spacing.xxs),
+        ) {
+            MarkIcon(mark, null, Modifier.size(14.dp))
+            Text(
+                label,
+                style = MaterialTheme.typography.labelMedium,
+                color = mark.tone.color(),
+                fontWeight = if (mark.strong && !stale) FontWeight.Bold else FontWeight.Normal,
+                maxLines = 1,
+            )
+        }
     }
 }

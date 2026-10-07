@@ -61,7 +61,6 @@ fun Workspace(
     topBar: TopBarSlot,
     acting: ActionState,
     ask: (Action) -> Unit,
-    openResult: (agent: String, tool: String, ref: String) -> Unit,
     modifier: Modifier = Modifier,
     stale: Boolean = false,
 ) {
@@ -78,6 +77,7 @@ fun Workspace(
 
     val shownAgent = (selected as? Tab.Agent)?.name
     TopBarActions(topBar) {
+        agents.find { it.name == shownAgent }?.let { StatePill(it.stateOf, stale) }
         val items = buildList {
             if (shownAgent != null && client != null) {
                 add(MenuItem("Terminal") { terminal = shownAgent })
@@ -119,7 +119,6 @@ fun Workspace(
                                     shown?.stateOf,
                                     shown?.waiting,
                                     networkChanges,
-                                    openResult = { tool, ref -> openResult(tab.name, tool, ref) },
                                     openTerminal = { terminal = tab.name },
                                 )
                             }

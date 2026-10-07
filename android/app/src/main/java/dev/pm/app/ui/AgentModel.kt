@@ -36,6 +36,9 @@ sealed interface ChatState {
     data class Failed(val reason: String) : ChatState
 }
 
+/** A tool's whole output, by its result's `full` reference, as far as it has been read. */
+data class WholeOutput(val ref: String, val body: ReaderBody)
+
 /** Text the user sent the agent, and how far it got. */
 sealed interface Outbox {
     val text: String
@@ -98,6 +101,14 @@ class AgentModel(
      * read, or a reset, may hold the same words said before ("yes").
      */
     private val arrivedSinceSend = mutableListOf<Item>()
+
+    /**
+     * The whole output the reader shows, one at a time: outputs can run to megabytes, so reading
+     * another replaces it, and [closeWhole] lets it go.
+     */
+    private val _whole = MutableStateFlow<WholeOutput?>(null)
+    val whole: StateFlow<WholeOutput?> = _whole.asStateFlow()
+    private var readingWhole: Job? = null
 
     private var watching: Job? = null
     private val backoff = Backoff()
@@ -344,6 +355,30 @@ class AgentModel(
         watching = null
         reconnecting?.cancel()
         reconnecting = null
+    }
+
+    /** Read the whole output `ref` names into [whole], unless it is held or being read. */
+    fun readWhole(ref: String) {
+        val held = _whole.value
+        if (held?.ref == ref && held.body !is ReaderBody.Failed) return
+        readingWhole?.cancel()
+        _whole.value = WholeOutput(ref, ReaderBody.Loading)
+        readingWhole = viewModelScope.launch {
+            val body =
+                try {
+                    ReaderBody.Shown(client.toolResult(project, scope, agent, ref))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    ReaderBody.Failed(e.message ?: e.javaClass.simpleName) { readWhole(ref) }
+                }
+            _whole.value = WholeOutput(ref, body)
+        }
+    }
+
+    fun closeWhole() {
+        readingWhole?.cancel()
+        _whole.value = null
     }
 
     /** Page the conversation back from its oldest item held. */

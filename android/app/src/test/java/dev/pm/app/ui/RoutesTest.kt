@@ -42,11 +42,6 @@ class RoutesTest {
         fromHome.up()
         assertEquals(listOf(Route.Home, Route.Project("app")), fromHome.toList())
 
-        val output = stack(Route.Home, Route.Scope("app", "login", Tab.Summary))
-        output.add(Route.Output("app", "login", "qa", "r1", "Bash"))
-        output.up()
-        assertEquals(listOf(Route.Home, Route.Scope("app", "login", Tab.Summary)), output.toList())
-
         val repair = stack(Route.Home, Route.Settings, Route.Pair)
         repair.up()
         assertEquals(listOf(Route.Home, Route.Settings), repair.toList())
@@ -59,7 +54,7 @@ class RoutesTest {
                 Route.Home,
                 Route.Project("app"),
                 login,
-                Route.Output("app", "login", "qa", "r1", "Bash"),
+                Route.Settings,
             )
         shown.leave("app", "search")
         assertEquals(4, shown.size)

@@ -98,18 +98,21 @@ pub(in crate::harness) fn parse(line: &Value, offset: u64) -> Vec<Entry> {
                 call: call.to_string(),
                 text,
                 error,
+                at,
             }]
         }
         (Some("event_msg"), Some("task_complete")) => {
             match payload.get("error").filter(|e| !e.is_null()) {
                 Some(error) => item(Body::Event {
                     text: super::transcript::describe(error),
+                    failure: true,
                 }),
                 None => Vec::new(),
             }
         }
         (Some("event_msg"), Some("turn_aborted")) => item(Body::Event {
             text: "Interrupted".to_string(),
+            failure: false,
         }),
         (Some("compacted"), _) => item(Body::Compaction {
             summary: field("message")
@@ -262,7 +265,8 @@ mod tests {
         assert_eq!(
             item.body,
             Body::Event {
-                text: "API error: stream disconnected".into()
+                text: "API error: stream disconnected".into(),
+                failure: true,
             }
         );
     }

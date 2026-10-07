@@ -321,4 +321,21 @@ class AgentModelTest {
             server.takeRequest().url.encodedPath,
         )
     }
+
+    @Test
+    fun the_reader_holds_one_whole_output_at_a_time() = modelTest {
+        server.enqueue(MockResponse.Builder().body("first output").build())
+        server.enqueue(MockResponse.Builder().body("second output").build())
+
+        model.readWhole("r1")
+        eventually { model.whole.value?.body is ReaderBody.Shown }
+        model.readWhole("r1")
+        model.readWhole("r2")
+        eventually { (model.whole.value?.body as? ReaderBody.Shown)?.text == "second output" }
+
+        assertEquals("r2", model.whole.value?.ref)
+        assertEquals(2, server.requestCount)
+        model.closeWhole()
+        assertNull(model.whole.value)
+    }
 }

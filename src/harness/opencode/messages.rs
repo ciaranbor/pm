@@ -6,7 +6,8 @@
 //!   not, and is a continuation.
 //! - An `assistant` row holds parts: `text`, `reasoning`, and `tool`, whose
 //!   `state` carries both the call's `input` and its result (`content`, or
-//!   `error`). A row with an `error` ended its turn on it.
+//!   `error`); the part's `time.completed` is when the call returned. A row
+//!   with an `error` ended its turn on it.
 //! - A `synthetic` row from `shell` reports a background command's end.
 //! - A `compaction` row is a completed compaction with its `summary`, or a
 //!   failed one with an `error`.
@@ -78,11 +79,13 @@ pub(super) fn items(row: &Row) -> Vec<Item> {
                 .map_or(String::new(), |code| format!(" (exit {code})"));
             one(Body::Event {
                 text: format!("Background command {state}{exit}"),
+                failure: false,
             })
         }
         "compaction" => match data.pointer("/error/message").and_then(Value::as_str) {
             Some(error) => one(Body::Event {
                 text: format!("Compaction failed: {error}"),
+                failure: true,
             }),
             None => one(Body::Compaction {
                 summary: data
@@ -123,7 +126,8 @@ fn assistant(row: &Row, data: &Value, at: Option<chrono::DateTime<chrono::Utc>>)
                     let result = match state.get("status").and_then(Value::as_str) {
                         Some("completed" | "error") => {
                             let (output, error) = tool_output(state);
-                            Some(ToolResult::new(&output, error, || id.clone()))
+                            let ended = timestamp(part.pointer("/time/completed"));
+                            Some(ToolResult::new(&output, error, ended, || id.clone()))
                         }
                         _ => None,
                     };
@@ -148,19 +152,24 @@ fn assistant(row: &Row, data: &Value, at: Option<chrono::DateTime<chrono::Utc>>)
         })
         .collect();
     if let Some(error) = data.get("error") {
-        let text = match error.get("type").and_then(Value::as_str) {
-            Some("aborted") => "Interrupted".to_string(),
-            _ => one_line(
+        let aborted = error.get("type").and_then(Value::as_str) == Some("aborted");
+        let text = if aborted {
+            "Interrupted".to_string()
+        } else {
+            one_line(
                 error
                     .get("message")
                     .and_then(Value::as_str)
                     .unwrap_or("The turn failed"),
-            ),
+            )
         };
         out.push(Item::new(
             format!("{}:error", row.id),
             at,
-            Body::Event { text },
+            Body::Event {
+                text,
+                failure: !aborted,
+            },
         ));
     }
     out
