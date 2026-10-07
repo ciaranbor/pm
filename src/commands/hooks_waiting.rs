@@ -548,8 +548,7 @@ mod tests {
         );
         assert_eq!(detail(), asking, "the question is still pending");
 
-        hooks_dialog::close_typed(root, "login", "implementer", Harness::Codex, Some("go on"))
-            .unwrap();
+        hooks_dialog::close_typed(root, "login", "implementer", Harness::Codex, "go on").unwrap();
         runtime::clear_waiting(root, "login", "implementer").unwrap();
         assert_eq!(
             codex(json!({"hook_event_name": "PostToolUse", "tool_name": "shell"})),

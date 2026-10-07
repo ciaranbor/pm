@@ -19,8 +19,10 @@
 //! - the waiting hook closes its record, on the event that says it was
 //!   answered at the terminal ([`resolve`]);
 //! - for the agent's own dialog (not a subagent's), its turn has ended
-//!   since it opened, which catches one answered at the terminal in a way
-//!   no event ties back to it.
+//!   since it opened: the waiter closes it as the turn ends
+//!   ([`close_with_turn`]), which catches one answered at the terminal in
+//!   a way no event ties back to it; and, for a turn that ends with no
+//!   waiter, the hook ends on an unarmed marker newer than it.
 //!
 //! Its stdout is the decision, so it prints nothing else.
 //!
@@ -28,7 +30,7 @@
 //! input line while the agent works on — is recorded by the waiting hook
 //! instead ([`Harness::typed_dialog`]) and answered by typing the harness's
 //! own reply as a prompt. It closes as its harness drops it: on any prompt
-//! taken, and as the turn ends ([`close_typed`]).
+//! taken ([`close_typed`]), and as the turn ends ([`close_with_turn`]).
 
 use std::io::Read;
 use std::path::Path;
@@ -193,20 +195,32 @@ fn held(record: &DialogRecord) -> bool {
     record.pid.is_none_or(hook_process::pid_alive)
 }
 
-/// Close the agent's dialogs that are answered by typing, as its
-/// harness drops them: on `prompt` taken, which answers those it names, or
-/// with no prompt, as its turn ends.
+/// Close the agent's dialogs that are answered by typing, as its harness
+/// drops them on `prompt` taken, which answers those it names.
 pub fn close_typed(
     project_root: &Path,
     scope: &str,
     agent: &str,
     harness: Harness,
-    prompt: Option<&str>,
+    prompt: &str,
 ) -> Result<()> {
     for record in runtime::read_dialogs(project_root, scope, agent) {
         if record.pid.is_none() {
-            let taken = prompt.is_some_and(|p| harness.typed_reply_answers(&record, p));
+            let taken = harness.typed_reply_answers(&record, prompt);
             runtime::close_dialog(project_root, scope, agent, &record.dialog.id, taken)?;
+        }
+    }
+    Ok(())
+}
+
+/// Close the dialogs the agent's turn, now ended, leaves behind: those
+/// answered by typing, which its harness drops, and its own (not a
+/// subagent's): the turn could not have ended with one still pending, so
+/// it was answered somehow.
+pub fn close_with_turn(project_root: &Path, scope: &str, agent: &str) -> Result<()> {
+    for record in runtime::read_dialogs(project_root, scope, agent) {
+        if record.pid.is_none() || record.dialog.subagent.is_none() {
+            runtime::close_dialog(project_root, scope, agent, &record.dialog.id, false)?;
         }
     }
     Ok(())
@@ -725,7 +739,7 @@ mod tests {
         let root = dir.path();
         let answered = async_question(root, AGENT);
         let reply = Harness::Codex.typed_reply(&answered, &pick(&answered, "Blue"));
-        close_typed(root, "login", AGENT, Harness::Codex, Some(&reply)).unwrap();
+        close_typed(root, "login", AGENT, Harness::Codex, &reply).unwrap();
         assert!(runtime::dialog_answer_taken(
             root,
             "login",
@@ -734,7 +748,7 @@ mod tests {
         ));
 
         let dropped = async_question(root, AGENT);
-        close_typed(root, "login", AGENT, Harness::Codex, Some("never mind")).unwrap();
+        close_typed(root, "login", AGENT, Harness::Codex, "never mind").unwrap();
         assert!(runtime::dialog_closed(
             root,
             "login",
@@ -749,18 +763,21 @@ mod tests {
         ));
 
         let ended = async_question(root, AGENT);
-        let hooked = question(root);
-        close_typed(root, "login", AGENT, Harness::Codex, None).unwrap();
-        assert!(runtime::dialog_closed(
-            root,
-            "login",
-            AGENT,
-            &ended.dialog.id
-        ));
+        let own = question(root);
+        let subagents = bash(root, "a1", "cargo test");
+        close_with_turn(root, "login", AGENT).unwrap();
+        for closed in [&ended, &own] {
+            assert!(runtime::dialog_closed(
+                root,
+                "login",
+                AGENT,
+                &closed.dialog.id
+            ));
+        }
         assert_eq!(
             runtime::read_dialogs(root, "login", AGENT),
-            [hooked],
-            "a dialog its hook holds is its hook's to close"
+            [subagents],
+            "a subagent's outlives the turn"
         );
     }
 }
