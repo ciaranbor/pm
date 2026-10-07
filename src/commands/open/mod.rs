@@ -31,6 +31,8 @@ pub struct OpenResult {
     /// The respawned agents whose harness exited at launch or did not come
     /// up.
     pub failed_launches: Vec<FailedLaunch>,
+    /// What the open skipped or failed to spawn.
+    pub warnings: Vec<String>,
 }
 
 impl OpenResult {
@@ -85,7 +87,7 @@ pub fn confirm_launches<'a>(
 /// creations that `pm doctor` should handle.
 ///
 /// Worktree directories that are missing on disk are skipped with a warning
-/// printed to stderr rather than aborting the entire open.
+/// in [`OpenResult::warnings`] rather than aborting the entire open.
 ///
 /// The `tmux_server` parameter allows tests to use an isolated tmux server.
 pub fn open(
@@ -178,7 +180,7 @@ fn open_project(
     // recreated, their windows are gone and agent_spawn will create new ones.
     // If the session already existed, agent_spawn is idempotent (skips agents
     // whose windows are still present).
-    respawn_agents_for_scope(
+    let mut warnings = respawn_agents_for_scope(
         project_root,
         "main",
         &main_session,
@@ -203,10 +205,10 @@ fn open_project(
         if !tmux::has_session(tmux_server, &session_name)? {
             let worktree_path = project_root.join(&state.worktree);
             if !worktree_path.exists() {
-                eprintln!(
-                    "warning: skipping '{name}': worktree missing at {}",
+                warnings.push(format!(
+                    "skipping '{name}': worktree missing at {}",
                     worktree_path.display()
-                );
+                ));
                 continue;
             }
             tmux::create_session(tmux_server, &session_name, &worktree_path)?;
@@ -227,7 +229,7 @@ fn open_project(
     // agent_spawn is idempotent — skips agents whose windows already exist.
     for feature in &active_features {
         let session_name = tmux::session_name(project_name, feature);
-        respawn_agents_for_scope(
+        warnings.extend(respawn_agents_for_scope(
             project_root,
             feature,
             &session_name,
@@ -235,7 +237,7 @@ fn open_project(
             tmux_server,
             true,
             &mut launched,
-        )?;
+        )?);
     }
 
     Ok(OpenResult {
@@ -245,6 +247,7 @@ fn open_project(
         project_root: project_root.to_path_buf(),
         launched,
         failed_launches: Vec::new(),
+        warnings,
     })
 }
 

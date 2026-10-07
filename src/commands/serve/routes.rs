@@ -130,7 +130,7 @@ pub(super) fn route(config: &Config, vapid: &str, request: &Request<'_>) -> Hand
         };
     };
     if too_long {
-        let reply = if path.starts_with("/v1/projects/") {
+        let reply = if path.starts_with("/v1/projects/") && path.ends_with("/notes") {
             notes::too_long()
         } else {
             error(413, "the body is too long")
@@ -150,7 +150,7 @@ pub(super) fn route(config: &Config, vapid: &str, request: &Request<'_>) -> Hand
         }
         (_, "/v1/pairing") => Ok(error(405, "DELETE is served here")),
         (_, _) if path.starts_with("/v1/projects/") => {
-            notes_route(config, method, path, if_match, body).map(|(reply, written)| {
+            projects_route(config, method, path, if_match, body).map(|(reply, written)| {
                 detail = written;
                 reply
             })
@@ -206,9 +206,10 @@ fn post(config: &Config, path: &str, body: &str) -> Result<input::Written> {
     }
 }
 
-/// `/v1/projects/{project}/notes`: the project's notes, and what a save
-/// wrote, for the request log.
-fn notes_route(
+/// `/v1/projects/{project}/notes`, the project's notes, and
+/// `POST /v1/projects/{project}/{open|close|delete}`; with what a write did,
+/// for the request log.
+fn projects_route(
     config: &Config,
     method: &str,
     path: &str,
@@ -217,12 +218,24 @@ fn notes_route(
 ) -> Result<(Reply, Option<String>)> {
     let segments = segments(path);
     let segments: Vec<&str> = segments.iter().map(String::as_str).collect();
-    let ["projects", project, "notes"] = segments[..] else {
-        return Ok((error(404, "no such endpoint"), None));
+    let (project, action) = match segments[..] {
+        [
+            "projects",
+            project,
+            action @ ("notes" | "open" | "close" | "delete"),
+        ] => (project, action),
+        _ => return Ok((error(404, "no such endpoint"), None)),
     };
+    if action != "notes" && method != "POST" {
+        return Ok((error(405, "no such endpoint for this method"), None));
+    }
     let Some(root) = project_root(config, project)? else {
         return Ok((error(404, "no such project"), None));
     };
+    if action != "notes" {
+        let written = lifecycle::project(config, &root, action)?;
+        return Ok((written.reply, Some(written.detail)));
+    }
     match method {
         "GET" => Ok((notes::get(&root)?, None)),
         "PUT" => notes::put(&root, if_match, body),

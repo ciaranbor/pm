@@ -298,6 +298,25 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
     suspend fun delete(project: String, feature: String): List<String> =
         warnings(send(postRequest(url("features", project, feature, "delete"), "{}"), lifecycle))
 
+    /**
+     * Open the project, as `pm open` does: recreate its missing sessions and respawn their agents.
+     * Returns what it skipped and the agents that didn't come up.
+     */
+    suspend fun openProject(project: String): List<String> =
+        warnings(send(postRequest(url("projects", project, "open"), "{}"), lifecycle))
+
+    /** Close the project, as `pm close` does: end its sessions, keeping all its state. */
+    suspend fun closeProject(project: String) {
+        send(postRequest(url("projects", project, "close"), "{}"), lifecycle)
+    }
+
+    /**
+     * Delete the project, as `pm delete` without `--force` does; refused (`unsafe`) while a feature
+     * holds work that would be lost. Returns what the CLI would warn of.
+     */
+    suspend fun deleteProject(project: String): List<String> =
+        warnings(send(postRequest(url("projects", project, "delete"), "{}"), lifecycle))
+
     private fun warnings(reply: String): List<String> =
         json.decodeFromString(Ended.serializer(), reply).warnings
 

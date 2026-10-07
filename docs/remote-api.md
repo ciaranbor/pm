@@ -95,6 +95,9 @@ The API is under `/v1`; every path needs a paired device's token:
 | `features/{project}/{feature}/merge` | `POST`: `pm feat merge`, so merges and deletes the feature; `{"merged": true, "warnings"}` |
 | `features/{project}/{feature}/delete` | `POST`: `pm feat delete`; `{"deleted": true, "warnings"}` |
 | `agents/{project}/{scope}/{agent}/restart` | `POST {"force"?}`: `pm agent restart`; `{"restarted": <what it did>}` |
+| `projects/{project}/open` | `POST`: `pm open`; `{"opened": true, "sessions", "agents", "warnings"}`, the sessions it made and the agents that came up |
+| `projects/{project}/close` | `POST`: `pm close`; `{"closed": true, "sessions"}`, the sessions it ended |
+| `projects/{project}/delete` | `POST`: `pm delete`; `{"deleted": true, "warnings"}` |
 
 A client learns what the server serves from the request itself, never
 from a version string: a request the server doesn't know is `404`
@@ -102,8 +105,8 @@ from a version string: a request the server doesn't know is `404`
 this method"}`, so the server predates it; a path it served once and
 dropped is `410`, so the client predates the server.
 
-Merge, delete and restart run pm's own handlers without `--force`, to the
-end however long they take (the post-merge hook runs in the base session's
+Each action runs pm's own handler, never with `--force`, to the end
+however long it takes (the post-merge hook runs in the base session's
 `hook` window, not in the request). A refusal changed nothing and comes
 back as `409` with `{"error", "refused"}`, `error` worded as the CLI
 prints it, but for a way out only a terminal offers (`--force`, a rebase),
@@ -114,8 +117,10 @@ true` to interrupt it, and it is told to resume). Any other failure is a
 `500` with `{"error"}` and may have come partway: the snapshot shows how far.
 A merge or delete that went through carries `warnings`, what the CLI warns
 of on stderr: untracked files deleted with the worktree, or what of the
-worktree could not be removed. A restart leaves which window each session
-shows as it was.
+worktree could not be removed; an open's are the features it skipped and
+the agents that didn't come up. A restart leaves which window each session
+shows as it was. A project's delete removes it from pm and ends its
+sessions, but leaves every worktree, branch and the main checkout on disk.
 
 A notes save is never merged: a client resolves a `409` by saving again
 against the version it carries, once its user has chosen what to keep.

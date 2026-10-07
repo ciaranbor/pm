@@ -123,7 +123,7 @@ fun App(
     LaunchedEffect(top) { fullName.dismiss() }
     LaunchedEffect(model) {
         model.lifecycle.finished.collect { action ->
-            if (action !is Action.Restart) backStack.leave(action.project, action.subject)
+            action.removes?.let { (project, scope) -> backStack.leave(project, scope) }
             feedback.done(action.done)
         }
     }
@@ -132,15 +132,11 @@ fun App(
     LaunchedEffect(snapshot, connection, acting, shownScopes) {
         val shown = snapshot ?: return@LaunchedEffect
         // The app's own merge or delete reports itself once it finishes.
-        val own =
-            (acting as? ActionState.Running)
-                ?.action
-                ?.takeIf { it !is Action.Restart }
-                ?.let { it.project to it.subject }
+        val own = (acting as? ActionState.Running)?.action?.removes
         val gone = shown.dropped(backStack, seen)
         if (connection != Connection.Live) return@LaunchedEffect
         gone
-            .filter { it != own }
+            .filter { own?.covers(it) != true }
             .forEach { (project, scope) ->
                 backStack.leave(project, scope)
                 feedback.done(
@@ -241,6 +237,12 @@ fun App(
                             }
                             entry<Route.Project> { key ->
                                 Shown(snapshot, connection, model::retry, pairAgain) {
+                                    ProjectActions(
+                                        it,
+                                        key.project,
+                                        topBar,
+                                        model.lifecycle::ask,
+                                    )
                                     ScopesList(
                                         it,
                                         key.project,

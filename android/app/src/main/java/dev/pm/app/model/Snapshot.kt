@@ -36,6 +36,24 @@ data class Snapshot(
         if (scope == MAIN) project(project)?.main?.agents.orEmpty()
         else feature(project, scope)?.agents.orEmpty()
 
+    /** Whether any of `project`'s sessions is up. */
+    fun anyOpen(project: String): Boolean =
+        project(project)?.main?.sessionExists == true ||
+            featuresOf(project).any { it.sessionExists }
+
+    /**
+     * Whether `pm open` has a session of `project` to make: its main's, or an active feature's. A
+     * merged, stale or initializing feature gets none.
+     */
+    fun anyClosed(project: String): Boolean =
+        project(project)?.main?.sessionExists == false ||
+            featuresOf(project).any { it.lifecycle in OPENED && !it.sessionExists }
+
+    /** How many of `project`'s agents are busy, asking, or waiting on background work. */
+    fun working(project: String): Int =
+        (project(project)?.main?.agents.orEmpty() + featuresOf(project).flatMap { it.agents })
+            .count { it.stateOf in WORKING }
+
     /** How many of `project`'s scopes need each kind, most urgent first. */
     fun attentionCounts(project: String): List<Pair<AttentionKind, Int>> {
         val kinds =
@@ -115,6 +133,10 @@ data class Snapshot(
     companion object {
         const val VERSION = 1
         const val MAIN = "main"
+
+        /** The feature statuses `pm open` makes a session for. */
+        private val OPENED = setOf("wip", "review", "approved")
+        private val WORKING = setOf(AgentState.Busy, AgentState.Asking, AgentState.Background)
 
         val json = Json {
             ignoreUnknownKeys = true

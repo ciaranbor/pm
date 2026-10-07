@@ -2,6 +2,7 @@ package dev.pm.app.ui
 
 import dev.pm.app.api.PmClient
 import dev.pm.app.api.PmError
+import dev.pm.app.model.Snapshot
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
@@ -12,11 +13,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 
-/** What the app can ask `pm serve` to do to a feature or an agent. */
+/** What the app can ask `pm serve` to do to a project, a feature or an agent. */
 sealed interface Action {
     val project: String
 
-    /** What it acts on: the feature's or the agent's name. */
+    /** What it acts on: the project's, the feature's or the agent's name. */
     val subject: String
 
     /** The verb, as a button names it. */
@@ -41,19 +42,50 @@ sealed interface Action {
         override val subject = agent
         override val verb = "Restart"
     }
+
+    data class OpenProject(override val project: String) : Action {
+        override val subject = project
+        override val verb = "Open"
+    }
+
+    /** `working`: how many of its agents are busy, asking, or waiting on background work. */
+    data class CloseProject(override val project: String, val working: Int) : Action {
+        override val subject = project
+        override val verb = "Close"
+    }
+
+    data class DeleteProject(override val project: String) : Action {
+        override val subject = project
+        override val verb = "Delete"
+    }
 }
+
+/**
+ * The scope an action removes once it goes through, as project and scope; `main` stands for the
+ * whole project. Null for one that removes nothing.
+ */
+val Action.removes: Pair<String, String>?
+    get() =
+        when (this) {
+            is Action.Merge -> project to feature
+            is Action.Delete -> project to feature
+            is Action.DeleteProject -> project to Snapshot.MAIN
+            is Action.Restart,
+            is Action.OpenProject,
+            is Action.CloseProject -> null
+        }
 
 /** Where an action stands. */
 sealed interface ActionState {
     data object Idle : ActionState
 
-    /** Asked to confirm a merge, a delete, or a restart that would interrupt a turn. */
+    /** Asked to confirm a merge, a delete, a close, or a restart that would interrupt a turn. */
     data class Confirming(val action: Action) : ActionState
 
     /** On its way; `confirmed` if it was confirmed first, so its confirmation shows it going. */
     data class Running(val action: Action, val confirmed: Boolean = false) : ActionState
 
-    /** A merge or delete went through, but with `warnings`, in the server's words. */
+    /** It went through, but with `warnings`, in the server's words. */
     data class Warned(val action: Action, val warnings: List<String>) : ActionState
 
     /** It didn't end as asked; `reason` says why, in the server's words. */
@@ -78,8 +110,7 @@ enum class Outcome {
 
 /**
  * Lifecycle actions: confirmed where they destroy or interrupt, run one at a time, with their
- * refusals kept as the server words them. A merge or delete that went through is sent on
- * [finished].
+ * refusals kept as the server words them. Each that went through is sent on [finished].
  */
 class Lifecycle(private val scope: CoroutineScope, private val client: () -> PmClient?) {
     private val _state = MutableStateFlow<ActionState>(ActionState.Idle)
@@ -90,11 +121,12 @@ class Lifecycle(private val scope: CoroutineScope, private val client: () -> PmC
     /** Each action that went through, once. */
     val finished: Flow<Action> = _finished.receiveAsFlow()
 
-    /** Start `action` from its menu: a restart runs at once, a merge or delete asks first. */
+    /** Start `action` from its menu: a restart or an open runs at once, the rest ask first. */
     fun ask(action: Action) {
         if (_state.value is ActionState.Running) return
         when (action) {
-            is Action.Restart -> run(action)
+            is Action.Restart,
+            is Action.OpenProject -> run(action)
             else -> _state.value = ActionState.Confirming(action)
         }
     }
@@ -126,6 +158,12 @@ class Lifecycle(private val scope: CoroutineScope, private val client: () -> PmC
                                 )
                                 emptyList()
                             }
+                            is Action.OpenProject -> client.openProject(action.project)
+                            is Action.CloseProject -> {
+                                client.closeProject(action.project)
+                                emptyList()
+                            }
+                            is Action.DeleteProject -> client.deleteProject(action.project)
                         }
                     _finished.send(action)
                     if (warnings.isEmpty()) ActionState.Idle

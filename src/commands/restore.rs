@@ -125,7 +125,7 @@ pub fn restore_with(params: &RestoreParams<'_>) -> Result<Vec<String>> {
     }
 
     for (name, root) in &restored {
-        all_messages.push(open_project(
+        all_messages.extend(open_project(
             name,
             root,
             params.projects_dir,
@@ -222,15 +222,32 @@ struct ProjectResult {
 }
 
 /// Recreate a project's tmux sessions and respawn its active agents.
-fn open_project(name: &str, root: &Path, projects_dir: &Path, tmux_server: Option<&str>) -> String {
-    match super::open::open(root, projects_dir, tmux_server) {
-        Ok(result) if result.sessions_restored > 0 || result.agents_respawned > 0 => format!(
+fn open_project(
+    name: &str,
+    root: &Path,
+    projects_dir: &Path,
+    tmux_server: Option<&str>,
+) -> Vec<String> {
+    let result = match super::open::open(root, projects_dir, tmux_server) {
+        Ok(result) => result,
+        Err(e) => return vec![format!("{name}: open failed: {e}")],
+    };
+    let opened = if result.changed() {
+        format!(
             "{name}: restored {} sessions, respawned {} agents",
             result.sessions_restored, result.agents_respawned
-        ),
-        Ok(_) => format!("{name}: sessions opened"),
-        Err(e) => format!("{name}: open failed: {e}"),
-    }
+        )
+    } else {
+        format!("{name}: sessions opened")
+    };
+    std::iter::once(opened)
+        .chain(
+            result
+                .warnings
+                .iter()
+                .map(|w| format!("warning: {name}: {w}")),
+        )
+        .collect()
 }
 
 fn restore_project(

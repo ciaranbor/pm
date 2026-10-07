@@ -299,8 +299,9 @@ lets it — hours apart once the phone dozes. A permission prompt can be
 answered from its notification ([docs/android.md](docs/android.md#notifications)).
 
 A paired device may do everything the app offers: read everything, type
-into agents, merge and delete features and restart agents, as `pm feat
-merge`, `pm feat delete` and `pm agent restart` do without `--force`. `pm
+into agents, merge and delete features, restart agents, and open, close
+and delete projects, as `pm feat merge`, `pm feat delete`, `pm agent
+restart`, `pm open`, `pm close` and `pm delete` do without `--force`. `pm
 serve pair --name <device>` pairs another phone, or one again after a
 reinstall; `pm serve devices` lists the paired devices and `pm serve revoke
 <device>` withdraws one at once, cutting it off mid-stream. The app's

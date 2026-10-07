@@ -1,8 +1,8 @@
 //! The lifecycle endpoints: merge and delete a feature, restart an agent,
-//! through the handlers the CLI runs. A handler's refusal reaches the
-//! device in the CLI's words, except a way out only a terminal offers,
-//! which is worded for the device; a merge's or delete's warnings go with
-//! it as `warnings`.
+//! open, close and delete a project, through the handlers the CLI runs. A
+//! handler's refusal reaches the device in the CLI's words, except a way
+//! out only a terminal offers, which is worded for the device; an action's
+//! warnings go with it as `warnings`.
 //!
 //! Each runs to its end within the request, whether or not the device is
 //! still there to hear how it went. The post-merge hook doesn't hold it:
@@ -10,11 +10,13 @@
 //! there, so it has the user's environment rather than the server's. A
 //! restart leaves which window each session shows alone, so no tmux client
 //! moves for it; merge and delete move only a client viewing the feature's
-//! session, which they kill, as the CLI does.
+//! session, which they kill, as the CLI does, and a project's close and
+//! delete only the clients viewing its sessions. A project's delete is
+//! never `--force`: what that removes from disk is for a terminal.
 
 use std::path::Path;
 
-use crate::commands::{agent_restart, feat_delete, feat_merge, tmux_push};
+use crate::commands::{agent_restart, close, delete, feat_delete, feat_merge, open, tmux_push};
 use crate::error::{PmError, Result};
 
 use super::Config;
@@ -53,6 +55,51 @@ pub(super) fn feature(
         };
         Ok(serde_json::json!({ key: true, "warnings": ended.warnings }))
     });
+    finish(config, action, done)
+}
+
+/// `POST projects/{project}/{open|close|delete}` for the project at `root`.
+pub(super) fn project(config: &Config, root: &Path, action: &str) -> Result<Written> {
+    let server = config.tmux_server.as_deref();
+    let done = match action {
+        "open" => open::open(root, &config.projects_dir, server).map(|mut opened| {
+            open::confirm_launches([&mut opened], server);
+            let failed = opened.failed_launches.iter().map(|f| f.message());
+            let warnings: Vec<String> = opened.warnings.into_iter().chain(failed).collect();
+            serde_json::json!({
+                "opened": true,
+                "sessions": opened.sessions_restored,
+                "agents": opened.agents_respawned,
+                "warnings": warnings,
+            })
+        }),
+        "close" => close::close(root, server).and_then(|closed| {
+            // A server run by hand in one of the project's sessions outlives it.
+            if let Some(own) = &closed.own {
+                own.kill(server)?;
+            }
+            Ok(serde_json::json!({ "closed": true, "sessions": closed.killed }))
+        }),
+        "delete" => {
+            let mut warnings = Vec::new();
+            delete::delete(root, &config.projects_dir, false, server, |pending| {
+                warnings = pending.warnings.to_vec();
+                Ok(true)
+            })
+            .and_then(|deleted| {
+                if let Some(own) = deleted.as_ref().and_then(|d| d.own.as_ref()) {
+                    own.kill(server)?;
+                }
+                Ok(serde_json::json!({ "deleted": true, "warnings": warnings }))
+            })
+        }
+        _ => {
+            return Ok(Written {
+                reply: error(404, "no such endpoint"),
+                detail: String::new(),
+            });
+        }
+    };
     finish(config, action, done)
 }
 
@@ -272,5 +319,172 @@ mod tests {
         );
         assert!(!crate::git::has_uncommitted_changes(&main).unwrap());
         assert!(FeatureState::load(&paths::features_dir(&f.project), "login").is_ok());
+    }
+
+    fn snapshot(f: &super::super::tests::Fixture, token: &str) -> serde_json::Value {
+        let (status, reply) = call(&f.config, "GET", "/v1/snapshot", token, "");
+        assert_eq!(status, 200, "{reply}");
+        body(&reply)
+    }
+
+    #[test]
+    fn a_close_ends_every_session_of_the_project_and_keeps_its_state() {
+        let f = fixture();
+        let phone = pair(&f.config, "phone");
+        let session = tmux::session_name(&f.project_name, "login");
+        f.server
+            .spawn_idle_fake_agent(&f.project, &session, "login", "implementer");
+
+        let close = format!("/v1/projects/{}/close", f.project_name);
+        let (status, reply) = call(&f.config, "POST", &close, &phone, "");
+
+        assert_eq!(
+            (status, body(&reply)),
+            (200, serde_json::json!({"closed": true, "sessions": 2}))
+        );
+        let snapshot = snapshot(&f, &phone);
+        assert_eq!(snapshot["projects"][0]["main"]["session_exists"], false);
+        let login = &snapshot["features"][0];
+        assert_eq!(login["session_exists"], false);
+        assert_eq!(login["agents"][0]["state"], "closed");
+        assert!(FeatureState::load(&paths::features_dir(&f.project), "login").is_ok());
+    }
+
+    #[test]
+    fn an_open_recreates_a_closed_projects_sessions_once() {
+        let f = fixture();
+        let phone = pair(&f.config, "phone");
+        let close = format!("/v1/projects/{}/close", f.project_name);
+        assert_eq!(call(&f.config, "POST", &close, &phone, "").0, 200);
+
+        let open = format!("/v1/projects/{}/open", f.project_name);
+        let (status, reply) = call(&f.config, "POST", &open, &phone, "");
+        assert_eq!(
+            (status, body(&reply)),
+            (
+                200,
+                serde_json::json!({"opened": true, "sessions": 2, "agents": 0, "warnings": []})
+            )
+        );
+        for scope in ["main", "login"] {
+            let session = tmux::session_name(&f.project_name, scope);
+            assert!(tmux::has_session(f.server.name(), &session).unwrap());
+        }
+
+        let (status, reply) = call(&f.config, "POST", &open, &phone, "");
+        assert_eq!((status, body(&reply)["sessions"].as_u64()), (200, Some(0)));
+    }
+
+    #[test]
+    fn an_open_tells_the_device_of_a_feature_it_skipped() {
+        let f = fixture();
+        let phone = pair(&f.config, "phone");
+        let close = format!("/v1/projects/{}/close", f.project_name);
+        assert_eq!(call(&f.config, "POST", &close, &phone, "").0, 200);
+        std::fs::rename(f.project.join("login"), f.project.join("moved")).unwrap();
+
+        let open = format!("/v1/projects/{}/open", f.project_name);
+        let (status, reply) = call(&f.config, "POST", &open, &phone, "");
+
+        assert_eq!(status, 200, "{reply}");
+        let reply = body(&reply);
+        assert_eq!(reply["sessions"], 1, "{reply}");
+        let warnings = reply["warnings"].as_array().unwrap();
+        assert_eq!(warnings.len(), 1, "{reply}");
+        assert!(
+            warnings[0]
+                .as_str()
+                .unwrap()
+                .starts_with("skipping 'login': worktree missing"),
+            "{reply}"
+        );
+    }
+
+    #[test]
+    fn a_project_delete_of_unmerged_work_is_refused_with_the_terminal_way_out() {
+        let f = fixture();
+        let phone = pair(&f.config, "phone");
+        TestServer::add_feature_commit(&f.project, "login");
+
+        let delete = format!("/v1/projects/{}/delete", f.project_name);
+        let (status, reply) = call(&f.config, "POST", &delete, &phone, "");
+
+        assert_eq!(status, 409, "{reply}");
+        let reply = body(&reply);
+        assert_eq!(reply["refused"], "unsafe");
+        let error = reply["error"].as_str().unwrap();
+        assert!(
+            error.contains("feature 'login' has commits not merged"),
+            "{error}"
+        );
+        assert!(
+            error.contains(&format!(
+                "`pm delete --force --project {}` at a terminal deletes it anyway, \
+                 along with its worktrees and the main checkout.",
+                f.project_name
+            )),
+            "{error}"
+        );
+        assert!(!error.contains("Use --force"), "{error}");
+        assert!(paths::pm_dir(&f.project).exists());
+        assert!(
+            TestServer::registry_dir(&f.project)
+                .join(format!("{}.toml", f.project_name))
+                .exists()
+        );
+    }
+
+    #[test]
+    fn a_project_delete_forgets_the_project_and_leaves_its_checkouts() {
+        let f = fixture();
+        let phone = pair(&f.config, "phone");
+        std::fs::write(f.project.join("login/scratch.txt"), "notes").unwrap();
+
+        let delete = format!("/v1/projects/{}/delete", f.project_name);
+        let (status, reply) = call(&f.config, "POST", &delete, &phone, "");
+
+        assert_eq!(status, 200, "{reply}");
+        let reply = body(&reply);
+        assert_eq!(reply["deleted"], true);
+        let warnings = reply["warnings"].as_array().unwrap();
+        assert_eq!(warnings.len(), 1, "{reply}");
+        assert!(
+            warnings[0].as_str().unwrap().contains("scratch.txt"),
+            "{reply}"
+        );
+        assert!(!paths::pm_dir(&f.project).exists());
+        assert!(paths::main_worktree(&f.project).join(".git").exists());
+        assert!(f.project.join("login/scratch.txt").exists());
+        let main = tmux::session_name(&f.project_name, "main");
+        assert!(!tmux::has_session(f.server.name(), &main).unwrap());
+        assert_eq!(snapshot(&f, &phone)["projects"], serde_json::json!([]));
+
+        let (status, reply) = call(&f.config, "POST", &delete, &phone, "");
+        assert_eq!(
+            (status, body(&reply)["error"].as_str()),
+            (404, Some("no such project"))
+        );
+    }
+
+    #[test]
+    fn a_project_action_takes_only_a_post_and_notes_keep_their_methods() {
+        let f = fixture();
+        let phone = pair(&f.config, "phone");
+        let open = format!("/v1/projects/{}/open", f.project_name);
+        let (status, reply) = call(&f.config, "GET", &open, &phone, "");
+        assert_eq!(
+            (status, body(&reply)),
+            (
+                405,
+                serde_json::json!({"error": "no such endpoint for this method"})
+            )
+        );
+        let notes = format!("/v1/projects/{}/notes", f.project_name);
+        assert_eq!(call(&f.config, "GET", &notes, &phone, "").0, 200);
+        let (status, reply) = call(&f.config, "POST", &notes, &phone, "");
+        assert_eq!(
+            (status, body(&reply)["error"].as_str()),
+            (405, Some("GET and PUT are served here"))
+        );
     }
 }

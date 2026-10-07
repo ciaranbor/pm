@@ -2,8 +2,8 @@
 
 The README's [Android app](../README.md#android-app) covers installing and
 pairing the app, and [Remote access](../README.md#remote-access) what it
-connects to. This page covers updates, notification delivery, and
-building it yourself.
+connects to. This page covers updates, notification delivery, a project's
+actions, and building it yourself.
 
 ## Updates
 
@@ -43,6 +43,16 @@ closed, and while open, on each push and each poll.
 Polling alerts what a push would: a scope's top-ranked need as it begins,
 so a ready feature whose agent asks alerts the question first and ready
 once it is answered.
+
+## Projects
+
+A project's page has Open, Close and Delete in its top bar: Open
+while any of its sessions is missing, Close while any is up. Open runs at
+once. Close asks first, and says how many agents are mid-turn; Open brings
+them back, each resuming its conversation. Delete runs `pm delete` without
+`--force` once you type the project's name, and leaves every page of the
+project. The start screen lists a project with no session up under Closed
+projects, after the rest; its page offers Open.
 
 ## Building
 

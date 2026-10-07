@@ -149,7 +149,9 @@ fn blocking(on_turn: &mut dyn FnMut(AgentState, u32)) -> i32 {
 }
 
 /// Record that the hook ended without the agent getting a decision, so it
-/// sits at its prompt with nothing to wake it. Best-effort.
+/// sits at its prompt with nothing to wake it. Best-effort, and skipped once
+/// the project's `.pm` is gone: a delete ends the hook by killing its
+/// session, and the record would bring the project's state back.
 fn hook_ended(
     project_root: &std::path::Path,
     scope: &str,
@@ -157,6 +159,9 @@ fn hook_ended(
     why: String,
     on_turn: &mut dyn FnMut(AgentState, u32),
 ) {
+    if !paths::pm_dir(project_root).is_dir() {
+        return;
+    }
     let waiting = Waiting::now(WaitingKind::HookEnded, Some(format!("Stop hook {why}")));
     if runtime::write_waiting(project_root, scope, agent, &waiting).is_ok() {
         let unread = messages::unread_count(&paths::messages_dir(project_root), scope, agent);
@@ -659,5 +664,23 @@ mod tests {
         // Defensive: non-array values must not panic, just mean "not busy".
         let json = r#"{"background_tasks":"oops","session_crons":42}"#;
         assert!(!parse_busy(json));
+    }
+
+    #[test]
+    fn a_hook_ended_by_its_projects_delete_leaves_no_state_behind() {
+        let dir = tempdir().unwrap();
+        let mut told = Vec::new();
+
+        runtime::log_stop_hook(dir.path(), "main", "main", "ended undecided");
+        hook_ended(
+            dir.path(),
+            "main",
+            "main",
+            "ended by SIGHUP".into(),
+            &mut |s, _| told.push(s),
+        );
+
+        assert!(!paths::pm_dir(dir.path()).exists());
+        assert!(told.is_empty());
     }
 }

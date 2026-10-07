@@ -107,6 +107,28 @@ class UiTest {
     }
 
     @Test
+    @Config(qualifiers = "w360dp-h640dp-440dpi")
+    fun a_project_without_a_session_is_listed_apart_and_opens_its_page() {
+        val store = Store(ApplicationProvider.getApplicationContext())
+        store.pairing = Pairing("http://127.0.0.1:9", "pixel", "tok")
+        store.cacheSnapshot(
+            SNAPSHOT.replace(""""session_exists": true""", """"session_exists": false""")
+                .replace(
+                    """"projects": [{""",
+                    """"projects": [{"name": "web", "main": {"session_exists": true}}, {""",
+                )
+        )
+        val model = AppViewModel(Repository(store, OkHttpClient(), scope)) {}
+        compose.setContent { PmTheme { App(model, null, targetShown = {}) } }
+        compose.waitUntil(5_000) { model.snapshot.value != null }
+
+        compose.onNodeWithContentDescription("web, 0 features").assertIsDisplayed()
+        compose.onNodeWithText("Closed projects").assertIsDisplayed()
+        compose.onNodeWithContentDescription("app, 2 features", substring = true).performClick()
+        compose.onNodeWithContentDescription("Open").assertIsDisplayed()
+    }
+
+    @Test
     fun a_need_on_the_start_screen_opens_its_workspace_and_back_returns_to_the_start() {
         val model = model()
         compose.setContent { PmTheme { App(model, null, targetShown = {}) } }
