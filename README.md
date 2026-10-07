@@ -1,4 +1,10 @@
-# pm
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/branding/lockup-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="assets/branding/lockup-light.svg">
+    <img alt="pm" src="assets/branding/lockup-light.svg" width="196" height="84">
+  </picture>
+</h1>
 
 Terminal-based project manager built around tmux and git worktrees.
 

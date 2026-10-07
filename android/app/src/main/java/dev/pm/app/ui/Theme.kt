@@ -24,7 +24,7 @@ import com.materialkolor.scheme.SchemeTonalSpot
 import dev.pm.app.model.Tone
 
 /** The colour the app's scheme grows from where the wallpaper's isn't used. */
-val Seed = Color(0xFF6750A4)
+val Seed = Color(0xFF4F5B92)
 
 /** A Material scheme grown from `seed`, as Android grows one from a wallpaper. */
 fun schemeOf(seed: Color, dark: Boolean): ColorScheme {
