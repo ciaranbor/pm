@@ -6,6 +6,36 @@ notes.
 
 ## Unreleased
 
+- The Android app is redesigned:
+- **Home and workspaces:** one home screen (Needs you, Working, Projects) and a workspace per feature
+with a tab per agent plus Summary, Brief and Details.
+- **Chat:** groups tool calls into collapsible runs and has a full-screen output reader.
+- **Prompts:** permission prompts, plans and questions are compact cards; several open prompts page
+through; a lone question answers in one tap.
+- **Composer:** queued and failed messages show as bubbles with Retry, and drafts are kept per agent.
+- **Terminal sheet:** draws the pane cell for cell, with zoom, a sticky Ctrl key and Copy link.
+- **Notifications:** say what is asked, group per project, and allow or deny a permission prompt from
+the shade on an unlocked phone.
+- **Elsewhere:** a reworked notes editor, Settings and pairing, connection and freshness indicators, and
+a new icon.
+- From the phone: merge, delete and restart work for any paired device;
+codex agents' questions show as asking and can be answered; "Forget this
+server" unpairs the phone on the server, and `pm serve revoke` cuts a
+phone off at once.
+- `pm upgrade` restarts idle agents whose launch inputs changed (opt out
+with `[upgrade] restart_agents = false`); a launch counts only once the
+agent's session has started, and on macOS a hung login keychain holds
+restarts back.
+- `[bundled]` in the global config disables built-in agents, workflows,
+skills or the baseline.
+- Agents no longer stay "asking" after a question is answered at the
+terminal; messages pm sends itself say there is no one to reply to.
+- Fixes: a feature whose cleanup failed can be removed; `pm init` and
+`pm register` refuse a taken name and clean up after a failed clone;
+read-only codex agents start; phone input is never merged into an
+opencode draft; `pm msg send` revives an agent whose tool exited.
+- opencode 2.0.23 or later is required.
+- pm is MIT-licensed.
 - The release APK is named for its version, `pm-<version>-android-<abi>.apk`,
 so a second download no longer saves as `pm-android-arm64-v8a(1).apk`. The
 unversioned copy stays for a while so 0.4.0 apps still see the update.
