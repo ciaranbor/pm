@@ -38,6 +38,37 @@ data class Dialog(
         @SerialName("takes_message") val takesMessage: Boolean = false,
     )
 
+    /** What the dialog asks, as its card's title says it. */
+    val title: String
+        get() =
+            when (kind) {
+                "question" -> "The agent asks"
+                "plan" -> "Approve the plan?"
+                else -> "Allow ${tool ?: "this"}?"
+            }
+
+    /**
+     * What the dialog is about, in a line: the command or file, the plan's title, or the question
+     * with how many more follow it.
+     */
+    val target: String?
+        get() {
+            if (kind != "question") return detail
+            val first = questions.firstOrNull()?.question ?: return detail
+            val more = questions.size - 1
+            return if (more > 0) "$first (+$more more)" else first
+        }
+
+    /** The choices by weight: the first is the main one, the last declines, the rest between. */
+    val groups: ChoiceGroups?
+        get() {
+            val primary = choices.firstOrNull() ?: return null
+            if (choices.size == 1) return ChoiceGroups(primary, emptyList(), null)
+            return ChoiceGroups(primary, choices.subList(1, choices.size - 1), choices.last())
+        }
+
+    data class ChoiceGroups(val primary: Choice, val more: List<Choice>, val negative: Choice?)
+
     companion object {
         /** The choice that submits the answers to [questions]. */
         const val ANSWER = "answer"

@@ -34,6 +34,10 @@
             android:name=".push.ReplyReceiver"
             android:exported="false" />
 
+        <receiver
+            android:name=".push.AnswerReceiver"
+            android:exported="false" />
+
         <service
             android:name=".push.PushService"
             android:exported="false">

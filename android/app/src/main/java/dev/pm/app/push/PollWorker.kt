@@ -9,6 +9,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import dev.pm.app.container
+import dev.pm.app.model.Alert
 import dev.pm.app.model.Poll
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
@@ -38,7 +39,10 @@ class PollWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         if (!snapshot.understood) return Result.success()
         val (kept, made) = Poll.judge(container.store.polled, snapshot)
         container.store.polled = kept
-        made.forEach { Notifications.show(applicationContext, it) }
+        made.forEach {
+            val alert = Details.of(client, it, snapshot) ?: Alert.bare(it)
+            Notifications.show(applicationContext, alert)
+        }
         Notifications.reconcile(applicationContext, snapshot)
         return Result.success()
     }

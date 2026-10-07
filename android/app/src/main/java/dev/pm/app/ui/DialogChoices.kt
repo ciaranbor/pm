@@ -50,7 +50,7 @@ internal fun ChoiceRow(
     onChoice: (Dialog.Choice) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val groups = groupsOf(dialog.choices) ?: return
+    val groups = dialog.groups ?: return
     Row(
         modifier.fillMaxWidth().padding(top = Spacing.xs),
         horizontalArrangement = Arrangement.spacedBy(Spacing.s),

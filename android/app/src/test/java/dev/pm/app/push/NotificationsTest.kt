@@ -7,11 +7,14 @@ import android.content.Context
 import androidx.core.app.NotificationCompat
 import androidx.test.core.app.ApplicationProvider
 import dev.pm.app.SNAPSHOT
+import dev.pm.app.model.Alert
+import dev.pm.app.model.Dialog
 import dev.pm.app.model.PushedTransition
 import dev.pm.app.model.Snapshot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -26,8 +29,44 @@ class NotificationsTest {
     private fun alerts() =
         showing().filter { it.notification.flags and Notification.FLAG_GROUP_SUMMARY == 0 }
 
-    private fun summary() =
-        showing().singleOrNull { it.notification.flags and Notification.FLAG_GROUP_SUMMARY != 0 }
+    private fun summaries() =
+        showing().filter { it.notification.flags and Notification.FLAG_GROUP_SUMMARY != 0 }
+
+    private fun Notification.text() = extras.getCharSequence(Notification.EXTRA_TEXT).toString()
+
+    private fun Notification.lines() =
+        NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(this)!!
+            .messages
+            .map { it.text.toString() }
+
+    private fun Notification.conversationTitle() =
+        NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(this)!!
+            .conversationTitle
+            .toString()
+
+    private fun Notification.actionLabels() =
+        (0 until NotificationCompat.getActionCount(this)).map {
+            NotificationCompat.getAction(this, it)!!.title.toString()
+        }
+
+    private fun Notification.action(label: String) =
+        (0 until NotificationCompat.getActionCount(this))
+            .map { NotificationCompat.getAction(this, it)!! }
+            .single { it.title.toString() == label }
+
+    private fun byScope() =
+        alerts().associate { PushedTransition.parse(it.tag)!!.where to it.notification }
+
+    private val blocked = PushedTransition("app", "login", "blocked", "implementer")
+
+    private val permission =
+        Dialog(
+            "d1",
+            "permission",
+            tool = "Bash",
+            detail = "npm install stripe@^17",
+            choices = listOf(Dialog.Choice("yes", "Yes"), Dialog.Choice("no", "No")),
+        )
 
     @Test
     fun upgrading_replaces_the_single_channel_with_one_per_kind() {
@@ -49,139 +88,152 @@ class NotificationsTest {
     }
 
     @Test
-    fun alerts_group_under_a_summary_that_alerts_on_the_newest_ones_channel() {
+    fun alerts_are_titled_by_feature_and_grouped_per_project_under_a_summary_that_alerts() {
         Notifications.createChannels(context)
-        Notifications.show(
-            context,
-            PushedTransition("app", "login", "blocked", "implementer"),
-            now = 1,
-        )
+        Notifications.show(context, blocked, now = 1)
         Notifications.show(context, PushedTransition("app", "search", "ready"), now = 2)
+        Notifications.show(context, PushedTransition("web", "main", "asking", "main"), now = 3)
 
-        val byChannel = alerts().associate { it.notification.channelId to it.notification }
-        assertEquals(setOf("needs-input", "ready"), byChannel.keys)
-        val blocked = byChannel.getValue("needs-input")
-        assertEquals("app/login: implementer", blocked.extras.getString(Notification.EXTRA_TITLE))
-        assertEquals(
-            "implementer is blocked on you",
-            blocked.extras.getCharSequence(Notification.EXTRA_TEXT).toString(),
-        )
-        assertEquals(1L, blocked.`when`)
+        val login = byScope().getValue("app/login")
+        assertEquals("login", login.conversationTitle())
+        assertEquals("app", login.extras.getString(Notification.EXTRA_SUB_TEXT))
+        assertEquals("needs-input", login.channelId)
+        assertEquals(1L, login.`when`)
+        assertEquals("web", byScope().getValue("web/main").conversationTitle())
         alerts().forEach {
             assertEquals(NotificationCompat.GROUP_ALERT_SUMMARY, it.notification.groupAlertBehavior)
         }
 
-        val summary = summary()!!.notification
-        assertEquals("ready", summary.channelId)
-        assertEquals(alerts().first().notification.group, summary.group)
-        assertEquals("app/search", summary.extras.getString(Notification.EXTRA_TITLE))
-        assertEquals(2, summary.number)
+        val summaries = summaries().associateBy { it.tag }
+        assertEquals(setOf("app", "web"), summaries.keys)
+        val app = summaries.getValue("app").notification
+        assertEquals("ready", app.channelId)
+        assertEquals(login.group, app.group)
+        assertEquals("search", app.extras.getString(Notification.EXTRA_TITLE))
+        assertEquals(2, app.number)
+        assertEquals(1, summaries.getValue("web").notification.number)
     }
 
     @Test
     fun a_later_push_of_the_same_alert_replaces_it() {
         Notifications.createChannels(context)
-        Notifications.show(
-            context,
-            PushedTransition("app", "login", "blocked", "implementer"),
-            now = 1,
-        )
-        Notifications.show(
-            context,
-            PushedTransition("app", "login", "blocked", "reviewer"),
-            now = 2,
-        )
+        Notifications.show(context, blocked, now = 1)
+        Notifications.show(context, blocked.copy(agent = "reviewer"), now = 2)
         Notifications.show(context, PushedTransition("app", "login", "asking", "reviewer"), now = 3)
 
         assertEquals(2, alerts().size)
         assertEquals(
-            setOf("reviewer is blocked on you", "reviewer is asking"),
-            alerts()
-                .map { it.notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString() }
-                .toSet(),
+            setOf(listOf("Blocked on you"), listOf("Waiting for your answer")),
+            alerts().map { it.notification.lines() }.toSet(),
         )
     }
 
     @Test
-    fun a_snapshot_withdraws_the_alerts_it_shows_are_over() {
+    fun a_snapshot_withdraws_the_alerts_it_shows_are_over_but_not_those_answered() {
         Notifications.createChannels(context)
         val snapshot = Snapshot.parse(SNAPSHOT)
         Notifications.show(context, PushedTransition("app", "login", "blocked"), now = 1)
         Notifications.show(context, PushedTransition("app", "login", "ready"), now = 2)
+        Notifications.acted(
+            context,
+            Alert.bare(PushedTransition("web", "x", "blocked", "a")).replied("ok"),
+        )
 
         Notifications.reconcile(context, snapshot)
-        assertEquals(listOf("needs-input"), alerts().map { it.notification.channelId })
-        assertEquals(1, summary()!!.notification.number)
-        assertEquals("ready", summary()!!.notification.channelId)
+        assertEquals(setOf("app/login", "web/x"), byScope().keys)
+        val summaries = summaries().associateBy { it.tag }
+        assertEquals(1, summaries.getValue("app").notification.number)
 
         Notifications.reconcile(context, snapshot.copy(features = emptyList()))
-        assertEquals(emptyList<Any>(), showing())
+        assertEquals(setOf("web/x"), byScope().keys)
+        assertEquals(listOf("web"), summaries().map { it.tag })
     }
 
     @Test
     fun a_snapshot_brings_the_summary_up_to_date_after_a_dismissal() {
         Notifications.createChannels(context)
-        val snapshot = Snapshot.parse(SNAPSHOT)
-        val blocked = PushedTransition("app", "login", "blocked")
-        Notifications.show(context, blocked, now = 1)
+        Notifications.show(context, PushedTransition("app", "login", "blocked"), now = 1)
         Notifications.show(context, PushedTransition("app", "search", "ready"), now = 2)
         manager.cancel(PushedTransition.encode(blocked.key), alerts().first().id)
 
-        Notifications.reconcile(context, snapshot)
-        assertEquals(1, summary()!!.notification.number)
+        Notifications.reconcile(context, Snapshot.parse(SNAPSHOT))
+        assertEquals(1, summaries().single().notification.number)
     }
 
-    private fun replyAction(notification: Notification) =
-        NotificationCompat.getActionCount(notification).let { count ->
-            (0 until count)
-                .map { NotificationCompat.getAction(notification, it)!! }
-                .singleOrNull { it.remoteInputs?.isNotEmpty() == true }
-        }
-
     @Test
-    fun an_agent_waiting_on_the_user_is_answered_inline_but_a_dialog_is_not() {
+    fun every_alert_opens_its_agent_and_only_a_permission_prompt_is_allowed_or_denied() {
         Notifications.createChannels(context)
+        val asking = PushedTransition("app", "search", "asking", "qa")
+        Notifications.show(context, Alert.of(asking, null, listOf(permission)), now = 1)
         Notifications.show(
             context,
-            PushedTransition("app", "login", "blocked", "implementer"),
-            now = 1,
+            Alert.of(asking.copy(scope = "auth"), null, listOf(permission.copy(kind = "plan"))),
+            now = 2,
         )
-        Notifications.show(context, PushedTransition("app", "search", "asking", "qa"), now = 2)
-        Notifications.show(context, PushedTransition("app", "auth", "ready"), now = 3)
+        Notifications.show(context, blocked, now = 3)
+        Notifications.show(context, PushedTransition("app", "docs", "ready"), now = 4)
 
-        val byScope =
-            alerts().associate { PushedTransition.parse(it.tag)!!.where to it.notification }
-        val blocked = byScope.getValue("app/login")
-        val reply = replyAction(blocked)!!
+        val alerts = byScope()
+        val prompt = alerts.getValue("app/search")
+        assertEquals(listOf("Allow Bash? npm install stripe@^17"), prompt.lines())
+        assertEquals(listOf("Allow", "Deny", "Open"), prompt.actionLabels())
+        assertTrue(prompt.action("Allow").isAuthenticationRequired)
+        assertTrue(prompt.action("Deny").isAuthenticationRequired)
+        assertEquals(listOf("Open"), alerts.getValue("app/auth").actionLabels())
+        assertEquals(listOf("Open"), alerts.getValue("app/docs").actionLabels())
+
+        val waiting = alerts.getValue("app/login")
+        assertEquals(listOf("Reply", "Open"), waiting.actionLabels())
+        val reply = waiting.action("Reply")
         assertEquals(ReplyReceiver.KEY_TEXT, reply.remoteInputs!!.single().resultKey)
         assertEquals(NotificationCompat.Action.SEMANTIC_ACTION_REPLY, reply.semanticAction)
+        assertTrue(reply.isAuthenticationRequired)
         val style =
-            NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(blocked)!!
+            NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(waiting)!!
         assertEquals("implementer", style.messages.single().person!!.name)
-        assertNull(replyAction(byScope.getValue("app/search")))
-        assertNull("a ready scope names no agent", replyAction(byScope.getValue("app/auth")))
+        assertEquals("login", style.conversationTitle)
     }
 
     @Test
-    fun a_reply_that_failed_shows_its_text_and_can_be_sent_again() {
+    fun a_reply_shows_in_the_alert_with_the_reply_action_again_only_if_it_failed() {
         Notifications.createChannels(context)
-        val blocked = PushedTransition("app", "login", "blocked", "implementer")
-        Notifications.show(context, blocked, now = 1)
+        val alert = Alert.bare(blocked)
+        Notifications.show(context, alert, now = 1)
 
-        Notifications.replied(context, blocked, "use postgres", "tailnet unreachable", now = 2)
+        Notifications.acted(context, alert.failed("use postgres", "tailnet unreachable"), now = 2)
         val failed = alerts().single().notification
-        val lines =
-            NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(failed)!!
-                .messages
-                .map { it.text.toString() }
         assertEquals(
-            listOf("implementer is blocked on you", "Not sent (tailnet unreachable): use postgres"),
-            lines,
+            listOf("Blocked on you", "Not sent (tailnet unreachable): use postgres"),
+            failed.lines(),
         )
-        assertNotNull(replyAction(failed))
+        assertEquals(listOf("Reply", "Open"), failed.actionLabels())
 
-        Notifications.replied(context, blocked, "use postgres", null, now = 3)
+        Notifications.acted(context, alert.replied("use postgres"), now = 3)
         val sent = alerts().single().notification
-        assertNull(replyAction(sent))
+        assertEquals(listOf("Blocked on you", "use postgres"), sent.lines())
+        assertEquals(listOf("Open"), sent.actionLabels())
+    }
+
+    @Test
+    fun the_servers_words_replace_the_pushs_until_the_user_acts_on_the_alert() {
+        Notifications.createChannels(context)
+        val asking = PushedTransition("app", "search", "asking", "qa")
+        val detailed = Alert.of(asking, null, listOf(permission))
+        Notifications.show(context, asking, now = 1)
+
+        Notifications.detailed(context, detailed)
+        val shown = alerts().single().notification
+        assertEquals(listOf("Allow Bash? npm install stripe@^17"), shown.lines())
+        assertEquals("the alert keeps its time", 1L, shown.`when`)
+
+        Notifications.acted(context, detailed.answered("Allowed", emptyList()), now = 2)
+        Notifications.detailed(context, detailed)
+        assertEquals(
+            listOf("Allow Bash? npm install stripe@^17", "Allowed"),
+            alerts().single().notification.lines(),
+        )
+
+        Notifications.reconcile(context, Snapshot.parse(SNAPSHOT))
+        assertNotNull("an answered alert stays", alerts().singleOrNull())
     }
 }

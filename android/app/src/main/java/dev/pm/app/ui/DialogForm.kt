@@ -82,19 +82,6 @@ internal fun answersOf(
     return answers.takeIf { a -> a.values.all { it.isNotEmpty() } }
 }
 
-/** A dialog's choices by weight: the first is the main one, the last declines, the rest between. */
-internal data class ChoiceGroups(
-    val primary: Dialog.Choice,
-    val more: List<Dialog.Choice>,
-    val negative: Dialog.Choice?,
-)
-
-internal fun groupsOf(choices: List<Dialog.Choice>): ChoiceGroups? {
-    val primary = choices.firstOrNull() ?: return null
-    if (choices.size == 1) return ChoiceGroups(primary, emptyList(), null)
-    return ChoiceGroups(primary, choices.subList(1, choices.size - 1), choices.last())
-}
-
 /**
  * A choice's label cut to what comes before its first comma, for a row with little room: "Yes, and
  * use auto mode" is "Yes". Its menu or the review gives the whole.
@@ -106,10 +93,3 @@ internal fun isLoneChoice(dialog: Dialog): Boolean {
     val q = dialog.questions.singleOrNull() ?: return false
     return dialog.kind == "question" && !q.multiSelect && q.options.isNotEmpty()
 }
-
-internal fun titleOf(dialog: Dialog): String =
-    when (dialog.kind) {
-        "question" -> "The agent asks"
-        "plan" -> "Approve the plan?"
-        else -> "Allow ${dialog.tool ?: "this"}?"
-    }

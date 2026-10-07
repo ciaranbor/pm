@@ -1,5 +1,6 @@
 package dev.pm.app.push
 
+import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
@@ -8,6 +9,7 @@ import dev.pm.app.SNAPSHOT
 import dev.pm.app.container
 import dev.pm.app.data.Subscription
 import dev.pm.app.model.Pairing
+import dev.pm.app.model.PushedTransition
 import java.util.Collections
 import kotlinx.coroutines.runBlocking
 import mockwebserver3.Dispatcher
@@ -72,15 +74,23 @@ class PollWorkerTest {
         context.container.store.polled = emptySet()
         poll()
         assertEquals(listOf("/v1/snapshot"), snapshots.toList())
-        val shown = alerts().filter { it.tag != null }
-        assertEquals(3, shown.size)
-        val blocked = shown.single {
-            it.notification.channelId == "needs-input" && it.notification.actions != null
-        }
+        val shown =
+            alerts().filter { it.notification.flags and Notification.FLAG_GROUP_SUMMARY == 0 }
+        assertEquals(
+            "login's question is outranked by its being blocked",
+            setOf("blocked", "ready"),
+            shown.map { PushedTransition.parse(it.tag)!!.kind }.toSet(),
+        )
+        val blocked = shown.single { it.notification.channelId == "needs-input" }.notification
+        assertEquals(
+            "a polled alert says what the snapshot does",
+            "which DB?",
+            blocked.extras.getCharSequence(Notification.EXTRA_TEXT).toString(),
+        )
         assertEquals(
             "a polled alert of an agent blocked on the user is answered inline, as a pushed one is",
             1,
-            blocked.notification.actions.count { it.remoteInputs?.isNotEmpty() == true },
+            blocked.actions.count { it.remoteInputs?.isNotEmpty() == true },
         )
     }
 }

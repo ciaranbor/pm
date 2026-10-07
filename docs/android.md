@@ -27,6 +27,23 @@ instead, which works only on the tailnet and only as often as Android lets
 it: every 15 minutes at best, and hours apart once the phone dozes or the
 app goes unused. [Push](remote-api.md#push) has the server side.
 
+A push says only which scope entered which kind, so the app shows that at
+once, then fills in what the server says when the tailnet answers within
+10 s: the question or command an asking agent's oldest open dialog puts, a
+blocked feature's reason, a ready one's summary. Each notification is
+titled by its feature (a `main` by its project) and grouped under its
+project, and opens its agent. A permission prompt also has Allow and Deny,
+answered as the dialog card answers it (Deny stops the agent's turn), and
+a feature blocked on you has an inline reply to the agent that blocked it;
+both need the phone unlocked. What you sent stays in the notification
+until you dismiss it. The others are withdrawn once the server shows their
+need is over, which the app learns while it is open, on each push, and on
+each poll.
+
+Polling alerts what a push would: a scope's top-ranked need as it begins,
+so a ready feature whose agent asks alerts the question first and ready
+once it is answered.
+
 ## Building
 
 The app lives in `android/` (Kotlin, Jetpack Compose), and needs JDK 17+

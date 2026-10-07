@@ -6,17 +6,13 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
-import android.os.Bundle
 import android.provider.Settings
 import android.service.notification.StatusBarNotification
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import androidx.core.app.Person
-import androidx.core.app.RemoteInput
 import androidx.core.net.toUri
-import dev.pm.app.MainActivity
 import dev.pm.app.R
+import dev.pm.app.model.Alert
 import dev.pm.app.model.AttentionKind
 import dev.pm.app.model.PushedTransition
 import dev.pm.app.model.Snapshot
@@ -90,11 +86,12 @@ object Notifications {
 
     /** The single channel of earlier versions. */
     private const val RETIRED_CHANNEL = "attention"
+    /** The alerts' group, suffixed per project. */
     private const val GROUP = "dev.pm.app.attention"
+    /** Each project's summary's id; its tag is the project. */
     private const val SUMMARY_ID = 0
     /** Every alert's id; its tag, the encoded [PushedTransition.key], tells them apart. */
     private const val ALERT_ID = 1
-    private const val EXTRA_TRANSITION = "dev.pm.app.transition"
     private const val UPDATE_ID = 2
 
     fun createChannels(context: Context) {
@@ -110,139 +107,58 @@ object Notifications {
     }
 
     /**
-     * An alert of `transition`, replacing one with the same [PushedTransition.key], under a summary
-     * that alerts for the group on `transition`'s channel.
+     * Alert `alert`, replacing one with the same [PushedTransition.key], under its project's
+     * summary, which alerts for the group on `alert`'s channel unless `silent`.
      */
+    fun show(
+        context: Context,
+        alert: Alert,
+        now: Long = System.currentTimeMillis(),
+        silent: Boolean = false,
+    ) {
+        if (!allowed(context)) return
+        val transition = alert.transition
+        val tag = PushedTransition.encode(transition.key)
+        val channel = Channel.of(transition.kindOf)
+        val built =
+            AlertNotification.build(context, alert, channel.id, group(transition.project), now)
+                .setSilent(silent)
+                .build()
+        // What's showing is read before posting: a post reaches the active list asynchronously.
+        val others =
+            newestFirst(
+                alerts(context).filter { (sbn, shown) ->
+                    sbn.tag != tag && shown.transition.project == transition.project
+                }
+            )
+        @Suppress("MissingPermission")
+        NotificationManagerCompat.from(context).notify(tag, ALERT_ID, built)
+        summarize(context, transition.project, channel.id, listOf(alert) + others, silent)
+    }
+
+    /** Alert `transition` as its push alone tells it. */
     fun show(
         context: Context,
         transition: PushedTransition,
         now: Long = System.currentTimeMillis(),
-    ) {
-        if (!allowed(context)) return
-        val tag = PushedTransition.encode(transition.key)
-        val channel = Channel.of(transition.kindOf)
-        val alert = alert(context, transition, now).build()
-        // What's showing is read before posting: a post reaches the active list asynchronously.
-        val others = newestFirst(alerts(context).filter { (sbn, _) -> sbn.tag != tag })
-        @Suppress("MissingPermission")
-        NotificationManagerCompat.from(context).notify(tag, ALERT_ID, alert)
-        summarize(context, channel.id, listOf(transition) + others, silent = false)
-    }
+    ) = show(context, Alert.bare(transition), now)
 
     /**
-     * Show what came of the user's inline reply `text` to `transition`'s alert, silently: the reply
-     * under the agent's message, or, when `failure` says why it wasn't sent, the text with the
-     * reason, and the reply action again.
+     * Show `alert`, the detailed form of one showing as its push alone told it, silently; not if
+     * that one is gone, or the user has acted on it.
      */
-    fun replied(
-        context: Context,
-        transition: PushedTransition,
-        text: String,
-        failure: String?,
-        now: Long = System.currentTimeMillis(),
-    ) {
-        if (!allowed(context)) return
-        val alert = alert(context, transition, now, reply = Reply(text, failure))
-        @Suppress("MissingPermission")
-        NotificationManagerCompat.from(context)
-            .notify(
-                PushedTransition.encode(transition.key),
-                ALERT_ID,
-                alert.setSilent(true).build(),
-            )
+    fun detailed(context: Context, alert: Alert) {
+        val tag = PushedTransition.encode(alert.transition.key)
+        val (sbn, shown) = alerts(context).find { (sbn, _) -> sbn.tag == tag } ?: return
+        if (shown != Alert.bare(alert.transition)) return
+        show(context, alert, sbn.notification.`when`, silent = true)
     }
 
-    /** The user's inline reply, and why it wasn't sent, if it wasn't. */
-    private data class Reply(val text: String, val failure: String?)
+    /** Show what came of the user acting on an alert, silently, as `alert` now tells it. */
+    fun acted(context: Context, alert: Alert, now: Long = System.currentTimeMillis()) =
+        show(context, alert, now, silent = true)
 
-    /**
-     * `transition`'s alert. One naming an agent that waits on the user — blocked on them, or ready
-     * for review — is a conversation with that agent, answered inline ([ReplyReceiver]). An agent
-     * asking has a dialog up, which typed text can't answer, so it gets none.
-     */
-    private fun alert(
-        context: Context,
-        transition: PushedTransition,
-        now: Long,
-        reply: Reply? = null,
-    ): NotificationCompat.Builder {
-        val tag = PushedTransition.encode(transition.key)
-        val channel = Channel.of(transition.kindOf)
-        val intent =
-            Target(transition.project, transition.scope, transition.agent)
-                .into(Intent(context, MainActivity::class.java))
-                .setData(Uri.fromParts("pm", tag, null))
-                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        val open =
-            PendingIntent.getActivity(
-                context,
-                0,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-            )
-        val encoded = PushedTransition.encode(transition)
-        val alert =
-            NotificationCompat.Builder(context, channel.id)
-                .setSmallIcon(R.drawable.ic_notification)
-                .setContentTitle(transition.where)
-                .setContentText(transition.text)
-                .setWhen(now)
-                .setShowWhen(true)
-                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-                .setContentIntent(open)
-                .setAutoCancel(true)
-                .setGroup(GROUP)
-                .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_SUMMARY)
-                .addExtras(Bundle().apply { putString(EXTRA_TRANSITION, encoded) })
-        val agent = transition.agent
-        val waiting =
-            transition.kindOf == AttentionKind.Blocked || transition.kindOf == AttentionKind.Ready
-        if (agent == null || !waiting) return alert
-        val them = Person.Builder().setName(agent).setKey(agent).build()
-        val you = Person.Builder().setName(context.getString(R.string.reply_you)).build()
-        val style =
-            NotificationCompat.MessagingStyle(you)
-                .setConversationTitle(transition.where)
-                .setGroupConversation(false)
-                .addMessage(transition.text, now, them)
-        if (reply != null) {
-            val line =
-                reply.failure?.let { context.getString(R.string.reply_not_sent, it, reply.text) }
-                    ?: reply.text
-            style.addMessage(line, now, null as Person?)
-        }
-        alert.setStyle(style)
-        if (reply != null && reply.failure == null) return alert
-        val remote =
-            RemoteInput.Builder(ReplyReceiver.KEY_TEXT)
-                .setLabel(context.getString(R.string.reply_label, agent))
-                .build()
-        val send =
-            PendingIntent.getBroadcast(
-                context,
-                tag.hashCode(),
-                Intent(context, ReplyReceiver::class.java)
-                    .setData(Uri.fromParts("pm-reply", tag, null))
-                    .putExtra(EXTRA_TRANSITION, encoded),
-                // Mutable, the only one: RemoteInput writes the reply into it.
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
-            )
-        return alert.addAction(
-            NotificationCompat.Action.Builder(
-                    R.drawable.ic_send,
-                    context.getString(R.string.reply_action),
-                    send,
-                )
-                .addRemoteInput(remote)
-                .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY)
-                .setShowsUserInterface(false)
-                .build()
-        )
-    }
-
-    /** The transition a reply intent answers. */
-    fun replyingTo(intent: Intent): PushedTransition? =
-        intent.getStringExtra(EXTRA_TRANSITION)?.let(PushedTransition::parse)
+    private fun group(project: String) = "$GROUP/$project"
 
     /**
      * Offer `update`: tapped, the browser downloads its APK, which Android installs over pm.
@@ -274,62 +190,78 @@ object Notifications {
     fun download(update: Update): Intent =
         Intent(Intent.ACTION_VIEW, update.apk.toUri()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
-    /** Withdraw each alert `snapshot` shows is over, and bring the summary up to date. */
+    /**
+     * Withdraw each alert `snapshot` shows is over, but those the user answered, and bring each
+     * project's summary up to date.
+     */
     fun reconcile(context: Context, snapshot: Snapshot) {
         val alerts = alerts(context)
-        val over = alerts.filter { (_, transition) -> !transition.holds(snapshot) }
+        val over = alerts.filter { (_, alert) ->
+            !alert.settled && !alert.transition.holds(snapshot)
+        }
         val manager = NotificationManagerCompat.from(context)
         over.forEach { (sbn, _) -> manager.cancel(sbn.tag, ALERT_ID) }
-        val left = newestFirst(alerts - over.toSet())
-        val summary = active(context).find { it.id == SUMMARY_ID && it.tag == null } ?: return
-        when {
-            left.isEmpty() -> manager.cancel(SUMMARY_ID)
-            // A dismissed alert leaves the summary counting it.
-            left.size != summary.notification.number ->
-                summarize(context, summary.notification.channelId, left, silent = true)
+        val left = newestFirst(alerts - over.toSet()).groupBy { it.transition.project }
+        for (summary in active(context).filter { it.id == SUMMARY_ID && it.tag != null }) {
+            val project = left[summary.tag].orEmpty()
+            when {
+                project.isEmpty() -> manager.cancel(summary.tag, SUMMARY_ID)
+                // A dismissed alert leaves the summary counting it.
+                project.size != summary.notification.number ->
+                    summarize(
+                        context,
+                        summary.tag,
+                        summary.notification.channelId,
+                        project,
+                        silent = true,
+                    )
+            }
         }
     }
 
-    /** The group's summary, led by the newest alert: what the group's alert shows. */
+    /** `project`'s summary, led by its newest alert: what the group's alert shows. */
     private fun summarize(
         context: Context,
+        project: String,
         channel: String,
-        alerts: List<PushedTransition>,
+        alerts: List<Alert>,
         silent: Boolean,
     ) {
         val newest = alerts.first()
         val style = NotificationCompat.InboxStyle()
-        alerts.forEach { style.addLine("${it.where}: ${it.text}") }
+        alerts.forEach { style.addLine("${it.transition.title}: ${said(it)}") }
         val summary =
             NotificationCompat.Builder(context, channel)
                 .setSmallIcon(R.drawable.ic_notification)
-                .setContentTitle(newest.where)
-                .setContentText(newest.text)
-                .setStyle(style)
+                .setContentTitle(newest.transition.title)
+                .setContentText(said(newest))
+                .setSubText(project)
+                .setStyle(style.setSummaryText(project))
                 .setNumber(alerts.size)
                 .setCategory(NotificationCompat.CATEGORY_MESSAGE)
                 .setAutoCancel(true)
-                .setGroup(GROUP)
+                .setGroup(group(project))
                 .setGroupSummary(true)
                 .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_SUMMARY)
                 .setSilent(silent)
                 .build()
         @Suppress("MissingPermission")
-        NotificationManagerCompat.from(context).notify(SUMMARY_ID, summary)
+        NotificationManagerCompat.from(context).notify(project, SUMMARY_ID, summary)
     }
 
-    /** The alerts showing, with what each announced. */
-    private fun alerts(context: Context): List<Pair<StatusBarNotification, PushedTransition>> =
+    private fun said(alert: Alert): String = alert.lines.lastOrNull()?.text ?: alert.transition.text
+
+    /** The alerts showing, with what each shows. */
+    private fun alerts(context: Context): List<Pair<StatusBarNotification, Alert>> =
         active(context).mapNotNull { sbn ->
             if (sbn.id != ALERT_ID) return@mapNotNull null
             val encoded =
-                sbn.notification.extras.getString(EXTRA_TRANSITION) ?: return@mapNotNull null
-            PushedTransition.parse(encoded)?.let { sbn to it }
+                sbn.notification.extras.getString(AlertNotification.EXTRA_ALERT)
+                    ?: return@mapNotNull null
+            Alert.parse(encoded)?.let { sbn to it }
         }
 
-    private fun newestFirst(
-        alerts: List<Pair<StatusBarNotification, PushedTransition>>
-    ): List<PushedTransition> =
+    private fun newestFirst(alerts: List<Pair<StatusBarNotification, Alert>>): List<Alert> =
         alerts.sortedByDescending { (sbn, _) -> sbn.notification.`when` }.map { it.second }
 
     private fun active(context: Context): List<StatusBarNotification> =

@@ -17,6 +17,10 @@ data class PushedTransition(
     val where: String
         get() = "$project/$scope"
 
+    /** What the alert is titled: the feature, or for `main` its project. */
+    val title: String
+        get() = if (scope == Snapshot.MAIN) project else scope
+
     /** What happened, naming the agent when the push does. */
     val text: String
         get() =
@@ -24,7 +28,8 @@ data class PushedTransition(
                 AttentionKind.Blocked -> agent?.let { "$it is blocked on you" } ?: "Blocked on you"
                 AttentionKind.Asking -> agent?.let { "$it is asking" } ?: "An agent is asking"
                 AttentionKind.Ready -> "Ready for review"
-                AttentionKind.Dead -> agent?.let { "$it died" } ?: "An agent died"
+                AttentionKind.Dead ->
+                    agent?.let { "$it stopped running" } ?: "An agent stopped running"
                 else -> agent?.let { "$it: $kind" } ?: kind
             }
 
