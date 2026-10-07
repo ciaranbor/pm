@@ -11,6 +11,11 @@
 //! written in the same millisecond as the cursor are read again by the next
 //! tail; a reader drops what it has already sent.
 //!
+//! A tool call is unfinished as [`mark_unfinished`] says: a page reads the
+//! rows after its end to see whether something follows its calls, and a
+//! tail that moves on reads the rows before its first new message for the
+//! calls it leaves stranded, and sends them again marked.
+//!
 //! What each row reads as is [`messages`](super::messages).
 
 use std::path::{Path, PathBuf};
@@ -19,7 +24,7 @@ use rusqlite::{Connection, OpenFlags, params};
 use serde_json::Value;
 
 use crate::error::{PmError, Result};
-use crate::harness::transcript::items::{Page, Tail};
+use crate::harness::transcript::items::{Body, Item, Page, Tail, mark_unfinished, moves_on};
 
 use super::messages::{Row, items, tool_output};
 
@@ -91,6 +96,7 @@ pub(in crate::harness) fn page(
         "SELECT {COLUMNS} FROM session_message WHERE session_id = ?1 AND seq < ?2 \
          ORDER BY seq DESC LIMIT ?3"
     );
+    let end = before;
     let mut cursor = before.unwrap_or(i64::MAX);
     let mut read: Vec<Row> = Vec::new();
     let mut count = 0;
@@ -114,8 +120,22 @@ pub(in crate::harness) fn page(
         Some(first) if has_before(&conn, session, first.seq)? => Some(first.seq.to_string()),
         _ => None,
     };
+    let mut read_items: Vec<Item> = read.iter().flat_map(items).collect();
+    let followed = match end {
+        Some(next) => {
+            let later = format!(
+                "SELECT {COLUMNS} FROM session_message WHERE session_id = ?1 AND seq >= ?2 \
+                 ORDER BY seq LIMIT ?3"
+            );
+            rows(&conn, &later, params![session, next, BATCH])?
+                .iter()
+                .any(|row| moves_on(&items(row)))
+        }
+        None => false,
+    };
+    mark_unfinished(&mut read_items, followed);
     Ok(Page {
-        items: read.iter().flat_map(items).collect(),
+        items: read_items,
         before,
         after: after.to_string(),
     })
@@ -140,10 +160,44 @@ pub(in crate::harness) fn tail(db: &Path, session: &str, after: i64) -> Result<T
     );
     let read = rows(&conn, &query, params![session, after])?;
     let latest = read.iter().map(|r| r.updated).max().unwrap_or(after);
+    let mut out = Vec::new();
+    if let Some(row) = read.iter().find(|row| moves_on(&items(row))) {
+        out = last_pending_calls(&conn, session, row.seq, &read)?;
+    }
+    out.extend(read.iter().flat_map(items));
+    mark_unfinished(&mut out, false);
     Ok(Tail::Items {
-        items: read.iter().flat_map(items).collect(),
+        items: out,
         after: latest.to_string(),
     })
+}
+
+/// The calls without a result in the run of calls before the row with seq
+/// `seq`, but for those in rows `read` sends anyway, oldest first. A call
+/// further back had something else after it, and was sent marked then.
+fn last_pending_calls(
+    conn: &Connection,
+    session: &str,
+    seq: i64,
+    read: &[Row],
+) -> Result<Vec<Item>> {
+    let query = format!(
+        "SELECT {COLUMNS} FROM session_message WHERE session_id = ?1 AND seq < ?2 \
+         ORDER BY seq DESC LIMIT ?3"
+    );
+    let mut calls = Vec::new();
+    'scan: for row in rows(conn, &query, params![session, seq, BATCH])? {
+        let resent = read.iter().any(|r| r.id == row.id);
+        for item in items(&row).into_iter().rev() {
+            match &item.body {
+                Body::Tool { result: None, .. } if !resent => calls.push(item),
+                Body::Tool { .. } => {}
+                _ => break 'scan,
+            }
+        }
+    }
+    calls.reverse();
+    Ok(calls)
 }
 
 /// The whole output a truncated result's `full` reference names.
@@ -371,6 +425,43 @@ mod tests {
             Body::Assistant {
                 text: "Work done".into()
             }
+        );
+    }
+
+    #[test]
+    fn a_running_call_a_later_message_follows_is_unfinished() {
+        let db = Db::new();
+        let running = serde_json::json!({"time": {"created": 1}, "content": [
+            {"type": "tool", "id": "call_1", "name": "shell",
+             "state": {"status": "running", "input": {"command": "sleep 99"}}}]});
+        db.insert("msg_1", "assistant", 1, 1, &running);
+        let unfinished = |items: &[Item]| -> Vec<bool> {
+            items
+                .iter()
+                .filter_map(|i| match i.body {
+                    Body::Tool { unfinished, .. } => Some(unfinished),
+                    _ => None,
+                })
+                .collect()
+        };
+        let first = page(&db.path, SESSION, None, 10).unwrap();
+        assert_eq!(unfinished(&first.items), [false], "it may still return");
+
+        let typed = serde_json::json!({"text": "hello?", "files": []});
+        db.insert("msg_2", "user", 2, 5, &typed);
+        let Tail::Items { items, .. } = tail(&db.path, SESSION, 5).unwrap() else {
+            panic!("reset");
+        };
+        assert_eq!(
+            items.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
+            ["call_1", "msg_2"]
+        );
+        assert_eq!(unfinished(&items), [true]);
+        let older = page(&db.path, SESSION, Some(2), 10).unwrap();
+        assert_eq!(
+            unfinished(&older.items),
+            [true],
+            "a page looks past its end"
         );
     }
 

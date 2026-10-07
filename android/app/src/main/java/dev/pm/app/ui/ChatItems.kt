@@ -281,7 +281,11 @@ private fun Work(row: ChatRow.Work, touch: ChatTouch) {
             row.key,
             padding = PaddingValues(horizontal = Spacing.s, vertical = Spacing.xs),
             header = { open ->
-                RunStatus(running = tools.any { it.result == null }, failed = failed > 0)
+                RunStatus(
+                    running = tools.any { it.result == null && !it.unfinished },
+                    failed = failed > 0,
+                    unfinished = tools.any { it.unfinished },
+                )
                 Text(
                     workSummary(tools),
                     style = MaterialTheme.typography.labelLarge,
@@ -312,9 +316,9 @@ private fun Work(row: ChatRow.Work, touch: ChatTouch) {
     }
 }
 
-/** How a tool call or a run of them went: still running, failed, or done. */
+/** How a tool call or a run of them went: still running, failed, left without a result, or done. */
 @Composable
-private fun RunStatus(running: Boolean, failed: Boolean) {
+private fun RunStatus(running: Boolean, failed: Boolean, unfinished: Boolean) {
     val size = Modifier.size(16.dp)
     when {
         running ->
@@ -328,6 +332,13 @@ private fun RunStatus(running: Boolean, failed: Boolean) {
                 painterResource(R.drawable.ic_error),
                 "Failed",
                 tint = MaterialTheme.colorScheme.error,
+                modifier = size,
+            )
+        unfinished ->
+            Icon(
+                painterResource(R.drawable.ic_close),
+                "No result",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = size,
             )
         else ->
@@ -352,7 +363,11 @@ internal fun ToolLine(tool: Item.Tool, touch: ChatTouch) {
                 .touched(tool.id, touch)
                 .padding(horizontal = Spacing.s, vertical = Spacing.xs),
     ) {
-        RunStatus(running = result == null, failed = result?.error == true)
+        RunStatus(
+            running = result == null && !tool.unfinished,
+            failed = result?.error == true,
+            unfinished = tool.unfinished,
+        )
         Text(
             tool.name,
             style = MaterialTheme.typography.labelLarge,

@@ -8,16 +8,19 @@
 //! tool call with its result, which arrives on a later line. A page looks
 //! forward past its end for the results of its calls; a tail looks back
 //! before its start for the call of a result it holds alone, and sends the
-//! call again with its result.
+//! call again with its result. A call still without one once something else
+//! follows is unfinished: a page looks past its end for that something, and
+//! a tail that moves on looks back for the calls it leaves stranded and
+//! sends them again marked.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use super::items::{Body, Item, Page, Tail, ToolResult};
+use super::items::{Body, Item, Page, Tail, ToolResult, mark_unfinished, moves_on};
 use super::lines::{Backward, Source, open};
 
 /// What one transcript line holds.
@@ -156,6 +159,7 @@ pub(in crate::harness) fn page(
     lines.reverse();
     let (mut items, _) = assemble(lines);
 
+    let mut followed = false;
     let pending: Vec<String> = items
         .iter()
         .filter_map(pending_call)
@@ -164,11 +168,11 @@ pub(in crate::harness) fn page(
     if !pending.is_empty() {
         let (later, _) = src.forward(end, SEARCH_SCAN)?;
         let mut found: HashMap<String, ToolResult> = HashMap::new();
-        for (offset, line) in later {
+        for (offset, line) in &later {
             if !pending.iter().any(|id| line.contains(id.as_str())) {
                 continue;
             }
-            for entry in parse_line(offset, &line, parse) {
+            for entry in parse_line(*offset, line, parse) {
                 if let Entry::Result {
                     call,
                     text,
@@ -177,7 +181,7 @@ pub(in crate::harness) fn page(
                 } = entry
                     && pending.contains(&call)
                 {
-                    let result = tool_result(offset, &call, &text, error, at);
+                    let result = tool_result(*offset, &call, &text, error, at);
                     found.insert(call, result);
                 }
             }
@@ -190,7 +194,12 @@ pub(in crate::harness) fn page(
                 attach(item, result);
             }
         }
+        followed = items.iter().any(|item| pending_call(item).is_some())
+            && later
+                .iter()
+                .any(|(offset, line)| moves_on(&items_of(parse_line(*offset, line, parse))));
     }
+    mark_unfinished(&mut items, followed);
     Ok(Page {
         items,
         before: (start > 0).then(|| start.to_string()),
@@ -210,6 +219,7 @@ pub(in crate::harness) fn tail(path: &Path, after: u64, parse: Parse) -> io::Res
         .map(|(offset, line)| (offset, parse_line(offset, &line, parse)))
         .collect();
     let (items, orphans) = assemble(lines);
+    let answered: HashSet<String> = orphans.iter().map(|o| o.call.clone()).collect();
     let mut calls = Vec::new();
     for orphan in orphans {
         if let Some(mut call) = find_call(&mut src, after, &orphan.call, parse)? {
@@ -226,7 +236,11 @@ pub(in crate::harness) fn tail(path: &Path, after: u64, parse: Parse) -> io::Res
             calls.push(call);
         }
     }
+    if moves_on(&items) {
+        calls.extend(last_pending_calls(&mut src, after, &answered, parse)?);
+    }
     calls.extend(items);
+    mark_unfinished(&mut calls, false);
     Ok(Tail::Items {
         items: calls,
         after: end.to_string(),
@@ -247,6 +261,47 @@ pub(in crate::harness) fn lines_after(path: &Path, after: u64) -> io::Result<Opt
             .filter_map(|(_, line)| serde_json::from_str(line).ok())
             .collect(),
     ))
+}
+
+fn items_of(entries: Vec<Entry>) -> Vec<Item> {
+    entries
+        .into_iter()
+        .filter_map(|entry| match entry {
+            Entry::Item(item) => Some(item),
+            Entry::Result { .. } => None,
+        })
+        .collect()
+}
+
+/// The calls without a result in the run of calls that ends at cursor
+/// `before`, but for the `answered` ones, oldest first. A call further back
+/// had something else after it before `before`, and was sent marked then.
+fn last_pending_calls(
+    src: &mut Source,
+    before: u64,
+    answered: &HashSet<String>,
+    parse: Parse,
+) -> io::Result<Vec<Item>> {
+    let mut back = Backward::new(before, SEARCH_SCAN);
+    let mut returned = HashSet::new();
+    let mut calls = Vec::new();
+    'scan: while let Some((offset, line)) = back.next(src)? {
+        for entry in parse_line(offset, &line, parse).into_iter().rev() {
+            match entry {
+                Entry::Result { call, .. } => {
+                    returned.insert(call);
+                }
+                Entry::Item(item) if matches!(item.body, Body::Tool { .. }) => {
+                    if !returned.contains(&item.id) && !answered.contains(&item.id) {
+                        calls.push(item);
+                    }
+                }
+                Entry::Item(_) => break 'scan,
+            }
+        }
+    }
+    calls.reverse();
+    Ok(calls)
 }
 
 /// The tool call item `id`, from a line before `before`.
@@ -473,6 +528,60 @@ mod tests {
         let earlier = page(&path, Some(before), 10, parse).unwrap();
         assert_eq!(ids(&earlier.items), ["u0", "toolu_1"]);
         assert_eq!(tool_result_of(&earlier.items[1]).unwrap().text, "listing");
+    }
+
+    fn unfinished(item: &Item) -> bool {
+        matches!(
+            item.body,
+            Body::Tool {
+                unfinished: true,
+                ..
+            }
+        )
+    }
+
+    #[test]
+    fn a_call_the_conversation_moves_on_from_without_a_result_is_unfinished() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        append(&path, &[typed("u0", "go"), call("a1", "toolu_1")]);
+        append(&path, &[call("a2", "toolu_2")]);
+        let p = page(&path, None, 10, parse).unwrap();
+        assert!(
+            !p.items.iter().any(unfinished),
+            "calls side by side still run"
+        );
+        let Tail::Items { after, .. } = tail(&path, 0, parse).unwrap() else {
+            panic!("reset");
+        };
+
+        append(&path, &[result("r2", "toolu_2", "ok"), typed("u1", "next")]);
+        let Tail::Items { items, after } = tail(&path, after.parse().unwrap(), parse).unwrap()
+        else {
+            panic!("reset");
+        };
+        assert_eq!(ids(&items), ["toolu_2", "toolu_1", "u1"]);
+        assert!(!unfinished(&items[0]), "a call with its result is done");
+        assert!(unfinished(&items[1]), "the stranded call is sent again");
+
+        let whole = page(&path, None, 10, parse).unwrap();
+        assert_eq!(
+            whole.items.iter().map(unfinished).collect::<Vec<_>>(),
+            [false, true, false, false]
+        );
+        let text = std::fs::read_to_string(&path).unwrap();
+        let before = text.find(r#""uuid":"a2""#).unwrap();
+        let before = text[..before].rfind('\n').unwrap() as u64 + 1;
+        let earlier = page(&path, Some(before), 10, parse).unwrap();
+        assert_eq!(ids(&earlier.items), ["u0", "toolu_1"]);
+        assert!(unfinished(&earlier.items[1]), "a page looks past its end");
+
+        append(&path, &[result("r1", "toolu_1", "late")]);
+        let Tail::Items { items, .. } = tail(&path, after.parse().unwrap(), parse).unwrap() else {
+            panic!("reset");
+        };
+        assert_eq!(ids(&items), ["toolu_1"]);
+        assert!(!unfinished(&items[0]), "a late result replaces the mark");
     }
 
     #[test]

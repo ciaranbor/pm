@@ -43,6 +43,11 @@ pub enum Body {
         /// One line saying what the call was for.
         input: String,
         result: Option<ToolResult>,
+        /// No result, and something other than a tool call followed it: it
+        /// was interrupted, or its agent died mid-call. Set by
+        /// [`mark_unfinished`]; a result arriving after all replaces the row.
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        unfinished: bool,
     },
     /// A prompt pm's never-idle loop sent: a wake-up, not the human.
     Continuation {
@@ -139,6 +144,32 @@ pub enum Tail {
     Reset,
 }
 
+/// Marks each call in `items` that has no result and that a later item
+/// other than a call follows — in `items`, or after them when `followed` —
+/// as unfinished. Calls side by side wait on their results together, so
+/// only a turn, a reply or an event moving on leaves one unfinished.
+pub fn mark_unfinished(items: &mut [Item], followed: bool) {
+    let mut moved_on = followed;
+    for item in items.iter_mut().rev() {
+        match &mut item.body {
+            Body::Tool {
+                result: None,
+                unfinished,
+                ..
+            } => *unfinished |= moved_on,
+            Body::Tool { .. } => {}
+            _ => moved_on = true,
+        }
+    }
+}
+
+/// Whether any of `items` is something other than a tool call.
+pub fn moves_on(items: &[Item]) -> bool {
+    items
+        .iter()
+        .any(|item| !matches!(item.body, Body::Tool { .. }))
+}
+
 /// A timestamp field as the harnesses write it: RFC 3339, or epoch
 /// milliseconds.
 pub fn timestamp(value: Option<&Value>) -> Option<DateTime<Utc>> {
@@ -151,16 +182,17 @@ pub fn timestamp(value: Option<&Value>) -> Option<DateTime<Utc>> {
     }
 }
 
-/// Keys whose value says what a tool call is for, most telling first.
+/// Keys whose value says what a tool call is for, most telling first: a
+/// search's `pattern` or `query` says more than the `path` it searches.
 const INPUT_KEYS: &[&str] = &[
     "command",
     "cmd",
     "file_path",
     "filePath",
-    "path",
     "pattern",
-    "url",
     "query",
+    "path",
+    "url",
     "skill",
     "description",
     "prompt",
@@ -237,6 +269,7 @@ mod tests {
                     timestamp(Some(&json!("2026-10-02T18:08:53.108Z"))),
                     || "ref".into(),
                 )),
+                unfinished: false,
             },
         );
         let json = serde_json::to_value(&item).unwrap();
@@ -286,6 +319,10 @@ mod tests {
         assert_eq!(
             summarize_input(&json!("{\"cmd\":\"cargo test\",\"yield_time_ms\":1000}")),
             "cargo test"
+        );
+        assert_eq!(
+            summarize_input(&json!({"path": "src", "pattern": "fn main", "glob": "*.rs"})),
+            "fn main"
         );
         assert_eq!(summarize_input(&json!({"a": 1})), r#"{"a":1}"#);
     }

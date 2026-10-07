@@ -78,6 +78,7 @@ pub(in crate::harness) fn parse(line: &Value, offset: u64) -> Vec<Entry> {
                         .and_then(script_commands)
                         .unwrap_or_else(|| summarize_input(input.unwrap_or(&Value::Null))),
                     result: None,
+                    unfinished: false,
                 },
             ))]
         }
