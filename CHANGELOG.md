@@ -6,6 +6,8 @@ notes.
 
 ## Unreleased
 
+## 0.5.0 — 2026-10-07
+
 - The Android app is redesigned:
 - **Home and workspaces:** one home screen (Needs you, Working, Projects) and a workspace per feature
 with a tab per agent plus Summary, Brief and Details.
