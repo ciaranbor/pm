@@ -46,6 +46,7 @@
 //! session then continues in the window's directory.
 
 pub(super) mod chat;
+pub(super) mod dialog;
 pub(super) mod hook_trust;
 pub(super) mod input;
 pub(super) mod sessions;

@@ -58,7 +58,8 @@ impl Harness {
     /// remotely ([`dialog`](Self::dialog)), for `pm harness hooks dialog`.
     /// Empty for a harness whose loop is a plugin, which calls it itself,
     /// and for codex, which runs its hooks before showing a dialog, so a
-    /// hook waiting on the phone would hide the terminal's.
+    /// hook waiting on the phone would hide the terminal's (its async
+    /// questions are [`typed_dialog`](Self::typed_dialog)s).
     pub fn dialog_events(self) -> &'static [&'static str] {
         match self {
             Harness::ClaudeCode => claude_code::dialog::EVENTS,
@@ -85,6 +86,37 @@ impl Harness {
         match self {
             Harness::ClaudeCode => claude_code::dialog::resolved(record, payload),
             Harness::Codex | Harness::OpenCode => false,
+        }
+    }
+
+    /// The dialog a payload of `pm harness hooks waiting` opens that no
+    /// hook holds, answered by typing [`typed_reply`](Self::typed_reply),
+    /// with what that needs; `None` when none. Only codex's async
+    /// questions: the tool returns at once, leaving the question pending in
+    /// the TUI until a prompt is submitted or the turn ends.
+    pub fn typed_dialog(self, payload: &serde_json::Value) -> Option<(Dialog, serde_json::Value)> {
+        match self {
+            Harness::Codex => codex::dialog::dialog(payload),
+            Harness::ClaudeCode | Harness::OpenCode => None,
+        }
+    }
+
+    /// The prompt that gives `answer`, which `record` accepts, to the
+    /// [`typed_dialog`](Self::typed_dialog) it records.
+    pub fn typed_reply(self, record: &DialogRecord, answer: &Answer) -> String {
+        match self {
+            Harness::Codex => codex::dialog::reply(record, answer),
+            // Never opens one.
+            Harness::ClaudeCode | Harness::OpenCode => String::new(),
+        }
+    }
+
+    /// Whether `prompt` answers `record`'s [`typed_dialog`](Self::typed_dialog),
+    /// typed by [`typed_reply`](Self::typed_reply) or at the terminal.
+    pub fn typed_reply_answers(self, record: &DialogRecord, prompt: &str) -> bool {
+        match self {
+            Harness::Codex => codex::dialog::answered_by(record, prompt),
+            Harness::ClaudeCode | Harness::OpenCode => false,
         }
     }
 

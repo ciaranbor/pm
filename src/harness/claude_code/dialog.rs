@@ -310,7 +310,7 @@ mod tests {
         let (dialog, reply_context) = dialog(payload).unwrap();
         DialogRecord {
             dialog,
-            pid: 1,
+            pid: Some(1),
             reply_context,
         }
     }

@@ -17,9 +17,11 @@
 //! else: the waiter that marked the agent idle still waits.
 //!
 //! Any other prompt, pm's own included, means the agent is working again,
-//! so it clears the agent's waiting marker ([`runtime`]), claims a turn end
-//! its transcript recorded (an interrupt), stamps its activity, and has its
-//! window published busy and its session pushed. The interrupt is claimed
+//! so it closes the dialogs its harness drops on a prompt
+//! ([`hooks_dialog::close_typed`]), clears the agent's waiting marker
+//! ([`runtime`]), claims a turn end its transcript recorded (an interrupt),
+//! stamps its activity, and has its window published busy and its session
+//! pushed. The interrupt is claimed
 //! rather than left for the harness to bury under the prompt: the push may
 //! read the transcript before the prompt reaches it.
 //!
@@ -33,6 +35,7 @@ use serde_json::json;
 
 use crate::commands::agent_spawn::is_launch_prompt;
 use crate::commands::feat_status::feat_status;
+use crate::commands::hooks_dialog;
 use crate::commands::hooks_stop;
 use crate::commands::running_agents;
 use crate::error::Result;
@@ -99,6 +102,9 @@ fn on_prompt(project_root: &Path, scope: &str, agent: &str, prompt: &str) -> Res
         return Ok(Prompted::Dropped);
     }
     on_user_prompt(project_root, scope, prompt, harness)?;
+    if let Some(harness) = harness {
+        hooks_dialog::close_typed(project_root, scope, agent, harness, Some(prompt))?;
+    }
     runtime::touch_activity(project_root, scope, agent)?;
     runtime::clear_waiting(project_root, scope, agent)?;
     if let Some(harness) = harness
@@ -408,5 +414,63 @@ mod tests {
         register(&project, Harness::Codex);
         on_prompt(&project, "login", "implementer", &rewakes(&continuation)[1]).unwrap();
         assert_eq!(state(&project).progress, Progress::Wip);
+    }
+
+    #[test]
+    fn a_prompt_closes_a_codex_question_answering_it_only_when_it_is_the_reply() {
+        let dir = tempdir().unwrap();
+        let project = blocked_feature(dir.path());
+        register(&project, Harness::Codex);
+        let ask = || {
+            let payload = json!({"hook_event_name": "PreToolUse",
+                "tool_name": "request_user_input_async", "tool_use_id": "call_9Xk2",
+                "tool_input": {"questions": [{"title": "Which colour?"}]}});
+            let (dialog, reply_context) = Harness::Codex.typed_dialog(&payload).unwrap();
+            runtime::write_waiting(&project, "login", "implementer", &dialog.waiting()).unwrap();
+            let record = runtime::DialogRecord {
+                dialog,
+                pid: None,
+                reply_context,
+            };
+            runtime::write_dialog(&project, "login", "implementer", &record).unwrap();
+            record
+        };
+        // As codex's panel submitted it, live.
+        let reply = "<send_user_message_question_reply>\n[{\"answer\":\"Blue\",\
+            \"question\":\"Which colour?\",\
+            \"questionItemId\":\"[\\\"request_user_input_async\\\",\\\"call_9Xk2\\\",0]\"}]\n\
+            </send_user_message_question_reply>";
+
+        let answered = ask();
+        assert_eq!(
+            on_prompt(&project, "login", "implementer", reply).unwrap(),
+            Prompted::Taken
+        );
+        assert!(runtime::dialog_answer_taken(
+            &project,
+            "login",
+            "implementer",
+            &answered.dialog.id
+        ));
+        assert_eq!(
+            runtime::read_waiting(&project, "login", "implementer"),
+            None
+        );
+        assert_eq!(state(&project).progress, Progress::Wip, "the user's answer");
+
+        let dropped = ask();
+        on_prompt(&project, "login", "implementer", "skip that").unwrap();
+        assert!(runtime::dialog_closed(
+            &project,
+            "login",
+            "implementer",
+            &dropped.dialog.id
+        ));
+        assert!(!runtime::dialog_answer_taken(
+            &project,
+            "login",
+            "implementer",
+            &dropped.dialog.id
+        ));
     }
 }

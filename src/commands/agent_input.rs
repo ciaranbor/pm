@@ -3,12 +3,14 @@
 //! (`pm serve`'s write endpoints). Text is never sent as a continuation, so
 //! its UserPromptSubmit resets a blocked feature and the transcript records
 //! the user's words as the user's. A dialog a hook can see is answered
-//! through its harness instead ([`super::hooks_dialog`]).
+//! through its harness instead ([`super::hooks_dialog`]), and one no hook
+//! holds by typing the harness's own reply ([`type_reply`]).
 //!
 //! Keys reach whatever the pane shows, so each send first checks the agent
 //! is active, its pane runs its harness, and the pane is out of copy mode.
 //! Text is then refused while a dialog is up — the paste's Enter would
-//! answer it — and unless the input line reads as empty, once any key its
+//! answer it — unless no hook holds the dialog, which then waits beside the
+//! input line; and unless the input line reads as empty, once any key its
 //! harness names to make the line take text has been pressed (vim NORMAL
 //! mode): a draft at the keyboard is never merged into or cleared.
 //!
@@ -175,10 +177,14 @@ pub fn send_text(
         Err(refusal) => return Ok(Err(refusal)),
     };
     let at = target.at;
-    if let Some(asking) = at
+    let asking = at
         .as_ref()
-        .filter(|w| w.kind.class() == WaitingClass::Asking)
-    {
+        .filter(|w| w.kind.class() == WaitingClass::Asking);
+    let beside = asking.is_some_and(|w| {
+        super::hooks_dialog::current_for(project_root, scope, agent, w)
+            .is_some_and(|r| r.pid.is_none())
+    });
+    if let Some(asking) = asking.filter(|_| !beside) {
         return Ok(Err(Refusal::Asking(asking.describe())));
     }
     if !input_line_ready(
@@ -192,7 +198,7 @@ pub fn send_text(
         return Ok(Err(Refusal::NotAtPrompt));
     }
     let after = conversation_end(project_root, scope, agent)?;
-    let mid_turn = target.liveness == Liveness::Busy && at.is_none();
+    let mid_turn = target.liveness == Liveness::Busy && (at.is_none() || beside);
     tmux::paste::paste_text(tmux_server, &target.pane, text)?;
     let delivery = if mid_turn {
         Delivery::Queued
@@ -200,6 +206,34 @@ pub fn send_text(
         Delivery::Sent
     };
     Ok(Ok(Typed { delivery, after }))
+}
+
+/// Type `reply`, the harness's own answer to a dialog no hook holds, into
+/// `agent`'s input line and submit it. Unlike [`send_text`] it goes in while
+/// that dialog is up, which waits beside the input line rather than over it.
+pub fn type_reply(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    reply: &str,
+    tmux_server: Option<&str>,
+) -> Result<std::result::Result<(), Refusal>> {
+    let target = match target(project_root, scope, agent, tmux_server)? {
+        Ok(target) => target,
+        Err(refusal) => return Ok(Err(refusal)),
+    };
+    if !input_line_ready(
+        project_root,
+        scope,
+        agent,
+        target.harness,
+        &target.pane,
+        tmux_server,
+    )? {
+        return Ok(Err(Refusal::NotAtPrompt));
+    }
+    tmux::paste::paste_text(tmux_server, &target.pane, reply)?;
+    Ok(Ok(()))
 }
 
 /// Where `agent`'s conversation ends now; `None` when it has none.
@@ -476,6 +510,27 @@ mod tests {
         .unwrap();
         assert_eq!(pressed, Ok(()));
         assert_eq!(agent.received(1), b"1");
+    }
+
+    #[test]
+    fn text_reaches_a_codex_agent_asking_a_question_no_hook_holds_queued() {
+        let agent = Recording::new(Harness::Codex);
+        let payload = serde_json::json!({"hook_event_name": "PreToolUse",
+            "tool_name": "request_user_input_async", "tool_use_id": "c",
+            "tool_input": {"questions": [{"title": "Which colour?"}]}});
+        let (dialog, reply_context) = Harness::Codex.typed_dialog(&payload).unwrap();
+        runtime::write_waiting(&agent.project, "login", "implementer", &dialog.waiting()).unwrap();
+        let record = runtime::DialogRecord {
+            dialog,
+            pid: None,
+            reply_context,
+        };
+        runtime::write_dialog(&agent.project, "login", "implementer", &record).unwrap();
+
+        assert_eq!(agent.send("skip that"), Ok(Delivery::Queued));
+
+        let want = pasted("skip that");
+        assert_eq!(agent.received(want.len()), want);
     }
 
     #[test]

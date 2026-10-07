@@ -1074,8 +1074,9 @@ impl TestServer {
         target
     }
 
-    /// An agent of `harness` whose pane shows Claude Code's empty input box
-    /// and records every byte it is sent, waiting at that box. Returns its
+    /// An agent of `harness` whose pane shows an empty input box, codex's
+    /// composer for codex and Claude Code's otherwise, and records every
+    /// byte it is sent, waiting at that box. Returns its
     /// window and the file the bytes go to.
     pub fn spawn_recording_agent(
         &self,
@@ -1088,10 +1089,14 @@ impl TestServer {
         let received = project_root.join(format!(".pm/received-{agent_name}"));
         let cat = fake_harness_binary(harness, std::path::Path::new("/bin/cat"));
         let script = project_root.join(format!(".pm/recorder-{agent_name}"));
+        let (input_box, prompt) = match harness {
+            crate::harness::Harness::Codex => ("\\n› \\n\\n  footer\\n\\033[3A", "›"),
+            _ => ("──── agent ─\\n❯ \\n────────\\n\\033[2A", "❯"),
+        };
         std::fs::write(
             &script,
             format!(
-                "#!/bin/sh\nclear\nprintf '\\033[?2004h──── agent ─\\n❯ \\n────────\\n\\033[2A\\033[3G'\n\
+                "#!/bin/sh\nclear\nprintf '\\033[?2004h{input_box}\\033[3G'\n\
                  stty raw -echo\nexec {} -u > {}\n",
                 cat.display(),
                 received.display()
@@ -1109,7 +1114,7 @@ impl TestServer {
             &script.display().to_string(),
             crate::commands::running_agents::Liveness::Busy,
         );
-        self.wait_for_pane_text(&target, "❯");
+        self.wait_for_pane_text(&target, prompt);
         (target, received)
     }
 

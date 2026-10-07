@@ -117,6 +117,9 @@ An `input` the agent can't take now is refused with `409` and
 `{"error", "refused"}`: `asking` (a dialog is up; answer it through
 `dialog`, or with `keys`), `not-at-prompt` (a draft in its input line, or
 no input line on screen), `not-running`, `no-window` or `inactive`. Text is never merged into a draft typed at the terminal.
+Text is taken while a codex async question (below) is pending, since it
+waits beside the input line: it is `queued`, as the agent works on, and
+codex drops the question.
 
 A question, a permission prompt or a plan approval on a Claude Code
 agent's screen, and a permission ask on an opencode agent's, can be
@@ -140,6 +143,14 @@ them, `dialog` serves only the oldest. The snapshot's `waiting.dialog` is
 the id of the dialog the agent's state describes: the one that opened
 last, or once that one closes, the oldest still open.
 
+A codex agent's async question (`request_user_input_async`) is answered
+through `dialog` too, though no hook holds it: codex leaves it pending
+beside the input line while the agent works on, and pm submits the answer
+as a prompt in the reply format codex's own question panel uses. The input
+line must therefore be empty — a draft there gets `409` with `refused:
+"not-at-prompt"`. Codex drops the question once any prompt is submitted or
+the turn ends, and so does pm: the agent reads `asking` until then.
+
 A Claude Code permission prompt's "No" (`deny`) stops the agent's turn, as
 the CLI's does; with a `message` it instead tells the agent why and lets
 it carry on, as the CLI's "No" with feedback does. Its "Yes, and switch to
@@ -147,12 +158,12 @@ it carry on, as the CLI's "No" with feedback does. Its "Yes, and switch to
 file edit suggests accept edits); the CLI's "switch to auto mode" on a
 shell command is not, since nothing says whether auto mode is available.
 
-Any other dialog — every codex dialog, an opencode question, a startup
-dialog (trust, login), an MCP server's request, an error — is answered at
-the terminal: codex runs its hooks before it shows a dialog, so a hook
-waiting on the phone would hide the terminal's, and opencode's question
-form has no reply a plugin can give. An opencode agent approves its own
-permission asks unless `[harness.opencode] auto = false`.
+Any other dialog — codex's approvals and Plan-mode questions, an opencode
+question, a startup dialog (trust, login), an MCP server's request, an
+error — is answered at the terminal: codex runs its hooks before it shows
+a dialog, so a hook waiting on the phone would hide the terminal's, and
+opencode's question form has no reply a plugin can give. An opencode agent
+approves its own permission asks unless `[harness.opencode] auto = false`.
 
 ## Transcript contract (version 1)
 
