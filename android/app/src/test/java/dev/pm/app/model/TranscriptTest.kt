@@ -7,10 +7,9 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class TranscriptTest {
-    private fun page(json: String) = Json {
-        ignoreUnknownKeys = true
-    }
-        .decodeFromString(TranscriptPage.serializer(), json)
+    private val format = Json { ignoreUnknownKeys = true }
+
+    private fun page(json: String) = format.decodeFromString(TranscriptPage.serializer(), json)
 
     @Test
     fun parses_each_kind_and_skips_unknown_ones() {

@@ -104,7 +104,6 @@ fun keepRunKeys(rows: List<ChatRow>, known: MutableMap<String, String>): List<Ch
         when (row) {
             is ChatRow.Wakes -> row.copy(key = key)
             is ChatRow.Work -> row.copy(key = key)
-            else -> row
         }
     }
 }

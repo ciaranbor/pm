@@ -103,10 +103,7 @@ android {
     buildTypes {
         debug { ndk { abiFilters += listOf("arm64-v8a", "x86_64") } }
         release {
-            optimization {
-                enable = true
-                keepRules { files.add(file("keep-rules.pro")) }
-            }
+            optimization { enable = true }
             ndk { abiFilters += "arm64-v8a" }
             signingConfig = signingConfigs.findByName("release")
         }

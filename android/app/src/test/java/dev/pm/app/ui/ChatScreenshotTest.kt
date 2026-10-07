@@ -3,7 +3,7 @@ package dev.pm.app.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.Surface
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -21,7 +21,7 @@ import org.robolectric.annotation.GraphicsMode
 
 /**
  * A run of tool calls opened to its lines, and the reader, compared with the images in
- * `src/test/screenshots` on every run; `gradlew recordRoborazziDebug` records them anew.
+ * `src/test/screenshots` on every run; `gradlew recordRoborazziGoogleDebug` records them anew.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)

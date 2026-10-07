@@ -22,7 +22,7 @@ import org.robolectric.annotation.GraphicsMode
 
 /**
  * The list screens' rows, compared with the images in `src/test/screenshots` on every test run;
- * `gradlew recordRoborazziDebug` records them anew.
+ * `gradlew recordRoborazziGoogleDebug` records them anew.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
