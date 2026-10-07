@@ -157,7 +157,7 @@ mod tests {
 
     #[test]
     fn clone_repo_creates_clone() {
-        // Read side of CWD_LOCK (serialises against the CWD mutator) — see testing.rs.
+        // Read side of CWD_LOCK (serialises against the CWD mutator) — see `testing::CWD_LOCK`.
         let _cwd = crate::testing::CWD_LOCK
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -185,7 +185,7 @@ mod tests {
 
     #[test]
     fn clone_repo_fails_for_invalid_url() {
-        // Read side of CWD_LOCK (serialises against the CWD mutator) — see testing.rs.
+        // Read side of CWD_LOCK (serialises against the CWD mutator) — see `testing::CWD_LOCK`.
         let _cwd = crate::testing::CWD_LOCK
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
