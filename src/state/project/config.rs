@@ -94,6 +94,12 @@ pub struct UpgradeConfig {
     pub restart_agents: Option<bool>,
 }
 
+impl UpgradeConfig {
+    pub fn restarts_agents(&self) -> bool {
+        self.restart_agents != Some(false)
+    }
+}
+
 /// `pm serve`'s settings; global only, as the server is the machine's.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ServeConfig {

@@ -243,6 +243,41 @@ fn a_waiter_marks_the_agent_idle_until_a_message_wakes_it() {
     assert_eq!(kind(dir.path()), None, "busy with the continuation");
 }
 
+/// The restart a sweep deferred runs as the agent goes idle, in a
+/// process of its own, which drops a restart that is no longer due: here
+/// the project has no config to launch the agent from.
+#[test]
+fn a_waiter_going_idle_runs_the_deferred_restart_of_a_marked_agent() {
+    let dir = tempdir().unwrap();
+    project(dir.path());
+    runtime::mark_restart_at_idle(dir.path(), "main", AGENT).unwrap();
+
+    let mut hook = waiter(dir.path());
+    await_idle(dir.path(), &hook);
+    let start = Instant::now();
+    while runtime::restart_at_idle_marked(dir.path(), "main", AGENT) {
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "the deferred restart never ran"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let log = std::fs::read_to_string(
+        dir.path()
+            .join(".pm/runtime/main/implementer/stop-hook.log"),
+    )
+    .unwrap();
+    assert!(log.contains("restart at idle: dropped"), "{log}");
+
+    send(dir.path());
+    wait_for_exit(&mut hook);
+    assert_eq!(
+        hook.wait().unwrap().code(),
+        Some(2),
+        "it still wakes the agent"
+    );
+}
+
 #[test]
 fn a_superseded_waiter_ends_without_a_word() {
     let dir = tempdir().unwrap();

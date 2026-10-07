@@ -115,12 +115,14 @@ pub enum Commands {
         #[arg(long)]
         project: Option<String>,
     },
-    /// Reinstall pm's hooks and bundled assets
+    /// Reinstall pm's hooks and bundled assets, then restart the agents left stale
     Upgrade {
         /// Upgrade all registered projects instead of just the current one
         #[arg(long)]
         all: bool,
-        /// Preview changes without writing anything
+        /// Preview changes without writing anything. Stale agents are
+        /// judged against the assets installed now, not the ones the
+        /// upgrade would install
         #[arg(long, alias = "check")]
         dry_run: bool,
     },
@@ -358,6 +360,9 @@ pub enum HarnessCommands {
         /// Export sessions for all registered projects (default: current project only)
         #[arg(long)]
         all: bool,
+        /// With --all, a registered project to export (repeatable; default: every one)
+        #[arg(long = "project", value_name = "NAME", requires = "all")]
+        projects: Vec<String>,
         /// Output tarball path (default: pm-<harness>-<name>.tar.gz in current directory,
         /// `pm-claude-…` for claude-code)
         #[arg(short, long)]
@@ -482,6 +487,13 @@ pub enum HarnessHooksCommands {
         /// The harness whose dialog payload arrives on stdin
         harness: pm::harness::Harness,
     },
+    /// Restart an agent `pm upgrade` deferred, now idle (started by the Stop hook)
+    #[command(hide = true)]
+    RestartAtIdle {
+        agent: String,
+        #[arg(long)]
+        scope: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -547,7 +559,8 @@ pub enum AgentCommands {
         #[arg(long, requires = "all", conflicts_with = "scope")]
         global: bool,
         /// With --all: only running agents that would launch differently
-        /// now; the agent running the command is reported, not restarted
+        /// now; the agent running the command, and any mid-turn, restart at
+        /// their next idle instead
         #[arg(long, requires = "all")]
         stale: bool,
         /// Restart an agent that is mid-turn, asking, or running background

@@ -58,6 +58,41 @@ pub(super) fn push() {
         .spawn();
 }
 
+/// Start `pm harness hooks restart-at-idle` for `agent` of `scope`, in a
+/// session of its own: the restart kills the agent's pane, and with it
+/// every process of the pane's session. It runs from the project root, and
+/// without `PM_AGENT_NAME`, so the restart does not take it for the agent
+/// restarting itself.
+pub(super) fn restart_at_idle(project_root: &std::path::Path, scope: &str, agent: &str) {
+    let Ok(pm) = std::env::current_exe() else {
+        return;
+    };
+    let mut command = std::process::Command::new(pm);
+    command
+        .args([
+            "harness",
+            "hooks",
+            "restart-at-idle",
+            agent,
+            "--scope",
+            scope,
+        ])
+        .current_dir(project_root)
+        .env_remove("PM_AGENT_NAME")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // SAFETY: setsid is async-signal-safe, and nothing else runs between
+    // the fork and the exec.
+    unsafe {
+        command.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    let _ = command.spawn();
+}
+
 /// The window of `agent`, run in the pane this command runs in.
 pub(super) fn agent_window(server: Option<&str>, agent: &str) -> Option<AgentWindow> {
     let pane = std::env::var("TMUX_PANE").ok().filter(|p| !p.is_empty())?;

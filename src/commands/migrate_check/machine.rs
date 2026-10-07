@@ -35,6 +35,11 @@ pub(super) struct Machine<'a> {
 /// then the machine-local files to carry over.
 pub(super) fn findings(m: &Machine<'_>) -> Result<Vec<Finding>> {
     let tarball = |h: &Harness| format!("pm-{h}.tar.gz");
+    let selected: String = m
+        .projects
+        .iter()
+        .map(|project| format!(" --project {project}"))
+        .collect();
     let mut exported: Vec<Harness> = Vec::new();
     for (harness, _) in m.harnesses {
         if !exported.contains(harness) {
@@ -46,7 +51,10 @@ pub(super) fn findings(m: &Machine<'_>) -> Result<Vec<Finding>> {
         .map(|h| {
             Finding::manual(
                 THIS_HOST,
-                format!("pm harness export --all --harness {h} -o {}", tarball(h)),
+                format!(
+                    "pm harness export --all{selected} --harness {h} -o {}",
+                    tarball(h)
+                ),
                 Some(format!(
                     "{h} conversations travel only in an export; run it once agents are stopped"
                 )),
@@ -105,10 +113,7 @@ pub(super) fn findings(m: &Machine<'_>) -> Result<Vec<Finding>> {
         ),
         Some("pulls the registry, which names every project to restore".to_string()),
     ));
-    let mut restore = "pm restore".to_string();
-    for project in m.projects {
-        restore.push_str(&format!(" --project {project}"));
-    }
+    let mut restore = format!("pm restore{selected}");
     for harness in &exported {
         restore.push_str(&format!(" --import {}", tarball(harness)));
     }

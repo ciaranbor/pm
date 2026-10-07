@@ -8,7 +8,9 @@ use pm::state::paths;
 use pm::state::project::GlobalConfig;
 
 use super::scope::{optional_project_root, resolve_feature_name, resolve_scope};
-use super::window::{agent_window, publish, push, running_agent, tmux_server_from_env};
+use super::window::{
+    agent_window, publish, push, restart_at_idle, running_agent, tmux_server_from_env,
+};
 use crate::cli::*;
 
 pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
@@ -143,7 +145,22 @@ pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
                     if state != AgentState::Busy {
                         push();
                     }
+                    if state == AgentState::Idle
+                        && let Some((root, scope, agent)) = commands::restart_at_idle::marked()
+                    {
+                        restart_at_idle(&root, &scope, &agent);
+                    }
                 }))
+            }
+            HarnessHooksCommands::RestartAtIdle { agent, scope } => {
+                let root = paths::find_project_root(&std::env::current_dir()?)?;
+                commands::restart_at_idle::run(
+                    &root,
+                    &scope,
+                    &agent,
+                    tmux_server_from_env().as_deref(),
+                );
+                Ok(())
             }
             HarnessHooksCommands::SessionStart => {
                 let code = commands::hooks_session_start::session_start();
@@ -217,6 +234,7 @@ pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
         }
         HarnessCommands::Export {
             all,
+            projects,
             output,
             harness,
         } => {
@@ -230,6 +248,7 @@ pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
                 project_root: project_root.as_deref(),
                 projects_dir: &paths::global_projects_dir()?,
                 all,
+                projects: &projects,
                 output: output.as_deref(),
                 home: &paths::home_dir()?,
                 global: &GlobalConfig::load_or_default().harness,

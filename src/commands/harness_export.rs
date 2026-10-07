@@ -23,6 +23,8 @@ pub struct ExportParams<'a> {
     pub project_root: Option<&'a Path>,
     pub projects_dir: &'a Path,
     pub all: bool,
+    /// With `all`, the registered projects to export; empty exports every one.
+    pub projects: &'a [String],
     pub output: Option<&'a Path>,
     pub home: &'a Path,
     /// The global tier's `[harness.*]` settings.
@@ -78,11 +80,30 @@ fn resolve_projects(
     project_root: Option<&Path>,
     projects_dir: &Path,
     all: bool,
+    names: &[String],
 ) -> Result<Vec<Project>> {
     if all {
         // Skipping an entry would drop a project from the migration bundle
         // unnoticed until the other machine.
-        let registry = ProjectEntry::scan(projects_dir)?;
+        let mut registry = ProjectEntry::scan(projects_dir)?;
+        if !names.is_empty() {
+            registry.projects.retain(|(name, _)| names.contains(name));
+            registry.malformed.retain(|bad| names.contains(&bad.name));
+            let missing: Vec<&str> = names
+                .iter()
+                .filter(|name| {
+                    !registry.projects.iter().any(|(n, _)| n == *name)
+                        && !registry.malformed.iter().any(|bad| bad.name == **name)
+                })
+                .map(String::as_str)
+                .collect();
+            if !missing.is_empty() {
+                return Err(PmError::ExportImport(format!(
+                    "not a registered project: {} (`pm list` names them)",
+                    missing.join(", ")
+                )));
+            }
+        }
         if !registry.malformed.is_empty() {
             let entries: Vec<String> = registry
                 .malformed
@@ -122,7 +143,12 @@ fn staging_key(path: &Path) -> String {
 /// Returns the path to the created tarball and a list of status messages.
 pub fn export(params: &ExportParams<'_>) -> Result<(PathBuf, Vec<String>)> {
     let harness = params.harness;
-    let projects = resolve_projects(params.project_root, params.projects_dir, params.all)?;
+    let projects = resolve_projects(
+        params.project_root,
+        params.projects_dir,
+        params.all,
+        params.projects,
+    )?;
 
     let staging = tempfile::tempdir()?;
     let root_name = export_root(harness);
@@ -326,6 +352,7 @@ pub(super) mod tests {
             project_root,
             projects_dir,
             all: project_root.is_none(),
+            projects: &[],
             output: Some(output),
             home,
             global: &HarnessConfig::default(),
@@ -433,6 +460,48 @@ pub(super) mod tests {
 
         assert!(err.contains(&bad.display().to_string()), "{err}");
         assert!(!output_path.exists());
+    }
+
+    #[test]
+    fn export_all_with_projects_exports_only_those_and_refuses_an_unknown_name() {
+        let home = tempdir().unwrap();
+        let project_a = tempdir().unwrap();
+        let project_b = tempdir().unwrap();
+        let projects_dir = tempdir().unwrap();
+        let output_dir = tempdir().unwrap();
+        let main_a = setup_project(project_a.path(), "alpha", projects_dir.path());
+        let main_b = setup_project(project_b.path(), "beta", projects_dir.path());
+        setup_claude_sessions(home.path(), &main_a);
+        setup_claude_sessions(home.path(), &main_b);
+        // Another project's unreadable entry does not hold up this export.
+        std::fs::write(projects_dir.path().join("gamma.toml"), "root = ").unwrap();
+        let output_path = output_dir.path().join("beta.tar.gz");
+        let export_named = |names: &[String]| {
+            export(&ExportParams {
+                harness: Harness::ClaudeCode,
+                project_root: None,
+                projects_dir: projects_dir.path(),
+                all: true,
+                projects: names,
+                output: Some(&output_path),
+                home: home.path(),
+                global: &HarnessConfig::default(),
+            })
+        };
+
+        export_named(&["beta".to_string()]).unwrap();
+        let manifest = manifest_of(&output_path, Harness::ClaudeCode);
+        let names: Vec<_> = manifest.as_object().unwrap().keys().collect();
+        assert_eq!(names, ["beta"]);
+
+        let err = export_named(&["beta".to_string(), "delta".to_string()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not a registered project: delta"), "{err}");
+        let err = export_named(&["gamma".to_string()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("gamma.toml"), "{err}");
     }
 
     #[test]

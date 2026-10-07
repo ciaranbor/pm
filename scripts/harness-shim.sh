@@ -76,4 +76,10 @@ for a in "$@"; do
 done
 echo "{\"session_id\":\"$session\"}" | pm harness hooks session-start >/dev/null 2>&1
 pm harness hooks stop </dev/null >/dev/null 2>&1
+# While $HOME/shim-turns exists, each wake is a turn that reads the inbox and
+# ends, so the agent goes idle again.
+while [ -e "$HOME/shim-turns" ]; do
+  pm msg read >/dev/null 2>&1
+  pm harness hooks stop </dev/null >/dev/null 2>&1
+done
 exec sleep 600

@@ -1,5 +1,5 @@
 //! A project's agents: those with a live window, which must stop before
-//! the move, and those active per scope, which mark work in flight.
+//! the move, and the harnesses active ones run on.
 
 use std::path::Path;
 
@@ -10,12 +10,9 @@ use crate::state::feature::FeatureState;
 use crate::state::paths;
 use crate::state::project::ProjectConfig;
 
-/// A project's agents: those running, and those active, per scope.
 pub(super) struct Agents {
     /// `scope/name` of each agent with a live window.
     pub running: Vec<String>,
-    /// Active agents per scope.
-    active: Vec<(String, usize)>,
     /// The harnesses active agents run on.
     pub harnesses: Vec<Harness>,
 }
@@ -39,7 +36,6 @@ impl Agents {
         );
         let mut out = Self {
             running: Vec::new(),
-            active: Vec::new(),
             harnesses: Vec::new(),
         };
         for scope in &scopes {
@@ -51,22 +47,13 @@ impl Agents {
                 );
             }
             if let Ok(registry) = AgentRegistry::load(&paths::agents_dir(root), scope) {
-                let active: Vec<_> = registry.agents.values().filter(|e| e.active).collect();
-                for entry in &active {
+                for entry in registry.agents.values().filter(|e| e.active) {
                     if !out.harnesses.contains(&entry.harness) {
                         out.harnesses.push(entry.harness);
                     }
                 }
-                out.active.push((scope.clone(), active.len()));
             }
         }
         out
-    }
-
-    pub(super) fn active_in(&self, scope: &str) -> usize {
-        self.active
-            .iter()
-            .find(|(s, _)| s == scope)
-            .map_or(0, |(_, n)| *n)
     }
 }
