@@ -366,11 +366,13 @@ fn claude_restart_resumes_the_recorded_session() {
         .success();
 }
 
-/// Catches: doctor missing what codex's interactive hook-trust gate does to
-/// an agent — before trust its hooks never run, so no session id is ever
-/// recorded; after trust, a pm upgrade that changes a hook's command makes
-/// codex distrust it again, which only codex can tell (its `trusted_hash`
-/// is its own fingerprint). One turn on codex's default model.
+/// Catches: the spawn and doctor missing what codex's interactive hook-trust
+/// gate does to an agent — before trust its hooks never run, so it never
+/// comes up and no session id is ever recorded; after trust, a fresh spawn
+/// and a resume come up, and a pm upgrade that changes a hook's command
+/// makes codex distrust it again, which only codex can tell (its
+/// `trusted_hash` is its own fingerprint). A few turns on codex's default
+/// model.
 #[test]
 #[ignore]
 fn codex_hook_trust_through_the_interactive_gate_and_a_changed_hook() {
@@ -383,10 +385,11 @@ fn codex_hook_trust_through_the_interactive_gate_and_a_changed_hook() {
     s.pm(&main)
         .args(["agent", "spawn", "plain"])
         .assert()
-        .success();
-    wait_for("codex's hook review", TURN, &s, || {
-        s.pane(window).contains("Hooks need review")
-    });
+        .failure()
+        .stderr(predicates::str::contains(
+            "its codex harness started but has not come up after 20s",
+        ))
+        .stderr(predicates::str::contains("Trust all and continue"));
     s.backdate_spawns(&proj, "main");
     let doctor = s.doctor(&main);
     for expected in [
@@ -402,6 +405,16 @@ fn codex_hook_trust_through_the_interactive_gate_and_a_changed_hook() {
     });
     let doctor = s.doctor(&main);
     assert!(!doctor.contains("trust"), "{doctor}");
+    // Trusted, a fresh codex comes up: its session starts by the first
+    // turn, which the spawn prompt begins at once.
+    s.pm(&main)
+        .args(["agent", "spawn", "fresh", "--agent", "plain"])
+        .assert()
+        .success();
+    s.pm(&main)
+        .args(["agent", "stop", "fresh"])
+        .assert()
+        .success();
 
     let hooks = s.home().join(".codex/hooks.json");
     let original = std::fs::read_to_string(&hooks).unwrap();
@@ -419,6 +432,12 @@ fn codex_hook_trust_through_the_interactive_gate_and_a_changed_hook() {
     );
     assert!(!doctor.contains("SessionStart hook"), "{doctor}");
     std::fs::write(&hooks, original).unwrap();
+    // A resumed codex session starts again, so the restart sees it come up.
+    s.pm(&main)
+        .args(["agent", "restart", "--force", "plain"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("resumed session"));
     s.pm(&main)
         .args(["agent", "stop", "plain"])
         .assert()

@@ -1,6 +1,7 @@
 //! `pm agent restart --all`: restart every active agent of a scope, or of
 //! every scope of every registered project, through the same per-scope
-//! restart as `pm agent restart <names>` ([`agent_restart_many`]).
+//! restart as `pm agent restart <names>`
+//! ([`agent_restart_many`](super::agent_restart::agent_restart_many)).
 //!
 //! Which agents to restart is decided from one scan of the server
 //! ([`scope_agents_in`]); each scope's restart reads its agents again, so
@@ -16,27 +17,34 @@
 //! ([`RestartAll::finish`]). Window focus is left alone: a sweep over many
 //! scopes must not move the user's clients from window to window.
 //!
+//! Each harness's agents restart behind a canary ([`canary`]).
+//!
 //! [`Select::Stale`] (`--stale`, and `pm upgrade`) narrows the sweep to
 //! running agents whose launch is stale ([`launch_stamp`]): a dead agent,
 //! or one of a closed session, launches with what is current at its next
 //! spawn anyway, and the caller, which asked for no restart of its own, is
 //! reported instead.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
+use crate::harness::Harness;
 use crate::state::agent::{AgentEntry, AgentRegistry};
 use crate::state::feature::FeatureState;
 use crate::state::paths;
 use crate::state::project::{GlobalConfig, ProjectConfig, ProjectEntry};
 use crate::tmux;
 
-use super::agent_restart::{Restarted, agent_restart_many, callers_agent};
+use super::agent_restart::{Restarted, callers_agent};
 use super::attention::{AgentState, scope_agents_in};
-use super::launch_check::{self, Launch};
+use super::launch_check::{self, FailedLaunch, Launch};
 use super::launch_stamp;
+
+pub mod canary;
 use super::running_agents::Windows;
 use super::{agent_spawn, harness_check};
+use canary::Confirm;
 
 /// A scope of a project.
 #[derive(Debug, Clone)]
@@ -104,6 +112,8 @@ pub fn global_scopes(projects_dir: &Path) -> Result<(Vec<Scope>, Vec<Report>)> {
 #[derive(Debug)]
 pub enum Outcome {
     Restarted(String),
+    /// Restarted, but its harness did not come up.
+    NotUp(String),
     Skipped(String),
     Failed(String),
 }
@@ -118,8 +128,10 @@ pub struct Report {
 
 impl std::fmt::Display for Report {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let (Outcome::Restarted(line) | Outcome::Skipped(line) | Outcome::Failed(line)) =
-            &self.outcome;
+        let (Outcome::Restarted(line)
+        | Outcome::NotUp(line)
+        | Outcome::Skipped(line)
+        | Outcome::Failed(line)) = &self.outcome;
         write!(f, "{}: {line}", self.target)
     }
 }
@@ -141,14 +153,22 @@ impl Sweep {
         self.reports.iter().filter(|r| kind(&r.outcome)).count()
     }
 
-    /// `Restarted N, skipped N, failed N`, and how many were interrupted.
+    /// `Restarted N, skipped N, failed N`, how many did not come up, and
+    /// how many were interrupted.
     pub fn summary(&self) -> String {
         let mut line = format!(
-            "Restarted {}, skipped {}, failed {}",
-            self.count(|o| matches!(o, Outcome::Restarted(_))),
+            "Restarted {}",
+            self.count(|o| matches!(o, Outcome::Restarted(_)))
+        );
+        let not_up = self.count(|o| matches!(o, Outcome::NotUp(_)));
+        if not_up > 0 {
+            line.push_str(&format!(", not up {not_up}"));
+        }
+        line.push_str(&format!(
+            ", skipped {}, failed {}",
             self.count(|o| matches!(o, Outcome::Skipped(_))),
             self.count(|o| matches!(o, Outcome::Failed(_))),
-        );
+        ));
         if self.up_to_date > 0 {
             line.push_str(&format!(", {} up to date", self.up_to_date));
         }
@@ -167,6 +187,36 @@ impl Sweep {
 struct Batch {
     scope: Scope,
     done: Restarted,
+    /// Whether its launches were already confirmed: a canary's.
+    confirmed: bool,
+}
+
+/// The launches of `batches` not yet confirmed.
+fn launches(batches: &[Batch]) -> Vec<Launch> {
+    batches
+        .iter()
+        .filter(|b| !b.confirmed)
+        .flat_map(|b| {
+            b.done.launched().map(|agent| Launch {
+                project_root: b.scope.root.clone(),
+                scope: b.scope.name.clone(),
+                agent: agent.to_string(),
+            })
+        })
+        .collect()
+}
+
+/// Record each of `failed` in its batch, marking each batch's launches
+/// confirmed.
+fn record(batches: &mut [Batch], mut failed: Vec<FailedLaunch>) {
+    for batch in batches.iter_mut().filter(|b| !b.confirmed) {
+        let (mine, rest) = failed.into_iter().partition(|f| {
+            f.launch.project_root == batch.scope.root && f.launch.scope == batch.scope.name
+        });
+        failed = rest;
+        batch.done.record_failures(mine);
+        batch.confirmed = true;
+    }
 }
 
 /// The restarts [`restart_all`] ran.
@@ -181,27 +231,11 @@ pub struct RestartAll {
 
 impl RestartAll {
     /// Turn the result of each restarted agent whose harness exited at
-    /// launch into a failure saying why. Every launch is watched at once.
+    /// launch or did not come up into a failure saying why. Every launch
+    /// not yet confirmed is watched at once.
     pub fn confirm_launches(&mut self, tmux_server: Option<&str>) {
-        let launches: Vec<Launch> = self
-            .batches
-            .iter()
-            .flat_map(|b| {
-                b.done.launched().map(|agent| Launch {
-                    project_root: b.scope.root.clone(),
-                    scope: b.scope.name.clone(),
-                    agent: agent.to_string(),
-                })
-            })
-            .collect();
-        let mut failed = launch_check::confirm_all(&launches, tmux_server);
-        for batch in &mut self.batches {
-            let (mine, rest) = failed.into_iter().partition(|f| {
-                f.launch.project_root == batch.scope.root && f.launch.scope == batch.scope.name
-            });
-            failed = rest;
-            batch.done.record_failures(mine);
-        }
+        let failed = launch_check::confirm_all(&launches(&self.batches), tmux_server);
+        record(&mut self.batches, failed);
     }
 
     /// What happened to each agent. A restart refused because its agent
@@ -229,7 +263,11 @@ impl RestartAll {
                         let why = why
                             .strip_prefix(&format!("agent '{agent}': "))
                             .unwrap_or(&why);
-                        Outcome::Failed(format!("Failed to restart agent '{agent}': {why}"))
+                        if batch.done.not_up.contains(agent) {
+                            Outcome::NotUp(format!("Restarted agent '{agent}'; {why}"))
+                        } else {
+                            Outcome::Failed(format!("Failed to restart agent '{agent}': {why}"))
+                        }
                     }
                     (Err(e), None) => {
                         Outcome::Failed(format!("Failed to restart agent '{agent}': {e}"))
@@ -289,6 +327,22 @@ pub struct Plan {
 }
 
 impl Plan {
+    /// Take each planned agent `why` gives a reason for out of the plan,
+    /// reporting it skipped for that reason with the command that restarts
+    /// it.
+    pub fn hold(&mut self, why: impl Fn(&Scope, &str) -> Option<String>) {
+        for (scope, names, _) in &mut self.planned {
+            names.retain(|name| match why(scope, name) {
+                Some(why) => {
+                    self.unrestarted.push(held_back(scope, name, &why));
+                    false
+                }
+                None => true,
+            });
+        }
+        self.planned.retain(|(_, names, _)| !names.is_empty());
+    }
+
     /// One `Would restart` line per planned agent.
     pub fn would_restart(&self) -> Vec<String> {
         self.planned
@@ -411,6 +465,49 @@ pub fn plan(
     }
     plan.planned.sort_by_key(|(.., caller)| *caller);
     Ok(plan)
+}
+
+/// `agent` of `scope` skipped, held back for `why` until it clears.
+fn held_back(scope: &Scope, agent: &str, why: &str) -> Report {
+    Report {
+        target: scope.label(),
+        outcome: Outcome::Skipped(format!(
+            "Skipped agent '{agent}': {why}; restart it once that clears with {}",
+            restart_command(scope, agent)
+        )),
+    }
+}
+
+/// The harness each of `names` but the caller launches on its restart;
+/// one that cannot be told is left out, so it is no canary and none holds
+/// it back.
+pub(super) fn harnesses_of(
+    scope: &Scope,
+    names: &[String],
+    global: &GlobalConfig,
+    tmux_server: Option<&str>,
+) -> HashMap<String, Harness> {
+    let (Ok(config), Ok(registry)) = (
+        ProjectConfig::load(&paths::pm_dir(&scope.root)),
+        AgentRegistry::load(&paths::agents_dir(&scope.root), &scope.name),
+    ) else {
+        return HashMap::new();
+    };
+    let caller = callers_agent(&scope.root, &scope.name, names, tmux_server);
+    names
+        .iter()
+        .filter(|name| Some(*name) != caller)
+        .filter_map(|name| {
+            let entry = registry.get(name)?;
+            let harness = agent_spawn::configured_harness(
+                entry.effective_definition(name),
+                &config.agents,
+                &global.agents,
+            )
+            .ok()?;
+            Some((name.clone(), harness))
+        })
+        .collect()
 }
 
 /// The command that restarts `agent` of `scope`, quoted for a report line.
@@ -541,20 +638,36 @@ pub fn restart_all(
     tmux_server: Option<&str>,
 ) -> Result<RestartAll> {
     let plan = plan(scopes, select, force, tmux_server)?;
-    let batches = plan
-        .planned
-        .into_iter()
-        .map(|(scope, names, _)| Batch {
-            done: agent_restart_many(&scope.root, &scope.name, &names, force, false, tmux_server),
-            scope,
-        })
-        .collect();
-    Ok(RestartAll {
+    Ok(restart_plan(plan, select, force, tmux_server))
+}
+
+/// Restart what `plan`, made by [`plan`] with `select` and `force`, holds.
+pub fn restart_plan(
+    plan: Plan,
+    select: Select,
+    force: bool,
+    tmux_server: Option<&str>,
+) -> RestartAll {
+    let confirm = |launches: &[Launch]| launch_check::confirm_all(launches, tmux_server);
+    restart_confirming(plan, select, force, tmux_server, &confirm)
+}
+
+/// [`restart_plan`], its canaries' launches confirmed by `confirm`.
+fn restart_confirming(
+    mut plan: Plan,
+    select: Select,
+    force: bool,
+    tmux_server: Option<&str>,
+    confirm: Confirm,
+) -> RestartAll {
+    let (batches, held) = canary::restart_planned(plan.planned, force, tmux_server, confirm);
+    plan.unrestarted.extend(held);
+    RestartAll {
         unrestarted: plan.unrestarted,
         batches,
         select,
         up_to_date: plan.up_to_date,
-    })
+    }
 }
 
 /// Why restarting an agent in `state` would cut its turn short.
@@ -847,5 +960,69 @@ mod tests {
                 "{lines:#?}"
             );
         }
+    }
+
+    #[test]
+    fn an_agent_whose_harness_does_not_come_up_holds_back_the_rest_of_its_harness() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let session = tmux::session_name(&project_name, "login");
+        for agent in ["implementer", "reviewer"] {
+            server.spawn_idle_fake_agent(&project, &session, "login", agent);
+            let runtime = crate::state::runtime::agent_dir(&project, "login", agent).unwrap();
+            std::fs::write(runtime.join(crate::testing::HOLD_START), "").unwrap();
+            // The session before the restart had started: a restart must not
+            // read the new one as up on its stamp.
+            crate::state::runtime::mark_started(&project, "login", agent).unwrap();
+        }
+        let confirm = |launches: &[Launch]| {
+            launch_check::confirm_within(
+                launches,
+                server.name(),
+                launch_check::START_WITHIN,
+                std::time::Duration::from_secs(1),
+            )
+        };
+
+        let scope = Scope::of(&project, "login").unwrap();
+        let plan = plan(&[scope], Select::All, false, server.name()).unwrap();
+        let mut done = restart_confirming(plan, Select::All, false, server.name(), &confirm);
+        done.confirm_launches(server.name());
+        let sweep = done.sweep();
+
+        let lines = lines(&sweep);
+        assert_eq!(
+            sweep.summary(),
+            "Restarted 0, not up 1, skipped 1, failed 0",
+            "{lines:#?}"
+        );
+        assert_eq!(
+            lines[0],
+            format!(
+                "{session}: Skipped agent 'reviewer': not restarted, since {session}'s agent \
+                 'implementer', also on claude-code, did not come up after its restart (it has \
+                 drawn nothing); restart it once that clears with \
+                 `pm agent restart reviewer --scope login`"
+            )
+        );
+        assert!(
+            lines[1].starts_with(&format!(
+                "{session}: Restarted agent 'implementer'; its claude-code harness started but \
+                 has not come up after 1s"
+            )),
+            "{lines:#?}"
+        );
+        let runs = |agent: &str, what: &str| {
+            tmux::pane_processes(server.name(), &format!("{session}:{agent}"))
+                .unwrap()
+                .iter()
+                .any(|p| p.command.contains(what))
+        };
+        assert!(
+            runs("reviewer", crate::commands::hooks_install::PM_HOOK_MARKER),
+            "the one held back keeps its old session"
+        );
+        assert!(runs("implementer", "claude"), "the canary is left running");
     }
 }

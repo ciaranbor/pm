@@ -3,7 +3,8 @@
 use std::path::Path;
 
 use super::warnings::{
-    baseline_capability_warnings, global_config_warning, registry_warnings, serve_warnings,
+    baseline_capability_warnings, global_config_warning, keychain_warning, registry_warnings,
+    serve_warnings,
 };
 use super::{Depth, Fix, FixAction, diagnose};
 use crate::commands::feat_delete::{self, CleanupParams};
@@ -107,6 +108,7 @@ fn run(
     warnings.extend(global_config_warning());
     warnings.extend(registry_warnings(projects_dir)?);
     warnings.extend(serve_warnings(depth));
+    warnings.extend(keychain_warning(depth));
 
     let findings = diagnose(project_root, projects_dir, tmux_server, depth)?;
     let feature_count = FeatureState::list(&paths::features_dir(project_root))?.len();

@@ -145,17 +145,19 @@ fn report_restart_all(
     sweep.reports.splice(0..0, unread);
     for report in &sweep.reports {
         match report.outcome {
-            Outcome::Failed(_) => eprintln!("{report}"),
+            Outcome::Failed(_) | Outcome::NotUp(_) => eprintln!("{report}"),
             _ => println!("{report}"),
         }
     }
     println!("{}", sweep.summary());
-    let failed = sweep.count(|o| matches!(o, Outcome::Failed(_))) > 0;
+    let failed = sweep.count(|o| matches!(o, Outcome::Failed(_) | Outcome::NotUp(_))) > 0;
     std::io::Write::flush(&mut std::io::stdout())?;
     done.finish(server);
     push();
     if failed {
-        return Err(PmError::Agent("some agents failed to restart".to_string()));
+        return Err(PmError::Agent(
+            "some agents failed to restart or did not come up".to_string(),
+        ));
     }
     Ok(())
 }
@@ -169,7 +171,7 @@ fn restart_select(stale: bool) -> commands::agent_restart_all::Select {
 }
 
 /// Print what a send did, reporting a respawned recipient only once its
-/// harness has stayed up. The message is queued either way, so a failed
+/// harness has come up. The message is queued either way, so a failed
 /// launch is a warning.
 fn report_sent(
     project_root: &std::path::Path,
@@ -186,19 +188,28 @@ fn report_sent(
     }
 }
 
-/// Print each launch that failed; an error saying how many, if any did.
+/// Print each launch that exited or did not come up; an error saying how
+/// many, if any did.
 fn report_failed_launches(
     failed: &[commands::launch_check::FailedLaunch],
 ) -> pm::error::Result<()> {
     for failure in failed {
         eprintln!("error: {}", failure.message());
     }
-    match failed.len() {
-        0 => Ok(()),
-        n => Err(PmError::Agent(format!(
-            "{n} agent{} failed to launch",
-            plural(n)
-        ))),
+    let not_up = failed.iter().filter(|f| f.not_up()).count();
+    let counts = [
+        (failed.len() - not_up, "exited at launch"),
+        (not_up, "did not come up"),
+    ];
+    let said: Vec<String> = counts
+        .iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, what)| format!("{n} agent{} {what}", plural(*n)))
+        .collect();
+    if said.is_empty() {
+        Ok(())
+    } else {
+        Err(PmError::Agent(said.join(", ")))
     }
 }
 

@@ -68,6 +68,10 @@ pub(super) const CONFIG_DIR: &str = ".codex";
 
 /// The program an agent's window runs.
 pub(super) const BINARY: &str = "codex";
+
+/// codex asks the macOS keychain as it starts: with it hung, even
+/// `codex exec` hangs.
+pub(super) const READS_KEYCHAIN: bool = true;
 pub(super) const HOOKS_FILE: &str = "hooks.json";
 const CONFIG_FILE: &str = "config.toml";
 

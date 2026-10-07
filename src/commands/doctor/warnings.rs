@@ -1,5 +1,6 @@
 //! Project-independent warnings: the global config, the registry,
-//! `pm serve`, and whether each harness can deliver the shared baseline.
+//! `pm serve`, the macOS login keychain, and whether each harness can
+//! deliver the shared baseline.
 
 use std::path::Path;
 
@@ -43,6 +44,32 @@ pub(super) fn serve_warnings(depth: Depth) -> Vec<String> {
         crate::version::VERSION,
         |port| (depth == Depth::Full).then(|| crate::tailscale::check(port)),
     )
+}
+
+/// The macOS login keychain ([`keychain`](crate::keychain)), asked only at
+/// full depth: some harnesses read it as they start
+/// ([`Harness::reads_keychain`]).
+pub(super) fn keychain_warning(depth: Depth) -> Option<String> {
+    use crate::keychain::{self, Answer};
+    if depth != Depth::Full {
+        return None;
+    }
+    let command = keychain::COMMAND;
+    let readers = keychain::readers(Harness::SUPPORTED.iter().copied());
+    match keychain::check()? {
+        Answer::Answered => None,
+        Answer::Hung => Some(format!(
+            "keychain — the macOS login keychain did not answer `{command}` within {}s; \
+             {readers} read it as they start, so an agent of theirs launched now waits on it \
+             and does not come up",
+            keychain::LIMIT.as_secs()
+        )),
+        Answer::Error(said) => Some(format!(
+            "keychain — note: the macOS login keychain answered `{command}` with an error \
+             ({said}), as a locked one does over ssh; {readers} read it as they start, so an \
+             agent of theirs launched from here may not come up"
+        )),
+    }
 }
 
 /// Warn about each registry entry that can't be read; all-project commands

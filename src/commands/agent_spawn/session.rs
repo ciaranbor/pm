@@ -240,6 +240,7 @@ pub(super) fn spawn_session_with_config(
         runtime::write_session_path(params.project_root, params.feature, name, which, None)?;
     }
 
+    runtime::reset_started(params.project_root, params.feature, name)?;
     let launched = runtime::reset_launched(params.project_root, params.feature, name)?;
     tmux::send_line(
         params.tmux_server,

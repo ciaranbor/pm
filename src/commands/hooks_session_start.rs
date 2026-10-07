@@ -124,11 +124,11 @@ fn parse_payload(json_str: &str) -> crate::error::Result<Payload> {
     })
 }
 
-/// Clear the agent's waiting marker, stamp its activity, record its
-/// session paths, and update its session_id in the registry, returning
-/// the harness and effective definition its entry records. An unregistered
-/// agent is left alone (`None`): the spawn registers before launching, so
-/// this is a non-pm session.
+/// Clear the agent's waiting marker, stamp its activity and its start,
+/// record its session paths, and update its session_id in the registry,
+/// returning the harness and effective definition its entry records. An
+/// unregistered agent is left alone (`None`): the spawn registers before
+/// launching, so this is a non-pm session.
 fn record_start(
     project_root: &Path,
     feature: &str,
@@ -142,6 +142,7 @@ fn record_start(
         return Ok(None);
     };
     runtime::touch_activity(project_root, feature, agent_name)?;
+    runtime::mark_started(project_root, feature, agent_name)?;
     runtime::clear_waiting(project_root, feature, agent_name)?;
     let session_path = |which, path: Option<&Path>| {
         runtime::write_session_path(project_root, feature, agent_name, which, path)
@@ -254,17 +255,22 @@ mod tests {
     }
 
     #[test]
-    fn a_started_session_is_past_its_startup_dialog() {
+    fn a_started_session_is_up_and_past_its_startup_dialog() {
         use crate::state::runtime::{Waiting, WaitingKind};
         let dir = tempdir().unwrap();
         let root = setup_project_with_agent(dir.path(), "login", "reviewer");
         let startup = Waiting::now(WaitingKind::Startup, None);
         runtime::write_waiting(&root, "login", "reviewer", &startup).unwrap();
+        assert_eq!(runtime::started_at(&root, "login", "reviewer"), None);
 
         record_start(&root, "login", "reviewer", &started("s1")).unwrap();
 
         assert_eq!(runtime::read_waiting(&root, "login", "reviewer"), None);
         assert!(runtime::last_activity(&root, "login", "reviewer").is_some());
+        assert!(
+            runtime::started_at(&root, "login", "reviewer").is_some(),
+            "the launch check reads the session as up"
+        );
     }
 
     #[test]

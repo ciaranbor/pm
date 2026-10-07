@@ -12,7 +12,8 @@ use super::providers::{
     Providers, render, set_in_environment, split_model_id_notes, unset_key_notes,
 };
 use super::reach::Reach;
-use super::{CONFIG_ENV, ModelRef, bounded, command};
+use super::{CALL, CONFIG_ENV, ModelRef, command};
+use crate::bounded;
 use crate::harness::{ConfigIssue, ConfigIssueKind};
 use crate::state::project::OpenCodeConfig;
 
@@ -93,13 +94,13 @@ fn merged_config_issues(
 
     let mut command = command(cfg, &["api"], &["config.get"]);
     command.env(CONFIG_ENV, file.path()).current_dir(worktree);
-    let out = match bounded::run(&mut command, bounded::CALL) {
+    let out = match bounded::run(&mut command, CALL) {
         Ok(out) => out,
         Err(failure @ bounded::Failure::TimedOut { .. }) => {
             return Some(Merged {
                 invalid: vec![format!(
                     "{}, so pm could not check what opencode made of [harness.opencode]",
-                    failure.describe("config.get")
+                    failure.describe("opencode config.get")
                 )],
                 ..Default::default()
             });

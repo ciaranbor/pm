@@ -73,7 +73,6 @@
 //! agent. With `[harness.opencode] auto = false` pm puts allow rules for its
 //! own state dirs ahead of the row, which can still override them.
 
-mod bounded;
 pub(super) mod chat;
 pub(super) mod dialog;
 pub(super) mod input;
@@ -89,6 +88,7 @@ use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
 
+use crate::bounded;
 use crate::error::{PmError, Result};
 use crate::fs_utils::write_atomic;
 use crate::harness::probe::{self, Probe};
@@ -97,6 +97,12 @@ use crate::state::paths;
 use crate::state::project::OpenCodeConfig;
 use crate::state::workflow::VANILLA_AGENT;
 use crate::tmux;
+
+/// The limit for a call that answers from opencode's own store.
+const CALL: std::time::Duration = crate::harness::CALL_LIMIT;
+
+/// The limit for a call that writes or reads a whole transcript.
+const TRANSFER: std::time::Duration = std::time::Duration::from_secs(300);
 
 pub(super) const CONFIG_DIR: &str = ".opencode";
 pub(super) const PROJECTED_DIRS: &[&str] = &["agents"];
@@ -107,6 +113,9 @@ pub(super) const PROJECTED_DIRS: &[&str] = &["agents"];
 pub(super) const MIN_VERSION: (u32, u32, u32) = (2, 0, 23);
 
 const DEFAULT_BINARY: &str = "opencode";
+
+/// opencode keeps its provider credentials in its own files.
+pub(super) const READS_KEYCHAIN: bool = false;
 const PLUGIN_DIR: &str = "plugins/pm-never-idle";
 
 /// The plugin as installed, relative to [`PLUGIN_DIR`]. `index.ts` is what
@@ -550,7 +559,7 @@ struct Refusal {
 /// reported, for a caller that acts on the refusal.
 fn try_api(mut command: Command, args: &[&str]) -> Result<std::result::Result<Value, Refusal>> {
     let operation = args.first().copied().unwrap_or_default();
-    let out = bounded::output(&mut command, operation, bounded::CALL)?;
+    let out = bounded::output(&mut command, &format!("opencode {operation}"), CALL)?;
     let stdout = String::from_utf8_lossy(&out.stdout);
     if !out.status.success() {
         return Ok(Err(refusal(&stdout, &String::from_utf8_lossy(&out.stderr))));
@@ -649,10 +658,10 @@ pub(super) fn installed_version(
     let exit = probe::run(binary(cfg), "--version", probe, || {
         let mut command = Command::new(executable(binary(cfg)));
         command.arg("--version").stdin(Stdio::null());
-        bounded::run(&mut command, bounded::CALL)
+        bounded::run(&mut command, CALL)
             .map(probe::Exit::from)
             .map_err(|failure| match failure {
-                bounded::Failure::TimedOut { .. } => failure.describe("--version"),
+                bounded::Failure::TimedOut { .. } => failure.describe("opencode --version"),
                 bounded::Failure::Unrunnable { .. } => unrunnable(),
             })
     })?;

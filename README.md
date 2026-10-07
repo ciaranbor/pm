@@ -174,14 +174,24 @@ When an agent misbehaves, `pm agent restart <name>` respawns it on the same
 conversation; `pm agent spawn <name>` adds one to the feature. `pm doctor`
 reports an agent whose harness has exited.
 
+A spawn or restart succeeds once the agent's harness has started its
+session. One whose harness exits at launch fails with what its window
+shows. One whose harness runs 20s without starting its session has not come
+up: held on a login or trust screen, or before its startup, drawing nothing
+(on macOS, often a login keychain that isn't answering). It fails saying
+which, and is left running, since it may still come up.
+
 `pm agent restart --all` restarts every active agent of the scope, and
 `--all --global` every scope of every project. Idle agents restart and dead
 ones are respawned. One mid-turn, asking, or waiting on background work is
 skipped unless `--force`, which interrupts it and tells it to resume; an
 agent whose session is closed (a closed feature, a project not opened) is
 skipped, leaving the session closed. Run from an agent's own pane, that
-agent restarts last. Each agent gets a line and the run ends with a count;
-only a failed restart makes it exit non-zero.
+agent restarts last. Each harness's agents restart after one of them has
+come up: if it does not, the rest on that harness are skipped, still
+running, rather than restarted into the same wait. Each agent gets a line
+and the run ends with a count; a failed restart, or one that did not come
+up, makes it exit non-zero.
 
 A running agent keeps what it was launched with: its definition, the
 baseline and notice boards, its config rows, and on codex and opencode pm's
@@ -196,7 +206,11 @@ picks up the change at its next spawn. `pm upgrade`
 covers its project, `--all` every project. `pm agent restart --all --stale`
 runs the same sweep by hand, `pm doctor` names each stale agent, and
 `restart_agents = false` under `[upgrade]` in the global config turns the
-upgrade's restarts off.
+upgrade's restarts off. On macOS the upgrade first asks the login keychain,
+which some harnesses (Claude Code, codex) read as they start: if it does
+not answer within 5s, agents on those harnesses are left running, each
+listed with the command that restarts it once the keychain answers; `pm
+doctor` reports it too.
 
 ### Project notes
 

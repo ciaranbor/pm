@@ -37,6 +37,10 @@ pub(super) const CONFIG_DIR: &str = ".claude";
 /// The program an agent's window runs.
 pub(super) const BINARY: &str = "claude";
 
+/// Claude Code asks the macOS keychain for its credentials as it starts,
+/// even with `CLAUDE_CODE_OAUTH_TOKEN` set.
+pub(super) const READS_KEYCHAIN: bool = true;
+
 /// Claude Code reads the project settings (permissions etc.) per worktree,
 /// so a feature needs main's copy. `settings.local.json` is not seeded:
 /// Claude Code saves approvals granted in a linked worktree to the main

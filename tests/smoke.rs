@@ -1059,12 +1059,18 @@ fn a_project_moves_to_a_fresh_machine_and_its_agent_resumes() {
 
     // The reviewer has a conversation, recorded under its resolved cwd.
     let agents = s.proj().join(".pm/agents/login.toml");
-    let text = std::fs::read_to_string(&agents).unwrap();
-    std::fs::write(
-        &agents,
-        text.replace("session_id = \"\"", "session_id = \"sess-1\""),
-    )
-    .unwrap();
+    let text: Vec<String> = std::fs::read_to_string(&agents)
+        .unwrap()
+        .lines()
+        .map(|l| {
+            if l.starts_with("session_id = ") {
+                "session_id = \"sess-1\"".to_string()
+            } else {
+                l.to_string()
+            }
+        })
+        .collect();
+    std::fs::write(&agents, text.join("\n") + "\n").unwrap();
     let resolved = login.canonicalize().unwrap();
     let key: String = resolved
         .to_string_lossy()
