@@ -53,7 +53,8 @@ fn waiting_inner(harness: Harness) -> Result<Option<(AgentState, u32)>> {
     Ok(Some((state, unread)))
 }
 
-/// Apply what `payload` says to the agent's dialogs and marker. A marker
+/// Apply what `payload` says to the agent's dialogs and marker, recording a
+/// dialog it opens that no hook holds ([`Harness::typed_dialog`]). A marker
 /// cleared while dialogs are still open is set to stand for the oldest, the
 /// one a terminal queueing several shows. Between turns, a marker a
 /// subagent's event sets stays between turns, and one it clears gives way
@@ -69,7 +70,19 @@ fn settle(
     hooks_dialog::resolve(project_root, scope, agent, harness, payload)?;
     let between =
         runtime::read_waiting(project_root, scope, agent).is_some_and(|w| w.between_turns);
-    let mut event = harness.waiting_event(payload);
+    let mut event = match harness.typed_dialog(payload) {
+        Some((dialog, reply_context)) => {
+            let waiting = dialog.waiting();
+            let record = runtime::DialogRecord {
+                dialog,
+                pid: None,
+                reply_context,
+            };
+            runtime::write_dialog(project_root, scope, agent, &record)?;
+            Some(WaitingEvent::Set(waiting))
+        }
+        None => harness.waiting_event(payload),
+    };
     let subagents = matches!(event, Some(WaitingEvent::ClearSubagent(_)));
     if let Some(WaitingEvent::Set(w) | WaitingEvent::Fill { waiting: w, .. }) = &mut event {
         w.between_turns = between && w.subagent.is_some();
@@ -283,7 +296,7 @@ mod tests {
             dialog.since = start + chrono::Duration::seconds(opened);
             let record = runtime::DialogRecord {
                 dialog,
-                pid: std::process::id(),
+                pid: Some(std::process::id()),
                 reply_context,
             };
             runtime::write_dialog(root, "login", "implementer", &record).unwrap();
@@ -331,7 +344,7 @@ mod tests {
             let (dialog, reply_context) = Harness::ClaudeCode.dialog(&ask).unwrap();
             let record = runtime::DialogRecord {
                 dialog,
-                pid: std::process::id(),
+                pid: Some(std::process::id()),
                 reply_context,
             };
             runtime::write_dialog(root, scope, agent, &record).unwrap();
@@ -497,5 +510,75 @@ mod tests {
             Some(AgentState::Busy)
         );
         assert_eq!(kind(root), None);
+    }
+
+    #[test]
+    fn a_codex_async_question_asks_while_the_agent_works_until_it_closes() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let codex = |payload: serde_json::Value| send(root, Harness::Codex, payload);
+        let detail =
+            || runtime::read_waiting(root, "login", "implementer").map(|w| (w.kind, w.describe()));
+        let asking = Some((WaitingKind::Question, "Which colour?".to_string()));
+        // The hooks codex 0.160 fired, live, from the question to the sleep
+        // waiting on its answer.
+        let asked = codex(json!({"hook_event_name": "PreToolUse",
+            "tool_name": "request_user_input_async", "tool_use_id": "call_9Xk2",
+            "tool_input": {"questions": [{"title": "Which colour?", "options": ["Red", "Blue"]}]}}));
+        assert_eq!(asked, Some(AgentState::Asking));
+        assert_eq!(detail(), asking);
+        for payload in [
+            json!({"hook_event_name": "PostToolUse", "tool_name": "request_user_input_async",
+                   "tool_use_id": "call_9Xk2", "tool_response": "{\"accepted\":true}"}),
+            json!({"hook_event_name": "PreToolUse", "tool_name": "clocksleep"}),
+            json!({"hook_event_name": "PostToolUse", "tool_name": "clocksleep"}),
+        ] {
+            codex(payload);
+            assert_eq!(detail(), asking);
+        }
+
+        codex(
+            json!({"hook_event_name": "PermissionRequest", "tool_name": "Bash",
+                     "tool_input": {"command": "cargo publish"}}),
+        );
+        assert_eq!(kind(root), Some(WaitingKind::Permission));
+        assert_eq!(
+            codex(json!({"hook_event_name": "PostToolUse", "tool_name": "Bash"})),
+            Some(AgentState::Asking)
+        );
+        assert_eq!(detail(), asking, "the question is still pending");
+
+        hooks_dialog::close_typed(root, "login", "implementer", Harness::Codex, Some("go on"))
+            .unwrap();
+        runtime::clear_waiting(root, "login", "implementer").unwrap();
+        assert_eq!(
+            codex(json!({"hook_event_name": "PostToolUse", "tool_name": "shell"})),
+            None,
+            "dropped with the prompt"
+        );
+    }
+
+    #[test]
+    fn a_codex_async_question_is_not_asking_once_interrupted() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        send(
+            root,
+            Harness::Codex,
+            json!({"hook_event_name": "PreToolUse",
+                   "tool_name": "request_user_input_async", "tool_use_id": "c",
+                   "tool_input": {"questions": [{"title": "Which colour?"}]}}),
+        );
+        assert_eq!(
+            send(
+                root,
+                Harness::Codex,
+                json!({"hook_event_name": "Interrupt"})
+            ),
+            Some(AgentState::Unarmed)
+        );
+        assert!(
+            hooks_dialog::open_dialogs(root, "login", "implementer", Harness::Codex).is_empty()
+        );
     }
 }

@@ -378,7 +378,7 @@ fn a_subagents_dialog_open_as_the_turn_ends_keeps_the_agent_asking() {
     let record = runtime::DialogRecord {
         dialog,
         // This process stands in for the dialog's hook.
-        pid: std::process::id(),
+        pid: Some(std::process::id()),
         reply_context,
     };
     runtime::write_dialog(dir.path(), "main", AGENT, &record).unwrap();

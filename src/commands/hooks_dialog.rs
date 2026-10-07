@@ -23,11 +23,18 @@
 //!   no event ties back to it.
 //!
 //! Its stdout is the decision, so it prints nothing else.
+//!
+//! A dialog no hook holds — codex's async question, pending beside the
+//! input line while the agent works on — is recorded by the waiting hook
+//! instead ([`Harness::typed_dialog`]) and answered by typing the harness's
+//! own reply as a prompt. It closes as its harness drops it: on any prompt
+//! taken, and as the turn ends ([`close_typed`]).
 
 use std::io::Read;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use crate::commands::agent_input::{self, Refusal};
 use crate::commands::hook_process::{self, Caller, Signals};
 use crate::commands::{hooks_waiting, running_agents};
 use crate::error::Result;
@@ -102,7 +109,7 @@ fn open(harness: Harness) -> Result<Option<Opened>> {
     let (project_root, scope) = paths::agent_scope()?;
     let record = DialogRecord {
         dialog,
-        pid: std::process::id(),
+        pid: Some(std::process::id()),
         reply_context,
     };
     runtime::write_dialog(&project_root, &scope, &agent, &record)?;
@@ -176,8 +183,33 @@ pub fn open_dialogs(
     let waiting = running_agents::waiting(project_root, scope, agent, harness);
     records
         .into_iter()
-        .filter(|r| hook_process::pid_alive(r.pid) && !turn_ended(waiting.as_ref(), r))
+        .filter(|r| held(r) && !turn_ended(waiting.as_ref(), r))
         .collect()
+}
+
+/// Whether `record`'s dialog is still held: by its hook, alive, or, for a
+/// dialog answered by typing, by its harness until it closes.
+fn held(record: &DialogRecord) -> bool {
+    record.pid.is_none_or(hook_process::pid_alive)
+}
+
+/// Close the agent's dialogs that are answered by typing, as its
+/// harness drops them: on `prompt` taken, which answers those it names, or
+/// with no prompt, as its turn ends.
+pub fn close_typed(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    harness: Harness,
+    prompt: Option<&str>,
+) -> Result<()> {
+    for record in runtime::read_dialogs(project_root, scope, agent) {
+        if record.pid.is_none() {
+            let taken = prompt.is_some_and(|p| harness.typed_reply_answers(&record, p));
+            runtime::close_dialog(project_root, scope, agent, &record.dialog.id, taken)?;
+        }
+    }
+    Ok(())
 }
 
 /// The open dialog an agent already known to be at `waiting` is asking
@@ -191,11 +223,7 @@ pub fn current_for(
     runtime::read_dialogs(project_root, scope, agent)
         .into_iter()
         .rev()
-        .find(|r| {
-            waiting.kind == r.dialog.kind
-                && waiting.subagent == r.dialog.subagent
-                && hook_process::pid_alive(r.pid)
-        })
+        .find(|r| waiting.kind == r.dialog.kind && waiting.subagent == r.dialog.subagent && held(r))
 }
 
 /// What became of an answer.
@@ -212,10 +240,13 @@ pub enum Answered {
     Gone,
     /// No dialog of the agent's ever had the id it names.
     Unknown,
+    /// A dialog answered by typing could not be typed into.
+    Refused(Refusal),
 }
 
 /// Leave `answer` for the agent's dialog it names and wait up to `within`
-/// for its hook to take it.
+/// for its hook to take it; for a dialog no hook holds, type its harness's
+/// reply into the agent's pane on tmux server `tmux_server`.
 pub fn answer(
     project_root: &Path,
     scope: &str,
@@ -223,6 +254,7 @@ pub fn answer(
     harness: Harness,
     answer: &Answer,
     within: Duration,
+    tmux_server: Option<&str>,
 ) -> Result<Answered> {
     let id = &answer.id;
     let Some(record) = runtime::read_dialog(project_root, scope, agent, id) else {
@@ -237,7 +269,7 @@ pub fn answer(
     if turn_ended(waiting.as_ref(), &record) {
         return Ok(Answered::Elsewhere);
     }
-    if !hook_process::pid_alive(record.pid) {
+    if !held(&record) {
         return Ok(Answered::Gone);
     }
     if let Some(why) = record.dialog.invalid(answer) {
@@ -246,11 +278,23 @@ pub fn answer(
     if !runtime::leave_answer(project_root, scope, agent, answer)? {
         return Ok(Answered::Elsewhere);
     }
+    let Some(pid) = record.pid else {
+        let reply = harness.typed_reply(&record, answer);
+        return typed(
+            project_root,
+            scope,
+            agent,
+            harness,
+            &record,
+            &reply,
+            tmux_server,
+        );
+    };
     let deadline = Instant::now() + within;
     loop {
         let pending = runtime::answer_pending(project_root, scope, agent, id);
         let held = runtime::read_dialog(project_root, scope, agent, id).is_some();
-        let hook_alive = hook_process::pid_alive(record.pid);
+        let hook_alive = hook_process::pid_alive(pid);
         if !held && runtime::dialog_answer_taken(project_root, scope, agent, id) {
             return Ok(Answered::Taken);
         }
@@ -279,6 +323,28 @@ pub fn answer(
     }
 }
 
+/// Type `reply` to `record`'s dialog, whose answer is left, then close it
+/// as answered; the answer left is withdrawn should it not be typed.
+fn typed(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    harness: Harness,
+    record: &DialogRecord,
+    reply: &str,
+    tmux_server: Option<&str>,
+) -> Result<Answered> {
+    let id = &record.dialog.id;
+    let typed = agent_input::type_reply(project_root, scope, agent, reply, tmux_server)?;
+    if let Err(refusal) = typed {
+        runtime::take_answer(project_root, scope, agent, id)?;
+        return Ok(Answered::Refused(refusal));
+    }
+    runtime::close_dialog(project_root, scope, agent, id, true)?;
+    hooks_waiting::dialog_closed(project_root, scope, agent, harness, &record.dialog)?;
+    Ok(Answered::Taken)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,7 +358,7 @@ mod tests {
         let (dialog, reply_context) = Harness::ClaudeCode.dialog(&payload).unwrap();
         let record = DialogRecord {
             dialog,
-            pid: std::process::id(),
+            pid: Some(std::process::id()),
             reply_context,
         };
         runtime::write_dialog(root, "login", AGENT, &record).unwrap();
@@ -424,7 +490,8 @@ mod tests {
                 AGENT,
                 Harness::ClaudeCode,
                 &decline(&own.dialog.id),
-                Duration::ZERO
+                Duration::ZERO,
+                None,
             )
             .unwrap(),
             Answered::Elsewhere
@@ -484,6 +551,7 @@ mod tests {
                 Harness::ClaudeCode,
                 &decline(&id),
                 Duration::from_millis(300),
+                None,
             )
             .unwrap();
             closer.join().unwrap();
@@ -510,6 +578,7 @@ mod tests {
                 Harness::ClaudeCode,
                 answer,
                 Duration::from_millis(100),
+                None,
             )
             .unwrap()
         };
@@ -533,12 +602,165 @@ mod tests {
         );
 
         let mut dead = record.clone();
-        dead.pid = u32::MAX / 2;
+        dead.pid = Some(u32::MAX / 2);
         runtime::write_dialog(root, "login", AGENT, &dead).unwrap();
         assert_eq!(send(&reply("decline")), Answered::Gone);
         assert!(open_dialogs(root, "login", AGENT, Harness::ClaudeCode).is_empty());
 
         runtime::close_dialog(root, "login", AGENT, &record.dialog.id, false).unwrap();
         assert_eq!(send(&reply("decline")), Answered::Elsewhere, "closed");
+    }
+
+    /// The async question codex 0.160 asked live, recorded as the waiting
+    /// hook records it.
+    fn async_question(root: &Path, agent: &str) -> DialogRecord {
+        let payload = json!({"hook_event_name": "PreToolUse",
+            "tool_name": "request_user_input_async", "tool_use_id": "call_9Xk2",
+            "tool_input": {"questions": [{"title": "Which colour?", "options": ["Red", "Blue"]}]}});
+        let (dialog, reply_context) = Harness::Codex.typed_dialog(&payload).unwrap();
+        let record = DialogRecord {
+            dialog,
+            pid: None,
+            reply_context,
+        };
+        runtime::write_dialog(root, "login", agent, &record).unwrap();
+        runtime::write_waiting(root, "login", agent, &record.dialog.waiting()).unwrap();
+        record
+    }
+
+    fn pick(record: &DialogRecord, label: &str) -> Answer {
+        Answer {
+            id: record.dialog.id.clone(),
+            choice: ANSWER_CHOICE.into(),
+            answers: [("Which colour?".to_string(), vec![label.to_string()])].into(),
+            message: None,
+        }
+    }
+
+    #[test]
+    fn a_dialog_no_hook_holds_is_answered_by_typing_its_harnesss_reply() {
+        let server = crate::testing::TestServer::new();
+        let dir = tempdir().unwrap();
+        let (root, name) = server.setup_project_with_feature(dir.path(), "login");
+        let (_, received) = server.spawn_recording_agent(
+            &root,
+            &crate::tmux::session_name(&name, "login"),
+            "login",
+            AGENT,
+            Harness::Codex,
+        );
+        let record = async_question(&root, AGENT);
+        assert_eq!(
+            open_dialogs(&root, "login", AGENT, Harness::Codex),
+            std::slice::from_ref(&record)
+        );
+        let marker = runtime::read_waiting(&root, "login", AGENT).unwrap();
+        assert_eq!(
+            current_for(&root, "login", AGENT, &marker).map(|r| r.dialog.id),
+            Some(record.dialog.id.clone())
+        );
+        let send = |agent: &str, answer: &Answer| {
+            super::answer(
+                &root,
+                "login",
+                agent,
+                Harness::Codex,
+                answer,
+                Duration::ZERO,
+                server.name(),
+            )
+            .unwrap()
+        };
+        assert!(matches!(
+            send(AGENT, &pick(&record, "")),
+            Answered::Invalid(_)
+        ));
+
+        assert_eq!(send(AGENT, &pick(&record, "Blue")), Answered::Taken);
+        let reply = Harness::Codex.typed_reply(&record, &pick(&record, "Blue"));
+        let want = format!("\x1b[200~{reply}\x1b[201~\r").into_bytes();
+        let mut got = Vec::new();
+        for _ in 0..250 {
+            got = std::fs::read(&received).unwrap_or_default();
+            if got.len() >= want.len() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            String::from_utf8_lossy(&got),
+            String::from_utf8_lossy(&want)
+        );
+        assert!(runtime::dialog_answer_taken(
+            &root,
+            "login",
+            AGENT,
+            &record.dialog.id
+        ));
+        assert_eq!(runtime::read_waiting(&root, "login", AGENT), None, "busy");
+        assert_eq!(send(AGENT, &pick(&record, "Red")), Answered::Elsewhere);
+
+        // An agent with no pane to type into keeps its dialog answerable.
+        let unreachable = async_question(&root, "reviewer");
+        let answer = pick(&unreachable, "Red");
+        assert_eq!(
+            send("reviewer", &answer),
+            Answered::Refused(Refusal::Inactive)
+        );
+        assert!(!runtime::answer_pending(
+            &root,
+            "login",
+            "reviewer",
+            &unreachable.dialog.id
+        ));
+        assert_eq!(
+            open_dialogs(&root, "login", "reviewer", Harness::Codex),
+            [unreachable]
+        );
+    }
+
+    #[test]
+    fn a_dialog_no_hook_holds_closes_as_its_harness_drops_it() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let answered = async_question(root, AGENT);
+        let reply = Harness::Codex.typed_reply(&answered, &pick(&answered, "Blue"));
+        close_typed(root, "login", AGENT, Harness::Codex, Some(&reply)).unwrap();
+        assert!(runtime::dialog_answer_taken(
+            root,
+            "login",
+            AGENT,
+            &answered.dialog.id
+        ));
+
+        let dropped = async_question(root, AGENT);
+        close_typed(root, "login", AGENT, Harness::Codex, Some("never mind")).unwrap();
+        assert!(runtime::dialog_closed(
+            root,
+            "login",
+            AGENT,
+            &dropped.dialog.id
+        ));
+        assert!(!runtime::dialog_answer_taken(
+            root,
+            "login",
+            AGENT,
+            &dropped.dialog.id
+        ));
+
+        let ended = async_question(root, AGENT);
+        let hooked = question(root);
+        close_typed(root, "login", AGENT, Harness::Codex, None).unwrap();
+        assert!(runtime::dialog_closed(
+            root,
+            "login",
+            AGENT,
+            &ended.dialog.id
+        ));
+        assert_eq!(
+            runtime::read_dialogs(root, "login", AGENT),
+            [hooked],
+            "a dialog its hook holds is its hook's to close"
+        );
     }
 }

@@ -3,12 +3,12 @@
 //!
 //! - An approval prompt (only under an approval policy other than pm's
 //!   default `never`) fires `PermissionRequest`.
-//! - A question (`request_user_input`, Plan mode only) fires only
-//!   `PreToolUse`, carrying the questions. Outside Plan mode 0.160 offers
-//!   `request_user_input_async` instead, which returns at once while the
-//!   question stays queued in the TUI; nothing marks it answered, so it is
-//!   not read as waiting.
-//! - Either resolves with `PostToolUse`. Denying, or any interrupt of a
+//! - A question (`request_user_input`, Plan mode only, verified on 0.160)
+//!   fires only `PreToolUse`, carrying the questions.
+//! - Either resolves with `PostToolUse`. Outside Plan mode 0.160 offers
+//!   `request_user_input_async`, which returns at once while the question
+//!   stays pending in the TUI: a dialog read from the hook payload, not
+//!   here ([`super::dialog`]). Denying, or any interrupt of a
 //!   turn, fires only `Interrupt` and skips Stop, leaving the agent at its
 //!   prompt with no hook to wake it.
 //! - Hooks fired inside a subagent (`spawn_agent`) carry its `agent_id`, so

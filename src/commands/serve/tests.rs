@@ -1051,7 +1051,7 @@ fn open_dialogs_are_served_and_an_answer_reaches_the_hook_of_the_one_it_names() 
         dialog.since = start + chrono::Duration::seconds(after);
         let record = DialogRecord {
             dialog,
-            pid,
+            pid: Some(pid),
             reply_context,
         };
         runtime::write_dialog(&f.project, "login", "implementer", &record).unwrap();

@@ -443,3 +443,130 @@ fn codex_hook_trust_through_the_interactive_gate_and_a_changed_hook() {
         .assert()
         .success();
 }
+
+/// Catches: a codex async question (`request_user_input_async`) not read as
+/// asking, or its answer from the phone not reaching codex as the reply its
+/// own question panel gives — so the model never learns it.
+#[test]
+#[ignore]
+fn codex_async_question_reads_asking_and_is_answered_through_serve() {
+    require("codex");
+    let s = Smoke::real();
+    let proj = s.project_on("proj", "codex", None);
+    let config = proj.join(".pm/config.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    let text = match text.contains("[harness.codex]\n") {
+        true => text.replace(
+            "[harness.codex]\n",
+            "[harness.codex]\nbypass_hook_trust = true\n",
+        ),
+        false => text + "\n[harness.codex]\nbypass_hook_trust = true\n",
+    };
+    std::fs::write(&config, text).unwrap();
+    let main = proj.join("main");
+    s.pm(&main)
+        .args(["agent", "spawn", "plain"])
+        .assert()
+        .success();
+
+    let port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    let url = format!("http://127.0.0.1:{port}");
+    let paired = s
+        .pm(s.home())
+        .args(["serve", "pair", "--url", &url, "--name", "test"])
+        .output()
+        .unwrap();
+    let token = String::from_utf8_lossy(&paired.stdout)
+        .lines()
+        .find_map(|l| l.strip_prefix("token:").map(|t| t.trim().to_string()))
+        .expect("pair prints the token");
+    let mut server = s
+        .run_cmd(s.home(), "pm")
+        .args(["serve", "--port", &port.to_string()])
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let agent = format!("{url}/v1/agents/proj/main/plain");
+    let request = |method: &str, path: &str, body: Option<serde_json::Value>| {
+        let mut curl = std::process::Command::new("curl");
+        curl.args(["-s", "-X", method, "-H"])
+            .arg(format!("Authorization: Bearer {token}"))
+            .arg(format!("{agent}/{path}"));
+        if let Some(body) = body {
+            curl.args(["-H", "Content-Type: application/json", "-d"])
+                .arg(body.to_string());
+        }
+        let out = curl.output().unwrap();
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap_or_default()
+    };
+    wait_for("pm serve", Duration::from_secs(20), &s, || {
+        request("GET", "dialogs", None).get("dialogs").is_some()
+    });
+
+    let asked = request(
+        "POST",
+        "input",
+        Some(serde_json::json!({"text":
+            "Use the request_user_input_async tool to ask me one multiple-choice question: \
+             \"Which colour?\" with options Red and Blue. Then wait for my answer with \
+             clock.sleep (up to 5 minutes) and reply with only the colour I chose."})),
+    );
+    assert!(asked.get("delivery").is_some(), "{asked}");
+    let mut dialog = serde_json::Value::Null;
+    wait_for("the question", TURN, &s, || {
+        dialog = request("GET", "dialog", None);
+        dialog.get("id").is_some()
+    });
+    assert_eq!(dialog["kind"], "question", "{dialog}");
+    let question = dialog["questions"][0]["question"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let plain = || {
+        let mut curl = std::process::Command::new("curl");
+        curl.args(["-s", "-H"])
+            .arg(format!("Authorization: Bearer {token}"))
+            .arg(format!("{url}/v1/snapshot"));
+        let snapshot: serde_json::Value =
+            serde_json::from_slice(&curl.output().unwrap().stdout).unwrap_or_default();
+        snapshot["projects"][0]["main"]["agents"]
+            .as_array()
+            .and_then(|agents| agents.iter().find(|a| a["name"] == "plain").cloned())
+            .unwrap_or_default()
+    };
+    let asking = plain();
+    assert_eq!(asking["state"], "asking", "{asking}");
+    assert_eq!(asking["waiting"]["detail"], question.as_str(), "{asking}");
+    assert_eq!(asking["waiting"]["dialog"], dialog["id"], "{asking}");
+
+    let answered = request(
+        "POST",
+        "dialog",
+        Some(serde_json::json!({"id": dialog["id"], "choice": "answer",
+                                "answers": {question.as_str(): "Blue"}})),
+    );
+    assert_eq!(answered, serde_json::json!({"answered": true}));
+    wait_for("the model's reply, idle", TURN, &s, || {
+        let page = request("GET", "transcript?limit=10", None);
+        let replied = page["items"].as_array().is_some_and(|items| {
+            items.iter().any(|i| {
+                i["kind"] == "assistant" && i["text"].as_str().unwrap_or("").contains("Blue")
+            })
+        });
+        replied && plain()["state"] == "idle"
+    });
+    assert_eq!(
+        request("GET", "dialogs", None)["dialogs"],
+        serde_json::json!([])
+    );
+
+    let _ = server.kill();
+    let _ = server.wait();
+    s.pm(&main)
+        .args(["agent", "stop", "plain"])
+        .assert()
+        .success();
+}

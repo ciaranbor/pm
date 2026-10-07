@@ -1,7 +1,8 @@
 //! The **dialog records**: the dialogs on an agent's screen that can be
 //! answered remotely, each written by the `pm harness hooks dialog` that
-//! blocks the harness's own decision point for it, and the **answer** `pm
-//! serve` leaves for one. Several can be open at once (parallel subagents,
+//! blocks the harness's own decision point for it, or, for a dialog its
+//! harness takes an answer to as typed input, by the waiting hook; and the
+//! **answer** `pm serve` leaves for one. Several can be open at once (parallel subagents,
 //! several opencode asks), each with its own record and answer.
 //!
 //! A record is harness-neutral apart from `reply_context`, which holds what
@@ -182,8 +183,11 @@ impl Dialog {
 pub struct DialogRecord {
     #[serde(flatten)]
     pub dialog: Dialog,
-    /// The hook's process, which answers it.
-    pub pid: u32,
+    /// The hook's process, which answers it; `None` for a dialog no hook
+    /// holds, answered by typing its harness's reply
+    /// ([`Harness::typed_reply`](crate::harness::Harness::typed_reply)).
+    #[serde(default)]
+    pub pid: Option<u32>,
     /// What the harness needs to build its decision; never served.
     pub reply_context: Value,
 }
@@ -510,7 +514,7 @@ mod tests {
         let root = dir.path();
         let record = |dialog: Dialog| DialogRecord {
             dialog,
-            pid: 1,
+            pid: Some(1),
             reply_context: serde_json::json!({"secret": true}),
         };
         let older = record(questions());

@@ -1,6 +1,7 @@
 //! `…/dialog` and `…/dialogs`: the dialogs on an agent's screen that can
 //! be answered remotely, and an answer to one, which the dialog's hook
-//! hands its harness ([`hooks_dialog`]). The answer is logged by its choice
+//! hands its harness, or which is typed as the harness's own reply to a
+//! dialog no hook holds ([`hooks_dialog`]). The answer is logged by its choice
 //! only, never the words typed.
 
 use std::collections::BTreeMap;
@@ -62,7 +63,7 @@ enum Picked {
 }
 
 /// `POST …/dialog`.
-pub(super) fn post(agent: &Agent, body: &str) -> Result<Written> {
+pub(super) fn post(agent: &Agent, body: &str, tmux_server: Option<&str>) -> Result<Written> {
     let body: Body = match serde_json::from_str(body) {
         Ok(body) => body,
         Err(e) => return Ok(bad(&format!("the body is not a dialog answer: {e}"))),
@@ -102,6 +103,7 @@ pub(super) fn post(agent: &Agent, body: &str) -> Result<Written> {
         harness,
         &answer,
         TAKEN_WITHIN,
+        tmux_server,
     )?;
     let (reply, detail) = match answered {
         Answered::Taken => (json(200, serde_json::json!({ "answered": true })), detail),
@@ -117,6 +119,10 @@ pub(super) fn post(agent: &Agent, body: &str) -> Result<Written> {
         Answered::Gone => (
             refused("gone", "the dialog's hook is gone"),
             "dialog refused: gone".into(),
+        ),
+        Answered::Refused(refusal) => (
+            super::input::refused(&refusal),
+            format!("dialog refused: {}", refusal.code()),
         ),
     };
     Ok(Written { reply, detail })

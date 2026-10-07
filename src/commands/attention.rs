@@ -1140,7 +1140,7 @@ mod tests {
         let id = dialog.id.clone();
         let record = runtime::DialogRecord {
             dialog,
-            pid: std::process::id(),
+            pid: Some(std::process::id()),
             reply_context,
         };
         runtime::write_dialog(&project, "login", "asking", &record).unwrap();

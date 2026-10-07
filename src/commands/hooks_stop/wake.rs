@@ -32,7 +32,7 @@ use std::time::Duration;
 use crate::commands::agent_wait;
 use crate::commands::attention::AgentState;
 use crate::commands::hook_process::Caller;
-use crate::commands::hooks_waiting;
+use crate::commands::{hooks_dialog, hooks_waiting};
 use crate::error::Result;
 use crate::harness::{Harness, Wake};
 use crate::messages;
@@ -152,6 +152,7 @@ fn wait(
     let waiter = std::process::id();
     let newest = || runtime::read_waiter(project_root, scope, agent) == Some(waiter);
     let started = chrono::Utc::now();
+    hooks_dialog::close_typed(project_root, scope, agent, harness, None)?;
     runtime::take_waiter(project_root, scope, agent, waiter, busy.then_some(started))?;
     if runtime::loop_tripped(project_root, scope, agent).is_some() {
         log("the loop is stopped: ends at once");
@@ -241,4 +242,48 @@ fn trips(
              since the last (`pm msg read` may not be reaching this agent's inbox)"
         )
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn a_question_codex_drops_with_the_turn_leaves_the_agent_idle_not_asking() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let payload = serde_json::json!({"hook_event_name": "PreToolUse",
+            "tool_name": "request_user_input_async", "tool_use_id": "c",
+            "tool_input": {"questions": [{"title": "Which colour?"}]}});
+        let (dialog, reply_context) = Harness::Codex.typed_dialog(&payload).unwrap();
+        runtime::write_waiting(root, "login", "implementer", &dialog.waiting()).unwrap();
+        let record = runtime::DialogRecord {
+            dialog,
+            pid: None,
+            reply_context,
+        };
+        runtime::write_dialog(root, "login", "implementer", &record).unwrap();
+        let mut turns = Vec::new();
+
+        let waited = wait(
+            Harness::Codex,
+            false,
+            root,
+            "login",
+            "implementer",
+            &mut |state, _| turns.push(state),
+            |_| true,
+        )
+        .unwrap();
+
+        assert_eq!(waited, Waited::Ended);
+        assert_eq!(turns, [AgentState::Idle]);
+        assert!(runtime::dialog_closed(
+            root,
+            "login",
+            "implementer",
+            &record.dialog.id
+        ));
+    }
 }

@@ -109,6 +109,7 @@ fn send(dir: &Path, id: &str, choice: &str) -> Answered {
         Harness::ClaudeCode,
         &answer,
         Duration::from_secs(5),
+        None,
     )
     .unwrap()
 }
@@ -158,6 +159,7 @@ fn an_answer_left_for_the_dialog_is_printed_as_the_decision() {
         Harness::ClaudeCode,
         &answer,
         Duration::from_secs(5),
+        None,
     )
     .unwrap();
     assert_eq!(answered, Answered::Taken);

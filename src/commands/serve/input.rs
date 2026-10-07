@@ -74,7 +74,7 @@ pub(super) fn post(
                 detail: "interrupt".into(),
             })
         }
-        "dialog" => super::dialog::post(agent, body),
+        "dialog" => super::dialog::post(agent, body, tmux_server),
         "keys" => {
             let keys: Vec<String> = match parse(body, "keys").and_then(|v| {
                 serde_json::from_value(v).map_err(|_| "keys is a list of key names".to_string())
@@ -157,7 +157,7 @@ fn bad(message: &str) -> Written {
     }
 }
 
-fn refused(refusal: &Refusal) -> Reply {
+pub(super) fn refused(refusal: &Refusal) -> Reply {
     json(
         409,
         serde_json::json!({ "error": refusal.to_string(), "refused": refusal.code() }),

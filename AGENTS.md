@@ -51,7 +51,8 @@ Design decisions you can't recover by reading the tree. Preserve them.
 - Context reaches agents three ways, each contract in its module's `//!`:
   a team brief (`feat_common`), `agent spawn --context` (the heal path), and
   `msg send` (`agent_send`), which never spawns. Remote input is typed like local input,
-  never a message; a dialog is answered through its harness's hook, never keys.
+  never a message; a dialog is answered through its harness's hook, or as a
+  prompt in its harness's own reply format where no hook holds it — never keys.
 
 ### Workflows vs agents
 
