@@ -7,9 +7,9 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use pm::commands::hooks_dialog::{self, Answered};
-use pm::commands::hooks_install::dialog_hook_command;
+use pm::commands::hooks_install::{dialog_hook_command, stop_hook_command};
 use pm::harness::Harness;
-use pm::state::runtime::{self, ANSWER_CHOICE, Answer};
+use pm::state::runtime::{self, ANSWER_CHOICE, Answer, WaitingKind};
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -183,28 +183,107 @@ fn a_dialog_approved_at_the_terminal_ends_its_hook_silently_through_the_waiting_
     let (mut hook, id) = spawn_hook(dir.path(), &bash("a1", "touch a"));
 
     // The tool's PostToolUse, as the user approves it at the terminal.
-    let mut waiting = command(dir.path(), "pm harness hooks waiting claude-code")
+    waiting_hook(
+        dir.path(),
+        &json!({"hook_event_name": "PostToolUse", "agent_id": "a1",
+                "tool_name": "Bash", "tool_input": {"command": "touch a"}}),
+    );
+
+    ended_silently(&mut hook);
+    assert_eq!(send(dir.path(), &id, "allow"), Answered::Elsewhere);
+}
+
+/// The installed waiting hook, run to completion with `payload` on stdin.
+fn waiting_hook(dir: &Path, payload: &serde_json::Value) {
+    let mut waiting = command(dir, "pm harness hooks waiting claude-code")
         .stdin(Stdio::piped())
         .spawn()
         .unwrap();
-    let done = json!({"hook_event_name": "PostToolUse", "agent_id": "a1",
-                      "tool_name": "Bash", "tool_input": {"command": "touch a"}});
     waiting
         .stdin
         .take()
         .unwrap()
-        .write_all(done.to_string().as_bytes())
+        .write_all(payload.to_string().as_bytes())
         .unwrap();
     assert!(waiting.wait().unwrap().success());
+}
 
-    let out = wait_for_exit(&mut hook);
+fn ended_silently(hook: &mut Child) {
+    let out = wait_for_exit(hook);
     assert!(out.status.success());
     assert!(
         out.stdout.is_empty(),
         "{:?}",
         String::from_utf8_lossy(&out.stdout)
     );
-    assert_eq!(send(dir.path(), &id, "allow"), Answered::Elsewhere);
+}
+
+/// A question answered at the terminal, by a picked option or typed text:
+/// either way Claude Code (2.1.292, live) sends its PostToolUse with the
+/// answers added to the input, which still ends its hook and leaves the
+/// agent busy.
+#[test]
+fn a_question_answered_at_the_terminal_ends_its_hook() {
+    let dir = tempdir().unwrap();
+    project(dir.path());
+    let asked = question("Ship it?");
+    let (mut hook, id) = spawn_hook(dir.path(), &asked);
+    let record = runtime::read_dialog(dir.path(), "main", AGENT, &id).unwrap();
+    runtime::write_waiting(dir.path(), "main", AGENT, &record.dialog.waiting()).unwrap();
+    let mut input = asked["tool_input"].clone();
+    input["answers"] = json!({"Ship it?": "Only on Fridays"});
+    input["annotations"] = json!({});
+    waiting_hook(
+        dir.path(),
+        &json!({"hook_event_name": "PostToolUse", "tool_name": "AskUserQuestion",
+                "tool_input": input, "tool_response": input}),
+    );
+
+    ended_silently(&mut hook);
+    assert_eq!(send(dir.path(), &id, "decline"), Answered::Elsewhere);
+    assert_eq!(runtime::read_waiting(dir.path(), "main", AGENT), None);
+}
+
+#[test]
+fn the_turn_ending_closes_the_agents_own_question_and_keeps_a_subagents_asking() {
+    let dir = tempdir().unwrap();
+    project(dir.path());
+    // The agent's own question, answered in a way no PostToolUse matches.
+    let (mut own, own_id) = spawn_hook(dir.path(), &question("Ship it?"));
+    let (mut subagents, _) = spawn_hook(dir.path(), &bash("a1", "touch a"));
+
+    let mut waiter = command(dir.path(), &stop_hook_command(Harness::ClaudeCode))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    waiter
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(br#"{"background_tasks":[{"id":"a1","status":"running"}]}"#)
+        .unwrap();
+
+    ended_silently(&mut own);
+    assert_eq!(send(dir.path(), &own_id, "decline"), Answered::Elsewhere);
+    let start = Instant::now();
+    let marker = loop {
+        if let Some(w) =
+            runtime::read_waiting(dir.path(), "main", AGENT).filter(|w| w.between_turns)
+        {
+            break w;
+        }
+        assert!(start.elapsed() < Duration::from_secs(10), "never waited");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(marker.kind, WaitingKind::Permission);
+    assert_eq!(marker.subagent.as_deref(), Some("a1"));
+    assert!(subagents.try_wait().unwrap().is_none(), "still asking");
+
+    for child in [&mut waiter, &mut subagents] {
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
 }
 
 #[test]

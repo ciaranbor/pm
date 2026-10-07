@@ -103,7 +103,7 @@ fn on_prompt(project_root: &Path, scope: &str, agent: &str, prompt: &str) -> Res
     }
     on_user_prompt(project_root, scope, prompt, harness)?;
     if let Some(harness) = harness {
-        hooks_dialog::close_typed(project_root, scope, agent, harness, Some(prompt))?;
+        hooks_dialog::close_typed(project_root, scope, agent, harness, prompt)?;
     }
     runtime::touch_activity(project_root, scope, agent)?;
     runtime::clear_waiting(project_root, scope, agent)?;

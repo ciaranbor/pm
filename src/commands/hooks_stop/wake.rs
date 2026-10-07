@@ -152,7 +152,7 @@ fn wait(
     let waiter = std::process::id();
     let newest = || runtime::read_waiter(project_root, scope, agent) == Some(waiter);
     let started = chrono::Utc::now();
-    hooks_dialog::close_typed(project_root, scope, agent, harness, None)?;
+    hooks_dialog::close_with_turn(project_root, scope, agent)?;
     runtime::take_waiter(project_root, scope, agent, waiter, busy.then_some(started))?;
     if runtime::loop_tripped(project_root, scope, agent).is_some() {
         log("the loop is stopped: ends at once");

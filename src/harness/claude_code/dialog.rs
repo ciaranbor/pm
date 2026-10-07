@@ -51,6 +51,7 @@ const MANUAL: &str = "manual";
 const KEEP_PLANNING: &str = "keep-planning";
 
 const EVENT: &str = "PermissionRequest";
+const QUESTION_TOOL: &str = "AskUserQuestion";
 /// The hook events whose payloads open a dialog.
 pub(in crate::harness) const EVENTS: &[&str] = &[EVENT];
 
@@ -63,7 +64,7 @@ pub(in crate::harness) fn dialog(payload: &Value) -> Option<(Dialog, Value)> {
     let tool = payload.get("tool_name")?.as_str()?;
     let input = payload.get("tool_input").cloned().unwrap_or(json!({}));
     let mut dialog = match tool {
-        "AskUserQuestion" => questions(&input)?,
+        QUESTION_TOOL => questions(&input)?,
         "ExitPlanMode" => {
             let plan = input.get("plan").and_then(Value::as_str).unwrap_or("");
             Dialog {
@@ -240,18 +241,31 @@ fn always_label(suggestions: &[Value]) -> Option<String> {
 
 /// Whether `payload` is the `PostToolUse` (or `PostToolUseFailure`) of
 /// `record`'s tool call: the same thread, tool and input, as the payloads
-/// carry no id that ties them.
+/// carry no id that ties them. An `AskUserQuestion` answered at the
+/// terminal comes back with its answers added to its input, so only its
+/// questions are compared.
 pub(in crate::harness) fn resolved(record: &DialogRecord, payload: &Value) -> bool {
     let event = payload.get("hook_event_name").and_then(Value::as_str);
     if !matches!(event, Some("PostToolUse" | "PostToolUseFailure")) {
         return false;
     }
     let context = &record.reply_context;
+    let Some(tool) = context
+        .get("tool_name")
+        .filter(|t| payload.get("tool_name") == Some(t))
+    else {
+        return false;
+    };
+    let asked = context.get("tool_input");
+    let done = payload.get("tool_input");
+    let same_input = match tool.as_str() {
+        Some(QUESTION_TOOL) => {
+            asked.and_then(|i| i.get("questions")) == done.and_then(|i| i.get("questions"))
+        }
+        _ => asked == done,
+    };
     payload.get("agent_id").and_then(Value::as_str) == record.dialog.subagent.as_deref()
-        && context
-            .get("tool_name")
-            .is_some_and(|t| payload.get("tool_name") == Some(t))
-        && context.get("tool_input") == payload.get("tool_input")
+        && same_input
 }
 
 /// The `PermissionRequest` output that applies `answer` to `record`'s
