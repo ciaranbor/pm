@@ -19,7 +19,7 @@ unifiedpushFcm = "3.1.0"
 junit = "4.13.2"
 robolectric = "4.17"
 roborazzi = "1.76.0"
-composeLintChecks = "1.6.0"
+composeLintChecks = "1.6.1"
 ktfmtGradle = "0.27.0"
 
 [libraries]
