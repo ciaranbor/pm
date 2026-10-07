@@ -166,12 +166,12 @@ pub(super) fn installed_version(probe: Probe) -> Option<String> {
 /// The manual step that gives a new machine's Claude Code its credentials,
 /// which live outside anything pm syncs (the login keychain or
 /// `~/.claude.json`).
+pub(super) const CREDENTIALS_STEP: &str =
+    "log in to Claude Code (run `claude`, then /login, or `claude setup-token`)";
+
 pub(super) const PROMPT_MECHANISM: &str = "appending a prompt file (--append-system-prompt-file)";
 pub(super) const EXPORT_TAG: &str = "claude";
 pub(super) const WAKE: Wake = Wake::Rewake;
-
-pub(super) const CREDENTIALS_STEP: &str =
-    "log in to Claude Code (run `claude`, then /login, or `claude setup-token`)";
 
 pub(super) fn unusable_reason(probe: Probe) -> Option<String> {
     let runs = run_probe("--version", probe).is_ok_and(|exit| exit.success);
