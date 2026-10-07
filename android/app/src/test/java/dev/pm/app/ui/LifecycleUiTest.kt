@@ -161,9 +161,12 @@ class LifecycleUiTest {
     @Test
     fun a_scope_merged_elsewhere_is_left_with_word_of_why() {
         val without = SNAPSHOT.replace(""""name": "login"""", """"name": "login-gone"""")
-        events = { stream.response("snapshot" to without) }
+        events = { stream.response("snapshot" to SNAPSHOT, later = listOf("snapshot" to without)) }
         open(Target("app", "login", null))
+        compose.waitUntil(5_000) { model.connection.value == Connection.Live }
+        compose.onNodeWithText("Message the agent").assertIsDisplayed()
 
+        stream.sendLater()
         compose.waitUntil(5_000) {
             compose
                 .onAllNodesWithText("login was merged or deleted")
