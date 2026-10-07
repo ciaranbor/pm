@@ -1,8 +1,9 @@
 package dev.pm.app.model
 
 import java.time.Instant
-import java.time.ZoneOffset
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -24,31 +25,29 @@ data class FeatureInfo(
     val created: String? = null,
     @SerialName("last_active") val lastActive: String? = null,
 ) {
-    /** The details as label and value. */
-    val rows: List<Pair<String, String>>
-        get() =
-            listOfNotNull(
-                "Status" to progressLabel(progress),
-                "Branch" to branch,
-                ("Rebase" to "in progress").takeIf { rebaseInProgress },
-                "Remote" to (remote ?: "none"),
-                "Base" to base,
-                pr?.let { "PR" to listOfNotNull("#$it", prLabel(lifecycle)).joinToString(" ") },
-                divergence?.let { "Divergence" to "$it $base" },
-                workflow?.let {
-                    "Workflow" to listOfNotNull(it.name, it.description).joinToString(" — ")
-                },
-                created?.let { "Created" to stamp(it) },
-                lastActive?.let { "Last active" to stamp(it) },
-            )
+    /** The details as label and value, times in `zone`. */
+    fun rows(zone: ZoneId = ZoneId.systemDefault()): List<Pair<String, String>> =
+        listOfNotNull(
+            "Status" to progressLabel(progress),
+            "Branch" to branch,
+            ("Rebase" to "in progress").takeIf { rebaseInProgress },
+            "Remote" to (remote ?: "none"),
+            "Base" to base,
+            pr?.let { "PR" to listOfNotNull("#$it", prLabel(lifecycle)).joinToString(" ") },
+            divergence?.let { "Divergence" to "$it $base" },
+            workflow?.let {
+                "Workflow" to listOfNotNull(it.name, it.description).joinToString(" — ")
+            },
+            created?.let { "Created" to stamp(it, zone) },
+            lastActive?.let { "Last active" to stamp(it, zone) },
+        )
 }
 
-private val STAMP =
-    DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss 'UTC'").withZone(ZoneOffset.UTC)
+private val STAMP = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT)
 
-/** An RFC 3339 time as `pm feat info` shows it; one that doesn't parse, as it came. */
-private fun stamp(time: String): String = runCatching {
-    STAMP.format(Instant.parse(time))
+/** An RFC 3339 time in `zone`, in the phone's format; one that doesn't parse, as it came. */
+private fun stamp(time: String, zone: ZoneId): String = runCatching {
+    STAMP.withZone(zone).format(Instant.parse(time))
 }
     .getOrDefault(time)
 

@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -112,7 +111,7 @@ fun ToolOutputScreen(model: ToolOutputModel, modifier: Modifier = Modifier) {
                 with(LocalDensity.current) { (shown.columns * cell * size.value).toDp() } +
                     padding * 2
             Box(modifier.fillMaxSize().horizontalScroll(rememberScrollState())) {
-                SelectionContainer {
+                Selectable {
                     LazyColumn(
                         Modifier.width(width).fillMaxSize(),
                         contentPadding = PaddingValues(padding),

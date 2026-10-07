@@ -13,6 +13,7 @@ import dev.pm.app.model.Pairing
 import dev.pm.app.model.Snapshot
 import dev.pm.app.model.WorkflowInfo
 import java.time.Instant
+import java.util.TimeZone
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -36,7 +37,8 @@ class ListScreenshotTest {
         PmTheme(dynamic = false) { Surface(content) }
     }
 
-    private val home = @Composable { Home(snapshot, now, openNeed = {}, openProject = {}) }
+    private val home =
+        @Composable { Home(snapshot, now, openScope = { _, _ -> }, openProject = {}) }
     private val offline =
         @Composable {
             Column {
@@ -45,7 +47,7 @@ class ListScreenshotTest {
                     retry = {},
                     pairAgain = {},
                 )
-                Home(snapshot, now, openNeed = {}, openProject = {}, stale = true)
+                Home(snapshot, now, openScope = { _, _ -> }, openProject = {}, stale = true)
             }
         }
 
@@ -53,7 +55,8 @@ class ListScreenshotTest {
 
     @Test @Config(qualifiers = "+night") fun home_dark() = capture(home)
 
-    @Test fun home_calm_light() = capture { Home(calm, now, openNeed = {}, openProject = {}) }
+    @Test
+    fun home_calm_light() = capture { Home(calm, now, openScope = { _, _ -> }, openProject = {}) }
 
     @Test fun offline_light() = capture(offline)
 
@@ -65,17 +68,6 @@ class ListScreenshotTest {
     @Test
     @Config(qualifiers = "+night")
     fun scopes_dark() = capture { ScopesList(snapshot, "app", now, open = {}, openNotes = {}) }
-
-    @Test
-    fun agents_light() = capture {
-        AgentsList(snapshot, "app", "login", now, openAgent = {}, openPage = {})
-    }
-
-    @Test
-    @Config(qualifiers = "+night")
-    fun agents_dark() = capture {
-        AgentsList(snapshot, "app", "login", now, openAgent = {}, openPage = {})
-    }
 
     private val details =
         @Composable {
@@ -96,9 +88,20 @@ class ListScreenshotTest {
             DetailsScreen(viewModel { ReadModel(client) { info } })
         }
 
-    @Test fun details_light() = capture(details)
+    @Test fun details_light() = utc { capture(details) }
 
-    @Test @Config(qualifiers = "+night") fun details_dark() = capture(details)
+    @Test @Config(qualifiers = "+night") fun details_dark() = utc { capture(details) }
+
+    /** Run `block` with the phone in UTC, which details' times are shown in. */
+    private fun utc(block: () -> Unit) {
+        val zone = TimeZone.getDefault()
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
+        try {
+            block()
+        } finally {
+            TimeZone.setDefault(zone)
+        }
+    }
 }
 
 @Composable

@@ -49,18 +49,40 @@ data class Snapshot(
             .sortedBy { it.first.ordinal }
     }
 
+    /** Every scope, across projects: each project's main, then the features. */
+    private fun scopes(): List<Need> =
+        projects.mapNotNull { p ->
+            p.main?.let {
+                Need(
+                    p.name,
+                    MAIN,
+                    it.attention,
+                    it.agents,
+                    it.lastActivity,
+                    it.working,
+                    it.backgroundSince,
+                )
+            }
+        } +
+            features.map {
+                Need(
+                    it.project,
+                    it.name,
+                    it.attention,
+                    it.agents,
+                    it.lastActivity,
+                    it.working,
+                    it.backgroundSince,
+                    it.progress,
+                )
+            }
+
     /**
      * Every scope, across projects, whose attention isn't `none`: most urgent kind first, as pm
      * ranks its attention view; within a kind, the longest quiet first.
      */
-    fun needsYou(): List<Need> {
-        val mains = projects.mapNotNull { p ->
-            p.main?.let { Need(p.name, MAIN, it.attention, it.agents, it.lastActivity) }
-        }
-        val feats = features.map {
-            Need(it.project, it.name, it.attention, it.agents, it.lastActivity)
-        }
-        return (mains + feats)
+    fun needsYou(): List<Need> =
+        scopes()
             .filter { it.attention.kindOf != AttentionKind.None }
             .sortedWith(
                 compareBy<Need> { it.attention.kindOf.ordinal }
@@ -68,7 +90,18 @@ data class Snapshot(
                     .thenBy { it.project }
                     .thenBy { it.scope }
             )
-    }
+
+    /**
+     * Every scope at work that needs nothing of the user: an agent taking a turn, or waiting on
+     * background work. By project, then scope.
+     */
+    fun atWork(): List<Need> =
+        scopes()
+            .filter {
+                it.attention.kindOf == AttentionKind.None &&
+                    (it.working || it.backgroundSince != null)
+            }
+            .sortedWith(compareBy<Need> { it.project }.thenBy { it.scope })
 
     /** The projects, those with the most urgent need first, then by name. */
     fun projectsByUrgency(): List<ProjectSnapshot> =
@@ -78,8 +111,6 @@ data class Snapshot(
                 }
                 .thenBy { it.name }
         )
-
-    fun workingFeatures(): Int = features.count { it.working }
 
     companion object {
         const val VERSION = 1
@@ -94,13 +125,17 @@ data class Snapshot(
     }
 }
 
-/** A scope that needs the user: its attention, and since when it has been quiet. */
+/** A scope as the start screen lists it: its attention, and since when it has been quiet. */
 data class Need(
     val project: String,
     val scope: String,
     val attention: Attention,
     val agents: List<AgentSnapshot>,
     val lastActivity: String?,
+    val working: Boolean = false,
+    val backgroundSince: String? = null,
+    /** A feature's team status (`pm feat status`); empty for `main`. */
+    val progress: String = "",
 ) {
     val since: Instant?
         get() = lastActivity?.let { runCatching { Instant.parse(it) }.getOrNull() }

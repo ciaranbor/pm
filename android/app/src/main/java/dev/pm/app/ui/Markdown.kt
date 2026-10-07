@@ -22,8 +22,9 @@ import org.intellij.markdown.ast.getTextInNode
 
 /**
  * Markdown in the app's type: headings at title sizes, since display sizes fill a phone screen with
- * one line, and `text` for the body; `components` draws its parts, which read these styles. Parsed
- * off the main thread; the plain text holds its place until then.
+ * one line, and `text` for the body; `components` draws its parts, which read these styles. Text
+ * longer than [IMMEDIATE] is parsed off the main thread, the plain text holding its place until
+ * then; shorter text at once, so a page shown again (a chat's messages) doesn't flash raw.
  */
 @Composable
 fun PmMarkdown(
@@ -32,7 +33,12 @@ fun PmMarkdown(
     text: TextStyle = MaterialTheme.typography.bodyLarge,
     components: MarkdownComponents = markdownComponents(),
 ) {
-    val state = rememberMarkdownState(markdown, retainState = true)
+    val state =
+        rememberMarkdownState(
+            markdown,
+            retainState = true,
+            immediate = markdown.length <= IMMEDIATE,
+        )
     val type = MaterialTheme.typography
     val code = text.copy(fontFamily = FontFamily.Monospace, fontSize = 0.9.em)
     val codeBackground = MaterialTheme.colorScheme.surfaceContainerHighest
@@ -77,3 +83,41 @@ private fun tightCode(style: SpanStyle): MarkdownAnnotator = markdownAnnotator {
     withStyle(style) { inner.forEach { append(it.getTextInNode(content)) } }
     true
 }
+
+/** The longest text parsed as it is composed: parsing this much takes well under a frame. */
+private const val IMMEDIATE = 8_192
+
+private val FENCE = Regex("^ {0,3}(```|~~~)")
+
+/**
+ * `text` with each line break kept as one: Markdown joins a paragraph's lines, which runs a brief
+ * written as plain text together. Fenced code keeps its lines as it is.
+ */
+fun keepLineBreaks(text: String): String {
+    val lines = text.lines()
+    var fenced = false
+    return lines
+        .mapIndexed { i, line ->
+            val fence = FENCE.containsMatchIn(line)
+            if (fence) fenced = !fenced
+            val next = lines.getOrNull(i + 1)
+            if (
+                fenced ||
+                    fence ||
+                    line.isBlank() ||
+                    next.isNullOrBlank() ||
+                    FENCE.containsMatchIn(next)
+            )
+                line
+            else "$line  "
+        }
+        .joinToString("\n")
+}
+
+private val LINK = Regex("""!?\[([^\]]*)]\([^)]*\)""")
+private val LEAD = Regex("""^\s*(#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)""")
+private val EMPHASIS = Regex("""(\*\*|__|~~|\*|`)(\S(?:.*?\S)?)\1""")
+
+/** One line of Markdown as plain text, for an excerpt: markers dropped, links as their text. */
+fun plainExcerpt(markdown: String): String =
+    markdown.replace(LEAD, "").replace(LINK, "$1").replace(EMPHASIS, "$2").replace(EMPHASIS, "$2")

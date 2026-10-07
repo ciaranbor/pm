@@ -2,6 +2,7 @@ package dev.pm.app.api
 
 import dev.pm.app.model.DialogAnswer
 import dev.pm.app.model.Pairing
+import java.time.ZoneId
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
@@ -124,6 +125,7 @@ class PmClientTest {
         assertEquals("/v1/features/app/login", server.takeRequest().url.encodedPath)
         assertEquals(null, info.context)
         assertEquals(null, info.pr)
+        val rows = info.rows(ZoneId.of("Europe/Dublin"))
         assertEquals(
             listOf(
                 "Status" to "in progress",
@@ -132,10 +134,12 @@ class PmClientTest {
                 "Base" to "main",
                 "Divergence" to "3 ahead, 1 behind main",
                 "Workflow" to "review",
-                "Created" to "2026-10-05 18:36:31 UTC",
             ),
-            info.rows,
+            rows.filter { it.first != "Created" },
         )
+        // 18:36 UTC, in the phone's zone: Dublin is an hour ahead in October.
+        val created = rows.toMap().getValue("Created")
+        assertTrue(created, Regex("""\b(19|7):36\b""").containsMatchIn(created))
     }
 
     @Test

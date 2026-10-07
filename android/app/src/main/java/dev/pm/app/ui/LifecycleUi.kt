@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -27,41 +26,33 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import dev.pm.app.R
-import dev.pm.app.model.Snapshot
 
-/** The lifecycle actions a page offers in its top bar's overflow: none for most. */
-fun Route.actions(): List<Action> =
-    when (this) {
-        is Route.Scope ->
-            if (scope == Snapshot.MAIN) emptyList()
-            else listOf(Action.Merge(project, scope), Action.Delete(project, scope))
-        is Route.Agent -> listOf(Action.Restart(project, scope, agent))
-        else -> emptyList()
-    }
+/** An overflow menu entry: `destructive` ones show in the error colour, after a divider. */
+data class MenuItem(val label: String, val destructive: Boolean = false, val onClick: () -> Unit)
 
-/** The top bar's overflow, holding `actions`. */
+/** The top bar's overflow, holding `items`. */
 @Composable
-fun ActionsMenu(actions: List<Action>, ask: (Action) -> Unit, modifier: Modifier = Modifier) =
+fun OverflowMenu(items: List<MenuItem>, modifier: Modifier = Modifier) =
     Box(modifier) {
         var open by remember { mutableStateOf(false) }
         IconButton(onClick = { open = true }) {
             Icon(painterResource(R.drawable.ic_more_vert), "More actions")
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            actions.forEach { action ->
-                if (action is Action.Delete) HorizontalDivider()
+            items.forEachIndexed { i, item ->
+                if (item.destructive && i > 0 && !items[i - 1].destructive) HorizontalDivider()
                 DropdownMenuItem(
                     text = {
                         Text(
-                            action.verb,
+                            item.label,
                             color =
-                                if (action is Action.Delete) MaterialTheme.colorScheme.error
+                                if (item.destructive) MaterialTheme.colorScheme.error
                                 else Color.Unspecified,
                         )
                     },
                     onClick = {
                         open = false
-                        ask(action)
+                        item.onClick()
                     },
                 )
             }
@@ -116,7 +107,7 @@ fun ActionDialog(state: ActionState, confirm: () -> Unit, dismiss: () -> Unit) {
             AlertDialog(
                 onDismissRequest = dismiss,
                 title = { Text("${state.action.done}, with warnings") },
-                text = { SelectionContainer { Text(state.warnings.joinToString("\n\n")) } },
+                text = { Selectable { Text(state.warnings.joinToString("\n\n")) } },
                 confirmButton = { TextButton(onClick = dismiss) { Text("OK") } },
             )
         is ActionState.Failed ->
@@ -135,7 +126,7 @@ fun ActionDialog(state: ActionState, confirm: () -> Unit, dismiss: () -> Unit) {
                     )
                 },
                 text = {
-                    SelectionContainer {
+                    Selectable {
                         Text(
                             if (state.outcome == Outcome.Broken)
                                 "${state.reason}\n\nIt may have got partway; the app shows how far."

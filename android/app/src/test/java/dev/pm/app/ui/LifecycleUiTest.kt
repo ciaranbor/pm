@@ -1,5 +1,8 @@
 package dev.pm.app.ui
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasStateDescription
@@ -11,7 +14,9 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
+import dev.pm.app.OpenStream
 import dev.pm.app.SNAPSHOT
+import dev.pm.app.data.Connection
 import dev.pm.app.data.Repository
 import dev.pm.app.data.Store
 import dev.pm.app.model.Pairing
@@ -48,6 +53,11 @@ class LifecycleUiTest {
      */
     @Volatile private var refusals = 0
 
+    /** The event stream, if the server has one; else the app shows the cached snapshot. */
+    @Volatile private var events: (() -> MockResponse)? = null
+
+    private val stream = OpenStream()
+
     /** Each POST waits for this before it is answered. */
     @Volatile private var held = CountDownLatch(0)
 
@@ -69,7 +79,8 @@ class LifecycleUiTest {
                                 reply(409, """{"error":"no harness","refused":"no-harness"}""")
                             } else reply(200, "{}")
                         }
-                        // No event stream: the app shows the cached snapshot.
+                        path == "/v1/events" -> events?.invoke() ?: reply(503, "{}")
+                        // Nothing else to read: the app shows the cached snapshot.
                         else -> reply(503, "{}")
                     }
                 }
@@ -80,21 +91,28 @@ class LifecycleUiTest {
     @After
     fun stop() {
         held.countDown()
+        stream.release()
         scope.cancel()
         server.close()
     }
+
+    private lateinit var model: AppViewModel
+
+    /** The notification target the app is given; setting it again is another tap. */
+    private var shown by mutableStateOf<Target?>(null)
 
     private fun open(target: Target) {
         val store = Store(ApplicationProvider.getApplicationContext())
         store.pairing = Pairing(server.url("/").toString().trimEnd('/'), "pixel", "tok")
         store.cacheSnapshot(SNAPSHOT)
-        val model = AppViewModel(Repository(store, OkHttpClient(), scope)) {}
-        compose.setContent { PmTheme { App(model, target, targetShown = {}) } }
+        model = AppViewModel(Repository(store, OkHttpClient(), scope)) {}
+        shown = target
+        compose.setContent { PmTheme { App(model, shown, targetShown = {}) } }
         compose.waitUntil(5_000) { model.snapshot.value != null }
     }
 
     @Test
-    fun a_confirmed_merge_leaves_the_feature_for_its_project() {
+    fun a_confirmed_merge_leaves_the_feature_for_where_it_was_opened_from() {
         open(Target("app", "login", null))
 
         compose.onNodeWithContentDescription("More actions").performClick()
@@ -110,7 +128,71 @@ class LifecycleUiTest {
             listOf("/v1/features/app/login/merge"),
             synchronized(posted) { posted.toList() },
         )
-        compose.onNodeWithContentDescription("main", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("Needs you").assertIsDisplayed()
+    }
+
+    @Test
+    fun a_ready_feature_merges_from_its_summary() {
+        open(Target("app", "search", null))
+
+        compose.onNodeWithText("Merge").performClick()
+        compose.onNodeWithText("Merge search?").assertIsDisplayed()
+        compose.onAllNodesWithText("Merge").onLast().performClick()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText("Merged search").fetchSemanticsNodes().isNotEmpty()
+        }
+        assertEquals(
+            listOf("/v1/features/app/search/merge"),
+            synchronized(posted) { posted.toList() },
+        )
+    }
+
+    @Test
+    fun a_feature_newer_than_any_snapshot_yet_stays_open() {
+        events = { stream.response("snapshot" to SNAPSHOT) }
+        open(Target("app", "fresh", "implementer"))
+        compose.waitUntil(5_000) { model.connection.value == Connection.Live }
+        compose.waitForIdle()
+
+        compose.onNodeWithText("fresh").assertIsDisplayed()
+        compose.onNodeWithText("fresh was merged or deleted").assertDoesNotExist()
+    }
+
+    @Test
+    fun a_scope_merged_elsewhere_is_left_with_word_of_why() {
+        val without = SNAPSHOT.replace(""""name": "login"""", """"name": "login-gone"""")
+        events = { stream.response("snapshot" to SNAPSHOT, later = listOf("snapshot" to without)) }
+        open(Target("app", "login", null))
+        compose.waitUntil(5_000) { model.connection.value == Connection.Live }
+        compose.onNodeWithText("Message the agent").assertIsDisplayed()
+
+        stream.sendLater()
+        compose.waitUntil(5_000) {
+            compose
+                .onAllNodesWithText("login was merged or deleted")
+                .fetchSemanticsNodes()
+                .isNotEmpty()
+        }
+        compose.onNodeWithText("Needs you").assertIsDisplayed()
+    }
+
+    @Test
+    fun a_scope_opened_after_the_last_snapshot_is_still_left_once_one_drops_it() {
+        val without = SNAPSHOT.replace(""""name": "search"""", """"name": "search-gone"""")
+        events = { stream.response("snapshot" to SNAPSHOT, later = listOf("snapshot" to without)) }
+        open(Target("app", "login", null))
+        compose.waitUntil(5_000) { model.connection.value == Connection.Live }
+        shown = Target("app", "search", null)
+        compose.onNodeWithText("Merge").assertIsDisplayed()
+
+        stream.sendLater()
+        compose.waitUntil(5_000) {
+            compose
+                .onAllNodesWithText("search was merged or deleted")
+                .fetchSemanticsNodes()
+                .isNotEmpty()
+        }
+        compose.onNodeWithText("Message the agent").assertIsDisplayed()
     }
 
     @Test
@@ -118,7 +200,7 @@ class LifecycleUiTest {
         open(Target("app", "login", "implementer"))
 
         compose.onNodeWithContentDescription("More actions").performClick()
-        compose.onNodeWithText("Restart").performClick()
+        compose.onNodeWithText("Restart implementer").performClick()
 
         compose.waitUntil(5_000) {
             compose.onAllNodesWithText("Restarted implementer").fetchSemanticsNodes().isNotEmpty()

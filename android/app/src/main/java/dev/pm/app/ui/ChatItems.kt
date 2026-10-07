@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -66,7 +65,7 @@ private fun ItemView(item: Item, openResult: (tool: String, ref: String) -> Unit
                         )
                         .padding(Spacing.m)
                 ) {
-                    SelectionContainer {
+                    Selectable {
                         Text(item.text, color = MaterialTheme.colorScheme.onPrimaryContainer)
                     }
                 }
@@ -82,7 +81,7 @@ private fun ItemView(item: Item, openResult: (tool: String, ref: String) -> Unit
 
 @Composable
 private fun AssistantText(text: String) {
-    SelectionContainer { PmMarkdown(text, text = MaterialTheme.typography.bodyMedium) }
+    Selectable { PmMarkdown(text, text = MaterialTheme.typography.bodyMedium) }
 }
 
 @Composable
@@ -95,7 +94,7 @@ private fun Thinking(text: String) {
 internal fun Wakes(items: List<Item.Continuation>) {
     val title = if (items.size == 1) "pm woke the agent" else "pm woke the agent ×${items.size}"
     Collapsible(title, Modifier.fillMaxWidth()) {
-        SelectionContainer {
+        Selectable {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                 items.forEach {
                     Text(
@@ -213,7 +212,7 @@ internal fun ToolCard(tool: Item.Tool, openResult: (tool: String, ref: String) -
                 Modifier.padding(start = Spacing.m, end = Spacing.m, bottom = Spacing.m),
                 verticalArrangement = Arrangement.spacedBy(Spacing.xs),
             ) {
-                SelectionContainer {
+                Selectable {
                     Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                         Text(
                             tool.input,

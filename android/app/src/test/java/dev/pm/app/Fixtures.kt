@@ -51,8 +51,13 @@ val SNAPSHOT =
  */
 class OpenStream {
     private val held = CountDownLatch(1)
+    private val next = CountDownLatch(1)
 
-    fun response(vararg events: Pair<String, String>): MockResponse =
+    /** `events` at once, then `later` once [sendLater] is called, on the same open stream. */
+    fun response(
+        vararg events: Pair<String, String>,
+        later: List<Pair<String, String>> = emptyList(),
+    ): MockResponse =
         MockResponse.Builder()
             .addHeader("Content-Type", "text/event-stream")
             .body(
@@ -60,10 +65,11 @@ class OpenStream {
                     override val contentLength = -1L
 
                     override fun writeTo(sink: BufferedSink) {
-                        events.forEach { (name, data) ->
-                            sink.writeUtf8("event: $name\ndata: ${data.replace("\n", "")}\n\n")
+                        write(sink, events.toList())
+                        if (later.isNotEmpty()) {
+                            next.await()
+                            write(sink, later)
                         }
-                        sink.flush()
                         held.await()
                     }
                 }
@@ -71,8 +77,20 @@ class OpenStream {
             .onResponseEnd(SocketEffect.CloseSocket())
             .build()
 
+    private fun write(sink: BufferedSink, events: List<Pair<String, String>>) {
+        events.forEach { (name, data) ->
+            sink.writeUtf8("event: $name\ndata: ${data.replace("\n", "")}\n\n")
+        }
+        sink.flush()
+    }
+
+    fun sendLater() = next.countDown()
+
     /** End the stream: the server closes it, as `pm serve` stopping would. */
-    fun release() = held.countDown()
+    fun release() {
+        next.countDown()
+        held.countDown()
+    }
 }
 
 /**

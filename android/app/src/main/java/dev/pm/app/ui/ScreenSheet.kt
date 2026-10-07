@@ -58,7 +58,8 @@ internal fun ScreenSheet(
     scope: String,
     agent: String,
     dismiss: () -> Unit,
-    model: ScreenModel = viewModel { ScreenModel(client, project, scope, agent) },
+    model: ScreenModel =
+        viewModel(key = "screen/$agent") { ScreenModel(client, project, scope, agent) },
 ) {
     LifecycleStartEffect(model) {
         model.start()

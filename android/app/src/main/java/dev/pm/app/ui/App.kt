@@ -2,10 +2,12 @@ package dev.pm.app.ui
 
 import android.Manifest
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,15 +15,22 @@ import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TooltipAnchorPosition
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.TooltipState
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -40,8 +49,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
-import androidx.navigation3.runtime.NavBackStack
-import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
@@ -57,97 +64,13 @@ import dev.pm.app.update.UpdateWorker
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
-import kotlinx.serialization.Serializable
-
-/** Where the app can be. Each is a back stack entry, kept across process death. */
-@Serializable
-sealed interface Route : NavKey {
-    @Serializable data object Pair : Route
-
-    @Serializable data object Home : Route
-
-    @Serializable data class Project(val project: String) : Route
-
-    @Serializable data class Scope(val project: String, val scope: String) : Route
-
-    @Serializable
-    data class Agent(val project: String, val scope: String, val agent: String) : Route
-
-    @Serializable data class Summary(val project: String, val feature: String) : Route
-
-    @Serializable data class Notes(val project: String) : Route
-
-    /** The feature's `--context` brief. */
-    @Serializable data class Brief(val project: String, val feature: String) : Route
-
-    /** The feature's details: branch, base, PR, workflow. */
-    @Serializable data class Details(val project: String, val feature: String) : Route
-
-    /** A tool's whole output, by its result's `full` reference. */
-    @Serializable
-    data class Output(
-        val project: String,
-        val scope: String,
-        val agent: String,
-        val ref: String,
-        val tool: String,
-    ) : Route
-
-    @Serializable data object Settings : Route
-
-    /** The top bar's title, and the line under it that says where it is. */
-    val heading: kotlin.Pair<String, String?>
-        get() =
-            when (this) {
-                Pair -> "Pair" to null
-                Home -> "pm" to null
-                Settings -> "Settings" to null
-                is Project -> project to null
-                is Scope -> scope to project
-                is Agent -> agent to "$project › $scope"
-                is Summary -> "Summary" to "$project › $feature"
-                is Notes -> "Notes" to project
-                is Brief -> "Brief" to "$project › $feature"
-                is Details -> "Details" to "$project › $feature"
-                is Output -> "$tool output" to "$project › $scope › $agent"
-            }
-}
-
-/** The back stack a notification's target opens: from the start screen to its scope or agent. */
-fun Target.route(): List<Route> =
-    listOfNotNull(
-        Route.Home,
-        Route.Project(project),
-        Route.Scope(project, scope),
-        agent?.let { Route.Agent(project, scope, it) },
-    )
-
-private fun NavBackStack<NavKey>.replaceWith(routes: List<Route>) {
-    clear()
-    addAll(routes)
-}
-
-/** Drop the pages of `feature` in `project`, which is gone, and every page opened from them. */
-private fun NavBackStack<NavKey>.leave(project: String, feature: String) {
-    val at = indexOfFirst { (it as? Route)?.isOf(project, feature) == true }
-    if (at > 0) repeat(size - at) { removeLastOrNull() }
-}
-
-private fun Route.isOf(project: String, feature: String): Boolean =
-    when (this) {
-        is Route.Scope -> this.project == project && scope == feature
-        is Route.Agent -> this.project == project && scope == feature
-        is Route.Summary -> this.project == project && this.feature == feature
-        is Route.Brief -> this.project == project && this.feature == feature
-        is Route.Details -> this.project == project && this.feature == feature
-        is Route.Output -> this.project == project && scope == feature
-        else -> false
-    }
+import kotlinx.coroutines.launch
 
 /**
  * The app's frame and navigation. While shown, it holds the event stream open, and registers for
- * pushes once the server is reached. A `target` from a notification replaces the back stack once
- * paired, then `targetShown` is called.
+ * pushes once the server is reached. A `target` from a notification opens over what is shown once
+ * paired, then `targetShown` is called. A scope the live snapshot no longer has is left, with word
+ * of why.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -188,7 +111,7 @@ fun App(
     LaunchedEffect(target, pairing) {
         val to = target ?: return@LaunchedEffect
         if (pairing == null) return@LaunchedEffect
-        backStack.replaceWith(to.route())
+        backStack.open(to.route())
         targetShown()
     }
 
@@ -196,11 +119,35 @@ fun App(
     val scope = rememberCoroutineScope()
     val feedback = remember(scope) { Feedback(SnackbarHostState(), scope) }
     val topBar = remember { TopBarSlot() }
+    val fullName = rememberTooltipState(isPersistent = true)
+    LaunchedEffect(top) { fullName.dismiss() }
     LaunchedEffect(model) {
         model.lifecycle.finished.collect { action ->
             if (action !is Action.Restart) backStack.leave(action.project, action.subject)
             feedback.done(action.done)
         }
+    }
+    val seen = remember { mutableSetOf<kotlin.Pair<String, String>>() }
+    val shownScopes = backStack.mapNotNull { (it as? Route)?.scopeOf() }.distinct()
+    LaunchedEffect(snapshot, connection, acting, shownScopes) {
+        val shown = snapshot ?: return@LaunchedEffect
+        // The app's own merge or delete reports itself once it finishes.
+        val own =
+            (acting as? ActionState.Running)
+                ?.action
+                ?.takeIf { it !is Action.Restart }
+                ?.let { it.project to it.subject }
+        val gone = shown.dropped(backStack, seen)
+        if (connection != Connection.Live) return@LaunchedEffect
+        gone
+            .filter { it != own }
+            .forEach { (project, scope) ->
+                backStack.leave(project, scope)
+                feedback.done(
+                    if (scope == Snapshot.MAIN) "$project is no longer a pm project"
+                    else "$scope was merged or deleted"
+                )
+            }
     }
     ActionDialog(acting, model.lifecycle::confirm, model.lifecycle::dismiss)
 
@@ -211,45 +158,28 @@ fun App(
         readAt
             ?.takeIf { stale && top != Route.Pair && top != Route.Settings }
             ?.let { "Updated ${ago(it, now)}" }
-    val actions =
-        top?.actions().orEmpty().filter {
-            it !is Action.Merge && it !is Action.Delete ||
-                snapshot?.feature(it.project, it.subject) != null
-        }
     CompositionLocalProvider(LocalFeedback provides feedback) {
         Scaffold(
             modifier = modifier,
             snackbarHost = { FeedbackHost(feedback, Modifier.imePadding()) },
             topBar = {
                 TopAppBar(
-                    title = {
-                        Column {
-                            Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            if (subtitle != null || updated != null) {
-                                Subtitle(subtitle, updated)
-                            }
-                        }
-                    },
+                    title = { Title(title, subtitle, updated, fullName) },
                     navigationIcon = {
-                        if (backStack.size > 1) {
-                            IconButton(onClick = { backStack.removeLastOrNull() }) {
-                                Icon(painterResource(R.drawable.ic_arrow_back), "Back")
+                        if (top?.parent != null || backStack.size > 1) {
+                            IconButton(onClick = { backStack.up() }) {
+                                Icon(painterResource(R.drawable.ic_arrow_back), "Navigate up")
                             }
                         }
                     },
                     actions = {
                         val screen = topBar.actions
-                        if (screen != null) {
-                            screen()
-                        } else {
-                            if (actions.isNotEmpty()) {
-                                ActionsMenu(actions, model.lifecycle::ask)
-                            }
-                            if (top != Route.Settings && top != Route.Pair) {
-                                IconButton(onClick = { backStack.add(Route.Settings) }) {
-                                    Icon(painterResource(R.drawable.ic_settings), "Settings")
-                                }
-                            }
+                        when {
+                            screen != null -> screen()
+                            top == Route.Home ->
+                                OverflowMenu(
+                                    listOf(MenuItem("Settings") { backStack.add(Route.Settings) })
+                                )
                         }
                     },
                 )
@@ -268,6 +198,9 @@ fun App(
                 }
                 NavDisplay(
                     backStack = backStack,
+                    onBack = {
+                        if (fullName.isVisible) fullName.dismiss() else backStack.removeLastOrNull()
+                    },
                     entryDecorators =
                         listOf(
                             rememberSaveableStateHolderNavEntryDecorator(),
@@ -296,13 +229,7 @@ fun App(
                                     Home(
                                         it,
                                         now,
-                                        openNeed = { need ->
-                                            backStack.addAll(
-                                                Target(need.project, need.scope, need.agent?.name)
-                                                    .route()
-                                                    .drop(1)
-                                            )
-                                        },
+                                        openScope = { p, s -> backStack.add(Route.Scope(p, s)) },
                                         openProject = { p -> backStack.add(Route.Project(p)) },
                                         stale = stale,
                                     )
@@ -320,58 +247,35 @@ fun App(
                                     )
                                 }
                             }
-                            entry<Route.Scope> { key ->
+                            entry<Route.Scope>(clazzContentKey = { it.contentKey() }) { key ->
                                 Shown(snapshot, connection, model::retry, pairAgain) {
-                                    AgentsList(
+                                    Workspace(
                                         it,
-                                        key.project,
-                                        key.scope,
-                                        now,
-                                        openAgent = { a ->
-                                            backStack.add(Route.Agent(key.project, key.scope, a))
+                                        client,
+                                        key,
+                                        select = { tab ->
+                                            val at = backStack.indexOf(key)
+                                            if (at >= 0) backStack[at] = key.copy(tab = tab)
                                         },
-                                        openPage = { backStack.add(it) },
-                                        stale = stale,
-                                    )
-                                }
-                            }
-                            entry<Route.Agent> { key ->
-                                val paired = client
-                                if (paired == null) {
-                                    EmptyState("Not paired.")
-                                } else {
-                                    val shown =
-                                        snapshot?.agents(key.project, key.scope)?.find {
-                                            it.name == key.agent
-                                        }
-                                    AgentScreen(
-                                        paired,
-                                        key.project,
-                                        key.scope,
-                                        key.agent,
-                                        shown?.stateOf,
-                                        shown?.waiting,
+                                        now,
                                         networkChanges,
-                                        openResult = { tool, ref ->
+                                        topBar,
+                                        acting,
+                                        model.lifecycle::ask,
+                                        openResult = { agent, tool, ref ->
                                             backStack.add(
                                                 Route.Output(
                                                     key.project,
                                                     key.scope,
-                                                    key.agent,
+                                                    agent,
                                                     ref,
                                                     tool,
                                                 )
                                             )
                                         },
+                                        stale = stale,
                                     )
                                 }
-                            }
-                            entry<Route.Summary> { key ->
-                                SummaryScreen(
-                                    viewModel {
-                                        ReadModel(client) { summary(key.project, key.feature) }
-                                    }
-                                )
                             }
                             entry<Route.Notes> { key ->
                                 val store = LocalContext.current.container.store
@@ -385,20 +289,6 @@ fun App(
                                         )
                                     },
                                     topBar,
-                                )
-                            }
-                            entry<Route.Brief> { key ->
-                                BriefScreen(
-                                    viewModel {
-                                        ReadModel(client) { feature(key.project, key.feature) }
-                                    }
-                                )
-                            }
-                            entry<Route.Details> { key ->
-                                DetailsScreen(
-                                    viewModel {
-                                        ReadModel(client) { feature(key.project, key.feature) }
-                                    }
                                 )
                             }
                             entry<Route.Output> { key ->
@@ -451,6 +341,41 @@ fun App(
                         },
                 )
             }
+        }
+    }
+}
+
+/**
+ * The top bar's title, shrunk to fit before it is cut short, with a tap showing it whole; under it,
+ * the heading's second line, which gives way first, then how old the snapshot is. `tip` shows the
+ * full name, and Back hides it first: NavDisplay's onBack does that while the stack can go back,
+ * the handler here otherwise.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun Title(title: String, heading: String?, updated: String?, tip: TooltipState) {
+    val scope = rememberCoroutineScope()
+    BackHandler(enabled = tip.isVisible) { tip.dismiss() }
+    TooltipBox(
+        positionProvider =
+            TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Below),
+        tooltip = { PlainTooltip { Text(listOfNotNull(title, heading).joinToString("\n")) } },
+        state = tip,
+    ) {
+        Column(
+            Modifier.clickable(onClickLabel = "Show the full name") { scope.launch { tip.show() } }
+        ) {
+            Text(
+                title,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                autoSize =
+                    TextAutoSize.StepBased(
+                        minFontSize = MaterialTheme.typography.titleSmall.fontSize,
+                        maxFontSize = MaterialTheme.typography.titleLarge.fontSize,
+                    ),
+            )
+            if (heading != null || updated != null) Subtitle(heading, updated)
         }
     }
 }

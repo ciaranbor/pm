@@ -56,8 +56,12 @@ fun AgentScreen(
     waiting: Waiting?,
     networkChanges: Flow<Unit>,
     openResult: (tool: String, ref: String) -> Unit,
+    openTerminal: () -> Unit,
     modifier: Modifier = Modifier,
-    model: AgentModel = viewModel { AgentModel(client, project, scope, agent, networkChanges) },
+    model: AgentModel =
+        viewModel(key = "agent/$agent") {
+            AgentModel(client, project, scope, agent, networkChanges)
+        },
 ) {
     LifecycleStartEffect(model) {
         model.start()
@@ -78,8 +82,6 @@ fun AgentScreen(
             else feedback.failed("Couldn't interrupt: $failure", model::interrupt)
         }
     }
-    var terminal by rememberSaveable { mutableStateOf(false) }
-    val openTerminal = { terminal = true }
     Column(modifier.fillMaxSize().imePadding()) {
         Box(Modifier.weight(1f)) { Chat(model, openResult) }
         val shown = dialog
@@ -106,7 +108,6 @@ fun AgentScreen(
             )
         }
     }
-    if (terminal) ScreenSheet(client, project, scope, agent, dismiss = { terminal = false })
 }
 
 @Composable
