@@ -37,8 +37,8 @@ pub enum IssueKind {
     TmuxSessionMissing,
     /// Agent registered as active but its tmux window is gone.
     AgentWindowMissing,
-    /// An active agent's window is up but no session id has been recorded
-    /// for it since its spawn.
+    /// An active agent's window is up but its harness session has not
+    /// reported starting since its launch.
     AgentSessionNotStarted,
     /// An active agent's window is up but its harness exited to the shell.
     AgentHarnessExited,

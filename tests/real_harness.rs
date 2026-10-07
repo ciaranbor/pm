@@ -368,7 +368,7 @@ fn claude_restart_resumes_the_recorded_session() {
 
 /// Catches: the spawn and doctor missing what codex's interactive hook-trust
 /// gate does to an agent — before trust its hooks never run, so it never
-/// comes up and no session id is ever recorded; after trust, a fresh spawn
+/// comes up and its session never starts; after trust, a fresh spawn
 /// and a resume come up, and a pm upgrade that changes a hook's command
 /// makes codex distrust it again, which only codex can tell (its
 /// `trusted_hash` is its own fingerprint). A few turns on codex's default
@@ -393,7 +393,7 @@ fn codex_hook_trust_through_the_interactive_gate_and_a_changed_hook() {
     s.backdate_spawns(&proj, "main");
     let doctor = s.doctor(&main);
     for expected in [
-        "agent 'plain' is running but its codex session has recorded no session id",
+        "agent 'plain' is running but its codex session never reported starting",
         "codex has not trusted pm's Stop hook",
     ] {
         assert!(doctor.contains(expected), "{expected}\nin:\n{doctor}");

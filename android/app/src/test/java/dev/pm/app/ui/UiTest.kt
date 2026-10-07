@@ -146,6 +146,13 @@ class UiTest {
         compose.onNodeWithText("Message the agent").assertDoesNotExist()
         for (page in listOf("Brief", "Details")) {
             compose.onNodeWithText(page).performClick()
+            // The page reads the server on Dispatchers.IO, which the test clock does not await.
+            compose.waitUntil(5_000) {
+                compose
+                    .onAllNodesWithText("Can't reach pm serve")
+                    .fetchSemanticsNodes()
+                    .isNotEmpty()
+            }
             compose.onNodeWithText("Can't reach pm serve").assertIsDisplayed()
         }
         compose.onNodeWithContentDescription("implementer", substring = true).performClick()
