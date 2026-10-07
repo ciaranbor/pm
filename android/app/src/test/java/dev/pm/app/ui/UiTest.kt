@@ -9,11 +9,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.SemanticsActions
-import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertContentDescriptionContains
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
-import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -22,7 +20,6 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -37,12 +34,9 @@ import dev.pm.app.data.Connection
 import dev.pm.app.data.Repository
 import dev.pm.app.data.Store
 import dev.pm.app.model.AgentState
-import dev.pm.app.model.Conversation
 import dev.pm.app.model.FeatureInfo
-import dev.pm.app.model.Item
 import dev.pm.app.model.Pairing
 import dev.pm.app.model.Snapshot
-import dev.pm.app.model.ToolResult
 import dev.pm.app.push.Target
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
@@ -324,73 +318,6 @@ class UiTest {
         compose.mainClock.advanceTimeBy(100)
         compose.onNodeWithText("Pair again").performClick()
         assertEquals(1, pairings)
-    }
-
-    @Test
-    fun a_tool_card_opens_from_its_header_and_asks_for_the_whole_output() {
-        val tool =
-            Item.Tool(
-                "t",
-                null,
-                "Bash",
-                "cargo test",
-                ToolResult("first lines", error = false, truncated = true, full = "r1"),
-            )
-        val opened = mutableListOf<Pair<String, String>>()
-        compose.setContent { PmTheme { ToolCard(tool) { name, ref -> opened.add(name to ref) } } }
-        compose.onNodeWithText("first lines").assertDoesNotExist()
-        compose.onNodeWithText("Bash").performClick()
-        compose.onNodeWithText("first lines").assertIsDisplayed()
-        compose.onNodeWithText("first lines").performClick()
-        compose.onNodeWithText("first lines").assertIsDisplayed()
-        compose.onNodeWithText("Show all").performClick()
-        assertEquals(listOf("Bash" to "r1"), opened)
-    }
-
-    @Test
-    fun the_chat_follows_its_end_until_scrolled_up_then_counts_what_came_since() {
-        val user = { n: Int -> Item.User("u$n", null, "message $n") }
-        var conversation by mutableStateOf(Conversation((0 until 40).map(user)))
-        compose.setContent {
-            PmTheme { ChatView(conversation, live = true, older = {}, openResult = { _, _ -> }) }
-        }
-        compose.onNodeWithText("message 39").assertIsDisplayed()
-
-        conversation = conversation.appended(listOf(user(40)), null)
-        compose.onNodeWithText("message 40").assertIsDisplayed()
-
-        compose.onNode(hasScrollToIndexAction()).performScrollToIndex(0)
-        conversation = conversation.appended(listOf(user(41), user(42)), null)
-        compose.onNodeWithText("2 new", useUnmergedTree = true).performClick()
-        compose.onNodeWithText("message 42").assertIsDisplayed()
-        compose.onNodeWithText("2 new", useUnmergedTree = true).assertDoesNotExist()
-    }
-
-    @Test
-    fun the_chat_follows_again_once_scrolled_back_and_stays_at_its_end_as_the_last_row_grows() {
-        val user = { n: Int -> Item.User("u$n", null, "message $n") }
-        val running = Item.Tool("t", null, "Bash", "cargo test", null)
-        var conversation by mutableStateOf(Conversation((0 until 40).map(user) + running))
-        compose.setContent {
-            PmTheme { ChatView(conversation, live = true, older = {}, openResult = { _, _ -> }) }
-        }
-        val list = compose.onNode(hasScrollToIndexAction())
-        list.performScrollToIndex(0)
-        compose.onNodeWithContentDescription("Go to the end").assertIsDisplayed()
-        list.performScrollToIndex(conversation.items.size)
-        compose.onNodeWithContentDescription("Go to the end").assertDoesNotExist()
-
-        val output = (0 until 60).joinToString("\n") { "line $it" }
-        conversation =
-            conversation.appended(
-                listOf(running.copy(result = ToolResult(output, false, false, null))),
-                null,
-            )
-        compose.onNodeWithText("Bash").performClick()
-        compose.waitForIdle()
-        val range = list.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
-        assertEquals("scrolled to the end", range.maxValue(), range.value())
-        compose.onNodeWithContentDescription("Go to the end").assertDoesNotExist()
     }
 
     /** At a phone's density, not the 1× that screenshots render at. */

@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::io;
 use std::path::Path;
 
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use super::items::{Body, Item, Page, Tail, ToolResult};
@@ -27,6 +28,7 @@ pub(in crate::harness) enum Entry {
         call: String,
         text: String,
         error: bool,
+        at: Option<DateTime<Utc>>,
     },
 }
 
@@ -50,8 +52,14 @@ fn result_ref(offset: u64, call: &str) -> String {
     format!("{offset}:{call}")
 }
 
-fn tool_result(offset: u64, call: &str, text: &str, error: bool) -> ToolResult {
-    ToolResult::new(text, error, || result_ref(offset, call))
+fn tool_result(
+    offset: u64,
+    call: &str,
+    text: &str,
+    error: bool,
+    at: Option<DateTime<Utc>>,
+) -> ToolResult {
+    ToolResult::new(text, error, at, || result_ref(offset, call))
 }
 
 fn pending_call(item: &Item) -> Option<&str> {
@@ -73,6 +81,7 @@ struct Orphan {
     call: String,
     text: String,
     error: bool,
+    at: Option<DateTime<Utc>>,
 }
 
 /// The items of `lines`, in order, each tool call with its result when the
@@ -90,13 +99,22 @@ fn assemble(lines: Vec<(u64, Vec<Entry>)>) -> (Vec<Item>, Vec<Orphan>) {
                     }
                     items.push(item);
                 }
-                Entry::Result { call, text, error } => match calls.get(&call) {
-                    Some(&at) => attach(&mut items[at], tool_result(offset, &call, &text, error)),
+                Entry::Result {
+                    call,
+                    text,
+                    error,
+                    at,
+                } => match calls.get(&call) {
+                    Some(&index) => attach(
+                        &mut items[index],
+                        tool_result(offset, &call, &text, error, at),
+                    ),
                     None => orphans.push(Orphan {
                         offset,
                         call,
                         text,
                         error,
+                        at,
                     }),
                 },
             }
@@ -151,10 +169,15 @@ pub(in crate::harness) fn page(
                 continue;
             }
             for entry in parse_line(offset, &line, parse) {
-                if let Entry::Result { call, text, error } = entry
+                if let Entry::Result {
+                    call,
+                    text,
+                    error,
+                    at,
+                } = entry
                     && pending.contains(&call)
                 {
-                    let result = tool_result(offset, &call, &text, error);
+                    let result = tool_result(offset, &call, &text, error, at);
                     found.insert(call, result);
                 }
             }
@@ -192,7 +215,13 @@ pub(in crate::harness) fn tail(path: &Path, after: u64, parse: Parse) -> io::Res
         if let Some(mut call) = find_call(&mut src, after, &orphan.call, parse)? {
             attach(
                 &mut call,
-                tool_result(orphan.offset, &orphan.call, &orphan.text, orphan.error),
+                tool_result(
+                    orphan.offset,
+                    &orphan.call,
+                    &orphan.text,
+                    orphan.error,
+                    orphan.at,
+                ),
             );
             calls.push(call);
         }
@@ -292,7 +321,7 @@ mod tests {
     }
 
     fn result(uuid: &str, id: &str, output: &str) -> String {
-        json!({"type": "user", "uuid": uuid,
+        json!({"type": "user", "uuid": uuid, "timestamp": "2026-10-02T18:00:07Z",
                "message": {"content": [{"type": "tool_result", "tool_use_id": id,
                                         "content": output}]}})
         .to_string()
@@ -429,7 +458,13 @@ mod tests {
             panic!("reset");
         };
         assert_eq!(ids(&items), ["toolu_1", "u2"], "the call is sent again");
-        assert_eq!(tool_result_of(&items[0]).unwrap().text, "listing");
+        let returned = tool_result_of(&items[0]).unwrap();
+        assert_eq!(returned.text, "listing");
+        assert_eq!(
+            returned.at,
+            crate::harness::transcript::items::timestamp(Some(&json!("2026-10-02T18:00:07Z"))),
+            "a result is timed by its own line"
+        );
 
         // A page ending between the call and its result looks past its end.
         let text = std::fs::read_to_string(&path).unwrap();

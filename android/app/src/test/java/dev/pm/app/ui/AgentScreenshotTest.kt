@@ -43,15 +43,20 @@ class AgentScreenshotTest {
                 Item.Continuation("c2", "2026-10-02T12:01:00Z", "You have new messages."),
                 Item.Continuation("c3", "2026-10-02T12:02:00Z", "You have new messages."),
                 Item.Event("e1", "2026-10-02T12:03:00Z", "interrupted"),
-                Item.Tool("t3", "2026-10-02T12:04:00Z", "Read", "src/lib.rs", null),
+                // Not running: a spinner never settles under this composable-only capture.
+                Item.Tool(
+                    "t3",
+                    "2026-10-02T12:04:00Z",
+                    "Read",
+                    "src/lib.rs",
+                    ToolResult("pub fn run() {}", error = false, truncated = false, full = null),
+                ),
             ),
             before = null,
         )
 
     private fun capture() = captureRoboImage {
-        PmTheme {
-            Surface { ChatView(conversation, live = true, older = {}, openResult = { _, _ -> }) }
-        }
+        PmTheme { Surface { ChatView(conversation, live = true, older = {}) } }
     }
 
     @Test fun chat_light() = capture()

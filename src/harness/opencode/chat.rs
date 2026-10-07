@@ -380,6 +380,7 @@ mod tests {
         let output = "z".repeat(RESULT_LIMIT + 10);
         let row = serde_json::json!({"time": {"created": 1}, "content": [
             {"type": "tool", "id": "call_1", "name": "shell",
+             "time": {"created": 1, "completed": 2500},
              "state": {"status": "completed", "input": {"command": "yes"},
                        "content": [{"type": "text", "text": output}]}}]});
         db.insert("msg_1", "assistant", 1, 1, &row);
@@ -394,6 +395,7 @@ mod tests {
         };
         assert_eq!(input, "yes");
         assert!(result.truncated);
+        assert_eq!(result.at, chrono::DateTime::from_timestamp_millis(2500));
         let full = full_result(&db.path, SESSION, result.full.as_deref().unwrap()).unwrap();
         assert_eq!(full.as_deref(), Some(output.as_str()));
         assert_eq!(full_result(&db.path, "ses_other", "msg_1:0").unwrap(), None);

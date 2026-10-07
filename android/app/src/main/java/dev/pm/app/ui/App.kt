@@ -262,17 +262,6 @@ fun App(
                                         topBar,
                                         acting,
                                         model.lifecycle::ask,
-                                        openResult = { agent, tool, ref ->
-                                            backStack.add(
-                                                Route.Output(
-                                                    key.project,
-                                                    key.scope,
-                                                    agent,
-                                                    ref,
-                                                    tool,
-                                                )
-                                            )
-                                        },
                                         stale = stale,
                                     )
                                 }
@@ -289,19 +278,6 @@ fun App(
                                         )
                                     },
                                     topBar,
-                                )
-                            }
-                            entry<Route.Output> { key ->
-                                ToolOutputScreen(
-                                    viewModel {
-                                        ToolOutputModel(
-                                            client,
-                                            key.project,
-                                            key.scope,
-                                            key.agent,
-                                            key.ref,
-                                        )
-                                    }
                                 )
                             }
                             entry<Route.Settings> {

@@ -53,9 +53,13 @@ pub enum Body {
         summary: Option<String>,
     },
     /// Anything else worth a row of its own: an interrupt, a failed turn, a
-    /// background task's end.
+    /// background task's end. `failure` marks one that says something went
+    /// wrong (a failed request, turn or compaction), so a client can show it
+    /// apart from bookkeeping.
     Event {
         text: String,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        failure: bool,
     },
 }
 
@@ -63,6 +67,9 @@ pub enum Body {
 pub struct ToolResult {
     pub text: String,
     pub error: bool,
+    /// When the call returned, where the harness records it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at: Option<DateTime<Utc>>,
     pub truncated: bool,
     /// What fetches the whole output, when `text` was cut.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -72,11 +79,17 @@ pub struct ToolResult {
 impl ToolResult {
     /// `text` cut to [`RESULT_LIMIT`]; `full` names where the whole of it
     /// is read back from, kept only when something was cut.
-    pub fn new(text: &str, error: bool, full: impl FnOnce() -> String) -> Self {
+    pub fn new(
+        text: &str,
+        error: bool,
+        at: Option<DateTime<Utc>>,
+        full: impl FnOnce() -> String,
+    ) -> Self {
         if text.len() <= RESULT_LIMIT {
             return Self {
                 text: text.to_string(),
                 error,
+                at,
                 truncated: false,
                 full: None,
             };
@@ -88,6 +101,7 @@ impl ToolResult {
         Self {
             text: text[..cut].to_string(),
             error,
+            at,
             truncated: true,
             full: Some(full()),
         }
@@ -220,6 +234,7 @@ mod tests {
                 result: Some(ToolResult::new(
                     "x".repeat(RESULT_LIMIT + 2).as_str(),
                     false,
+                    timestamp(Some(&json!("2026-10-02T18:08:53.108Z"))),
                     || "ref".into(),
                 )),
             },
@@ -229,13 +244,31 @@ mod tests {
         assert_eq!(json["at"], "2026-10-02T18:08:51.608Z");
         assert_eq!(json["result"]["truncated"], true);
         assert_eq!(json["result"]["full"], "ref");
+        assert_eq!(json["result"]["at"], "2026-10-02T18:08:53.108Z");
         assert_eq!(json["result"]["text"].as_str().unwrap().len(), RESULT_LIMIT);
+    }
+
+    #[test]
+    fn an_event_says_it_is_a_failure_only_when_it_is_one() {
+        let event = |failure| {
+            serde_json::to_value(Item::new(
+                "e",
+                None,
+                Body::Event {
+                    text: "no errors found".into(),
+                    failure,
+                },
+            ))
+            .unwrap()
+        };
+        assert_eq!(event(true)["failure"], true);
+        assert!(event(false).get("failure").is_none());
     }
 
     #[test]
     fn a_cut_never_splits_a_character() {
         let text = format!("{}é", "x".repeat(RESULT_LIMIT - 1));
-        let result = ToolResult::new(&text, false, String::new);
+        let result = ToolResult::new(&text, false, None, String::new);
         assert_eq!(result.text.len(), RESULT_LIMIT - 1);
         assert!(result.truncated);
     }

@@ -27,6 +27,9 @@ class TranscriptTest {
               {"id":"6","kind":"continuation","text":"You have new messages"},
               {"id":"7","kind":"compaction","summary":null},
               {"id":"8","kind":"event","text":"interrupted"},
+              {"id":"10","kind":"event","text":"API Error: 529","failure":true},
+              {"id":"11","kind":"tool","name":"Bash","input":"ls",
+               "result":{"text":"","error":false,"truncated":false,"at":"2026-10-02T09:00:04Z"}},
               {"id":"9","kind":"hologram","text":"?"}
             ]}
             """
@@ -48,6 +51,14 @@ class TranscriptTest {
                 Item.Continuation("6", null, "You have new messages"),
                 Item.Compaction("7", null, null),
                 Item.Event("8", null, "interrupted"),
+                Item.Event("10", null, "API Error: 529", failure = true),
+                Item.Tool(
+                    "11",
+                    null,
+                    "Bash",
+                    "ls",
+                    ToolResult("", false, false, null, at = "2026-10-02T09:00:04Z"),
+                ),
             ),
             items,
         )
