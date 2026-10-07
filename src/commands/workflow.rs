@@ -33,15 +33,19 @@ kept in pm state, never in the worktree, for an orchestrator who never saw
 the feature and reads it after the branch is gone. If git history, the code, or the merge
 already records something, leave it out; if it would be lost with the branch,
 write it down. Not a running log: write it when you know what the work leaves
-behind, and add to it if more emerges. Cover, in order of value:
+behind, and add to it if more emerges.
+
+Open the summary with one or two plain sentences on a single unwrapped line,
+before any heading, saying what the feature is and what it changed or found.
+Write them for someone who doesn't know this project: describe things in
+everyday words, not module, command, flag or internal feature names, unless
+the name *is* the change. Then cover, in order of value:
 
 - out-of-scope bugs, gaps, and ideas you did not fix — self-contained
   enough to act on without the branch
 - decisions that diverged from the brief, with the reason
 - durable gotchas: external constraints, verified behaviour, dead-ends
 - user-facing consequences: breaking changes, required actions, migrations
-- one line on what shipped — the shape, not the diff, unless your workflow
-  makes the summary itself the deliverable
 
 Leave out review rounds and approvals, status lines, test counts or tool
 output, file-by-file change lists, smoke-test walkthroughs, and narration of

@@ -220,8 +220,7 @@ fn reason(state: &FeatureState) -> Option<&str> {
         .flatten()
 }
 
-/// The summary's first line of text: summaries open with a title heading
-/// that only repeats the feature name.
+/// The summary's first line of text, skipping headings.
 pub(crate) fn first_line(project_root: &Path, name: &str) -> Option<String> {
     let summary = std::fs::read_to_string(paths::summary_path(project_root, name)).ok()?;
     summary
