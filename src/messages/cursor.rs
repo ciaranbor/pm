@@ -1,3 +1,6 @@
+//! The per-sender read cursor: the last index each sender's queue has been
+//! read to.
+
 use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
@@ -7,7 +10,7 @@ use super::validation::validate_name;
 
 /// Returns the cursor file path for an agent's inbox.
 pub(crate) fn cursor_path(messages_dir: &Path, feature: &str, agent: &str) -> PathBuf {
-    super::inbox_dir(messages_dir, feature, agent).join(".cursor")
+    super::layout::inbox_dir(messages_dir, feature, agent).join(".cursor")
 }
 
 pub(crate) fn load_cursor(path: &Path) -> Result<Cursor> {
@@ -46,8 +49,8 @@ pub fn next(messages_dir: &Path, feature: &str, agent: &str, sender: &str) -> Re
     validate_name(agent, "agent")?;
     validate_name(sender, "sender")?;
 
-    let sdir = super::sender_dir(messages_dir, feature, agent, sender);
-    let latest = super::max_index(&sdir)?;
+    let sdir = super::layout::sender_dir(messages_dir, feature, agent, sender);
+    let latest = super::layout::max_index(&sdir)?;
 
     let cpath = cursor_path(messages_dir, feature, agent);
     let mut cursor = load_cursor(&cpath)?;
@@ -63,4 +66,79 @@ pub fn next(messages_dir: &Path, feature: &str, agent: &str, sender: &str) -> Re
     cursor.insert(sender.to_string(), new);
     save_cursor(&cpath, &cursor)?;
     Ok(new)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::PmError;
+    use crate::messages::send;
+    use crate::messages::test_support::messages_dir;
+    use tempfile::tempdir;
+
+    #[test]
+    fn next_advances_cursor_by_one() {
+        let dir = tempdir().unwrap();
+        let mdir = messages_dir(dir.path());
+
+        send(&mdir, "login", "reviewer", "implementer", "one").unwrap();
+        send(&mdir, "login", "reviewer", "implementer", "two").unwrap();
+        send(&mdir, "login", "reviewer", "implementer", "three").unwrap();
+
+        assert_eq!(
+            cursor_for(&mdir, "login", "reviewer", "implementer").unwrap(),
+            0
+        );
+        assert_eq!(next(&mdir, "login", "reviewer", "implementer").unwrap(), 1);
+        assert_eq!(
+            cursor_for(&mdir, "login", "reviewer", "implementer").unwrap(),
+            1
+        );
+        assert_eq!(next(&mdir, "login", "reviewer", "implementer").unwrap(), 2);
+        assert_eq!(next(&mdir, "login", "reviewer", "implementer").unwrap(), 3);
+        assert_eq!(
+            cursor_for(&mdir, "login", "reviewer", "implementer").unwrap(),
+            3
+        );
+    }
+
+    #[test]
+    fn next_errors_at_latest() {
+        let dir = tempdir().unwrap();
+        let mdir = messages_dir(dir.path());
+
+        send(&mdir, "login", "reviewer", "implementer", "one").unwrap();
+        next(&mdir, "login", "reviewer", "implementer").unwrap();
+
+        let err = next(&mdir, "login", "reviewer", "implementer").unwrap_err();
+        assert!(matches!(err, PmError::Messaging(_)));
+        assert!(format!("{err}").contains("no messages to advance past"));
+    }
+
+    #[test]
+    fn next_errors_on_empty_sender() {
+        let dir = tempdir().unwrap();
+        let mdir = messages_dir(dir.path());
+
+        // No messages from "implementer" yet.
+        let err = next(&mdir, "login", "reviewer", "implementer").unwrap_err();
+        assert!(matches!(err, PmError::Messaging(_)));
+    }
+
+    #[test]
+    fn next_only_advances_named_sender() {
+        let dir = tempdir().unwrap();
+        let mdir = messages_dir(dir.path());
+
+        send(&mdir, "login", "reviewer", "implementer", "impl").unwrap();
+        send(&mdir, "login", "reviewer", "user", "user").unwrap();
+
+        next(&mdir, "login", "reviewer", "implementer").unwrap();
+
+        assert_eq!(
+            cursor_for(&mdir, "login", "reviewer", "implementer").unwrap(),
+            1
+        );
+        assert_eq!(cursor_for(&mdir, "login", "reviewer", "user").unwrap(), 0);
+    }
 }

@@ -1,3 +1,5 @@
+//! The messaging data types.
+
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};

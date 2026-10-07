@@ -1,3 +1,5 @@
+//! Inbox name validation: every name becomes a path component.
+
 use crate::error::{PmError, Result};
 
 /// Validate that a name (agent, sender, feature) is safe for use as a path component.
