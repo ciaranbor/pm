@@ -1,5 +1,6 @@
 package dev.pm.app.ui
 
+import androidx.annotation.DrawableRes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -11,6 +12,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -27,20 +29,46 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import dev.pm.app.R
 
-/** An overflow menu entry: `destructive` ones show in the error colour, after a divider. */
-data class MenuItem(val label: String, val destructive: Boolean = false, val onClick: () -> Unit)
+/**
+ * An action for [ActionMenu]: `icon` stands for it when shown as a button; `destructive` ones show
+ * in the error colour, after a divider in a menu.
+ */
+data class MenuItem(
+    val label: String,
+    @DrawableRes val icon: Int,
+    val destructive: Boolean = false,
+    val onClick: () -> Unit,
+)
 
-/** An overflow holding `items`, the top bar's unless `description` names another. */
+/**
+ * `items` as icon buttons, or behind a ⋮ once there are [MENU_FROM] of them: a menu around one or
+ * two entries costs a tap and draws an oversized box.
+ */
 @Composable
-fun OverflowMenu(
+fun ActionMenu(
     items: List<MenuItem>,
     modifier: Modifier = Modifier,
-    description: String = "More actions",
-) =
+) {
+    if (items.size < MENU_FROM) {
+        Row(modifier) {
+            items.forEach { item ->
+                IconButton(onClick = item.onClick) {
+                    Icon(
+                        painterResource(item.icon),
+                        item.label,
+                        tint =
+                            if (item.destructive) MaterialTheme.colorScheme.error
+                            else LocalContentColor.current,
+                    )
+                }
+            }
+        }
+        return
+    }
     Box(modifier) {
         var open by remember { mutableStateOf(false) }
         IconButton(onClick = { open = true }) {
-            Icon(painterResource(R.drawable.ic_more_vert), description)
+            Icon(painterResource(R.drawable.ic_more_vert), "More actions")
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             items.forEachIndexed { i, item ->
@@ -62,6 +90,9 @@ fun OverflowMenu(
             }
         }
     }
+}
+
+private const val MENU_FROM = 3
 
 private val Action.running: String
     get() =

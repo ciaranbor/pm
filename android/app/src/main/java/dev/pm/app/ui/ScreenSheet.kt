@@ -163,7 +163,9 @@ internal fun ScreenPanel(
             OutlinedTextField(
                 value = text,
                 onValueChange = { new ->
-                    val clean = new.replace("\n", "")
+                    // pm serve types no control characters, so a pasted line break joins as a
+                    // space.
+                    val clean = new.replace(LINE_BREAKS, " ")
                     val letter =
                         clean.getOrNull(clean.commonPrefixWith(text).length)?.takeIf {
                             ctrl != Ctrl.Off &&
@@ -270,3 +272,5 @@ private fun CopyIcon(done: Boolean, icon: Int, description: String) {
 
 private const val LINK = "Link"
 private const val SCREEN = "Screen"
+
+private val LINE_BREAKS = Regex("""\s*\R\s*""")

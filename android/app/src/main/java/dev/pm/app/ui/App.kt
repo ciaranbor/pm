@@ -158,7 +158,7 @@ fun App(
         readAt
             ?.takeIf { stale && top != Route.Pair && top != Route.Settings }
             ?.let { "Updated ${ago(it, now)}" }
-    CompositionLocalProvider(LocalFeedback provides feedback) {
+    CompositionLocalProvider(LocalFeedback provides feedback, LocalConnection provides connection) {
         Scaffold(
             modifier = modifier,
             snackbarHost = { FeedbackHost(feedback, Modifier.imePadding()) },
@@ -177,8 +177,12 @@ fun App(
                         when {
                             screen != null -> screen()
                             top == Route.Home ->
-                                OverflowMenu(
-                                    listOf(MenuItem("Settings") { backStack.add(Route.Settings) })
+                                ActionMenu(
+                                    listOf(
+                                        MenuItem("Settings", R.drawable.ic_settings) {
+                                            backStack.add(Route.Settings)
+                                        }
+                                    )
                                 )
                         }
                     },

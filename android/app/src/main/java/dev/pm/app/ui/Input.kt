@@ -27,21 +27,36 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.SavedStateHandle
 import dev.pm.app.R
 import dev.pm.app.model.AgentState
 import dev.pm.app.model.Waiting
 
 /**
- * Unsent drafts by agent, kept while the app runs, so leaving an agent and coming back keeps one.
+ * Unsent drafts by agent, so leaving an agent and coming back keeps one; in `saved`, if given, so
+ * they outlive Android stopping the app in the background. Saved state rides in a Binder
+ * transaction, so the longest drafts past [SAVED_MAX] characters in all are kept in memory only.
  */
 @Stable
-class Drafts {
-    private val held = mutableStateMapOf<String, String>()
+class Drafts(private val saved: SavedStateHandle? = null) {
+    private val held =
+        mutableStateMapOf<String, String>().apply {
+            saved?.get<HashMap<String, String>>(SAVED)?.let(::putAll)
+        }
 
     operator fun get(key: String): String = held[key].orEmpty()
 
     operator fun set(key: String, draft: String) {
         if (draft.isEmpty()) held.remove(key) else held[key] = draft
+        val saving = saved ?: return
+        var room = SAVED_MAX
+        val kept = HashMap<String, String>()
+        for ((at, text) in held.entries.sortedBy { it.value.length }) {
+            if (text.length > room) break
+            kept[at] = text
+            room -= text.length
+        }
+        saving[SAVED] = kept
     }
 
     /** Put `text` back into the draft under `key`, after what is there. */
@@ -49,12 +64,18 @@ class Drafts {
         val held = get(key)
         set(key, if (held.isBlank()) text else "$held\n$text")
     }
+
+    companion object {
+        const val SAVED_MAX = 64 * 1024
+    }
 }
+
+private const val SAVED = "drafts"
 
 /**
  * Where the user writes to the agent: a draft, kept under `draftKey`, sent as one prompt. A dialog
  * up, or an agent not running, takes no text; a dialog up offers the terminal, where it can be
- * answered with keys. The overflow holds Interrupt and the terminal.
+ * answered with keys. Interrupt and the terminal sit beside it.
  */
 @Composable
 internal fun Composer(
@@ -217,8 +238,8 @@ private fun describe(outbox: Outbox): String =
     }
 
 /**
- * The overflow beside the composer or a dialog card: the terminal, and Interrupt where it
- * `canInterrupt`; while an interrupt is on its way, progress beside it and only the terminal.
+ * The actions beside the composer or a dialog card: the terminal, and Interrupt where it
+ * `canInterrupt`; while an interrupt is on its way, progress in its place.
  */
 @Composable
 internal fun AgentActions(
@@ -235,12 +256,12 @@ internal fun AgentActions(
                 strokeWidth = 2.dp,
             )
         }
-        OverflowMenu(
+        ActionMenu(
             buildList {
-                if (canInterrupt && !interrupting) add(MenuItem("Interrupt", onClick = interrupt))
-                add(MenuItem("Show the terminal", onClick = openTerminal))
-            },
-            description = "Agent actions",
+                if (canInterrupt && !interrupting)
+                    add(MenuItem("Interrupt", R.drawable.ic_stop, onClick = interrupt))
+                add(MenuItem("Show the terminal", R.drawable.ic_terminal, onClick = openTerminal))
+            }
         )
     }
 }

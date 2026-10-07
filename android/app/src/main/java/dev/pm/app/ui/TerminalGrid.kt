@@ -62,7 +62,7 @@ fun columns(row: String): Int = cells(row).lastOrNull()?.let { it.column + it.wi
 /**
  * The links on the screen, in order. A link cut at the end of a row the pane wrapped (a row as wide
  * as the widest, or one the link fills up to a box's border) carries on with the link characters
- * that start the next row.
+ * that start the next row; so does a row ending in the start of a link's scheme (`https:/`).
  */
 fun screenLinks(rows: List<String>): List<String> {
     val plain = rows.map { row -> row.map { if (it.code in BOX) ' ' else it }.joinToString("") }
@@ -70,32 +70,48 @@ fun screenLinks(rows: List<String>): List<String> {
     fun cut(row: Int, at: Int) =
         at == rows[row].trimEnd().lastIndex && columns(rows[row]) >= widest - 2 ||
             rows[row].getOrNull(at + 1)?.code in BOX
+    /** `link`, ending at `at` on `row`, carried on over the rows the pane wrapped it onto. */
+    fun follow(link: String, row: Int, at: Int): Triple<String, Int, Int> {
+        var whole = link
+        var last = row
+        var end = at
+        while (last + 1 < plain.size && cut(last, end)) {
+            val line = plain[last + 1]
+            val start = line.indexOfFirst { it != ' ' }
+            if (start < 0 || LINK.find(line, start)?.range?.first == start) break
+            val stop =
+                (start until line.length).firstOrNull { !isLinkChar(line[it]) } ?: line.length
+            if (stop == start) break
+            whole += line.substring(start, stop)
+            last++
+            end = stop - 1
+        }
+        return Triple(whole, last, end)
+    }
     val links = mutableListOf<String>()
     var i = 0
     var from = 0
     while (i < plain.size) {
         val found = LINK.findAll(plain[i], from).toList()
+        val starts = found.map { Triple(it.value, i, it.range.last) }.toMutableList()
+        if (found.isEmpty() || found.last().range.last < plain[i].trimEnd().lastIndex) {
+            val line = plain[i].trimEnd()
+            val head = line.substring(maxOf(from, line.lastIndexOf(' ') + 1))
+            if (head.isNotEmpty() && SCHEMES.any { it.startsWith(head) && it != head }) {
+                val split = follow(head, i, line.lastIndex)
+                if (SCHEMES.any { split.first.startsWith(it) } && split.second > i) starts += split
+            }
+        }
         from = 0
         var next = i + 1
-        found.forEachIndexed { n, match ->
-            var link = match.value
-            var row = i
-            var at = match.range.last
-            while (n == found.lastIndex && row + 1 < plain.size && cut(row, at)) {
-                val line = plain[row + 1]
-                val start = line.indexOfFirst { it != ' ' }
-                if (start < 0 || LINK.find(line, start)?.range?.first == start) break
-                val end =
-                    (start until line.length).firstOrNull { !isLinkChar(line[it]) } ?: line.length
-                if (end == start) break
-                link += line.substring(start, end)
-                row++
-                at = end - 1
-            }
-            if (row > i) {
-                val rest = at < plain[row].trimEnd().lastIndex
-                next = if (rest) row else row + 1
-                if (rest) from = at + 1
+        starts.forEachIndexed { n, (value, row, at) ->
+            // A split scheme's start, after the matches, is already followed.
+            val (link, last, end) =
+                if (n == starts.lastIndex && n < found.size) follow(value, row, at) else starts[n]
+            if (last > i) {
+                val rest = end < plain[last].trimEnd().lastIndex
+                next = if (rest) last else last + 1
+                if (rest) from = end + 1
             }
             links += link.trimEnd(*TRAILING)
         }
@@ -103,6 +119,8 @@ fun screenLinks(rows: List<String>): List<String> {
     }
     return links
 }
+
+private val SCHEMES = listOf("https://", "http://")
 
 private val BOX = 0x2500..0x257F
 

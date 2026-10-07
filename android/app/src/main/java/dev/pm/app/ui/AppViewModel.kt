@@ -1,5 +1,6 @@
 package dev.pm.app.ui
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.pm.app.api.PmClient
@@ -25,8 +26,11 @@ import kotlinx.coroutines.launch
  * What every screen shares: the repository's state, the clock activity is measured by, and push
  * registration.
  */
-class AppViewModel(private val repository: Repository, private val unsubscribePush: () -> Unit) :
-    ViewModel() {
+class AppViewModel(
+    private val repository: Repository,
+    saved: SavedStateHandle? = null,
+    private val unsubscribePush: () -> Unit,
+) : ViewModel() {
     val pairing: StateFlow<Pairing?> = repository.pairing
     val loaded: StateFlow<Boolean> = repository.loaded
     val client: StateFlow<PmClient?> = repository.client
@@ -42,7 +46,7 @@ class AppViewModel(private val repository: Repository, private val unsubscribePu
     }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), Instant.now())
 
-    val drafts = Drafts()
+    val drafts = Drafts(saved)
 
     /** Merge, delete and restart, for whichever server is paired when asked. */
     val lifecycle = Lifecycle(viewModelScope) { client.value }

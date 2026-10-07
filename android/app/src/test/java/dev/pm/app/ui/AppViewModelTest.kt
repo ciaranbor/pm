@@ -1,5 +1,6 @@
 package dev.pm.app.ui
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import androidx.test.core.app.ApplicationProvider
 import dev.pm.app.OpenStream
@@ -84,5 +85,25 @@ class AppViewModelTest {
 
         model.viewModelScope.cancel()
         eventually { model.viewModelScope.coroutineContext.job.isCompleted }
+    }
+
+    @Test
+    fun the_models_drafts_outlive_the_process_through_its_saved_state_unless_too_big() = runTest {
+        val store = Store(ApplicationProvider.getApplicationContext())
+        val repository = Repository(store, OkHttpClient(), backgroundScope)
+        val saved = SavedStateHandle()
+        val first = AppViewModel(repository, saved) {}
+        first.drafts["app/login/implementer"] = "half a thought"
+        first.drafts["app/login/reviewer"] = "x".repeat(Drafts.SAVED_MAX)
+
+        val again = AppViewModel(repository, saved) {}
+        assertEquals("half a thought", again.drafts["app/login/implementer"])
+        assertEquals("too big to save: kept in memory only", "", again.drafts["app/login/reviewer"])
+        assertEquals("x".repeat(Drafts.SAVED_MAX), first.drafts["app/login/reviewer"])
+
+        listOf(first, again).forEach { it.viewModelScope.cancel() }
+        eventually {
+            listOf(first, again).all { it.viewModelScope.coroutineContext.job.isCompleted }
+        }
     }
 }

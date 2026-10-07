@@ -25,6 +25,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 
+/** Why an edit went wrong, and whether saving again is the way to retry it. */
+data class NotesFailure(val message: String, val saveAgain: Boolean)
+
 sealed interface NotesState {
     data object Loading : NotesState
 
@@ -70,13 +73,13 @@ class NotesModel(
     private val _state = MutableStateFlow<NotesState>(NotesState.Loading)
     val state: StateFlow<NotesState> = _state.asStateFlow()
 
-    private val _failures = Channel<String>(Channel.BUFFERED)
+    private val _failures = Channel<NotesFailure>(Channel.BUFFERED)
 
     /** Each edit's error once, as it happens: a save failing the same way twice is sent twice. */
-    val failures: Flow<String> = _failures.receiveAsFlow()
+    val failures: Flow<NotesFailure> = _failures.receiveAsFlow()
 
-    private fun fail(error: String) {
-        _failures.trySend(error)
+    private fun fail(error: String, saveAgain: Boolean = true) {
+        _failures.trySend(NotesFailure(error, saveAgain))
     }
 
     /** The text being edited, while [state] is [NotesState.Editing]. */
@@ -86,7 +89,7 @@ class NotesModel(
     /**
      * The offsets of the text at the top of the editor and of its cursor: where it opens, and where
      * they were when last shown, so a rotation, a look at the preview, or the process dying returns
-     * to the same place.
+     * to the same place. A kept draft holds them too, for opening the notes again after leaving.
      */
     var top: Int
         get() = saved[TOP] ?: 0
@@ -100,14 +103,25 @@ class NotesModel(
             saved[CURSOR] = value
         }
 
+    /** Whether the editor had the keyboard when last shown, to give it back after a rotation. */
+    var focused: Boolean
+        get() = saved[FOCUSED] ?: false
+        set(value) {
+            saved[FOCUSED] = value
+        }
+
     private val writer = CoroutineScope(SupervisorJob() + writes)
     private var reading: Job? = null
     private var pending: Job? = null
     private var unkept = false
+    private var keptAt = 0 to 0
 
     init {
         val draft = drafts.draft(project)
-        if (draft != null) open(draft, top, cursor) else reload()
+        if (draft != null) {
+            open(draft, saved[TOP] ?: draft.top, saved[CURSOR] ?: draft.cursor)
+            keptAt = top to cursor
+        } else reload()
     }
 
     /** Read the notes again, unless an edit is open. */
@@ -152,14 +166,15 @@ class NotesModel(
         }
     }
 
-    /** Keep the edit now if it changed since it was last kept. */
+    /** Keep the edit now if it, or where the editor is in it, changed since it was last kept. */
     fun keep() {
         pending?.cancel()
         val now = _state.value as? NotesState.Editing ?: return
-        if (!unkept) return
+        if (!unkept && (!now.changed || keptAt == top to cursor)) return
         unkept = false
+        keptAt = top to cursor
         val text = text.toString()
-        write(if (text == now.base.text) null else NotesDraft(now.base, text))
+        write(if (text == now.base.text) null else NotesDraft(now.base, text, top, cursor))
     }
 
     /** Drop the edit and show the notes as they are now. */
@@ -176,7 +191,7 @@ class NotesModel(
         if (now.saving) return
         val draft = NotesDraft(now.base, text.toString())
         if (overNotesLimit(draft.text)) {
-            fail(TOO_LONG)
+            fail(TOO_LONG, saveAgain = false)
             return
         }
         pending?.cancel()
@@ -249,7 +264,9 @@ class NotesModel(
             } catch (e: Exception) {
                 if (_state.value is NotesState.Editing)
                     fail(
-                        "Couldn't keep the edit on this phone: ${e.message ?: e.javaClass.simpleName}"
+                        "Couldn't keep the edit on this phone: " +
+                            (e.message ?: e.javaClass.simpleName),
+                        saveAgain = false,
                     )
             }
         }
@@ -275,6 +292,7 @@ class NotesModel(
 
         private const val TOP = "top"
         private const val CURSOR = "cursor"
+        private const val FOCUSED = "focused"
 
         private val DRAFT_WRITES = Dispatchers.IO.limitedParallelism(1)
 

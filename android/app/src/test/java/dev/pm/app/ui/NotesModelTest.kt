@@ -26,6 +26,7 @@ import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -74,7 +75,7 @@ class NotesModelTest {
     /** What `model` reports on [NotesModel.failures] from now on. */
     private fun TestScope.failuresOf(model: NotesModel): List<String> =
         mutableListOf<String>().also { seen ->
-            backgroundScope.launch { model.failures.collect { seen += it } }
+            backgroundScope.launch { model.failures.collect { seen += it.message } }
         }
 
     private fun notes(text: String, version: String) =
@@ -142,6 +143,23 @@ class NotesModelTest {
         val again = model()
         assertEquals(NotesState.Editing(Notes("old\n", "v1"), changed = true), again.state.value)
         assertEquals("unsaved\n", again.text.toString())
+    }
+
+    @Test
+    fun an_edit_left_reopens_where_the_editor_was() = modelTest {
+        server.enqueue(notes("one\ntwo\nthree\n", "v1"))
+        val first = model()
+        eventually { first.state.value is NotesState.Viewing }
+        first.edit()
+        first.edited("one\ntwo\nthree\nfour\n")
+        advanceTimeBy(NotesModel.KEEP_AFTER_MS + 1)
+        first.top = 4
+        first.cursor = 9
+        first.keep()
+
+        val again = model()
+        assertEquals(4, again.top)
+        assertEquals(9, again.cursor)
     }
 
     @Test
@@ -213,11 +231,14 @@ class NotesModelTest {
             }
         eventually { model.state.value is NotesState.Viewing }
         model.edit()
-        val failures = failuresOf(model)
+        val failures = mutableListOf<NotesFailure>()
+        backgroundScope.launch { model.failures.collect { failures += it } }
         model.edited("new\n")
         advanceTimeBy(NotesModel.KEEP_AFTER_MS + 1)
         eventually { failures.isNotEmpty() }
-        assertTrue(failures.single(), failures.single().contains("No space left on device"))
+        val failure = failures.single()
+        assertTrue(failure.message, failure.message.contains("No space left on device"))
+        assertFalse("saving again is no retry for keeping it here", failure.saveAgain)
     }
 
     @Test

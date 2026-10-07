@@ -15,8 +15,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.hasScrollAction
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -128,15 +130,17 @@ class NotesEditorTest {
     fun the_editor_reopens_where_it_was_after_rotation_or_process_death() {
         val top = text.indexOf("- Item 5.3")
         val cursor = text.indexOf("- Item 5.7")
-        val field = editing(SavedStateHandle(mapOf("top" to top, "cursor" to cursor)))
+        val field =
+            editing(SavedStateHandle(mapOf("top" to top, "cursor" to cursor, "focused" to true)))
         compose.runOnIdle {
             assertEquals(field.topOf(top), field.scrollY)
             assertEquals(cursor, field.selectionStart)
+            assertTrue("the field has the keyboard again", field.hasFocus())
         }
     }
 
     @Test
-    fun a_look_at_the_preview_returns_to_the_same_place() {
+    fun the_preview_opens_at_the_section_being_edited_and_edit_returns_to_the_same_place() {
         val first = editing()
         val (scrolled, cursor) =
             compose.runOnIdle {
@@ -145,6 +149,8 @@ class NotesEditorTest {
                 first.scrollY to first.selectionStart
             }
         compose.onNodeWithText("Preview").performClick()
+        compose.onNodeWithText("Section 6").assertIsDisplayed()
+        compose.onNodeWithText("Section 1").assertIsNotDisplayed()
         compose.onNodeWithText("Edit").performClick()
         val again = field()
         compose.runOnIdle {

@@ -8,6 +8,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.pm.app.push.Notifications
 import dev.pm.app.push.Target
@@ -27,7 +28,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             PmTheme {
                 val model = viewModel {
-                    AppViewModel(container.repository) {
+                    AppViewModel(container.repository, createSavedStateHandle()) {
                         Notifications.unsubscribe(applicationContext)
                     }
                 }

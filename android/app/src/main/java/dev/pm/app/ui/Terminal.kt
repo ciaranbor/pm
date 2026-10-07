@@ -10,7 +10,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
@@ -24,6 +26,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
@@ -86,7 +89,7 @@ fun rememberCellWidth(): Float {
  * An agent's pane, as [screenRows] gives it, drawn cell for cell at its own width, so a TUI keeps
  * its grid: it opens fitted to the view's width, pinching or a double tap zooms about the fingers,
  * and a drag pans. It opens at the bottom, where a dialog's choices or the prompt are, and stays
- * there as the pane changes unless scrolled away.
+ * there as the pane changes unless scrolled away; a screen shorter than the view sits at its foot.
  */
 @Composable
 internal fun TerminalView(rows: List<String>, modifier: Modifier = Modifier) {
@@ -151,8 +154,11 @@ internal fun TerminalView(rows: List<String>, modifier: Modifier = Modifier) {
                 .horizontalScroll(horizontal)
         ) {
             val shown = remember(rows) { rows.joinToString("\n") }
+            val view = this@BoxWithConstraints.maxHeight
             Spacer(
-                Modifier.size(
+                Modifier.heightIn(min = view)
+                    .wrapContentHeight(Alignment.Bottom, unbounded = true)
+                    .size(
                         with(density) { (grid.width * scale + 2 * padding).toDp() },
                         with(density) { (grid.height * scale + 2 * padding).toDp() },
                     )
@@ -228,7 +234,7 @@ private class Grid(rows: List<String>, measurer: TextMeasurer) {
                         1f)
         var columns = 1
         rows.forEachIndexed { y, row ->
-            val cells = cells(row)
+            val cells = cells(row).map { c -> STAND_INS[c.text]?.let { c.copy(text = it) } ?: c }
             columns = maxOf(columns, cells.lastOrNull()?.let { it.column + it.width } ?: 0)
             var i = 0
             while (i < cells.size) {
@@ -272,6 +278,12 @@ private class Grid(rows: List<String>, measurer: TextMeasurer) {
             }
         }
 }
+
+/**
+ * Characters neither [TerminalFont] nor Android's fonts draw, and the font's look-alikes drawn in
+ * their place: Claude Code's mode line starts with `⏵⏵`.
+ */
+private val STAND_INS = mapOf("⏵" to "▶", "⏴" to "◀")
 
 /** The size the grid is laid out at, before it is scaled to the view. */
 private const val BASE_SP = 12f

@@ -3,6 +3,7 @@ package dev.pm.app.ui
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -55,4 +56,20 @@ fun rememberRetry(connection: Connection, retry: () -> Unit): ManualRetry {
     }
     LaunchedEffect(connection) { if (connection == Connection.Live) state.failedAgain = false }
     return state
+}
+
+/** How the app stands with the server, for pages that read from it beside the snapshot. */
+// Provided by App, as it provides the snackbar: every page that reads would otherwise take it.
+@Suppress("ComposeCompositionLocalUsage")
+val LocalConnection = compositionLocalOf<Connection> { Connection.Live }
+
+/**
+ * Calls `retry` when [LocalConnection] turns live while the page is `failed`, so a page left on its
+ * error doesn't stay there once the app reconnects.
+ */
+@Composable
+fun RetryOnReconnect(failed: Boolean, retry: () -> Unit) {
+    val live = LocalConnection.current == Connection.Live
+    val latest by rememberUpdatedState(retry)
+    LaunchedEffect(live) { if (live && failed) latest() }
 }

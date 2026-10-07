@@ -103,8 +103,8 @@ private fun LazyListScope.needRows(
         val kind = need.attention.kindOf
         val age = need.since?.let { span(Duration.between(it, now).seconds.coerceAtLeast(0)) }
         ScopeRow(
-            name = scopeName(need.project, need.scope),
-            place = need.project.takeIf { need.scope != Snapshot.MAIN },
+            name = need.scope,
+            place = need.project,
             mark = Marks.attention(kind),
             status = listOfNotNull(kind.label, age).joinToString(" · "),
             line = preview(need),
@@ -113,10 +113,6 @@ private fun LazyListScope.needRows(
         )
         RowDivider()
     }
-
-/** A scope's name in a list: a feature's own, or for `main`, its project's. */
-private fun scopeName(project: String, scope: String): String =
-    if (scope == Snapshot.MAIN) "$project main" else scope
 
 /**
  * What a need's row says it is about: the attention's detail, else the question or command its
@@ -131,8 +127,8 @@ private fun WorkingRow(scope: Need, now: Instant, stale: Boolean, open: () -> Un
     val state = if (activity == Activity.Working) AgentState.Busy else AgentState.Background
     val mark = Marks.agent(state).let { if (stale) it.copy(tone = Tone.Neutral) else it }
     ScopeRow(
-        name = scopeName(scope.project, scope.scope),
-        place = scope.project.takeIf { scope.scope != Snapshot.MAIN },
+        name = scope.scope,
+        place = scope.project,
         mark = mark,
         status = describe(activity, stale),
         line = workingLine(scope),

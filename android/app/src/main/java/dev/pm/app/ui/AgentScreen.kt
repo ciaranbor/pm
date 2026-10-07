@@ -23,6 +23,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -36,6 +37,8 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
@@ -99,41 +102,45 @@ fun AgentScreen(
     val draftKey = "$project/$scope/$agent"
     Column(modifier.fillMaxSize().imePadding()) {
         Box(Modifier.weight(1f)) { Chat(model) }
-        answered?.let { AnsweredRow(it) }
-        val sent = outbox?.takeUnless { it is Outbox.Seen }
-        if (sent != null) {
-            OutboxBubble(
-                sent,
-                retry = model::retrySend,
-                edit = {
-                    drafts.restore(draftKey, sent.text)
-                    model.dismissOutbox()
-                },
-            )
-        }
-        if (asking && dialogs.isNotEmpty()) {
-            DialogCard(
-                dialogs,
-                answering,
-                interrupting,
-                notice,
-                answer = model::answer,
-                interrupt = model::interrupt,
-                openTerminal = openTerminal,
-            )
-        } else {
-            Composer(
-                shownState,
-                waiting,
-                sending = outbox is Outbox.Sending,
-                notice?.text,
-                interrupting,
-                drafts,
-                draftKey,
-                send = model::send,
-                interrupt = model::interrupt,
-                openTerminal = openTerminal,
-            )
+        val density = LocalDensity.current
+        DisposableEffect(feedback) { onDispose { feedback.lift = 0.dp } }
+        Column(Modifier.onSizeChanged { feedback.lift = with(density) { it.height.toDp() } }) {
+            answered?.let { AnsweredRow(it) }
+            val sent = outbox?.takeUnless { it is Outbox.Seen }
+            if (sent != null) {
+                OutboxBubble(
+                    sent,
+                    retry = model::retrySend,
+                    edit = {
+                        drafts.restore(draftKey, sent.text)
+                        model.dismissOutbox()
+                    },
+                )
+            }
+            if (asking && dialogs.isNotEmpty()) {
+                DialogCard(
+                    dialogs,
+                    answering,
+                    interrupting,
+                    notice,
+                    answer = model::answer,
+                    interrupt = model::interrupt,
+                    openTerminal = openTerminal,
+                )
+            } else {
+                Composer(
+                    shownState,
+                    waiting,
+                    sending = outbox is Outbox.Sending,
+                    notice?.text,
+                    interrupting,
+                    drafts,
+                    draftKey,
+                    send = model::send,
+                    interrupt = model::interrupt,
+                    openTerminal = openTerminal,
+                )
+            }
         }
     }
 }

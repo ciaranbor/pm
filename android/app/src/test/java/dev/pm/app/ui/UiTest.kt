@@ -4,6 +4,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.text.selection.SelectionState
 import androidx.compose.foundation.text.selection.rememberSelectionState
 import androidx.compose.material3.Text
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -12,30 +13,36 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertContentDescriptionContains
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertLeftPositionInRootIsEqualTo
 import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation3.runtime.NavBackStack
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.ui.NavDisplay
 import androidx.test.core.app.ApplicationProvider
+import dev.pm.app.R
 import dev.pm.app.SNAPSHOT
 import dev.pm.app.api.PmClient
+import dev.pm.app.api.PmError
 import dev.pm.app.data.Connection
 import dev.pm.app.data.Repository
 import dev.pm.app.data.Store
+import dev.pm.app.model.AgentSnapshot
 import dev.pm.app.model.AgentState
 import dev.pm.app.model.FeatureInfo
 import dev.pm.app.model.Pairing
 import dev.pm.app.model.Snapshot
 import dev.pm.app.push.Target
+import java.io.IOException
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -89,7 +96,7 @@ class UiTest {
         target = Target("app", "login", "implementer")
         compose.onNodeWithText("login").assertIsDisplayed()
         compose.onNodeWithText("Updated just now", substring = true).assertIsDisplayed()
-        compose.onNodeWithContentDescription("implementer asking, 2 unread").assertIsDisplayed()
+        compose.onNodeWithContentDescription("implementer was asking, 2 unread").assertIsDisplayed()
         compose
             .onNodeWithText("A dialog is up at the terminal: Postgres or SQLite?")
             .assertIsDisplayed()
@@ -105,6 +112,7 @@ class UiTest {
         compose.setContent { PmTheme { App(model, null, targetShown = {}) } }
         compose.waitUntil(5_000) { model.snapshot.value != null }
 
+        compose.onNodeWithContentDescription("main, app, ", substring = true).assertIsDisplayed()
         compose
             .onNodeWithContentDescription("login, app, blocked · ", substring = true)
             .assertContentDescriptionContains("which DB?", substring = true)
@@ -325,6 +333,78 @@ class UiTest {
     }
 
     @Test
+    fun a_page_left_on_its_error_reads_again_once_the_app_reconnects() {
+        var reachable = false
+        var connection by mutableStateOf<Connection>(Connection.Unreachable("down"))
+        val page =
+            ReadModel(PmClient(Pairing("http://pm", "pixel", "tok"))) {
+                if (reachable) "the summary" else throw PmError.Unreachable(IOException("down"))
+            }
+        compose.setContent {
+            PmTheme {
+                CompositionLocalProvider(LocalConnection provides connection) {
+                    SummaryScreen(page)
+                }
+            }
+        }
+        compose.onNodeWithText("Can't reach pm serve").assertIsDisplayed()
+
+        reachable = true
+        connection = Connection.Live
+        compose.onNodeWithText("the summary").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w360dp-h640dp")
+    fun a_feature_opened_at_its_summary_keeps_its_first_agent_tab_in_view() {
+        val agents = listOf(AgentSnapshot("implementer", "busy"), AgentSnapshot("reviewer", "idle"))
+        compose.setContent {
+            PmTheme { WorkspaceTabs(tabsOf("login", agents, null), Tab.Summary, agents, {}) }
+        }
+        compose
+            .onNodeWithContentDescription("implementer", substring = true)
+            .assertLeftPositionInRootIsEqualTo(0.dp)
+        compose.onNodeWithText("Summary").assertIsDisplayed()
+    }
+
+    @Test
+    fun an_agent_tab_says_what_its_agent_was_doing_while_the_app_is_offline() {
+        val agents = listOf(AgentSnapshot("implementer", "busy"))
+        var stale by mutableStateOf(false)
+        compose.setContent {
+            PmTheme {
+                WorkspaceTabs(tabsOf("login", agents, null), Tab.Summary, agents, {}, stale = stale)
+            }
+        }
+        compose.onNodeWithContentDescription("implementer working").assertIsDisplayed()
+        stale = true
+        compose.onNodeWithContentDescription("implementer was working").assertIsDisplayed()
+    }
+
+    @Test
+    fun up_to_two_actions_are_buttons_and_three_go_behind_a_menu() {
+        val chosen = mutableListOf<String>()
+        var items by mutableStateOf(2)
+        compose.setContent {
+            PmTheme {
+                ActionMenu(
+                    listOf("Merge", "Delete", "Terminal").take(items).map {
+                        MenuItem(it, R.drawable.ic_terminal) { chosen += it }
+                    }
+                )
+            }
+        }
+        compose.onNodeWithContentDescription("More actions").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Delete").performClick()
+
+        items = 3
+        compose.onNodeWithContentDescription("Delete").assertDoesNotExist()
+        compose.onNodeWithContentDescription("More actions").performClick()
+        compose.onNodeWithText("Terminal").performClick()
+        assertEquals(listOf("Delete", "Terminal"), chosen)
+    }
+
+    @Test
     fun a_send_or_an_interrupt_on_its_way_holds_the_other_and_a_draft_outlives_its_composer() {
         val drafts = Drafts()
         var sending by mutableStateOf(true)
@@ -348,9 +428,8 @@ class UiTest {
                 }
             }
         }
-        compose.onNodeWithContentDescription("Agent actions").performClick()
-        compose.onNodeWithText("Interrupt").assertDoesNotExist()
-        compose.onNodeWithText("Show the terminal").performClick()
+        compose.onNodeWithContentDescription("Interrupt").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Show the terminal").performClick()
 
         sending = false
         interrupting = true

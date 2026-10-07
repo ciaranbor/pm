@@ -5,8 +5,12 @@ import kotlinx.serialization.Serializable
 /** A project's notes as the server last had them; `version` is what a save names. */
 @Serializable data class Notes(val text: String, val version: String)
 
-/** An edit of the notes not yet saved: its text, and the version it started from. */
-@Serializable data class NotesDraft(val base: Notes, val text: String)
+/**
+ * An edit of the notes not yet saved: its text, the version it started from, and the offsets of the
+ * text at the top of the editor and of its cursor when last kept.
+ */
+@Serializable
+data class NotesDraft(val base: Notes, val text: String, val top: Int = 0, val cursor: Int = 0)
 
 /** The longest notes the server takes from a phone, in UTF-8 bytes; `pm notes` has no limit. */
 const val MAX_NOTES_BYTES = 256 * 1024
