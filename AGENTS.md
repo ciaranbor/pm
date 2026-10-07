@@ -42,7 +42,7 @@ Design decisions you can't recover by reading the tree. Preserve them.
   sender's (README has the selection rule).
 - Idle is the waiting marker plus a live waiter, never the marker alone
   (`state/runtime.rs`). A continuation reaching an empty inbox is dropped.
-- Hooks install for **every supported harness** (`hooks_install.rs` says why)
+- Hooks install for **every supported harness** (`hooks_install` says why)
   and read the agent's name and worktree from their env (cwd only as a fallback),
   so a spawn never attaches to a shared harness server, whose hooks run in its own.
 - Every waiter has a breaker; a loop that stops itself must say so.
