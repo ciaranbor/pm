@@ -29,7 +29,7 @@ use std::path::Path;
 
 use crate::error::Result;
 use crate::harness::probe::{self, Probe};
-use crate::harness::{Projection, ProjectionScope, SpawnSpec};
+use crate::harness::{Projection, ProjectionScope, SpawnSpec, Wake};
 use crate::tmux;
 
 pub(super) const CONFIG_DIR: &str = ".claude";
@@ -166,6 +166,10 @@ pub(super) fn installed_version(probe: Probe) -> Option<String> {
 /// The manual step that gives a new machine's Claude Code its credentials,
 /// which live outside anything pm syncs (the login keychain or
 /// `~/.claude.json`).
+pub(super) const PROMPT_MECHANISM: &str = "appending a prompt file (--append-system-prompt-file)";
+pub(super) const EXPORT_TAG: &str = "claude";
+pub(super) const WAKE: Wake = Wake::Rewake;
+
 pub(super) const CREDENTIALS_STEP: &str =
     "log in to Claude Code (run `claude`, then /login, or `claude setup-token`)";
 

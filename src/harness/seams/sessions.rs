@@ -78,9 +78,9 @@ impl Harness {
     /// The harness's name in an export's file and root directory names.
     pub fn export_tag(self) -> &'static str {
         match self {
-            Harness::ClaudeCode => "claude",
-            Harness::Codex => "codex",
-            Harness::OpenCode => "opencode",
+            Harness::ClaudeCode => claude_code::EXPORT_TAG,
+            Harness::Codex => codex::EXPORT_TAG,
+            Harness::OpenCode => opencode::EXPORT_TAG,
         }
     }
 

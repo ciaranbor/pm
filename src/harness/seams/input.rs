@@ -61,7 +61,7 @@ impl Harness {
     /// hook waiting on the phone would hide the terminal's.
     pub fn dialog_events(self) -> &'static [&'static str] {
         match self {
-            Harness::ClaudeCode => &["PermissionRequest"],
+            Harness::ClaudeCode => claude_code::dialog::EVENTS,
             Harness::Codex | Harness::OpenCode => &[],
         }
     }

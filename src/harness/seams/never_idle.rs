@@ -12,9 +12,9 @@ impl Harness {
     /// continuation to the agent.
     pub fn wake(self) -> Wake {
         match self {
-            Harness::ClaudeCode => Wake::Rewake,
-            Harness::Codex => Wake::Queue,
-            Harness::OpenCode => Wake::Block,
+            Harness::ClaudeCode => claude_code::WAKE,
+            Harness::Codex => codex::WAKE,
+            Harness::OpenCode => opencode::WAKE,
         }
     }
 

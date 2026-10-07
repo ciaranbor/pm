@@ -52,6 +52,9 @@ const KEEP_PLANNING: &str = "keep-planning";
 
 /// The dialog a `PermissionRequest` payload opens, with what its decision
 /// needs: the tool's input and the permission suggestions.
+/// The hook events whose payloads open a dialog.
+pub(in crate::harness) const EVENTS: &[&str] = &["PermissionRequest"];
+
 pub(in crate::harness) fn dialog(payload: &Value) -> Option<(Dialog, Value)> {
     if payload.get("hook_event_name")?.as_str()? != "PermissionRequest" {
         return None;

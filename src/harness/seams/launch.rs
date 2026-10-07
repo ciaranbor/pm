@@ -78,18 +78,9 @@ impl Harness {
     /// messages.
     pub fn prompt_mechanism(self) -> String {
         match self {
-            Harness::ClaudeCode => {
-                "appending a prompt file (--append-system-prompt-file)".to_string()
-            }
-            Harness::Codex => format!(
-                "SessionStart hook context injection outside the shared daemon \
-                 (needs codex >= {})",
-                codex::min_version_string()
-            ),
-            Harness::OpenCode => format!(
-                "the pm-never-idle plugin's context hook (needs opencode >= {})",
-                opencode::min_version_string()
-            ),
+            Harness::ClaudeCode => claude_code::PROMPT_MECHANISM.to_string(),
+            Harness::Codex => codex::prompt_mechanism(),
+            Harness::OpenCode => opencode::prompt_mechanism(),
         }
     }
 
