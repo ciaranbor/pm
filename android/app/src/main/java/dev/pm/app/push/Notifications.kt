@@ -244,9 +244,12 @@ object Notifications {
     fun replyingTo(intent: Intent): PushedTransition? =
         intent.getStringExtra(EXTRA_TRANSITION)?.let(PushedTransition::parse)
 
-    /** Offer `update`: tapped, the browser downloads its APK, which Android installs over pm. */
-    fun update(context: Context, update: Update) {
-        if (!allowed(context)) return
+    /**
+     * Offer `update`: tapped, the browser downloads its APK, which Android installs over pm.
+     * Whether it was posted: not while pm's notifications are off.
+     */
+    fun update(context: Context, update: Update): Boolean {
+        if (!allowed(context)) return false
         val open =
             PendingIntent.getActivity(
                 context,
@@ -264,6 +267,7 @@ object Notifications {
                 .build()
         @Suppress("MissingPermission")
         NotificationManagerCompat.from(context).notify(UPDATE_ID, notification)
+        return true
     }
 
     /** What opens `update`'s APK in the browser. */

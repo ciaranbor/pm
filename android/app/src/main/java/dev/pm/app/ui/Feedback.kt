@@ -167,18 +167,18 @@ private data class Report(
  */
 @Stable
 class Feedback(val host: SnackbarHostState, private val scope: CoroutineScope) {
-    fun done(message: String) {
-        scope.launch {
-            host.currentSnackbarData?.dismiss()
-            host.showSnackbar(Report(message, null, error = false))
-        }
-    }
+    /** Report `message`, with `action` offering a next step where there is one. */
+    fun done(message: String, action: String? = null, onAction: () -> Unit = {}) =
+        show(message, action, error = false, onAction)
 
-    fun failed(message: String, retry: (() -> Unit)? = null) {
+    fun failed(message: String, retry: (() -> Unit)? = null) =
+        show(message, retry?.let { "Retry" }, error = true) { retry?.invoke() }
+
+    private fun show(message: String, action: String?, error: Boolean, onAction: () -> Unit) {
         scope.launch {
             host.currentSnackbarData?.dismiss()
-            val result = host.showSnackbar(Report(message, retry?.let { "Retry" }, error = true))
-            if (result == SnackbarResult.ActionPerformed) retry?.invoke()
+            val result = host.showSnackbar(Report(message, action, error))
+            if (result == SnackbarResult.ActionPerformed) onAction()
         }
     }
 }
