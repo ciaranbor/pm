@@ -11,8 +11,9 @@ use crate::tmux;
 
 /// Respawn agents for a given scope.
 ///
-/// Adds each agent respawned to `launched`. If `select_window_zero` is true
-/// and no agents were respawned, selects window 0 as the landing window.
+/// Adds each agent respawned to `launched`; returns the spawn errors. If
+/// `select_window_zero` is true and no agents were respawned, selects window
+/// 0 as the landing window.
 pub(super) fn respawn_agents_for_scope(
     project_root: &Path,
     scope: &str,
@@ -21,12 +22,9 @@ pub(super) fn respawn_agents_for_scope(
     tmux_server: Option<&str>,
     select_window_zero: bool,
     launched: &mut Vec<Launch>,
-) -> Result<()> {
+) -> Result<Vec<String>> {
     let spawn_result = agent_spawn::agent_spawn_all(project_root, scope, tmux_server)?;
     let spawned = spawn_result.spawned_count;
-    for err in &spawn_result.errors {
-        eprintln!("warning: {err}");
-    }
     launched.extend(spawn_result.launched().map(|agent| Launch {
         project_root: project_root.to_path_buf(),
         scope: scope.to_string(),
@@ -51,5 +49,9 @@ pub(super) fn respawn_agents_for_scope(
         let _ = tmux::select_window(tmux_server, &format!("{session_name}:0"));
     }
 
-    Ok(())
+    Ok(spawn_result
+        .errors
+        .iter()
+        .map(ToString::to_string)
+        .collect())
 }

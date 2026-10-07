@@ -296,4 +296,25 @@ class PmClientTest {
         assertEquals("/v1/agents/app/login/implementer/restart", restarted.url.encodedPath)
         assertEquals("""{"force":true}""", restarted.body?.utf8())
     }
+
+    @Test
+    fun project_actions_are_posted_and_an_older_server_is_told_apart() = runBlocking {
+        reply(200, """{"opened":true,"sessions":2,"agents":1,"warnings":["skipping 'x'"]}""")
+        reply(200, """{"closed":true,"sessions":2}""")
+        reply(409, """{"error":"feature 'login' has unpushed commits","refused":"unsafe"}""")
+        reply(404, """{"error":"no such endpoint"}""")
+
+        assertEquals(listOf("skipping 'x'"), client.openProject("app"))
+        client.closeProject("app")
+        val refused = runCatching { client.deleteProject("app") }.exceptionOrNull()
+        assertTrue("$refused", refused is PmError.Refused && refused.code == "unsafe")
+        val older = runCatching { client.openProject("app") }.exceptionOrNull()
+        assertTrue("$older", older is PmError.Unsupported && !older.retired)
+
+        val opened = server.takeRequest()
+        assertEquals("POST", opened.method)
+        assertEquals("/v1/projects/app/open", opened.url.encodedPath)
+        assertEquals("/v1/projects/app/close", server.takeRequest().url.encodedPath)
+        assertEquals("/v1/projects/app/delete", server.takeRequest().url.encodedPath)
+    }
 }

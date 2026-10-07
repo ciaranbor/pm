@@ -29,7 +29,10 @@ import org.robolectric.annotation.GraphicsMode
 @Config(qualifiers = "w360dp-h400dp")
 class ListScreenshotTest {
     private val snapshot = Snapshot.parse(SNAPSHOT)
-    private val calm = Snapshot.parse("""{"version": 1, "projects": [{"name": "app"}]}""")
+    private val calm =
+        Snapshot.parse(
+            """{"version": 1, "projects": [{"name": "app", "main": {"session_exists": true}}]}"""
+        )
     private val now = Instant.parse("2026-10-02T10:00:00Z")
     private val client = PmClient(Pairing("http://127.0.0.1:9", "pixel", "tok"))
 

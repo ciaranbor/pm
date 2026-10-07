@@ -396,8 +396,13 @@ pub fn clear_restart_at_idle(project_root: &Path, scope: &str, agent: &str) -> R
 }
 
 /// Append `line` to the agent's Stop hook log, stamped with the time and
-/// this process's pid. Best-effort: a log that can't be written is skipped.
+/// this process's pid. Best-effort: a log that can't be written is skipped,
+/// as is one for a project whose `.pm` is gone, which a hook signalled by
+/// its project's delete would otherwise bring back.
 pub fn log_stop_hook(project_root: &Path, scope: &str, agent: &str, line: &str) {
+    if !paths::pm_dir(project_root).is_dir() {
+        return;
+    }
     let Ok(dir) = agent_dir(project_root, scope, agent) else {
         return;
     };

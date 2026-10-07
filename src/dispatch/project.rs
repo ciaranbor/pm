@@ -66,6 +66,9 @@ pub(super) fn open_all(server: Option<&str>) -> Result<()> {
         commands::open::open_all(&projects_dir, server, |name, outcome| match outcome {
             ProjectOpen::Opened(r) => {
                 changed |= r.changed();
+                for warning in &r.warnings {
+                    eprintln!("warning: {name}: {warning}");
+                }
                 println!(
                     "{name}: restored {} session{}, respawned {} agent{}",
                     r.sessions_restored,
@@ -117,6 +120,9 @@ pub(super) fn open(project: Option<String>, server: Option<&str>) -> Result<()> 
     let projects_dir = paths::global_projects_dir()?;
     let project_root = project_root(&projects_dir, project.as_deref())?;
     let mut result = commands::open::open(&project_root, &projects_dir, server)?;
+    for warning in &result.warnings {
+        eprintln!("warning: {warning}");
+    }
     commands::open::confirm_launches([&mut result], server);
     if result.changed() {
         println!(
@@ -164,10 +170,41 @@ pub(super) fn delete(
 ) -> Result<()> {
     let projects_dir = paths::global_projects_dir()?;
     let project_root = project_root(&projects_dir, project.as_deref())?;
-    let (project_name, own) =
-        commands::delete::delete(&project_root, &projects_dir, force, yes, server)?;
-    println!("Deleted project '{project_name}'");
-    finish_in_own_session(server, own)
+    let deleted =
+        commands::delete::delete(&project_root, &projects_dir, force, server, |pending| {
+            for warning in pending.warnings {
+                eprintln!("warning: {warning}");
+            }
+            if yes {
+                return Ok(true);
+            }
+            let what = if force {
+                format!(" and the checkout at {}", pending.main.display())
+            } else {
+                String::new()
+            };
+            let name = pending.project;
+            match pending.features {
+                0 => eprint!("Delete project '{name}'{what}? [y/N] "),
+                n => eprint!("Delete project '{name}', its {n} feature(s){what}? [y/N] "),
+            }
+            std::io::Write::flush(&mut std::io::stderr())?;
+            let mut answer = String::new();
+            std::io::stdin().read_line(&mut answer)?;
+            let confirmed = answer.trim().eq_ignore_ascii_case("y");
+            if !confirmed {
+                eprintln!("Aborted.");
+            }
+            Ok(confirmed)
+        })?;
+    let Some(deleted) = deleted else {
+        return Ok(());
+    };
+    for warning in &deleted.warnings {
+        eprintln!("warning: {warning}");
+    }
+    println!("Deleted project '{}'", deleted.project);
+    finish_in_own_session(server, deleted.own)
 }
 
 pub(super) fn notes(project: Option<String>) -> Result<()> {

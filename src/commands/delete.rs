@@ -1,4 +1,3 @@
-use std::io::{self, Write};
 use std::path::Path;
 
 use crate::error::{PmError, Result};
@@ -54,9 +53,29 @@ fn check_all_features_safety(
     Ok(blockers)
 }
 
+/// What a delete is about to remove, for its confirmation.
+pub struct Pending<'a> {
+    pub project: &'a str,
+    pub features: usize,
+    /// The main checkout, which only `--force` removes.
+    pub main: &'a Path,
+    /// What the CLI warns of before it asks: untracked files in feature
+    /// worktrees, and with `--force`, what only `main` holds.
+    pub warnings: &'a [String],
+}
+
+/// What [`delete`] did.
+pub struct Deleted {
+    pub project: String,
+    /// What of a `--force` teardown could not be removed.
+    pub warnings: Vec<String>,
+    /// The session this process runs in, when it was one of the project's.
+    pub own: Option<tmux::OwnSession>,
+}
+
 /// Delete a project: safety-check all features, kill sessions, remove state and registry.
-/// Returns the project's name, and the session this process runs in when it
-/// was one of the project's.
+/// `confirm` is asked once the checks pass and before anything is removed;
+/// `None` when it declined.
 ///
 /// Without `--force`, every worktree directory is left in place — `main` holds the
 /// repository the feature worktrees link into, so it stays with them. With `--force`,
@@ -66,9 +85,9 @@ pub fn delete(
     project_root: &Path,
     projects_dir: &Path,
     force: bool,
-    yes: bool,
     tmux_server: Option<&str>,
-) -> Result<(String, Option<tmux::OwnSession>)> {
+    confirm: impl FnOnce(&Pending) -> Result<bool>,
+) -> Result<Option<Deleted>> {
     let pm_dir = paths::pm_dir(project_root);
     let features_dir = paths::features_dir(project_root);
     let config = ProjectConfig::load(&pm_dir)?;
@@ -78,62 +97,54 @@ pub fn delete(
     let main_repo = paths::main_worktree(project_root);
     let main_branch = ProjectEntry::load(projects_dir, &project_name)?.main_branch;
 
-    // --- Safety checks (skip with --force) ---
     if !force && !features.is_empty() {
         let blockers = check_all_features_safety(project_root, &features, &main_branch)?;
         if !blockers.is_empty() {
-            let mut msg = String::from("Cannot delete project — the following issues were found:");
+            let mut reason =
+                String::from("Cannot delete project — the following issues were found:");
             for b in &blockers {
-                msg.push_str(&format!("\n  - {b}"));
+                reason.push_str(&format!("\n  - {b}"));
             }
-            msg.push_str("\n\nUse --force to override.");
-            return Err(PmError::SafetyCheck(msg));
+            return Err(PmError::Unsafe {
+                reason,
+                cli: "\n\nUse --force to override.".to_string(),
+                remote: format!(
+                    "\n\n`pm delete --force --project {project_name}` at a terminal deletes it anyway, \
+                     along with its worktrees and the main checkout."
+                ),
+            });
         }
     }
 
-    // --- Warn about untracked files (unless --force, which removes everything anyway) ---
-    if !force {
-        for (name, state) in &features {
-            let worktree_path = project_root.join(&state.worktree);
-            let untracked = git::untracked_files(&worktree_path).unwrap_or_default();
-            if !untracked.is_empty() {
-                eprintln!(
-                    "warning: feature '{name}' has {} untracked file(s):",
-                    untracked.len()
-                );
-                for f in &untracked {
-                    eprintln!("  {f}");
-                }
-            }
-        }
+    let warnings = if force {
+        force_loss_warnings(&main_repo)
     } else {
-        for line in force_loss_warnings(&main_repo) {
-            eprintln!("warning: {line}");
-        }
-    }
+        features
+            .iter()
+            .filter_map(|(name, state)| {
+                let untracked =
+                    git::untracked_files(&project_root.join(&state.worktree)).unwrap_or_default();
+                (!untracked.is_empty()).then(|| {
+                    format!(
+                        "feature '{name}' has {} untracked file(s): {}",
+                        untracked.len(),
+                        listed(&untracked)
+                    )
+                })
+            })
+            .collect()
+    };
 
-    // --- Confirmation prompt (skip with --yes) ---
-    if !yes {
-        let feat_count = features.len();
-        let what = if force {
-            format!(" and the checkout at {}", main_repo.display())
-        } else {
-            String::new()
-        };
-        if feat_count > 0 {
-            eprint!("Delete project '{project_name}', its {feat_count} feature(s){what}? [y/N] ");
-        } else {
-            eprint!("Delete project '{project_name}'{what}? [y/N] ");
-        }
-        io::stderr().flush()?;
-
-        let mut answer = String::new();
-        io::stdin().read_line(&mut answer)?;
-        if !answer.trim().eq_ignore_ascii_case("y") {
-            eprintln!("Aborted.");
-            return Ok((project_name, None));
-        }
+    let pending = Pending {
+        project: &project_name,
+        features: features.len(),
+        main: &main_repo,
+        warnings: &warnings,
+    };
+    if !confirm(&pending)? {
+        return Ok(None);
     }
+    let mut warnings = Vec::new();
 
     // --- Delete all features ---
     let own = tmux::own_session(tmux_server)
@@ -155,7 +166,7 @@ pub fn delete(
 
         if force {
             // --force: full cleanup including worktree directory removal
-            let warnings = cleanup_feature(&CleanupParams {
+            let cleanup = cleanup_feature(&CleanupParams {
                 repo: &main_repo,
                 worktree_path: &worktree_path,
                 branch: &state.branch,
@@ -175,9 +186,7 @@ pub fn delete(
                 ),
                 ending: None,
             })?;
-            for warning in warnings {
-                eprintln!("warning: {warning}");
-            }
+            warnings.extend(cleanup);
         } else {
             // Soft teardown: remove pm state and tmux session, but leave
             // the worktree directories and git branches intact so the user
@@ -228,7 +237,21 @@ pub fn delete(
         tmux::kill_session(tmux_server, &main_session)?;
     }
 
-    Ok((project_name, own))
+    Ok(Some(Deleted {
+        project: project_name,
+        warnings,
+        own,
+    }))
+}
+
+/// The first few of `files`, and how many more there are.
+fn listed(files: &[String]) -> String {
+    const SHOWN: usize = 5;
+    let mut out = files[..files.len().min(SHOWN)].join(", ");
+    if files.len() > SHOWN {
+        out.push_str(&format!(" and {} more", files.len() - SHOWN));
+    }
+    out
 }
 
 /// What `--force` would destroy along with `main` that exists nowhere else:
@@ -297,7 +320,7 @@ mod tests {
         let bystander = bystander.name.clone();
 
         let projects_dir = TestServer::registry_dir(&project);
-        delete(&project, &projects_dir, false, true, own.name()).unwrap();
+        delete(&project, &projects_dir, false, own.name(), |_| Ok(true)).unwrap();
 
         let clients = tmux::clients::list(own.name()).unwrap();
         assert_eq!(clients.len(), 2, "a client was detached: {clients:?}");
@@ -315,7 +338,10 @@ mod tests {
 
         assert!(tmux::has_session(server.name(), &main_session).unwrap());
 
-        delete(&project_path, &projects_dir, false, true, server.name()).unwrap();
+        delete(&project_path, &projects_dir, false, server.name(), |_| {
+            Ok(true)
+        })
+        .unwrap();
 
         assert!(!paths::pm_dir(&project_path).exists());
         assert!(!projects_dir.join(format!("{project_name}.toml")).exists());
@@ -343,7 +369,10 @@ mod tests {
         ))
         .unwrap();
 
-        delete(&project_path, &projects_dir, false, true, server.name()).unwrap();
+        delete(&project_path, &projects_dir, false, server.name(), |_| {
+            Ok(true)
+        })
+        .unwrap();
 
         let features_dir = paths::features_dir(&project_path);
         assert!(!FeatureState::exists(&features_dir, "login"));
@@ -375,7 +404,9 @@ mod tests {
         std::fs::write(worktree.join("dirty.txt"), "uncommitted").unwrap();
         git::stage_file(&worktree, "dirty.txt").unwrap();
 
-        let result = delete(&project_path, &projects_dir, false, true, server.name());
+        let result = delete(&project_path, &projects_dir, false, server.name(), |_| {
+            Ok(true)
+        });
         assert!(result.is_err());
 
         // Everything should still exist
@@ -402,7 +433,9 @@ mod tests {
         git::stage_file(&worktree, "feature.txt").unwrap();
         git::commit(&worktree, "feature work").unwrap();
 
-        let result = delete(&project_path, &projects_dir, false, true, server.name());
+        let result = delete(&project_path, &projects_dir, false, server.name(), |_| {
+            Ok(true)
+        });
         assert!(result.is_err());
 
         assert!(paths::pm_dir(&project_path).exists());
@@ -428,7 +461,10 @@ mod tests {
         git::commit(&worktree, "feature work").unwrap();
         git::merge_no_ff(&main, "login").unwrap();
 
-        delete(&project_path, &projects_dir, false, true, server.name()).unwrap();
+        delete(&project_path, &projects_dir, false, server.name(), |_| {
+            Ok(true)
+        })
+        .unwrap();
 
         assert!(!paths::pm_dir(&project_path).exists());
     }
@@ -451,7 +487,10 @@ mod tests {
         std::fs::write(worktree.join("dirty.txt"), "uncommitted").unwrap();
         git::stage_file(&worktree, "dirty.txt").unwrap();
 
-        delete(&project_path, &projects_dir, true, true, server.name()).unwrap();
+        delete(&project_path, &projects_dir, true, server.name(), |_| {
+            Ok(true)
+        })
+        .unwrap();
 
         assert!(!paths::pm_dir(&project_path).exists());
         assert!(!projects_dir.join(format!("{project_name}.toml")).exists());
@@ -472,10 +511,20 @@ mod tests {
         std::fs::rename(&main, &real_repo).unwrap();
         std::os::unix::fs::symlink(&real_repo, &main).unwrap();
 
-        delete(&project_path, &projects_dir, true, true, server.name()).unwrap();
+        delete(&project_path, &projects_dir, true, server.name(), |_| {
+            Ok(true)
+        })
+        .unwrap();
 
         assert!(!project_path.exists());
         assert!(real_repo.join(".git").exists());
+    }
+
+    #[test]
+    fn a_long_list_of_untracked_files_is_cut_to_the_first_few() {
+        let files: Vec<String> = (1..=7).map(|i| format!("f{i}")).collect();
+        assert_eq!(listed(&files[..2]), "f1, f2");
+        assert_eq!(listed(&files), "f1, f2, f3, f4, f5 and 2 more");
     }
 
     #[test]
@@ -503,7 +552,10 @@ mod tests {
         let (project_path, projects_dir, _) = server.setup_project(dir.path());
         std::fs::write(project_path.join("notes.txt"), "mine").unwrap();
 
-        delete(&project_path, &projects_dir, true, true, server.name()).unwrap();
+        delete(&project_path, &projects_dir, true, server.name(), |_| {
+            Ok(true)
+        })
+        .unwrap();
 
         assert!(!paths::main_worktree(&project_path).exists());
         assert!(project_path.join("notes.txt").exists());
@@ -527,7 +579,10 @@ mod tests {
         let main_repo = paths::main_worktree(&project_path);
         git::merge_no_ff(&main_repo, "login").unwrap();
 
-        delete(&project_path, &projects_dir, false, true, server.name()).unwrap();
+        delete(&project_path, &projects_dir, false, server.name(), |_| {
+            Ok(true)
+        })
+        .unwrap();
 
         // pm state and registry are cleaned up
         assert!(!paths::pm_dir(&project_path).exists());
@@ -546,7 +601,7 @@ mod tests {
         let projects_dir = dir.path().join("registry");
         std::fs::create_dir_all(&projects_dir).unwrap();
 
-        let result = delete(&project_path, &projects_dir, false, true, None);
+        let result = delete(&project_path, &projects_dir, false, None, |_| Ok(true));
         assert!(result.is_err());
     }
 
@@ -579,7 +634,9 @@ mod tests {
         std::fs::write(worktree.join("file.txt"), "content").unwrap();
         git::stage_file(&worktree, "file.txt").unwrap();
 
-        let result = delete(&project_path, &projects_dir, false, true, server.name());
+        let result = delete(&project_path, &projects_dir, false, server.name(), |_| {
+            Ok(true)
+        });
         assert!(result.is_err());
 
         // Nothing should have been deleted

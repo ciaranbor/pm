@@ -76,6 +76,33 @@ class RoutesTest {
         val unreadable = without.copy(projects = without.projects.map { it.copy(skipped = "bad") })
         assertEquals(emptyList<Pair<String, String>>(), unreadable.dropped(shown, seen))
     }
+
+    @Test
+    fun leaving_a_projects_main_drops_every_page_of_the_project() {
+        val shown =
+            stack(
+                Route.Home,
+                Route.Project("other"),
+                Route.Project("app"),
+                Route.Notes("app"),
+                login,
+            )
+        shown.leave("app", "login")
+        assertEquals(4, shown.size)
+        shown.leave("app", Snapshot.MAIN)
+        assertEquals(listOf(Route.Home, Route.Project("other")), shown.toList())
+    }
+
+    @Test
+    fun a_project_gone_from_the_snapshot_is_dropped_as_one() {
+        val snapshot = Snapshot.parse(SNAPSHOT)
+        val shown = listOf(Route.Home, Route.Project("app"), Route.Notes("app"), login)
+        val seen = mutableSetOf<Pair<String, String>>()
+        snapshot.dropped(shown, seen)
+
+        val gone = snapshot.copy(projects = emptyList(), features = emptyList())
+        assertEquals(listOf("app" to Snapshot.MAIN), gone.dropped(shown, seen))
+    }
 }
 
 class WorkspaceTabsTest {

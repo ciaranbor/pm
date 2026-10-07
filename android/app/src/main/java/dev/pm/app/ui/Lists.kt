@@ -66,6 +66,9 @@ fun Home(
 ) {
     val needs = snapshot.needsYou()
     val atWork = snapshot.atWork()
+    // A project with no session up is closed, and listed apart, after the rest.
+    val (shown, closed) =
+        snapshot.projectsByUrgency().partition { it.skipped != null || snapshot.anyOpen(it.name) }
     LazyColumn(modifier) {
         item(key = "needs") { Heading("Needs you") }
         if (needs.isEmpty()) {
@@ -86,8 +89,13 @@ fun Home(
                 RowDivider()
             }
         }
-        item(key = "projects") { Heading("Projects") }
-        items(snapshot.projectsByUrgency(), key = { "project/${it.name}" }) { project ->
+        if (shown.isNotEmpty()) item(key = "projects") { Heading("Projects") }
+        items(shown, key = { "project/${it.name}" }) { project ->
+            ProjectRow(snapshot, project, now, stale, open = { openProject(project.name) })
+            RowDivider()
+        }
+        if (closed.isNotEmpty()) item(key = "closed") { Heading("Closed projects") }
+        items(closed.sortedBy { it.name }, key = { "closed/${it.name}" }) { project ->
             ProjectRow(snapshot, project, now, stale, open = { openProject(project.name) })
             RowDivider()
         }

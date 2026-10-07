@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -13,6 +14,7 @@ import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
 import dev.pm.app.OpenStream
 import dev.pm.app.SNAPSHOT
@@ -109,6 +111,54 @@ class LifecycleUiTest {
         shown = target
         compose.setContent { PmTheme { App(model, shown, targetShown = {}) } }
         compose.waitUntil(WAIT) { model.snapshot.value != null }
+    }
+
+    /** Open the project page's menu, reached by Up from one of its workspaces. */
+    private fun openProjectMenu() {
+        open(Target("app", "login", null))
+        compose.onNodeWithContentDescription("Navigate up").performClick()
+        compose.onNodeWithText("Notes").assertIsDisplayed()
+        compose.onNodeWithContentDescription("More actions").performClick()
+    }
+
+    @Test
+    fun a_project_is_deleted_only_once_its_name_is_typed_and_then_left() {
+        openProjectMenu()
+        compose.onNodeWithText("Open").assertIsDisplayed()
+        compose.onNodeWithText("Delete").performClick()
+
+        compose.onNodeWithText("Delete app?").assertIsDisplayed()
+        compose.onNodeWithText("Delete").assertIsNotEnabled()
+        compose.onNode(hasSetTextAction()).performTextInput("ap")
+        compose.onNodeWithText("Delete").assertIsNotEnabled()
+        compose.onNode(hasSetTextAction()).performTextInput("p ")
+        compose.onNodeWithText("Delete").performClick()
+
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText("Deleted app").fetchSemanticsNodes().isNotEmpty()
+        }
+        assertEquals(listOf("/v1/projects/app/delete"), synchronized(posted) { posted.toList() })
+        compose.onNodeWithText("Needs you").assertIsDisplayed()
+    }
+
+    @Test
+    fun a_close_says_how_many_agents_it_interrupts_and_stays_on_the_project() {
+        openProjectMenu()
+        compose.onNodeWithText("Close").performClick()
+
+        compose
+            .onNodeWithText(
+                "1 agent is working, asking, or waiting on background work.",
+                substring = true,
+            )
+            .assertIsDisplayed()
+        compose.onNodeWithText("Close").performClick()
+
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText("Closed app").fetchSemanticsNodes().isNotEmpty()
+        }
+        assertEquals(listOf("/v1/projects/app/close"), synchronized(posted) { posted.toList() })
+        compose.onNodeWithText("Notes").assertIsDisplayed()
     }
 
     @Test

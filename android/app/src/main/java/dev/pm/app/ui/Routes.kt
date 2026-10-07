@@ -108,19 +108,31 @@ internal fun NavBackStack<NavKey>.up() {
 
 /**
  * Drop the pages of `scope` in `project`, which is gone, and every page opened from them; the start
- * screen if nothing is left.
+ * screen if nothing is left. `main` goes only with its project, so leaving it drops all the
+ * project's pages.
  */
 internal fun NavBackStack<NavKey>.leave(project: String, scope: String) {
-    val at = indexOfFirst { (it as? Route)?.scopeOf() == (project to scope) }
+    val at = indexOfFirst {
+        (it as? Route)?.scopeOf()?.let { shown -> (project to scope).covers(shown) } == true
+    }
     if (at < 0) return
     repeat(size - at) { removeLastOrNull() }
     if (isEmpty()) add(Route.Home)
 }
 
-/** The scope a page shows, as project and scope. */
+/** Whether this scope's going takes `other` with it: itself, or any of a project's when `main`. */
+internal fun kotlin.Pair<String, String>.covers(other: kotlin.Pair<String, String>): Boolean =
+    this == other || (second == Snapshot.MAIN && first == other.first)
+
+/**
+ * The scope a page shows, as project and scope: a project's own pages are its `main`'s, which is
+ * there as long as the project is.
+ */
 internal fun Route.scopeOf(): kotlin.Pair<String, String>? =
     when (this) {
         is Route.Scope -> project to scope
+        is Route.Project -> project to Snapshot.MAIN
+        is Route.Notes -> project to Snapshot.MAIN
         else -> null
     }
 
@@ -143,7 +155,7 @@ internal fun Route.Scope.contentKey(): String = "scope/$project/$scope"
 /**
  * The scopes the back stack shows that this snapshot no longer has, of those an earlier snapshot
  * had: merged or deleted. One not seen yet may be newer than the snapshots so far, as a feature a
- * push announced can be. Adds those it has to `seen`.
+ * push announced can be. A gone project stands for all its scopes. Adds those it has to `seen`.
  */
 internal fun Snapshot.dropped(
     stack: List<NavKey>,
@@ -159,3 +171,4 @@ internal fun Snapshot.dropped(
                 null -> false
             }
         }
+        .let { gone -> gone.filter { scope -> gone.none { it != scope && it.covers(scope) } } }

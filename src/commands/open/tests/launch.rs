@@ -38,6 +38,7 @@ fn a_launch_that_exits_is_taken_off_its_own_projects_count() {
             agent: agent.into(),
         }],
         failed_launches: Vec::new(),
+        warnings: Vec::new(),
     };
     let mut results = [opened(&a, "up"), opened(&b, "quits")];
 

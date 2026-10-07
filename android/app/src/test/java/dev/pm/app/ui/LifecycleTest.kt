@@ -140,4 +140,29 @@ class LifecycleTest {
             lifecycle.state.value,
         )
     }
+
+    @Test
+    fun a_project_opens_at_once_and_its_delete_waits_for_confirmation() = runTest {
+        val lifecycle = Lifecycle(backgroundScope) { client }
+        val open = Action.OpenProject("app")
+        val delete = Action.DeleteProject("app")
+        val skipped = "skipping 'login': worktree missing at /src/app/login"
+        val refusal = "Cannot delete project — feature 'login' has unpushed commits"
+        reply(200, """{"opened":true,"sessions":1,"agents":0,"warnings":["$skipped"]}""")
+        reply(409, """{"error":"$refusal","refused":"unsafe"}""")
+
+        lifecycle.ask(open)
+        eventually { lifecycle.state.value is ActionState.Warned }
+        assertEquals(ActionState.Warned(open, listOf(skipped)), lifecycle.state.value)
+        assertEquals("/v1/projects/app/open", server.takeRequest().url.encodedPath)
+        lifecycle.dismiss()
+
+        lifecycle.ask(delete)
+        assertEquals(ActionState.Confirming(delete), lifecycle.state.value)
+        assertEquals("nothing is sent before confirming", 1, server.requestCount)
+        lifecycle.confirm()
+        eventually { lifecycle.state.value is ActionState.Failed }
+        assertEquals(ActionState.Failed(delete, refusal), lifecycle.state.value)
+        assertEquals("/v1/projects/app/delete", server.takeRequest().url.encodedPath)
+    }
 }
