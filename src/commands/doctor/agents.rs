@@ -12,9 +12,10 @@ use crate::error::Result;
 use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
 use crate::state::paths;
 use crate::state::project::{GlobalConfig, ProjectConfig};
+use crate::state::runtime;
 use crate::state::workflow::{LEGACY_VANILLA_AGENT, VANILLA_AGENT};
 
-/// How long after its spawn an agent may go without a recorded session id,
+/// How long after its spawn an agent may go without its session starting,
 /// or a loaded never-idle loop, before that is reported.
 pub(crate) const START_GRACE: Duration = Duration::from_secs(60);
 
@@ -91,17 +92,8 @@ pub(super) fn agent_issues(
             });
         }
         if past_grace(entry) {
-            if entry.session_id.is_empty() {
-                issues.push(Issue {
-                    kind: IssueKind::AgentSessionNotStarted,
-                    message: format!(
-                        "agent '{agent_name}' is running but its {} session has recorded no \
-                         session id (run `pm agent restart {agent_name} --scope {scope}`)",
-                        entry.harness
-                    ),
-                    fix: Fix::None,
-                });
-            } else if entry.harness.loop_loaded(project_root, scope, agent_name) == Some(false) {
+            // First: opencode's plugin is what stamps its session started.
+            if entry.harness.loop_loaded(project_root, scope, agent_name) == Some(false) {
                 issues.push(Issue {
                     kind: IssueKind::LoopNotLoaded,
                     message: format!(
@@ -112,10 +104,28 @@ pub(super) fn agent_issues(
                     ),
                     fix: Fix::None,
                 });
+            } else if !session_started(project_root, scope, agent_name) {
+                issues.push(Issue {
+                    kind: IssueKind::AgentSessionNotStarted,
+                    message: format!(
+                        "agent '{agent_name}' is running but its {} session never reported \
+                         starting (run `pm agent restart {agent_name} --scope {scope}`)",
+                        entry.harness
+                    ),
+                    fix: Fix::None,
+                });
             }
         }
     }
     Ok(issues)
+}
+
+/// Whether `agent`'s harness session reported starting since its launch.
+/// An agent with no launch stamp was launched by a pm that wrote no start
+/// stamp either, so it counts as started.
+fn session_started(project_root: &Path, scope: &str, agent: &str) -> bool {
+    runtime::started_at(project_root, scope, agent).is_some()
+        || runtime::launched_at(project_root, scope, agent).is_none()
 }
 
 /// Whether `agent`'s never-idle loop stopped itself, or its last turn
@@ -668,14 +678,13 @@ mod tests {
     }
 
     #[test]
-    fn running_agent_with_no_session_id_is_flagged_once_past_its_own_grace_period() {
+    fn running_agent_whose_session_never_started_is_flagged_once_past_its_own_grace_period() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let projects_dir = TestServer::registry_dir(&project_path);
         let session_name = tmux::session_name(&project_name, "login");
         server.spawn_fake_agent(&project_path, &session_name, "login", "reviewer");
-        server.spawn_fake_agent(&project_path, &session_name, "login", "implementer");
 
         let agents_dir = paths::agents_dir(&project_path);
         let long_ago = chrono::Utc::now() - 2 * START_GRACE;
@@ -683,6 +692,13 @@ mod tests {
             let mut registry = AgentRegistry::load(&agents_dir, "login").unwrap();
             edit(registry.get_mut("reviewer").unwrap());
             registry.save(&agents_dir, "login").unwrap();
+        };
+        let launched = |at: chrono::DateTime<chrono::Utc>| {
+            let file = runtime::reset_launched(&project_path, "login", "reviewer").unwrap();
+            std::fs::File::create(file)
+                .unwrap()
+                .set_modified(at.into())
+                .unwrap();
         };
         let login_issues = || -> Vec<(IssueKind, String)> {
             diagnose(&project_path, &projects_dir, server.name(), Depth::Quick)
@@ -693,42 +709,44 @@ mod tests {
                 .map(|i| (i.kind(), i.message().to_string()))
                 .collect()
         };
+        let not_started = vec![(
+            IssueKind::AgentSessionNotStarted,
+            "agent 'reviewer' is running but its codex session never reported starting (run \
+             `pm agent restart reviewer --scope login`)"
+                .to_string(),
+        )];
 
-        // Just spawned: the hook may simply not have fired yet.
+        // Just spawned: the hook may simply not have fired yet. A resume
+        // keeps its session id, so that says nothing about the start.
         save(&|e| {
             e.harness = Harness::Codex;
+            e.session_id = "sess-1".to_string();
             e.spawned_at = Some(chrono::Utc::now());
         });
+        launched(chrono::Utc::now());
         assert_eq!(login_issues(), vec![]);
 
         // The registry was written a moment ago, as it is whenever another
         // agent in the scope records its session; the reviewer's own spawn
         // is what counts.
         save(&|e| e.spawned_at = Some(long_ago));
-        assert_eq!(
-            login_issues(),
-            vec![(
-                IssueKind::AgentSessionNotStarted,
-                "agent 'reviewer' is running but its codex session has recorded no session id \
-                 (run `pm agent restart reviewer --scope login`)"
-                    .to_string()
-            )]
-        );
+        assert_eq!(login_issues(), not_started);
 
         save(&|e| e.active = false);
         assert_eq!(login_issues(), vec![]);
+        save(&|e| e.active = true);
 
-        save(&|e| {
-            e.active = true;
-            e.session_id = "sess-1".to_string();
-        });
+        runtime::mark_started(&project_path, "login", "reviewer").unwrap();
+        assert_eq!(login_issues(), vec![]);
+        runtime::reset_started(&project_path, "login", "reviewer").unwrap();
+
+        // Launched by a pm that wrote no start stamp.
+        runtime::reset_launched(&project_path, "login", "reviewer").unwrap();
         assert_eq!(login_issues(), vec![]);
 
         // An entry with no spawn time is as old as the registry file.
-        save(&|e| {
-            e.session_id.clear();
-            e.spawned_at = None;
-        });
+        launched(chrono::Utc::now());
+        save(&|e| e.spawned_at = None);
         assert_eq!(login_issues(), vec![]);
         std::fs::File::options()
             .write(true)
@@ -736,13 +754,6 @@ mod tests {
             .unwrap()
             .set_modified(SystemTime::from(long_ago))
             .unwrap();
-        let kinds: Vec<IssueKind> = login_issues().into_iter().map(|(k, _)| k).collect();
-        assert_eq!(
-            kinds,
-            vec![
-                IssueKind::AgentSessionNotStarted,
-                IssueKind::AgentSessionNotStarted
-            ]
-        );
+        assert_eq!(login_issues(), not_started);
     }
 }

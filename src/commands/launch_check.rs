@@ -314,7 +314,12 @@ fn watch(
                             harness: watched.harness,
                             after: up_deadline,
                         },
-                        output: drawn(tmux_server, &pane.window, &launched),
+                        output: drawn(
+                            tmux_server,
+                            &pane.window,
+                            &launched,
+                            processes.first().map(|shell| shell.command.as_str()),
+                        ),
                     });
                 }
                 None if running => {
@@ -353,8 +358,11 @@ fn last_output(tmux_server: Option<&str>, window: &str) -> String {
 }
 
 /// [`last_output`], from after the line the spawn typed, which creates
-/// `launched`: empty when the harness has drawn nothing below it.
-fn drawn(tmux_server: Option<&str>, window: &str, launched: &Path) -> String {
+/// `launched`: empty when the harness has drawn nothing below it. Lines
+/// the pane's `shell` printed itself, prefixed with its name, are left out:
+/// they are its diagnostics from running the line (bash on macOS reports a
+/// lost `setpgid` race under load), not the harness's screen.
+fn drawn(tmux_server: Option<&str>, window: &str, launched: &Path, shell: Option<&str>) -> String {
     let text = tmux::capture_pane(tmux_server, window).unwrap_or_default();
     let lines = non_empty(&text);
     let launched = launched.to_string_lossy();
@@ -362,7 +370,23 @@ fn drawn(tmux_server: Option<&str>, window: &str, launched: &Path) -> String {
         .iter()
         .rposition(|l| l.contains(launched.as_ref()))
         .map_or(0, |typed| typed + 1);
-    tail(&lines[from..])
+    let drawn: Vec<&str> = lines[from..]
+        .iter()
+        .filter(|l| !shell.is_some_and(|shell| shell_says(shell, l)))
+        .copied()
+        .collect();
+    tail(&drawn)
+}
+
+/// Whether `line` is a diagnostic of the shell running as `command`: its
+/// program's name, then `: `. A login shell's leading `-` is optional on
+/// both, since bash keeps it in what it prints and zsh drops it.
+fn shell_says(command: &str, line: &str) -> bool {
+    let program = command.split(' ').next().unwrap_or(command);
+    let name = program.rsplit('/').next().unwrap_or(program);
+    line.trim_start_matches('-')
+        .strip_prefix(name.trim_start_matches('-'))
+        .is_some_and(|rest| rest.starts_with(": "))
 }
 
 fn non_empty(text: &str) -> Vec<&str> {
@@ -404,6 +428,24 @@ mod tests {
         .unwrap();
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
         bin
+    }
+
+    #[test]
+    fn a_shell_diagnostic_is_recognised_with_or_without_its_login_dash() {
+        let setpgid = "child setpgid (1 to 1): Operation not permitted";
+        for (command, line) in [
+            ("-bash", format!("-bash: {setpgid}")),
+            ("/bin/bash -l", format!("bash: {setpgid}")),
+            ("-zsh", "zsh: command not found: claude".to_string()),
+            ("/bin/sh", format!("sh: {setpgid}")),
+        ] {
+            assert!(shell_says(command, &line), "{command}: {line}");
+        }
+        assert!(!shell_says("-bash", "bashful: hello"));
+        assert!(!shell_says(
+            "/bin/sh",
+            "Do you trust the files in this folder?"
+        ));
     }
 
     #[test]
@@ -459,9 +501,15 @@ mod tests {
         tmux::send_line(server.name(), &waits, "sleep 1.5 & wait").unwrap();
         let line = format!("{} {}", comes_up.display(), started("main", "waits"));
         type_launch("main", "waits", &waits, line);
-        // Blocked before its startup, drawing nothing.
+        // Blocked before its startup, drawing nothing; what its shell
+        // printed running the line is not the harness's.
         let silent = server.spawn_dead_fake_agent(&project, &main, "main", "silent");
-        type_launch("main", "silent", &silent, format!("{fake} 999"));
+        type_launch(
+            "main",
+            "silent",
+            &silent,
+            format!("pm-test-no-such-command; {fake} 999"),
+        );
         // Held on a screen of its own before its session starts.
         let asks = server.spawn_dead_fake_agent(&project, &main, "main", "asks");
         type_launch("main", "asks", &asks, talks.display().to_string());

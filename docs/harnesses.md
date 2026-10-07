@@ -123,8 +123,8 @@ unattended:
   every resume.
 - **No shared daemon.** pm launches codex with `--no-daemon`, since hooks
   attached to codex's background server run in the server's environment,
-  not the agent's. `pm doctor` reports a running agent that has recorded no
-  session id after a grace period; `pm agent restart` it.
+  not the agent's. `pm doctor` reports a running agent whose session never
+  reported starting after a grace period; `pm agent restart` it.
 - **Wakes come through codex's queue**, which the TUI polls every 10 s, so
   an idle codex agent takes a message up to about 10 s after it arrives.
   The queue skips an interrupted thread, so Esc leaves a codex agent

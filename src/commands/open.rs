@@ -531,7 +531,7 @@ mod tests {
     }
 
     #[test]
-    fn drift_warnings_do_not_offer_fix_for_an_agent_with_no_session_id() {
+    fn drift_warnings_do_not_offer_fix_for_an_agent_whose_session_never_started() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
@@ -543,6 +543,10 @@ mod tests {
         registry.get_mut("reviewer").unwrap().spawned_at =
             Some(chrono::Utc::now() - chrono::Duration::hours(1));
         registry.save(&agents_dir, "login").unwrap();
+        std::fs::File::create(
+            crate::state::runtime::reset_launched(&project_path, "login", "reviewer").unwrap(),
+        )
+        .unwrap();
 
         let warnings = collect_drift_warnings(&project_path, &projects_dir, server.name()).unwrap();
         assert_eq!(warnings.len(), 1, "{warnings:?}");
