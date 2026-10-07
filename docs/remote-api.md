@@ -44,9 +44,16 @@ Google's push service built into pm's app — and registers the subscription
 with `pm serve`, which sends each `transition` event to it as an encrypted
 Web Push (RFC 8030/8291, signed with the VAPID key). A push carries only
 `{project, scope, kind, agent}`; the app fetches the rest over the tailnet
-when opened. A push service answering that a subscription is gone drops
-it. Revoking a device, or its unpairing itself (`DELETE pairing`), drops
-its subscription with its token.
+when opened. When that need is over — the feature is no longer blocked or
+ready, the scope's agents stop asking, the agent runs again, or the feature
+is gone — an end push `{project, scope, ended, agent}` follows, `ended`
+naming the kind (`agent` only for `dead`), so the app withdraws the alert
+while closed. An end has no `kind`, so an app that predates it drops it.
+A transition is pushed 10 s after it happens, and neither it nor its end
+is pushed if the need is over by then. A transition goes at high urgency,
+an end at normal, which a dozing phone may receive late. A push service
+answering that a subscription is gone drops it. Revoking a device, or its
+unpairing itself (`DELETE pairing`), drops its subscription with its token.
 Deleting `vapid.pem` strands every subscription until the app is next
 opened and subscribes again.
 

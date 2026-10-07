@@ -13,11 +13,12 @@
 //! event stream when it changed, and judges it against the last ([`Watch`])
 //! for transitions: the rule tmux alerts by, plus an agent dying. The first
 //! snapshot, read as the server starts, is the baseline, so a restart
-//! reports nothing that was already so. Each transition also goes to every
-//! subscribed device as a Web Push (`push`), which reaches a phone off the
-//! tailnet. The poller also re-executes the binary once it is replaced
-//! ([`Binary`]), so an upgrade reaches a server launchd keeps running; it
-//! first lets the requests being answered finish (`in_flight`).
+//! reports nothing that was already so. Each transition, and each end of
+//! one's episode, also goes to every subscribed device as a Web Push
+//! (`push`), which reaches a phone off the tailnet. The poller also
+//! re-executes the binary once it is replaced ([`Binary`]), so an upgrade
+//! reaches a server launchd keeps running; it first sends the pushes it
+//! holds back, and lets the requests being answered finish (`in_flight`).
 //!
 //! Nothing on the phone is urgent, so the poller is sparing: it reads the
 //! snapshot every minute, and every few seconds only while an event stream
@@ -115,6 +116,9 @@ pub struct Config {
     pub transcript_poll: Duration,
     /// Where a push may be sent.
     pub push: PushPolicy,
+    /// How long a transition waits before it is pushed, so a need met
+    /// meanwhile never reaches the phone.
+    pub push_grace: Duration,
 }
 
 impl Config {
@@ -129,6 +133,7 @@ impl Config {
             heartbeat: Duration::from_secs(25),
             transcript_poll: Duration::from_secs(1),
             push: PushPolicy::new(&[]),
+            push_grace: Duration::from_secs(10),
         }
     }
 }
@@ -164,7 +169,12 @@ impl Server {
             waker,
             http,
             vapid: push::public_key(&key),
-            pusher: Pusher::start(config.devices.clone(), key, config.push.clone()),
+            pusher: Pusher::start(
+                config.devices.clone(),
+                key,
+                config.push.clone(),
+                config.push_grace,
+            ),
             config,
             hub: Hub::new(&snapshot)?,
             watch: Mutex::new(Watch::start(&snapshot)),
@@ -232,13 +242,14 @@ impl Server {
             let mut watch = self.watch.lock().unwrap_or_else(|e| e.into_inner());
             match read.and_then(|snapshot| self.hub.update(&watch, &snapshot)) {
                 Ok((next, transitions)) => {
+                    self.pusher.send(transitions, watch.ended(&next));
                     *watch = next;
-                    self.pusher.send(transitions);
                 }
                 Err(e) => log(&format!("snapshot unreadable: {e}")),
             }
             drop(watch);
             if let Some(binary) = binary.as_ref().filter(|b| b.replaced()) {
+                self.pusher.flush();
                 let (_held, idle) = self.in_flight.wait_idle(REEXEC_WAIT);
                 if !idle {
                     log("binary replaced; re-executing with requests still unanswered");

@@ -1,11 +1,13 @@
 package dev.pm.app.push
 
 import android.app.Activity
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.provider.Settings
 import android.service.notification.StatusBarNotification
 import androidx.core.app.NotificationCompat
@@ -14,6 +16,7 @@ import androidx.core.net.toUri
 import dev.pm.app.R
 import dev.pm.app.model.Alert
 import dev.pm.app.model.AttentionKind
+import dev.pm.app.model.PushedEnd
 import dev.pm.app.model.PushedTransition
 import dev.pm.app.model.Snapshot
 import dev.pm.app.update.Update
@@ -154,9 +157,17 @@ object Notifications {
         show(context, alert, sbn.notification.`when`, silent = true)
     }
 
-    /** Show what came of the user acting on an alert, silently, as `alert` now tells it. */
+    /**
+     * Show what came of the user acting on an alert, silently, as `alert` now tells it; not if the
+     * alert was withdrawn meanwhile, its need over.
+     */
     fun acted(context: Context, alert: Alert, now: Long = System.currentTimeMillis()) =
-        show(context, alert, now, silent = true)
+        synchronized(this) {
+            val tag = PushedTransition.encode(alert.transition.key)
+            if (alerts(context).any { (sbn, _) -> sbn.tag == tag }) {
+                show(context, alert, now, silent = true)
+            }
+        }
 
     private fun group(project: String) = "$GROUP/$project"
 
@@ -190,17 +201,44 @@ object Notifications {
     fun download(update: Update): Intent =
         Intent(Intent.ACTION_VIEW, update.apk.toUri()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
-    /**
-     * Withdraw each alert `snapshot` shows is over, but those the user answered, and bring each
-     * project's summary up to date.
-     */
-    fun reconcile(context: Context, snapshot: Snapshot) {
-        val alerts = alerts(context)
-        val over = alerts.filter { (_, alert) ->
-            !alert.settled && !alert.transition.holds(snapshot)
+    /** Withdraw the alerts whose need `end` says is over. */
+    fun withdraw(context: Context, end: PushedEnd) =
+        synchronized(this) {
+            val alerts = alerts(context)
+            withdraw(context, alerts, alerts.filter { (_, alert) -> end.ends(alert.transition) })
         }
+
+    /**
+     * Withdraw each alert `snapshot` shows is over, and bring each project's summary up to date.
+     */
+    fun reconcile(context: Context, snapshot: Snapshot) =
+        synchronized(this) {
+            val alerts = alerts(context)
+            withdraw(
+                context,
+                alerts,
+                alerts.filterNot { (_, alert) -> alert.transition.holds(snapshot) },
+            )
+        }
+
+    /**
+     * Withdraw `over` of the `alerts` showing, silently, and bring each project's summary up to
+     * date.
+     */
+    private fun withdraw(
+        context: Context,
+        alerts: List<Pair<StatusBarNotification, Alert>>,
+        over: List<Pair<StatusBarNotification, Alert>>,
+    ) {
         val manager = NotificationManagerCompat.from(context)
-        over.forEach { (sbn, _) -> manager.cancel(sbn.tag, ALERT_ID) }
+        over.forEach { (sbn, _) ->
+            // Android ignores an app cancelling a notification a direct reply keeps up, until the
+            // app posts it again.
+            if (keptUpByReply(sbn.notification)) {
+                @Suppress("MissingPermission") manager.notify(sbn.tag, ALERT_ID, sbn.notification)
+            }
+            manager.cancel(sbn.tag, ALERT_ID)
+        }
         val left = newestFirst(alerts - over.toSet()).groupBy { it.transition.project }
         for (summary in active(context).filter { it.id == SUMMARY_ID && it.tag != null }) {
             val project = left[summary.tag].orEmpty()
@@ -260,6 +298,13 @@ object Notifications {
                     ?: return@mapNotNull null
             Alert.parse(encoded)?.let { sbn to it }
         }
+
+    /** `Notification.FLAG_LIFETIME_EXTENDED_BY_DIRECT_REPLY`, hidden from the SDK (Android 15). */
+    private const val FLAG_KEPT_UP_BY_REPLY = 0x00010000
+
+    private fun keptUpByReply(notification: Notification): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM &&
+            notification.flags and FLAG_KEPT_UP_BY_REPLY != 0
 
     private fun newestFirst(alerts: List<Pair<StatusBarNotification, Alert>>): List<Alert> =
         alerts.sortedByDescending { (sbn, _) -> sbn.notification.`when` }.map { it.second }

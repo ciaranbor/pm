@@ -16,8 +16,7 @@ data class Alert(
     /** The permission prompt the alert's Allow and Deny answer; null for any other alert. */
     val prompt: Dialog? = null,
     /**
-     * The user answered from the alert: it stays, showing what was sent, rather than being
-     * withdrawn as the condition it announced ends.
+     * The user answered from the alert, which shows what was sent: nothing more is asked of them.
      */
     val settled: Boolean = false,
 ) {

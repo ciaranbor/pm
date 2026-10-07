@@ -34,6 +34,7 @@ pub(super) fn fixture() -> Fixture {
     config.idle_poll = Duration::from_millis(100);
     config.watched_poll = Duration::from_millis(100);
     config.min_gap = Duration::ZERO;
+    config.push_grace = Duration::ZERO;
     Fixture {
         _dir: dir,
         server,
@@ -702,7 +703,7 @@ fn push_service_answering(responses: Vec<String>) -> (String, mpsc::Receiver<Rec
 }
 
 #[test]
-fn a_transition_is_pushed_encrypted_to_each_subscriber_until_its_service_drops_it() {
+fn a_transition_and_its_end_are_pushed_encrypted_to_each_subscriber_until_its_service_drops_it() {
     let mut f = fixture();
     f.config.push = PushPolicy::local();
     let phone = pair(&f.config, "phone");
@@ -746,9 +747,12 @@ fn a_transition_is_pushed_encrypted_to_each_subscriber_until_its_service_drops_i
         authorization.ends_with(&format!("k={}", vapid["vapid"].as_str().unwrap())),
         "{authorization}"
     );
+    assert_eq!(pushed.header("urgency"), Some("high"));
     let auth = web_push_native::Auth::clone_from_slice(&auth);
-    let message = web_push_native::decrypt(pushed.body, &secret, &auth).unwrap();
-    let message: serde_json::Value = serde_json::from_slice(&message).unwrap();
+    let decrypt = |body: Vec<u8>| -> serde_json::Value {
+        serde_json::from_slice(&web_push_native::decrypt(body, &secret, &auth).unwrap()).unwrap()
+    };
+    let message = decrypt(pushed.body);
     assert_eq!(
         message,
         serde_json::json!({
@@ -763,13 +767,27 @@ fn a_transition_is_pushed_encrypted_to_each_subscriber_until_its_service_drops_i
     std::fs::create_dir_all(summary.parent().unwrap()).unwrap();
     std::fs::write(&summary, "Adds login\n").unwrap();
     feat_status(&f.project, "login", Progress::Ready, None, None).unwrap();
-    received.recv_timeout(Duration::from_secs(15)).unwrap();
+    let pushed = received.recv_timeout(Duration::from_secs(15)).unwrap();
+    assert_eq!(pushed.header("urgency"), Some("normal"));
+    assert_eq!(
+        decrypt(pushed.body),
+        serde_json::json!({
+            "project": f.project_name,
+            "scope": "login",
+            "ended": "blocked",
+            "agent": null,
+        }),
+        "the end goes before what began with it"
+    );
     let deadline = Instant::now() + Duration::from_secs(15);
     while stored_push(&f.config, "phone").is_some() {
         assert!(Instant::now() < deadline, "a 410 drops the subscription");
         std::thread::sleep(Duration::from_millis(50));
     }
-    assert!(received.try_recv().is_err(), "one push per transition");
+    assert!(
+        received.try_recv().is_err(),
+        "nothing more once the subscription is gone"
+    );
     drop(server);
 }
 
@@ -810,6 +828,87 @@ fn a_push_service_redirecting_is_not_followed() {
         followed.try_recv().is_err(),
         "the redirect's target is never sent to"
     );
+}
+
+/// Subscribe `device`, paired under `config`, to a push service at `url`.
+fn subscribe(config: &Config, device: &str, url: &str) {
+    let (_, _, subscription) = subscriber(url);
+    let push = super::push::subscription(&subscription, &PushPolicy::local()).unwrap();
+    Devices::update(&config.devices, |d| {
+        d.devices.get_mut(device).unwrap().push = Some(push);
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn a_transition_is_pushed_once_its_grace_is_out_and_not_at_all_if_its_need_ends_first() {
+    let mut f = fixture();
+    f.config.push = PushPolicy::local();
+    f.config.push_grace = Duration::from_millis(300);
+    let token = pair(&f.config, "phone");
+    let (url, received) = push_service(vec![201, 201]);
+    subscribe(&f.config, "phone", &url);
+    let server = start(f.config.clone());
+    let events = watched(&server, &token);
+
+    block(&f);
+    assert_eq!(next_transition(&events), "blocked");
+    received
+        .recv_timeout(Duration::from_secs(15))
+        .expect("pushed with nothing else happening");
+
+    feat_status(&f.project, "login", Progress::Wip, None, None).unwrap();
+    received.recv_timeout(Duration::from_secs(15)).unwrap();
+    drop(server);
+
+    f.config.push_grace = Duration::from_secs(3);
+    let (url, received) = push_service(vec![201]);
+    subscribe(&f.config, "phone", &url);
+    let server = start(f.config.clone());
+    let events = watched(&server, &token);
+    block(&f);
+    assert_eq!(next_transition(&events), "blocked");
+    feat_status(&f.project, "login", Progress::Wip, None, None).unwrap();
+    assert!(
+        received.recv_timeout(Duration::from_secs(5)).is_err(),
+        "neither the transition nor its end is pushed"
+    );
+    drop(server);
+}
+
+#[test]
+fn a_flush_sends_the_transitions_held_back() {
+    use crate::commands::attention::{Attention, AttentionKind, transition::Transition};
+    let mut f = fixture();
+    f.config.push = PushPolicy::local();
+    pair(&f.config, "phone");
+    let (url, received) = push_service(vec![201]);
+    subscribe(&f.config, "phone", &url);
+    let key = super::push::vapid_key(&super::push::key_path(&f.config.devices)).unwrap();
+    let pusher = super::push::Pusher::start(
+        f.config.devices.clone(),
+        key,
+        PushPolicy::local(),
+        Duration::from_secs(600),
+    );
+
+    pusher.send(
+        vec![Transition {
+            project: f.project_name.clone(),
+            scope: "login".into(),
+            attention: Attention {
+                kind: AttentionKind::Blocked,
+                detail: None,
+                agent: None,
+            },
+        }],
+        Vec::new(),
+    );
+    pusher.flush();
+    received
+        .recv_timeout(Duration::from_secs(5))
+        .expect("sent long before its grace is out");
 }
 
 #[test]

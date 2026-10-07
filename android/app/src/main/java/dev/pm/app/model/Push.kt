@@ -82,3 +82,31 @@ data class PushedTransition(
             json.encodeToString(serializer(), transition)
     }
 }
+
+/**
+ * What an end push carries (`commands/serve/push.rs`): a scope's need of kind [ended] is over, for
+ * [agent] when it names one.
+ */
+@Serializable
+data class PushedEnd(
+    val project: String,
+    val scope: String,
+    val ended: String,
+    val agent: String? = null,
+) {
+    /** Whether `transition` announced the need this ends. */
+    fun ends(transition: PushedTransition): Boolean =
+        transition.project == project &&
+            transition.scope == scope &&
+            transition.kind == ended &&
+            (agent == null || transition.agent == agent)
+
+    companion object {
+        private val json = Json { ignoreUnknownKeys = true }
+
+        fun parse(bytes: ByteArray): PushedEnd? = runCatching {
+            json.decodeFromString(serializer(), bytes.decodeToString())
+        }
+            .getOrNull()
+    }
+}
