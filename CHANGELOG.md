@@ -6,6 +6,25 @@ notes.
 
 ## Unreleased
 
+- The Android app opens, closes and deletes projects; projects with nothing
+running are listed under "Closed projects".
+- Phone alerts go away once their need is over, even with the app closed,
+and an alert waits 10 s so one handled at the terminal never reaches the
+phone.
+- App polish: one or two actions show as icon buttons instead of a near-empty
+⋮ menu; `main` is listed like any other session; long paths keep their
+filename (`…/dir/file.txt`), in `pm` status lines too; drafts survive Android
+closing the app; error pages recover on reconnect; plus many smaller fixes.
+- `pm upgrade` restarts busy agents once they go idle instead of skipping them,
+and a single-project upgrade names the other projects it left with outdated
+agents. `pm harness export --all` takes `--project`, and `pm migrate check`
+judges work in flight from git, not from running agents.
+- Fixes: opencode agents no longer stop hearing messages after an hour idle;
+`pm delete` no longer leaves a `.pm` folder behind, nor prints "Deleted"
+after you answer "n"; `nohup pm serve` survives its terminal closing; `pm
+agent restart` no longer calls agents that didn't come up "failed".
+- pm needs tmux 3.6 or later and builds with Rust 1.91 or later.
+
 ## 0.5.0 — 2026-10-07
 
 - The Android app is redesigned:
