@@ -259,9 +259,12 @@ fun App(
                                         it,
                                         client,
                                         key,
-                                        select = { tab ->
+                                        select = { agent ->
                                             val at = backStack.indexOf(key)
-                                            if (at >= 0) backStack[at] = key.copy(tab = tab)
+                                            if (at >= 0) backStack[at] = key.copy(agent = agent)
+                                        },
+                                        openFeature = {
+                                            backStack.open(Route.Feature(key.project, key.scope))
                                         },
                                         now,
                                         networkChanges,
@@ -270,6 +273,24 @@ fun App(
                                         model.lifecycle::ask,
                                         stale = stale,
                                         drafts = model.drafts,
+                                    )
+                                }
+                            }
+                            entry<Route.Feature>(clazzContentKey = { it.contentKey() }) { key ->
+                                Shown(snapshot, connection, model::retry, pairAgain) {
+                                    FeatureRoute(
+                                        it,
+                                        client,
+                                        key,
+                                        select = { page ->
+                                            val at = backStack.indexOf(key)
+                                            if (at >= 0) backStack[at] = key.copy(page = page)
+                                        },
+                                        now,
+                                        topBar,
+                                        acting,
+                                        model.lifecycle::ask,
+                                        stale = stale,
                                     )
                                 }
                             }

@@ -103,7 +103,12 @@ internal object AlertNotification {
 
     private fun open(context: Context, transition: PushedTransition, tag: String): PendingIntent {
         val intent =
-            Target(transition.project, transition.scope, transition.agent)
+            Target(
+                    transition.project,
+                    transition.scope,
+                    transition.agent,
+                    ready = transition.kindOf == AttentionKind.Ready,
+                )
                 .into(Intent(context, MainActivity::class.java))
                 .setData(Uri.fromParts("pm", tag, null))
                 .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)

@@ -39,8 +39,7 @@ class MergeCheckModel(
                 again = false
                 try {
                     val check = client.mergeCheck(project, feature)
-                    _blocker.value =
-                        if (check.mergeable) null else check.reason ?: "Can't merge now"
+                    _blocker.value = if (check.mergeable) null else check.reason ?: "Reason unknown"
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: PmError.Unsupported) {

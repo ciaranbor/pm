@@ -1,5 +1,6 @@
 package dev.pm.app.ui
 
+import android.content.Intent
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.text.selection.SelectionState
 import androidx.compose.foundation.text.selection.rememberSelectionState
@@ -96,7 +97,7 @@ class UiTest {
         target = Target("app", "login", "implementer")
         compose.onNodeWithText("login").assertIsDisplayed()
         compose.onNodeWithText("Updated just now", substring = true).assertIsDisplayed()
-        compose.onNodeWithContentDescription("implementer was asking, 2 unread").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Agent was asking").assertIsDisplayed()
         compose
             .onNodeWithText("A dialog is up at the terminal: Postgres or SQLite?")
             .assertIsDisplayed()
@@ -162,14 +163,17 @@ class UiTest {
     }
 
     @Test
-    fun a_workspace_has_a_tab_per_agent_then_its_features_pages() {
+    fun a_lone_agents_workspace_has_no_tabs_and_its_info_opens_the_features_pages() {
         val model = model()
         compose.setContent { PmTheme { App(model, Target("app", "login", null), {}) } }
         compose.waitUntil(5_000) { model.snapshot.value != null }
 
         compose.onNodeWithText("Message the agent").assertIsDisplayed()
-        compose.onNodeWithText("Summary").performClick()
+        compose.onNodeWithContentDescription("implementer", substring = true).assertDoesNotExist()
+        compose.onNodeWithText("Ready for review").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Feature info").performClick()
         compose.onNodeWithText("which DB?").assertIsDisplayed()
+        compose.onNodeWithText("app · Feature").assertIsDisplayed()
         compose.onNodeWithText("Message the agent").assertDoesNotExist()
         for (page in listOf("Brief", "Details")) {
             compose.onNodeWithText(page).performClick()
@@ -182,7 +186,59 @@ class UiTest {
             }
             compose.onNodeWithText("Can't reach pm serve").assertIsDisplayed()
         }
-        compose.onNodeWithContentDescription("implementer", substring = true).performClick()
+        compose.onNodeWithText("Merge").assertDoesNotExist()
+
+        back()
+        compose.onNodeWithText("Message the agent").assertIsDisplayed()
+    }
+
+    @Test
+    fun a_ready_alert_opens_the_features_page_before_the_snapshot_says_ready() {
+        val model = model()
+        val ready = Target("app", "login", null, ready = true)
+        val intent = ready.into(Intent())
+        compose.setContent { PmTheme { App(model, Target.from(intent), {}) } }
+        compose.waitUntil(5_000) { model.snapshot.value != null }
+
+        compose.onNodeWithText("app · Feature").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Navigate up").performClick()
+        compose.onNodeWithText("Message the agent").assertIsDisplayed()
+    }
+
+    @Test
+    fun a_feature_without_agents_shows_its_page_in_place_of_a_chat() {
+        val model = model()
+        compose.setContent { PmTheme { App(model, Target("app", "search", null), {}) } }
+        compose.waitUntil(5_000) { model.snapshot.value != null }
+
+        compose.onNodeWithText("Adds search").assertIsDisplayed()
+        compose.onNodeWithText("Brief").assertIsDisplayed()
+        compose.onNodeWithText("Merge").assertIsDisplayed()
+        compose.onNodeWithText("Message the agent").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Feature info").assertDoesNotExist()
+    }
+
+    @Test
+    fun a_ready_features_chat_says_so_and_leads_to_its_summary_with_merge() {
+        val store = Store(ApplicationProvider.getApplicationContext())
+        store.pairing = Pairing("http://127.0.0.1:9", "pixel", "tok")
+        store.cacheSnapshot(
+            SNAPSHOT.replace(
+                """"kind": "blocked", "detail": "which DB?", "agent": "implementer"""",
+                """"kind": "ready", "detail": "Adds login", "agent": null""",
+            )
+        )
+        val model = AppViewModel(Repository(store, OkHttpClient(), scope)) {}
+        compose.setContent { PmTheme { App(model, Target("app", "login", "implementer"), {}) } }
+        compose.waitUntil(5_000) { model.snapshot.value != null }
+
+        compose.onNodeWithText("Message the agent").assertIsDisplayed()
+        compose.onNodeWithText("Ready for review").assertIsDisplayed()
+        compose.onNodeWithText("Merge").assertDoesNotExist()
+        compose.onNodeWithText("Summary").performClick()
+        compose.onNodeWithText("Merge").assertIsDisplayed()
+
+        compose.onNodeWithContentDescription("Navigate up").performClick()
         compose.onNodeWithText("Message the agent").assertIsDisplayed()
     }
 
@@ -215,15 +271,18 @@ class UiTest {
         val client = PmClient(Pairing("http://127.0.0.1:9", "pixel", "tok"))
         compose.setContent {
             PmTheme {
-                SummaryTab(
+                FeaturePage(
                     ready,
-                    viewModel { ReadModel(client) { "# Search" } },
+                    Page.Summary,
+                    select = {},
                     Instant.parse("2026-10-02T10:00:00Z"),
                     stale = false,
                     merging = false,
                     busy = false,
                     merge = {},
-                )
+                ) {
+                    SummaryScreen(viewModel { ReadModel(client) { "# Search" } })
+                }
             }
         }
         compose.onNodeWithText("Ready for review").assertIsDisplayed()
@@ -239,7 +298,7 @@ class UiTest {
         compose.waitUntil(5_000) { model.snapshot.value != null }
         compose.onNodeWithText("Message the agent").assertIsDisplayed()
 
-        compose.onNodeWithText("Summary").performClick()
+        compose.onNodeWithContentDescription("Feature info").performClick()
         compose.onNodeWithText("Message the agent").assertDoesNotExist()
         target = Target("app", "login", "implementer")
         compose.onNodeWithText("Message the agent").assertIsDisplayed()
@@ -378,15 +437,17 @@ class UiTest {
 
     @Test
     @Config(qualifiers = "w360dp-h640dp")
-    fun a_feature_opened_at_its_summary_keeps_its_first_agent_tab_in_view() {
-        val agents = listOf(AgentSnapshot("implementer", "busy"), AgentSnapshot("reviewer", "idle"))
+    fun a_team_opened_at_its_last_agent_keeps_its_first_agent_tab_in_view() {
+        val agents =
+            listOf("implementer", "reviewer", "researcher", "qa", "designer").map {
+                AgentSnapshot(it, "idle")
+            }
         compose.setContent {
-            PmTheme { WorkspaceTabs(tabsOf("login", agents, null), Tab.Summary, agents, {}) }
+            PmTheme { WorkspaceTabs(tabsOf(agents, null), "designer", agents, {}) }
         }
         compose
             .onNodeWithContentDescription("implementer", substring = true)
             .assertLeftPositionInRootIsEqualTo(0.dp)
-        compose.onNodeWithText("Summary").assertIsDisplayed()
     }
 
     @Test
@@ -394,9 +455,7 @@ class UiTest {
         val agents = listOf(AgentSnapshot("implementer", "busy"))
         var stale by mutableStateOf(false)
         compose.setContent {
-            PmTheme {
-                WorkspaceTabs(tabsOf("login", agents, null), Tab.Summary, agents, {}, stale = stale)
-            }
+            PmTheme { WorkspaceTabs(tabsOf(agents, null), null, agents, {}, stale = stale) }
         }
         compose.onNodeWithContentDescription("implementer working").assertIsDisplayed()
         stale = true

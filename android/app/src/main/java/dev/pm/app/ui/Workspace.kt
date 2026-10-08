@@ -7,13 +7,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -23,35 +24,35 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.ui.res.painterResource
 import dev.pm.app.R
 import dev.pm.app.api.PmClient
 import dev.pm.app.model.AgentSnapshot
 import dev.pm.app.model.AgentState
 import dev.pm.app.model.Attention
 import dev.pm.app.model.AttentionKind
-import dev.pm.app.model.FeatureInfo
 import dev.pm.app.model.FeatureSnapshot
+import dev.pm.app.model.Marks
 import dev.pm.app.model.Snapshot
 import dev.pm.app.model.activity
 import dev.pm.app.model.prLabel
 import dev.pm.app.model.progressLabel
 import java.time.Instant
 import kotlinx.coroutines.flow.Flow
-import kotlinx.serialization.json.Json
 
 /**
- * One scope's screen: a tab per agent, its chat; a feature's then Summary, Brief and Details. It
- * shows the route's tab: `select` puts another in the route, as it does the one the scope most
- * needs looked at (a ready feature's Summary, with Merge) when the route names none.
+ * One scope's screen: a tab per agent once there are two, and the chat of the route's agent. It
+ * shows the route's agent: `select` puts another in the route, as it does the one the scope most
+ * needs looked at when the route names none. A feature's ⓘ calls `openFeature`, as does its ready
+ * strip; a feature without agents shows its page here instead.
  */
 @Composable
 fun Workspace(
     snapshot: Snapshot,
     client: PmClient?,
     route: Route.Scope,
-    select: (Tab) -> Unit,
+    select: (String) -> Unit,
+    openFeature: () -> Unit,
     now: Instant,
     networkChanges: Flow<Unit>,
     topBar: TopBarSlot,
@@ -66,91 +67,86 @@ fun Workspace(
     val feature = snapshot.feature(project, scope)
     val main = snapshot.project(project)?.main?.takeIf { scope == Snapshot.MAIN }
     val agents = snapshot.agents(project, scope)
-    val tabs = tabsOf(scope, agents, route.tab)
-    val fallback = defaultTab(feature, main?.attention, agents)
-    LaunchedEffect(route.tab == null) { if (route.tab == null) fallback?.let(select) }
-    val selected = route.tab?.takeIf { it in tabs } ?: fallback
-    var terminal by rememberSaveable { mutableStateOf<String?>(null) }
-    val mergeCheck = feature?.let {
-        viewModel(key = "merge") { MergeCheckModel(client, project, scope) }
+    val tabs = tabsOf(agents, route.agent)
+    val fallback = defaultAgent(feature, main?.attention, agents)
+    LaunchedEffect(route.agent == null) { if (route.agent == null) fallback?.let(select) }
+    val selected = route.agent?.takeIf { it in tabs } ?: fallback
+    val mergeBlocker = feature?.let {
+        mergeBlocker(client, project, scope, it, acting, recheck = selected == null)
     }
-    val mergeBlocker = mergeCheck?.blocker?.collectAsState()?.value
-    LaunchedEffect(feature, acting) { mergeCheck?.refresh() }
 
-    val shownAgent = (selected as? Tab.Agent)?.name
+    if (selected == null) {
+        if (feature == null) EmptyState("No agents here", hint = "Its session isn't running.")
+        else {
+            var page by rememberSaveable { mutableStateOf(Page.Summary) }
+            FeatureActions(topBar, feature, mergeBlocker, ask)
+            FeatureScreen(
+                project,
+                scope,
+                feature,
+                page,
+                { page = it },
+                client,
+                now,
+                stale,
+                acting,
+                mergeBlocker,
+                ask,
+                modifier,
+            )
+        }
+        return
+    }
+
+    var terminal by rememberSaveable { mutableStateOf<String?>(null) }
     TopBarActions(topBar) {
-        agents.find { it.name == shownAgent }?.let { StatePill(it.stateOf, stale) }
+        agents.find { it.name == selected }?.let { StatePill(it.stateOf, stale) }
+        if (feature != null) {
+            IconButton(onClick = openFeature) {
+                Icon(painterResource(R.drawable.ic_info), "Feature info")
+            }
+        }
         val items = buildList {
-            if (shownAgent != null && client != null) {
-                add(MenuItem("Terminal", R.drawable.ic_terminal) { terminal = shownAgent })
+            if (client != null) {
+                add(MenuItem("Terminal", R.drawable.ic_terminal) { terminal = selected })
                 add(
-                    MenuItem("Restart $shownAgent", R.drawable.ic_autorenew) {
-                        ask(Action.Restart(project, scope, shownAgent))
+                    MenuItem("Restart $selected", R.drawable.ic_autorenew) {
+                        ask(Action.Restart(project, scope, selected))
                     }
                 )
             }
             if (feature != null) {
-                add(
-                    MenuItem("Merge", R.drawable.ic_merge, blocker = mergeBlocker) {
-                        ask(Action.Merge(project, scope))
-                    }
-                )
-                add(
-                    MenuItem("Delete", R.drawable.ic_delete, destructive = true) {
-                        ask(Action.Delete(project, scope))
-                    }
-                )
+                add(mergeItem(feature, mergeBlocker, ask))
+                add(deleteItem(feature, ask))
             }
         }
         ActionMenu(items)
     }
 
-    val pages = rememberSaveableStateHolder()
+    val chats = rememberSaveableStateHolder()
     Column(modifier.fillMaxSize()) {
         if (tabs.size > 1) WorkspaceTabs(tabs, selected, agents, select = select, stale = stale)
         Box(Modifier.weight(1f)) {
-            val tab = selected
-            if (tab == null) {
-                EmptyState("No agents here", hint = "Its session isn't running.")
-                return@Box
-            }
-            key(tab) {
-                pages.SaveableStateProvider(pageKey(tab)) {
-                    when (tab) {
-                        is Tab.Agent -> {
-                            if (client == null) EmptyState("Not paired.")
-                            else {
-                                val shown = agents.find { it.name == tab.name }
-                                AgentScreen(
-                                    client,
-                                    project,
-                                    scope,
-                                    tab.name,
-                                    shown?.stateOf,
-                                    shown?.waiting,
-                                    networkChanges,
-                                    openTerminal = { terminal = tab.name },
-                                    drafts = drafts,
-                                )
-                            }
-                        }
-                        Tab.Summary ->
-                            SummaryTab(
-                                feature,
-                                viewModel(key = "summary") {
-                                    ReadModel(client) { summary(project, scope) }
-                                },
-                                now,
-                                stale,
-                                merging =
-                                    (acting as? ActionState.Running)?.action ==
-                                        Action.Merge(project, scope),
-                                busy = acting is ActionState.Running,
-                                merge = { ask(Action.Merge(project, scope)) },
-                                mergeBlocker = mergeBlocker,
-                            )
-                        Tab.Brief -> BriefScreen(infoModel(client, project, scope))
-                        Tab.Details -> DetailsScreen(infoModel(client, project, scope))
+            key(selected) {
+                chats.SaveableStateProvider(selected) {
+                    if (client == null) EmptyState("Not paired.")
+                    else {
+                        val shown = agents.find { it.name == selected }
+                        AgentScreen(
+                            client,
+                            project,
+                            scope,
+                            selected,
+                            shown?.stateOf,
+                            shown?.waiting,
+                            networkChanges,
+                            openTerminal = { terminal = selected },
+                            drafts = drafts,
+                            banner =
+                                if (feature != null && isReady(feature)) {
+                                    { ReadyStrip(openFeature) }
+                                } else null,
+                        )
                     }
                 }
             }
@@ -162,96 +158,51 @@ fun Workspace(
     }
 }
 
-@Composable
-private fun infoModel(client: PmClient?, project: String, feature: String): ReadModel<FeatureInfo> =
-    viewModel(key = "info") { ReadModel(client) { feature(project, feature) } }
-
-/**
- * The scope's tabs: its agents, and the route's should the snapshot not have it yet; then pages.
- */
-internal fun tabsOf(scope: String, agents: List<AgentSnapshot>, asked: Tab?): List<Tab> {
-    val named = agents.map { Tab.Agent(it.name) }
-    val extra = (asked as? Tab.Agent)?.takeIf { it !in named }
-    val pages =
-        if (scope == Snapshot.MAIN) emptyList() else listOf(Tab.Summary, Tab.Brief, Tab.Details)
-    return named + listOfNotNull(extra) + pages
+/** The scope's agents, and the route's should the snapshot not have it yet. */
+internal fun tabsOf(agents: List<AgentSnapshot>, asked: String?): List<String> {
+    val named = agents.map { it.name }
+    return named + listOfNotNull(asked?.takeIf { it !in named })
 }
 
-/**
- * The tab a scope opens on: a ready feature's Summary; else the agent its attention names, one
- * asking, or its first; a feature without agents, its Summary.
- */
-internal fun defaultTab(
+/** The agent a scope opens on: the one its attention names, else one asking, else its first. */
+internal fun defaultAgent(
     feature: FeatureSnapshot?,
     attention: Attention?,
     agents: List<AgentSnapshot>,
-): Tab? {
+): String? {
     val need = feature?.attention ?: attention
-    if (feature != null && isReady(feature)) return Tab.Summary
-    val agent =
-        agents.find { it.name == need?.agent }
+    return (agents.find { it.name == need?.agent }
             ?: agents.find { it.stateOf == AgentState.Asking }
-            ?: agents.firstOrNull()
-    return agent?.let { Tab.Agent(it.name) } ?: feature?.let { Tab.Summary }
+            ?: agents.firstOrNull())
+        ?.name
 }
 
-/**
- * A feature's summary under where it stands; a ready feature's with Merge, its next step, below.
- * `merging` while this feature's merge runs; `busy` while any action does. A `mergeBlocker` turns
- * Merge off and says why.
- */
+/** Over a ready feature's composer: that it is ready, and the way to its summary. */
 @Composable
-fun SummaryTab(
-    feature: FeatureSnapshot?,
-    model: ReadModel<String>,
-    now: Instant,
-    stale: Boolean,
-    merging: Boolean,
-    busy: Boolean,
-    merge: () -> Unit,
-    modifier: Modifier = Modifier,
-    mergeBlocker: String? = null,
-) {
-    Column(modifier.fillMaxSize()) {
-        if (feature != null) {
-            StatusHeader(feature, now, stale)
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        }
-        SummaryScreen(model, Modifier.weight(1f))
-        if (feature != null && isReady(feature)) {
-            Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
-                Column(
-                    Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.xs),
-                ) {
-                    if (mergeBlocker != null && !merging) {
-                        Text(
-                            mergeBlocker,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    PendingButton(
-                        "Merge",
-                        merge,
-                        Modifier.fillMaxWidth(),
-                        pending = merging,
-                        enabled = merging || (!busy && mergeBlocker == null),
-                    )
-                }
-            }
+private fun ReadyStrip(openFeature: () -> Unit) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
+        Row(
+            Modifier.fillMaxWidth().padding(start = Spacing.gutter, end = Spacing.xs),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.s),
+        ) {
+            Marks.attention(AttentionKind.Ready)?.let { MarkIcon(it, null) }
+            Text(
+                "Ready for review",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = openFeature) { Text("Summary") }
         }
     }
 }
 
-private fun isReady(feature: FeatureSnapshot): Boolean =
+internal fun isReady(feature: FeatureSnapshot): Boolean =
     feature.attention.kindOf == AttentionKind.Ready || feature.progress == AttentionKind.Ready.wire
 
 /** Where a feature stands: its attention and what it says, its status and PR, its activity. */
 @Composable
-private fun StatusHeader(feature: FeatureSnapshot, now: Instant, stale: Boolean) {
+internal fun StatusHeader(feature: FeatureSnapshot, now: Instant, stale: Boolean) {
     Selectable {
         Column(
             Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter, vertical = Spacing.s),
@@ -309,6 +260,3 @@ fun statusLine(feature: FeatureSnapshot): String =
             },
         )
         .joinToString(" · ")
-
-/** The key a tab's page state is kept under. */
-private fun pageKey(tab: Tab): String = Json.encodeToString(Tab.serializer(), tab)

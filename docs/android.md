@@ -3,7 +3,7 @@
 The README's [Android app](../README.md#android-app) covers installing and
 pairing the app, and [Remote access](../README.md#remote-access) what it
 connects to. This page covers updates, notification delivery, a project's
-actions, and building it yourself.
+actions, a feature's workspace, and building it yourself.
 
 ## Updates
 
@@ -56,12 +56,26 @@ projects, after the rest; its page offers Open. A registered project that
 isn't on this machine is not listed
 ([snapshot](remote-api.md#json-version-1)).
 
+## Features
+
+A feature's workspace is its agents' chats, with a tab per agent once it
+has two. The ⓘ in its top bar opens the feature's page: where it stands
+(what it needs, its status and PR, its activity) over its summary, brief
+and details; Up returns to the chat. While the feature is ready for
+review, a strip above the composer says so and leads to that page, whose
+Merge button sits at the bottom. A feature with no agents running opens
+straight on its page. Merge, Delete, and the shown agent's terminal and
+restart are in the chat's ⋮ menu.
+
 A feature's Merge is off while merging would not land its branch as it
-stands, with the reason in a line above the Summary tab's Merge button
-and under the menu's: uncommitted changes, a paused merge or rebase, or a
-branch behind its base, which needs a rebase at a terminal first. The app
-asks each time the feature's page shows or its state changes. A server
-too old to say leaves Merge on and refuses a merge it can't make.
+stands, with the reason under the menu's Merge, and on the feature's page
+under where it stands, or above its Merge button once it is ready:
+uncommitted changes, a paused merge or rebase, or a branch behind its
+base, which needs a rebase at a terminal first. The app
+asks each time the feature's chat or page shows, or its state changes,
+and every 25 s while its page is on screen, so a commit at a terminal
+shows without reopening it. A server too old to say leaves Merge on and
+refuses a merge it can't make.
 
 ## Building
 
