@@ -66,11 +66,15 @@ class ListScreenshotTest {
     @Test @Config(qualifiers = "+night") fun offline_dark() = capture(offline)
 
     @Test
-    fun scopes_light() = capture { ScopesList(snapshot, "app", now, open = {}, openNotes = {}) }
+    fun scopes_light() = capture {
+        ScopesList(snapshot, "app", now, open = {}, openNotes = {}, openDocs = {})
+    }
 
     @Test
     @Config(qualifiers = "+night")
-    fun scopes_dark() = capture { ScopesList(snapshot, "app", now, open = {}, openNotes = {}) }
+    fun scopes_dark() = capture {
+        ScopesList(snapshot, "app", now, open = {}, openNotes = {}, openDocs = {})
+    }
 
     private val details =
         @Composable {

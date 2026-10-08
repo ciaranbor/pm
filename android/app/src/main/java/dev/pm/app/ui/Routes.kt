@@ -29,6 +29,13 @@ sealed interface Route : NavKey {
 
     @Serializable data class Notes(val project: String) : Route
 
+    /** A project's information store: its categories. */
+    @Serializable data class Docs(val project: String) : Route
+
+    /** One doc of a project's information store, by its filename; `title` is what it shows. */
+    @Serializable
+    data class Doc(val project: String, val filename: String, val title: String) : Route
+
     @Serializable data object Settings : Route
 
     /** The top bar's title, and the line under it that says where it is. */
@@ -42,6 +49,8 @@ sealed interface Route : NavKey {
                 is Scope -> scope to project
                 is Feature -> scope to "$project · Feature"
                 is Notes -> "Notes" to project
+                is Docs -> "Docs" to project
+                is Doc -> title to "$project · Docs"
             }
 
     /** Where Up leads: the page this one belongs to. */
@@ -55,6 +64,8 @@ sealed interface Route : NavKey {
                 is Scope -> Project(project)
                 is Feature -> Scope(project, scope)
                 is Notes -> Project(project)
+                is Docs -> Project(project)
+                is Doc -> Docs(project)
             }
 
     /**
@@ -149,6 +160,8 @@ internal fun Route.scopeOf(): kotlin.Pair<String, String>? =
         is Route.Feature -> project to scope
         is Route.Project -> project to Snapshot.MAIN
         is Route.Notes -> project to Snapshot.MAIN
+        is Route.Docs -> project to Snapshot.MAIN
+        is Route.Doc -> project to Snapshot.MAIN
         else -> null
     }
 

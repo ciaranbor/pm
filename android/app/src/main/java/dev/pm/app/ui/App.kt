@@ -61,10 +61,12 @@ import dev.pm.app.model.Snapshot
 import dev.pm.app.push.Notifications
 import dev.pm.app.push.Target
 import dev.pm.app.update.UpdateWorker
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * The app's frame and navigation. While shown, it holds the event stream open, and registers for
@@ -249,6 +251,10 @@ fun App(
                                         now,
                                         open = { s -> backStack.add(Route.Scope(key.project, s)) },
                                         openNotes = { backStack.add(Route.Notes(key.project)) },
+                                        openDocs =
+                                            if (rememberDocsServed(client, key.project)) {
+                                                { backStack.add(Route.Docs(key.project)) }
+                                            } else null,
                                         stale = stale,
                                     )
                                 }
@@ -304,6 +310,28 @@ fun App(
                                             store,
                                             createSavedStateHandle(),
                                         )
+                                    },
+                                    topBar,
+                                )
+                            }
+                            entry<Route.Docs> { key ->
+                                DocsScreen(
+                                    viewModel { ReadModel(client) { docs(key.project) } },
+                                    now,
+                                    open = { doc ->
+                                        backStack.add(
+                                            Route.Doc(key.project, doc.filename, doc.title)
+                                        )
+                                    },
+                                )
+                            }
+                            entry<Route.Doc> { key ->
+                                DocScreen(
+                                    viewModel {
+                                        ReadModel(client) {
+                                            val text = doc(key.project, key.filename)
+                                            withContext(Dispatchers.Default) { markdownParts(text) }
+                                        }
                                     },
                                     topBar,
                                 )

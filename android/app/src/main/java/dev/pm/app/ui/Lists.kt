@@ -162,7 +162,7 @@ fun workingLine(scope: Need): String? =
 
 /** Between list rows: inset, so the rows read as one list rather than boxes. */
 @Composable
-private fun RowDivider() =
+internal fun RowDivider() =
     HorizontalDivider(
         Modifier.padding(start = Rows.dividerInset + MARK_SLOT),
         color = MaterialTheme.colorScheme.outlineVariant,
@@ -348,17 +348,20 @@ fun ScopesList(
     now: Instant,
     open: (String) -> Unit,
     openNotes: () -> Unit,
+    /** Null where the server has no docs to serve. */
+    openDocs: (() -> Unit)?,
     modifier: Modifier = Modifier,
     stale: Boolean = false,
 ) {
     val main = snapshot.project(project)?.main
     LazyColumn(modifier) {
         item(key = "header") {
-            OutlinedButton(
-                openNotes,
+            Row(
                 Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.s),
             ) {
-                Text("Notes")
+                OutlinedButton(openNotes) { Text("Notes") }
+                if (openDocs != null) OutlinedButton(openDocs) { Text("Docs") }
             }
         }
         if (main != null) {
