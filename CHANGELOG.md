@@ -6,9 +6,36 @@ notes.
 
 ## Unreleased
 
+- pm's global files follow XDG on macOS as on Linux: settings and the
+project list in `~/.config/pm`, machine-only state (phone pairing, the push
+key) in `~/.local/state/pm`, the cache in `~/.cache/pm`. Nothing is moved
+for you: on macOS, move `~/Library/Application Support/pm` to `~/.config/pm`
+before upgrading. If you set `XDG_*` variables, set them in your login
+profile so the shell, tmux and launchd agree.
+- `main` can mark itself blocked on you (`pm feat status blocked -m …`), so
+a project waiting on your decision shows in the attention list, tmux and the
+app like a blocked feature. `main` is no longer a valid feature name.
+- The Android app:
+  - A feature's screen has tabs only for its agents; status, summary, brief,
+  details and Merge moved to a feature page behind ⓘ.
+  - Merge is disabled, with the reason, unless the work is committed and
+  the branch contains its base.
+  - A Docs page reads the project's information store (todo, issues,
+  findings…).
+  - Projects not on this machine are left out.
+- Registered projects that aren't on this machine are handled throughout:
+commands that name one point at `pm restore`, all-project commands skip it,
+`pm restore` finishes a folder holding only pm state, and `pm delete`
+unregisters one.
 - `pm upgrade` always upgrades every registered project, as `--all` did:
 the assets and hooks it installs are shared by all of them, so upgrading
 one left the rest half-upgraded. `--all` is still accepted, and ignored.
+- Claude Code agents start without a "Stand by." turn, and an agent that
+Claude Code compacts while idle no longer reads as busy. A resumed agent
+with nothing unread is still told to carry on.
+- CI runs the full test suite on Linux too; several Linux-only issues are
+fixed, including `pm self-update` on a busy binary.
+- Removed: the hidden `pm claude` alias.
 
 ## 0.5.1 — 2026-10-08
 
