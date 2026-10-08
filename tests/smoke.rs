@@ -357,6 +357,44 @@ fn status_sees_live_sessions_without_a_utf8_locale() {
     assert!(!login.contains("no session"), "{out}");
 }
 
+/// Catches: an agent's status resolving its scope from `PM_AGENT_WORKTREE`
+/// when its shell has left its worktree — main's agent works in `.pm/docs`.
+#[test]
+#[ignore]
+fn main_marks_itself_blocked_from_outside_its_worktree() {
+    let s = Smoke::new();
+    s.init_with_feature();
+    let docs = s.proj().join(".pm/docs");
+    let main = s.proj().join("main");
+    let status = |args: &str| {
+        let out = s
+            .run_cmd(&docs, "sh")
+            .arg("-c")
+            .arg(format!(
+                "PM_AGENT_WORKTREE={} pm feat status {args}",
+                shell_quote(&main.to_string_lossy())
+            ))
+            .output()
+            .unwrap();
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned()
+                + &String::from_utf8_lossy(&out.stderr),
+        )
+    };
+
+    let (ok, out) = status("blocked -m 'next item?'");
+    assert!(ok, "{out}");
+    assert!(out.contains("main is blocked"), "{out}");
+    let (ok, out) = status("");
+    assert!(ok, "{out}");
+    let row = out.lines().find(|l| l.starts_with("main "));
+    assert!(
+        row.is_some_and(|r| r.contains(" blocked ") && r.ends_with("next item?")),
+        "{out}"
+    );
+}
+
 /// Catches: `pm delete --force` run from the project's own main session,
 /// which must remove every piece of state before the kill ends the caller.
 #[test]

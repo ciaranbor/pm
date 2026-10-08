@@ -24,6 +24,7 @@ class SnapshotTest {
 
         val main = snapshot.project("app")!!.main!!
         assertEquals(AttentionKind.Unknown, main.attention.kindOf)
+        assertEquals("wip", main.progress)
         assertEquals(AgentState.Unknown, main.agents.single().stateOf)
         assertEquals(listOf("main"), snapshot.agents("app", Snapshot.MAIN).map { it.name })
         assertEquals(listOf("implementer"), snapshot.agents("app", "login").map { it.name })

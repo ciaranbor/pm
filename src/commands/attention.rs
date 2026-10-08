@@ -30,6 +30,7 @@ use crate::state::project::{
     GlobalConfig, HarnessConfig, ProjectConfig, ProjectEntry, resolve_harness_config,
 };
 use crate::state::runtime::{self, Waiting, WaitingClass, WaitingKind};
+use crate::state::scope::{self, TeamStatus};
 use crate::tmux;
 
 use super::feat_status_view::first_line;
@@ -98,15 +99,18 @@ pub struct ProjectSnapshot {
     pub main: Option<ScopeSnapshot>,
 }
 
-/// A scope's session and agents: all the main scope has, with no progress
-/// of its own.
+/// A scope's team status, session and agents: all the main scope has.
 #[derive(Debug, Clone, Serialize)]
 pub struct ScopeSnapshot {
     pub session: String,
     pub session_exists: bool,
     pub agents: Vec<AgentSnapshot>,
-    /// What the scope's agents need, by [`main_attention`]'s rule.
+    /// What the scope needs, by [`main_attention`]'s rule.
     pub attention: Attention,
+    /// Wip or blocked: main is never ready.
+    pub progress: Progress,
+    pub blocked_reason: Option<String>,
+    pub blocked_by: Option<String>,
     pub working: bool,
     /// When the longest-waiting background agent's wait began.
     pub background_since: Option<DateTime<Utc>>,
@@ -333,17 +337,46 @@ pub fn attention(feature: &FeatureSnapshot) -> Attention {
     of(AttentionKind::None, None, None)
 }
 
-/// The attention a main scope needs, which has no progress: an agent
-/// asking, dead or unarmed, in that order.
-pub fn main_attention(agents: &[AgentSnapshot]) -> Attention {
+/// The attention a main scope needs: blocked, or an agent asking, dead or
+/// unarmed, in that order. Main has no PR to clean up or merge, and an idle
+/// orchestrator is its resting state, not a stall.
+pub fn main_attention(main: &ScopeSnapshot) -> Attention {
+    if main.progress == Progress::Blocked {
+        return of(
+            AttentionKind::Blocked,
+            main.blocked_reason.clone(),
+            main.blocked_by.clone(),
+        );
+    }
     [
         (AgentState::Asking, AttentionKind::Asking),
         (AgentState::Dead, AttentionKind::Dead),
         (AgentState::Unarmed, AttentionKind::Unarmed),
     ]
     .into_iter()
-    .find_map(|(state, kind)| agent_in(agents, state, kind))
+    .find_map(|(state, kind)| agent_in(&main.agents, state, kind))
     .unwrap_or_else(|| of(AttentionKind::None, None, None))
+}
+
+#[cfg(test)]
+impl ScopeSnapshot {
+    /// A main scope of `agents` with status `team`, its attention judged.
+    pub(crate) fn main_of(agents: Vec<AgentSnapshot>, team: TeamStatus) -> Self {
+        let mut main = Self {
+            session: "app/main".into(),
+            session_exists: true,
+            agents,
+            attention: of(AttentionKind::None, None, None),
+            progress: team.progress,
+            blocked_reason: team.reason().map(str::to_string),
+            blocked_by: team.agent().map(str::to_string),
+            working: false,
+            background_since: None,
+            last_activity: None,
+        };
+        main.attention = main_attention(&main);
+        main
+    }
 }
 
 /// The snapshot of every registered project on this machine
@@ -449,7 +482,7 @@ pub fn scope_agents_in(
         windows,
         config: &config,
     };
-    Ok(reader.read(scope)?.agents)
+    Ok(reader.read(scope, TeamStatus::default())?.agents)
 }
 
 fn sort(features: &mut [FeatureSnapshot]) {
@@ -490,7 +523,7 @@ fn project_features(
                 background_since,
                 last_activity,
                 ..
-            } = reader.read(&name)?;
+            } = reader.read(&name, state.team.clone())?;
             let mut feature = FeatureSnapshot {
                 project: project.clone(),
                 attention: Attention {
@@ -498,13 +531,9 @@ fn project_features(
                     detail: None,
                     agent: None,
                 },
-                progress: state.progress,
-                blocked_reason: state
-                    .blocked_reason
-                    .filter(|_| state.progress == Progress::Blocked),
-                blocked_by: state
-                    .blocked_by
-                    .filter(|_| state.progress == Progress::Blocked),
+                progress: state.team.progress,
+                blocked_reason: state.team.reason().map(str::to_string),
+                blocked_by: state.team.agent().map(str::to_string),
                 summary: first_line(project_root, &name),
                 lifecycle: state.status,
                 pr: Some(state.pr).filter(|pr| !pr.is_empty()),
@@ -521,7 +550,7 @@ fn project_features(
         })
         .collect::<Result<_>>()?;
     Ok(ProjectRead {
-        main: reader.read("main")?,
+        main: reader.read(scope::MAIN, TeamStatus::load(project_root, scope::MAIN)?)?,
         name: project,
         features,
     })
@@ -536,7 +565,8 @@ struct ScopeReader<'a> {
 }
 
 impl ScopeReader<'_> {
-    fn read(&self, scope: &str) -> Result<ScopeSnapshot> {
+    /// `scope`, whose status is `team`.
+    fn read(&self, scope: &str, team: TeamStatus) -> Result<ScopeSnapshot> {
         let session = tmux::session_name(self.project, scope);
         let session_exists = self.windows.has_session(&session);
         let registry = AgentRegistry::load(&paths::agents_dir(self.project_root), scope)?;
@@ -591,15 +621,20 @@ impl ScopeReader<'_> {
                 }
             })
             .collect();
-        Ok(ScopeSnapshot {
+        let mut snapshot = ScopeSnapshot {
             session,
             session_exists,
-            attention: main_attention(&agents),
+            attention: of(AttentionKind::None, None, None),
+            progress: team.progress,
+            blocked_reason: team.reason().map(str::to_string),
+            blocked_by: team.agent().map(str::to_string),
             agents,
             working,
             background_since,
             last_activity,
-        })
+        };
+        snapshot.attention = main_attention(&snapshot);
+        Ok(snapshot)
     }
 
     /// A busy agent, refined by what it is `at` or a stopped loop. A
@@ -844,6 +879,9 @@ mod tests {
                         detail: Some("main: plan approval".into()),
                         agent: Some("main".into()),
                     },
+                    progress: Progress::Wip,
+                    blocked_reason: None,
+                    blocked_by: None,
                     working: false,
                     background_since: Some("2026-10-01T08:00:00Z".parse().unwrap()),
                     last_activity: Some("2026-10-02T09:30:00Z".parse().unwrap()),
@@ -879,6 +917,9 @@ mod tests {
                             "detail": "main: plan approval",
                             "agent": "main"
                         },
+                        "progress": "wip",
+                        "blocked_reason": null,
+                        "blocked_by": null,
                         "working": false,
                         "background_since": "2026-10-01T08:00:00Z",
                         "last_activity": "2026-10-02T09:30:00Z"
@@ -1047,7 +1088,9 @@ mod tests {
         let dead = agent("b", AgentState::Dead, 0);
         let asking = waiting("c", AgentState::Asking, WaitingKind::Plan, "plan approval");
         let idle = agent("main", AgentState::Idle, 0);
-        let kind_of = |agents: Vec<AgentSnapshot>| main_attention(&agents).kind;
+        let main =
+            |agents: Vec<AgentSnapshot>| ScopeSnapshot::main_of(agents, TeamStatus::default());
+        let kind_of = |agents: Vec<AgentSnapshot>| main(agents).attention.kind;
 
         assert_eq!(kind_of(vec![idle.clone()]), AttentionKind::None);
         assert_eq!(
@@ -1059,12 +1102,38 @@ mod tests {
             AttentionKind::Dead
         );
         assert_eq!(
-            main_attention(&[unarmed, dead, asking]),
+            main(vec![unarmed, dead, asking]).attention,
             Attention {
                 kind: AttentionKind::Asking,
                 detail: Some("c: plan approval".into()),
                 agent: Some("c".into()),
             }
+        );
+    }
+
+    #[test]
+    fn a_blocked_main_needs_its_answer_first_and_an_idle_one_never_stalls() {
+        let asking = waiting("c", AgentState::Asking, WaitingKind::Plan, "plan approval");
+        let blocked = TeamStatus {
+            progress: Progress::Blocked,
+            blocked_reason: Some("next item?".into()),
+            blocked_by: Some("main".into()),
+        };
+
+        assert_eq!(
+            ScopeSnapshot::main_of(vec![asking], blocked).attention,
+            Attention {
+                kind: AttentionKind::Blocked,
+                detail: Some("next item?".into()),
+                agent: Some("main".into()),
+            }
+        );
+        let idle = vec![agent("main", AgentState::Idle, 0)];
+        assert_eq!(
+            ScopeSnapshot::main_of(idle, TeamStatus::default())
+                .attention
+                .kind,
+            AttentionKind::None
         );
     }
 

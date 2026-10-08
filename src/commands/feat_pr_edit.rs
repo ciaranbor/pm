@@ -65,9 +65,7 @@ mod tests {
             workflow: None,
             created: now,
             last_active: now,
-            progress: Default::default(),
-            blocked_reason: None,
-            blocked_by: None,
+            team: Default::default(),
         }
     }
 

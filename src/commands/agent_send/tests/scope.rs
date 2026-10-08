@@ -48,24 +48,6 @@ fn send_cross_scope_shows_scopes_in_output() {
     let main_session = tmux::session_name(&config.project.name, "main");
     tmux::create_session(server.name(), &main_session, &main_worktree).unwrap();
 
-    // Need feature state for "main" scope so agent lookup works
-    let now = Utc::now();
-    let main_state = FeatureState {
-        status: FeatureStatus::Wip,
-        branch: "main".to_string(),
-        worktree: "main".to_string(),
-        base: String::new(),
-        pr: String::new(),
-        context: String::new(),
-        workflow: None,
-        created: now,
-        last_active: now,
-        progress: Default::default(),
-        blocked_reason: None,
-        blocked_by: None,
-    };
-    main_state.save(&pm_dir.join("features"), "main").unwrap();
-
     // Agent definition in main worktree, and pre-spawn it active —
     // cross-scope sends require the target's agent to already be running.
     create_agent_definition(&root, "implementer");
@@ -130,22 +112,6 @@ fn send_cross_scope_records_sender_scope_in_metadata() {
     let main_session = tmux::session_name(&config.project.name, "main");
     tmux::create_session(server.name(), &main_session, &main_worktree).unwrap();
 
-    let now = Utc::now();
-    let main_state = FeatureState {
-        status: FeatureStatus::Wip,
-        branch: "main".to_string(),
-        worktree: "main".to_string(),
-        base: String::new(),
-        pr: String::new(),
-        context: String::new(),
-        workflow: None,
-        created: now,
-        last_active: now,
-        progress: Default::default(),
-        blocked_reason: None,
-        blocked_by: None,
-    };
-    main_state.save(&pm_dir.join("features"), "main").unwrap();
     create_agent_definition(&root, "implementer");
     server.spawn_fake_agent(&root, &main_session, "main", "implementer");
 
@@ -185,22 +151,6 @@ fn send_cross_scope_dead_window_queues_and_respawns() {
     let main_session = tmux::session_name(&config.project.name, "main");
     tmux::create_session(server.name(), &main_session, &main_worktree).unwrap();
 
-    let now = Utc::now();
-    let main_state = FeatureState {
-        status: FeatureStatus::Wip,
-        branch: "main".to_string(),
-        worktree: "main".to_string(),
-        base: String::new(),
-        pr: String::new(),
-        context: String::new(),
-        workflow: None,
-        created: now,
-        last_active: now,
-        progress: Default::default(),
-        blocked_reason: None,
-        blocked_by: None,
-    };
-    main_state.save(&pm_dir.join("features"), "main").unwrap();
     create_agent_definition(&root, "implementer");
 
     // Spawn the recipient active in main scope, then kill its window by

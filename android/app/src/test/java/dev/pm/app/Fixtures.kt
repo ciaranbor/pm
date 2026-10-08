@@ -23,6 +23,7 @@ val SNAPSHOT =
           "session": "app/main", "session_exists": true,
           "agents": [{"name": "main", "state": "hibernating", "unread": 0, "window": "app/main:1", "waiting": null}],
           "attention": {"kind": "summoning", "detail": "main: ?", "agent": "main"},
+          "progress": "wip", "blocked_reason": null, "blocked_by": null,
           "working": false, "last_activity": null, "colour": "teal"
         }
       }],

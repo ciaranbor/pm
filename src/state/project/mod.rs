@@ -106,9 +106,7 @@ mod tests {
                 workflow: None,
                 created: chrono::Utc::now(),
                 last_active: chrono::Utc::now(),
-                progress: Default::default(),
-                blocked_reason: None,
-                blocked_by: None,
+                team: Default::default(),
             };
             state.save(&features_dir, &format!("feat-{i}")).unwrap();
         }
@@ -146,9 +144,7 @@ mod tests {
                 workflow: None,
                 created: chrono::Utc::now(),
                 last_active: chrono::Utc::now(),
-                progress: Default::default(),
-                blocked_reason: None,
-                blocked_by: None,
+                team: Default::default(),
             };
             state.save(&features_dir, &format!("feat-{i}")).unwrap();
         }
@@ -190,9 +186,7 @@ mod tests {
                 workflow: None,
                 created: chrono::Utc::now(),
                 last_active: chrono::Utc::now(),
-                progress: Default::default(),
-                blocked_reason: None,
-                blocked_by: None,
+                team: Default::default(),
             };
             state.save(&features_dir, &format!("feat-{i}")).unwrap();
         }
@@ -229,9 +223,7 @@ mod tests {
             workflow: None,
             created: chrono::Utc::now(),
             last_active: chrono::Utc::now(),
-            progress: Default::default(),
-            blocked_reason: None,
-            blocked_by: None,
+            team: Default::default(),
         };
         state.save(&features_dir, "old-feat").unwrap();
 
@@ -267,9 +259,7 @@ mod tests {
             workflow: None,
             created: chrono::Utc::now(),
             last_active: chrono::Utc::now(),
-            progress: Default::default(),
-            blocked_reason: None,
-            blocked_by: None,
+            team: Default::default(),
         };
         state.save(&features_dir, "stale-feat").unwrap();
 
@@ -307,9 +297,7 @@ mod tests {
                 workflow: None,
                 created: chrono::Utc::now(),
                 last_active: chrono::Utc::now(),
-                progress: Default::default(),
-                blocked_reason: None,
-                blocked_by: None,
+                team: Default::default(),
             };
             state.save(&features_dir, &format!("feat-{i}")).unwrap();
         }

@@ -81,6 +81,20 @@ class AlertTest {
             listOf("main stopped running"),
             said(Alert.of(push("dead", "main", "main"), snapshot, emptyList())),
         )
+        val mainBlocked =
+            snapshot.copy(
+                projects =
+                    snapshot.projects.map {
+                        it.copy(
+                            main =
+                                it.main!!.copy(progress = "blocked", blockedReason = "next item?")
+                        )
+                    }
+            )
+        assertEquals(
+            listOf("next item?"),
+            said(Alert.of(push("blocked", "main", "main"), mainBlocked, emptyList())),
+        )
     }
 
     @Test

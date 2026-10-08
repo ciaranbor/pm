@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
+use crate::state::scope::TeamStatus;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -36,8 +37,8 @@ impl std::fmt::Display for FeatureStatus {
     }
 }
 
-/// Where the team's work stands, set by the agents with `pm feat status`.
-/// Independent of [`FeatureStatus`], which `pm feat sync` derives from the PR.
+/// Where the team's work stands ([`TeamStatus`]). Independent of
+/// [`FeatureStatus`], which `pm feat sync` derives from the PR.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Progress {
@@ -63,14 +64,8 @@ impl std::fmt::Display for Progress {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FeatureState {
     pub status: FeatureStatus,
-    #[serde(default)]
-    pub progress: Progress,
-    /// What a blocked team is waiting on the user for.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub blocked_reason: Option<String>,
-    /// The agent that marked the feature blocked: the one to answer.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub blocked_by: Option<String>,
+    #[serde(flatten)]
+    pub team: TeamStatus,
     pub branch: String,
     pub worktree: String,
     #[serde(default)]
@@ -265,9 +260,7 @@ mod tests {
             workflow: None,
             created: Utc::now(),
             last_active: Utc::now(),
-            progress: Default::default(),
-            blocked_reason: None,
-            blocked_by: None,
+            team: Default::default(),
         }
     }
 
@@ -283,14 +276,50 @@ mod tests {
         )
         .unwrap();
         let old = FeatureState::load(&features_dir, "old").unwrap();
-        assert_eq!(old.progress, Progress::Wip);
+        assert_eq!(old.team.progress, Progress::Wip);
         assert_eq!(old.status, FeatureStatus::Review);
 
         let mut state = make_feature(FeatureStatus::Wip);
-        state.progress = Progress::Blocked;
+        state.team.progress = Progress::Blocked;
         state.save(&features_dir, "login").unwrap();
         let loaded = FeatureState::load(&features_dir, "login").unwrap();
-        assert_eq!(loaded.progress, Progress::Blocked);
+        assert_eq!(loaded.team.progress, Progress::Blocked);
+    }
+
+    #[test]
+    fn the_team_status_keeps_its_on_disk_keys() {
+        let dir = tempdir().unwrap();
+        let features_dir = dir.path().join("features");
+        std::fs::create_dir_all(&features_dir).unwrap();
+        let written = "status = \"wip\"\nprogress = \"blocked\"\n\
+                       blocked_reason = \"which DB?\"\nblocked_by = \"implementer\"\n\
+                       branch = \"login\"\nworktree = \"login\"\nbase = \"main\"\n\
+                       pr = \"\"\ncontext = \"\"\nworkflow = \"default\"\n\
+                       created = \"2025-01-01T00:00:00Z\"\n\
+                       last_active = \"2025-01-01T00:00:00Z\"\n";
+        std::fs::write(features_dir.join("login.toml"), written).unwrap();
+
+        let state = FeatureState::load(&features_dir, "login").unwrap();
+        assert_eq!(
+            state.team,
+            TeamStatus {
+                progress: Progress::Blocked,
+                blocked_reason: Some("which DB?".into()),
+                blocked_by: Some("implementer".into()),
+            }
+        );
+        assert_eq!(state.workflow.as_deref(), Some("default"));
+        state.save(&features_dir, "login").unwrap();
+        let saved: toml::Table =
+            toml::from_str(&std::fs::read_to_string(features_dir.join("login.toml")).unwrap())
+                .unwrap();
+        assert_eq!(saved, toml::from_str::<toml::Table>(written).unwrap());
+
+        let mut wip = state;
+        wip.team = TeamStatus::default();
+        wip.save(&features_dir, "login").unwrap();
+        let saved = std::fs::read_to_string(features_dir.join("login.toml")).unwrap();
+        assert!(!saved.contains("blocked_"), "{saved}");
     }
 
     #[derive(Debug, PartialEq, Serialize, Deserialize)]

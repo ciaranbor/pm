@@ -353,9 +353,7 @@ pub(crate) mod test_support {
             workflow: None,
             created: now,
             last_active: now,
-            progress: Default::default(),
-            blocked_reason: None,
-            blocked_by: None,
+            team: Default::default(),
         };
         state.save(&pm_dir.join("features"), feature_name).unwrap();
 

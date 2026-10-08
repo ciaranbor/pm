@@ -60,7 +60,9 @@ data class PushedTransition(
             it.stateOf == state && (agent == null || it.name == agent)
         }
         return when (kindOf) {
-            AttentionKind.Blocked -> feature?.progress == "blocked"
+            AttentionKind.Blocked ->
+                if (scope == Snapshot.MAIN) project.main?.progress == "blocked"
+                else feature?.progress == "blocked"
             AttentionKind.Ready -> feature?.progress == "ready" || feature?.lifecycle == "approved"
             AttentionKind.Asking -> anyIn(AgentState.Asking)
             AttentionKind.Dead -> anyIn(AgentState.Dead)

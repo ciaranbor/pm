@@ -1,9 +1,8 @@
 use std::path::Path;
 
 use crate::error::Result;
-use crate::state::feature::FeatureState;
-use crate::state::paths;
 use crate::state::project::{ProjectConfig, ProjectEntry};
+use crate::state::{paths, scope};
 use crate::tmux;
 
 /// What [`close`] did.
@@ -24,16 +23,9 @@ pub fn close(project_root: &Path, tmux_server: Option<&str>) -> Result<Closed> {
     let config = ProjectConfig::load(&pm_dir)?;
     let project_name = &config.project.name;
 
-    let features_dir = paths::features_dir(project_root);
-    let features = FeatureState::list(&features_dir)?;
-
-    let scopes = features
-        .iter()
-        .map(|(name, _)| name.as_str())
-        .chain(["main"]);
     let mut doomed = Vec::new();
-    for scope in scopes {
-        let session = tmux::session_name(project_name, scope);
+    for scope in scope::names(project_root)? {
+        let session = tmux::session_name(project_name, &scope);
         if tmux::has_session(tmux_server, &session)? {
             doomed.push(session);
         }
@@ -116,6 +108,7 @@ pub fn close_all_with_dir(
 mod tests {
     use super::*;
     use crate::commands::feat_new;
+    use crate::state::feature::FeatureState;
     use crate::testing::{ControlClient, OwnServer, TestServer};
     use tempfile::tempdir;
 

@@ -369,7 +369,7 @@ fun ScopesList(
                 ProjectScopeRow(
                     name = Snapshot.MAIN,
                     attention = main.attention,
-                    line = null,
+                    line = needLine(main.attention),
                     agents = main.agents,
                     closed = !main.sessionExists,
                     activity = activity(main.working, main.backgroundSince, main.lastActivity, now),

@@ -50,10 +50,10 @@ pub fn feat_merge(
     let merge_start = Instant::now();
     let mut tlog: Option<TimingLog> = Some(TimingLog::new(&pm_dir, "merge", name));
     let already_status_merged = plan.already_merged();
-    if state.progress != Progress::Ready {
+    if state.team.progress != Progress::Ready {
         eprintln!(
             "warning: feature '{name}' is not marked ready (status: {})",
-            state.progress
+            state.team.progress
         );
     }
 

@@ -46,6 +46,7 @@ Creates a feature from a branch that already exists. Does not create a new branc
 
 ```sh
 pm feat status        # from main: each feature's status, why it is blocked, what a ready one says
+pm feat status main   # main's own status (wip, or blocked and why)
 pm feat list          # each feature's status, lifecycle, branch, base and PR (--all: every project)
 pm feat info <name>   # full details for a feature
 pm status             # project dashboard

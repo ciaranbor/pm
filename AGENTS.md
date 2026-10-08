@@ -108,6 +108,8 @@ Design decisions you can't recover by reading the tree. Preserve them.
   for gaps; the always-sent merge/delete notice, naming which, is the sole
   triage trigger. `blocked` never messages `main`; nothing pm sends resets it.
 - Team status and the PR-derived `status` are separate: sync can't clobber it.
+  `main` has a team status too, `wip` or `blocked`, never `ready`, kept
+  outside `features/` so main never lists as a feature.
 - Each `workflow.md` names the single summary owner; content guidance is
   single-sourced in `pm workflow show`, never in defs, workflows, or skills.
 - The `feat new` brief is non-repliable: the agent has no `main` reply target.

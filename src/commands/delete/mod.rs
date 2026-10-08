@@ -3,8 +3,8 @@ use std::path::Path;
 use crate::error::{PmError, Result};
 use crate::state::agent::AgentRegistry;
 use crate::state::feature::FeatureState;
-use crate::state::paths;
 use crate::state::project::{ProjectConfig, ProjectEntry};
+use crate::state::{paths, scope};
 use crate::{gh, git, messages, tmux};
 
 use super::feat_delete::{CleanupParams, base_scope, check_safety, cleanup_feature};
@@ -152,12 +152,11 @@ pub fn delete(
     let mut warnings = Vec::new();
 
     // --- Delete all features ---
+    let scopes = scope::names(project_root)?;
     let own = tmux::own_session(tmux_server)
         .filter(|own| {
-            features
+            scopes
                 .iter()
-                .map(|(name, _)| name.as_str())
-                .chain(["main"])
                 .any(|scope| tmux::session_name(&project_name, scope) == *own)
         })
         .map(|name| tmux::OwnSession {

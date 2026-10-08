@@ -11,7 +11,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
-use crate::state::paths;
+use crate::state::{paths, scope};
 use crate::tmux;
 
 const HOOK_WINDOW_NAME: &str = "hook";
@@ -30,6 +30,7 @@ macro_rules! env_comment {
 #   PM_MAIN_WORKTREE   the main worktree
 #   PM_WORKTREE        the worktree this hook concerns (also the cwd)
 #   PM_SESSION         the tmux session this hook runs in
+#   PM_SCOPE           scope owning PM_WORKTREE: main or the feature's name
 #   PM_FEATURE         feature owning PM_WORKTREE; empty in main scope
 "
     };
@@ -103,9 +104,9 @@ pub struct HookContext {
     pub session: String,
     /// Worktree the session belongs to; also the hook's working directory.
     pub worktree: PathBuf,
-    /// Feature the session belongs to; `None` in main scope, exported as
-    /// an empty `PM_FEATURE`.
-    pub feature: Option<String>,
+    /// Scope the session belongs to; main's is exported as an empty
+    /// `PM_FEATURE`.
+    pub scope: String,
     /// post-merge only: the feature that was merged into `worktree`.
     pub merged_feature: Option<String>,
 }
@@ -116,8 +117,8 @@ impl HookContext {
         Self {
             project_root: project_root.to_path_buf(),
             session: tmux::session_name(project_name, scope),
-            worktree: project_root.join(scope),
-            feature: (scope != "main").then(|| scope.to_string()),
+            worktree: paths::scope_worktree(project_root, scope),
+            scope: scope.to_string(),
             merged_feature: None,
         }
     }
@@ -140,7 +141,14 @@ impl HookContext {
             ),
             ("PM_WORKTREE", lossy(&self.worktree)),
             ("PM_SESSION", self.session.clone()),
-            ("PM_FEATURE", self.feature.clone().unwrap_or_default()),
+            ("PM_SCOPE", self.scope.clone()),
+            (
+                "PM_FEATURE",
+                Some(&self.scope)
+                    .filter(|s| *s != scope::MAIN)
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
         ];
         if let Some(merged) = &self.merged_feature {
             vars.push(("PM_MERGED_FEATURE", merged.clone()));
@@ -214,7 +222,7 @@ mod tests {
         crate::testing::write_executable(
             &script,
             "#!/bin/sh\nprintf '%s\\n' \"$PM_PROJECT_ROOT\" \"$PM_MAIN_WORKTREE\" \
-             \"$PM_WORKTREE\" \"$PM_SESSION\" \"${PM_FEATURE+set}:$PM_FEATURE\" \
+             \"$PM_WORKTREE\" \"$PM_SESSION\" \"$PM_SCOPE\" \"${PM_FEATURE+set}:$PM_FEATURE\" \
              \"${PM_MERGED_FEATURE+set}:$PM_MERGED_FEATURE\"\n",
         );
         let out = std::process::Command::new("sh")
@@ -247,6 +255,7 @@ mod tests {
                 root.join("main").display().to_string(),
                 root.join("log in").display().to_string(),
                 "it's a/proj/log in".to_string(),
+                "log in".to_string(),
                 "set:log in".to_string(),
                 ":".to_string(),
             ]
@@ -254,24 +263,25 @@ mod tests {
     }
 
     #[test]
-    fn main_scope_hook_sees_empty_feature_and_post_merge_sees_merged_feature() {
+    fn main_scope_hook_sees_main_an_empty_feature_and_the_merged_feature() {
         let dir = tempdir().unwrap();
         let root = dir.path().to_path_buf();
         let env = hook_env_seen_by(&HookContext::post_merge(&root, "proj", "main", "login"));
-        assert_eq!(env[4], "set:");
-        assert_eq!(env[5], "set:login");
+        assert_eq!(env[4], "main");
+        assert_eq!(env[5], "set:");
+        assert_eq!(env[6], "set:login");
     }
 
     #[test]
     fn post_merge_context_is_the_base_scope() {
         let root = Path::new("/p");
         let ctx = HookContext::post_merge(root, "proj", "main", "login");
-        assert_eq!(ctx.feature, None);
+        assert_eq!(ctx.scope, "main");
         assert_eq!(ctx.session, "proj/main");
         assert_eq!(ctx.worktree, root.join("main"));
 
         let ctx = HookContext::post_merge(root, "proj", "parent", "login");
-        assert_eq!(ctx.feature.as_deref(), Some("parent"));
+        assert_eq!(ctx.scope, "parent");
         assert_eq!(ctx.merged_feature.as_deref(), Some("login"));
         assert_eq!(ctx.session, "proj/parent");
         assert_eq!(ctx.worktree, root.join("parent"));

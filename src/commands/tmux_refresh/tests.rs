@@ -10,6 +10,7 @@ use crate::state::agent::AgentRegistry;
 use crate::state::feature::{FeatureState, FeatureStatus, Progress};
 use crate::state::paths;
 use crate::state::runtime::WaitingKind;
+use crate::state::scope::TeamStatus;
 use crate::testing::{OwnServer, TestServer, server_socket_exists};
 use crate::tmux;
 use crate::tmux::options::Client;
@@ -236,7 +237,7 @@ fn main_agents_get_badges_and_main_carries_its_project_and_its_agents_badge() {
         [
             project_name.as_str(),
             "",
-            "",
+            "wip",
             "",
             "",
             "#[fg=colour245]\u{f252} #[fg=yellow]\u{f0e0}#[default]",
@@ -245,7 +246,7 @@ fn main_agents_get_badges_and_main_carries_its_project_and_its_agents_badge() {
             "",
             ""
         ],
-        "main's own badge, whatever its attention"
+        "main's own badge while not blocked"
     );
 
     let agents_dir = paths::agents_dir(&project);
@@ -423,22 +424,13 @@ fn changes_are_written_in_one_tmux_call_and_a_repeat_writes_nothing() {
 }
 
 fn main_scope(agents: Vec<AgentSnapshot>) -> Snapshot {
-    let attention = attention::main_attention(&agents);
     Snapshot {
         version: attention::VERSION,
         projects: vec![attention::ProjectSnapshot {
             name: "app".into(),
             root: "/src/app".into(),
             skipped: None,
-            main: Some(ScopeSnapshot {
-                session: "app/main".into(),
-                session_exists: true,
-                agents,
-                attention,
-                working: false,
-                background_since: None,
-                last_activity: None,
-            }),
+            main: Some(ScopeSnapshot::main_of(agents, TeamStatus::default())),
         }],
         features: Vec::new(),
     }
@@ -543,6 +535,46 @@ fn main_asking_needs_attention_alerts_once_and_unarmed_never_alerts() {
         ["#[fg=magenta]\u{f1f6} 1 unarmed#[default]"]
     );
     assert!(announced(&commands).is_empty());
+}
+
+#[test]
+fn a_blocked_main_shows_its_attention_badge_and_alerts_once_but_not_when_reopened() {
+    let mut snapshot = main_scope(Vec::new());
+    snapshot.projects[0].main = Some(ScopeSnapshot::main_of(
+        vec![main_agent(AgentState::Idle, WaitingKind::Idle, "idle")],
+        TeamStatus {
+            progress: Progress::Blocked,
+            blocked_reason: Some("next item?".into()),
+            blocked_by: Some("main".into()),
+        },
+    ));
+    let session = |options: &[(&'static str, &str)]| Options {
+        clients: vec![Client::named("c1")],
+        sessions: vec![Holder::session("app/main", options)],
+        ..Options::default()
+    };
+    let now = Utc::now();
+
+    let commands = commands(&snapshot, &session(&[(PROJECT, "app")]), now);
+    assert_eq!(sets(&commands, ATTENTION), ["blocked"]);
+    assert_eq!(sets(&commands, PROGRESS), ["blocked"]);
+    assert_eq!(sets(&commands, REASON), ["next item?"]);
+    assert_eq!(
+        sets(&commands, BADGE),
+        [badge::attention(AttentionKind::Blocked).unwrap()]
+    );
+    assert_eq!(sets(&commands, COUNT), ["1"]);
+    assert_eq!(announced(&commands), ["pm: app/main blocked: next item?"]);
+
+    let shown = session(&[
+        (PROJECT, "app"),
+        (ATTENTION, "blocked"),
+        (ALERTED, "blocked"),
+    ]);
+    assert!(announced(&super::commands(&snapshot, &shown, now)).is_empty());
+    let reopened = super::commands(&snapshot, &session(&[]), now);
+    assert!(announced(&reopened).is_empty(), "a standing block");
+    assert_eq!(sets(&reopened, ATTENTION), ["blocked"]);
 }
 
 fn feature_scope(progress: Progress, busy: bool, agents: Vec<AgentSnapshot>) -> Snapshot {

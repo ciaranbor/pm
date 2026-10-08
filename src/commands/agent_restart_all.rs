@@ -33,10 +33,10 @@ use std::path::{Path, PathBuf};
 use crate::error::{PmError, Result};
 use crate::harness::Harness;
 use crate::state::agent::{AgentEntry, AgentRegistry};
-use crate::state::feature::FeatureState;
 use crate::state::paths;
 use crate::state::project::{GlobalConfig, ProjectConfig, ProjectEntry};
 use crate::state::runtime;
+use crate::state::scope;
 use crate::tmux;
 
 use super::agent_restart::{Restarted, callers_agent};
@@ -76,14 +76,14 @@ impl Scope {
 
 /// Every scope of the project at `root`: main, then each feature.
 pub fn project_scopes(root: &Path) -> Result<Vec<Scope>> {
-    let main = Scope::of(root, "main")?;
-    let features = FeatureState::list(&paths::features_dir(root))?;
-    let mut scopes = vec![main.clone()];
-    scopes.extend(features.into_iter().map(|(name, _)| Scope {
-        name,
-        ..main.clone()
-    }));
-    Ok(scopes)
+    let main = Scope::of(root, scope::MAIN)?;
+    Ok(scope::names(root)?
+        .into_iter()
+        .map(|name| Scope {
+            name,
+            ..main.clone()
+        })
+        .collect())
 }
 
 /// Every scope of every project registered in `projects_dir` that is on this

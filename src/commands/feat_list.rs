@@ -24,14 +24,14 @@ pub fn feat_list(project_root: &Path) -> Result<Vec<String>> {
     let name_w = features.iter().map(|(n, _)| n.len()).max().unwrap().max(4);
     let progress_w = features
         .iter()
-        .map(|(_, s)| s.progress.to_string().len())
+        .map(|(_, s)| s.team.progress.to_string().len())
         .max()
         .unwrap();
 
     let mut lines = Vec::new();
 
     for (name, state) in &features {
-        let mut line = format!("{:<name_w$}  {:<progress_w$}", name, state.progress);
+        let mut line = format!("{:<name_w$}  {:<progress_w$}", name, state.team.progress);
         if let Some(lifecycle) = lifecycle_token(state.status) {
             line.push_str(&format!("  {lifecycle}"));
         }
@@ -119,9 +119,10 @@ mod tests {
             workflow: None,
             created: Utc::now(),
             last_active: Utc::now(),
-            progress: crate::state::feature::Progress::Blocked,
-            blocked_reason: None,
-            blocked_by: None,
+            team: crate::state::scope::TeamStatus {
+                progress: crate::state::feature::Progress::Blocked,
+                ..Default::default()
+            },
         };
         state.save(&features_dir, "login").unwrap();
 

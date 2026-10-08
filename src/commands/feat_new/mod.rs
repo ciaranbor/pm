@@ -10,20 +10,24 @@ use crate::hooks;
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
 use crate::state::project::{ProjectConfig, ProjectEntry};
+use crate::state::scope;
 use crate::{git, tmux};
 
 /// Derive a feature name from a branch name, replacing `/` with `-`.
-/// If `name_override` is provided, validate it and use that instead.
+/// If `name_override` is provided, validate it and use that instead. A
+/// feature may not take the main scope's name.
 pub fn sanitize_feature_name(branch: &str, name_override: Option<&str>) -> Result<String> {
-    match name_override {
-        Some(name) => {
-            if name.contains('/') {
-                return Err(PmError::InvalidFeatureName(name.to_string()));
-            }
-            Ok(name.to_string())
+    let name = match name_override {
+        Some(name) if name.contains('/') => {
+            return Err(PmError::InvalidFeatureName(name.to_string()));
         }
-        None => Ok(branch.replace('/', "-")),
+        Some(name) => name.to_string(),
+        None => branch.replace('/', "-"),
+    };
+    if name == scope::MAIN {
+        return Err(PmError::ReservedFeatureName(name));
     }
+    Ok(name)
 }
 
 /// Read all of `reader` to EOF as a UTF-8 string. Used to back the `-`
