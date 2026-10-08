@@ -52,7 +52,9 @@ once. Close asks first, and says how many agents are mid-turn; Open brings
 them back, each resuming its conversation. Delete runs `pm delete` without
 `--force` once you type the project's name, and leaves every page of the
 project. The start screen lists a project with no session up under Closed
-projects, after the rest; its page offers Open.
+projects, after the rest; its page offers Open. A registered project that
+isn't on this machine is not listed
+([snapshot](remote-api.md#json-version-1)).
 
 ## Building
 

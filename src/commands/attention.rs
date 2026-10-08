@@ -346,9 +346,13 @@ pub fn main_attention(agents: &[AgentSnapshot]) -> Attention {
     .unwrap_or_else(|| of(AttentionKind::None, None, None))
 }
 
-/// The snapshot of every registered project. A project whose state or
-/// registry entry can't be read is listed as skipped, so one broken entry
-/// doesn't hide the rest. Nothing is printed: the tmux watcher runs this.
+/// The snapshot of every registered project on this machine: one with its
+/// main checkout, which every command that opens a project needs. Another
+/// (synced from a registry whose project was never restored here, or
+/// removed from disk) is left out, as nothing here can act on it. A project
+/// whose state or registry entry can't be read is listed as skipped, so one
+/// broken entry doesn't hide the rest. Nothing is printed: the tmux watcher
+/// runs this.
 pub fn all(projects_dir: &Path, tmux_server: Option<&str>) -> Result<Snapshot> {
     let windows = Windows::read(tmux_server)?;
     let global = GlobalConfig::load_or_default().harness;
@@ -360,6 +364,9 @@ pub fn all(projects_dir: &Path, tmux_server: Option<&str>) -> Result<Snapshot> {
     let registry = ProjectEntry::scan(projects_dir)?;
     for (name, entry) in registry.projects {
         let root = entry.root_path();
+        if !paths::main_worktree(&root).is_dir() {
+            continue;
+        }
         let read = if paths::pm_dir(&root).is_dir() {
             project_features(&root, &windows, &global).map_err(|e| e.to_string())
         } else {
@@ -1279,7 +1286,7 @@ mod tests {
     }
 
     #[test]
-    fn every_project_is_snapshotted_most_urgent_first_and_an_unreadable_one_skipped() {
+    fn every_project_here_is_snapshotted_most_urgent_first_and_an_unreadable_one_skipped() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let projects_dir = dir.path().join("registry");
@@ -1300,6 +1307,10 @@ mod tests {
         let gone = dir.path().join(server.scope("gone"));
         init::init(&gone, &projects_dir, None, server.name()).unwrap();
         std::fs::remove_dir_all(&gone).unwrap();
+        // Its checkout is here, but not its pm state.
+        let cleared = dir.path().join(server.scope("cleared"));
+        init::init(&cleared, &projects_dir, None, server.name()).unwrap();
+        std::fs::remove_dir_all(paths::pm_dir(&cleared)).unwrap();
         let broken = projects_dir.join(format!("{}.toml", server.scope("broken")));
         std::fs::write(&broken, "root = \"/x\"\nmain_branch = [").unwrap();
 
@@ -1322,14 +1333,18 @@ mod tests {
             .iter()
             .map(|p| (p.name.as_str(), p.skipped.as_deref()))
             .collect();
-        assert_eq!(skipped.len(), 4);
-        assert!(skipped.contains(&(server.scope("alpha").as_str(), None)));
-        assert!(
-            skipped
-                .iter()
-                .any(|(name, why)| *name == server.scope("gone")
-                    && why.is_some_and(|w| w.starts_with("no pm project at")))
+        assert_eq!(
+            skipped.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+            [
+                server.scope("alpha"),
+                server.scope("beta"),
+                server.scope("broken"),
+                server.scope("cleared")
+            ]
         );
+        assert!(skipped.contains(&(server.scope("alpha").as_str(), None)));
+        let no_pm = format!("no pm project at {}", cleared.display());
+        assert!(skipped.contains(&(server.scope("cleared").as_str(), Some(no_pm.as_str()))));
 
         let lines =
             crate::commands::feat_status_view::all(&projects_dir, false, server.name()).unwrap();
@@ -1359,11 +1374,7 @@ mod tests {
         );
         assert_eq!(
             lines[3],
-            format!(
-                "{}: skipped (no pm project at {})",
-                server.scope("gone"),
-                gone.display()
-            )
+            format!("{}: skipped ({no_pm})", server.scope("cleared"))
         );
         assert_eq!(lines.len(), 4);
     }

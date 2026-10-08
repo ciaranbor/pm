@@ -153,12 +153,12 @@ first of these that applies, most urgent first:
 | `stalled` | status `wip`, but every agent is idle with no unread messages: the team stopped without saying why |
 
 `main` gets a row too when one of its agents is asking, dead or unarmed.
-Run `pm feat status` in the `main` session (`--all` for every project; `pm
-status` prints it too) and work down from the top: answer what is blocked
-or asking, merge what is ready, restart what is dead, prompt what is
-unarmed, and ask a stalled team why it stopped. In a feature, `pm feat
-status` shows just that feature. Its `--json` form is a stable contract for
-scripts ([docs/remote-api.md](docs/remote-api.md#attention-snapshot)).
+Run `pm feat status` in the `main` session (`--all` for every project on
+this machine; `pm status` prints it too) and work down from the top:
+answer what is blocked or asking, merge what is ready, restart what is
+dead, prompt what is unarmed, and ask a stalled team why it stopped. In a
+feature, `pm feat status` shows just that feature. Its `--json` form is a
+stable contract for scripts ([docs/remote-api.md](docs/remote-api.md#attention-snapshot)).
 
 ### Work with the agents
 

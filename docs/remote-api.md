@@ -319,7 +319,10 @@ consumer must tolerate values it doesn't know:
 }
 ```
 
-`features` is sorted like the rows. `attention.kind` is one of the table's
+`projects` lists the registered projects on this machine, those with their
+main checkout: one synced from another machine's registry and never
+restored here, or removed from disk, is left out, as nothing here can open
+it. `features` is sorted like the rows. `attention.kind` is one of the table's
 kinds or `none`; `progress` stays `ready` while a busy agent holds
 [`ready`](../README.md#follow-what-needs-you) back; `skipped` says why a
 project's features are missing, and
