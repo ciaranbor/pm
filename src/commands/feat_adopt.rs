@@ -181,8 +181,8 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
         }
 
         // Step 2.7: Enqueue the initial context as a message to each
-        // brief_agents agent (if context provided). The Stop hook delivers
-        // it on each agent's empty first turn; TASK.md is never written.
+        // brief_agents agent (if context provided). pm's waiter wakes each
+        // agent with it once its session starts; TASK.md is never written.
         if let Some(ref resolved) = resolved_context {
             feat_common::enqueue_initial_context(
                 params.project_root,

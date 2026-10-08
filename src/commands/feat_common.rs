@@ -116,8 +116,8 @@ pub fn write_initializing_state(
 }
 
 /// Enqueue a feature's initial context as a message in each `brief_agents`
-/// agent's inbox. The pm Stop hook will deliver it on each agent's empty
-/// first turn. Caller passes the workflow's loaded `brief_agents` list; the
+/// agent's inbox. pm's waiter wakes each agent with it once its session
+/// starts. Caller passes the workflow's loaded `brief_agents` list; the
 /// empty case (no brief recipients) is handled silently.
 ///
 /// The brief is sent with no sender scope and a `no-reply-brief` sender, so
@@ -151,9 +151,8 @@ pub fn enqueue_initial_context(
 /// shell created by `tmux new-session`) to avoid leaving an empty window.
 /// Subsequent agents are spawned into new windows.
 ///
-/// The pm Stop hook is responsible for delivering any queued messages on
-/// each agent's empty first turn — `spawn_session` itself passes no
-/// initial prompt.
+/// pm's waiter delivers any queued messages once each agent's session
+/// starts — `spawn_session` itself passes no initial prompt.
 ///
 /// Config notes are printed per agent here: the feature commands report
 /// only the feature name, so there is no per-agent status line to carry them.

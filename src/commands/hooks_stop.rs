@@ -5,10 +5,7 @@
 //! ended ([`Harness::wake`]), it is that harness's waiter (`wake.rs` has
 //! how it waits and wakes). Without one it is the waiter opencode's plugin
 //! runs between turns: it answers `block` at once when messages are
-//! queued, else waits on the inbox until one arrives. An entry an earlier
-//! release installed for Claude Code or codex runs it too, inside the
-//! turn, until `pm harness hooks install` replaces it (`pm doctor` reports
-//! one).
+//! queued, else waits on the inbox until one arrives.
 //!
 //! The wait ends without a decision once the harness that ran the hook is
 //! gone ([`hook_process`](super::hook_process) has how that is told), or a
@@ -91,6 +88,14 @@ pub fn stop(harness: Option<Harness>, on_turn: &mut dyn FnMut(AgentState, u32)) 
         Some(harness) => wake::run(harness, on_turn),
         None => blocking(on_turn),
     }
+}
+
+/// Run `harness`'s waiter from a hook other than Stop, whose `payload` it
+/// has read: SessionStart's, on a harness whose SessionStart hook
+/// [waits](Harness::waits_at_session_start). Returns the exit code, as
+/// [`stop`] does.
+pub fn wait_from(harness: Harness, payload: &str, on_turn: &mut dyn FnMut(AgentState, u32)) -> i32 {
+    wake::run_on(harness, payload, on_turn)
 }
 
 /// The blocking hook. Prints its answer as JSON and returns 0. Ending

@@ -115,7 +115,7 @@ fn setup_review(
         seed::seed_feature_assets(project_root, &worktree_path)?;
 
         // Step 2.7: Enqueue PR-review context to the reviewer agent's inbox.
-        // The pm Stop hook will deliver it on the reviewer's empty first turn.
+        // pm's waiter wakes the reviewer with it once its session starts.
         let messages_dir = paths::messages_dir(project_root);
         let sender = crate::messages::default_user_name();
         crate::messages::send(&messages_dir, feature_name, "reviewer", &sender, &context)?;

@@ -226,9 +226,9 @@ pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
         seed::seed_feature_assets(params.project_root, &worktree_path)?;
 
         // Step 3.6: Enqueue initial context as a message to every
-        // brief_agents agent in the workflow (if context provided). The
-        // Stop hook will deliver it on the empty first turn after spawn.
-        // TASK.md is never written.
+        // brief_agents agent in the workflow (if context provided). pm's
+        // waiter wakes each agent with it once its session starts. TASK.md
+        // is never written.
         if let Some(ref resolved) = resolved_context {
             feat_common::enqueue_initial_context(
                 params.project_root,

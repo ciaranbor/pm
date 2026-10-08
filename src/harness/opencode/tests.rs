@@ -75,7 +75,7 @@ fn build_cmd_opens_the_prepared_session_standalone_and_auto() {
         &cfg(),
         &pre("ses_1"),
     );
-    // The definition, model and sentinel prompt never reach the command
+    // The definition, model and prompt never reach the command
     // line: the session already carries the agent and the model, and the
     // plugin arms without a first turn.
     assert_eq!(

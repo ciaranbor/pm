@@ -44,6 +44,13 @@
 //! was last run in another directory the TUI otherwise stops at an
 //! interactive directory chooser, which stalls an unwatched window. The
 //! session then continues in the window's directory.
+//!
+//! The waiter starts only as a turn ends, so a spawn launches codex with a
+//! prompt (`agent_spawn`'s `SPAWN_PROMPT`, or `RESUME_PROMPT` on a resume).
+//! Arming without one is not possible (codex 0.160 source): SessionStart
+//! runs only as the first turn starts, so with no prompt it never fires; an
+//! async SessionStart's exit 2 is ignored; and `codex queue` cannot reach a
+//! thread before its first user message, which is what persists it.
 
 pub(super) mod chat;
 pub(super) mod dialog;
@@ -99,6 +106,9 @@ const RESUME_IN_CURRENT_DIR: &str = "tui.resume_cwd=\"current\"";
 /// turn has ended, and it outlives the turn and Esc. Its continuation goes
 /// on the session's queue ([`queue_prompt`]).
 pub(super) const STOP_HOOK_OPTIONS: &[(&str, bool)] = &[("async", true)];
+
+/// See the module docs.
+pub(super) const NEEDS_LAUNCH_PROMPT: bool = true;
 
 /// `codex queue`: add `text` to the persistent queue (`queue_*.sqlite`)
 /// of thread `session_id`. A running TUI, `--no-daemon` too, starts it as

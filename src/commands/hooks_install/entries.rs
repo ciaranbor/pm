@@ -20,7 +20,10 @@
 //! The SessionStart hook is `pm harness hooks session-start`, which captures
 //! the session ID from the harness's JSON input and writes it to the agent
 //! registry so dead agents can be resumed, and on codex also prints the
-//! agent's composed prompt as `additionalContext`.
+//! agent's composed prompt as `additionalContext`. On a harness whose
+//! SessionStart hook [waits](Harness::waits_at_session_start) it then runs
+//! the waiter, so its entry carries the Stop hook's timeout and
+//! [`Harness::session_start_hook_options`].
 //!
 //! The UserPromptSubmit hook is `pm harness hooks user-prompt`, which sets a
 //! blocked feature back to `wip` (see [`crate::commands::hooks_user_prompt`]).
@@ -145,6 +148,18 @@ pub fn stop_hook_command(harness: Harness) -> String {
     format!("{GUARD}{PM_HOOK_MARKER} {harness}")
 }
 
+/// pm's SessionStart hook entry for `harness`.
+pub(super) fn session_start_hook_entry(harness: Harness) -> Value {
+    let mut entry = json!({"type": "command", "command": session_start_hook_command()});
+    if let Some(options) = harness.session_start_hook_options()
+        && let Value::Object(fields) = &mut entry
+    {
+        fields.insert("timeout".into(), STOP_HOOK_TIMEOUT_SECS.into());
+        fields.extend(options);
+    }
+    entry
+}
+
 /// The shell command registered as the SessionStart hook.
 pub fn session_start_hook_command() -> String {
     format!("{GUARD}{PM_SESSION_START_MARKER}")
@@ -174,7 +189,7 @@ pub(super) fn pm_entries(harness: Harness) -> Vec<(&'static str, &'static [&'sta
         (
             "SessionStart",
             SESSION_START_MARKERS,
-            command(session_start_hook_command()),
+            session_start_hook_entry(harness),
         ),
         (
             USER_PROMPT_EVENT,

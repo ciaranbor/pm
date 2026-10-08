@@ -163,8 +163,8 @@ fn spawn_agent(
 
     // Queue context as a message. On spawn paths it's queued after validation
     // (so a bad def leaves no dead letter) but before the tmux spawn (so it
-    // survives a later spawn failure as a dead letter and auto-arrives on the
-    // empty first turn).
+    // survives a later spawn failure as a dead letter, and pm's waiter wakes
+    // the agent with it once its session starts).
     let queue_context = || -> Result<()> {
         if let Some(ctx) = context {
             let messages_dir = paths::messages_dir(project_root);
@@ -487,26 +487,42 @@ mod tests {
         entry.session_id = "sess-abc123".to_string();
         registry.save(&agents_dir, &feature).unwrap();
 
-        // Kill the window (simulating it died)
-        // Kill and recreate the session to clear the window
-        tmux::kill_session(server.name(), &session_name).unwrap();
+        // Kill and recreate the session to clear the window, as a crash or
+        // reboot does, and respawn it.
         let worktree = dir.path().join("login");
-        tmux::create_session(server.name(), &session_name, &worktree).unwrap();
+        let respawn = || {
+            tmux::kill_session(server.name(), &session_name).unwrap();
+            tmux::create_session(server.name(), &session_name, &worktree).unwrap();
+            let spawned =
+                agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
+            let window = format!("{session_name}:reviewer");
+            server.wait_for_pane_text(&window, "--resume sess-abc123");
+            (spawned, tmux::capture_pane(server.name(), &window).unwrap())
+        };
 
-        // Re-spawn should resume
-        let (outcome, msg, _) =
-            agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
+        // With nothing unread it is told to carry on its work.
+        let ((outcome, msg, _), pane) = respawn();
         assert_eq!(outcome, SpawnOutcome::Resumed);
         assert!(outcome.is_new_window());
         assert!(msg.contains("Resumed agent 'reviewer'"));
-        let window = format!("{session_name}:reviewer");
-        server.wait_for_pane_text(&window, "pm resumed this session");
-        assert!(
-            !tmux::capture_pane(server.name(), &window)
-                .unwrap()
-                .contains(SPAWN_PROMPT),
-            "a resumed session is not told to stand by"
-        );
+        assert!(pane.contains("'pm resumed this session"), "{pane}");
+        assert!(!pane.contains(SPAWN_PROMPT), "{pane}");
+        let prompted = || runtime::take_launch_prompt(dir.path(), &feature, "reviewer");
+        assert!(prompted(), "its SessionStart leaves the waiter to the turn");
+
+        // A message unread wakes it through the SessionStart waiter instead.
+        crate::messages::send(
+            &paths::messages_dir(dir.path()),
+            &feature,
+            "reviewer",
+            "implementer",
+            "look again",
+        )
+        .unwrap();
+        let (_, pane) = respawn();
+        assert!(!pane.contains("pm resumed this session"), "{pane}");
+        assert!(!pane.contains(SPAWN_PROMPT), "{pane}");
+        assert!(!prompted());
     }
 
     #[test]

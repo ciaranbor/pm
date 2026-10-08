@@ -2,6 +2,7 @@ use pm::commands;
 use pm::commands::attention::AgentState;
 use pm::commands::harness_export::ExportParams;
 use pm::commands::harness_migrate::MigrateParams;
+use pm::commands::hooks_session_start::Started;
 use pm::error::Result;
 use pm::harness::Harness;
 use pm::state::paths;
@@ -136,21 +137,7 @@ pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
                 Ok(())
             }
             HarnessHooksCommands::Stop { harness } => {
-                let mut window = running_agent()
-                    .and_then(|agent| agent_window(tmux_server_from_env().as_deref(), &agent));
-                exit_unless_ok(commands::hooks_stop::stop(harness, &mut |state, unread| {
-                    if let Some(window) = window.as_mut() {
-                        window.publish(state, unread);
-                    }
-                    if state != AgentState::Busy {
-                        push();
-                    }
-                    if state == AgentState::Idle
-                        && let Some((root, scope, agent)) = commands::restart_at_idle::marked()
-                    {
-                        restart_at_idle(&root, &scope, &agent);
-                    }
-                }))
+                exit_unless_ok(commands::hooks_stop::stop(harness, &mut waiter_turns()))
             }
             HarnessHooksCommands::RestartAtIdle { agent, scope } => {
                 let root = paths::find_project_root(&std::env::current_dir()?)?;
@@ -163,13 +150,18 @@ pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
                 Ok(())
             }
             HarnessHooksCommands::SessionStart => {
-                let code = commands::hooks_session_start::session_start();
+                let started = commands::hooks_session_start::session_start();
                 // The harness is running now, so its window no longer reads
                 // as dead.
                 if running_agent().is_some() {
                     push();
                 }
-                exit_unless_ok(code)
+                match started {
+                    Started::Done => Ok(()),
+                    Started::Wait { harness, payload } => exit_unless_ok(
+                        commands::hooks_stop::wait_from(harness, &payload, &mut waiter_turns()),
+                    ),
+                }
             }
             HarnessHooksCommands::UserPrompt => {
                 exit_unless_ok(commands::hooks_user_prompt::user_prompt(|unread| {
@@ -288,6 +280,26 @@ pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
                 commands::doctor::probe_line(harness, optional_project_root()?.as_deref())
             );
             Ok(())
+        }
+    }
+}
+
+/// What a waiter is told of the agent's turns: publish its window's state,
+/// push once it waits, and run a restart marked for its idle.
+fn waiter_turns() -> impl FnMut(AgentState, u32) {
+    let mut window =
+        running_agent().and_then(|agent| agent_window(tmux_server_from_env().as_deref(), &agent));
+    move |state, unread| {
+        if let Some(window) = window.as_mut() {
+            window.publish(state, unread);
+        }
+        if state != AgentState::Busy {
+            push();
+        }
+        if state == AgentState::Idle
+            && let Some((root, scope, agent)) = commands::restart_at_idle::marked()
+        {
+            restart_at_idle(&root, &scope, &agent);
         }
     }
 }

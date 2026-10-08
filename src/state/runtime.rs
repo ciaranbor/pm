@@ -81,6 +81,7 @@ const WAITING_FILE: &str = "waiting.json";
 const ACTIVITY_FILE: &str = "activity";
 const LAUNCHED_FILE: &str = "launched";
 const STARTED_FILE: &str = "started";
+const LAUNCH_PROMPT_FILE: &str = "launch-prompt";
 const TURN_END_CLAIM: &str = "turn-end-claimed-";
 const WAITER_FILE: &str = "waiter";
 const BREAKER_FILE: &str = "breaker.json";
@@ -590,6 +591,33 @@ pub fn launched_file(project_root: &Path, scope: &str, agent: &str) -> PathBuf {
 pub fn launched_at(project_root: &Path, scope: &str, agent: &str) -> Option<DateTime<Utc>> {
     let file = agent_file(project_root, scope, agent, LAUNCHED_FILE);
     Some(std::fs::metadata(file).ok()?.modified().ok()?.into())
+}
+
+/// Record whether the agent's spawn launches it with a prompt, whose turn's
+/// end starts its waiter, so its session's start need not
+/// ([`take_launch_prompt`]).
+pub fn set_launch_prompt(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    prompted: bool,
+) -> Result<()> {
+    let file = agent_dir(project_root, scope, agent)?.join(LAUNCH_PROMPT_FILE);
+    if prompted {
+        std::fs::write(file, "")?;
+    } else if let Err(e) = std::fs::remove_file(file)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(e.into());
+    }
+    Ok(())
+}
+
+/// Whether the session starting now was launched with a prompt
+/// ([`set_launch_prompt`]), forgetting it: a later start in the same
+/// session, a `/clear`, had none.
+pub fn take_launch_prompt(project_root: &Path, scope: &str, agent: &str) -> bool {
+    std::fs::remove_file(agent_file(project_root, scope, agent, LAUNCH_PROMPT_FILE)).is_ok()
 }
 
 /// Stamp the agent's harness session as started now.

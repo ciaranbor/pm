@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::entries::{LOOP_EVENTS, STOP_MARKERS, dialog_events, stop_hook_entry, waiting_events};
+use super::entries::{LOOP_EVENTS, dialog_events, pm_entries, waiting_events};
 use super::settings::pm_hook_position;
 use crate::harness::Harness;
 #[cfg(test)]
@@ -33,13 +33,22 @@ pub fn stale_plugin_files(harness: Harness, home: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Whether pm's Stop hook entry in `root` is the one this release
-/// installs for `harness`. One an earlier release wrote still runs, but
-/// blocking, inside the turn.
-pub fn stop_hook_current(harness: Harness, root: &Value) -> bool {
-    pm_hook_position(root, "Stop", STOP_MARKERS).is_some_and(|(i, j)| {
-        root.pointer(&format!("/hooks/Stop/{i}/hooks/{j}")) == Some(&stop_hook_entry(harness))
-    })
+/// The events of `harness`'s never-idle loop whose pm entry in `root` is
+/// missing or not the one this release installs. One an earlier release
+/// wrote still runs, but may not start the waiter: a SessionStart entry
+/// without its options leaves a Claude Code agent spawned with no launch
+/// prompt idle until a message is typed to it.
+pub fn stale_loop_entries(harness: Harness, root: &Value) -> Vec<&'static str> {
+    pm_entries(harness)
+        .into_iter()
+        .filter(|(event, _, _)| LOOP_EVENTS.iter().any(|(e, _)| e == event))
+        .filter(|(event, markers, entry)| {
+            pm_hook_position(root, event, markers).is_none_or(|(i, j)| {
+                root.pointer(&format!("/hooks/{event}/{i}/hooks/{j}")) != Some(entry)
+            })
+        })
+        .map(|(event, _, _)| event)
+        .collect()
 }
 
 /// Whether `harness`'s never-idle loop is installed: every pm entry in its

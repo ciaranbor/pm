@@ -145,13 +145,15 @@ pub fn harness_problems(
         );
     } else if let Some(root) = root.as_ref()
         && harness.user_settings_file(home).is_some()
-        && !hooks_install::stop_hook_current(harness, root)
+        && let stale = hooks_install::stale_loop_entries(harness, root)
+        && !stale.is_empty()
     {
         push(
             ProblemKind::LoopNotInstalled,
             format!(
-                "pm's Stop hook in {shown} is from an earlier release and blocks the agent's \
-                 turn (run `pm harness hooks install`)"
+                "pm's {} hook in {shown} is from an earlier release, so an agent may not wake \
+                 for messages (run `pm harness hooks install`)",
+                stale.join(", ")
             ),
         );
     } else if harness.user_settings_file(home).is_some() {
@@ -509,36 +511,53 @@ mod tests {
     }
 
     #[test]
-    fn a_stop_hook_an_earlier_release_installed_is_a_problem_install_fixes() {
-        let dir = tempdir().unwrap();
-        let home = home_with_hooks(dir.path());
-        let settings = home.join(".claude/settings.json");
-        let mut root: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
-        root["hooks"]["Stop"] = serde_json::json!([{"hooks": [{"type": "command",
-            "command": "[ -n \"$PM_AGENT_NAME\" ] || exit 0; exec pm harness hooks stop",
-            "timeout": 31_536_000}]}]);
-        std::fs::write(&settings, root.to_string()).unwrap();
-        let problems = || {
-            harness_problems(
-                Harness::ClaudeCode,
-                &HarnessConfig::default(),
-                &home,
-                Probe::Fresh,
-            )
-            .unwrap()
-        };
+    fn loop_hooks_an_earlier_release_installed_are_a_problem_install_fixes() {
+        let earlier = [
+            (
+                "Stop",
+                serde_json::json!({"type": "command",
+                    "command": "[ -n \"$PM_AGENT_NAME\" ] || exit 0; exec pm harness hooks stop",
+                    "timeout": 31_536_000}),
+            ),
+            // Without asyncRewake it records the session but never starts
+            // the waiter.
+            (
+                "SessionStart",
+                serde_json::json!({"type": "command",
+                    "command": crate::commands::hooks_install::session_start_hook_command()}),
+            ),
+        ];
+        for (event, entry) in earlier {
+            let dir = tempdir().unwrap();
+            let home = home_with_hooks(dir.path());
+            let settings = home.join(".claude/settings.json");
+            let mut root: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+            root["hooks"][event] = serde_json::json!([{ "hooks": [entry] }]);
+            std::fs::write(&settings, root.to_string()).unwrap();
+            let problems = || {
+                harness_problems(
+                    Harness::ClaudeCode,
+                    &HarnessConfig::default(),
+                    &home,
+                    Probe::Fresh,
+                )
+                .unwrap()
+            };
 
-        let stale = problems();
-        assert_eq!(stale.len(), 1, "{stale:?}");
-        assert_eq!(stale[0].kind, ProblemKind::LoopNotInstalled);
-        assert!(
-            stale[0].message.contains("from an earlier release"),
-            "{stale:?}"
-        );
+            let stale = problems();
+            assert_eq!(stale.len(), 1, "{stale:?}");
+            assert_eq!(stale[0].kind, ProblemKind::LoopNotInstalled);
+            assert!(
+                stale[0]
+                    .message
+                    .starts_with(&format!("pm's {event} hook in ")),
+                "{stale:?}"
+            );
 
-        crate::commands::hooks_install::install_in(&home, None, false).unwrap();
-        assert_eq!(problems(), Vec::new());
+            crate::commands::hooks_install::install_in(&home, None, false).unwrap();
+            assert_eq!(problems(), Vec::new(), "{event}");
+        }
     }
 
     #[test]

@@ -7,13 +7,28 @@
 //! agent's composed prompt — definition body, baseline, notice boards — as
 //! `additionalContext`, so the role re-applies on every start and resume.
 //! A started session is past any startup dialog, so it also clears the
-//! agent's waiting marker and stamps its activity.
+//! agent's waiting marker and stamps its activity. On a harness whose
+//! SessionStart hook [waits](Harness::waits_at_session_start) it then
+//! runs the waiter ([`hooks_stop::wait_from`]) — in this hook, not an entry
+//! of its own: the harness runs an event's hooks in parallel, and clearing
+//! the marker could erase the idle one the waiter just wrote. It does not
+//! run one for a session its spawn launched with a prompt
+//! ([`runtime::set_launch_prompt`]): that turn's Stop starts the waiter,
+//! and one started now would read the agent idle mid-turn.
+//!
+//! A compaction (`source: compact`) is no start: the session runs on, and
+//! the hook neither clears the marker nor starts a waiter. Claude Code
+//! compacts mid-turn, and idle too (2.1.294, "Compacted while idle"), where
+//! the waiter of the last turn still holds the agent: clearing its idle
+//! marker would leave an armed agent reading busy.
 //!
 //! Non-agent sessions (no `PM_AGENT_NAME` env var) are silently ignored.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+#[cfg(doc)]
+use crate::commands::hooks_stop;
 use crate::error::Result;
 use crate::harness::Harness;
 use crate::state::agent::AgentRegistry;
@@ -21,30 +36,30 @@ use crate::state::paths;
 use crate::state::runtime::{self, SessionPath};
 use crate::state::workflow;
 
-/// Run the SessionStart hook logic. Returns the exit code (always 0).
-///
-/// Prints nothing on success unless the agent's harness takes its prompt
-/// through this hook.
-pub fn session_start() -> i32 {
-    // Non-agent sessions: silently succeed.
-    if std::env::var("PM_AGENT_NAME").is_err() {
-        return 0;
-    }
-    match session_start_inner() {
-        Ok(Some(output)) => {
-            print!("{output}");
-            0
-        }
-        Ok(None) => 0,
-        Err(_) => {
-            // Resolution failed — not a pm project, or malformed input.
-            // Don't error out; hooks should be invisible to non-pm sessions.
-            0
-        }
-    }
+/// What is left to do once the start is recorded.
+pub enum Started {
+    /// Exit 0.
+    Done,
+    /// Run `harness`'s waiter ([`hooks_stop::wait_from`]) on the hook's
+    /// payload.
+    Wait { harness: Harness, payload: String },
 }
 
-fn session_start_inner() -> Result<Option<String>> {
+/// Run the SessionStart hook logic, which always succeeds.
+///
+/// Prints nothing unless the agent's harness takes its prompt through this
+/// hook.
+pub fn session_start() -> Started {
+    // Non-agent sessions: silently succeed.
+    if std::env::var("PM_AGENT_NAME").is_err() {
+        return Started::Done;
+    }
+    // A failure — not a pm project, or malformed input — stays silent:
+    // hooks should be invisible to non-pm sessions.
+    session_start_inner().unwrap_or(Started::Done)
+}
+
+fn session_start_inner() -> Result<Started> {
     let agent_name = std::env::var("PM_AGENT_NAME")
         .map_err(|_| crate::error::PmError::Messaging("no PM_AGENT_NAME".into()))?;
 
@@ -56,9 +71,26 @@ fn session_start_inner() -> Result<Option<String>> {
 
     let Some((harness, definition)) = record_start(&project_root, &feature, &agent_name, &payload)?
     else {
-        return Ok(None);
+        return Ok(Started::Done);
     };
-    hook_output(&project_root, harness, &definition)
+    if let Some(output) = hook_output(&project_root, harness, &definition)? {
+        print!("{output}");
+    }
+    let waits = harness.waits_at_session_start()
+        && !compacted(&payload)
+        && !runtime::take_launch_prompt(&project_root, &feature, &agent_name);
+    Ok(if waits {
+        Started::Wait {
+            harness,
+            payload: input,
+        }
+    } else {
+        Started::Done
+    })
+}
+
+fn compacted(payload: &Payload) -> bool {
+    payload.source.as_deref() == Some("compact")
 }
 
 /// What the hook prints for this agent's harness: the composed prompt for
@@ -95,6 +127,8 @@ fn injected_context(project_root: &Path, definition: &str) -> Result<Option<Stri
 struct Payload {
     session_id: String,
     transcript: Option<PathBuf>,
+    /// Why the session started: `startup`, `resume`, `clear`, `compact`.
+    source: Option<String>,
 }
 
 fn parse_payload(json_str: &str) -> crate::error::Result<Payload> {
@@ -121,12 +155,16 @@ fn parse_payload(json_str: &str) -> crate::error::Result<Payload> {
             .and_then(|v| v.as_str())
             .filter(|p| !p.is_empty())
             .map(PathBuf::from),
+        source: parsed
+            .get("source")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
     })
 }
 
-/// Clear the agent's waiting marker, stamp its activity and its start,
-/// record its session paths, and update its session_id in the registry,
-/// returning the harness and effective definition its entry records. An
+/// Clear the agent's waiting marker unless the session was compacted, stamp
+/// its activity and its start, record its session paths, and update its
+/// session_id in the registry, returning the harness and effective definition its entry records. An
 /// unregistered agent is left alone (`None`): the spawn registers before
 /// launching, so this is a non-pm session.
 fn record_start(
@@ -143,7 +181,9 @@ fn record_start(
     };
     runtime::touch_activity(project_root, feature, agent_name)?;
     runtime::mark_started(project_root, feature, agent_name)?;
-    runtime::clear_waiting(project_root, feature, agent_name)?;
+    if !compacted(payload) {
+        runtime::clear_waiting(project_root, feature, agent_name)?;
+    }
     let session_path = |which, path: Option<&Path>| {
         runtime::write_session_path(project_root, feature, agent_name, which, path)
     };
@@ -175,6 +215,7 @@ mod tests {
         Payload {
             session_id: session_id.to_string(),
             transcript: None,
+            source: None,
         }
     }
 

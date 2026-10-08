@@ -18,6 +18,23 @@ impl Harness {
         }
     }
 
+    /// Whether a spawn must launch the agent with a prompt: the harness
+    /// starts pm's waiter only as a turn ends, and no other way.
+    pub fn needs_launch_prompt(self) -> bool {
+        match self {
+            Harness::Codex => codex::NEEDS_LAUNCH_PROMPT,
+            Harness::ClaudeCode | Harness::OpenCode => false,
+        }
+    }
+
+    /// Whether pm's SessionStart hook runs the waiter once the session has
+    /// started or resumed, so the agent waits for messages without a first
+    /// turn: its entry has [options](Self::session_start_hook_options) to
+    /// run in the background. opencode's plugin arms at setup itself.
+    pub fn waits_at_session_start(self) -> bool {
+        self.session_start_hook_options().is_some()
+    }
+
     /// Whether this harness's waiter, alive, wakes an agent at `kind`. A
     /// rewake reaches a session however its turn ended; codex's queue
     /// skips an interrupted thread; a waiter that blocks inside the turn

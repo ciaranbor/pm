@@ -1,7 +1,9 @@
 //! The waiter: pm's Stop hook on a harness that runs it in the background
 //! once the turn has ended ([`Wake::Rewake`], [`Wake::Queue`]), so the
 //! agent sits at its prompt between turns and takes typing and keys as
-//! the user's.
+//! the user's. A SessionStart hook that
+//! [waits](crate::harness::Harness::waits_at_session_start) runs it too, so
+//! the agent waits from its start without a first turn.
 //!
 //! It takes over the agent's waiter file and marks the agent idle (or
 //! background, while background work runs, which the waiter file records
@@ -71,20 +73,31 @@ pub(super) enum Waited {
 /// continuation on stderr for a rewake, else 0, or 1 once it failed, the
 /// agent then marked unarmed.
 pub(super) fn run(harness: Harness, on_turn: &mut dyn FnMut(AgentState, u32)) -> i32 {
+    if std::env::var_os("PM_AGENT_NAME").is_none() {
+        return 0;
+    }
+    run_on(harness, &read_stdin(), on_turn)
+}
+
+/// [`run`] on the hook payload `payload`, already read.
+pub(super) fn run_on(
+    harness: Harness,
+    payload: &str,
+    on_turn: &mut dyn FnMut(AgentState, u32),
+) -> i32 {
     let caller = Caller::current();
     let Ok(agent) = std::env::var("PM_AGENT_NAME") else {
         return 0;
     };
-    let payload = read_stdin();
     let Ok((project_root, scope)) = paths::agent_scope() else {
         return 0;
     };
-    let busy = parse_busy(&payload);
+    let busy = parse_busy(payload);
     runtime::log_stop_hook(
         &project_root,
         &scope,
         &agent,
-        &format!("{harness} waiter: {}", background_work(&payload)),
+        &format!("{harness} waiter: {}", background_work(payload)),
     );
     let waited = wait(
         harness,
@@ -114,7 +127,7 @@ pub(super) fn run(harness: Harness, on_turn: &mut dyn FnMut(AgentState, u32)) ->
             eprint!("{prompt}");
             2
         }
-        Wake::Queue => match session_id(&payload)
+        Wake::Queue => match session_id(payload)
             .ok_or_else(|| "the Stop payload names no session".to_string())
             .and_then(|id| {
                 harness
