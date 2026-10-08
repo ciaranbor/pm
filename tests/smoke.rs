@@ -132,6 +132,46 @@ fn init_from_git_without_a_path_roots_the_project_in_the_cwd() {
     assert!(s.projects_dir().join("app.toml").exists());
 }
 
+/// Catches: the real config dir an earlier release used (macOS's
+/// `~/Library/Application Support/pm`, or the machine-local dirs inside
+/// `~/.config/pm`) not reaching the XDG dirs through `pm upgrade`, losing
+/// the registry or `pm serve`'s pairings.
+#[test]
+#[ignore]
+fn upgrade_moves_an_earlier_releases_files_and_keeps_the_registry() {
+    let s = Smoke::new();
+    s.pm(s.home())
+        .args(["init", "--no-main", &s.proj().to_string_lossy()])
+        .assert()
+        .success();
+    let config = s.home().join(".config/pm");
+    let legacy = if cfg!(target_os = "macos") {
+        let legacy = s.home().join("Library/Application Support/pm");
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::rename(&config, &legacy).unwrap();
+        legacy
+    } else {
+        config.clone()
+    };
+    std::fs::create_dir_all(legacy.join("serve")).unwrap();
+    std::fs::write(legacy.join("serve/devices.toml"), "[devices]\n").unwrap();
+
+    s.pm(s.home())
+        .args(["upgrade"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("into the XDG dirs"));
+
+    assert!(s.projects_dir().join("proj.toml").exists());
+    assert!(s.state_dir().join("serve/devices.toml").exists());
+    assert!(!legacy.join("serve").exists());
+    s.pm(s.home())
+        .arg("list")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("proj"));
+}
+
 /// Catches: `agent spawn --scope` resolving the target from the caller's
 /// cwd instead of the flag, run from `main` as an orchestrator would.
 #[test]
@@ -987,7 +1027,7 @@ fn serve_install_loads_its_agent_through_launchctl() {
 }
 
 /// Catches: the background push a pm command starts waking `pm serve`
-/// through the wake FIFO in the real config dir, which the command finds
+/// through the wake FIFO in the real runtime dir, which the command finds
 /// only from its own environment. What the server does when woken is a
 /// lib test's.
 #[test]
@@ -998,7 +1038,7 @@ fn a_change_pm_makes_wakes_the_server() {
     use std::os::unix::fs::OpenOptionsExt;
     let s = Smoke::new();
     s.init_with_feature();
-    let fifo = s.projects_dir().with_file_name("serve").join("wake");
+    let fifo = s.runtime_dir().join("serve/wake");
     std::fs::create_dir_all(fifo.parent().unwrap()).unwrap();
     let path = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
     // Safety: `path` is a valid NUL-terminated string for the call.

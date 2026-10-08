@@ -2,8 +2,7 @@
 //! which may do everything the API offers. Only a token's SHA-256 is
 //! stored: a token is 256 random bits, so a plain hash is as good as a slow
 //! one, and the file leaking gives away no token. The file is
-//! machine-local, under the config dir's `serve/`, which the registry's
-//! `.gitignore` block names, and readable only by the user.
+//! machine-local ([`ServeFiles`]) and readable only by the user.
 //!
 //! A device's Web Push subscription lives on its entry, so revoking the
 //! device drops it. Every change goes through [`Devices::update`], which
@@ -13,7 +12,7 @@
 
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::hash::{hex, sha256_hex};
 use chrono::{DateTime, Utc};
@@ -21,11 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{PmError, Result};
 use crate::fs_utils::write_atomic;
-
-/// The config-dir-relative dir `pm serve` keeps its machine-local files in.
-pub const DIR_NAME: &str = "serve";
-const FILE_NAME: &str = "devices.toml";
-const LOCK_NAME: &str = "devices.lock";
+use crate::state::serve_files::ServeFiles;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Device {
@@ -51,11 +46,6 @@ pub struct Devices {
 }
 
 impl Devices {
-    /// The devices file under the pm config dir `config_dir`.
-    pub fn path(config_dir: &Path) -> PathBuf {
-        config_dir.join(DIR_NAME).join(FILE_NAME)
-    }
-
     /// The devices in `path`; none when it doesn't exist.
     pub fn load(path: &Path) -> Result<Self> {
         match std::fs::read_to_string(path) {
@@ -71,20 +61,20 @@ impl Devices {
         Ok(())
     }
 
-    /// Apply `change` to the devices in `path` and save them, holding the
+    /// Apply `change` to the devices in `files` and save them, holding the
     /// devices' lock throughout. Nothing is saved when `change` fails.
-    pub fn update<T>(path: &Path, change: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
-        let dir = path.parent().unwrap_or(Path::new("."));
-        std::fs::create_dir_all(dir)?;
+    pub fn update<T>(files: &ServeFiles, change: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        files.create()?;
         let lock = std::fs::OpenOptions::new()
             .create(true)
             .truncate(false)
             .write(true)
-            .open(dir.join(LOCK_NAME))?;
+            .open(files.devices_lock())?;
         lock.lock()?;
-        let mut devices = Self::load(path)?;
+        let path = files.devices();
+        let mut devices = Self::load(&path)?;
         let out = change(&mut devices)?;
-        devices.save(path)?;
+        devices.save(&path)?;
         Ok(out)
     }
 
@@ -153,7 +143,7 @@ mod tests {
     #[test]
     fn a_paired_token_authenticates_until_revoked_and_is_never_stored() {
         let dir = tempdir().unwrap();
-        let path = Devices::path(dir.path());
+        let path = dir.path().join("devices.toml");
         let mut devices = Devices::load(&path).unwrap();
         let token = devices.pair("pixel").unwrap();
         devices.save(&path).unwrap();
@@ -184,7 +174,7 @@ mod tests {
     #[test]
     fn a_device_paired_with_old_scopes_or_grants_still_authenticates() {
         let dir = tempdir().unwrap();
-        let path = Devices::path(dir.path());
+        let path = dir.path().join("devices.toml");
         let token = "ab".repeat(32);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(

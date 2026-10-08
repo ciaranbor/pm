@@ -1,4 +1,4 @@
-//! The per-server lock files under `<config dir>/tmux/`, one per kind
+//! The per-server lock files under `<runtime dir>/tmux/`, one per kind
 //! (`watch`, `refresh`), named by the server's socket, which names it however
 //! it was reached.
 //!
@@ -36,6 +36,14 @@ pub fn lock(socket: &str, kind: &str) -> Result<Lock> {
 
 /// The `kind` lock of the server at `socket`, unless another holds it.
 pub fn try_lock(socket: &str, kind: &str) -> Result<Option<Lock>> {
+    // TRANSITIONAL (drop in the release after the XDG move): a watcher an
+    // earlier release started holds its lock under the legacy dir.
+    let legacy = paths::global_legacy_dir()?
+        .join(DIR_NAME)
+        .join(file_name(socket, kind));
+    if crate::state::serve_files::held(&legacy) {
+        return Ok(None);
+    }
     take(&path(socket, kind)?, socket, false)
 }
 
@@ -74,16 +82,20 @@ pub fn prune() -> Result<()> {
     Ok(())
 }
 
-/// The lock files' dir under the config dir.
+/// The lock files' dir under the runtime dir.
 pub(crate) const DIR_NAME: &str = "tmux";
 
 fn dir() -> Result<PathBuf> {
-    let dir = paths::global_config_dir()?.join(DIR_NAME);
+    let dir = paths::global_runtime_dir()?.join(DIR_NAME);
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }
 
 fn path(socket: &str, kind: &str) -> Result<PathBuf> {
+    Ok(dir()?.join(file_name(socket, kind)))
+}
+
+fn file_name(socket: &str, kind: &str) -> String {
     let name: String = socket
         .chars()
         .map(|c| {
@@ -94,7 +106,7 @@ fn path(socket: &str, kind: &str) -> Result<PathBuf> {
             }
         })
         .collect();
-    Ok(dir()?.join(format!("{name}.{kind}.lock")))
+    format!("{name}.{kind}.lock")
 }
 
 /// Lock the file at `path`, recording `socket` in it unless empty. `None`
@@ -159,7 +171,7 @@ mod tests {
     }
 
     fn socket(name: &str) -> String {
-        let dir = paths::global_config_dir().unwrap().join("sockets");
+        let dir = paths::global_runtime_dir().unwrap().join("sockets");
         std::fs::create_dir_all(&dir).unwrap();
         let socket = dir.join(format!("{name}-{}", std::process::id()));
         std::fs::write(&socket, "").unwrap();
@@ -180,6 +192,22 @@ mod tests {
         // The removed file is no longer the lock.
         eventually(|| waiting.try_lock().ok());
         assert!(try_lock(&socket, "watch").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_watch_lock_an_earlier_release_holds_counts_as_held() {
+        let socket = socket("legacy");
+        let legacy = paths::global_legacy_dir()
+            .unwrap()
+            .join(DIR_NAME)
+            .join(file_name(&socket, "watch"));
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        let old_watcher = std::fs::File::create(&legacy).unwrap();
+        old_watcher.lock().unwrap();
+        assert!(try_lock(&socket, "watch").unwrap().is_none());
+
+        drop(old_watcher);
+        eventually(|| try_lock(&socket, "watch").unwrap());
     }
 
     #[test]

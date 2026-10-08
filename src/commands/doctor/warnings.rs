@@ -31,15 +31,16 @@ fn global_config_warning_in(config_dir: &Path) -> Option<String> {
 /// `pm serve` ([`serve_status`](crate::commands::serve_status)). Tailscale
 /// is asked only at full depth.
 pub(super) fn serve_warnings(depth: Depth) -> Vec<String> {
-    let (Ok(home), Ok(config_dir), Ok(exe)) = (
+    let (Ok(home), Ok(config_dir), Ok(files), Ok(exe)) = (
         paths::home_dir(),
         paths::global_config_dir(),
+        crate::state::serve_files::ServeFiles::global(),
         std::env::current_exe(),
     ) else {
         return Vec::new();
     };
     let port = crate::commands::serve::configured_port(&config_dir);
-    crate::commands::serve_status::Facts::read(&home, &config_dir, port).warnings(
+    crate::commands::serve_status::Facts::read(&home, &files, port).warnings(
         &exe,
         crate::version::VERSION,
         |port| (depth == Depth::Full).then(|| crate::tailscale::check(port)),

@@ -34,8 +34,9 @@ pub(crate) fn configured_harness(
 
 /// Directories outside the worktree an agent must be able to write, for a
 /// harness that sandboxes: pm's state, the shared `.git` every worktree
-/// writes through, the pm config dir, plus any `[harness.codex]
-/// writable_roots` (relative ones resolve against the project root).
+/// writes through, pm's global dirs ([`global_dirs`]), plus any
+/// `[harness.codex] writable_roots` (relative ones resolve against the
+/// project root).
 pub(super) fn writable_dirs(
     project_root: &Path,
     config: &HarnessConfig,
@@ -44,7 +45,7 @@ pub(super) fn writable_dirs(
         paths::pm_dir(project_root),
         paths::main_worktree(project_root).join(".git"),
     ];
-    dirs.extend(paths::global_config_dir().ok());
+    dirs.extend(global_dirs());
     for root in config.codex.writable_roots.as_deref().unwrap_or(&[]) {
         let path = Path::new(root);
         dirs.push(if path.is_absolute() {
@@ -54,6 +55,24 @@ pub(super) fn writable_dirs(
         });
     }
     dirs
+}
+
+/// pm's global dirs, none inside another. The legacy dir is among them
+/// (TRANSITIONAL, until the release after the XDG move): the migration may
+/// first run in a sandboxed agent's hook.
+fn global_dirs() -> Vec<std::path::PathBuf> {
+    let Ok(home) = paths::home_dir() else {
+        return Vec::new();
+    };
+    let pm = paths::dirs_under(&home);
+    let legacy = crate::state::dirs::legacy_dir(&home, &pm);
+    let mut out: Vec<std::path::PathBuf> = Vec::new();
+    for dir in [pm.config, pm.state, pm.cache, pm.runtime, legacy] {
+        if !out.iter().any(|d| dir.starts_with(d)) {
+            out.push(dir);
+        }
+    }
+    out
 }
 
 /// The definition that reaches the harness: the effective definition, except
@@ -127,7 +146,7 @@ mod tests {
     }
 
     #[test]
-    fn writable_dirs_are_pm_state_shared_git_config_dir_and_configured_roots() {
+    fn writable_dirs_are_pm_state_shared_git_global_dirs_and_configured_roots() {
         let root = Path::new("/proj");
         let config = HarnessConfig {
             codex: crate::state::project::CodexConfig {
@@ -136,16 +155,20 @@ mod tests {
             },
             ..Default::default()
         };
-        assert_eq!(
-            writable_dirs(root, &config),
-            vec![
-                PathBuf::from("/proj/.pm"),
-                PathBuf::from("/proj/main/.git"),
-                paths::global_config_dir().unwrap(),
-                PathBuf::from("/abs/cache"),
-                PathBuf::from("/proj/main/target"),
-            ]
-        );
+        let pm = paths::global_dirs().unwrap();
+        let mut expected = vec![
+            PathBuf::from("/proj/.pm"),
+            PathBuf::from("/proj/main/.git"),
+            pm.config,
+            pm.state,
+            pm.cache,
+        ];
+        expected.extend(cfg!(target_os = "macos").then(|| paths::global_legacy_dir().unwrap()));
+        expected.extend([
+            PathBuf::from("/abs/cache"),
+            PathBuf::from("/proj/main/target"),
+        ]);
+        assert_eq!(writable_dirs(root, &config), expected);
     }
 
     #[test]

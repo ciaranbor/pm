@@ -3,13 +3,12 @@
 //!
 //! The pm config dir can be git-backed (`pm state init --global`) so the
 //! project registry, global config, and global *custom* workflows sync
-//! between machines. Two kinds of file share the dir but are not state to
-//! sync: machine-local files (the harness probe cache, keyed by binary path
-//! and mtime; the per-tmux-server lock files; `pm serve`'s paired devices
-//! and log; registry entries a pull set aside) and the bundled workflows, which `pm upgrade` rewrites every
-//! release — committing that churn would make every machine's registry
-//! dirty after each upgrade. So `.gitignore`
-//! carries a marker-delimited block naming both, regenerated wherever
+//! between machines. The bundled workflows share the dir but are not state
+//! to sync: `pm upgrade` rewrites them every release, and committing that
+//! churn would make every machine's registry dirty after each upgrade. Nor
+//! are the machine-local dirs an earlier release wrote into the config dir
+//! (now under the state, cache and runtime dirs, [`Dirs`](crate::state::dirs::Dirs)).
+//! So `.gitignore` carries a marker-delimited block naming both, regenerated wherever
 //! bundled workflows are written, from the bundle and the dir names their
 //! owners write to — never a hand-kept list, which would go stale. Because
 //! the file is tracked, one machine's regeneration reaches the others
@@ -26,11 +25,9 @@ use std::path::{Path, PathBuf};
 use crate::error::Result;
 use crate::fs_utils::write_atomic;
 use crate::git;
-use crate::state::{devices, paths};
+use crate::state::paths;
 
 use super::skills::bundled_workflow_names;
-use super::tmux_lock;
-use crate::harness::probe;
 
 /// Lines every registry `.gitignore` starts from: the registry may
 /// accumulate machine-specific ephemera.
@@ -40,13 +37,11 @@ const BASE: &str = "\
 *.pid
 ";
 
-/// Machine-local dirs pm writes under the config dir, relative to it.
-const MACHINE_LOCAL: &[&str] = &[
-    probe::CACHE_DIR_NAME,
-    tmux_lock::DIR_NAME,
-    devices::DIR_NAME,
-    super::state_cmd::SET_ASIDE_DIR_NAME,
-];
+/// The machine-local dirs an earlier release wrote under the config dir.
+/// TRANSITIONAL (drop in the release after the XDG move): `.gitignore` is
+/// synced, and a machine still on that release writes them and would commit
+/// them once a pull from an upgraded machine dropped these lines.
+const MACHINE_LOCAL: &[&str] = super::xdg_migrate::LEGACY_MACHINE_DIRS;
 
 const BLOCK_START: &str = "# >>> managed by pm — regenerated, edit outside this block >>>";
 const BLOCK_END: &str = "# <<< managed by pm <<<";
@@ -251,11 +246,13 @@ mod tests {
         }
         assert!(!ignored(dir.path(), "workflows/mine/config.toml"));
         assert!(ignored(dir.path(), "foo.lock"));
-        let probes = crate::harness::probe::cache_file(dir.path());
-        let probes = probes.strip_prefix(dir.path()).unwrap();
-        assert!(ignored(dir.path(), &probes.to_string_lossy()));
-        let tmux = format!("{}/not-a-lock", tmux_lock::DIR_NAME);
-        assert!(ignored(dir.path(), &tmux));
+        for legacy in [
+            "cache/harness-probes.json",
+            "tmux/not-a-lock",
+            "serve/vapid.pem",
+        ] {
+            assert!(ignored(dir.path(), legacy), "{legacy}");
+        }
         assert!(!ignored(dir.path(), "config.toml"));
         assert!(!ignored(dir.path(), "projects/p.toml"));
     }
@@ -282,7 +279,7 @@ mod tests {
     fn sync_untracks_committed_machine_local_files_and_keeps_state() {
         let dir = tempdir().unwrap();
         git::init_repo(dir.path()).unwrap();
-        let probes = crate::harness::probe::cache_file(dir.path());
+        let probes = dir.path().join("cache/harness-probes.json");
         std::fs::create_dir_all(probes.parent().unwrap()).unwrap();
         std::fs::write(&probes, "{}").unwrap();
         std::fs::write(dir.path().join("config.toml"), "").unwrap();

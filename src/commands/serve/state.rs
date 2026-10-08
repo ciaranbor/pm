@@ -1,45 +1,33 @@
-//! The running server's files beside the devices file: the lock it holds
-//! for its life, which keeps it to one per config dir; `state.json`, what
-//! the holder says of itself; and its log.
+//! The running server's own [`ServeFiles`]: the lock it holds for its life,
+//! which keeps it to one per machine; `state.json`, what the holder says of
+//! itself; and its log.
 //!
 //! Whether a server runs is whether the lock is held, never the pid in
 //! `state.json`, which a server killed leaves behind.
 
 use std::fs::{File, OpenOptions, TryLockError};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::fs_utils::write_atomic;
-use crate::state::devices;
+use crate::state::serve_files::ServeFiles;
 
-fn dir(config_dir: &Path) -> PathBuf {
-    config_dir.join(devices::DIR_NAME)
-}
-
-pub fn log_path(config_dir: &Path) -> PathBuf {
-    dir(config_dir).join("serve.log")
-}
-
-fn state_path(config_dir: &Path) -> PathBuf {
-    dir(config_dir).join("state.json")
-}
-
-fn open_lock(config_dir: &Path) -> Result<File> {
-    std::fs::create_dir_all(dir(config_dir))?;
+fn open_lock(files: &ServeFiles) -> Result<File> {
+    files.create()?;
     Ok(OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
-        .open(dir(config_dir).join("serve.lock"))?)
+        .open(files.lock())?)
 }
 
-/// The server lock of `config_dir`, released when dropped; `None` while
-/// another server holds it.
-pub fn lock(config_dir: &Path) -> Result<Option<File>> {
-    let file = open_lock(config_dir)?;
+/// The server lock of `files`, released when dropped; `None` while another
+/// server holds it.
+pub fn lock(files: &ServeFiles) -> Result<Option<File>> {
+    let file = open_lock(files)?;
     match file.try_lock() {
         Ok(()) => Ok(Some(file)),
         Err(TryLockError::WouldBlock) => Ok(None),
@@ -47,16 +35,16 @@ pub fn lock(config_dir: &Path) -> Result<Option<File>> {
     }
 }
 
-/// The server lock of `config_dir`, once its holder lets go.
-pub fn wait(config_dir: &Path) -> Result<File> {
-    let file = open_lock(config_dir)?;
+/// The server lock of `files`, once its holder lets go.
+pub fn wait(files: &ServeFiles) -> Result<File> {
+    let file = open_lock(files)?;
     file.lock()?;
     Ok(file)
 }
 
-/// Whether a server of `config_dir` runs.
-pub fn held(config_dir: &Path) -> Result<bool> {
-    Ok(lock(config_dir)?.is_none())
+/// Whether a server of `files` runs.
+pub fn held(files: &ServeFiles) -> Result<bool> {
+    Ok(lock(files)?.is_none())
 }
 
 /// What the running server says of itself.
@@ -83,16 +71,16 @@ impl State {
         }
     }
 
-    /// What the last server of `config_dir` wrote, if readable.
-    pub fn load(config_dir: &Path) -> Option<Self> {
-        let text = std::fs::read_to_string(state_path(config_dir)).ok()?;
+    /// What the last server of `files` wrote, if readable.
+    pub fn load(files: &ServeFiles) -> Option<Self> {
+        let text = std::fs::read_to_string(files.state()).ok()?;
         serde_json::from_str(&text).ok()
     }
 
-    pub fn save(&self, config_dir: &Path) -> Result<()> {
-        std::fs::create_dir_all(dir(config_dir))?;
+    pub fn save(&self, files: &ServeFiles) -> Result<()> {
+        files.create()?;
         write_atomic(
-            &state_path(config_dir),
+            &files.state(),
             serde_json::to_string_pretty(self)?.as_bytes(),
         )?;
         Ok(())
@@ -107,7 +95,7 @@ mod tests {
     #[test]
     fn one_server_holds_the_lock_and_another_waits_for_it() {
         let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().to_path_buf();
+        let config = ServeFiles::legacy(dir.path());
         let first = lock(&config).unwrap().expect("free");
         assert!(held(&config).unwrap());
 

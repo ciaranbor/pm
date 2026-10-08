@@ -10,7 +10,7 @@
 //!
 //! The server signs each push with its VAPID key (RFC 8292), which some
 //! push services (FCM among them) require. The key is made on first use
-//! and kept beside the devices file; a device registers against its public
+//! and kept with the devices file ([`ServeFiles`]); a device registers against its public
 //! half, so replacing the key strands every subscription.
 //!
 //! Where a push may go is the [`policy`]'s to say; a stored subscription
@@ -18,7 +18,7 @@
 //! a push service answers 404 or 410 for. A worker thread sends, so a slow
 //! push service never holds up the poller.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
@@ -32,6 +32,7 @@ use crate::commands::attention::transition::{Ended, Transition};
 use crate::error::{PmError, Result};
 use crate::fs_utils::write_atomic;
 use crate::state::devices::{Devices, Push};
+use crate::state::serve_files::ServeFiles;
 
 use super::log;
 
@@ -41,19 +42,12 @@ mod queue;
 use policy::Policy;
 use queue::{Outgoing, Queue};
 
-const KEY_NAME: &str = "vapid.pem";
-
 /// Who to contact about this server's pushes, as RFC 8292 asks; push
 /// services don't check it, and pm has no address of its own.
 const CONTACT: &str = "mailto:pm-serve@localhost";
 
 /// How long a push service keeps a message for a device it can't reach.
 const TTL: Duration = Duration::from_secs(6 * 60 * 60);
-
-/// The VAPID key file beside the devices file at `devices`.
-pub(super) fn key_path(devices: &Path) -> PathBuf {
-    devices.with_file_name(KEY_NAME)
-}
 
 /// The VAPID key at `path`, made and saved first if there is none.
 pub(super) fn vapid_key(path: &Path) -> Result<ES256KeyPair> {
@@ -176,7 +170,7 @@ pub(super) struct Pusher {
 
 impl Pusher {
     pub(super) fn start(
-        devices: PathBuf,
+        devices: ServeFiles,
         key: ES256KeyPair,
         policy: Policy,
         grace: Duration,
@@ -246,12 +240,12 @@ impl Pusher {
 
 fn deliver(
     agent: &ureq::Agent,
-    devices: &Path,
+    devices: &ServeFiles,
     key: &ES256KeyPair,
     policy: &Policy,
     pushes: &[Outgoing],
 ) -> Result<()> {
-    let paired = Devices::load(devices)?;
+    let paired = Devices::load(&devices.devices())?;
     for (name, device) in &paired.devices {
         let Some(push) = device.push.as_ref() else {
             continue;
@@ -303,7 +297,7 @@ fn send(
 }
 
 /// Drop `name`'s subscription, unless it has registered another since.
-fn forget(devices: &Path, name: &str, gone: &Push) -> Result<()> {
+fn forget(devices: &ServeFiles, name: &str, gone: &Push) -> Result<()> {
     Devices::update(devices, |paired| {
         if let Some(device) = paired.devices.get_mut(name)
             && device.push.as_ref() == Some(gone)

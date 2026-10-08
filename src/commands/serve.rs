@@ -33,10 +33,10 @@
 //! wakes the poller too, which ends the event streams of tokens no longer
 //! paired.
 //!
-//! One server runs per pm config dir, holding a lock ([`state`]); another
+//! One server runs per machine, holding a lock ([`state`]); another
 //! waits for it to exit. Every request is logged to stderr with the device
-//! whose token it carried; launchd sends that to `serve.log` in the
-//! devices' dir.
+//! whose token it carried; launchd sends that to `serve.log`
+//! ([`ServeFiles`]).
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -48,6 +48,7 @@ use chrono::{SecondsFormat, Utc};
 
 use crate::error::{PmError, Result};
 use crate::state::devices::Devices;
+use crate::state::serve_files::ServeFiles;
 
 use super::attention::{self, transition::Watch};
 use super::reexec::Binary;
@@ -101,8 +102,8 @@ pub fn configured_port(config_dir: &std::path::Path) -> u16 {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub projects_dir: PathBuf,
-    /// The paired devices' file ([`Devices::path`](crate::state::devices::Devices::path)).
-    pub devices: PathBuf,
+    /// Where the paired devices and the server's other files are.
+    pub files: ServeFiles,
     pub tmux_server: Option<String>,
     /// How often the snapshot is read while no event stream is open.
     pub idle_poll: Duration,
@@ -122,10 +123,10 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn new(projects_dir: PathBuf, devices: PathBuf, tmux_server: Option<&str>) -> Self {
+    pub fn new(projects_dir: PathBuf, files: ServeFiles, tmux_server: Option<&str>) -> Self {
         Self {
             projects_dir,
-            devices,
+            files,
             tmux_server: tmux_server.map(str::to_string),
             idle_poll: Duration::from_secs(60),
             watched_poll: Duration::from_secs(5),
@@ -163,14 +164,15 @@ impl Server {
         let http = tiny_http::Server::http(addr)
             .map_err(|e| PmError::Serve(format!("cannot listen on {addr}: {e}")))?;
         let snapshot = attention::all(&config.projects_dir, config.tmux_server.as_deref())?;
-        let key = push::vapid_key(&push::key_path(&config.devices))?;
-        let waker = Waker::open(&config.devices)?;
+        config.files.create()?;
+        let key = push::vapid_key(&config.files.key())?;
+        let waker = Waker::open(&config.files)?;
         Ok(Arc::new(Self {
             waker,
             http,
             vapid: push::public_key(&key),
             pusher: Pusher::start(
-                config.devices.clone(),
+                config.files.clone(),
                 key,
                 config.push.clone(),
                 config.push_grace,
@@ -267,7 +269,7 @@ impl Server {
         if !self.hub.watched() {
             return;
         }
-        match Devices::load(&self.config.devices) {
+        match Devices::load(&self.config.files.devices()) {
             Ok(devices) => self.hub.cut(|token| devices.holds(token)),
             Err(e) => log(&format!("devices unreadable: {e}")),
         }
@@ -377,20 +379,21 @@ fn log(line: &str) {
 }
 
 /// Serve on loopback `port` until the process ends, once no other server
-/// of the config dir `config_dir` runs.
-pub fn serve(config: Config, config_dir: &std::path::Path, port: u16) -> Result<()> {
-    let lock = match state::lock(config_dir)? {
+/// of the same files runs.
+pub fn serve(config: Config, port: u16) -> Result<()> {
+    let files = config.files.clone();
+    let lock = match state::lock(&files)? {
         Some(lock) => lock,
         None => {
-            let holder = state::State::load(config_dir).map_or("?".into(), |s| s.pid.to_string());
+            let holder = state::State::load(&files).map_or("?".into(), |s| s.pid.to_string());
             log(&format!(
                 "waiting for the running server (pid {holder}) to exit"
             ));
-            state::wait(config_dir)?
+            state::wait(&files)?
         }
     };
     let server = Server::bind(config, port)?;
-    state::State::now(server.addr().port()).save(config_dir)?;
+    state::State::now(server.addr().port()).save(&files)?;
     log(&format!("listening on http://{}", server.addr()));
     server.run();
     drop(lock);

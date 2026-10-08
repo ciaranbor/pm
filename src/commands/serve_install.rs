@@ -2,9 +2,12 @@
 //! LaunchAgent, started at login and restarted if it exits, so it survives
 //! reboots of an always-on Mac. launchd gives its jobs a bare `PATH`, so
 //! the agent carries the installing shell's, where `tmux` and `git` are
-//! found; `PM_TMUX_SERVER`, when set, goes with it. It gets a UTF-8 `LANG`
-//! too (the installing shell's, if UTF-8), which launchd leaves unset. Its
-//! output goes to `serve.log` beside the devices file. The port is
+//! found; `PM_TMUX_SERVER`, when set, goes with it, and so do the XDG
+//! variables ([`Dirs`]): without them the server would keep its files in
+//! the default dirs while the user's shell keeps them elsewhere, two
+//! registries and two servers. It gets a UTF-8 `LANG` too (the installing
+//! shell's, if UTF-8), which launchd leaves unset. Its output goes to
+//! `serve.log` ([`ServeFiles`]). The port is
 //! `[serve] port`, read as the server starts, so the plist names none.
 //! Installing again repairs an install; `pm upgrade` refreshes one
 //! ([`refresh`]).
@@ -15,7 +18,9 @@ use std::time::{Duration, Instant};
 use crate::error::{PmError, Result};
 use crate::fs_utils::{process_alive, write_atomic};
 use crate::launchd;
+use crate::state::dirs::{Dirs, XDG_VARS};
 use crate::state::paths;
+use crate::state::serve_files::ServeFiles;
 
 use super::serve::state::{self, State};
 
@@ -50,16 +55,17 @@ pub struct Installed {
 /// Write the LaunchAgent and (re)load it.
 pub fn install(tmux_server: Option<&str>) -> Result<Installed> {
     macos_only()?;
-    let config_dir = paths::global_config_dir()?;
+    let home = paths::home_dir()?;
     let exe = std::env::current_exe()?;
-    let log = state::log_path(&config_dir);
-    std::fs::create_dir_all(log.parent().expect("a file in a dir"))?;
+    let xdg = xdg_env(None, &shell_env);
+    let files = files_under(&home, &xdg);
+    files.create()?;
     let path_env = std::env::var("PATH").unwrap_or_default();
     let lang = utf8_lang(std::env::var("LANG").ok());
-    let plist = plist_path(&paths::home_dir()?);
+    let plist = plist_path(&home);
     write_atomic(
         &plist,
-        render(&exe, &path_env, &lang, tmux_server, &log).as_bytes(),
+        render(&exe, &path_env, &lang, tmux_server, &xdg, &files.log()).as_bytes(),
     )?;
     launchd::bootout(LABEL)?;
     let began = chrono::Utc::now();
@@ -67,13 +73,13 @@ pub fn install(tmux_server: Option<&str>) -> Result<Installed> {
 
     let start = Instant::now();
     let started = loop {
-        let state = State::load(&config_dir);
+        let state = State::load(&files);
         if let Some(state) = state.as_ref().filter(|s| s.started >= began) {
             break Ok(state.pid);
         }
         if start.elapsed() > WAIT {
             let holder = state
-                .filter(|s| process_alive(s.pid) && state::held(&config_dir).unwrap_or(false))
+                .filter(|s| process_alive(s.pid) && state::held(&files).unwrap_or(false))
                 .map(|s| s.pid);
             break Err(holder);
         }
@@ -103,13 +109,18 @@ pub enum Refresh {
     Updated,
 }
 
+/// The installing shell's value of `name`.
+pub fn shell_env(name: &str) -> Option<String> {
+    std::env::var(name).ok()
+}
+
 /// Bring the installed agent's plist under `home` up to this pm's template,
-/// keeping its executable and the `PATH`, `LANG` and `PM_TMUX_SERVER` its
-/// install recorded (an older plist with no `LANG` gets the current
-/// shell's, if UTF-8). `reload` runs only when the file changed.
+/// keeping its executable and the `PATH`, `LANG`, `PM_TMUX_SERVER` and XDG
+/// variables its install recorded (one an older plist lacks is taken from
+/// `shell`, `LANG` only if UTF-8). `reload` runs only when the file changed.
 pub fn refresh(
     home: &Path,
-    config_dir: &Path,
+    shell: impl Fn(&str) -> Option<String>,
     dry_run: bool,
     reload: impl FnOnce(&Path) -> Result<()>,
 ) -> Result<Refresh> {
@@ -126,21 +137,26 @@ pub fn refresh(
         ))
     })?;
     let path_env = plist_env(&old, "PATH")
-        .or_else(|| std::env::var("PATH").ok())
+        .or_else(|| shell("PATH"))
         .unwrap_or_default();
-    let lang = utf8_lang(plist_env(&old, "LANG").or_else(|| std::env::var("LANG").ok()));
+    let lang = utf8_lang(plist_env(&old, "LANG").or_else(|| shell("LANG")));
     let tmux_server = plist_env(&old, "PM_TMUX_SERVER");
+    let xdg = xdg_env(Some(&old), &shell);
+    let files = files_under(home, &xdg);
     let new = render(
         &exe,
         &path_env,
         &lang,
         tmux_server.as_deref(),
-        &state::log_path(config_dir),
+        &xdg,
+        &files.log(),
     );
     if new == old {
         return Ok(Refresh::Current);
     }
     if !dry_run {
+        // launchd opens the log before pm runs, and makes no dirs.
+        files.create()?;
         write_atomic(&plist, new.as_bytes())?;
         reload(&plist)
             .map_err(|e| PmError::Serve(format!("{e}; `pm serve install` reloads the agent")))?;
@@ -154,6 +170,31 @@ pub fn reload(plist: &Path) -> Result<()> {
     launchd::bootstrap(plist)
 }
 
+/// The XDG variables the agent carries: those recorded in the plist `old`,
+/// else `shell`'s.
+fn xdg_env(
+    old: Option<&str>,
+    shell: &impl Fn(&str) -> Option<String>,
+) -> Vec<(&'static str, String)> {
+    XDG_VARS
+        .iter()
+        .filter_map(|&name| {
+            let value = old
+                .and_then(|old| plist_env(old, name))
+                .or_else(|| shell(name));
+            value.filter(|v| !v.is_empty()).map(|v| (name, v))
+        })
+        .collect()
+}
+
+/// The server's files under `home` as resolved with the variables `xdg`.
+fn files_under(home: &Path, xdg: &[(&str, String)]) -> ServeFiles {
+    let dirs = Dirs::resolve(home, |name| {
+        xdg.iter().find(|(n, _)| *n == name).map(|(_, v)| v.into())
+    });
+    ServeFiles::in_dirs(&dirs)
+}
+
 /// `lang` when it names UTF-8, else a UTF-8 locale every Mac has.
 fn utf8_lang(lang: Option<String>) -> String {
     lang.filter(|l| {
@@ -163,7 +204,14 @@ fn utf8_lang(lang: Option<String>) -> String {
     .unwrap_or_else(|| "en_US.UTF-8".into())
 }
 
-fn render(exe: &Path, path_env: &str, lang: &str, tmux_server: Option<&str>, log: &Path) -> String {
+fn render(
+    exe: &Path,
+    path_env: &str,
+    lang: &str,
+    tmux_server: Option<&str>,
+    xdg: &[(&str, String)],
+    log: &Path,
+) -> String {
     let string = |s: &str| format!("<string>{}</string>", escape(s));
     let mut env = format!(
         "<key>PATH</key>{}<key>LANG</key>{}",
@@ -172,6 +220,9 @@ fn render(exe: &Path, path_env: &str, lang: &str, tmux_server: Option<&str>, log
     );
     if let Some(server) = tmux_server {
         env.push_str(&format!("<key>PM_TMUX_SERVER</key>{}", string(server)));
+    }
+    for (name, value) in xdg {
+        env.push_str(&format!("<key>{name}</key>{}", string(value)));
     }
     let log = log.to_string_lossy();
     format!(
@@ -195,6 +246,12 @@ fn render(exe: &Path, path_env: &str, lang: &str, tmux_server: Option<&str>, log
         exe = string(&exe.to_string_lossy()),
         log = string(&log),
     )
+}
+
+/// The dirs the server of the agent `plist` resolves, by the XDG variables
+/// it records: launchd passes it no others.
+pub fn plist_dirs(home: &Path, plist: &str) -> Dirs {
+    Dirs::resolve(home, |name| plist_env(plist, name).map(Into::into))
 }
 
 /// The executable a plist install wrote runs.
@@ -251,10 +308,14 @@ mod refresh_tests {
         panic!("reloaded the agent")
     }
 
+    fn no_shell(_: &str) -> Option<String> {
+        None
+    }
+
     #[test]
     fn an_absent_agent_is_left_uninstalled() {
         let home = tempfile::tempdir().unwrap();
-        let refreshed = refresh(home.path(), &home.path().join("pm"), false, must_not_reload);
+        let refreshed = refresh(home.path(), no_shell, false, must_not_reload);
         assert_eq!(refreshed.unwrap(), Refresh::NotInstalled);
         assert!(!plist_path(home.path()).exists());
     }
@@ -262,44 +323,69 @@ mod refresh_tests {
     #[test]
     fn a_stale_plist_is_rewritten_keeping_its_install_choices_and_reloaded_once() {
         let home = tempfile::tempdir().unwrap();
-        let config_dir = home.path().join("pm");
         let plist = plist_path(home.path());
         std::fs::create_dir_all(plist.parent().unwrap()).unwrap();
-        // What an install before `LANG` was added wrote.
+        let recorded_cache = home
+            .path()
+            .join("recorded-cache")
+            .to_string_lossy()
+            .into_owned();
+        let shell_state = home
+            .path()
+            .join("shell-state")
+            .to_string_lossy()
+            .into_owned();
+        // What an install before `LANG` and the XDG move wrote, but for a
+        // cache dir set when it was installed.
         let stale = render(
             Path::new("/opt/a&b/pm"),
             "/opt/<brew>/bin:/usr/bin",
             "en_US.UTF-8",
             Some("work"),
-            &state::log_path(&config_dir),
+            &[("XDG_CACHE_HOME", recorded_cache.clone())],
+            &home
+                .path()
+                .join("Library/Application Support/pm/serve/serve.log"),
         )
         .replace("<key>LANG</key><string>en_US.UTF-8</string>", "");
         std::fs::write(&plist, &stale).unwrap();
+        let shell = |name: &str| match name {
+            "LANG" => Some("de_DE.UTF-8".to_string()),
+            "XDG_CACHE_HOME" => Some("/elsewhere".to_string()),
+            "XDG_STATE_HOME" => Some(shell_state.clone()),
+            _ => None,
+        };
 
-        let dry = refresh(home.path(), &config_dir, true, must_not_reload).unwrap();
+        let dry = refresh(home.path(), shell, true, must_not_reload).unwrap();
         assert_eq!(dry, Refresh::Updated);
         assert_eq!(std::fs::read_to_string(&plist).unwrap(), stale);
 
         let reloads = Cell::new(0);
-        let refreshed = refresh(home.path(), &config_dir, false, |p| {
+        let refreshed = refresh(home.path(), shell, false, |p| {
             assert_eq!(p, plist);
             reloads.set(reloads.get() + 1);
             Ok(())
         });
         assert_eq!(refreshed.unwrap(), Refresh::Updated);
         assert_eq!(reloads.get(), 1);
+        let log = Path::new(&shell_state).join("pm/serve/serve.log");
         assert_eq!(
             std::fs::read_to_string(&plist).unwrap(),
             render(
                 Path::new("/opt/a&b/pm"),
                 "/opt/<brew>/bin:/usr/bin",
-                &utf8_lang(std::env::var("LANG").ok()),
+                "de_DE.UTF-8",
                 Some("work"),
-                &state::log_path(&config_dir),
+                &[
+                    ("XDG_STATE_HOME", shell_state.clone()),
+                    ("XDG_CACHE_HOME", recorded_cache),
+                ],
+                &log,
             )
         );
+        assert!(log.parent().unwrap().is_dir(), "launchd makes no dirs");
 
-        let again = refresh(home.path(), &config_dir, false, must_not_reload).unwrap();
+        let again = refresh(home.path(), no_shell, false, must_not_reload).unwrap();
         assert_eq!(again, Refresh::Current);
     }
 
@@ -311,7 +397,7 @@ mod refresh_tests {
         let mangled = "<plist><dict><key>Label</key><string>dev.pm.serve</string></dict></plist>";
         std::fs::write(&plist, mangled).unwrap();
 
-        assert!(refresh(home.path(), &home.path().join("pm"), false, must_not_reload).is_err());
+        assert!(refresh(home.path(), no_shell, false, must_not_reload).is_err());
         assert_eq!(std::fs::read_to_string(&plist).unwrap(), mangled);
     }
 }
@@ -330,6 +416,7 @@ mod tests {
             "/opt/<brew>/bin:/usr/bin",
             "en_IE.UTF-8",
             Some("work"),
+            &[("XDG_STATE_HOME", "/s".into())],
             Path::new("/logs/serve.log"),
         );
         let mut plutil = Command::new("plutil")
@@ -357,7 +444,8 @@ mod tests {
             serde_json::json!({
                 "PATH": "/opt/<brew>/bin:/usr/bin",
                 "LANG": "en_IE.UTF-8",
-                "PM_TMUX_SERVER": "work"
+                "PM_TMUX_SERVER": "work",
+                "XDG_STATE_HOME": "/s"
             })
         );
         assert_eq!(parsed["StandardErrorPath"], "/logs/serve.log");

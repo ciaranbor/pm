@@ -1,7 +1,9 @@
 pub mod agent;
 pub mod devices;
+pub mod dirs;
 pub mod feature;
 pub mod paths;
 pub mod project;
 pub mod runtime;
+pub mod serve_files;
 pub mod workflow;

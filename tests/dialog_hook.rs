@@ -51,6 +51,9 @@ fn command(dir: &Path, shell: &str) -> Command {
         .env("PM_AGENT_NAME", AGENT)
         .env_remove(pm::state::paths::AGENT_WORKTREE_ENV)
         .current_dir(dir.join("main"));
+    for var in pm::state::dirs::XDG_VARS {
+        cmd.env_remove(var);
+    }
     cmd
 }
 

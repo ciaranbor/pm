@@ -133,12 +133,17 @@ impl Smoke {
 
     /// Where the binary under test keeps the global registry for this HOME.
     pub fn projects_dir(&self) -> PathBuf {
-        let config = if cfg!(target_os = "macos") {
-            self.home().join("Library/Application Support")
-        } else {
-            self.home().join(".config")
-        };
-        config.join("pm").join("projects")
+        self.home().join(".config/pm/projects")
+    }
+
+    /// The binary under test's state dir for this HOME.
+    pub fn state_dir(&self) -> PathBuf {
+        self.home().join(".local/state/pm")
+    }
+
+    /// Its runtime dir: the sandbox unsets `XDG_RUNTIME_DIR`.
+    pub fn runtime_dir(&self) -> PathBuf {
+        self.state_dir().join("run")
     }
 
     /// `scripts/sandbox run -C <cwd> -- <program>`: the sandbox's own env,

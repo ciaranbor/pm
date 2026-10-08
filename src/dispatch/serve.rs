@@ -1,13 +1,13 @@
 use std::time::Duration;
 
 use crate::cli::ServeCommands;
-use pm::commands::serve::{self, state};
+use pm::commands::serve;
 use pm::commands::serve_pair::{self, Pairing};
 use pm::commands::{serve_install, serve_logs, serve_status};
 use pm::error::Result;
-use pm::state::devices::Devices;
 use pm::state::paths;
 use pm::state::project::GlobalConfig;
+use pm::state::serve_files::ServeFiles;
 use pm::tailscale::{self, Serving};
 
 /// How long `tailscale serve --bg` may take before install gives up on it.
@@ -19,20 +19,20 @@ pub(super) fn dispatch_serve(
     server: Option<&str>,
 ) -> Result<()> {
     let config_dir = paths::global_config_dir()?;
-    let devices = Devices::path(&config_dir);
+    let files = ServeFiles::global()?;
     match command {
         None => {
-            let mut config = serve::Config::new(paths::global_projects_dir()?, devices, server);
+            let mut config = serve::Config::new(paths::global_projects_dir()?, files, server);
             let hosts = GlobalConfig::load(&config_dir)?.serve.push_hosts;
             config.push = serve::PushPolicy::new(&hosts);
             let port = port.unwrap_or_else(|| serve::configured_port(&config_dir));
-            serve::serve(config, &config_dir, port)
+            serve::serve(config, port)
         }
         Some(ServeCommands::Pair { name, url }) => {
-            print_pairing(&serve_pair::pair(&devices, &name, url.as_deref())?)
+            print_pairing(&serve_pair::pair(&files, &name, url.as_deref())?)
         }
         Some(ServeCommands::Devices) => {
-            let lines = pm::commands::serve_devices::devices(&devices)?;
+            let lines = pm::commands::serve_devices::devices(&files.devices())?;
             if lines.is_empty() {
                 println!("No devices paired; `pm serve pair` pairs one.");
             }
@@ -42,7 +42,7 @@ pub(super) fn dispatch_serve(
             Ok(())
         }
         Some(ServeCommands::Revoke { device }) => {
-            pm::commands::serve_revoke::revoke(&devices, &device)?;
+            pm::commands::serve_revoke::revoke(&files, &device)?;
             println!("Revoked {device}.");
             Ok(())
         }
@@ -50,7 +50,7 @@ pub(super) fn dispatch_serve(
             port,
             no_tailscale,
             pair,
-        }) => install(&config_dir, server, port, no_tailscale, pair),
+        }) => install(&config_dir, &files, server, port, no_tailscale, pair),
         Some(ServeCommands::Uninstall) => {
             if serve_install::uninstall()? {
                 println!("Uninstalled the pm serve LaunchAgent.");
@@ -65,17 +65,14 @@ pub(super) fn dispatch_serve(
         Some(ServeCommands::Status) => {
             let port = serve::configured_port(&config_dir);
             let exe = std::env::current_exe()?;
-            for line in serve_status::status(&paths::home_dir()?, &config_dir, port, &exe) {
+            for line in serve_status::status(&paths::home_dir()?, &files, port, &exe) {
                 println!("{line}");
             }
             Ok(())
         }
-        Some(ServeCommands::Logs { lines, follow }) => serve_logs::logs(
-            &state::log_path(&config_dir),
-            lines,
-            follow,
-            &mut std::io::stdout(),
-        ),
+        Some(ServeCommands::Logs { lines, follow }) => {
+            serve_logs::logs(&files.log(), lines, follow, &mut std::io::stdout())
+        }
     }
 }
 
@@ -93,6 +90,7 @@ fn print_pairing(pairing: &Pairing) -> Result<()> {
 
 fn install(
     config_dir: &std::path::Path,
+    files: &ServeFiles,
     server: Option<&str>,
     port: Option<u16>,
     no_tailscale: bool,
@@ -125,7 +123,7 @@ fn install(
     println!("{}", serving.advice(port));
 
     if let Some(device) = pair {
-        match serve_pair::pair(&Devices::path(config_dir), &device, None) {
+        match serve_pair::pair(files, &device, None) {
             Ok(pairing) => print_pairing(&pairing)?,
             Err(e) => println!(
                 "Not paired: {e}. `pm serve pair --name {device} --url <url>` pairs it with the URL the phone reaches."

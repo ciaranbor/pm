@@ -3,13 +3,12 @@
 //! file, so both stop at once; it is woken to end the device's open event
 //! streams too.
 
-use std::path::Path;
-
 use crate::error::{PmError, Result};
 use crate::state::devices::Devices;
+use crate::state::serve_files::ServeFiles;
 
-pub fn revoke(devices: &Path, device: &str) -> Result<()> {
-    Devices::update(devices, |paired| {
+pub fn revoke(files: &ServeFiles, device: &str) -> Result<()> {
+    Devices::update(files, |paired| {
         if paired.revoke(device) {
             Ok(())
         } else {
@@ -18,6 +17,6 @@ pub fn revoke(devices: &Path, device: &str) -> Result<()> {
             )))
         }
     })?;
-    super::serve::wake(devices);
+    super::serve::wake(files);
     Ok(())
 }

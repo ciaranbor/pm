@@ -2,7 +2,9 @@
 
 `.pm/` holds a project's state (features, agents, messages, config,
 summaries, docs); the pm config dir holds the project registry, global
-config, notices, and your global workflows. Both can be git-backed. Your
+config, notices, and your global workflows. Both can be git-backed. pm's
+state, cache and runtime dirs are this machine's alone and never move
+([Where pm keeps its files](../README.md#where-pm-keeps-its-files)). Your
 code travels through each repo's own remote, and agents' conversations
 through a `pm harness export` tarball.
 

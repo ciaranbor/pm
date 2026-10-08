@@ -591,8 +591,8 @@ git push
 ## Configuration
 
 Settings live in `<project>/.pm/config.toml`, or `config.toml` in the pm
-config dir (`~/.config/pm/` on Linux, `~/Library/Application Support/pm/` on
-macOS) for every project. Agent settings are re-read at every spawn, so
+config dir ([Where pm keeps its files](#where-pm-keeps-its-files)) for every
+project. Agent settings are re-read at every spawn, so
 restart, fork, `pm open`, and a dead-window heal pick up edits; there is no
 spawn-time flag. For a one-off change, edit the row and restart the agent,
 or switch inside the session (`/model`).
@@ -654,6 +654,34 @@ agents](#work-with-the-agents)).
 **`[project] max_features`** caps a project's in-flight features (any not
 merged or stale); the project value beats the global one, and unset means
 no cap.
+
+### Where pm keeps its files
+
+pm follows the [XDG Base Directory
+spec](https://specifications.freedesktop.org/basedir/latest/) on macOS and
+Linux alike:
+
+| Dir | Default | Holds |
+|---|---|---|
+| config, `$XDG_CONFIG_HOME/pm` | `~/.config/pm` | `config.toml`, `notices.md`, global workflows, the project registry; what `pm state --global` syncs |
+| state, `$XDG_STATE_HOME/pm` | `~/.local/state/pm` | `pm serve`'s paired devices, push key and log; registry entries a pull set aside |
+| cache, `$XDG_CACHE_HOME/pm` | `~/.cache/pm` | harness probe results, safe to delete |
+| runtime, `$XDG_RUNTIME_DIR/pm` | `<state>/run` | locks and `pm serve`'s wake-up |
+
+A variable set to a relative path is ignored. `pm serve`'s secrets are
+files only you can read (`serve/` is 0700, the devices file and push key
+0600), outside the config dir, so neither its git repo nor a dotfiles repo
+tracking `~/.config` sees them; `pm doctor` warns if their permissions
+widen. Set the XDG variables in your login profile, not an
+interactive-only rc, so pm's tmux server and `pm serve install`'s
+LaunchAgent (which records them) see the same dirs as your shell.
+
+An earlier release kept these in `~/Library/Application Support/pm` on
+macOS and inside `~/.config/pm` on Linux. The `pm` on your `PATH` moves
+them on its first run (any other pm build leaves them, since every other pm
+process still runs that one). Where both locations hold config, only
+projects registered at the old one alone are carried over, and `pm doctor`
+names anything left behind and any tmux config line pointing there.
 
 ## Further reading
 

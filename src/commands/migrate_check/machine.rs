@@ -8,6 +8,7 @@ use crate::git;
 use crate::harness::{Harness, Probe};
 use crate::state::devices::Devices;
 use crate::state::project::HarnessConfig;
+use crate::state::serve_files::ServeFiles;
 
 use super::super::skills::{CANONICAL_DIR, GlobalStore, global_customs_in};
 use super::{Finding, THIS_HOST, shell_path};
@@ -127,7 +128,8 @@ pub(super) fn findings(m: &Machine<'_>) -> Result<Vec<Finding>> {
         ),
     ));
 
-    if let Ok(devices) = Devices::load(&Devices::path(m.config_dir))
+    let serve = ServeFiles::in_dirs(&crate::state::paths::dirs_under(m.home));
+    if let Ok(devices) = Devices::load(&serve.devices())
         && !devices.devices.is_empty()
     {
         let names: Vec<&str> = devices.devices.keys().map(String::as_str).collect();
@@ -139,7 +141,7 @@ pub(super) fn findings(m: &Machine<'_>) -> Result<Vec<Finding>> {
             ),
             Some(format!(
                 "paired devices and the push key stay here; or carry {} over by hand",
-                shell_path(&m.config_dir.join(crate::state::devices::DIR_NAME))
+                shell_path(&serve.dir)
             )),
         ));
     }

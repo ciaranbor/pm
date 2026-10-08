@@ -28,7 +28,7 @@ pub(super) fn fixture() -> Fixture {
     let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
     let mut config = Config::new(
         TestServer::registry_dir(&project),
-        Devices::path(dir.path()),
+        ServeFiles::legacy(dir.path()),
         server.name(),
     );
     config.idle_poll = Duration::from_millis(100);
@@ -45,7 +45,7 @@ pub(super) fn fixture() -> Fixture {
 }
 
 pub(super) fn pair(config: &Config, name: &str) -> String {
-    Devices::update(&config.devices, |d| d.pair(name)).unwrap()
+    Devices::update(&config.files, |d| d.pair(name)).unwrap()
 }
 
 fn request<'a>(
@@ -87,7 +87,7 @@ fn a_request_without_a_live_token_is_refused() {
     let f = fixture();
     let reader = pair(&f.config, "reader");
     let revoked = pair(&f.config, "gone");
-    crate::commands::serve_revoke::revoke(&f.config.devices, "gone").unwrap();
+    crate::commands::serve_revoke::revoke(&f.config.files, "gone").unwrap();
 
     let status = |path: &str, token: Option<&str>| get(&f.config, path, token).0;
     assert_eq!(status("/v1/snapshot", None), 401);
@@ -585,7 +585,7 @@ fn subscriber(endpoint: &str) -> (web_push_native::p256::SecretKey, [u8; 16], St
 }
 
 fn stored_push(config: &Config, device: &str) -> Option<crate::state::devices::Push> {
-    Devices::load(&config.devices).unwrap().devices[device]
+    Devices::load(&config.files.devices()).unwrap().devices[device]
         .push
         .clone()
 }
@@ -602,7 +602,7 @@ fn a_device_sets_and_clears_only_its_own_https_subscription() {
         (200, r#"{"vapid":"the-servers-vapid-key"}"#)
     );
     assert!(
-        !super::push::key_path(&f.config.devices).exists(),
+        !f.config.files.key().exists(),
         "the route never makes a key of its own"
     );
 
@@ -711,7 +711,7 @@ fn a_transition_and_its_end_are_pushed_encrypted_to_each_subscriber_until_its_se
     let (url, received) = push_service(vec![201, 410]);
     let (secret, auth, subscription) = subscriber(&url);
     let push = super::push::subscription(&subscription, &PushPolicy::local()).unwrap();
-    Devices::update(&f.config.devices, |d| {
+    Devices::update(&f.config.files, |d| {
         d.devices.get_mut("phone").unwrap().push = Some(crate::state::devices::Push {
             endpoint: url.clone(),
             ..push.clone()
@@ -803,7 +803,7 @@ fn a_push_service_redirecting_is_not_followed() {
     ]);
     let (_, _, subscription) = subscriber(&url);
     let push = super::push::subscription(&subscription, &PushPolicy::local()).unwrap();
-    Devices::update(&f.config.devices, |d| {
+    Devices::update(&f.config.files, |d| {
         d.devices.get_mut("phone").unwrap().push = Some(push);
         Ok(())
     })
@@ -834,7 +834,7 @@ fn a_push_service_redirecting_is_not_followed() {
 fn subscribe(config: &Config, device: &str, url: &str) {
     let (_, _, subscription) = subscriber(url);
     let push = super::push::subscription(&subscription, &PushPolicy::local()).unwrap();
-    Devices::update(&config.devices, |d| {
+    Devices::update(&config.files, |d| {
         d.devices.get_mut(device).unwrap().push = Some(push);
         Ok(())
     })
@@ -885,9 +885,9 @@ fn a_flush_sends_the_transitions_held_back() {
     pair(&f.config, "phone");
     let (url, received) = push_service(vec![201]);
     subscribe(&f.config, "phone", &url);
-    let key = super::push::vapid_key(&super::push::key_path(&f.config.devices)).unwrap();
+    let key = super::push::vapid_key(&f.config.files.key()).unwrap();
     let pusher = super::push::Pusher::start(
-        f.config.devices.clone(),
+        f.config.files.clone(),
         key,
         PushPolicy::local(),
         Duration::from_secs(600),
@@ -917,7 +917,7 @@ fn a_stored_subscription_the_policy_refuses_is_dropped() {
     pair(&f.config, "phone");
     let (_, _, subscription) = subscriber("https://tailnet-service.ts.net/up");
     let push = super::push::subscription(&subscription, &PushPolicy::local()).unwrap();
-    Devices::update(&f.config.devices, |d| {
+    Devices::update(&f.config.files, |d| {
         d.devices.get_mut("phone").unwrap().push = Some(push);
         Ok(())
     })
@@ -979,7 +979,7 @@ fn a_wake_reads_a_change_pm_made_without_waiting_for_the_poll() {
     let events = watched(&server, &token);
 
     block(&f);
-    wake(&f.config.devices);
+    wake(&f.config.files);
 
     assert_eq!(next_transition(&events), "blocked");
 }
@@ -1008,14 +1008,14 @@ fn wakes_closer_together_than_the_gap_make_one_read() {
     let events = watched(&server, &token);
 
     block(&f);
-    wake(&f.config.devices);
+    wake(&f.config.files);
     // Past the wake's settling, so without the gap it would read `blocked`.
     std::thread::sleep(Duration::from_millis(500));
     let summary = paths::summary_path(&f.project, "login");
     std::fs::create_dir_all(summary.parent().unwrap()).unwrap();
     std::fs::write(&summary, "Adds login\n").unwrap();
     feat_status(&f.project, "login", Progress::Ready, None, None).unwrap();
-    wake(&f.config.devices);
+    wake(&f.config.files);
 
     assert_eq!(next_transition(&events), "ready", "blocked was never read");
     assert_eq!(server.0.reads.load(std::sync::atomic::Ordering::SeqCst), 2);
@@ -1249,7 +1249,7 @@ fn notes_are_saved_only_from_the_version_they_were_read_at() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
     let (project, projects_dir, name) = server.setup_project_no_tmux(dir.path());
-    let config = Config::new(projects_dir, Devices::path(dir.path()), None);
+    let config = Config::new(projects_dir, ServeFiles::legacy(dir.path()), None);
     let bearer = format!("Bearer {}", pair(&config, "phone"));
     let path = format!("/v1/projects/{name}/notes");
     let send = |method: &str, if_match: Option<&str>, body: &str| {
@@ -1329,12 +1329,12 @@ fn revoking_a_device_ends_its_open_streams_and_no_other_devices() {
     let revoked = watched(&server, &phone);
     let kept = watched(&server, &tablet);
 
-    crate::commands::serve_revoke::revoke(&f.config.devices, "phone").unwrap();
+    crate::commands::serve_revoke::revoke(&f.config.files, "phone").unwrap();
 
     until(&revoked, |l| l == "event: revoked");
     until(&revoked, |l| l == "0");
     block(&f);
-    wake(&f.config.devices);
+    wake(&f.config.files);
     assert_eq!(next_transition(&kept), "blocked");
 }
 
@@ -1347,7 +1347,7 @@ fn a_device_unpairs_itself_and_only_itself() {
     assert_eq!(call(&f.config, "GET", "/v1/pairing", &phone, "").0, 405);
     assert_eq!(call(&f.config, "DELETE", "/v1/pairing", &phone, "").0, 204);
 
-    let devices = Devices::load(&f.config.devices).unwrap();
+    let devices = Devices::load(&f.config.files.devices()).unwrap();
     assert_eq!(devices.devices.keys().collect::<Vec<_>>(), ["tablet"]);
     assert_eq!(call(&f.config, "DELETE", "/v1/pairing", &phone, "").0, 401);
     assert_eq!(get(&f.config, "/v1/snapshot", Some(&tablet)).0, 200);

@@ -32,9 +32,9 @@ answered, such as a merge, runs to its end. pm does not rely on Tailscale's
 identity headers: a tagged device sends none. `pm serve` logs each request
 with its device to stderr — for input, the keys pressed or the SHA-256 of
 the text, for a dialog's answer its choice, never the text — which the LaunchAgent sends to `serve.log`
-(`pm serve logs`) in the `serve/` dir of pm's config dir, beside the devices
+(`pm serve logs`) in the `serve/` dir of pm's state dir, beside the devices
 file and the server's VAPID key (`vapid.pem`); `pm state` syncs none of
-them.
+them ([Where pm keeps its files](../README.md#where-pm-keeps-its-files)).
 
 ## Push
 

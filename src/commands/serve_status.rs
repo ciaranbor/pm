@@ -9,10 +9,13 @@
 use std::path::{Path, PathBuf};
 
 use crate::state::devices::Devices;
+use crate::state::serve_files::ServeFiles;
 use crate::tailscale::Serving;
 
 use super::serve::state::{self, State};
-use super::serve_install::{LABEL, plist_exe, plist_path};
+use super::serve_install::{LABEL, plist_dirs, plist_exe, plist_path};
+use crate::state::dirs::Dirs;
+use crate::state::paths;
 
 /// The server as its files show it.
 pub struct Facts {
@@ -20,22 +23,27 @@ pub struct Facts {
     pub running: Option<State>,
     /// The installed agent's executable, when its plist exists.
     pub installed: Option<PathBuf>,
+    /// Where the installed agent's server keeps pm's files, by the XDG
+    /// variables its plist records, and where this process does.
+    pub dirs: Option<(Dirs, Dirs)>,
     pub devices: usize,
     pub port: u16,
 }
 
 impl Facts {
-    pub fn read(home: &Path, config_dir: &Path, port: u16) -> Self {
-        let running = state::held(config_dir)
+    pub fn read(home: &Path, files: &ServeFiles, port: u16) -> Self {
+        let running = state::held(files)
             .unwrap_or(false)
-            .then(|| State::load(config_dir))
+            .then(|| State::load(files))
             .flatten();
+        let plist = std::fs::read_to_string(plist_path(home)).ok();
         Self {
             running,
-            installed: std::fs::read_to_string(plist_path(home))
-                .ok()
-                .map(|plist| plist_exe(&plist).unwrap_or_default()),
-            devices: Devices::load(&Devices::path(config_dir))
+            installed: plist
+                .as_ref()
+                .map(|plist| plist_exe(plist).unwrap_or_default()),
+            dirs: plist.map(|plist| (plist_dirs(home, &plist), paths::dirs_under(home))),
+            devices: Devices::load(&files.devices())
                 .map(|d| d.devices.len())
                 .unwrap_or(0),
             port,
@@ -67,6 +75,18 @@ impl Facts {
                 ));
             }
         }
+        if let Some((agent, here)) = &self.dirs
+            && (agent.config != here.config || agent.state != here.state)
+        {
+            warn(format!(
+                "the LaunchAgent's server keeps pm's files in {} and {}, this shell in {} and {}, \
+                 so they see different registries; set the XDG variables alike and run `pm serve install`",
+                agent.config.display(),
+                agent.state.display(),
+                here.config.display(),
+                here.state.display()
+            ));
+        }
         if let Some(running) = &self.running
             && running.version != version
         {
@@ -97,8 +117,8 @@ impl Facts {
 
 /// `pm serve status`: one line per aspect, then doctor's warnings but
 /// Tailscale's, which has a line of its own.
-pub fn status(home: &Path, config_dir: &Path, port: u16, exe: &Path) -> Vec<String> {
-    let facts = Facts::read(home, config_dir, port);
+pub fn status(home: &Path, files: &ServeFiles, port: u16, exe: &Path) -> Vec<String> {
+    let facts = Facts::read(home, files, port);
     let mut lines = Vec::new();
     lines.push(match &facts.running {
         Some(s) => format!(
@@ -131,10 +151,7 @@ pub fn status(home: &Path, config_dir: &Path, port: u16, exe: &Path) -> Vec<Stri
         "tailscale: {}",
         crate::tailscale::check(port).advice(port)
     ));
-    lines.push(format!(
-        "log:       {}",
-        state::log_path(config_dir).display()
-    ));
+    lines.push(format!("log:       {}", files.log().display()));
     lines.extend(
         facts
             .warnings(exe, crate::version::VERSION, |_| None)
@@ -155,7 +172,8 @@ mod tests {
     #[test]
     fn doctor_warns_of_an_installed_server_not_running_or_running_another_pm_or_version() {
         let dir = tempfile::tempdir().unwrap();
-        let (home, config) = (dir.path().join("home"), dir.path().join("config"));
+        let home = dir.path().join("home");
+        let config = ServeFiles::legacy(&dir.path().join("config"));
         let exe = Path::new("/usr/local/bin/pm");
         std::fs::create_dir_all(home.join("Library/LaunchAgents")).unwrap();
         let version = crate::version::VERSION;
@@ -186,6 +204,16 @@ mod tests {
         let found = warnings(&Facts::read(&home, &config, 7764));
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(found[0].contains("/opt/old/bin/pm"), "{found:?}");
+
+        let elsewhere = plist.replace(
+            "</array>",
+            "</array><key>EnvironmentVariables</key><dict><key>XDG_STATE_HOME</key>\
+             <string>/elsewhere</string></dict>",
+        );
+        std::fs::write(plist_path(&home), elsewhere).unwrap();
+        let found = warnings(&Facts::read(&home, &config, 7764));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("/elsewhere/pm"), "{found:?}");
 
         std::fs::write(plist_path(&home), &plist).unwrap();
         State {

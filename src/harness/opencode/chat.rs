@@ -28,12 +28,9 @@ use crate::harness::transcript::items::{Body, Item, Page, Tail, mark_unfinished,
 
 use super::messages::{Row, items, tool_output};
 
-/// The database under `data_home` (`$XDG_DATA_HOME`), else under
-/// `<home>/.local/share`.
-pub(in crate::harness) fn db_path(home: &Path, data_home: Option<&Path>) -> PathBuf {
-    data_home
-        .map_or_else(|| home.join(".local/share"), Path::to_path_buf)
-        .join("opencode/opencode.db")
+/// The database under `data_home` ([`Dirs::data_home`](crate::state::dirs::Dirs::data_home)).
+pub(in crate::harness) fn db_path(data_home: &Path) -> PathBuf {
+    data_home.join("opencode/opencode.db")
 }
 
 fn open(db: &Path) -> Result<Connection> {
@@ -253,7 +250,7 @@ pub(crate) mod testing {
 
     /// Where opencode keeps its database under `home`.
     pub fn db(home: &Path) -> PathBuf {
-        super::db_path(home, None)
+        super::db_path(&home.join(".local/share"))
     }
 
     /// A database at `path` with opencode's message table.

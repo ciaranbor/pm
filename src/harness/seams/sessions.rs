@@ -59,7 +59,7 @@ impl Harness {
                 codex::chat::parse,
             ),
             Harness::OpenCode => {
-                let db = opencode::chat::db_path(agent.home, paths::data_home().as_deref());
+                let db = opencode::chat::db_path(&paths::dirs_under(agent.home).data_home);
                 if agent.session_id.is_empty() || !db.is_file() {
                     return None;
                 }
