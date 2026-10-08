@@ -208,20 +208,6 @@ fn harness_subcommands_have_help() {
 }
 
 #[test]
-fn claude_is_a_hidden_alias_for_harness() {
-    // The alias is not listed as a subcommand (help text may still mention
-    // claude-code elsewhere).
-    pm().arg("--help")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\n  harness "))
-        .stdout(predicate::str::is_match(r"(?m)^\s+claude\s").unwrap().not());
-    for path in [["claude", "hooks"], ["claude", "skills"]] {
-        pm().args(path).arg("--help").assert().success();
-    }
-}
-
-#[test]
 fn harness_flag_rejects_unsupported_harness() {
     pm().args(["harness", "settings", "list", "--harness", "aider"])
         .assert()

@@ -36,7 +36,7 @@ pub(crate) use check::{is_installed_for, is_installed_in};
 pub use entries::{
     PM_DIALOG_MARKER, PM_HOOK_MARKER, PM_SESSION_START_MARKER, PM_USER_PROMPT_MARKER,
     PM_WAITING_MARKER, STOP_HOOK_TIMEOUT_SECS, USER_PROMPT_EVENT, dialog_events,
-    dialog_hook_command, loop_fingerprint, pm_events, runs_blocking_stop_hook,
+    dialog_hook_command, loop_fingerprint, pm_events,
     session_start_hook_command, stop_hook_command, user_prompt_hook_command, waiting_events,
     waiting_hook_command,
 };

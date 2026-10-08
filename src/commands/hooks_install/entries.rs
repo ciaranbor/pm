@@ -37,8 +37,8 @@
 //! the status hook's, with the Stop hook's timeout: it blocks until a
 //! dialog is answered remotely (see [`crate::commands::hooks_dialog`]).
 //!
-//! Entries written by older releases (`pm claude hooks …`, or the unguarded
-//! `pm harness hooks …`) still match a marker, so they count as pm-owned.
+//! Entries written by older releases (the unguarded `pm harness hooks …`)
+//! still match a marker, so they count as pm-owned.
 //!
 //! A rewake loops across turns with no cap (12 consecutive wakes verified on
 //! Claude Code 2.1.289, where `stop_hook_active` then reads true), so the
@@ -64,25 +64,8 @@ pub const PM_HOOK_MARKER: &str = "pm harness hooks stop";
 /// Marker string for pm-owned SessionStart hook entries.
 pub const PM_SESSION_START_MARKER: &str = "pm harness hooks session-start";
 
-/// The previous generation's markers, still treated as pm-owned so an
-/// upgrade rewrites them in place rather than adding a second entry.
-const LEGACY_HOOK_MARKER: &str = "pm claude hooks stop";
-const LEGACY_SESSION_START_MARKER: &str = "pm claude hooks session-start";
-
-pub(super) const STOP_MARKERS: &[&str] = &[PM_HOOK_MARKER, LEGACY_HOOK_MARKER];
-
-/// Whether a process command line runs pm's Stop hook named with no
-/// harness: the blocking form, which runs inside the turn — every release
-/// before the waiter ran only that.
-pub fn runs_blocking_stop_hook(command: &str) -> bool {
-    STOP_MARKERS.iter().any(|marker| {
-        command
-            .split_once(marker)
-            .is_some_and(|(_, rest)| rest.trim().is_empty())
-    })
-}
-pub(super) const SESSION_START_MARKERS: &[&str] =
-    &[PM_SESSION_START_MARKER, LEGACY_SESSION_START_MARKER];
+pub(super) const STOP_MARKERS: &[&str] = &[PM_HOOK_MARKER];
+pub(super) const SESSION_START_MARKERS: &[&str] = &[PM_SESSION_START_MARKER];
 
 /// The event of pm's hook that resets a blocked feature. Not part of the
 /// never-idle loop: without it an agent still runs and wakes.

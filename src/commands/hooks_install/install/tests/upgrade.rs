@@ -3,7 +3,6 @@ use super::*;
 #[test]
 fn install_rewrites_older_user_level_spellings_in_place() {
     for old in [
-        "pm claude hooks stop",
         "pm harness hooks stop",
         "[ -n \"$PM_AGENT_NAME\" ] || exit 0; pm harness hooks stop",
     ] {
@@ -118,7 +117,7 @@ fn install_keeps_a_foreign_hook_bundled_with_pms() {
     write_json(
         &user_file(&home),
         &json!({"hooks": {"Stop": [{"matcher": "x", "hooks": [
-            {"type": "command", "command": "pm claude hooks stop"},
+            {"type": "command", "command": "pm harness hooks stop"},
             {"type": "command", "command": "my-notify"}
         ]}]}}),
     );
