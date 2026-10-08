@@ -4,8 +4,9 @@
 # (pm's one production seam for this), and the built `pm` plus harness
 # shims first on PATH. Nothing in it touches the real ~/ or the default tmux
 # server. Naming follows the lib tests (server `pm-test-<name>`, HOME
-# `$TMPDIR/pm-test-home-<name>`) so the recovery command in src/testing/pty_budget.rs covers
-# a sandbox too, and `cargo test` reaps one whose name is a dead pid.
+# `$TMPDIR/pm-test-home-<name>`) so the recovery command in
+# src/testing/system_ptys.rs covers a sandbox too, and `cargo test` reaps
+# one whose name is a dead pid.
 set -eu
 
 usage() {
