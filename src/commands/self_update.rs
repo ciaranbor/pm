@@ -203,7 +203,7 @@ fn install(exe: &Path, bytes: &[u8]) -> Result<()> {
 /// Run `exe upgrade --all`, returning what it printed.
 fn upgrade_all(exe: &Path) -> Vec<String> {
     let mut lines = vec!["Upgrading all projects...".to_string()];
-    match Command::new(exe).args(["upgrade", "--all"]).output() {
+    match run_just_written(Command::new(exe).args(["upgrade", "--all"])) {
         Ok(out) => {
             lines.extend(
                 String::from_utf8_lossy(&out.stdout)
@@ -220,6 +220,23 @@ fn upgrade_all(exe: &Path) -> Vec<String> {
         Err(e) => lines.push(format!("Warning: could not run `pm upgrade --all`: {e}")),
     }
     lines
+}
+
+/// Run `command`, whose program was just written. On Linux its exec fails
+/// with "Text file busy" while a child that another thread of this process
+/// forked (as test threads do) still holds the write handle, until that
+/// child execs.
+fn run_just_written(command: &mut Command) -> std::io::Result<std::process::Output> {
+    let mut tries = 0;
+    loop {
+        match command.output() {
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && tries < 20 => {
+                tries += 1;
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            result => return result,
+        }
+    }
 }
 
 /// `pm self-update` for this binary.
