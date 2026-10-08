@@ -14,7 +14,6 @@ mod remote;
 mod repo;
 
 pub use backfill::{backfill, backfill_with_dir};
-pub(crate) use global::SET_ASIDE_DIR_NAME;
 pub use global::{
     global_init, global_init_with_remote, global_pull, global_push, global_remote, global_status,
 };

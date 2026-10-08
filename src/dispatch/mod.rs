@@ -21,9 +21,6 @@ mod window;
 mod workflow;
 
 pub fn run(cli: Cli) -> pm::error::Result<()> {
-    if !matches!(cli.command, Commands::Upgrade { .. }) {
-        commands::xdg_migrate::lazy();
-    }
     let server = window::tmux_server_from_env();
     let server = server.as_deref();
     match cli.command {

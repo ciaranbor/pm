@@ -103,7 +103,7 @@ mod tests {
     #[test]
     fn a_wake_ends_the_wait_and_one_with_no_server_does_nothing() {
         let dir = tempfile::tempdir().unwrap();
-        let devices = ServeFiles::legacy(dir.path());
+        let devices = ServeFiles::new(dir.path().into(), dir.path().into());
         wake(&devices);
 
         let waker = Waker::open(&devices).unwrap();

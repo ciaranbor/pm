@@ -28,7 +28,7 @@ pub(super) fn fixture() -> Fixture {
     let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
     let mut config = Config::new(
         TestServer::registry_dir(&project),
-        ServeFiles::legacy(dir.path()),
+        ServeFiles::new(dir.path().into(), dir.path().into()),
         server.name(),
     );
     config.idle_poll = Duration::from_millis(100);
@@ -1249,7 +1249,11 @@ fn notes_are_saved_only_from_the_version_they_were_read_at() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
     let (project, projects_dir, name) = server.setup_project_no_tmux(dir.path());
-    let config = Config::new(projects_dir, ServeFiles::legacy(dir.path()), None);
+    let config = Config::new(
+        projects_dir,
+        ServeFiles::new(dir.path().into(), dir.path().into()),
+        None,
+    );
     let bearer = format!("Bearer {}", pair(&config, "phone"));
     let path = format!("/v1/projects/{name}/notes");
     let send = |method: &str, if_match: Option<&str>, body: &str| {

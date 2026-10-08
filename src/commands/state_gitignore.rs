@@ -5,14 +5,12 @@
 //! project registry, global config, and global *custom* workflows sync
 //! between machines. The bundled workflows share the dir but are not state
 //! to sync: `pm upgrade` rewrites them every release, and committing that
-//! churn would make every machine's registry dirty after each upgrade. Nor
-//! are the machine-local dirs an earlier release wrote into the config dir
-//! (now under the state, cache and runtime dirs, [`Dirs`](crate::state::dirs::Dirs)).
-//! So `.gitignore` carries a marker-delimited block naming both, regenerated wherever
-//! bundled workflows are written, from the bundle and the dir names their
-//! owners write to — never a hand-kept list, which would go stale. Because
-//! the file is tracked, one machine's regeneration reaches the others
-//! through the repo. Everything outside the block is the user's.
+//! churn would make every machine's registry dirty after each upgrade. So
+//! `.gitignore` carries a marker-delimited block naming them, regenerated
+//! wherever bundled workflows are written, from the bundle — never a
+//! hand-kept list, which would go stale. Because the file is tracked, one
+//! machine's regeneration reaches the others through the repo. Everything
+//! outside the block is the user's.
 //!
 //! Copies an earlier release committed are untracked in the same pass
 //! (`git rm --cached`), staged but not committed: the next `pm state push
@@ -37,12 +35,6 @@ const BASE: &str = "\
 *.pid
 ";
 
-/// The machine-local dirs an earlier release wrote under the config dir.
-/// TRANSITIONAL (drop in the release after the XDG move): `.gitignore` is
-/// synced, and a machine still on that release writes them and would commit
-/// them once a pull from an upgraded machine dropped these lines.
-const MACHINE_LOCAL: &[&str] = super::xdg_migrate::LEGACY_MACHINE_DIRS;
-
 const BLOCK_START: &str = "# >>> managed by pm — regenerated, edit outside this block >>>";
 const BLOCK_END: &str = "# <<< managed by pm <<<";
 /// The markers of a block holding only bundled workflows, which an earlier
@@ -57,14 +49,9 @@ fn gitignore_path(config_dir: &Path) -> PathBuf {
 
 /// Every config-dir-relative path the block ignores.
 fn managed_paths() -> Vec<String> {
-    MACHINE_LOCAL
-        .iter()
-        .map(|p| p.to_string())
-        .chain(
-            bundled_workflow_names()
-                .into_iter()
-                .map(|name| format!("{}/{name}", paths::WORKFLOWS_DIR_NAME)),
-        )
+    bundled_workflow_names()
+        .into_iter()
+        .map(|name| format!("{}/{name}", paths::WORKFLOWS_DIR_NAME))
         .collect()
 }
 
@@ -246,13 +233,6 @@ mod tests {
         }
         assert!(!ignored(dir.path(), "workflows/mine/config.toml"));
         assert!(ignored(dir.path(), "foo.lock"));
-        for legacy in [
-            "cache/harness-probes.json",
-            "tmux/not-a-lock",
-            "serve/vapid.pem",
-        ] {
-            assert!(ignored(dir.path(), legacy), "{legacy}");
-        }
         assert!(!ignored(dir.path(), "config.toml"));
         assert!(!ignored(dir.path(), "projects/p.toml"));
     }
@@ -272,27 +252,35 @@ mod tests {
         assert_eq!(marker_count(&out), 1);
         assert!(out.ends_with("mine\n"));
         git::init_repo(dir.path()).unwrap();
-        assert!(ignored(dir.path(), "cache/x.json"));
+        let bundled = bundled_workflow_names().into_iter().next().unwrap();
+        assert!(ignored(
+            dir.path(),
+            &format!("workflows/{bundled}/workflow.md")
+        ));
     }
 
     #[test]
-    fn sync_untracks_committed_machine_local_files_and_keeps_state() {
+    fn sync_untracks_committed_bundled_workflows_and_keeps_state() {
         let dir = tempdir().unwrap();
         git::init_repo(dir.path()).unwrap();
-        let probes = dir.path().join("cache/harness-probes.json");
-        std::fs::create_dir_all(probes.parent().unwrap()).unwrap();
-        std::fs::write(&probes, "{}").unwrap();
+        let bundled = bundled_workflow_names().into_iter().next().unwrap();
+        let rel = format!("workflows/{bundled}");
+        let workflow = dir.path().join(&rel).join("workflow.md");
+        std::fs::create_dir_all(workflow.parent().unwrap()).unwrap();
+        std::fs::write(&workflow, "").unwrap();
         std::fs::write(dir.path().join("config.toml"), "").unwrap();
         git::add_all(dir.path()).unwrap();
         git::commit(dir.path(), "old release").unwrap();
 
         let lines = sync_global_registry_ignore(dir.path(), false).unwrap();
         assert!(
-            lines.iter().any(|l| l.starts_with("Untracked cache from")),
+            lines
+                .iter()
+                .any(|l| l.starts_with(&format!("Untracked {rel} from"))),
             "{lines:?}"
         );
-        assert!(probes.is_file());
-        assert!(git::ls_files(dir.path(), "cache").unwrap().is_empty());
+        assert!(workflow.is_file());
+        assert!(git::ls_files(dir.path(), &rel).unwrap().is_empty());
         assert!(!git::ls_files(dir.path(), "config.toml").unwrap().is_empty());
     }
 

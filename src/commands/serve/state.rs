@@ -95,7 +95,7 @@ mod tests {
     #[test]
     fn one_server_holds_the_lock_and_another_waits_for_it() {
         let dir = tempfile::tempdir().unwrap();
-        let config = ServeFiles::legacy(dir.path());
+        let config = ServeFiles::new(dir.path().into(), dir.path().into());
         let first = lock(&config).unwrap().expect("free");
         assert!(held(&config).unwrap());
 

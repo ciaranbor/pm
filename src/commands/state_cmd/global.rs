@@ -110,7 +110,7 @@ fn global_init_at(
 
 /// The dir under the state dir that registry entries a pull replaced are
 /// kept in.
-pub(crate) const SET_ASIDE_DIR_NAME: &str = "registry-before-pull";
+const SET_ASIDE_DIR_NAME: &str = "registry-before-pull";
 
 fn set_aside_dir() -> Result<std::path::PathBuf> {
     Ok(paths::global_state_dir()?.join(SET_ASIDE_DIR_NAME))

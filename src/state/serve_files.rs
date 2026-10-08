@@ -5,9 +5,8 @@
 //! Both dirs are the user's alone (0700): the devices file and the key are
 //! secrets.
 
-use std::fs::{OpenOptions, TryLockError};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 
 use super::dirs::Dirs;
 use super::paths;
@@ -41,32 +40,9 @@ impl ServeFiles {
         Self::new(dirs.state.join(DIR_NAME), dirs.runtime.join(DIR_NAME))
     }
 
-    /// The single dir an earlier release kept all of them in, under the
-    /// legacy dir `legacy`.
-    pub fn legacy(legacy: &Path) -> Self {
-        let dir = legacy.join(DIR_NAME);
-        Self::new(dir.clone(), dir)
-    }
-
     /// This machine's.
     pub fn global() -> Result<Self> {
-        let home = paths::home_dir()?;
-        let dirs = paths::dirs_under(&home);
-        let current = Self::in_dirs(&dirs);
-        // TRANSITIONAL (drop in the release after the XDG move): a server
-        // an earlier release started still holds the legacy lock and reads
-        // the legacy devices, and a deferred migration leaves them there.
-        let legacy = Self::legacy(&super::dirs::legacy_dir(&home, &dirs));
-        Ok(Self::choose(current, legacy))
-    }
-
-    /// `legacy` while a server holds its lock or only it has been paired,
-    /// else `current`.
-    fn choose(current: Self, legacy: Self) -> Self {
-        if legacy != current && (legacy.held() || (!current.paired() && legacy.paired())) {
-            return legacy;
-        }
-        current
+        Ok(Self::in_dirs(&paths::global_dirs()?))
     }
 
     pub fn devices(&self) -> PathBuf {
@@ -99,67 +75,11 @@ impl ServeFiles {
         }
         Ok(())
     }
-
-    /// Whether a server holds the lock, found without making it.
-    pub fn held(&self) -> bool {
-        held(&self.lock())
-    }
-
-    /// Whether a devices file or a VAPID key is here.
-    fn paired(&self) -> bool {
-        self.devices().exists() || self.key().exists()
-    }
-}
-
-/// Whether another process holds the lock file at `path`; `false` when there
-/// is none, or it is not a regular file (opening a FIFO could block).
-pub fn held(path: &Path) -> bool {
-    OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(path)
-        .is_ok_and(|file| {
-            file.metadata().is_ok_and(|m| m.is_file())
-                && matches!(file.try_lock(), Err(TryLockError::WouldBlock))
-        })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_lock_is_held_only_while_another_handle_has_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let files = ServeFiles::legacy(dir.path());
-        assert!(!files.held(), "no file");
-        files.create().unwrap();
-        let lock = std::fs::File::create(files.lock()).unwrap();
-        assert!(!files.held());
-        lock.lock().unwrap();
-        assert!(files.held());
-    }
-
-    #[test]
-    fn the_legacy_files_are_used_only_while_an_old_server_or_only_they_have_them() {
-        let dir = tempfile::tempdir().unwrap();
-        let current = ServeFiles::new(dir.path().join("state"), dir.path().join("run"));
-        let legacy = ServeFiles::legacy(&dir.path().join("legacy"));
-        let choose = || ServeFiles::choose(current.clone(), legacy.clone());
-        assert_eq!(choose(), current, "neither paired");
-
-        legacy.create().unwrap();
-        std::fs::write(legacy.key(), "k").unwrap();
-        assert_eq!(choose(), legacy, "only the legacy dir paired");
-
-        current.create().unwrap();
-        std::fs::write(current.devices(), "").unwrap();
-        assert_eq!(choose(), current, "both paired");
-
-        let old_server = std::fs::File::create(legacy.lock()).unwrap();
-        old_server.lock().unwrap();
-        assert_eq!(choose(), legacy, "an old server runs");
-    }
 
     #[test]
     fn create_makes_both_dirs_private() {

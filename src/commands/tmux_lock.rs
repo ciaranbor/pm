@@ -36,14 +36,6 @@ pub fn lock(socket: &str, kind: &str) -> Result<Lock> {
 
 /// The `kind` lock of the server at `socket`, unless another holds it.
 pub fn try_lock(socket: &str, kind: &str) -> Result<Option<Lock>> {
-    // TRANSITIONAL (drop in the release after the XDG move): a watcher an
-    // earlier release started holds its lock under the legacy dir.
-    let legacy = paths::global_legacy_dir()?
-        .join(DIR_NAME)
-        .join(file_name(socket, kind));
-    if crate::state::serve_files::held(&legacy) {
-        return Ok(None);
-    }
     take(&path(socket, kind)?, socket, false)
 }
 
@@ -192,22 +184,6 @@ mod tests {
         // The removed file is no longer the lock.
         eventually(|| waiting.try_lock().ok());
         assert!(try_lock(&socket, "watch").unwrap().is_none());
-    }
-
-    #[test]
-    fn a_watch_lock_an_earlier_release_holds_counts_as_held() {
-        let socket = socket("legacy");
-        let legacy = paths::global_legacy_dir()
-            .unwrap()
-            .join(DIR_NAME)
-            .join(file_name(&socket, "watch"));
-        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
-        let old_watcher = std::fs::File::create(&legacy).unwrap();
-        old_watcher.lock().unwrap();
-        assert!(try_lock(&socket, "watch").unwrap().is_none());
-
-        drop(old_watcher);
-        eventually(|| try_lock(&socket, "watch").unwrap());
     }
 
     #[test]
