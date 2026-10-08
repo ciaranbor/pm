@@ -63,3 +63,6 @@ data class Divergence(val ahead: Int = 0, val behind: Int = 0) {
 }
 
 @Serializable data class WorkflowInfo(val name: String = "", val description: String? = null)
+
+/** Whether a feature's merge would go through now (`GET features/{project}/{feature}/merge`). */
+@Serializable data class MergeCheck(val mergeable: Boolean = true, val reason: String? = null)

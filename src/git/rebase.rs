@@ -1,4 +1,4 @@
-//! Rebase state probes.
+//! Paused rebase and merge probes.
 
 use std::path::Path;
 
@@ -15,4 +15,10 @@ pub fn rebase_in_progress(worktree: &Path) -> Result<bool> {
         }
     }
     Ok(false)
+}
+
+/// Whether a merge is paused in `worktree`, awaiting its commit.
+pub fn merge_in_progress(worktree: &Path) -> Result<bool> {
+    let path = run_git(worktree, &["rev-parse", "--git-path", "MERGE_HEAD"])?;
+    Ok(worktree.join(path).exists())
 }

@@ -3,6 +3,7 @@ package dev.pm.app.api
 import dev.pm.app.model.Dialog
 import dev.pm.app.model.DialogAnswer
 import dev.pm.app.model.FeatureInfo
+import dev.pm.app.model.MergeCheck
 import dev.pm.app.model.Notes
 import dev.pm.app.model.Pairing
 import dev.pm.app.model.Snapshot
@@ -135,6 +136,12 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
 
     suspend fun feature(project: String, feature: String): FeatureInfo =
         json.decodeFromString(FeatureInfo.serializer(), get(url("features", project, feature)))
+
+    suspend fun mergeCheck(project: String, feature: String): MergeCheck =
+        json.decodeFromString(
+            MergeCheck.serializer(),
+            get(url("features", project, feature, "merge")),
+        )
 
     suspend fun summary(project: String, feature: String): String =
         get(url("features", project, feature, "summary"))

@@ -13,6 +13,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -22,6 +23,7 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.pm.app.R
 import dev.pm.app.api.PmClient
@@ -69,6 +71,11 @@ fun Workspace(
     LaunchedEffect(route.tab == null) { if (route.tab == null) fallback?.let(select) }
     val selected = route.tab?.takeIf { it in tabs } ?: fallback
     var terminal by rememberSaveable { mutableStateOf<String?>(null) }
+    val mergeCheck = feature?.let {
+        viewModel(key = "merge") { MergeCheckModel(client, project, scope) }
+    }
+    val mergeBlocker = mergeCheck?.blocker?.collectAsState()?.value
+    LaunchedEffect(feature, acting) { mergeCheck?.refresh() }
 
     val shownAgent = (selected as? Tab.Agent)?.name
     TopBarActions(topBar) {
@@ -83,7 +90,11 @@ fun Workspace(
                 )
             }
             if (feature != null) {
-                add(MenuItem("Merge", R.drawable.ic_merge) { ask(Action.Merge(project, scope)) })
+                add(
+                    MenuItem("Merge", R.drawable.ic_merge, blocker = mergeBlocker) {
+                        ask(Action.Merge(project, scope))
+                    }
+                )
                 add(
                     MenuItem("Delete", R.drawable.ic_delete, destructive = true) {
                         ask(Action.Delete(project, scope))
@@ -136,6 +147,7 @@ fun Workspace(
                                         Action.Merge(project, scope),
                                 busy = acting is ActionState.Running,
                                 merge = { ask(Action.Merge(project, scope)) },
+                                mergeBlocker = mergeBlocker,
                             )
                         Tab.Brief -> BriefScreen(infoModel(client, project, scope))
                         Tab.Details -> DetailsScreen(infoModel(client, project, scope))
@@ -185,7 +197,8 @@ internal fun defaultTab(
 
 /**
  * A feature's summary under where it stands; a ready feature's with Merge, its next step, below.
- * `merging` while this feature's merge runs; `busy` while any action does.
+ * `merging` while this feature's merge runs; `busy` while any action does. A `mergeBlocker` turns
+ * Merge off and says why.
  */
 @Composable
 fun SummaryTab(
@@ -197,6 +210,7 @@ fun SummaryTab(
     busy: Boolean,
     merge: () -> Unit,
     modifier: Modifier = Modifier,
+    mergeBlocker: String? = null,
 ) {
     Column(modifier.fillMaxSize()) {
         if (feature != null) {
@@ -206,14 +220,27 @@ fun SummaryTab(
         SummaryScreen(model, Modifier.weight(1f))
         if (feature != null && isReady(feature)) {
             Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
-                PendingButton(
-                    "Merge",
-                    merge,
-                    Modifier.fillMaxWidth()
-                        .padding(horizontal = Spacing.gutter, vertical = Spacing.s),
-                    pending = merging,
-                    enabled = !busy || merging,
-                )
+                Column(
+                    Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+                ) {
+                    if (mergeBlocker != null && !merging) {
+                        Text(
+                            mergeBlocker,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    PendingButton(
+                        "Merge",
+                        merge,
+                        Modifier.fillMaxWidth(),
+                        pending = merging,
+                        enabled = merging || (!busy && mergeBlocker == null),
+                    )
+                }
             }
         }
     }

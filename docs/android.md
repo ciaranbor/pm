@@ -52,7 +52,16 @@ once. Close asks first, and says how many agents are mid-turn; Open brings
 them back, each resuming its conversation. Delete runs `pm delete` without
 `--force` once you type the project's name, and leaves every page of the
 project. The start screen lists a project with no session up under Closed
-projects, after the rest; its page offers Open.
+projects, after the rest; its page offers Open. A registered project that
+isn't on this machine is not listed
+([snapshot](remote-api.md#json-version-1)).
+
+A feature's Merge is off while merging would not land its branch as it
+stands, with the reason in a line above the Summary tab's Merge button
+and under the menu's: uncommitted changes, a paused merge or rebase, or a
+branch behind its base, which needs a rebase at a terminal first. The app
+asks each time the feature's page shows or its state changes. A server
+too old to say leaves Merge on and refuses a merge it can't make.
 
 ## Building
 

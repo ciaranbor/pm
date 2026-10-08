@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use crate::commands::{attention, feat_info};
+use crate::commands::{attention, feat_info, feat_merge};
 use crate::error::Result;
 use crate::state::agent::AgentRegistry;
 use crate::state::devices::{Devices, Push};
@@ -405,6 +405,19 @@ fn get(config: &Config, path: &str, query: &Query, token_sha256: &str) -> Result
             }
             let info = feat_info::info(&root, &config.projects_dir, feature)?;
             Ok(ok(JSON, serde_json::to_string(&info)?))
+        }
+        ["features", project, feature, "merge"] => {
+            let Some(root) = project_root(config, project)? else {
+                return Ok(error(404, "no such project"));
+            };
+            if !has_feature(&root, feature)? {
+                return Ok(error(404, "no such feature"));
+            }
+            let reason = feat_merge::blocker(&root, &config.projects_dir, feature)?;
+            Ok(json(
+                200,
+                serde_json::json!({ "mergeable": reason.is_none(), "reason": reason }),
+            ))
         }
         ["features", project, feature, "summary"] => {
             let Some(root) = project_root(config, project)? else {

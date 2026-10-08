@@ -210,6 +210,39 @@ mod tests {
     }
 
     #[test]
+    fn a_device_asks_whether_a_merge_would_go_through_without_merging() {
+        let f = fixture();
+        let phone = pair(&f.config, "phone");
+        let merge = format!("/v1/features/{}/login/merge", f.project_name);
+        TestServer::add_feature_commit(&f.project, "login");
+        crate::git::run_git(&f.project.join("login"), &["rm", "-q", "feature.txt"]).unwrap();
+
+        let (status, reply) = call(&f.config, "GET", &merge, &phone, "");
+        assert_eq!(
+            (status, body(&reply)),
+            (
+                200,
+                serde_json::json!({"mergeable": false, "reason": "Uncommitted changes"})
+            )
+        );
+
+        crate::git::run_git(&f.project.join("login"), &["commit", "-qm", "drop"]).unwrap();
+        let (status, reply) = call(&f.config, "GET", &merge, &phone, "");
+        assert_eq!(
+            (status, body(&reply)),
+            (200, serde_json::json!({"mergeable": true, "reason": null}))
+        );
+        assert!(FeatureState::load(&paths::features_dir(&f.project), "login").is_ok());
+
+        let ghost = format!("/v1/features/{}/ghost/merge", f.project_name);
+        let (status, reply) = call(&f.config, "GET", &ghost, &phone, "");
+        assert_eq!(
+            (status, body(&reply)["error"].as_str()),
+            (404, Some("no such feature"))
+        );
+    }
+
+    #[test]
     fn a_delete_of_unmerged_work_is_refused() {
         let f = fixture();
         let phone = pair(&f.config, "phone");

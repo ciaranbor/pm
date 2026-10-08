@@ -60,6 +60,11 @@ class LifecycleUiTest {
 
     private val stream = OpenStream()
 
+    /** What a GET of a feature's merge check gets; a server without the check, by default. */
+    @Volatile
+    private var mergeCheck: MockResponse =
+        MockResponse.Builder().code(404).body("""{"error":"no such endpoint"}""").build()
+
     /** Each POST waits for this before it is answered. */
     @Volatile private var held = CountDownLatch(0)
 
@@ -82,6 +87,7 @@ class LifecycleUiTest {
                             } else reply(200, "{}")
                         }
                         path == "/v1/events" -> events?.invoke() ?: reply(503, "{}")
+                        path.endsWith("/merge") -> mergeCheck
                         // Nothing else to read: the app shows the cached snapshot.
                         else -> reply(503, "{}")
                     }
@@ -195,6 +201,28 @@ class LifecycleUiTest {
             listOf("/v1/features/app/search/merge"),
             synchronized(posted) { posted.toList() },
         )
+    }
+
+    @Test
+    fun merge_is_off_with_the_servers_reason_while_it_would_not_go_through() {
+        mergeCheck =
+            MockResponse.Builder()
+                .code(200)
+                .body("""{"mergeable":false,"reason":"Behind main: rebase first"}""")
+                .build()
+        open(Target("app", "search", null))
+
+        compose.waitUntil(WAIT) {
+            compose
+                .onAllNodesWithText("Behind main: rebase first")
+                .fetchSemanticsNodes()
+                .isNotEmpty()
+        }
+        compose.onNodeWithText("Merge").assertIsNotEnabled()
+        compose
+            .onNodeWithContentDescription("Merge: Behind main: rebase first")
+            .assertIsNotEnabled()
+        assertEquals(emptyList<String>(), synchronized(posted) { posted.toList() })
     }
 
     @Test

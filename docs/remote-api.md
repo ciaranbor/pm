@@ -92,7 +92,7 @@ The API is under `/v1`; every path needs a paired device's token:
 | `agents/{project}/{scope}/{agent}/type` | `POST {"text"}` (up to 4 KB, no control characters): typed into the pane as keys with nothing pressed after, for a dialog that takes text (a login code) |
 | `agents/{project}/{scope}/{agent}/dialog` | `GET`: the oldest of the agent's dialogs that can be answered remotely (below), the one its terminal shows first, else `404`; `POST {"id", "choice", "answers"?, "message"?}`: answers the open dialog `id` names, `{"answered": true}` once its harness has the answer |
 | `agents/{project}/{scope}/{agent}/dialogs` | `GET`: `{"dialogs": [Dialog, …]}`, every dialog of the agent's that can be answered remotely, oldest first; empty when none |
-| `features/{project}/{feature}/merge` | `POST`: `pm feat merge`, so merges and deletes the feature; `{"merged": true, "warnings"}` |
+| `features/{project}/{feature}/merge` | `GET`: `{"mergeable", "reason"}`, whether a merge would land the branch as it stands, checked in git as asked; `reason` (`null` when mergeable) is a few words for a button: what `pm feat merge` would refuse (uncommitted changes, a merge or rebase paused in the feature's or its base's worktree, a base with no checkout), or `Behind <base>: rebase first` when the branch doesn't contain its base, which `pm feat merge` would join with a merge commit nobody reviewed. `POST`: `pm feat merge`, so merges and deletes the feature; `{"merged": true, "warnings"}` |
 | `features/{project}/{feature}/delete` | `POST`: `pm feat delete`; `{"deleted": true, "warnings"}` |
 | `agents/{project}/{scope}/{agent}/restart` | `POST {"force"?}`: `pm agent restart`; `{"restarted": <what it did>}` |
 | `projects/{project}/open` | `POST`: `pm open`; `{"opened": true, "sessions", "agents", "warnings"}`, the sessions it made and the agents that came up |
@@ -319,7 +319,10 @@ consumer must tolerate values it doesn't know:
 }
 ```
 
-`features` is sorted like the rows. `attention.kind` is one of the table's
+`projects` lists the registered projects on this machine, those with their
+main checkout: one synced from another machine's registry and never
+restored here, or removed from disk, is left out, as nothing here can open
+it. `features` is sorted like the rows. `attention.kind` is one of the table's
 kinds or `none`; `progress` stays `ready` while a busy agent holds
 [`ready`](../README.md#follow-what-needs-you) back; `skipped` says why a
 project's features are missing, and
