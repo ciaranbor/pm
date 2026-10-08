@@ -2,6 +2,9 @@ package dev.pm.app.ui
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -104,6 +107,33 @@ class DocsUiTest {
                 .onAllNodesWithText("Body of section 150.", substring = true)
                 .fetchSemanticsNodes()
                 .isNotEmpty()
+        }
+    }
+
+    @Test
+    fun the_list_reads_again_when_shown_again() {
+        val listed = { size: Int ->
+            MockResponse.Builder()
+                .code(200)
+                .body("""{"docs":[{"filename":"todo.md","description":"Tasks.","size":$size}]}""")
+                .build()
+        }
+        server.enqueue(listed(2048))
+        server.enqueue(listed(5120))
+        var shown by mutableStateOf(true)
+        compose.setContent {
+            val model = viewModel { ReadModel(client) { docs("app") } }
+            if (shown) DocsScreen(model, Instant.now(), open = {})
+        }
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText("2 KB").fetchSemanticsNodes().isNotEmpty()
+        }
+
+        shown = false
+        compose.waitForIdle()
+        shown = true
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText("5 KB").fetchSemanticsNodes().isNotEmpty()
         }
     }
 }

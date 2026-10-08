@@ -36,8 +36,8 @@ struct Listed {
 }
 
 /// The categories `categories.toml` lists, in its order, keeping only
-/// those whose filename is a file directly in the docs dir; none when it
-/// is missing.
+/// those whose filename names a file directly in the docs dir and, if it
+/// is a link, one that stays there; none when it is missing.
 fn categories(root: &Path) -> Result<Vec<Category>> {
     let path = paths::docs_dir(root).join("categories.toml");
     let text = match std::fs::read_to_string(&path) {
@@ -49,8 +49,19 @@ fn categories(root: &Path) -> Result<Vec<Category>> {
     Ok(parsed
         .category
         .into_iter()
-        .filter(|c| plain_name(&c.filename))
+        .filter(|c| plain_name(&c.filename) && stays_in(root, &c.filename))
         .collect())
+}
+
+/// Whether `filename` in the docs dir resolves inside it; a file not
+/// written yet does.
+fn stays_in(root: &Path, filename: &str) -> bool {
+    let dir = paths::docs_dir(root);
+    match (dir.join(filename).canonicalize(), dir.canonicalize()) {
+        (Ok(file), Ok(dir)) => file.parent() == Some(dir.as_path()),
+        (Err(e), _) => e.kind() == std::io::ErrorKind::NotFound,
+        (Ok(_), Err(_)) => false,
+    }
 }
 
 fn plain_name(name: &str) -> bool {
@@ -132,6 +143,14 @@ filename = "later.md"
 description = "Not written yet."
 
 [[category]]
+filename = "alias.md"
+description = "A link that stays in the docs dir."
+
+[[category]]
+filename = "escape.md"
+description = "A link out of it."
+
+[[category]]
 filename = "../notes.md"
 description = "Outside the docs dir."
 "#,
@@ -139,6 +158,9 @@ description = "Outside the docs dir."
         .unwrap();
         std::fs::write(docs.join("todo.md"), "# Todo\n").unwrap();
         std::fs::write(docs.join("secret.md"), "unlisted\n").unwrap();
+        std::fs::write(docs.join("ideas.md"), "# Ideas\n").unwrap();
+        std::os::unix::fs::symlink("ideas.md", docs.join("alias.md")).unwrap();
+        std::os::unix::fs::symlink("../notes.md", docs.join("escape.md")).unwrap();
         std::fs::write(paths::notes_path(&project), "notes\n").unwrap();
         let send = |method: &str, path: &str| match route(
             &config,
@@ -160,7 +182,7 @@ description = "Outside the docs dir."
             .iter()
             .map(|d| d["filename"].as_str().unwrap())
             .collect();
-        assert_eq!(names, ["todo.md", "later.md"]);
+        assert_eq!(names, ["todo.md", "later.md", "alias.md"]);
         assert_eq!(docs[0]["description"], "Tasks.");
         assert_eq!(docs[0]["size"], 7);
         assert!(docs[0]["modified"].is_string());
@@ -175,7 +197,17 @@ description = "Outside the docs dir."
             send("GET", &format!("{base}/later.md")),
             (200, String::new())
         );
-        for unlisted in ["secret.md", "categories.toml", "..%2Fnotes.md", "%2E%2E"] {
+        assert_eq!(
+            send("GET", &format!("{base}/alias.md")),
+            (200, "# Ideas\n".into())
+        );
+        for unlisted in [
+            "escape.md",
+            "secret.md",
+            "categories.toml",
+            "..%2Fnotes.md",
+            "%2E%2E",
+        ] {
             assert_eq!(
                 send("GET", &format!("{base}/{unlisted}")).0,
                 404,

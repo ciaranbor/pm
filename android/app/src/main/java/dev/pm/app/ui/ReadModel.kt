@@ -36,6 +36,22 @@ class ReadModel<T>(private val client: PmClient?, private val read: suspend PmCl
         retry()
     }
 
+    /** Whether the screen showing this has left composition since it was made. */
+    var left = false
+
+    /** Read again behind what is shown, replacing it once read; a failure leaves it. */
+    fun refresh() {
+        if (reading?.isActive == true || _uiState.value !is ReadState.Shown) return
+        val client = client ?: return
+        reading = viewModelScope.launch {
+            try {
+                _uiState.value = ReadState.Shown(client.read())
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {}
+        }
+    }
+
     fun retry() {
         if (reading?.isActive == true) return
         _uiState.value = ReadState.Loading
