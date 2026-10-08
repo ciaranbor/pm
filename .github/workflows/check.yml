@@ -1,0 +1,90 @@
+# The checks every change to main must pass. Caches are saved only from main:
+# a PR's cache is visible to that PR alone and counts against the repo's cache
+# quota. The weekly run catches advisories published with no change to pm.
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    env:
+      # Tests commit into real repos under the runner's own git config.
+      GIT_AUTHOR_NAME: pm-ci
+      GIT_AUTHOR_EMAIL: pm-ci@localhost
+      GIT_COMMITTER_NAME: pm-ci
+      GIT_COMMITTER_EMAIL: pm-ci@localhost
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The opencode plugin's tests run TypeScript directly: node 22.18+.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      # README's minimum, built: the runner's tmux 3.4 fails pm's tmux tests.
+      - name: Install tmux
+        env:
+          TMUX_VERSION: "3.6"
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libevent-dev libncurses-dev bison pkg-config
+          curl -fsSL "https://github.com/tmux/tmux/releases/download/$TMUX_VERSION/tmux-$TMUX_VERSION.tar.gz" | tar -xz -C "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP/tmux-$TMUX_VERSION"
+          ./configure --prefix="$HOME/.local" >/dev/null
+          make -j"$(nproc)" >/dev/null
+          make install >/dev/null
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: tmux -V
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      # The smoke and real-harness scenarios are #[ignore]d: they need a
+      # sandbox each, or the real harness CLIs and their credentials.
+      - run: cargo test --locked
+      - run: cargo doc --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  # Builds on the oldest toolchain Cargo.toml's rust-version declares. Linux
+  # only: the macOS-only code is built on stable by the release.
+  msrv:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - id: msrv
+        run: echo "version=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo check --all-targets --locked
+
+  # Advisories, licences, duplicate versions and sources, per deny.toml.
+  deny:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2

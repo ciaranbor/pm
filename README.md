@@ -19,8 +19,10 @@ and the mental model.
 
 ## Requirements
 
-- tmux, with a [Nerd Font](https://www.nerdfonts.com) (v3) as your terminal
-  font for the plugin's badges
+- tmux 3.6 or later (older releases, such as Ubuntu 24.04's 3.4, break the
+  plugin's status, alerts and attention key), with a
+  [Nerd Font](https://www.nerdfonts.com) (v3) as your terminal font for the
+  plugin's badges
 - git
 - an agent harness: [Claude Code](https://claude.com/claude-code) (the
   default), codex, or opencode
@@ -37,10 +39,10 @@ curl -fsSL https://github.com/ciaranbor/pm/releases/latest/download/install.sh |
 
 Run again, or run `pm self-update`, to upgrade in place; `pm --version`
 says which pm you have. Elsewhere, or to run your own changes, build from
-source: `cargo install --path .` in a checkout, or `cargo install --git
-https://github.com/ciaranbor/pm`. Such a build reports its commit in its
-version (`0.2.0+3.gabc1234`), and `pm self-update` leaves it alone unless
-given `--force`.
+source (Rust 1.91 or later): `cargo install --path .` in a checkout, or
+`cargo install --git https://github.com/ciaranbor/pm`. Such a build
+reports its commit in its version (`0.2.0+3.gabc1234`), and `pm
+self-update` leaves it alone unless given `--force`.
 
 Then add pm's tmux plugin, one line at the end of your tmux config:
 
