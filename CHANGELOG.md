@@ -6,6 +6,8 @@ notes.
 
 ## Unreleased
 
+## 0.5.1 — 2026-10-08
+
 - The Android app opens, closes and deletes projects; projects with nothing
 running are listed under "Closed projects".
 - Phone alerts go away once their need is over, even with the app closed,
