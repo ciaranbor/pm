@@ -132,46 +132,6 @@ fn init_from_git_without_a_path_roots_the_project_in_the_cwd() {
     assert!(s.projects_dir().join("app.toml").exists());
 }
 
-/// Catches: the real config dir an earlier release used (macOS's
-/// `~/Library/Application Support/pm`, or the machine-local dirs inside
-/// `~/.config/pm`) not reaching the XDG dirs through `pm upgrade`, losing
-/// the registry or `pm serve`'s pairings.
-#[test]
-#[ignore]
-fn upgrade_moves_an_earlier_releases_files_and_keeps_the_registry() {
-    let s = Smoke::new();
-    s.pm(s.home())
-        .args(["init", "--no-main", &s.proj().to_string_lossy()])
-        .assert()
-        .success();
-    let config = s.home().join(".config/pm");
-    let legacy = if cfg!(target_os = "macos") {
-        let legacy = s.home().join("Library/Application Support/pm");
-        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
-        std::fs::rename(&config, &legacy).unwrap();
-        legacy
-    } else {
-        config.clone()
-    };
-    std::fs::create_dir_all(legacy.join("serve")).unwrap();
-    std::fs::write(legacy.join("serve/devices.toml"), "[devices]\n").unwrap();
-
-    s.pm(s.home())
-        .args(["upgrade"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("into the XDG dirs"));
-
-    assert!(s.projects_dir().join("proj.toml").exists());
-    assert!(s.state_dir().join("serve/devices.toml").exists());
-    assert!(!legacy.join("serve").exists());
-    s.pm(s.home())
-        .arg("list")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("proj"));
-}
-
 /// Catches: `agent spawn --scope` resolving the target from the caller's
 /// cwd instead of the flag, run from `main` as an orchestrator would.
 #[test]

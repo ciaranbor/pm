@@ -57,17 +57,13 @@ pub(super) fn writable_dirs(
     dirs
 }
 
-/// pm's global dirs, none inside another. The legacy dir is among them
-/// (TRANSITIONAL, until the release after the XDG move): the migration may
-/// first run in a sandboxed agent's hook.
+/// pm's global dirs, none inside another.
 fn global_dirs() -> Vec<std::path::PathBuf> {
-    let Ok(home) = paths::home_dir() else {
+    let Ok(pm) = paths::global_dirs() else {
         return Vec::new();
     };
-    let pm = paths::dirs_under(&home);
-    let legacy = crate::state::dirs::legacy_dir(&home, &pm);
     let mut out: Vec<std::path::PathBuf> = Vec::new();
-    for dir in [pm.config, pm.state, pm.cache, pm.runtime, legacy] {
+    for dir in [pm.config, pm.state, pm.cache, pm.runtime] {
         if !out.iter().any(|d| dir.starts_with(d)) {
             out.push(dir);
         }
@@ -163,7 +159,6 @@ mod tests {
             pm.state,
             pm.cache,
         ];
-        expected.extend(cfg!(target_os = "macos").then(|| paths::global_legacy_dir().unwrap()));
         expected.extend([
             PathBuf::from("/abs/cache"),
             PathBuf::from("/proj/main/target"),

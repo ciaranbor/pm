@@ -317,14 +317,7 @@ fn install_global_lines(dry_run: bool) -> Vec<String> {
 /// half-upgraded. When `dry_run` is `true`, preview changes without writing
 /// anything.
 pub fn upgrade(dry_run: bool, tmux_server: Option<&str>) -> Result<Vec<String>> {
-    // First, so the registry is read from where it now is.
-    let mut lines = super::xdg_migrate::upgrade_lines(dry_run);
-    lines.extend(upgrade_in(
-        &paths::global_projects_dir()?,
-        dry_run,
-        tmux_server,
-    )?);
-    Ok(lines)
+    upgrade_in(&paths::global_projects_dir()?, dry_run, tmux_server)
 }
 
 /// [`upgrade`] of the projects registered in `projects_dir`.

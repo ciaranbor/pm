@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
 
-pub use super::dirs::{CONFIG_ITEMS, Dirs};
+pub use super::dirs::Dirs;
 
 pub(crate) const PM_DIR_NAME: &str = ".pm";
 const FEATURES_DIR_NAME: &str = "features";
@@ -44,39 +44,10 @@ pub fn global_dirs() -> Result<Dirs> {
     Ok(dirs_under(&home_dir()?))
 }
 
-/// Where an earlier release kept pm's global files ([`legacy_dir`](super::dirs::legacy_dir)).
-pub fn global_legacy_dir() -> Result<PathBuf> {
-    let home = home_dir()?;
-    Ok(super::dirs::legacy_dir(&home, &dirs_under(&home)))
-}
-
 /// The pm config dir ([`Dirs::config`]): the project registry, global
 /// `config.toml`, `notices.md`, and the global `workflows/` tier.
 pub fn global_config_dir() -> Result<PathBuf> {
-    let home = home_dir()?;
-    let dirs = dirs_under(&home);
-    // TRANSITIONAL (drop in the release after the XDG move): while a failed
-    // or refused migration leaves the config at the legacy location, use it
-    // there rather than start an empty registry.
-    Ok(choose_config(
-        dirs.config.clone(),
-        super::dirs::legacy_dir(&home, &dirs),
-    ))
-}
-
-/// `legacy` when only it holds config, else `config`.
-fn choose_config(config: PathBuf, legacy: PathBuf) -> PathBuf {
-    if legacy != config && !holds_config(&config) && holds_config(&legacy) {
-        return legacy;
-    }
-    config
-}
-
-/// Whether `dir` holds any of the config dir's [`CONFIG_ITEMS`].
-pub fn holds_config(dir: &Path) -> bool {
-    CONFIG_ITEMS
-        .iter()
-        .any(|item| std::fs::symlink_metadata(dir.join(item)).is_ok())
+    Ok(global_dirs()?.config)
 }
 
 /// The pm state dir ([`Dirs::state`]).
@@ -489,21 +460,6 @@ mod tests {
         let result = resolve_scope_from(root, root);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), PmError::NotInWorktree));
-    }
-
-    #[test]
-    fn the_legacy_config_dir_is_used_only_while_it_alone_holds_config() {
-        let dir = tempdir().unwrap();
-        let (config, legacy) = (dir.path().join("config"), dir.path().join("legacy"));
-        let choose = || choose_config(config.clone(), legacy.clone());
-        assert_eq!(choose(), config, "neither holds config");
-
-        std::fs::create_dir_all(legacy.join("projects")).unwrap();
-        assert_eq!(choose(), legacy);
-
-        std::fs::create_dir_all(&config).unwrap();
-        std::fs::write(config.join("config.toml"), "").unwrap();
-        assert_eq!(choose(), config, "both hold config");
     }
 
     #[test]

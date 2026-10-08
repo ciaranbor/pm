@@ -676,13 +676,6 @@ widen. Set the XDG variables in your login profile, not an
 interactive-only rc, so pm's tmux server and `pm serve install`'s
 LaunchAgent (which records them) see the same dirs as your shell.
 
-An earlier release kept these in `~/Library/Application Support/pm` on
-macOS and inside `~/.config/pm` on Linux. The `pm` on your `PATH` moves
-them on its first run (any other pm build leaves them, since every other pm
-process still runs that one). Where both locations hold config, only
-projects registered at the old one alone are carried over, and `pm doctor`
-names anything left behind and any tmux config line pointing there.
-
 ## Further reading
 
 - [docs/tmux.md](docs/tmux.md) — the tmux plugin's options, badges, and

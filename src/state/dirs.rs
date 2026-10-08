@@ -6,25 +6,11 @@
 //! A variable counts only when set to an absolute path; the spec says to
 //! ignore a relative one. With no `$XDG_RUNTIME_DIR`, runtime files go
 //! under the state dir rather than a shared `/tmp`.
-//!
-//! An earlier release kept everything under `dirs::config_dir()/pm`, which
-//! on macOS is `~/Library/Application Support/pm` ([`legacy_dir`]);
-//! [`xdg_migrate`](crate::commands::xdg_migrate) moves it.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 const NAME: &str = "pm";
-
-/// What the config dir holds, all of it synced by its git repo.
-pub const CONFIG_ITEMS: &[&str] = &[
-    "config.toml",
-    "notices.md",
-    "workflows",
-    "projects",
-    ".git",
-    ".gitignore",
-];
 
 /// The variables [`Dirs::resolve`] reads.
 pub const XDG_VARS: &[&str] = &[
@@ -60,17 +46,6 @@ impl Dirs {
             data_home: base("XDG_DATA_HOME", ".local/share"),
             state,
         }
-    }
-}
-
-/// Where an earlier release kept every global file: `~/Library/Application
-/// Support/pm` on macOS; elsewhere the config dir itself, whose machine-local
-/// subdirs then move out of it.
-pub fn legacy_dir(home: &Path, dirs: &Dirs) -> PathBuf {
-    if cfg!(target_os = "macos") {
-        home.join("Library/Application Support").join(NAME)
-    } else {
-        dirs.config.clone()
     }
 }
 

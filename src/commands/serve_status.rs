@@ -173,7 +173,7 @@ mod tests {
     fn doctor_warns_of_an_installed_server_not_running_or_running_another_pm_or_version() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
-        let config = ServeFiles::legacy(&dir.path().join("config"));
+        let config = ServeFiles::new(dir.path().join("config"), dir.path().join("config"));
         let exe = Path::new("/usr/local/bin/pm");
         std::fs::create_dir_all(home.join("Library/LaunchAgents")).unwrap();
         let version = crate::version::VERSION;

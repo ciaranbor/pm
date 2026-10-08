@@ -335,17 +335,15 @@ mod refresh_tests {
             .join("shell-state")
             .to_string_lossy()
             .into_owned();
-        // What an install before `LANG` and the XDG move wrote, but for a
-        // cache dir set when it was installed.
+        // What an install before `LANG` was added wrote, with the cache
+        // dir set when it was installed.
         let stale = render(
             Path::new("/opt/a&b/pm"),
             "/opt/<brew>/bin:/usr/bin",
             "en_US.UTF-8",
             Some("work"),
             &[("XDG_CACHE_HOME", recorded_cache.clone())],
-            &home
-                .path()
-                .join("Library/Application Support/pm/serve/serve.log"),
+            &home.path().join("old/serve.log"),
         )
         .replace("<key>LANG</key><string>en_US.UTF-8</string>", "");
         std::fs::write(&plist, &stale).unwrap();
