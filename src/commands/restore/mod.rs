@@ -4,6 +4,10 @@
 //! from `--import` tarballs go in next, so that `pm open` resumes every
 //! agent's conversation instead of starting it before the conversation
 //! exists here.
+//!
+//! A root that exists without its main checkout ([`Presence::NotRestored`])
+//! gets the clone in place: what is already under the root stays, and a
+//! failed clone removes only `main/`.
 
 use std::path::{Path, PathBuf};
 
@@ -11,7 +15,7 @@ use crate::error::{PmError, Result};
 use crate::git;
 use crate::state::feature::FeatureState;
 use crate::state::paths;
-use crate::state::project::{GlobalConfig, ProjectEntry};
+use crate::state::project::{GlobalConfig, Presence, ProjectEntry};
 
 /// What to restore, and from where.
 pub struct RestoreParams<'a> {
@@ -259,8 +263,9 @@ fn restore_project(
     let root = entry.root_path();
     let mut messages = Vec::new();
 
-    // Step 1: Clone if the project directory doesn't exist
-    if !root.exists() {
+    // Step 1: Clone if the project isn't on this machine
+    let presence = Presence::of(&root);
+    if presence == Presence::RootMissing {
         if let Some(ref repo_url) = entry.repo_url {
             messages.push(format!("{name}: cloning from {repo_url}..."));
             super::init::init_in(
@@ -296,6 +301,20 @@ fn restore_project(
                 ready: false,
             });
         }
+    } else if presence == Presence::NotRestored {
+        let Some(repo_url) = &entry.repo_url else {
+            messages.push(format!(
+                "{name}: skipped ({} holds no main checkout and no repo_url)",
+                root.display()
+            ));
+            return Ok(ProjectResult {
+                messages,
+                ready: false,
+            });
+        };
+        messages.push(format!("{name}: cloning from {repo_url} into main/..."));
+        complete_root(&root, name, repo_url)?;
+        messages.push(format!("{name}: cloned"));
     } else {
         messages.push(format!("{name}: directory exists"));
     }
@@ -404,9 +423,32 @@ fn restore_project(
 
     Ok(ProjectResult {
         messages,
-        ready: true,
+        ready: Presence::of(&root).is_here(),
     })
 }
+
+/// Clone `repo_url` into the `main/` that `root` lacks, and scaffold its
+/// `.pm/` state when it has no config. A failure removes `main/` again, and
+/// nothing else under `root`.
+fn complete_root(root: &Path, name: &str, repo_url: &str) -> Result<()> {
+    let main = paths::main_worktree(root);
+    if std::fs::symlink_metadata(&main).is_ok() {
+        return Err(PmError::PathAlreadyExists(main));
+    }
+    let done = git::clone_repo(repo_url, &main).and_then(|()| {
+        if paths::pm_dir(root).join("config.toml").exists() {
+            return Ok(());
+        }
+        super::init::scaffold_state(root, name, &super::skills::GlobalStore::resolve()?)
+    });
+    if done.is_err() {
+        let _ = std::fs::remove_dir_all(&main);
+    }
+    done
+}
+
+#[cfg(test)]
+mod husk_tests;
 
 #[cfg(test)]
 mod tests {

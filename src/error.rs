@@ -31,6 +31,15 @@ pub enum PmError {
     #[error("Not inside a pm project")]
     NotInProject,
 
+    #[error("project '{name}' is not on this machine: run `pm restore {name}`")]
+    NotHere { name: String },
+
+    #[error(
+        "{} holds pm state but no main checkout: `pm restore` or `pm delete` its project",
+        .0.display()
+    )]
+    NotRestoredRoot(PathBuf),
+
     #[error("Not in a feature worktree — provide a feature name explicitly")]
     NotInFeatureWorktree,
 

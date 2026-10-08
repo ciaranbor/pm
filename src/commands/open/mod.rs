@@ -101,8 +101,8 @@ pub fn open(
 /// What `open_all` did with one registered project.
 pub enum ProjectOpen {
     Opened(OpenResult),
-    /// The registered root is not on disk.
-    RootMissing(PathBuf),
+    /// The project is not on this machine.
+    NotHere,
     Failed(PmError),
 }
 
@@ -110,9 +110,9 @@ pub enum ProjectOpen {
 /// passing each project's outcome to `report` as soon as it is known; each
 /// outcome, by name, for the launches to be confirmed after.
 ///
-/// A project whose root is missing, or whose open fails, is reported and the
-/// sweep continues. The client is never switched or attached here; that is
-/// the caller's choice.
+/// A project that isn't on this machine, or whose open fails, is reported
+/// and the sweep continues. The client is never switched or attached here;
+/// that is the caller's choice.
 pub fn open_all(
     projects_dir: &Path,
     tmux_server: Option<&str>,
@@ -121,8 +121,8 @@ pub fn open_all(
     let mut outcomes = Vec::new();
     for (name, entry) in ProjectEntry::list(projects_dir)? {
         let root = entry.root_path();
-        let outcome = if !root.exists() {
-            ProjectOpen::RootMissing(root)
+        let outcome = if !entry.presence().is_here() {
+            ProjectOpen::NotHere
         } else {
             match open_project(&root, projects_dir, tmux_server) {
                 Ok(result) => ProjectOpen::Opened(result),

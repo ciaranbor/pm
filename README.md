@@ -269,7 +269,16 @@ pm keeps running in tmux; there is nothing to restart day to day. After a
 reboot, `pm open` recreates a project's missing sessions, respawns every
 active agent on its conversation, runs the `restore`
 [lifecycle hook](#lifecycle-hooks), and warns about drift `pm doctor`
-finds; `pm open --all` does so for every registered project.
+finds; `pm open --all` does so for every registered project on this
+machine.
+
+A registered project is *on this machine* when its root holds its `main/`
+checkout; the registry can sync from a machine that has projects this one
+doesn't. A command naming a project that isn't here, or run inside its
+root, refuses and says to `pm restore <name>`; an all-project command skips
+it; `pm doctor` warns about a root that has state but no checkout; and
+`pm delete <name>` unregisters it, removing its `.pm/` and then its root if
+nothing else is left there.
 `pm close` (`--all` for every project) tears the sessions down by choice,
 without touching state; `pm open` brings them back. `pm delete`, by
 contrast, removes the project from pm, and with `--force` deletes its

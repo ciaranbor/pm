@@ -133,8 +133,9 @@ pub fn main_worktree(project_root: &Path) -> PathBuf {
     project_root.join("main")
 }
 
-/// Walk up from `start` to find the project root (directory containing `.pm/`).
-/// Returns `None` if no `.pm/` directory is found.
+/// Walk up from `start` to find the project root: the nearest directory
+/// containing `.pm/`, which must also be on this machine
+/// ([`Presence`](crate::state::project::Presence)).
 pub fn find_project_root(start: &Path) -> Result<PathBuf> {
     let mut current = start.to_path_buf();
 
@@ -146,6 +147,9 @@ pub fn find_project_root(start: &Path) -> Result<PathBuf> {
 
     loop {
         if current.join(PM_DIR_NAME).is_dir() {
+            if !crate::state::project::Presence::of(&current).is_here() {
+                return Err(PmError::NotRestoredRoot(current));
+            }
             return Ok(current);
         }
         if !current.pop() {
@@ -243,6 +247,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = dir.path();
         std::fs::create_dir(root.join(".pm")).unwrap();
+        std::fs::create_dir(main_worktree(root)).unwrap();
 
         let found = find_project_root(root).unwrap();
         assert_eq!(found, root.canonicalize().unwrap());
@@ -260,6 +265,19 @@ mod tests {
 
         let found = find_project_root(&deep).unwrap();
         assert_eq!(found, root.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn find_project_root_refuses_a_root_without_main() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("husk");
+        std::fs::create_dir_all(root.join(".pm/messages")).unwrap();
+
+        let err = find_project_root(&root.join(".pm/messages")).unwrap_err();
+        assert!(
+            matches!(&err, PmError::NotRestoredRoot(r) if *r == root.canonicalize().unwrap()),
+            "{err}"
+        );
     }
 
     #[test]

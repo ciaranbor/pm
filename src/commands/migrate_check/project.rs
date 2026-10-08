@@ -92,7 +92,7 @@ fn uncheckable(name: &str, entry: &ProjectEntry, main: &Path) -> Option<Finding>
             .push("then `pm register` it from its directory".to_string());
         return Some(finding);
     }
-    if !main.is_dir() {
+    if !entry.presence().is_here() {
         let mut finding = Finding::blocker(
             "main/",
             format!("{} does not exist here", shell_path(main)),

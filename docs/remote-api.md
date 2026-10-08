@@ -103,7 +103,10 @@ A client learns what the server serves from the request itself, never
 from a version string: a request the server doesn't know is `404`
 `{"error": "no such endpoint"}` or `405` `{"error": "no such endpoint for
 this method"}`, so the server predates it; a path it served once and
-dropped is `410`, so the client predates the server.
+dropped is `410`, so the client predates the server. A registered project
+that isn't [on this machine](../README.md#around-a-reboot) is `404`
+`{"error": "project not on this machine"}`, except to `delete`, which
+unregisters it as `pm delete` does.
 
 Each action runs pm's own handler, never with `--force`, to the end
 however long it takes (the post-merge hook runs in the base session's
@@ -319,10 +322,9 @@ consumer must tolerate values it doesn't know:
 }
 ```
 
-`projects` lists the registered projects on this machine, those with their
-main checkout: one synced from another machine's registry and never
-restored here, or removed from disk, is left out, as nothing here can open
-it. `features` is sorted like the rows. `attention.kind` is one of the table's
+`projects` lists the registered projects
+[on this machine](../README.md#around-a-reboot); any other is left out, as
+nothing here can open it. `features` is sorted like the rows. `attention.kind` is one of the table's
 kinds or `none`; `progress` stays `ready` while a busy agent holds
 [`ready`](../README.md#follow-what-needs-you) back; `skipped` says why a
 project's features are missing, and

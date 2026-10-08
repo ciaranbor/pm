@@ -281,10 +281,10 @@ pub(crate) fn count_active_features() -> Result<Vec<(String, usize)>> {
     let mut results = Vec::new();
 
     for (name, entry) in &projects {
-        let root = entry.root_path();
-        if !root.exists() {
+        if !entry.presence().is_here() {
             continue;
         }
+        let root = entry.root_path();
         let features_dir = paths::features_dir(&root);
         if let Ok(features) = FeatureState::list(&features_dir) {
             let active = features

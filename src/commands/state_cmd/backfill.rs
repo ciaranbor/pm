@@ -32,11 +32,11 @@ pub fn backfill_with_dir(projects_dir: &Path) -> Result<Vec<String>> {
             continue;
         }
 
-        let root = entry.root_path();
-        if !root.exists() {
-            messages.push(format!("{name}: skipped (root does not exist)"));
+        if !entry.presence().is_here() {
+            messages.push(format!("{name}: skipped (not on this machine)"));
             continue;
         }
+        let root = entry.root_path();
 
         let mut changed = false;
 
@@ -132,7 +132,7 @@ mod tests {
         let projects_dir = dir.path().join("projects");
         let project_root = dir.path().join("myapp");
 
-        std::fs::create_dir_all(&project_root).unwrap();
+        std::fs::create_dir_all(paths::main_worktree(&project_root)).unwrap();
         setup_pm_with_remote(&project_root, "https://github.com/user/myapp-pm-state.git");
 
         let entry = ProjectEntry {
@@ -202,7 +202,7 @@ mod tests {
         let msgs = backfill_with_dir(&projects_dir).unwrap();
         assert!(
             msgs.iter()
-                .any(|m| m.contains("skipped (root does not exist)")),
+                .any(|m| m.contains("skipped (not on this machine)")),
             "{msgs:?}"
         );
     }

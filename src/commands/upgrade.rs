@@ -207,8 +207,10 @@ fn upgrade_projects(projects_dir: &Path) -> Result<Vec<String>> {
         }
 
         let root = entry.root_path();
-        if !root.exists() {
-            lines.push(format!("{name}: skipped (root does not exist)"));
+        if !entry.presence().is_here() {
+            lines.push(format!(
+                "{name}: skipped (not on this machine: run `pm restore {name}`)"
+            ));
             continue;
         }
         match upgrade_project(&root) {
@@ -250,8 +252,10 @@ fn upgrade_projects_dry_run(projects_dir: &Path) -> Result<(Vec<String>, bool)> 
         }
 
         let root = entry.root_path();
-        if !root.exists() {
-            lines.push(format!("{name}: skipped (root does not exist)"));
+        if !entry.presence().is_here() {
+            lines.push(format!(
+                "{name}: skipped (not on this machine: run `pm restore {name}`)"
+            ));
             continue;
         }
         let actions = upgrade_project_dry_run(&root).map(|(actions, hooks)| {
@@ -820,6 +824,33 @@ last_active = "2026-01-01T00:00:00Z"
                 .join(".agents/agents/main.md")
                 .exists()
         );
+    }
+
+    #[test]
+    fn upgrade_skips_a_project_not_on_this_machine_without_writing_to_it() {
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("registry");
+        let husk = dir.path().join("husk");
+        fs::create_dir_all(husk.join(".pm/messages")).unwrap();
+        ProjectEntry {
+            root: husk.to_string_lossy().to_string(),
+            main_branch: "main".to_string(),
+            repo_url: None,
+            state_remote: None,
+        }
+        .save(&projects_dir, "husk")
+        .unwrap();
+
+        let skip = "husk: skipped (not on this machine: run `pm restore husk`)".to_string();
+        assert!(
+            upgrade_projects_dry_run(&projects_dir)
+                .unwrap()
+                .0
+                .contains(&skip)
+        );
+        assert!(upgrade_projects(&projects_dir).unwrap().contains(&skip));
+        assert!(!husk.join(".pm/docs").exists());
+        assert!(!husk.join(".pm/.git").exists());
     }
 
     #[test]

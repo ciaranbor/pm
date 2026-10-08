@@ -86,13 +86,16 @@ pub fn project_scopes(root: &Path) -> Result<Vec<Scope>> {
     Ok(scopes)
 }
 
-/// Every scope of every project registered in `projects_dir`, and a
-/// skipped report for each project that can't be read.
+/// Every scope of every project registered in `projects_dir` that is on this
+/// machine, and a skipped report for each project that can't be read.
 pub fn global_scopes(projects_dir: &Path) -> Result<(Vec<Scope>, Vec<Report>)> {
     let registry = ProjectEntry::scan(projects_dir)?;
     let mut scopes = Vec::new();
     let mut unread = Vec::new();
     for (name, entry) in registry.projects {
+        if !entry.presence().is_here() {
+            continue;
+        }
         match project_scopes(&entry.root_path()) {
             Ok(found) => scopes.extend(found),
             Err(e) => unread.push(Report {

@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn open_all_reopens_every_project_and_skips_a_missing_root() {
+fn open_all_reopens_every_project_and_skips_those_not_here() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
     let projects_dir = dir.path().join("registry");
@@ -25,6 +25,16 @@ fn open_all_reopens_every_project_and_skips_a_missing_root() {
     }
     .save(&projects_dir, "ghost")
     .unwrap();
+    let husk = dir.path().join("husk");
+    std::fs::create_dir_all(husk.join(".pm/messages")).unwrap();
+    ProjectEntry {
+        root: husk.to_string_lossy().to_string(),
+        main_branch: "main".to_string(),
+        repo_url: None,
+        state_remote: None,
+    }
+    .save(&projects_dir, "husk")
+    .unwrap();
     let sessions = [
         tmux::session_name(&alpha, "main"),
         tmux::session_name(&alpha, "login"),
@@ -40,7 +50,7 @@ fn open_all_reopens_every_project_and_skips_a_missing_root() {
         .map(|(name, outcome)| {
             let label = match outcome {
                 ProjectOpen::Opened(r) => format!("restored {}", r.sessions_restored),
-                ProjectOpen::RootMissing(_) => "root missing".to_string(),
+                ProjectOpen::NotHere => "not here".to_string(),
                 ProjectOpen::Failed(_) => "failed".to_string(),
             };
             (name, label)
@@ -56,7 +66,8 @@ fn open_all_reopens_every_project_and_skips_a_missing_root() {
     assert_eq!(
         outcomes,
         [
-            ("ghost".to_string(), "root missing".to_string()),
+            ("ghost".to_string(), "not here".to_string()),
+            ("husk".to_string(), "not here".to_string()),
             (alpha, "restored 2".to_string()),
             (beta, "restored 1".to_string()),
         ]
@@ -72,7 +83,7 @@ fn open_all_continues_past_a_project_that_fails() {
     let broken_path = dir.path().join(&broken);
     init::init(&broken_path, &projects_dir, None, server.name()).unwrap();
     tmux::kill_session(server.name(), &tmux::session_name(&broken, "main")).unwrap();
-    std::fs::remove_dir_all(paths::main_worktree(&broken_path)).unwrap();
+    std::fs::remove_file(paths::pm_dir(&broken_path).join("config.toml")).unwrap();
     let healthy = server.scope("healthy");
     init::init(
         &dir.path().join(&healthy),
@@ -89,7 +100,7 @@ fn open_all_continues_past_a_project_that_fails() {
         .map(|(name, outcome)| {
             let label = match outcome {
                 ProjectOpen::Opened(r) => format!("restored {}", r.sessions_restored),
-                ProjectOpen::RootMissing(_) => "root missing".to_string(),
+                ProjectOpen::NotHere => "not here".to_string(),
                 ProjectOpen::Failed(_) => "failed".to_string(),
             };
             (name, label)

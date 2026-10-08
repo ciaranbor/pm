@@ -53,7 +53,9 @@ imports one later, into projects already restored. An import adds only
 what the machine lacks, never replacing a session or memory file it has,
 and rewrites the recorded paths when the home directory differs.
 `pm harness migrate --from <old path>` does the same for a project moved
-on one machine.
+on one machine. A root that exists without its `main/` checkout is completed
+too: restore clones into `main/`, writing a fresh project config when the
+root has none and the state remote doesn't supply one.
 
 The registry repo syncs your global custom workflows, never the bundled
 ones or machine-local files.

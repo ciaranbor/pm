@@ -88,11 +88,11 @@ pub fn close_all_with_dir(
     let mut messages = Vec::new();
     let mut own = None;
     for (name, entry) in &projects {
-        let root = entry.root_path();
-        if !root.exists() {
-            messages.push(format!("{name}: skipped (directory does not exist)"));
+        if !entry.presence().is_here() {
+            messages.push(format!("{name}: skipped (not on this machine)"));
             continue;
         }
+        let root = entry.root_path();
         match close(&root, tmux_server) {
             Ok(closed) => {
                 messages.push(format!(
@@ -322,7 +322,7 @@ mod tests {
         let (msgs, _) = close_all_with_dir(&projects_dir, server.name()).unwrap();
         assert!(
             msgs.iter()
-                .any(|m| m.contains("ghost") && m.contains("directory does not exist")),
+                .any(|m| m.contains("ghost") && m.contains("not on this machine")),
             "{msgs:?}"
         );
     }
@@ -335,9 +335,9 @@ mod tests {
         let server = TestServer::new();
         let projects_dir = dir.path().join("registry");
 
-        // Broken project: directory exists, no .pm/ config
+        // Broken project: on this machine, no .pm/ config
         let broken_path = dir.path().join("broken");
-        std::fs::create_dir_all(&broken_path).unwrap();
+        std::fs::create_dir_all(paths::main_worktree(&broken_path)).unwrap();
         let broken = ProjectEntry {
             root: broken_path.to_string_lossy().to_string(),
             main_branch: "main".to_string(),
