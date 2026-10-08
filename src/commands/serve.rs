@@ -54,6 +54,7 @@ use super::attention::{self, transition::Watch};
 use super::reexec::Binary;
 
 mod dialog;
+mod docs;
 mod events;
 mod in_flight;
 mod input;

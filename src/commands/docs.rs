@@ -172,7 +172,7 @@ pub fn bootstrap(project_root: &Path) -> Result<()> {
     // categories it's missing (e.g. findings.md added in a later version) so
     // the orchestrator — which discovers categories by reading this file —
     // sees every default category file bootstrap creates below.
-    let categories_path = docs_dir.join("categories.toml");
+    let categories_path = paths::doc_categories(project_root);
     if !categories_path.exists() {
         std::fs::write(&categories_path, default_categories_toml())?;
     } else {
@@ -201,7 +201,7 @@ pub fn bootstrap_dry_run(project_root: &Path) -> Vec<std::path::PathBuf> {
     if !docs_dir.exists() {
         would_create.push(docs_dir.clone());
     }
-    let categories_path = docs_dir.join("categories.toml");
+    let categories_path = paths::doc_categories(project_root);
     if !categories_path.exists() {
         would_create.push(categories_path);
     }
@@ -243,7 +243,7 @@ mod tests {
 
         bootstrap(&root).unwrap();
 
-        let categories_path = paths::docs_dir(&root).join("categories.toml");
+        let categories_path = paths::doc_categories(&root);
         assert!(categories_path.exists());
 
         let content = std::fs::read_to_string(&categories_path).unwrap();

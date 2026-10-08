@@ -56,6 +56,12 @@ projects, after the rest; its page offers Open. A registered project that
 isn't on this machine is not listed
 ([snapshot](remote-api.md#json-version-1)).
 
+Beside its Notes, a project's page has Docs: the categories of its
+[information store](../README.md#information-store-and-summaries), each with
+what it holds, its size and when it last changed, each opening to read. The
+docs are read-only on the phone, since `main` writes them. Sections in the
+top bar jumps to a heading. A server that predates the docs shows no Docs button.
+
 ## Features
 
 A feature's workspace is its agents' chats, with a tab per agent once it

@@ -106,6 +106,11 @@ pub fn docs_dir(project_root: &Path) -> PathBuf {
     pm_dir(project_root).join("docs")
 }
 
+/// The information store's index of categories: `<project>/.pm/docs/categories.toml`.
+pub fn doc_categories(project_root: &Path) -> PathBuf {
+    docs_dir(project_root).join("categories.toml")
+}
+
 /// Feature summaries for the orchestrator: `<project>/.pm/summaries/`.
 pub fn summaries_dir(project_root: &Path) -> PathBuf {
     pm_dir(project_root).join("summaries")

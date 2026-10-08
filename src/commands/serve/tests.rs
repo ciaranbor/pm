@@ -48,7 +48,7 @@ pub(super) fn pair(config: &Config, name: &str) -> String {
     Devices::update(&config.files, |d| d.pair(name)).unwrap()
 }
 
-fn request<'a>(
+pub(super) fn request<'a>(
     method: &'a str,
     path: &'a str,
     query: &'a str,

@@ -36,6 +36,30 @@ class ReadModel<T>(private val client: PmClient?, private val read: suspend PmCl
         retry()
     }
 
+    private var shownBefore = false
+
+    /**
+     * Its screen is shown: the first time, as read at creation; after that, read again behind what
+     * is shown, since it may have changed while another page was.
+     */
+    fun shown() {
+        if (shownBefore) refresh()
+        shownBefore = true
+    }
+
+    /** Read again behind what is shown, replacing it once read; a failure leaves it. */
+    private fun refresh() {
+        if (reading?.isActive == true || _uiState.value !is ReadState.Shown) return
+        val client = client ?: return
+        reading = viewModelScope.launch {
+            try {
+                _uiState.value = ReadState.Shown(client.read())
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {}
+        }
+    }
+
     fun retry() {
         if (reading?.isActive == true) return
         _uiState.value = ReadState.Loading
