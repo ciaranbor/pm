@@ -14,8 +14,8 @@ use super::upgrade_restart;
 /// pre-global-tier bundled copies away, and project the project's own
 /// customs for each harness in use. Feature worktrees are untouched except by
 /// that migration, which removes only pm-owned files.
-/// The global asset tier is installed separately (see [`upgrade_all`] and
-/// [`upgrade`]) since it is shared by every project.
+/// The global asset tier is installed separately (see [`upgrade`]) since it
+/// is shared by every project.
 pub fn upgrade_project(project_root: &Path) -> Result<Vec<String>> {
     let mut updated: Vec<String> = Vec::new();
 
@@ -70,12 +70,11 @@ pub fn upgrade_project(project_root: &Path) -> Result<Vec<String>> {
 
 /// Dry-run variant of [`upgrade_project`]: report what would change without
 /// writing anything. Returns one `Would …` line per action that would be
-/// taken; an empty `Vec` means the project is fully up to date.
-pub fn upgrade_project_dry_run(project_root: &Path) -> Result<Vec<String>> {
-    let mut actions = Vec::new();
-
-    // Hooks
-    actions.extend(hooks_install::install_dry_run(Some(project_root))?);
+/// taken, empty when the project is fully up to date, and whether the hooks
+/// agents launch with would change.
+fn upgrade_project_dry_run(project_root: &Path) -> Result<(Vec<String>, bool)> {
+    let mut actions = hooks_install::install_dry_run(Some(project_root))?;
+    let hooks_change = !actions.is_empty();
 
     // Information store (.pm/docs/) bootstrap
     for path in super::docs::bootstrap_dry_run(project_root) {
@@ -118,7 +117,7 @@ pub fn upgrade_project_dry_run(project_root: &Path) -> Result<Vec<String>> {
     // Projections (compares the canonical store as it is on disk now)
     actions.extend(skills::project_assets(project_root, true)?);
 
-    Ok(actions)
+    Ok((actions, hooks_change))
 }
 
 /// `agents` as `'default' (login), …`.
@@ -171,15 +170,9 @@ fn display_path(project_root: &Path, path: &Path) -> String {
         .unwrap_or_else(|_| path.display().to_string())
 }
 
-/// Upgrade all registered projects.
-/// Returns one summary line per project.
-pub fn upgrade_all() -> Result<Vec<String>> {
-    let projects_dir = paths::global_projects_dir()?;
-    upgrade_all_with_dir(&projects_dir)
-}
-
-/// Testable inner function that takes an explicit projects directory.
-pub fn upgrade_all_with_dir(projects_dir: &Path) -> Result<Vec<String>> {
+/// Install the global tier, then upgrade every project registered in
+/// `projects_dir`: a summary line per project, a broken one included.
+fn upgrade_projects(projects_dir: &Path) -> Result<Vec<String>> {
     let projects = ProjectEntry::list(projects_dir)?;
 
     if projects.is_empty() {
@@ -232,26 +225,21 @@ pub fn upgrade_all_with_dir(projects_dir: &Path) -> Result<Vec<String>> {
     Ok(lines)
 }
 
-/// Dry-run variant of [`upgrade_all`]: preview what would change for every
-/// registered project without writing anything.
-pub fn upgrade_all_dry_run() -> Result<Vec<String>> {
-    let projects_dir = paths::global_projects_dir()?;
-    upgrade_all_dry_run_with_dir(&projects_dir)
-}
-
-/// Testable inner function that takes an explicit projects directory.
-pub fn upgrade_all_dry_run_with_dir(projects_dir: &Path) -> Result<Vec<String>> {
+/// Dry-run variant of [`upgrade_projects`], and whether the hooks agents
+/// launch with would change in any project.
+fn upgrade_projects_dry_run(projects_dir: &Path) -> Result<(Vec<String>, bool)> {
     let projects = ProjectEntry::list(projects_dir)?;
+    let mut hooks_change = false;
 
     if projects.is_empty() {
         let mut lines = install_global_lines(true);
         lines.push("No registered projects".to_string());
-        return Ok(lines);
+        return Ok((lines, hooks_change));
     }
 
     let mut lines = install_global_lines(true);
     for (name, entry) in &projects {
-        // Same guard as in upgrade_all: never resolve a non-portable root
+        // Same guard as in upgrade_projects: never resolve a non-portable root
         // against the caller's CWD.
         if !crate::path_utils::is_portable(&entry.root) {
             lines.push(format!(
@@ -266,7 +254,11 @@ pub fn upgrade_all_dry_run_with_dir(projects_dir: &Path) -> Result<Vec<String>> 
             lines.push(format!("{name}: skipped (root does not exist)"));
             continue;
         }
-        match upgrade_project_dry_run(&root) {
+        let actions = upgrade_project_dry_run(&root).map(|(actions, hooks)| {
+            hooks_change |= hooks;
+            actions
+        });
+        match actions {
             Ok(actions) if actions.is_empty() => {
                 lines.push(format!("{name}: up to date"));
             }
@@ -279,7 +271,7 @@ pub fn upgrade_all_dry_run_with_dir(projects_dir: &Path) -> Result<Vec<String>> 
             Err(e) => lines.push(format!("{name}: error: {e}")),
         }
     }
-    Ok(lines)
+    Ok((lines, hooks_change))
 }
 
 /// Install (or preview installing) the shared global asset tier, and
@@ -315,47 +307,32 @@ fn install_global_lines(dry_run: bool) -> Vec<String> {
     lines
 }
 
-/// Upgrade either the current project (default) or all projects (--all),
-/// then restart the agents left stale ([`upgrade_restart`]). When `dry_run`
-/// is `true`, preview changes without writing anything.
-pub fn upgrade(all: bool, dry_run: bool, tmux_server: Option<&str>) -> Result<Vec<String>> {
-    let project_root = if all {
-        None
-    } else {
-        Some(paths::find_project_root(&std::env::current_dir()?)?)
-    };
-    upgrade_at(project_root.as_deref(), dry_run, tmux_server)
+/// Upgrade every registered project, then restart the agents left stale
+/// ([`upgrade_restart`]). The global tier, hooks and `pm serve` LaunchAgent
+/// are the machine's, so upgrading one project alone would leave the others
+/// half-upgraded. When `dry_run` is `true`, preview changes without writing
+/// anything.
+pub fn upgrade(dry_run: bool, tmux_server: Option<&str>) -> Result<Vec<String>> {
+    upgrade_in(&paths::global_projects_dir()?, dry_run, tmux_server)
 }
 
-/// [`upgrade`] of the project at `project_root`, or of every project, with
-/// the `Up to date` line a dry run that finds nothing to do prints.
-fn upgrade_at(
-    project_root: Option<&Path>,
+/// [`upgrade`] of the projects registered in `projects_dir`.
+fn upgrade_in(
+    projects_dir: &Path,
     dry_run: bool,
     tmux_server: Option<&str>,
 ) -> Result<Vec<String>> {
-    let mut lines: Vec<String> = match (project_root, dry_run) {
-        (None, true) => upgrade_all_dry_run()?,
-        (None, false) => upgrade_all()?,
-        (Some(root), true) => {
-            let mut lines = install_global_lines(true);
-            lines.extend(upgrade_project_dry_run(root)?);
-            lines
-        }
-        (Some(root), false) => {
-            let mut lines = install_global_lines(false);
-            lines.extend(upgrade_project(root)?);
-            lines
-        }
+    let (mut lines, hooks_change) = if dry_run {
+        upgrade_projects_dry_run(projects_dir)?
+    } else {
+        (upgrade_projects(projects_dir)?, false)
     };
     // What agents launch with that the upgrade would change: the global
     // tier's definitions and baseline, and the hooks.
-    let launch_changes = dry_run
-        && (skills::install_global_dry_run().is_ok_and(|l| !l.is_empty())
-            || hooks_install::install_dry_run(project_root).is_ok_and(|l| !l.is_empty()));
-    let projects_dir = paths::global_projects_dir()?;
+    let launch_changes =
+        dry_run && (hooks_change || skills::install_global_dry_run().is_ok_and(|l| !l.is_empty()));
     let global = GlobalConfig::load_or_default();
-    let (scopes, unread) = upgrade_restart::scopes(&projects_dir, project_root);
+    let (scopes, unread) = upgrade_restart::scopes(projects_dir);
     lines.extend(unread);
     lines.extend(upgrade_restart::restart_stale(
         &scopes,
@@ -365,18 +342,6 @@ fn upgrade_at(
     ));
     if launch_changes && global.upgrade.restarts_agents() {
         lines.push(upgrade_restart::DRY_RUN_CAVEAT.to_string());
-    }
-    if let Some(root) = project_root
-        && global.upgrade.restarts_agents()
-    {
-        lines.extend(upgrade_restart::stale_elsewhere(
-            &projects_dir,
-            root,
-            tmux_server,
-        ));
-    }
-    if dry_run && lines.is_empty() {
-        lines.push("Up to date".to_string());
     }
     Ok(lines)
 }
@@ -439,7 +404,7 @@ last_active = "2026-01-01T00:00:00Z"
         );
         registry.save(&agents_dir, "login").unwrap();
 
-        let dry = upgrade_project_dry_run(&root).unwrap();
+        let dry = upgrade_project_dry_run(&root).unwrap().0;
         assert!(
             dry.contains(&"Would relaunch vanilla agents 'default' (login) as 'plain'".to_string()),
             "{dry:?}"
@@ -539,7 +504,7 @@ last_active = "2026-01-01T00:00:00Z"
         fs::create_dir_all(msg.parent().unwrap()).unwrap();
         fs::write(&msg, "hello").unwrap();
 
-        let dry = upgrade_project_dry_run(&root).unwrap();
+        let dry = upgrade_project_dry_run(&root).unwrap().0;
         assert!(
             dry.contains(&"Would remove 3 bundled files under main/".to_string()),
             "{dry:?}"
@@ -597,7 +562,7 @@ last_active = "2026-01-01T00:00:00Z"
 
         // `solo` now resolves from the global tier, and a second run is a no-op.
         assert!(crate::state::workflow::exists(&root, "solo"));
-        let actions = upgrade_project_dry_run(&root).unwrap();
+        let actions = upgrade_project_dry_run(&root).unwrap().0;
         assert!(actions.is_empty(), "second dry-run not empty: {actions:?}");
     }
 
@@ -685,7 +650,7 @@ last_active = "2026-01-01T00:00:00Z"
         assert_eq!(snapshot(&feat), before);
         // Main's own projection still ran.
         assert!(main.join(".claude/agents/custom.md").exists());
-        assert!(upgrade_project_dry_run(&root).unwrap().is_empty());
+        assert!(upgrade_project_dry_run(&root).unwrap().0.is_empty());
     }
 
     #[test]
@@ -710,7 +675,7 @@ last_active = "2026-01-01T00:00:00Z"
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
 
-        let actions = upgrade_project_dry_run(&root).unwrap();
+        let actions = upgrade_project_dry_run(&root).unwrap().0;
         let joined = actions.join("\n");
         assert!(
             joined.contains("Would create"),
@@ -734,14 +699,14 @@ last_active = "2026-01-01T00:00:00Z"
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
         upgrade_project(&root).unwrap();
-        assert!(upgrade_project_dry_run(&root).unwrap().is_empty());
+        assert!(upgrade_project_dry_run(&root).unwrap().0.is_empty());
 
         let main = paths::main_worktree(&root);
         let custom = main.join(".agents/agents/custom.md");
         fs::create_dir_all(custom.parent().unwrap()).unwrap();
         fs::write(&custom, "custom def").unwrap();
 
-        let actions = upgrade_project_dry_run(&root).unwrap();
+        let actions = upgrade_project_dry_run(&root).unwrap().0;
         assert!(
             actions.iter().any(|a| a.starts_with("Would project")),
             "expected projection line, got: {actions:?}"
@@ -750,22 +715,33 @@ last_active = "2026-01-01T00:00:00Z"
     }
 
     #[test]
-    fn dry_run_reports_up_to_date_only_when_nothing_is_pending() {
+    fn dry_run_lists_each_project_then_the_stale_agents() {
         let server = crate::testing::TestServer::new();
         let dir = tempdir().unwrap();
+        let registry = tempdir().unwrap();
         let (root, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        ProjectEntry {
+            root: root.to_string_lossy().to_string(),
+            main_branch: "main".to_string(),
+            repo_url: None,
+            state_remote: None,
+        }
+        .save(registry.path(), &project_name)
+        .unwrap();
         let session = crate::tmux::session_name(&project_name, "login");
         server.spawn_idle_fake_agent(&root, &session, "login", "reviewer");
         skills::install_global().unwrap();
         upgrade_project(&root).unwrap();
-        let dry_run = || upgrade_at(Some(&root), true, server.name()).unwrap();
-        assert_eq!(dry_run(), ["Up to date"]);
+        let dry_run = || upgrade_in(registry.path(), true, server.name()).unwrap();
+        assert_eq!(dry_run(), [format!("{project_name}: up to date")]);
 
         crate::state::runtime::write_launch_stamp(&root, "login", "reviewer", "old").unwrap();
         assert_eq!(
             dry_run(),
-            [format!("{session}: Would restart agent 'reviewer'")],
-            "a stale agent alone is something to do"
+            [
+                format!("{project_name}: up to date"),
+                format!("{session}: Would restart agent 'reviewer'"),
+            ],
         );
 
         let custom = paths::main_worktree(&root).join(".agents/agents/custom.md");
@@ -790,7 +766,7 @@ last_active = "2026-01-01T00:00:00Z"
         );
     }
 
-    // --- upgrade_all_with_dir tests ---
+    // --- upgrade_projects tests ---
 
     /// Write a registry entry directly to disk, bypassing the
     /// ProjectEntry::save validation. Used to simulate legacy bad entries
@@ -805,7 +781,7 @@ last_active = "2026-01-01T00:00:00Z"
     }
 
     #[test]
-    fn upgrade_all_installs_the_global_tier_once_and_upgrades_every_project() {
+    fn upgrade_installs_the_global_tier_once_and_upgrades_every_project() {
         let dir = tempdir().unwrap();
         let projects_dir = dir.path().join("registry");
         for name in ["one", "two"] {
@@ -820,7 +796,7 @@ last_active = "2026-01-01T00:00:00Z"
             .unwrap();
         }
 
-        let lines = upgrade_all_with_dir(&projects_dir).unwrap();
+        let lines = upgrade_projects(&projects_dir).unwrap();
         let joined = lines.join("\n");
         assert!(
             joined.contains("one: Upgraded") && joined.contains("two: Upgraded"),
@@ -847,8 +823,8 @@ last_active = "2026-01-01T00:00:00Z"
     }
 
     #[test]
-    fn upgrade_all_skips_legacy_non_portable_root() {
-        // Regression: a single bad entry must not break `upgrade --all` or
+    fn upgrade_skips_legacy_non_portable_root() {
+        // Regression: a single bad entry must not break `pm upgrade` or
         // (by extension) `pm self-update`, which is the command users would
         // run to *pick up* this fix.
         let dir = tempdir().unwrap();
@@ -865,7 +841,7 @@ last_active = "2026-01-01T00:00:00Z"
         .save(&projects_dir, "good")
         .unwrap();
 
-        let lines = upgrade_all_with_dir(&projects_dir).unwrap();
+        let lines = upgrade_projects(&projects_dir).unwrap();
         let joined = lines.join("\n");
         assert!(
             joined.contains("exo-bench: skipped (non-portable root")
@@ -877,7 +853,7 @@ last_active = "2026-01-01T00:00:00Z"
             "good project should not be skipped, got: {joined}"
         );
 
-        let lines = upgrade_all_dry_run_with_dir(&projects_dir).unwrap();
+        let (lines, _) = upgrade_projects_dry_run(&projects_dir).unwrap();
         assert!(
             lines
                 .join("\n")

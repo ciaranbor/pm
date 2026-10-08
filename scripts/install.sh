@@ -7,7 +7,7 @@
 #   PM_DOWNLOAD_URL where the release's assets are (a test seam)
 #
 # The binary is checked against the release's SHA256SUMS. Safe to re-run:
-# it replaces pm in place and upgrades every project (`pm upgrade --all`).
+# it replaces pm in place and upgrades every project.
 set -eu
 
 repo="https://github.com/ciaranbor/pm"
@@ -115,7 +115,13 @@ case ":$PATH:" in
 esac
 
 if $replacing; then
-    "$pm" upgrade --all
+    # A PM_VERSION whose `pm upgrade` covers only the project it runs in
+    # lists `--all` in its help; later ones upgrade every project anyway.
+    if "$pm" upgrade --help | grep -q -- --all; then
+        "$pm" upgrade --all
+    else
+        "$pm" upgrade
+    fi
 else
     cat <<EOF
 

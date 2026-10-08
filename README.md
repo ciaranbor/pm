@@ -212,9 +212,9 @@ cut short. Left running and listed with the command that restarts them: one
 whose configured harness changed (a restart would start its conversation
 over), and one that would not relaunch — no model row, or codex hooks not
 yet trusted. A dead agent picks up the change at its next spawn. `pm
-upgrade` covers its project, though the bundled assets it installs are
-every project's: it names the other projects left with stale agents, which
-`pm upgrade --all` restarts. `--dry-run` judges agents against the assets
+upgrade` covers every registered project, since the bundled assets and
+hooks it installs are the machine's; a project it can't upgrade gets its
+own line and the rest go ahead. `--dry-run` judges agents against the assets
 installed now, so it cannot list those only the new assets make stale, and
 says so. `pm agent restart --all --stale` runs the same sweep by hand, `pm
 doctor` names each stale agent, and `restart_agents = false` under
@@ -575,7 +575,7 @@ set -eu
 [ -z "$PM_FEATURE" ] || exit 0
 echo "merged $PM_MERGED_FEATURE; installing and pushing"
 cargo install --path .
-pm upgrade --all
+pm upgrade
 git push
 ```
 

@@ -339,7 +339,7 @@ impl Project<'_> {
         }
         if crate::commands::docs::would_migrate_docs_submodule(self.root) {
             state.problem("docs/ is a nested git repo `pm state push` doesn't carry");
-            state.command("pm upgrade --all");
+            state.command("pm upgrade");
             state.steps(&[Step::Repair, Step::StatePush]);
         }
         let note = repo::state_repo(

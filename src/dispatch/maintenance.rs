@@ -25,8 +25,8 @@ pub(super) fn doctor(fix: bool, project: Option<String>, server: Option<&str>) -
     Ok(())
 }
 
-pub(super) fn upgrade(all: bool, dry_run: bool, server: Option<&str>) -> Result<()> {
-    let lines = commands::upgrade::upgrade(all, dry_run, server)?;
+pub(super) fn upgrade(dry_run: bool, server: Option<&str>) -> Result<()> {
+    let lines = commands::upgrade::upgrade(dry_run, server)?;
     for line in lines {
         println!("{line}");
     }

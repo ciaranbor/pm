@@ -1,5 +1,5 @@
 //! `pm self-update`: replace this binary with the latest GitHub release
-//! for its target, then run the new binary's `pm upgrade --all`, so the
+//! for its target, then run the new binary's `pm upgrade`, so the
 //! bundled assets installed are the new binary's, not this one's.
 //!
 //! The release is the one `releases/latest` names, which excludes
@@ -118,13 +118,13 @@ fn listed_digest<'a>(sums: &'a str, name: &str) -> Option<&'a str> {
 #[derive(Debug)]
 pub enum Outcome {
     UpToDate(String),
-    /// What it printed, the new binary's `upgrade --all` included.
+    /// What it printed, the new binary's `upgrade` included.
     Installed(Vec<String>),
 }
 
 /// Check the release `api` names latest and, if it is newer than
 /// `update.current` (or `update.force`), install it over `update.exe` and
-/// run its `upgrade --all`.
+/// run its `upgrade`.
 pub fn update(update: &Update<'_>) -> Result<Outcome> {
     if version::is_dev(update.current) && !update.force {
         return Err(PmError::SelfUpdate(format!(
@@ -179,7 +179,7 @@ pub fn update(update: &Update<'_>) -> Result<Outcome> {
         update.current,
         update.exe.display()
     )];
-    lines.extend(upgrade_all(update.exe));
+    lines.extend(upgrade_projects(update.exe));
     Ok(Outcome::Installed(lines))
 }
 
@@ -200,10 +200,10 @@ fn install(exe: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Run `exe upgrade --all`, returning what it printed.
-fn upgrade_all(exe: &Path) -> Vec<String> {
+/// Run `exe upgrade`, returning what it printed.
+fn upgrade_projects(exe: &Path) -> Vec<String> {
     let mut lines = vec!["Upgrading all projects...".to_string()];
-    match run_just_written(Command::new(exe).args(["upgrade", "--all"])) {
+    match run_just_written(Command::new(exe).arg("upgrade")) {
         Ok(out) => {
             lines.extend(
                 String::from_utf8_lossy(&out.stdout)
@@ -212,12 +212,12 @@ fn upgrade_all(exe: &Path) -> Vec<String> {
             );
             if !out.status.success() {
                 lines.push(format!(
-                    "Warning: `pm upgrade --all` failed: {}",
+                    "Warning: `pm upgrade` failed: {}",
                     String::from_utf8_lossy(&out.stderr).trim()
                 ));
             }
         }
-        Err(e) => lines.push(format!("Warning: could not run `pm upgrade --all`: {e}")),
+        Err(e) => lines.push(format!("Warning: could not run `pm upgrade`: {e}")),
     }
     lines
 }
@@ -423,7 +423,7 @@ mod tests {
         );
         assert_eq!(
             std::fs::read_to_string(dir.path().join("ran")).unwrap(),
-            "upgrade --all\n"
+            "upgrade\n"
         );
         assert!(lines.iter().any(|l| l == "upgraded"), "{lines:?}");
         let leftovers: Vec<_> = std::fs::read_dir(exe.parent().unwrap())

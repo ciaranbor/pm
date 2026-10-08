@@ -6,6 +6,10 @@ notes.
 
 ## Unreleased
 
+- `pm upgrade` always upgrades every registered project, as `--all` did:
+the assets and hooks it installs are shared by all of them, so upgrading
+one left the rest half-upgraded. `--all` is still accepted, and ignored.
+
 ## 0.5.1 — 2026-10-08
 
 - The Android app opens, closes and deletes projects; projects with nothing
