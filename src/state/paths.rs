@@ -2,22 +2,21 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
 
+pub use super::dirs::{CONFIG_ITEMS, Dirs};
+
 pub(crate) const PM_DIR_NAME: &str = ".pm";
 const FEATURES_DIR_NAME: &str = "features";
-const CONFIG_DIR_NAME: &str = "pm";
 pub(crate) const PROJECTS_DIR_NAME: &str = "projects";
 
 pub(crate) const WORKFLOWS_DIR_NAME: &str = "workflows";
 
-/// `$XDG_DATA_HOME`, where set. Under `cfg(test)` never, for the reason
-/// [`home_dir`] gives: a data path then derives from the test home.
-pub fn data_home() -> Option<PathBuf> {
+/// The XDG variable `name` of this process. Never under `cfg(test)`, so a
+/// developer's own variables can't point a test at their real dirs.
+fn xdg_env(name: &str) -> Option<std::ffi::OsString> {
     if cfg!(test) {
         return None;
     }
-    std::env::var_os("XDG_DATA_HOME")
-        .filter(|dir| !dir.is_empty())
-        .map(PathBuf::from)
+    std::env::var_os(name)
 }
 
 /// The user's home directory. Every global-tier path (the `~/.agents` store,
@@ -35,24 +34,64 @@ pub fn home_dir() -> Result<PathBuf> {
     }
 }
 
-/// The pm config dir: `dirs::config_dir()/pm` — `~/.config/pm` on Linux,
-/// `~/Library/Application Support/pm` on macOS. Holds the project registry,
-/// global `config.toml`, `notices.md`, and the global `workflows/` tier.
+/// pm's global [`Dirs`] under `home`, by this process's XDG variables.
+pub fn dirs_under(home: &Path) -> Dirs {
+    Dirs::resolve(home, xdg_env)
+}
+
+/// pm's global [`Dirs`].
+pub fn global_dirs() -> Result<Dirs> {
+    Ok(dirs_under(&home_dir()?))
+}
+
+/// Where an earlier release kept pm's global files ([`legacy_dir`](super::dirs::legacy_dir)).
+pub fn global_legacy_dir() -> Result<PathBuf> {
+    let home = home_dir()?;
+    Ok(super::dirs::legacy_dir(&home, &dirs_under(&home)))
+}
+
+/// The pm config dir ([`Dirs::config`]): the project registry, global
+/// `config.toml`, `notices.md`, and the global `workflows/` tier.
 pub fn global_config_dir() -> Result<PathBuf> {
-    #[cfg(test)]
-    {
-        Ok(home_dir()?.join(".config").join(CONFIG_DIR_NAME))
+    let home = home_dir()?;
+    let dirs = dirs_under(&home);
+    // TRANSITIONAL (drop in the release after the XDG move): while a failed
+    // or refused migration leaves the config at the legacy location, use it
+    // there rather than start an empty registry.
+    Ok(choose_config(
+        dirs.config.clone(),
+        super::dirs::legacy_dir(&home, &dirs),
+    ))
+}
+
+/// `legacy` when only it holds config, else `config`.
+fn choose_config(config: PathBuf, legacy: PathBuf) -> PathBuf {
+    if legacy != config && !holds_config(&config) && holds_config(&legacy) {
+        return legacy;
     }
-    #[cfg(not(test))]
-    {
-        let config_dir = dirs::config_dir().ok_or_else(|| {
-            PmError::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "could not determine config directory",
-            ))
-        })?;
-        Ok(config_dir.join(CONFIG_DIR_NAME))
-    }
+    config
+}
+
+/// Whether `dir` holds any of the config dir's [`CONFIG_ITEMS`].
+pub fn holds_config(dir: &Path) -> bool {
+    CONFIG_ITEMS
+        .iter()
+        .any(|item| std::fs::symlink_metadata(dir.join(item)).is_ok())
+}
+
+/// The pm state dir ([`Dirs::state`]).
+pub fn global_state_dir() -> Result<PathBuf> {
+    Ok(global_dirs()?.state)
+}
+
+/// The pm cache dir ([`Dirs::cache`]).
+pub fn global_cache_dir() -> Result<PathBuf> {
+    Ok(global_dirs()?.cache)
+}
+
+/// The pm runtime dir ([`Dirs::runtime`]).
+pub fn global_runtime_dir() -> Result<PathBuf> {
+    Ok(global_dirs()?.runtime)
 }
 
 /// The project registry: `<config dir>/projects/`.
@@ -453,10 +492,27 @@ mod tests {
     }
 
     #[test]
+    fn the_legacy_config_dir_is_used_only_while_it_alone_holds_config() {
+        let dir = tempdir().unwrap();
+        let (config, legacy) = (dir.path().join("config"), dir.path().join("legacy"));
+        let choose = || choose_config(config.clone(), legacy.clone());
+        assert_eq!(choose(), config, "neither holds config");
+
+        std::fs::create_dir_all(legacy.join("projects")).unwrap();
+        assert_eq!(choose(), legacy);
+
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(config.join("config.toml"), "").unwrap();
+        assert_eq!(choose(), config, "both hold config");
+    }
+
+    #[test]
     fn global_dirs_hang_off_the_test_home_under_test() {
         let home = home_dir().unwrap();
         assert!(home.starts_with(std::env::temp_dir()));
         assert!(global_config_dir().unwrap().starts_with(&home));
+        assert!(global_state_dir().unwrap().starts_with(&home));
+        assert!(global_runtime_dir().unwrap().starts_with(&home));
         assert!(global_projects_dir().unwrap().ends_with("pm/projects"));
         assert!(global_workflows_dir().unwrap().ends_with("pm/workflows"));
     }

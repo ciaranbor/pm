@@ -147,7 +147,7 @@ pub(super) fn restart(config: &Config, agent: &Agent, body: &str) -> Result<Writ
 /// told, since state may have changed.
 fn finish(config: &Config, action: &str, done: Result<serde_json::Value>) -> Result<Written> {
     let _ = tmux_push::push(&config.projects_dir, config.tmux_server.as_deref());
-    super::wake(&config.devices);
+    super::wake(&config.files);
     let reply = match done {
         Ok(body) => json(200, body),
         Err(e) => {

@@ -280,7 +280,7 @@ mod tests {
             .recv_timeout(Duration::from_secs(10))
             .expect("server gone")
             .unwrap();
-        let files: Vec<_> = std::fs::read_dir(paths::global_config_dir().unwrap().join("tmux"))
+        let files: Vec<_> = std::fs::read_dir(paths::global_runtime_dir().unwrap().join("tmux"))
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .filter(|name| name.contains(server.name().unwrap()))

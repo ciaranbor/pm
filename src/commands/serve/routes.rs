@@ -112,7 +112,7 @@ pub(super) fn route(config: &Config, vapid: &str, request: &Request<'_>) -> Hand
         too_long,
     } = *request;
     let token = authorization.and_then(bearer);
-    let devices = match Devices::load(&config.devices) {
+    let devices = match Devices::load(&config.files.devices()) {
         Ok(devices) => devices,
         Err(e) => {
             return Handled {
@@ -146,7 +146,7 @@ pub(super) fn route(config: &Config, vapid: &str, request: &Request<'_>) -> Hand
         (_, _) if RETIRED.contains(&path) => Ok(error(410, "this endpoint was retired")),
         (_, "/v1/push") => push_route(config, vapid, method, device, body),
         ("DELETE", "/v1/pairing") => {
-            crate::commands::serve_revoke::revoke(&config.devices, device).map(|()| no_content())
+            crate::commands::serve_revoke::revoke(&config.files, device).map(|()| no_content())
         }
         (_, "/v1/pairing") => Ok(error(405, "DELETE is served here")),
         (_, _) if path.starts_with("/v1/projects/") => {
@@ -269,7 +269,7 @@ fn push_route(
     body: &str,
 ) -> Result<Reply> {
     let set = |push: Option<Push>| {
-        Devices::update(&config.devices, |paired| {
+        Devices::update(&config.files, |paired| {
             if let Some(d) = paired.devices.get_mut(device) {
                 d.push = push;
             }

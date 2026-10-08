@@ -32,13 +32,55 @@ fn version_is_the_cargo_version_with_build_metadata_off_a_release() {
     );
 }
 
-fn pm() -> Command {
-    let mut pm = Command::cargo_bin("pm").unwrap();
+/// The binary under test in a throwaway home of its own, which lives as
+/// long as the command.
+struct Pm {
+    cmd: Command,
+    _home: tempfile::TempDir,
+}
+
+impl std::ops::Deref for Pm {
+    type Target = Command;
+    fn deref(&self) -> &Command {
+        &self.cmd
+    }
+}
+
+impl std::ops::DerefMut for Pm {
+    fn deref_mut(&mut self) -> &mut Command {
+        &mut self.cmd
+    }
+}
+
+fn pm() -> Pm {
+    let home = tempdir().unwrap();
+    Pm {
+        cmd: Command::from_std(std_pm(home.path())),
+        _home: home,
+    }
+}
+
+/// The binary under test, reaching none of the user's own pm state: `home`
+/// for `HOME`, no XDG dirs, no tmux server anyone uses, and no `pm` on
+/// `PATH`, so it is never the installed pm.
+fn std_pm(home: &std::path::Path) -> std::process::Command {
+    let mut pm = std::process::Command::new(assert_cmd::cargo::cargo_bin("pm"));
     pm.envs(no_tmux())
+        .env("HOME", home)
+        .env("PATH", path_without_pm())
         .env_remove("TMUX")
         .env_remove("TMUX_PANE")
         .env_remove(pm::state::paths::AGENT_WORKTREE_ENV);
+    for var in pm::state::dirs::XDG_VARS {
+        pm.env_remove(var);
+    }
     pm
+}
+
+fn path_without_pm() -> std::ffi::OsString {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let dirs = std::env::split_paths(&path).filter(|dir| !dir.join("pm").exists());
+    std::env::join_paths(dirs).unwrap()
 }
 
 /// A tmux server no test starts, so the binary under test never writes to
@@ -322,12 +364,7 @@ fn stop_hook_waiting_on_an_empty_inbox_exits_when_its_harness_goes() {
     let dir = tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join(".pm")).unwrap();
     std::fs::create_dir_all(dir.path().join("main")).unwrap();
-    let mut hook = std::process::Command::new(assert_cmd::cargo::cargo_bin("pm"))
-        .envs(no_tmux())
-        .env_remove("TMUX")
-        .env_remove("TMUX_PANE")
-        .env_remove(pm::state::paths::AGENT_WORKTREE_ENV)
-        .env("HOME", dir.path())
+    let mut hook = std_pm(dir.path())
         .env("PM_AGENT_NAME", "implementer")
         .current_dir(dir.path().join("main"))
         .args(["harness", "hooks", "stop"])

@@ -19,23 +19,31 @@ fn global_ctx(dir: &Path) -> RepoContext<'_> {
     }
 }
 
-/// Initialise a git repo in ~/.config/pm/ for global registry backup.
+/// Initialise a git repo in the pm config dir for global registry backup.
 /// Non-interactive variant for programmatic use (e.g. `pm upgrade`).
 pub fn global_init() -> Result<String> {
     let dir = paths::global_config_dir()?;
-    global_init_at(&dir, false, None)
+    global_init_at(&dir, &set_aside_dir()?, false, None)
 }
 
 /// Initialise with an explicit remote URL (combines init + remote + pull).
 pub fn global_init_with_remote(remote_url: Option<&str>) -> Result<String> {
     let dir = paths::global_config_dir()?;
+    let aside = set_aside_dir()?;
     match remote_url {
-        Some(url) => global_init_at(&dir, false, Some(url)),
-        None => global_init_at(&dir, true, None),
+        Some(url) => global_init_at(&dir, &aside, false, Some(url)),
+        None => global_init_at(&dir, &aside, true, None),
     }
 }
 
-fn global_init_at(dir: &Path, interactive: bool, remote_url: Option<&str>) -> Result<String> {
+/// Init the registry repo in `dir`, setting aside in `aside` the entries a
+/// pull replaces ([`keep_registry_entries`]).
+fn global_init_at(
+    dir: &Path,
+    aside: &Path,
+    interactive: bool,
+    remote_url: Option<&str>,
+) -> Result<String> {
     // On a fresh machine the registry is pulled before any project exists.
     let created = remote_url.is_some() && !dir.exists();
     if created {
@@ -79,7 +87,7 @@ fn global_init_at(dir: &Path, interactive: bool, remote_url: Option<&str>) -> Re
     // Only a reset can drop an entry registered here; a fast-forward that
     // removes one is the remote deleting it.
     let (kept, set_aside) = if reset {
-        keep_registry_entries(dir, local_projects)?
+        keep_registry_entries(dir, aside, local_projects)?
     } else {
         Default::default()
     };
@@ -94,18 +102,18 @@ fn global_init_at(dir: &Path, interactive: bool, remote_url: Option<&str>) -> Re
         result.push_str(&format!(
             "\nThe remote's entries replaced this machine's for {}; this machine's are in {}",
             set_aside.join(", "),
-            set_aside_dir(dir).display()
+            aside.display()
         ));
     }
     Ok(result)
 }
 
-/// The config-dir-relative dir that registry entries a pull replaced are
-/// kept in; machine-local, so the registry repo ignores it.
+/// The dir under the state dir that registry entries a pull replaced are
+/// kept in.
 pub(crate) const SET_ASIDE_DIR_NAME: &str = "registry-before-pull";
 
-fn set_aside_dir(dir: &Path) -> std::path::PathBuf {
-    dir.join(SET_ASIDE_DIR_NAME)
+fn set_aside_dir() -> Result<std::path::PathBuf> {
+    Ok(paths::global_state_dir()?.join(SET_ASIDE_DIR_NAME))
 }
 
 /// The registry entries under the config dir `dir` that did not come from
@@ -141,10 +149,11 @@ fn registry_entries(dir: &Path) -> Vec<(std::ffi::OsString, Vec<u8>)> {
 /// Write back each of `entries` that taking the remote's registry removed,
 /// so a project registered on this machine before it pulled the registry
 /// stays registered. Where both have an entry the remote's wins, and this
-/// machine's differing one is set aside in [`set_aside_dir`]. Returns the
+/// machine's differing one is set aside in `aside`. Returns the
 /// names written back and the names set aside.
 fn keep_registry_entries(
     dir: &Path,
+    aside_dir: &Path,
     entries: Vec<(std::ffi::OsString, Vec<u8>)>,
 ) -> Result<(Vec<String>, Vec<String>)> {
     let projects = dir.join(paths::PROJECTS_DIR_NAME);
@@ -161,9 +170,8 @@ fn keep_registry_entries(
         match std::fs::read(&path) {
             Ok(remote) if remote == content => {}
             Ok(_) => {
-                let aside = set_aside_dir(dir);
-                std::fs::create_dir_all(&aside)?;
-                std::fs::write(aside.join(&file), content)?;
+                std::fs::create_dir_all(aside_dir)?;
+                std::fs::write(aside_dir.join(&file), content)?;
                 set_aside.push(name(&file));
             }
             Err(_) => {
@@ -208,6 +216,10 @@ mod tests {
     use crate::commands::state_cmd::test_support::*;
     use tempfile::tempdir;
 
+    fn aside(config_dir: &Path) -> std::path::PathBuf {
+        config_dir.with_extension("aside")
+    }
+
     // -- init --remote tests (global) --
 
     #[test]
@@ -219,7 +231,13 @@ mod tests {
         let bare = dir.path().join("registry-remote.git");
         git::init_bare(&bare).unwrap();
 
-        let msg = global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        let msg = global_init_at(
+            &global,
+            &aside(&global),
+            false,
+            Some(&bare.to_string_lossy()),
+        )
+        .unwrap();
         assert!(msg.contains("Initialised"));
         assert!(git::has_remote(&global, "origin").unwrap());
     }
@@ -233,7 +251,13 @@ mod tests {
         let bare = dir.path().join("registry-remote.git");
         create_populated_bare(&bare);
 
-        let msg = global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        let msg = global_init_at(
+            &global,
+            &aside(&global),
+            false,
+            Some(&bare.to_string_lossy()),
+        )
+        .unwrap();
         assert!(msg.contains("Initialised"), "unexpected: {msg}");
         assert!(msg.contains("pulled"), "unexpected: {msg}");
         assert!(git::has_remote(&global, "origin").unwrap());
@@ -250,11 +274,17 @@ mod tests {
         let bare = dir.path().join("registry-remote.git");
         create_populated_bare(&bare);
 
-        global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        global_init_at(
+            &global,
+            &aside(&global),
+            false,
+            Some(&bare.to_string_lossy()),
+        )
+        .unwrap();
         assert!(global.join("remote-file.txt").exists());
 
         let without = dir.path().join("other");
-        assert!(global_init_at(&without, false, None).is_err());
+        assert!(global_init_at(&without, &aside(&without), false, None).is_err());
     }
 
     /// A machine that already pulled the registry from `bare`; the old
@@ -262,7 +292,13 @@ mod tests {
     fn pulled_registry_and_a_later_push(dir: &Path, bare: &Path) -> std::path::PathBuf {
         let global = dir.join("new-host");
         create_populated_bare(bare);
-        global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        global_init_at(
+            &global,
+            &aside(&global),
+            false,
+            Some(&bare.to_string_lossy()),
+        )
+        .unwrap();
         let old = dir.join("old-host");
         git::clone_repo(&bare.to_string_lossy(), &old).unwrap();
         std::fs::create_dir_all(old.join("projects")).unwrap();
@@ -282,7 +318,13 @@ mod tests {
         std::fs::create_dir_all(global.join("projects")).unwrap();
         std::fs::write(global.join("projects/local.toml"), "root = \"~/local\"\n").unwrap();
 
-        global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        global_init_at(
+            &global,
+            &aside(&global),
+            false,
+            Some(&bare.to_string_lossy()),
+        )
+        .unwrap();
         assert!(global.join("projects/pushed.toml").exists());
         assert!(global.join("projects/local.toml").exists());
     }
@@ -292,7 +334,13 @@ mod tests {
         let dir = tempdir().unwrap();
         let bare = dir.path().join("registry.git");
         let global = pulled_registry_and_a_later_push(dir.path(), &bare);
-        global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        global_init_at(
+            &global,
+            &aside(&global),
+            false,
+            Some(&bare.to_string_lossy()),
+        )
+        .unwrap();
         assert!(global.join("projects/pushed.toml").exists());
 
         let old = dir.path().join("old-host");
@@ -300,7 +348,13 @@ mod tests {
         git::commit_with_message(&old, "pm delete pushed").unwrap();
         git::push(&old, "origin", "main").unwrap();
 
-        let msg = global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        let msg = global_init_at(
+            &global,
+            &aside(&global),
+            false,
+            Some(&bare.to_string_lossy()),
+        )
+        .unwrap();
         assert!(!global.join("projects/pushed.toml").exists(), "{msg}");
         assert!(!msg.contains("Kept"), "{msg}");
     }
@@ -312,13 +366,19 @@ mod tests {
         let dir = tempdir().unwrap();
         let global = dir.path().join("config-pm");
         std::fs::create_dir_all(global.join("projects")).unwrap();
-        global_init_at(&global, false, None).unwrap();
+        global_init_at(&global, &aside(&global), false, None).unwrap();
         let bare = dir.path().join("registry.git");
         create_populated_bare(&bare);
         git::add_remote(&global, "origin", &bare.to_string_lossy()).unwrap();
         std::fs::write(global.join("projects/here.toml"), "root = \"~/here\"\n").unwrap();
 
-        let msg = global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        let msg = global_init_at(
+            &global,
+            &aside(&global),
+            false,
+            Some(&bare.to_string_lossy()),
+        )
+        .unwrap();
         assert!(global.join("remote-file.txt").exists(), "{msg}");
         assert!(global.join("projects/here.toml").exists(), "{msg}");
     }
@@ -328,7 +388,13 @@ mod tests {
         let dir = tempdir().unwrap();
         let bare = dir.path().join("registry.git");
         let global = pulled_registry_and_a_later_push(dir.path(), &bare);
-        global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        global_init_at(
+            &global,
+            &aside(&global),
+            false,
+            Some(&bare.to_string_lossy()),
+        )
+        .unwrap();
         // Registered and committed here, so the next pull can't fast-forward.
         std::fs::write(global.join("projects/here.toml"), "root = \"~/here\"\n").unwrap();
         git::add_all(&global).unwrap();
@@ -339,7 +405,13 @@ mod tests {
         git::commit_with_message(&old_host, "pm delete pushed").unwrap();
         git::push(&old_host, "origin", "main").unwrap();
 
-        let msg = global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        let msg = global_init_at(
+            &global,
+            &aside(&global),
+            false,
+            Some(&bare.to_string_lossy()),
+        )
+        .unwrap();
         assert!(!global.join("projects/pushed.toml").exists(), "{msg}");
         assert!(global.join("projects/here.toml").exists(), "{msg}");
     }
@@ -350,9 +422,14 @@ mod tests {
         let bare = dir.path().join("registry.git");
         let global = pulled_registry_and_a_later_push(dir.path(), &bare);
 
-        let err = global_init_at(&global, false, Some("git@example.com:other.git"))
-            .unwrap_err()
-            .to_string();
+        let err = global_init_at(
+            &global,
+            &aside(&global),
+            false,
+            Some("git@example.com:other.git"),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains(&*bare.to_string_lossy()), "{err}");
         assert!(
             err.contains("remote set-url origin git@example.com:other.git"),
@@ -367,11 +444,17 @@ mod tests {
         let global = dir.path().join("config-pm");
         std::fs::create_dir_all(global.join("projects")).unwrap();
         std::fs::write(global.join("projects/local.toml"), "root = \"~/local\"\n").unwrap();
-        global_init_at(&global, false, None).unwrap();
+        global_init_at(&global, &aside(&global), false, None).unwrap();
         let bare = dir.path().join("registry-remote.git");
         create_populated_bare(&bare);
 
-        let msg = global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        let msg = global_init_at(
+            &global,
+            &aside(&global),
+            false,
+            Some(&bare.to_string_lossy()),
+        )
+        .unwrap();
         assert!(global.join("remote-file.txt").exists());
         assert!(global.join("projects/local.toml").exists());
         assert!(msg.contains("only on this machine: local"), "{msg}");
@@ -383,14 +466,14 @@ mod tests {
         let bad = dir.path().join("typo.giT").to_string_lossy().to_string();
 
         let fresh = dir.path().join("fresh");
-        let err = global_init_at(&fresh, false, Some(&bad)).unwrap_err();
+        let err = global_init_at(&fresh, &aside(&fresh), false, Some(&bad)).unwrap_err();
         assert!(err.to_string().contains(&bad), "{err}");
         assert!(!fresh.exists());
 
         let existing = dir.path().join("existing");
         std::fs::create_dir_all(existing.join("projects")).unwrap();
         std::fs::write(existing.join("projects/local.toml"), "root = \"~/l\"\n").unwrap();
-        global_init_at(&existing, false, Some(&bad)).unwrap_err();
+        global_init_at(&existing, &aside(&existing), false, Some(&bad)).unwrap_err();
         let mut left: Vec<_> = std::fs::read_dir(&existing)
             .unwrap()
             .map(|e| e.unwrap().file_name())
@@ -401,7 +484,13 @@ mod tests {
         // The retry with the URL fixed just works.
         let bare = dir.path().join("registry.git");
         create_populated_bare(&bare);
-        global_init_at(&existing, false, Some(&bare.to_string_lossy())).unwrap();
+        global_init_at(
+            &existing,
+            &aside(&existing),
+            false,
+            Some(&bare.to_string_lossy()),
+        )
+        .unwrap();
         assert!(existing.join("remote-file.txt").exists());
         assert!(existing.join("projects/local.toml").exists());
     }
@@ -416,12 +505,18 @@ mod tests {
         std::fs::create_dir_all(global.join("projects")).unwrap();
         std::fs::write(global.join("projects/pushed.toml"), "root = \"~/mine\"\n").unwrap();
 
-        let msg = global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        let msg = global_init_at(
+            &global,
+            &aside(&global),
+            false,
+            Some(&bare.to_string_lossy()),
+        )
+        .unwrap();
         assert_eq!(
             std::fs::read_to_string(global.join("projects/pushed.toml")).unwrap(),
             std::fs::read_to_string(old_host.join("projects/pushed.toml")).unwrap()
         );
-        let aside = set_aside_dir(&global).join("pushed.toml");
+        let aside = aside(&global).join("pushed.toml");
         assert_eq!(
             std::fs::read_to_string(aside).unwrap(),
             "root = \"~/mine\"\n"
@@ -435,12 +530,18 @@ mod tests {
         let global = dir.path().join("config-pm");
         std::fs::create_dir_all(global.join("projects")).unwrap();
 
-        global_init_at(&global, false, None).unwrap();
+        global_init_at(&global, &aside(&global), false, None).unwrap();
 
         let bare = dir.path().join("registry-remote.git");
         git::init_bare(&bare).unwrap();
 
-        let msg = global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        let msg = global_init_at(
+            &global,
+            &aside(&global),
+            false,
+            Some(&bare.to_string_lossy()),
+        )
+        .unwrap();
         assert!(msg.contains("already initialised"));
         assert!(git::has_remote(&global, "origin").unwrap());
     }
@@ -451,12 +552,18 @@ mod tests {
         let global = dir.path().join("config-pm");
         std::fs::create_dir_all(global.join("projects")).unwrap();
 
-        global_init_at(&global, false, None).unwrap();
+        global_init_at(&global, &aside(&global), false, None).unwrap();
 
         let bare = dir.path().join("registry-remote.git");
         create_populated_bare(&bare);
 
-        let msg = global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        let msg = global_init_at(
+            &global,
+            &aside(&global),
+            false,
+            Some(&bare.to_string_lossy()),
+        )
+        .unwrap();
         assert!(msg.contains("already initialised"), "unexpected: {msg}");
         assert!(git::has_remote(&global, "origin").unwrap());
         assert!(
@@ -473,11 +580,22 @@ mod tests {
 
         let bare = dir.path().join("registry-remote.git");
         git::init_bare(&bare).unwrap();
-        global_init_at(&global, false, Some(&bare.to_string_lossy())).unwrap();
+        global_init_at(
+            &global,
+            &aside(&global),
+            false,
+            Some(&bare.to_string_lossy()),
+        )
+        .unwrap();
 
         let bare2 = dir.path().join("other-remote.git");
         git::init_bare(&bare2).unwrap();
-        let result = global_init_at(&global, false, Some(&bare2.to_string_lossy()));
+        let result = global_init_at(
+            &global,
+            &aside(&global),
+            false,
+            Some(&bare2.to_string_lossy()),
+        );
         assert!(result.is_err());
     }
 
@@ -494,7 +612,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let global = setup_global_dir(dir.path());
 
-        let msg = global_init_at(&global, false, None).unwrap();
+        let msg = global_init_at(&global, &aside(&global), false, None).unwrap();
         assert!(msg.contains("Initialised"));
         assert!(global.join(".git").exists());
         assert!(global.join(".gitignore").exists());
@@ -510,7 +628,7 @@ mod tests {
         std::fs::create_dir_all(&wf).unwrap();
         std::fs::write(wf.join("config.toml"), "x").unwrap();
 
-        global_init_at(&global, false, None).unwrap();
+        global_init_at(&global, &aside(&global), false, None).unwrap();
 
         let committed = git::cat_file(&global, "HEAD:.gitignore").unwrap();
         assert!(committed.starts_with("*.lock\n"));
@@ -523,8 +641,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let global = setup_global_dir(dir.path());
 
-        global_init_at(&global, false, None).unwrap();
-        let msg = global_init_at(&global, false, None).unwrap();
+        global_init_at(&global, &aside(&global), false, None).unwrap();
+        let msg = global_init_at(&global, &aside(&global), false, None).unwrap();
         assert!(msg.contains("already initialised"));
     }
 
@@ -533,7 +651,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let global = dir.path().join("nonexistent");
 
-        let result = global_init_at(&global, false, None);
+        let result = global_init_at(&global, &aside(&global), false, None);
         assert!(result.is_err());
     }
 
@@ -542,7 +660,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let global = setup_global_dir(dir.path());
 
-        global_init_at(&global, false, None).unwrap();
+        global_init_at(&global, &aside(&global), false, None).unwrap();
         let ctx = global_ctx(&global);
         let msg = status_repo(&ctx).unwrap();
         assert!(msg.contains("clean"));
@@ -553,7 +671,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let global = setup_global_dir(dir.path());
 
-        global_init_at(&global, false, None).unwrap();
+        global_init_at(&global, &aside(&global), false, None).unwrap();
         std::fs::write(global.join("projects").join("test.toml"), "x").unwrap();
 
         let ctx = global_ctx(&global);
@@ -575,7 +693,7 @@ mod tests {
     fn global_remote_sets_origin() {
         let dir = tempdir().unwrap();
         let global = setup_global_dir(dir.path());
-        global_init_at(&global, false, None).unwrap();
+        global_init_at(&global, &aside(&global), false, None).unwrap();
 
         let ctx = global_ctx(&global);
         let msg = set_remote(&ctx, "https://example.com/registry.git").unwrap();
@@ -587,7 +705,7 @@ mod tests {
     fn global_remote_errors_if_already_set() {
         let dir = tempdir().unwrap();
         let global = setup_global_dir(dir.path());
-        global_init_at(&global, false, None).unwrap();
+        global_init_at(&global, &aside(&global), false, None).unwrap();
 
         let ctx = global_ctx(&global);
         set_remote(&ctx, "https://example.com/registry.git").unwrap();
@@ -599,7 +717,7 @@ mod tests {
     fn global_push_without_remote_commits_locally() {
         let dir = tempdir().unwrap();
         let global = setup_global_dir(dir.path());
-        global_init_at(&global, false, None).unwrap();
+        global_init_at(&global, &aside(&global), false, None).unwrap();
 
         std::fs::write(global.join("projects").join("new.toml"), "x").unwrap();
 
@@ -613,7 +731,7 @@ mod tests {
     fn global_pull_without_remote_is_noop() {
         let dir = tempdir().unwrap();
         let global = setup_global_dir(dir.path());
-        global_init_at(&global, false, None).unwrap();
+        global_init_at(&global, &aside(&global), false, None).unwrap();
 
         let ctx = global_ctx(&global);
         let msg = pull_repo(&ctx).unwrap();
@@ -624,7 +742,7 @@ mod tests {
     fn global_push_commits_and_pushes() {
         let dir = tempdir().unwrap();
         let global = setup_global_dir(dir.path());
-        global_init_at(&global, false, None).unwrap();
+        global_init_at(&global, &aside(&global), false, None).unwrap();
 
         // Create a bare remote
         let bare = dir.path().join("registry-remote.git");
@@ -647,7 +765,7 @@ mod tests {
     fn global_pull_fetches_remote_changes() {
         let dir = tempdir().unwrap();
         let global = setup_global_dir(dir.path());
-        global_init_at(&global, false, None).unwrap();
+        global_init_at(&global, &aside(&global), false, None).unwrap();
 
         // Create bare remote and push
         let bare = dir.path().join("registry-remote.git");
@@ -684,7 +802,7 @@ mod tests {
         )
         .unwrap();
 
-        global_init_at(&global, false, None).unwrap();
+        global_init_at(&global, &aside(&global), false, None).unwrap();
 
         let ctx = global_ctx(&global);
         let msg = status_repo(&ctx).unwrap();

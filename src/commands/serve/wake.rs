@@ -1,4 +1,4 @@
-//! The poller's wake-up: a FIFO beside the devices file. The server holds it
+//! The poller's wake-up: a FIFO among the server's runtime files. The server holds it
 //! open both ways, so a write never finds it without a reader and the read
 //! end never sees end-of-file; [`wake`] writes a byte without blocking, and
 //! with no server running finds no reader and does nothing.
@@ -9,25 +9,21 @@ use std::io::{ErrorKind, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
-use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::error::Result;
+use crate::state::serve_files::ServeFiles;
 
 /// How long a wake waits for the rest of the change that caused it: a
 /// command may push more than once as it finishes.
 const SETTLE: Duration = Duration::from_millis(250);
 
-fn path(devices: &Path) -> PathBuf {
-    devices.with_file_name("wake")
-}
-
-/// Wake the server whose devices file is `devices`, if one runs.
-pub fn wake(devices: &Path) {
+/// Wake the server of `files`, if one runs.
+pub fn wake(files: &ServeFiles) {
     let opened = OpenOptions::new()
         .write(true)
         .custom_flags(libc::O_NONBLOCK)
-        .open(path(devices));
+        .open(files.wake());
     // No reader (ENXIO), no FIFO yet, or a full pipe: nothing to do.
     if let Ok(mut fifo) = opened
         && fifo.metadata().is_ok_and(|m| m.file_type().is_fifo())
@@ -42,13 +38,10 @@ pub(super) struct Waker {
 }
 
 impl Waker {
-    /// The wake-up of the server whose devices file is `devices`, made if
-    /// there is none.
-    pub(super) fn open(devices: &Path) -> Result<Self> {
-        let path = path(devices);
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
+    /// The wake-up of the server of `files`, made if there is none.
+    pub(super) fn open(files: &ServeFiles) -> Result<Self> {
+        let path = files.wake();
+        files.create()?;
         if std::fs::symlink_metadata(&path).is_ok_and(|m| !m.file_type().is_fifo()) {
             std::fs::remove_file(&path)?;
         }
@@ -110,7 +103,7 @@ mod tests {
     #[test]
     fn a_wake_ends_the_wait_and_one_with_no_server_does_nothing() {
         let dir = tempfile::tempdir().unwrap();
-        let devices = dir.path().join("serve/devices.toml");
+        let devices = ServeFiles::legacy(dir.path());
         wake(&devices);
 
         let waker = Waker::open(&devices).unwrap();

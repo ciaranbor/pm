@@ -21,6 +21,9 @@ mod window;
 mod workflow;
 
 pub fn run(cli: Cli) -> pm::error::Result<()> {
+    if !matches!(cli.command, Commands::Upgrade { .. }) {
+        commands::xdg_migrate::lazy();
+    }
     let server = window::tmux_server_from_env();
     let server = server.as_deref();
     match cli.command {
@@ -70,9 +73,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             commands::tmux_jump::jump(&paths::global_projects_dir()?, server, &client, &target)
         }
         Commands::Tmux(TmuxCommands::Push) => {
-            commands::serve::wake(&pm::state::devices::Devices::path(
-                &paths::global_config_dir()?,
-            ));
+            commands::serve::wake(&pm::state::serve_files::ServeFiles::global()?);
             commands::tmux_push::push(&paths::global_projects_dir()?, server)
         }
         Commands::Tmux(TmuxCommands::Watch) => {

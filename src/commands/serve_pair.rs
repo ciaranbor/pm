@@ -2,14 +2,13 @@
 //! what the phone app needs to connect, as JSON: `{"url", "device",
 //! "token"}`, `url` being where the transport serves `pm serve`.
 
-use std::path::Path;
-
 use qrcode::QrCode;
 use qrcode::render::unicode::Dense1x2;
 use serde::Serialize;
 
 use crate::error::{PmError, Result};
 use crate::state::devices::Devices;
+use crate::state::serve_files::ServeFiles;
 use crate::tailscale;
 
 #[derive(Serialize)]
@@ -35,10 +34,10 @@ impl Pairing {
     }
 }
 
-/// Pair `device` in the devices file at `devices`. `url`
+/// Pair `device` among the devices of `files`. `url`
 /// defaults to this machine's tailnet name over HTTPS, as `tailscale serve`
 /// serves it.
-pub fn pair(devices: &Path, device: &str, url: Option<&str>) -> Result<Pairing> {
+pub fn pair(files: &ServeFiles, device: &str, url: Option<&str>) -> Result<Pairing> {
     let url = match url {
         Some(url) => url.trim_end_matches('/').to_string(),
         None => tailscale::dns_name()
@@ -49,7 +48,7 @@ pub fn pair(devices: &Path, device: &str, url: Option<&str>) -> Result<Pairing> 
                 )
             })?,
     };
-    let token = Devices::update(devices, |paired| paired.pair(device))?;
+    let token = Devices::update(files, |paired| paired.pair(device))?;
     Ok(Pairing {
         url,
         device: device.to_string(),

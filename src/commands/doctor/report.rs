@@ -108,6 +108,7 @@ fn run(
     warnings.extend(global_config_warning());
     warnings.extend(registry_warnings(projects_dir)?);
     warnings.extend(serve_warnings(depth));
+    warnings.extend(crate::commands::xdg_migrate::warnings());
     warnings.extend(keychain_warning(depth));
 
     let findings = diagnose(project_root, projects_dir, tmux_server, depth)?;

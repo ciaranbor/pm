@@ -58,17 +58,18 @@ pub(super) fn run<E>(
     probe: Probe,
     spawn: impl FnOnce() -> Result<Exit, E>,
 ) -> Result<Exit, E> {
-    match paths::global_config_dir() {
+    match paths::global_cache_dir() {
         Ok(dir) => run_in(&cache_file(&dir), binary, arg, probe, spawn),
         Err(_) => spawn(),
     }
 }
 
-/// The config dir's machine-local cache dir, which the probe cache is in.
-pub(crate) const CACHE_DIR_NAME: &str = "cache";
+/// The probe cache's name.
+pub(crate) const CACHE_FILE: &str = "harness-probes.json";
 
-pub(crate) fn cache_file(config_dir: &Path) -> PathBuf {
-    config_dir.join(CACHE_DIR_NAME).join("harness-probes.json")
+/// The probe cache under the cache dir `cache_dir`.
+pub(crate) fn cache_file(cache_dir: &Path) -> PathBuf {
+    cache_dir.join(CACHE_FILE)
 }
 
 fn run_in<E>(

@@ -62,7 +62,11 @@ fn start_in(dir: &Path, cwd: &Path, command: &str, payload: &str) -> Child {
         bin.parent().unwrap().display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    let mut hook = Command::new("/bin/sh")
+    let mut hook = Command::new("/bin/sh");
+    for var in pm::state::dirs::XDG_VARS {
+        hook.env_remove(var);
+    }
+    let mut hook = hook
         .args(["-c", command])
         .env(
             "PM_TMUX_SERVER",
