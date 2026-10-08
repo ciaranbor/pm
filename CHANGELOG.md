@@ -6,6 +6,8 @@ notes.
 
 ## Unreleased
 
+## 0.6.0 — 2026-10-08
+
 - pm's global files follow XDG on macOS as on Linux: settings and the
 project list in `~/.config/pm`, machine-only state (phone pairing, the push
 key) in `~/.local/state/pm`, the cache in `~/.cache/pm`. Nothing is moved
