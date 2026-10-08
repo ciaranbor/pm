@@ -8,11 +8,6 @@
 //! with what is current. `[upgrade] restart_agents = false` in the global
 //! config turns both off.
 //!
-//! An upgrade of one project sweeps only that project's agents, though the
-//! global tier it installs is every project's: restarting agents in
-//! projects the user did not name would surprise more than help. It names
-//! the other projects with stale agents instead ([`stale_elsewhere`]).
-//!
 //! A dry run judges agents against the assets installed now, so it cannot
 //! list those only the new assets would make stale; it says so
 //! ([`DRY_RUN_CAVEAT`]) whenever the upgrade has assets to install.
@@ -31,58 +26,20 @@ use std::path::Path;
 
 use crate::harness::Harness;
 use crate::keychain::{self, Answer};
-use crate::state::project::{GlobalConfig, ProjectEntry};
+use crate::state::project::GlobalConfig;
 
-use super::agent_restart_all::{
-    Scope, Select, global_scopes, harnesses_of, plan, project_scopes, restart_plan,
-};
+use super::agent_restart_all::{Scope, Select, global_scopes, harnesses_of, plan, restart_plan};
 
 /// What a dry run with assets to install adds to its stale agents.
 pub const DRY_RUN_CAVEAT: &str = "Stale agents: judged against the assets installed now; \
      the upgrade also restarts any its new assets make stale";
 
-/// A line naming each registered project other than the one at
-/// `project_root` with running stale agents, and how many, with the
-/// command that restarts them; `None` when there are none.
-pub fn stale_elsewhere(
-    projects_dir: &Path,
-    project_root: &Path,
-    tmux_server: Option<&str>,
-) -> Option<String> {
-    let own = project_root.canonicalize().ok();
-    let registry = ProjectEntry::scan(projects_dir).ok()?;
-    let mut found = Vec::new();
-    for (name, entry) in registry.projects {
-        let root = entry.root_path();
-        if root.canonicalize().ok() == own {
-            continue;
-        }
-        let Ok(scopes) = project_scopes(&root) else {
-            continue;
-        };
-        if let Ok(plan) = plan(&scopes, Select::Stale, false, tmux_server)
-            && plan.stale > 0
-        {
-            found.push(format!("{name} ({})", plan.stale));
-        }
-    }
-    (!found.is_empty()).then(|| {
-        format!(
-            "Stale agents in other projects, left running: {}; `pm upgrade --all` restarts them",
-            found.join(", ")
-        )
-    })
-}
-
-/// The scopes `pm upgrade` sweeps: the project at `project_root`'s, else
-/// every registered project's; and a line for each project it can't read.
-pub fn scopes(projects_dir: &Path, project_root: Option<&Path>) -> (Vec<Scope>, Vec<String>) {
-    let found = match project_root {
-        Some(root) => project_scopes(root).map(|scopes| (scopes, Vec::new())),
-        None => global_scopes(projects_dir)
-            .map(|(scopes, unread)| (scopes, unread.iter().map(ToString::to_string).collect())),
-    };
-    found.unwrap_or_else(|e| (Vec::new(), vec![format!("stale agents: error: {e}")]))
+/// The scopes `pm upgrade` sweeps, every registered project's, and a line
+/// for each project it can't read.
+pub fn scopes(projects_dir: &Path) -> (Vec<Scope>, Vec<String>) {
+    global_scopes(projects_dir)
+        .map(|(scopes, unread)| (scopes, unread.iter().map(ToString::to_string).collect()))
+        .unwrap_or_else(|e| (Vec::new(), vec![format!("stale agents: error: {e}")]))
 }
 
 /// Restart the stale agents of `scopes`, or with `dry_run` say which it
@@ -172,6 +129,7 @@ fn restart_stale_asking(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::agent_restart_all::project_scopes;
     use crate::state::project::UpgradeConfig;
     use crate::testing::TestServer;
     use crate::tmux;
@@ -185,8 +143,7 @@ mod tests {
         let session = tmux::session_name(&project_name, "login");
         server.spawn_idle_fake_agent(&project, &session, "login", "reviewer");
         crate::state::runtime::write_launch_stamp(&project, "login", "reviewer", "old").unwrap();
-        let (scopes, unread) = scopes(dir.path(), Some(&project));
-        assert!(unread.is_empty(), "{unread:?}");
+        let scopes = project_scopes(&project).unwrap();
         let waiting = || {
             tmux::pane_processes(server.name(), &format!("{session}:reviewer"))
                 .unwrap()
@@ -229,7 +186,7 @@ mod tests {
         let session = tmux::session_name(&project_name, "login");
         server.spawn_fake_agent(&project, &session, "login", "implementer");
         crate::state::runtime::write_launch_stamp(&project, "login", "implementer", "old").unwrap();
-        let (scopes, _) = scopes(dir.path(), Some(&project));
+        let scopes = project_scopes(&project).unwrap();
         let marked =
             || crate::state::runtime::restart_at_idle_marked(&project, "login", "implementer");
         let off = GlobalConfig {
@@ -267,48 +224,6 @@ mod tests {
     }
 
     #[test]
-    fn stale_agents_of_other_projects_are_named_and_left_running() {
-        let server = TestServer::new();
-        let here = tempdir().unwrap();
-        let there = tempdir().unwrap();
-        let registry = tempdir().unwrap();
-        let (own, _) = server.setup_project_with_feature_no_tmux(here.path(), "login");
-        let (other, other_name) = server.setup_project_with_feature(there.path(), "login");
-        for (root, name) in [(&own, "own"), (&other, "other")] {
-            crate::state::project::ProjectEntry {
-                root: root.to_string_lossy().to_string(),
-                main_branch: "main".to_string(),
-                repo_url: None,
-                state_remote: None,
-            }
-            .save(registry.path(), name)
-            .unwrap();
-        }
-        let session = tmux::session_name(&other_name, "login");
-        server.spawn_idle_fake_agent(&other, &session, "login", "reviewer");
-        assert_eq!(stale_elsewhere(registry.path(), &own, server.name()), None);
-
-        crate::state::runtime::write_launch_stamp(&other, "login", "reviewer", "old").unwrap();
-        assert_eq!(
-            stale_elsewhere(registry.path(), &own, server.name()).as_deref(),
-            Some(
-                "Stale agents in other projects, left running: other (1); `pm upgrade --all` \
-                 restarts them"
-            )
-        );
-        assert_eq!(
-            stale_elsewhere(registry.path(), &other, server.name()),
-            None
-        );
-        assert!(
-            tmux::pane_processes(server.name(), &format!("{session}:reviewer"))
-                .unwrap()
-                .iter()
-                .any(|p| p.command.contains("sleep 999"))
-        );
-    }
-
-    #[test]
     fn the_keychain_holds_back_its_readers_while_it_hangs_and_an_error_is_only_noted() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
@@ -316,7 +231,7 @@ mod tests {
         let session = tmux::session_name(&project_name, "login");
         server.spawn_idle_fake_agent(&project, &session, "login", "reviewer");
         crate::state::runtime::write_launch_stamp(&project, "login", "reviewer", "old").unwrap();
-        let (scopes, _) = scopes(dir.path(), Some(&project));
+        let scopes = project_scopes(&project).unwrap();
         let global = GlobalConfig::default();
         let waiting = || {
             tmux::pane_processes(server.name(), &format!("{session}:reviewer"))

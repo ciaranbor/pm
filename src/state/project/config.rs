@@ -85,8 +85,8 @@ pub struct BundledDisable {
     pub baseline: bool,
 }
 
-/// `pm upgrade`'s settings; global only, as `upgrade --all` sweeps the
-/// machine.
+/// `pm upgrade`'s settings; global only, as an upgrade sweeps every
+/// project.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct UpgradeConfig {
     /// Restart the idle agents whose launch is stale; unset means `true`.
