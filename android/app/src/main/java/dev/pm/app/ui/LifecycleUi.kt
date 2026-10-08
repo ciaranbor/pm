@@ -35,12 +35,13 @@ import dev.pm.app.model.Snapshot
 
 /**
  * An action for [ActionMenu]: `icon` stands for it when shown as a button; `destructive` ones show
- * in the error colour, after a divider in a menu.
+ * in the error colour, after a divider in a menu. One with a `blocker` is off, saying why.
  */
 data class MenuItem(
     val label: String,
     @DrawableRes val icon: Int,
     val destructive: Boolean = false,
+    val blocker: String? = null,
     val onClick: () -> Unit,
 )
 
@@ -56,10 +57,10 @@ fun ActionMenu(
     if (items.size < MENU_FROM) {
         Row(modifier) {
             items.forEach { item ->
-                IconButton(onClick = item.onClick) {
+                IconButton(onClick = item.onClick, enabled = item.blocker == null) {
                     Icon(
                         painterResource(item.icon),
-                        item.label,
+                        listOfNotNull(item.label, item.blocker).joinToString(": "),
                         tint =
                             if (item.destructive) MaterialTheme.colorScheme.error
                             else LocalContentColor.current,
@@ -79,13 +80,20 @@ fun ActionMenu(
                 if (item.destructive && i > 0 && !items[i - 1].destructive) HorizontalDivider()
                 DropdownMenuItem(
                     text = {
-                        Text(
-                            item.label,
-                            color =
-                                if (item.destructive) MaterialTheme.colorScheme.error
-                                else Color.Unspecified,
-                        )
+                        Column {
+                            Text(
+                                item.label,
+                                color =
+                                    if (item.destructive && item.blocker == null)
+                                        MaterialTheme.colorScheme.error
+                                    else Color.Unspecified,
+                            )
+                            item.blocker?.let {
+                                Text(it, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
                     },
+                    enabled = item.blocker == null,
                     onClick = {
                         open = false
                         item.onClick()

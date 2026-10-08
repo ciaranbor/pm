@@ -1,6 +1,7 @@
 //! `feat_merge` end to end: the merge itself and the checks that refuse it.
 
 mod base;
+mod blocker;
 mod cleanup;
 mod hook;
 mod upstream;
@@ -8,6 +9,7 @@ mod upstream;
 use super::*;
 use crate::commands::{feat_new, init};
 use crate::hooks;
+use crate::state::feature::FeatureState;
 use crate::testing::TestServer;
 use crate::tmux;
 use tempfile::tempdir;
