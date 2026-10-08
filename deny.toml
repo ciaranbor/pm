@@ -1,0 +1,49 @@
+# cargo-deny's checks, run by CI (.github/workflows/check.yml).
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = [
+    # The Marvin attack (RSA decryption timing) has no fixed `rsa` release.
+    # It reaches pm only through web-push-native's jwt-simple, and VAPID
+    # signs with ES256: pm never runs RSA.
+    { id = "RUSTSEC-2023-0071", reason = "pm never runs RSA; no fixed release" },
+]
+
+# Licences a dependency of an MIT-licensed binary may carry.
+[licenses]
+version = 2
+confidence-threshold = 0.9
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    "CC0-1.0",
+    "Unlicense",
+]
+# File-level copyleft: the crate's own files stay MPL, and pm only links it.
+exceptions = [{ crate = "option-ext", allow = ["MPL-2.0"] }]
+
+# Duplicates are reported, not failed: most come from web-push-native
+# lagging the RustCrypto releases pm's own dependencies use.
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

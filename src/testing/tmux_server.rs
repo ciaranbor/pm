@@ -5,8 +5,9 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::fake_harness::window_path;
-use super::pty_budget::{enforce_soft_cap, enforce_system_pty_cap};
+use super::pty_budget::enforce_soft_cap;
 use super::reaper::reap_dead_test_servers;
+use super::system_ptys::enforce_system_pty_cap;
 
 static TMUX_SERVER_COUNTER: AtomicU32 = AtomicU32::new(0);
 

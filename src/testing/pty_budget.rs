@@ -6,46 +6,6 @@
 /// recovery command instead of silently exhausting the system pty budget.
 pub(super) const MAX_TEST_SESSIONS: usize = 200;
 
-/// System-wide pty ceiling. If the total number of allocated ptys on the
-/// system reaches this threshold, tests abort before creating more. The
-/// macOS hard limit is 511; this leaves headroom for the user's own
-/// sessions and agents.
-const MAX_SYSTEM_PTYS: usize = 300;
-
-/// Shell command that kills every test server and unlinks its socket.
-pub(super) const KILL_ALL_TEST_SERVERS: &str = r#"for s in /tmp/tmux-$(id -u)/pm-test-*; do tmux -L $(basename "$s") kill-server; rm -f "$s"; done"#;
-
-/// Count system-wide allocated ptys by reading `/dev/ttys*` entries.
-/// Returns `None` if the count cannot be determined.
-fn system_pty_count() -> Option<usize> {
-    let entries = std::fs::read_dir("/dev").ok()?;
-    let count = entries
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.file_name()
-                .to_str()
-                .is_some_and(|name| name.starts_with("ttys"))
-        })
-        .count();
-    Some(count)
-}
-
-/// Check the system-wide pty count and return an error message if it
-/// exceeds the safety threshold.
-pub(super) fn enforce_system_pty_cap() -> Result<(), String> {
-    if let Some(count) = system_pty_count()
-        && count >= MAX_SYSTEM_PTYS
-    {
-        return Err(format!(
-            "system-wide pty count is {count} (threshold: {MAX_SYSTEM_PTYS}, macOS limit: 511). \
-                 Aborting test to prevent pty exhaustion. \
-                 Check for leaked tmux sessions: tmux list-sessions; \
-                 kill test servers: {KILL_ALL_TEST_SERVERS}"
-        ));
-    }
-    Ok(())
-}
-
 /// Check the soft cap on live sessions. Returns `Err(message)` when the
 /// caller should panic; the message is the exact recovery hint shown to
 /// the user. Pure function so it can be unit-tested directly.
@@ -64,6 +24,20 @@ pub(super) fn enforce_soft_cap(count: usize, pid: u32) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::system_ptys::{check_system_ptys, system_ptys};
+
+    #[test]
+    fn the_system_pty_count_and_limit_are_readable() {
+        let (limit, _) = system_ptys().expect("read the system's ptys");
+        assert!(limit > 0);
+    }
+
+    #[test]
+    fn the_system_cap_trips_at_its_share_of_the_limit() {
+        assert!(check_system_ptys(511, 305).is_ok());
+        assert!(check_system_ptys(511, 306).is_err());
+        assert!(check_system_ptys(4096, 2000).is_ok());
+    }
 
     #[test]
     fn soft_cap_helper_allows_counts_at_or_below_max() {

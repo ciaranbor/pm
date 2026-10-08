@@ -4,11 +4,11 @@
 //! config, `/bin/sh` windows, a `keepalive` session). Servers of dead pids
 //! are reaped as the next run starts, and the current one is killed at exit.
 //! Every session consumes a pty, so [`TestServer::new`] aborts the run once
-//! the system-wide count reaches a budget below the macOS limit, and
+//! the system-wide count reaches a budget below the system's limit, and
 //! `.cargo/config.toml` caps runs at 4 threads. A budget failure means leaked
 //! sessions. To recover from a runaway run, kill its server with
 //! `tmux -L pm-test-<pid> kill-server`, or every test server with
-//! [`KILL_ALL_TEST_SERVERS`](pty_budget::KILL_ALL_TEST_SERVERS).
+//! [`KILL_ALL_TEST_SERVERS`](system_ptys::KILL_ALL_TEST_SERVERS).
 use std::sync::RwLock;
 
 mod control_client;
@@ -18,6 +18,7 @@ mod home;
 mod projects;
 mod pty_budget;
 mod reaper;
+mod system_ptys;
 mod tmux_server;
 
 pub use control_client::ControlClient;

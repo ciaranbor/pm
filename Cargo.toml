@@ -2,9 +2,12 @@
 name = "pm"
 version = "0.5.0"
 edition = "2024"
+rust-version = "1.91"
 description = "Terminal-based project manager built around tmux and git worktrees"
 license = "MIT"
 repository = "https://github.com/ciaranbor/pm"
+keywords = ["tmux", "git-worktree", "agents", "project-manager", "cli"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 clap = { version = "4.6.0", features = ["derive"] }

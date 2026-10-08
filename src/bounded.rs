@@ -148,15 +148,28 @@ fn install_signal_handlers() {
     static INSTALLED: Once = Once::new();
     INSTALLED.call_once(|| {
         for signal in FATAL_SIGNALS {
-            // SAFETY: the handler makes only async-signal-safe calls.
-            unsafe {
-                libc::signal(
-                    signal,
-                    on_fatal_signal as extern "C" fn(libc::c_int) as libc::sighandler_t,
-                );
-            }
+            install_signal_handler(signal);
         }
     });
+}
+
+/// Catch `signal` with [`on_fatal_signal`], unless pm was started ignoring
+/// it (`nohup`'s SIGHUP): it would not have ended pm, so it must not now.
+fn install_signal_handler(signal: libc::c_int) {
+    // SAFETY: a zeroed sigaction is a valid out-parameter for reading the
+    // current disposition; the handler makes only async-signal-safe calls.
+    unsafe {
+        let mut current: libc::sigaction = std::mem::zeroed();
+        if libc::sigaction(signal, std::ptr::null(), &mut current) == 0
+            && current.sa_sigaction == libc::SIG_IGN
+        {
+            return;
+        }
+        libc::signal(
+            signal,
+            on_fatal_signal as extern "C" fn(libc::c_int) as libc::sighandler_t,
+        );
+    }
 }
 
 extern "C" fn on_fatal_signal(signal: libc::c_int) {
@@ -200,6 +213,34 @@ fn read_to_end(pipe: Option<impl Read + Send + 'static>) -> mpsc::Receiver<Vec<u
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Dispositions are process-wide, so this runs in a forked child that
+    /// makes only async-signal-safe calls.
+    #[test]
+    fn a_signal_pm_was_started_ignoring_stays_ignored() {
+        // SAFETY: the child calls only signal(2) and _exit(2).
+        let pid = unsafe { libc::fork() };
+        if pid == 0 {
+            let ok = unsafe {
+                libc::signal(libc::SIGHUP, libc::SIG_IGN);
+                install_signal_handler(libc::SIGHUP);
+                let ignored = libc::signal(libc::SIGHUP, libc::SIG_DFL) == libc::SIG_IGN;
+                install_signal_handler(libc::SIGHUP);
+                let caught = libc::signal(libc::SIGHUP, libc::SIG_DFL)
+                    == on_fatal_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
+                ignored && caught
+            };
+            unsafe { libc::_exit(i32::from(!ok)) };
+        }
+        assert!(pid > 0, "fork failed");
+        let mut status = 0;
+        // SAFETY: waiting on the child just forked.
+        assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
+        assert!(
+            libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
+            "status {status}"
+        );
+    }
 
     fn sh(script: &str) -> Command {
         let mut command = Command::new("sh");

@@ -13,6 +13,9 @@ use std::time::{Duration, Instant};
 use assert_cmd::Command;
 use predicates::prelude::*;
 
+#[path = "../../src/testing/system_ptys.rs"]
+mod system_ptys;
+
 pub const SANDBOX: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/sandbox");
 
 /// Scenarios each own the sandbox named after this pid, so they run one at
@@ -21,7 +24,6 @@ static LOCK: Mutex<()> = Mutex::new(());
 static ATEXIT: Once = Once::new();
 static RUN_COUNTER: AtomicU32 = AtomicU32::new(0);
 
-const MAX_SYSTEM_PTYS: usize = 300;
 pub const WAIT: Duration = Duration::from_secs(30);
 pub const POLL: Duration = Duration::from_millis(50);
 
@@ -69,7 +71,9 @@ impl Smoke {
 
     fn up(real: bool) -> Self {
         let guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        enforce_system_pty_cap();
+        if let Err(msg) = system_ptys::enforce_system_pty_cap() {
+            panic!("{msg}");
+        }
 
         let pid = std::process::id();
         let name = pid.to_string();
@@ -431,26 +435,6 @@ pub fn parse_record(text: &str) -> Option<Record> {
 
 pub fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
-}
-
-fn enforce_system_pty_cap() {
-    let count = std::fs::read_dir("/dev")
-        .map(|d| {
-            d.flatten()
-                .filter(|e| {
-                    e.file_name()
-                        .to_str()
-                        .is_some_and(|n| n.starts_with("ttys"))
-                })
-                .count()
-        })
-        .unwrap_or(0);
-    assert!(
-        count < MAX_SYSTEM_PTYS,
-        "system-wide pty count is {count} (threshold: {MAX_SYSTEM_PTYS}). \
-         Check for leaked tmux sessions; kill test servers: \
-         for s in /tmp/tmux-$(id -u)/pm-test-*; do tmux -L $(basename \"$s\") kill-server; done"
-    );
 }
 
 static ATEXIT_PID: AtomicU32 = AtomicU32::new(0);

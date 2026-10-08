@@ -187,10 +187,11 @@ pub fn confirm_scope(
 
 /// Wait until the harness of each of `launches`, made just now, has come
 /// up, exited, or run [`UP_WITHIN`] without coming up; the ones that did
-/// not come up. All are watched together, so the wait does not grow with
-/// their number. Advisory: an agent pm cannot find (no readable config or
-/// registry entry, no window) is not watched, and windows that cannot be
-/// read report none, so a launch that worked is never failed by the check.
+/// not come up, in the order of `launches`. All are watched together, so
+/// the wait does not grow with their number. Advisory: an agent pm cannot
+/// find (no readable config or registry entry, no window) is not watched,
+/// and windows that cannot be read report none, so a launch that worked is
+/// never failed by the check.
 pub fn confirm_all(launches: &[Launch], tmux_server: Option<&str>) -> Vec<FailedLaunch> {
     confirm_within(launches, tmux_server, START_WITHIN, UP_WITHIN)
 }
@@ -209,6 +210,8 @@ pub(crate) fn confirm_within(
 /// What watching one launch needs to know.
 struct Watched<'a> {
     launch: &'a Launch,
+    /// Its place in the launches, which orders the failures.
+    order: usize,
     session: String,
     window_name: String,
     harness: Harness,
@@ -232,7 +235,7 @@ fn watch(
     let mut projects: HashMap<&Path, Option<(String, HarnessConfig)>> = HashMap::new();
     let mut registries: HashMap<(&Path, &str), Option<AgentRegistry>> = HashMap::new();
     let mut pending = Vec::new();
-    for launch in launches {
+    for (order, launch) in launches.iter().enumerate() {
         let root = launch.project_root.as_path();
         let project = projects.entry(root).or_insert_with(|| {
             let config = ProjectConfig::load(&paths::pm_dir(root)).ok()?;
@@ -250,6 +253,7 @@ fn watch(
         };
         pending.push(Watched {
             launch,
+            order,
             session: tmux::session_name(project_name, &launch.scope),
             window_name: entry.window_name.clone(),
             harness: entry.harness,
@@ -308,19 +312,22 @@ fn watch(
                 Some(since) if !dead && now - since < up_deadline => still.push(watched),
                 Some(_) if !dead => {
                     let launched = runtime::launched_file(project_root, scope, name);
-                    failed.push(FailedLaunch {
-                        launch: watched.launch.clone(),
-                        failure: Failure::NotUp {
-                            harness: watched.harness,
-                            after: up_deadline,
+                    failed.push((
+                        watched.order,
+                        FailedLaunch {
+                            launch: watched.launch.clone(),
+                            failure: Failure::NotUp {
+                                harness: watched.harness,
+                                after: up_deadline,
+                            },
+                            output: drawn(
+                                tmux_server,
+                                &pane.window,
+                                &launched,
+                                processes.first().map(|shell| shell.command.as_str()),
+                            ),
                         },
-                        output: drawn(
-                            tmux_server,
-                            &pane.window,
-                            &launched,
-                            processes.first().map(|shell| shell.command.as_str()),
-                        ),
-                    });
+                    ));
                 }
                 None if running => {
                     watched.up_since = Some(now);
@@ -328,11 +335,14 @@ fn watch(
                 }
                 None if !settled && now - start < start_deadline => still.push(watched),
                 None if !dead => {}
-                _ => failed.push(FailedLaunch {
-                    launch: watched.launch.clone(),
-                    failure: Failure::Exited,
-                    output: last_output(tmux_server, &pane.window),
-                }),
+                _ => failed.push((
+                    watched.order,
+                    FailedLaunch {
+                        launch: watched.launch.clone(),
+                        failure: Failure::Exited,
+                        output: last_output(tmux_server, &pane.window),
+                    },
+                )),
             }
         }
         pending = still;
@@ -340,7 +350,8 @@ fn watch(
             std::thread::sleep(POLL);
         }
     }
-    Ok(failed)
+    failed.sort_by_key(|(order, _)| *order);
+    Ok(failed.into_iter().map(|(_, failure)| failure).collect())
 }
 
 /// Whether a pane's shell, the first of its `processes`, is at its prompt
