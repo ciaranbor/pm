@@ -47,7 +47,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
         Commands::Msg(cmd) => msg::run(cmd, server),
         Commands::Feat(cmd) => feat::run(cmd, server),
         Commands::Doctor { fix, project } => maintenance::doctor(fix, project, server),
-        Commands::Upgrade { all: _, dry_run } => maintenance::upgrade(dry_run, server),
+        Commands::Upgrade { dry_run } => maintenance::upgrade(dry_run, server),
         Commands::Restore { projects, imports } => maintenance::restore(projects, imports, server),
         Commands::Migrate(MigrateCommands::Check {
             projects,

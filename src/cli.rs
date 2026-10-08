@@ -115,12 +115,6 @@ pub enum Commands {
     /// Reinstall pm's hooks and bundled assets in every registered project, then restart
     /// the agents left stale
     Upgrade {
-        // TRANSITIONAL: accepted and ignored, since every upgrade covers all
-        // projects; older `pm self-update` and post-merge hooks pass it.
-        // Keep for one release after 0.5.1, then remove; scripts/install.sh
-        // passes it only to releases whose help lists it.
-        #[arg(long, hide = true)]
-        all: bool,
         /// Preview changes without writing anything. Stale agents are
         /// judged against the assets installed now, not the ones the
         /// upgrade would install
