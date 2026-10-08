@@ -284,11 +284,7 @@ mod tests {
         let dir = tempdir().unwrap();
         // Create a "remote" bare repo
         let bare_path = dir.path().join("remote.git");
-        std::fs::create_dir_all(&bare_path).unwrap();
-        Command::new("git")
-            .args(["init", "--bare", &bare_path.to_string_lossy()])
-            .output()
-            .unwrap();
+        crate::git::init_bare(&bare_path).unwrap();
 
         // Clone it to get a repo with an upstream tracking branch
         let clone_path = dir.path().join("clone");
@@ -318,11 +314,7 @@ mod tests {
     fn has_unpushed_commits_false_when_pushed() {
         let dir = tempdir().unwrap();
         let bare_path = dir.path().join("remote.git");
-        std::fs::create_dir_all(&bare_path).unwrap();
-        Command::new("git")
-            .args(["init", "--bare", &bare_path.to_string_lossy()])
-            .output()
-            .unwrap();
+        crate::git::init_bare(&bare_path).unwrap();
 
         let clone_path = dir.path().join("clone");
         Command::new("git")

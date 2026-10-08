@@ -25,7 +25,9 @@ pub fn init_repo(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Init a bare repo (test helper for simulating a remote).
+/// Init a bare repo (test helper for simulating a remote) whose default
+/// branch is `main`, as a hosted remote's is, whatever `init.defaultBranch`
+/// says.
 #[cfg(test)]
 pub(crate) fn init_bare(path: &Path) -> Result<()> {
     std::fs::create_dir_all(path)?;
@@ -35,6 +37,7 @@ pub(crate) fn init_bare(path: &Path) -> Result<()> {
     if !output.status.success() {
         return Err(super::failure(&output));
     }
+    run_git(path, &["symbolic-ref", "HEAD", "refs/heads/main"])?;
     Ok(())
 }
 

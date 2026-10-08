@@ -239,11 +239,7 @@ mod tests {
 
         // Create a bare "remote" repo
         let bare_path = dir.path().join("remote.git");
-        std::fs::create_dir_all(&bare_path).unwrap();
-        Command::new("git")
-            .args(["init", "--bare", &bare_path.to_string_lossy()])
-            .output()
-            .unwrap();
+        crate::git::init_bare(&bare_path).unwrap();
 
         // Init project (creates a real git repo at project_path/main)
         let project_path = dir.path().join(server.scope("myapp"));

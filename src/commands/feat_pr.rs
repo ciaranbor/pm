@@ -99,10 +99,7 @@ mod tests {
 
         // Create a bare remote to push to
         let remote_path = dir.join("remote.git");
-        std::process::Command::new("git")
-            .args(["init", "--bare", &remote_path.to_string_lossy()])
-            .output()
-            .unwrap();
+        crate::git::init_bare(&remote_path).unwrap();
 
         // Add remote to the main repo
         let main_repo = paths::main_worktree(&project_path);
