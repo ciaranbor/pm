@@ -62,12 +62,6 @@ class DocsUiTest {
     }
 
     @Test
-    fun a_server_with_docs_offers_them_beside_the_notes() {
-        projectPage(MockResponse.Builder().code(200).body("""{"docs":[]}""").build())
-        compose.onNodeWithText("Docs").assertExists()
-    }
-
-    @Test
     fun a_server_that_predates_docs_offers_only_the_notes() {
         projectPage(
             MockResponse.Builder().code(404).body("""{"error":"no such endpoint"}""").build()

@@ -3,6 +3,7 @@ package dev.pm.app.ui
 import androidx.navigation3.runtime.NavBackStack
 import androidx.navigation3.runtime.NavKey
 import dev.pm.app.model.Snapshot
+import dev.pm.app.model.docTitle
 import dev.pm.app.push.Target
 import kotlinx.serialization.Serializable
 
@@ -32,9 +33,8 @@ sealed interface Route : NavKey {
     /** A project's information store: its categories. */
     @Serializable data class Docs(val project: String) : Route
 
-    /** One doc of a project's information store, by its filename; `title` is what it shows. */
-    @Serializable
-    data class Doc(val project: String, val filename: String, val title: String) : Route
+    /** One doc of a project's information store, by its filename. */
+    @Serializable data class Doc(val project: String, val filename: String) : Route
 
     @Serializable data object Settings : Route
 
@@ -50,7 +50,7 @@ sealed interface Route : NavKey {
                 is Feature -> scope to "$project · Feature"
                 is Notes -> "Notes" to project
                 is Docs -> "Docs" to project
-                is Doc -> title to "$project · Docs"
+                is Doc -> docTitle(filename) to "$project · Docs"
             }
 
     /** Where Up leads: the page this one belongs to. */

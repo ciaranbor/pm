@@ -59,9 +59,8 @@ isn't on this machine is not listed
 Beside its Notes, a project's page has Docs: the categories of its
 [information store](../README.md#information-store-and-summaries), each with
 what it holds, its size and when it last changed, each opening to read. The
-docs are read-only on the phone, since `main` writes them. A long doc is
-drawn a section at a time as you scroll, and Sections in the top bar jumps
-to a heading. A server that predates the docs shows no Docs button.
+docs are read-only on the phone, since `main` writes them. Sections in the
+top bar jumps to a heading. A server that predates the docs shows no Docs button.
 
 ## Features
 

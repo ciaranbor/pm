@@ -13,10 +13,12 @@ data class DocCategory(
     val size: Long = 0,
     val modified: String? = null,
 ) {
-    /** `user-feedback.md` as `User feedback`. */
     val title: String
-        get() =
-            filename.substringBeforeLast('.').replace('-', ' ').replace('_', ' ').replaceFirstChar {
-                it.uppercase()
-            }
+        get() = docTitle(filename)
 }
+
+/** A doc's filename as its title: `user-feedback.md` as `User feedback`. */
+fun docTitle(filename: String): String =
+    filename.substringBeforeLast('.').replace('-', ' ').replace('_', ' ').replaceFirstChar {
+        it.uppercase()
+    }

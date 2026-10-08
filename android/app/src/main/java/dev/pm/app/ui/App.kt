@@ -319,9 +319,7 @@ fun App(
                                     viewModel { ReadModel(client) { docs(key.project) } },
                                     now,
                                     open = { doc ->
-                                        backStack.add(
-                                            Route.Doc(key.project, doc.filename, doc.title)
-                                        )
+                                        backStack.add(Route.Doc(key.project, doc.filename))
                                     },
                                 )
                             }

@@ -17,7 +17,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -42,11 +42,7 @@ fun DocsScreen(
     open: (DocCategory) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // Shown again on the way back from a doc, which may have changed meanwhile.
-    DisposableEffect(model) {
-        if (model.left) model.refresh()
-        onDispose { model.left = true }
-    }
+    LaunchedEffect(model) { model.shown() }
     ReadScreen(model, "docs", "This project is no longer there.", modifier) { docs ->
         if (docs.isEmpty()) {
             EmptyState("No docs", hint = "The project's categories.toml lists none.")
@@ -167,8 +163,8 @@ internal fun sectionHeadings(parts: List<String>): List<Section> =
     }
 
 /**
- * Whether the server serves `project`'s docs: so until it answers that it predates them, so a
- * server that has them never shows the entry late.
+ * Whether the server serves `project`'s docs: true until it answers that it predates them, so a
+ * server that has them never shows Docs late.
  */
 @Composable
 internal fun rememberDocsServed(client: PmClient?, project: String): Boolean {

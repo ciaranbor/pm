@@ -39,7 +39,7 @@ struct Listed {
 /// those whose filename names a file directly in the docs dir and, if it
 /// is a link, one that stays there; none when it is missing.
 fn categories(root: &Path) -> Result<Vec<Category>> {
-    let path = paths::docs_dir(root).join("categories.toml");
+    let path = paths::doc_categories(root);
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -53,12 +53,12 @@ fn categories(root: &Path) -> Result<Vec<Category>> {
         .collect())
 }
 
-/// Whether `filename` in the docs dir resolves inside it; a file not
-/// written yet does.
+/// Whether `filename` in the docs dir resolves to a file directly inside
+/// it; a file not written yet does.
 fn stays_in(root: &Path, filename: &str) -> bool {
     let dir = paths::docs_dir(root);
     match (dir.join(filename).canonicalize(), dir.canonicalize()) {
-        (Ok(file), Ok(dir)) => file.parent() == Some(dir.as_path()),
+        (Ok(file), Ok(dir)) => file.parent() == Some(dir.as_path()) && file.is_file(),
         (Err(e), _) => e.kind() == std::io::ErrorKind::NotFound,
         (Ok(_), Err(_)) => false,
     }
@@ -147,6 +147,10 @@ filename = "alias.md"
 description = "A link that stays in the docs dir."
 
 [[category]]
+filename = "sub"
+description = "A directory."
+
+[[category]]
 filename = "escape.md"
 description = "A link out of it."
 
@@ -160,6 +164,7 @@ description = "Outside the docs dir."
         std::fs::write(docs.join("secret.md"), "unlisted\n").unwrap();
         std::fs::write(docs.join("ideas.md"), "# Ideas\n").unwrap();
         std::os::unix::fs::symlink("ideas.md", docs.join("alias.md")).unwrap();
+        std::fs::create_dir(docs.join("sub")).unwrap();
         std::os::unix::fs::symlink("../notes.md", docs.join("escape.md")).unwrap();
         std::fs::write(paths::notes_path(&project), "notes\n").unwrap();
         let send = |method: &str, path: &str| match route(
@@ -202,6 +207,7 @@ description = "Outside the docs dir."
             (200, "# Ideas\n".into())
         );
         for unlisted in [
+            "sub",
             "escape.md",
             "secret.md",
             "categories.toml",
