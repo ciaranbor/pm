@@ -1,10 +1,11 @@
 //! `pm harness hooks user-prompt`: the user typing into an agent's window
 //! answers a blocked feature, so the feature goes back to `wip`.
 //!
-//! Only the user's input resets it. pm's own prompts are ignored: its
-//! launch prompts ([`is_launch_prompt`]), a continuation however it came
-//! — typed to re-arm the agent (see `agent_rearm`), queued, or a Stop
-//! hook's rewake, which the harness wraps ([`Harness::prompt_said`]) — and
+//! Only the user's input resets it. pm's own prompts are ignored: the
+//! launch prompts a codex agent starts with ([`is_launch_prompt`]), a
+//! continuation however it came — typed to re-arm the agent (see
+//! `agent_rearm`), queued, or a rewake, which the harness wraps
+//! ([`Harness::prompt_said`]) — and
 //! the notice of a loop that stopped itself; so are prompts the harness
 //! wrote itself ([`Harness::synthesized_prompt`]), a background task's end
 //! among them. A `block` continuation runs no UserPromptSubmit. Blocked is
@@ -322,14 +323,16 @@ mod tests {
         registry.save(&paths::agents_dir(project), "login").unwrap();
     }
 
-    /// Claude Code's prompts for a Stop hook's rewake carrying `reason`,
-    /// naming the hook by its event and by pm's own command, whose quotes
-    /// the reason must be found past (2.1.289).
+    /// Claude Code's prompts for a rewake carrying `reason`, naming the
+    /// hook by its event, by pm's own command, whose quotes the reason must
+    /// be found past (2.1.289), and as SessionStart's waiter (2.1.294).
     fn rewakes(reason: &str) -> Vec<String> {
         let command = crate::commands::hooks_install::stop_hook_command(Harness::ClaudeCode);
         [
             "\"Stop\"".to_string(),
             format!(": \"{command}\""),
+            "\"SessionStart:startup\"".to_string(),
+            "\"SessionStart:resume\"".to_string(),
         ]
         .iter()
         .map(|named| {

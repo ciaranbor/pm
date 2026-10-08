@@ -42,7 +42,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
         } => project::delete(project, force, yes, server),
         Commands::Notes { project } => project::notes(project),
         Commands::Status { project } => project::status(project, server),
-        Commands::Harness(cmd) | Commands::Claude(cmd) => harness::run(cmd),
+        Commands::Harness(cmd) => harness::run(cmd),
         Commands::Agent(cmd) => agent::run(cmd, server),
         Commands::Msg(cmd) => msg::run(cmd, server),
         Commands::Feat(cmd) => feat::run(cmd, server),

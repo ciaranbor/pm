@@ -61,10 +61,10 @@ mod tests {
             "hooks": {
                 "Stop": [
                     {"hooks": [{"type": "command", "command": "echo foreign stop"}]},
-                    {"hooks": [{"type": "command", "command": "pm claude hooks stop", "timeout": STOP_HOOK_TIMEOUT_SECS}]}
+                    {"hooks": [{"type": "command", "command": "pm harness hooks stop", "timeout": STOP_HOOK_TIMEOUT_SECS}]}
                 ],
                 "SessionStart": [
-                    {"hooks": [{"type": "command", "command": "pm claude hooks session-start"}]}
+                    {"hooks": [{"type": "command", "command": "pm harness hooks session-start"}]}
                 ]
             }
         })

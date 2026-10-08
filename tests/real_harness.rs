@@ -129,10 +129,6 @@ impl Smoke {
             .filter(|id| !id.is_empty())
     }
 
-    fn pane(&self, target: &str) -> String {
-        self.tmux_ok(&["capture-pane", "-p", "-J", "-t", target])
-    }
-
     /// `pm init --no-main` a project at `name` whose every agent runs on
     /// `harness`, with `model` if given.
     fn project_on(&self, name: &str, harness: &str, model: Option<&str>) -> PathBuf {
@@ -301,9 +297,11 @@ fn opencode_a_failed_move_is_reported_and_can_be_retried() {
     assert_eq!(s.opencode_sessions_at(&main), [session]);
 }
 
-/// Catches: a restart that starts a logged-in Claude Code afresh instead of
-/// resuming — a new session id, or a second transcript. Two turns on the
-/// cheapest model: the spawn's and the resume notice's.
+/// Catches: a Claude Code agent launched with no prompt that a message does
+/// not wake, from its spawn or from a resume; a resume with nothing unread
+/// that is not told to carry on; and a restart that starts it afresh
+/// instead of resuming — a new session id, or a second transcript. Three
+/// turns on the cheapest model: one per message, and the resume notice's.
 #[test]
 #[ignore]
 fn claude_restart_resumes_the_recorded_session() {
@@ -343,10 +341,27 @@ fn claude_restart_resumes_the_recorded_session() {
                 .contains(text)
         })
     };
-    wait_for("the first turn's end", TURN, &s, || {
-        s.pane("proj/main:plain").contains('❯') && transcript("\"type\":\"assistant\"")
+    // Idle before any turn: its SessionStart hook started the waiter.
+    let idle = || {
+        wait_for("the agent idle", TURN, &s, || {
+            pm::state::runtime::read_waiting(&proj, "main", "plain")
+                .is_some_and(|w| w.kind == pm::state::runtime::WaitingKind::Idle)
+        });
+    };
+    let message = |text: &str| {
+        idle();
+        s.pm(&main)
+            .args(["msg", "send", "plain", text])
+            .assert()
+            .success();
+    };
+    message("first-message: reply with OK and nothing else.");
+    wait_for("the first message's turn", TURN, &s, || {
+        transcript("first-message") && transcript("\"type\":\"assistant\"")
     });
 
+    // Restarted mid-turn, it would be woken by the restart's own notice.
+    idle();
     s.pm(&main)
         .args(["agent", "restart", "--force", "plain"])
         .assert()
@@ -354,6 +369,10 @@ fn claude_restart_resumes_the_recorded_session() {
         .stdout(predicates::str::contains("resumed session"));
     wait_for("the resume notice in the transcript", TURN, &s, || {
         transcript("pm resumed this session")
+    });
+    message("second-message: reply with OK and nothing else.");
+    wait_for("the second message's turn", TURN, &s, || {
+        transcript("second-message")
     });
 
     assert_eq!(s.session_id(&proj, "main").as_deref(), Some(id.as_str()));

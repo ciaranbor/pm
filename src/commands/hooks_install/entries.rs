@@ -20,7 +20,10 @@
 //! The SessionStart hook is `pm harness hooks session-start`, which captures
 //! the session ID from the harness's JSON input and writes it to the agent
 //! registry so dead agents can be resumed, and on codex also prints the
-//! agent's composed prompt as `additionalContext`.
+//! agent's composed prompt as `additionalContext`. On a harness whose
+//! SessionStart hook [waits](Harness::waits_at_session_start) it then runs
+//! the waiter, so its entry carries the Stop hook's timeout and
+//! [`Harness::session_start_hook_options`].
 //!
 //! The UserPromptSubmit hook is `pm harness hooks user-prompt`, which sets a
 //! blocked feature back to `wip` (see [`crate::commands::hooks_user_prompt`]).
@@ -37,8 +40,8 @@
 //! the status hook's, with the Stop hook's timeout: it blocks until a
 //! dialog is answered remotely (see [`crate::commands::hooks_dialog`]).
 //!
-//! Entries written by older releases (`pm claude hooks …`, or the unguarded
-//! `pm harness hooks …`) still match a marker, so they count as pm-owned.
+//! Entries written by older releases (the unguarded `pm harness hooks …`)
+//! still match a marker, so they count as pm-owned.
 //!
 //! A rewake loops across turns with no cap (12 consecutive wakes verified on
 //! Claude Code 2.1.289, where `stop_hook_active` then reads true), so the
@@ -64,25 +67,8 @@ pub const PM_HOOK_MARKER: &str = "pm harness hooks stop";
 /// Marker string for pm-owned SessionStart hook entries.
 pub const PM_SESSION_START_MARKER: &str = "pm harness hooks session-start";
 
-/// The previous generation's markers, still treated as pm-owned so an
-/// upgrade rewrites them in place rather than adding a second entry.
-const LEGACY_HOOK_MARKER: &str = "pm claude hooks stop";
-const LEGACY_SESSION_START_MARKER: &str = "pm claude hooks session-start";
-
-pub(super) const STOP_MARKERS: &[&str] = &[PM_HOOK_MARKER, LEGACY_HOOK_MARKER];
-
-/// Whether a process command line runs pm's Stop hook named with no
-/// harness: the blocking form, which runs inside the turn — every release
-/// before the waiter ran only that.
-pub fn runs_blocking_stop_hook(command: &str) -> bool {
-    STOP_MARKERS.iter().any(|marker| {
-        command
-            .split_once(marker)
-            .is_some_and(|(_, rest)| rest.trim().is_empty())
-    })
-}
-pub(super) const SESSION_START_MARKERS: &[&str] =
-    &[PM_SESSION_START_MARKER, LEGACY_SESSION_START_MARKER];
+pub(super) const STOP_MARKERS: &[&str] = &[PM_HOOK_MARKER];
+pub(super) const SESSION_START_MARKERS: &[&str] = &[PM_SESSION_START_MARKER];
 
 /// The event of pm's hook that resets a blocked feature. Not part of the
 /// never-idle loop: without it an agent still runs and wakes.
@@ -162,6 +148,18 @@ pub fn stop_hook_command(harness: Harness) -> String {
     format!("{GUARD}{PM_HOOK_MARKER} {harness}")
 }
 
+/// pm's SessionStart hook entry for `harness`.
+pub(super) fn session_start_hook_entry(harness: Harness) -> Value {
+    let mut entry = json!({"type": "command", "command": session_start_hook_command()});
+    if let Some(options) = harness.session_start_hook_options()
+        && let Value::Object(fields) = &mut entry
+    {
+        fields.insert("timeout".into(), STOP_HOOK_TIMEOUT_SECS.into());
+        fields.extend(options);
+    }
+    entry
+}
+
 /// The shell command registered as the SessionStart hook.
 pub fn session_start_hook_command() -> String {
     format!("{GUARD}{PM_SESSION_START_MARKER}")
@@ -191,7 +189,7 @@ pub(super) fn pm_entries(harness: Harness) -> Vec<(&'static str, &'static [&'sta
         (
             "SessionStart",
             SESSION_START_MARKERS,
-            command(session_start_hook_command()),
+            session_start_hook_entry(harness),
         ),
         (
             USER_PROMPT_EVENT,

@@ -13,6 +13,15 @@
 //! end it, nor does a new turn; `/exit` ends it with SIGTERM (verified on
 //! 2.1.289).
 //!
+//! pm's SessionStart hook is `asyncRewake` too, and runs the same waiter
+//! once the session has started or resumed: its exit 2 wakes a session that
+//! has had no turn yet (verified on 2.1.294), with the rewake's prompt
+//! naming the hook `SessionStart:startup` or `SessionStart:resume`. So a
+//! spawn needs no launch prompt; a resume gets one only to carry on work in
+//! flight (`agent_spawn`'s `RESUME_PROMPT`). Compaction fires SessionStart
+//! too (`source: compact`), mid-turn and while idle, which is no start
+//! ([`hooks_session_start`](crate::commands::hooks_session_start)).
+//!
 //! A running session picks up edits to the user-level hooks file through
 //! its file watcher (verified on 2.1.272), so a new release's hook entries
 //! need no restart. Its definition, `--append-system-prompt-file` and flags
@@ -53,14 +62,17 @@ pub(super) const USER_SETTINGS_FILE: &str = "settings.json";
 /// See the module docs.
 pub(super) const STOP_HOOK_OPTIONS: &[(&str, bool)] = &[("asyncRewake", true)];
 
+/// See the module docs.
+pub(super) const SESSION_START_HOOK_OPTIONS: &[(&str, bool)] = STOP_HOOK_OPTIONS;
+
 const REWAKE_SUMMARY: &str = "<summary>Stop hook feedback</summary>";
 const REWAKE_ERROR: &str = "Stop hook blocking error from command";
 
 /// The reason a Stop hook's rewake carries, from the prompt it wakes the
 /// session with: `<task-notification>…<summary>Stop hook feedback</summary>
 /// …Stop hook blocking error from command[:] "…": <reason>`, the quoted
-/// part naming the event or the hook's command (2.1.289). `None` for any
-/// other prompt.
+/// part naming the event or the hook's command (2.1.289) — SessionStart's
+/// rewake has the same shape. `None` for any other prompt.
 pub(super) fn rewake_reason(prompt: &str) -> Option<&str> {
     let prompt = prompt.trim_start();
     if !prompt.starts_with("<task-notification>") || !prompt.contains(REWAKE_SUMMARY) {
@@ -219,8 +231,6 @@ mod tests {
 
     #[test]
     fn build_cmd_with_agent() {
-        // The never-idle sentinel is injected by the spawn chokepoint;
-        // build_cmd itself is prompt-agnostic.
         let cmd = build_cmd(&SpawnSpec {
             definition: Some("reviewer"),
             ..Default::default()
@@ -232,11 +242,11 @@ mod tests {
     fn build_cmd_edit_dir_leaves_the_prompt_positional() {
         let dirs = [std::path::PathBuf::from("/proj/.pm/summaries")];
         let cmd = build_cmd(&SpawnSpec {
-            prompt: Some("Stand by."),
+            prompt: Some("go"),
             edit_dirs: &dirs,
             ..Default::default()
         });
-        assert_eq!(cmd, "claude --add-dir='/proj/.pm/summaries' 'Stand by.'");
+        assert_eq!(cmd, "claude --add-dir='/proj/.pm/summaries' 'go'");
     }
 
     #[test]

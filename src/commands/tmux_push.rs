@@ -11,7 +11,7 @@
 //! just-spawned agent's window runs only a shell, which the snapshot reads
 //! as starting rather than dead ([`attention`](super::attention)). The
 //! harness's own hooks push as it starts — SessionStart, where it has, and
-//! the Stop hook as the first turn ends.
+//! the waiter as it first waits.
 //!
 //! The Stop hook writes its own window's options ([`AgentWindow`]), found
 //! by the pane it runs in, in one `tmux` call it does not wait for, as the

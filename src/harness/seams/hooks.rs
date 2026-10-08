@@ -44,14 +44,22 @@ impl Harness {
     /// The keys pm's Stop hook entry carries beyond its command and
     /// timeout, which make the harness run it once the turn has ended.
     pub fn stop_hook_options(self) -> serde_json::Map<String, serde_json::Value> {
-        match self {
+        hook_options(match self {
             Harness::ClaudeCode => claude_code::STOP_HOOK_OPTIONS,
             Harness::Codex => codex::STOP_HOOK_OPTIONS,
             Harness::OpenCode => &[],
+        })
+    }
+
+    /// The keys pm's SessionStart hook entry carries beyond its command and
+    /// the Stop hook's timeout, which make the harness run it in the
+    /// background once the session has started, as the waiter; `None` for
+    /// a harness whose SessionStart hook does not wait.
+    pub fn session_start_hook_options(self) -> Option<serde_json::Map<String, serde_json::Value>> {
+        match self {
+            Harness::ClaudeCode => Some(hook_options(claude_code::SESSION_START_HOOK_OPTIONS)),
+            Harness::Codex | Harness::OpenCode => None,
         }
-        .iter()
-        .map(|(key, value)| (key.to_string(), serde_json::Value::Bool(*value)))
-        .collect()
     }
 
     /// The harness's trust in the hooks of its user-level file — the gate
@@ -105,4 +113,11 @@ impl Harness {
             Harness::Codex => Some(codex::session_start_output(context)),
         }
     }
+}
+
+fn hook_options(options: &[(&str, bool)]) -> serde_json::Map<String, serde_json::Value> {
+    options
+        .iter()
+        .map(|(key, value)| (key.to_string(), serde_json::Value::Bool(*value)))
+        .collect()
 }

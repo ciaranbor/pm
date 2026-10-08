@@ -1,6 +1,6 @@
 //! The installed Stop hook command, run the way a harness runs it: the
 //! blocking hook opencode's plugin runs, against signals from the harness
-//! and from anyone else, and Claude Code's waiter.
+//! and from anyone else, and Claude Code's waiter, from Stop and SessionStart.
 
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -513,4 +513,148 @@ fn a_codex_waiter_that_cannot_queue_leaves_the_agent_unarmed() {
     let waiting = runtime::read_waiting(dir.path(), "main", AGENT).unwrap();
     assert_eq!(waiting.kind, WaitingKind::HookEnded);
     assert!(waiting.describe().contains("queue: refused"), "{waiting:?}");
+}
+
+/// Register the agent as running `harness`, as a spawn does before
+/// launching it.
+fn register(dir: &Path, harness: Harness) {
+    use pm::state::agent::{AgentEntry, AgentRegistry, AgentType};
+    let mut registry = AgentRegistry::default();
+    registry.register(
+        AGENT,
+        AgentEntry {
+            agent_type: AgentType::Agent,
+            session_id: String::new(),
+            window_name: AGENT.into(),
+            active: true,
+            agent_definition: None,
+            harness,
+            spawned_at: None,
+        },
+    );
+    registry.save(&paths::agents_dir(dir), "main").unwrap();
+}
+
+/// pm's SessionStart hook, run as the harness runs it, on a session that
+/// started for `source`.
+fn session_start(dir: &Path, source: &str) -> Child {
+    let payload = serde_json::json!({"session_id": "s1", "source": source}).to_string();
+    start_with(
+        dir,
+        &pm::commands::hooks_install::session_start_hook_command(),
+        &payload,
+    )
+}
+
+#[test]
+fn a_claude_code_session_waits_for_messages_from_its_start() {
+    for source in ["startup", "resume"] {
+        let dir = tempdir().unwrap();
+        project(dir.path());
+        register(dir.path(), Harness::ClaudeCode);
+        let mut hook = session_start(dir.path(), source);
+        await_idle(dir.path(), &hook);
+
+        send(dir.path());
+        wait_for_exit(&mut hook);
+        let out = hook.wait_with_output().unwrap();
+
+        assert_eq!(out.status.code(), Some(2), "{source}: {out:?}");
+        assert_eq!(String::from_utf8_lossy(&out.stderr), CONTINUATION);
+        assert!(out.stdout.is_empty(), "{source}: {out:?}");
+    }
+}
+
+/// A spawn queues a feature's brief before the session starts.
+#[test]
+fn a_claude_code_session_started_with_a_brief_queued_wakes_at_once() {
+    for source in ["startup", "resume"] {
+        let dir = tempdir().unwrap();
+        project(dir.path());
+        register(dir.path(), Harness::ClaudeCode);
+        send(dir.path());
+
+        let mut hook = session_start(dir.path(), source);
+        wait_for_exit(&mut hook);
+        let out = hook.wait_with_output().unwrap();
+
+        assert_eq!(out.status.code(), Some(2), "{source}: {out:?}");
+        assert_eq!(String::from_utf8_lossy(&out.stderr), CONTINUATION);
+        assert_eq!(kind(dir.path()), None, "{source}: busy with the brief");
+    }
+}
+
+/// A compaction fires SessionStart mid-turn, where a waiter would mark a
+/// busy agent idle; codex starts its waiter only as a turn ends.
+#[test]
+fn a_compaction_and_a_codex_session_start_run_no_waiter() {
+    for (harness, source) in [
+        (Harness::ClaudeCode, "compact"),
+        (Harness::Codex, "startup"),
+    ] {
+        let dir = tempdir().unwrap();
+        project(dir.path());
+        register(dir.path(), harness);
+        let mut hook = session_start(dir.path(), source);
+        wait_for_exit(&mut hook);
+        let out = hook.wait_with_output().unwrap();
+
+        assert!(out.status.success(), "{harness} {source}: {out:?}");
+        assert_eq!(runtime::read_waiter(dir.path(), "main", AGENT), None);
+        assert_eq!(kind(dir.path()), None, "{harness} {source}");
+        let registry =
+            pm::state::agent::AgentRegistry::load(&paths::agents_dir(dir.path()), "main").unwrap();
+        assert_eq!(registry.get(AGENT).unwrap().session_id, "s1", "recorded");
+    }
+}
+
+/// Claude Code compacts an idle session too, running SessionStart while
+/// the last turn's waiter holds the agent.
+#[test]
+fn an_idle_compaction_leaves_the_agent_idle_and_its_waiter_armed() {
+    let dir = tempdir().unwrap();
+    project(dir.path());
+    register(dir.path(), Harness::ClaudeCode);
+    let mut hook = waiter(dir.path());
+    await_idle(dir.path(), &hook);
+
+    let mut compaction = session_start(dir.path(), "compact");
+    wait_for_exit(&mut compaction);
+    assert!(compaction.wait_with_output().unwrap().status.success());
+    assert_eq!(kind(dir.path()), Some(WaitingKind::Idle));
+    assert_eq!(
+        runtime::read_waiter(dir.path(), "main", AGENT),
+        Some(hook.id())
+    );
+
+    send(dir.path());
+    wait_for_exit(&mut hook);
+    let out = hook.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert_eq!(String::from_utf8_lossy(&out.stderr), CONTINUATION);
+}
+
+/// A spawn that launches the session with a prompt leaves the waiter to
+/// that turn's Stop: one started now would read the agent idle mid-turn.
+#[test]
+fn a_claude_code_session_launched_with_a_prompt_starts_no_waiter() {
+    let dir = tempdir().unwrap();
+    project(dir.path());
+    register(dir.path(), Harness::ClaudeCode);
+    runtime::set_launch_prompt(dir.path(), "main", AGENT, true).unwrap();
+
+    let mut hook = session_start(dir.path(), "resume");
+    wait_for_exit(&mut hook);
+    assert!(hook.wait_with_output().unwrap().status.success());
+    assert_eq!(runtime::read_waiter(dir.path(), "main", AGENT), None);
+    assert_eq!(kind(dir.path()), None);
+    let registry =
+        pm::state::agent::AgentRegistry::load(&paths::agents_dir(dir.path()), "main").unwrap();
+    assert_eq!(registry.get(AGENT).unwrap().session_id, "s1", "recorded");
+
+    // A later start in the session, a `/clear`, had no prompt.
+    let mut hook = session_start(dir.path(), "clear");
+    await_idle(dir.path(), &hook);
+    hook.kill().unwrap();
+    hook.wait().unwrap();
 }

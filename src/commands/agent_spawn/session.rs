@@ -26,14 +26,17 @@ fn window_command(name: &str, launched: &Path, worktree: &Path, cmd: &str) -> St
     )
 }
 
-/// The prompt a named agent is launched with when none is given, so its
-/// first turn ends at once and the Stop hook takes over. It is not the
-/// user's input (see [`hooks_user_prompt`](crate::commands::hooks_user_prompt)).
+/// The prompt an agent is launched with when none is given, on a harness
+/// that [needs one](crate::harness::Harness::needs_launch_prompt) for its
+/// first turn's end to start pm's waiter. It is not the user's input (see
+/// [`hooks_user_prompt`](crate::commands::hooks_user_prompt)).
 pub const SPAWN_PROMPT: &str = "Stand by.";
 
-/// [`SPAWN_PROMPT`] for a resumed session, whose conversation may hold work
-/// the agent was told to resume: "Stand by." there reads as the user calling
-/// that work off.
+/// The prompt a resumed session is launched with when none is given, so
+/// work in its conversation carries on after a crash or reboot; on a
+/// harness that needs no launch prompt, only when no message is unread to
+/// wake it instead. "Stand by." there would read as the user calling that
+/// work off.
 pub const RESUME_PROMPT: &str = "pm resumed this session. This is not a message from the user \
      and changes nothing: carry on as your messages direct.";
 
@@ -125,14 +128,17 @@ pub(super) fn spawn_session_with_config(
     )?;
     let settings = &launch.settings;
 
-    // An agent needs a sentinel prompt when none is explicitly provided:
-    // a harness with no positional prompt just waits for user input and never
-    // completes a turn, so the Stop hook never fires. A trivial "continue"
-    // prompt causes an immediate first turn, whose end starts pm's waiter.
+    let needs_prompt = settings.harness.needs_launch_prompt();
+    let resumed = params.resume_session.is_some() && !params.fork_session;
+    let nothing_unread = || {
+        let messages_dir = paths::messages_dir(params.project_root);
+        crate::messages::unread_count(&messages_dir, params.feature, params.agent_name) == 0
+    };
     let effective_prompt = match params.prompt {
-        Some(p) => p,
-        None if params.resume_session.is_some() && !params.fork_session => RESUME_PROMPT,
-        None => SPAWN_PROMPT,
+        Some(p) => Some(p),
+        None if resumed && (needs_prompt || nothing_unread()) => Some(RESUME_PROMPT),
+        None if needs_prompt => Some(SPAWN_PROMPT),
+        None => None,
     };
 
     let name = params.agent_name;
@@ -154,7 +160,7 @@ pub(super) fn spawn_session_with_config(
     let spec = SpawnSpec {
         definition: definition_flag(effective_definition),
         append_prompt_file: append_file.as_deref(),
-        prompt: Some(effective_prompt),
+        prompt: effective_prompt,
         resume_session: params.resume_session,
         fork_session: params.fork_session,
         permission_mode: settings.permission_mode.as_deref(),
@@ -242,6 +248,12 @@ pub(super) fn spawn_session_with_config(
     }
 
     runtime::reset_started(params.project_root, params.feature, name)?;
+    runtime::set_launch_prompt(
+        params.project_root,
+        params.feature,
+        name,
+        effective_prompt.is_some() && settings.harness.waits_at_session_start(),
+    )?;
     let launched = runtime::reset_launched(params.project_root, params.feature, name)?;
     tmux::send_line(
         params.tmux_server,
@@ -405,9 +417,24 @@ mod tests {
             &target,
             "PM_AGENT_NAME=reviewer && codex --no-daemon -a 'never' -s 'danger-full-access' 'Stand by.'",
         );
-        let registry = AgentRegistry::load(&paths::agents_dir(dir.path()), &feature).unwrap();
+        let agents_dir = paths::agents_dir(dir.path());
+        let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
         assert_eq!(registry.get("reviewer").unwrap().harness, Harness::Codex);
         assert!(Harness::Codex.worktree_trusted(&paths::home_dir().unwrap(), &worktree));
+
+        // codex starts its waiter only as a turn ends, so a resume is
+        // launched with a prompt too: one that calls off nothing.
+        registry.get_mut("reviewer").unwrap().session_id = "codex-session".to_string();
+        registry.save(&agents_dir, &feature).unwrap();
+        tmux::kill_session(server.name(), &session_name).unwrap();
+        tmux::create_session(server.name(), &session_name, &worktree).unwrap();
+        let (outcome, _, _) =
+            agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
+        assert_eq!(outcome, SpawnOutcome::Resumed);
+        let target = tmux::find_window(server.name(), &session_name, "reviewer")
+            .unwrap()
+            .expect("window");
+        server.wait_for_pane_text(&target, "'pm resumed this session");
     }
 
     #[test]
@@ -884,10 +911,7 @@ package = "second-pkg"
         let target = tmux::find_window(server.name(), &session_name, "plain")
             .unwrap()
             .expect("window");
-        server.wait_for_pane_text(
-            &target,
-            &format!("--add-dir='{}' 'Stand by.'", summaries.display()),
-        );
+        server.wait_for_pane_text(&target, &format!("--add-dir='{}'", summaries.display()));
     }
 
     #[test]

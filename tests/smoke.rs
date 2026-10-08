@@ -38,7 +38,6 @@ fn spawn_builds_the_command_through_the_real_shell() {
             .to_string_lossy()
             .to_string(),
         format!("--add-dir={}", s.proj().join(".pm/summaries").display()),
-        "Stand by.".into(),
     ]
     .into();
     assert_eq!(rec.argv, expected);

@@ -68,9 +68,6 @@ pub enum Commands {
     /// Agent harness integration
     #[command(subcommand)]
     Harness(HarnessCommands),
-    /// Hidden alias for `pm harness` kept for one release
-    #[command(subcommand, hide = true)]
-    Claude(HarnessCommands),
     /// Close all tmux sessions for a project (counterpart to `pm open`)
     Close {
         /// Project name (defaults to current project from CWD)

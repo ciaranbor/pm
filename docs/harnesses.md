@@ -18,6 +18,12 @@ file of every supported harness (`~/.claude/settings.json` for Claude Code,
   reads `background` while a Claude Code background task or session cron
   runs; a message wakes it all the same. Each turn's end starts a new
   waiter, which supersedes the last.
+- the **SessionStart hook**, which records the session so pm can resume
+  it. On Claude Code it is `asyncRewake` too and starts the waiter, so a
+  new agent waits for messages without a turn of its own. codex can only
+  start one as a turn ends, so pm launches it with a short prompt it
+  ignores. A resumed agent with no message waiting, on either, is told to
+  carry on, so work a crash or reboot interrupted goes on.
 - a **UserPromptSubmit** hook, which sets a blocked feature back to `wip`
   when you type into one of its agents; pm's own prompts don't count. It
   also drops a wake that arrives once its messages are read — a duplicate

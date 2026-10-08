@@ -13,7 +13,7 @@ pub struct SpawnSpec<'a> {
     pub definition: Option<&'a str>,
     /// The composed baseline + notice-board file appended to the system prompt.
     pub append_prompt_file: Option<&'a str>,
-    /// Initial positional prompt (or the never-idle sentinel).
+    /// Initial positional prompt.
     pub prompt: Option<&'a str>,
     /// Session id to resume.
     pub resume_session: Option<&'a str>,
@@ -82,7 +82,7 @@ mod tests {
             &SpawnSpec {
                 definition: Some("reviewer"),
                 append_prompt_file: Some("/proj/main/.agents/pm-baseline.md"),
-                prompt: Some("Stand by."),
+                prompt: Some("go"),
                 resume_session: Some("abc123"),
                 fork_session: true,
                 permission_mode: Some("acceptEdits"),
@@ -98,7 +98,7 @@ mod tests {
             "claude --agent reviewer --model 'opus' \
              --append-system-prompt-file '/proj/main/.agents/pm-baseline.md' \
              --permission-mode 'acceptEdits' --add-dir='/proj/.pm/summaries' \
-             --resume abc123 --fork-session 'Stand by.'"
+             --resume abc123 --fork-session 'go'"
         );
     }
 

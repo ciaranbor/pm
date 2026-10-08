@@ -480,7 +480,7 @@ last_active = "2026-01-01T00:00:00Z"
         fs::write(claude.join("pm-baseline.md"), "stale baseline").unwrap();
         fs::write(
             claude.join("settings.json"),
-            r#"{"permissions":{"allow":["Read"]},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo mine"}]},{"hooks":[{"type":"command","command":"pm claude hooks stop","timeout":86400}]}],"SessionStart":[{"hooks":[{"type":"command","command":"pm claude hooks session-start"}]}]}}"#,
+            r#"{"permissions":{"allow":["Read"]},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo mine"}]},{"hooks":[{"type":"command","command":"pm harness hooks stop","timeout":86400}]}],"SessionStart":[{"hooks":[{"type":"command","command":"pm harness hooks session-start"}]}]}}"#,
         )
         .unwrap();
         let solo = paths::workflows_dir(&root).join("solo");
@@ -759,7 +759,7 @@ last_active = "2026-01-01T00:00:00Z"
         fs::create_dir_all(settings.parent().unwrap()).unwrap();
         fs::write(
             &settings,
-            r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"pm claude hooks stop"}]}]}}"#,
+            r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"pm harness hooks stop"}]}]}}"#,
         )
         .unwrap();
         let lines = dry_run();

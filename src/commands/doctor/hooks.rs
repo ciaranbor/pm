@@ -446,7 +446,7 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
         let projects_dir = TestServer::registry_dir(&project_path);
-        let legacy = r#"{"permissions":{"allow":["Read"]},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"pm claude hooks stop"}]}]}}"#;
+        let legacy = r#"{"permissions":{"allow":["Read"]},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"pm harness hooks stop"}]}]}}"#;
         for wt in ["main", "login"] {
             let claude = project_path.join(wt).join(".claude");
             std::fs::create_dir_all(&claude).unwrap();
