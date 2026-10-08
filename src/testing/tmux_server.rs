@@ -57,7 +57,10 @@ pub(super) const HERMETIC_SHELL: &str = "/bin/sh";
 /// runs `sh` with no startup files. tmux starts a window as
 /// `$default-shell -c <default-command>`, and takes `default-shell` from
 /// `SHELL`, so both are set; with `ENV` unset the interactive `sh` reads
-/// nothing. Its windows find the [`fake_harness_path`] stand-ins first
+/// nothing. The command `exec`s the shell: dash (Debian's `/bin/sh`) would
+/// otherwise stay as its parent, so the pane's own process would not be the
+/// shell whose prompt [`running_agents`](crate::commands::running_agents)
+/// reads. Its windows find the [`fake_harness_path`] stand-ins first
 /// ([`window_path`]). The keepalive session keeps the server up: without it the
 /// server shuts down each time a test cleans up its sessions.
 fn start_hermetic_server(name: &str) -> bool {
@@ -80,7 +83,13 @@ fn start_hermetic_server(name: &str) -> bool {
             HERMETIC_SHELL,
         ])
         .args([";", "set-option", "-g", "default-shell", HERMETIC_SHELL])
-        .args([";", "set-option", "-g", "default-command", HERMETIC_SHELL])
+        .args([
+            ";",
+            "set-option",
+            "-g",
+            "default-command",
+            &format!("exec {HERMETIC_SHELL}"),
+        ])
         .output()
         .is_ok_and(|o| o.status.success())
 }
