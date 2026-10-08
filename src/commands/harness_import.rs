@@ -153,11 +153,11 @@ pub fn import(
             report.miss(name, "not registered locally");
             continue;
         };
-        let root = local.root_path();
-        if !paths::main_worktree(&root).is_dir() {
+        if !local.presence().is_here() {
             report.miss(name, "not restored here");
             continue;
         }
+        let root = local.root_path();
         let config = harness_config_in(Some(&root), global);
         let store = SessionStore {
             home,

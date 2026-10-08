@@ -31,8 +31,7 @@ fn agent_send_cross_project_with_dir(
     projects_dir: &Path,
     params: &CrossProjectSendParams<'_>,
 ) -> Result<String> {
-    let entry = ProjectEntry::load(projects_dir, params.target_project_name)?;
-    let target_root = entry.root_path();
+    let (_, target_root) = ProjectEntry::load_here(projects_dir, params.target_project_name)?;
 
     let messages_dir = paths::messages_dir(&target_root);
     let index = messages::send_full(
@@ -68,7 +67,23 @@ mod tests {
     fn setup_target_project(dir: &Path) -> PathBuf {
         let root = dir.to_path_buf();
         std::fs::create_dir_all(root.join(".pm/messages")).unwrap();
+        std::fs::create_dir_all(root.join("main")).unwrap();
         root
+    }
+
+    fn send_hello(projects_dir: &Path, target: &str) -> Result<String> {
+        agent_send_cross_project_with_dir(
+            projects_dir,
+            &CrossProjectSendParams {
+                target_project_name: target,
+                sender_scope: "login",
+                sender_project: "myapp",
+                target_scope: "main",
+                recipient: "implementer",
+                sender: "reviewer",
+                body: "hello",
+            },
+        )
     }
 
     #[test]
@@ -120,22 +135,31 @@ mod tests {
     #[test]
     fn cross_project_send_to_nonexistent_project_errors() {
         let projects_dir = tempdir().unwrap();
-        std::fs::create_dir_all(projects_dir.path()).unwrap();
+        let err = send_hello(projects_dir.path(), "nonexistent").unwrap_err();
+        assert!(matches!(err, PmError::ProjectNotFound(_)));
+    }
 
-        let result = agent_send_cross_project_with_dir(
-            projects_dir.path(),
-            &CrossProjectSendParams {
-                target_project_name: "nonexistent",
-                sender_scope: "login",
-                sender_project: "myapp",
-                target_scope: "main",
-                recipient: "implementer",
-                sender: "reviewer",
-                body: "hello",
-            },
-        );
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), PmError::ProjectNotFound(_)));
+    #[test]
+    fn cross_project_send_to_a_project_not_here_writes_nothing() {
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("projects");
+        let husk = dir.path().join("husk");
+        std::fs::create_dir_all(&husk).unwrap();
+        let missing = dir.path().join("missing");
+        for (name, root) in [("husk", &husk), ("missing", &missing)] {
+            ProjectEntry {
+                root: root.to_str().unwrap().to_string(),
+                main_branch: "main".to_string(),
+                repo_url: None,
+                state_remote: None,
+            }
+            .save(&projects_dir, name)
+            .unwrap();
+            let err = send_hello(&projects_dir, name).unwrap_err();
+            assert!(matches!(err, PmError::NotHere { .. }), "{err}");
+        }
+        assert_eq!(std::fs::read_dir(&husk).unwrap().count(), 0);
+        assert!(!missing.exists());
     }
 
     #[test]

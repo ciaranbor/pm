@@ -9,7 +9,7 @@ use crate::commands::skills;
 use crate::error::Result;
 use crate::harness::{Harness, Probe};
 use crate::state::paths;
-use crate::state::project::{GlobalConfig, ProjectEntry, harness_config};
+use crate::state::project::{GlobalConfig, Presence, ProjectEntry, harness_config};
 
 /// Warn when the global `config.toml` exists but doesn't parse. Every reader
 /// falls back to defaults on a parse error so that a bad file can never block a
@@ -72,21 +72,31 @@ pub(super) fn keychain_warning(depth: Depth) -> Option<String> {
     }
 }
 
-/// Warn about each registry entry that can't be read; all-project commands
-/// skip it.
+/// Warn about each registry entry that can't be read, which all-project
+/// commands skip, and each root that holds no main checkout. A root that is
+/// missing altogether is not warned about: a registry synced between
+/// machines names projects a machine never uses.
 pub(super) fn registry_warnings(projects_dir: &Path) -> Result<Vec<String>> {
-    Ok(ProjectEntry::scan(projects_dir)?
-        .malformed
+    let registry = ProjectEntry::scan(projects_dir)?;
+    let unreadable = registry.malformed.iter().map(|bad| {
+        format!(
+            "registry — {} could not be read ({}); all-project commands skip project '{}'",
+            bad.path.display(),
+            bad.error,
+            bad.name
+        )
+    });
+    let unrestored = registry
+        .projects
         .iter()
-        .map(|bad| {
+        .filter(|(_, entry)| entry.presence() == Presence::NotRestored)
+        .map(|(name, entry)| {
             format!(
-                "registry — {} could not be read ({}); all-project commands skip project '{}'",
-                bad.path.display(),
-                bad.error,
-                bad.name
+                "registry — {} holds no main checkout: `pm restore {name}` or `pm delete {name}`",
+                entry.root_path().display()
             )
-        })
-        .collect())
+        });
+    Ok(unreadable.chain(unrestored).collect())
 }
 
 /// Warn when the shared agent baseline is installed for this project but a
@@ -183,6 +193,40 @@ mod tests {
             warnings[0].contains(&bad.display().to_string()) && warnings[0].contains("'bad'"),
             "got: {}",
             warnings[0]
+        );
+    }
+
+    #[test]
+    fn registry_warnings_name_a_root_without_main_but_not_a_missing_root() {
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("projects");
+        let husk = dir.path().join("husk");
+        std::fs::create_dir_all(husk.join(".pm/messages")).unwrap();
+        let here = dir.path().join("here");
+        std::fs::create_dir_all(paths::main_worktree(&here)).unwrap();
+        for (name, root) in [
+            ("husk", husk.clone()),
+            ("here", here),
+            ("gone", dir.path().join("gone")),
+        ] {
+            ProjectEntry {
+                root: root.to_string_lossy().into_owned(),
+                main_branch: "main".to_string(),
+                repo_url: None,
+                state_remote: None,
+            }
+            .save(&projects_dir, name)
+            .unwrap();
+        }
+
+        let warnings = registry_warnings(&projects_dir).unwrap();
+
+        assert_eq!(
+            warnings,
+            [format!(
+                "registry — {} holds no main checkout: `pm restore husk` or `pm delete husk`",
+                husk.display()
+            )]
         );
     }
 

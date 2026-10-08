@@ -5,6 +5,7 @@ mod agent_settings;
 mod config;
 mod entry;
 mod harness_config;
+mod presence;
 
 use std::path::Path;
 
@@ -22,6 +23,7 @@ pub use harness_config::{
     CodexConfig, HarnessConfig, OpenCodeConfig, harness_config, harness_config_in,
     resolve_harness_config,
 };
+pub use presence::Presence;
 
 /// Check whether creating a new feature would exceed the configured limit.
 ///

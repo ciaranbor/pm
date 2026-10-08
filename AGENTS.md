@@ -72,6 +72,10 @@ Design decisions you can't recover by reading the tree. Preserve them.
 ### Registry, config, and the baseline
 
 - An agent's `active` flag is the single source of truth for its lifecycle.
+- Whether a registered project is on this machine is read from disk
+  (`state/project/presence.rs`), never stored in the registry, which syncs to
+  machines where it isn't true; every registry consumer checks it before
+  touching a root.
 - `agent_definition` decouples the registry key (display name, tmux window,
   `PM_AGENT_NAME`) from the definition launched; restart, fork, `pm open`,
   and the dead-window heal all preserve the alias.

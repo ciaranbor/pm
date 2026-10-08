@@ -58,7 +58,7 @@ pub(super) fn feature(
     finish(config, action, done)
 }
 
-/// `POST projects/{project}/{open|close|delete}` for the project at `root`.
+/// `POST projects/{project}/{open|close}` for the project at `root`.
 pub(super) fn project(config: &Config, root: &Path, action: &str) -> Result<Written> {
     let server = config.tmux_server.as_deref();
     let done = match action {
@@ -80,19 +80,6 @@ pub(super) fn project(config: &Config, root: &Path, action: &str) -> Result<Writ
             }
             Ok(serde_json::json!({ "closed": true, "sessions": closed.killed }))
         }),
-        "delete" => {
-            let mut warnings = Vec::new();
-            delete::delete(root, &config.projects_dir, false, server, |pending| {
-                warnings = pending.warnings.to_vec();
-                Ok(true)
-            })
-            .and_then(|deleted| {
-                if let Some(own) = deleted.as_ref().and_then(|d| d.own.as_ref()) {
-                    own.kill(server)?;
-                }
-                Ok(serde_json::json!({ "deleted": true, "warnings": warnings }))
-            })
-        }
         _ => {
             return Ok(Written {
                 reply: error(404, "no such endpoint"),
@@ -101,6 +88,25 @@ pub(super) fn project(config: &Config, root: &Path, action: &str) -> Result<Writ
         }
     };
     finish(config, action, done)
+}
+
+/// `POST projects/{project}/delete`, which also unregisters a project that
+/// isn't on this machine.
+pub(super) fn delete_project(config: &Config, name: &str) -> Result<Written> {
+    let server = config.tmux_server.as_deref();
+    let mut warnings = Vec::new();
+    let done = delete::delete_named(&config.projects_dir, name, false, server, |pending| {
+        warnings = pending.warnings.to_vec();
+        Ok(true)
+    })
+    .and_then(|deleted| {
+        if let Some(own) = deleted.as_ref().and_then(|d| d.own.as_ref()) {
+            own.kill(server)?;
+        }
+        warnings.extend(deleted.into_iter().flat_map(|d| d.warnings));
+        Ok(serde_json::json!({ "deleted": true, "warnings": warnings }))
+    });
+    finish(config, "delete", done)
 }
 
 /// A restart's body; an empty one is `{}`.
@@ -497,6 +503,39 @@ mod tests {
             (status, body(&reply)["error"].as_str()),
             (404, Some("no such project"))
         );
+    }
+
+    #[test]
+    fn a_project_not_on_this_machine_is_not_found() {
+        let f = fixture();
+        let phone = pair(&f.config, "phone");
+        std::fs::remove_dir_all(paths::main_worktree(&f.project)).unwrap();
+
+        for (method, action) in [("POST", "open"), ("GET", "notes")] {
+            let path = format!("/v1/projects/{}/{action}", f.project_name);
+            let (status, reply) = call(&f.config, method, &path, &phone, "");
+            assert_eq!(
+                (status, body(&reply)),
+                (
+                    404,
+                    serde_json::json!({"error": "project not on this machine"})
+                )
+            );
+        }
+        let main = tmux::session_name(&f.project_name, "main");
+        tmux::kill_session(f.server.name(), &main).unwrap();
+        let open = format!("/v1/projects/{}/open", f.project_name);
+        assert_eq!(call(&f.config, "POST", &open, &phone, "").0, 404);
+        assert!(!tmux::has_session(f.server.name(), &main).unwrap());
+
+        let delete = format!("/v1/projects/{}/delete", f.project_name);
+        let (status, reply) = call(&f.config, "POST", &delete, &phone, "");
+        assert_eq!(
+            (status, body(&reply)["deleted"].as_bool()),
+            (200, Some(true))
+        );
+        assert!(!paths::pm_dir(&f.project).exists());
+        assert_eq!(call(&f.config, "POST", &delete, &phone, "").0, 404);
     }
 
     #[test]

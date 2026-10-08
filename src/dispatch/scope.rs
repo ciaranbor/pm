@@ -2,6 +2,7 @@
 
 use pm::error::{PmError, Result};
 use pm::state::paths;
+use pm::state::project::ProjectEntry;
 use std::path::{Path, PathBuf};
 
 pub(super) fn resolve_feature_name(name: Option<String>, project_root: &Path) -> Result<String> {
@@ -45,9 +46,10 @@ pub(super) fn resolve_scope_with_flag(
 }
 
 /// The root of the project named `project`, or else of the one the cwd is in.
+/// A named project that isn't on this machine is refused.
 pub(super) fn project_root(projects_dir: &Path, project: Option<&str>) -> Result<PathBuf> {
     match project {
-        Some(name) => Ok(pm::state::project::ProjectEntry::load(projects_dir, name)?.root_path()),
+        Some(name) => Ok(ProjectEntry::load_here(projects_dir, name)?.1),
         None => paths::find_project_root(&std::env::current_dir()?),
     }
 }

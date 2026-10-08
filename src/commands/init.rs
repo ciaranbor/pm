@@ -133,42 +133,36 @@ fn populate(
         "main".to_string()
     };
 
-    // Create .pm/ structure
-    let pm_dir = paths::pm_dir(path);
-    let features_dir = paths::features_dir(path);
-    std::fs::create_dir_all(&features_dir)?;
+    scaffold_state(path, name, global)?;
 
-    // Write project config
-    let config = ProjectConfig {
+    Ok(main_branch)
+}
+
+/// Write the `.pm/` state of a new project named `name` at `path`, and
+/// install what every project needs: its hooks, the global asset tier and
+/// the pm hooks in each harness's settings. A project scaffolded here holds no
+/// bundled copies, so it is born migrated.
+pub(super) fn scaffold_state(path: &Path, name: &str, global: &GlobalStore) -> Result<()> {
+    std::fs::create_dir_all(paths::features_dir(path))?;
+    ProjectConfig {
         project: ProjectInfo {
             name: name.to_string(),
             max_features: None,
         },
         agents: AgentsConfig::default(),
         harness: Default::default(),
-    };
-    config.save(&pm_dir)?;
+    }
+    .save(&paths::pm_dir(path))?;
 
-    // Bootstrap default hook scripts
     hooks::bootstrap(path)?;
-
-    // Bootstrap the information store (.pm/docs/) and state repo (.pm/)
     super::docs::bootstrap(path)?;
     super::state_cmd::init(path)?;
-
-    // Install the pm hooks into the harness's user-level settings so every
-    // agent spawned on this machine runs as a never-idle message processor
-    // (see `commands::hooks_install`).
+    // See `commands::hooks_install` for why every harness gets them.
     hooks_install::install_in(&global.home, Some(path), false)?;
-
-    // Bundled skills, agent definitions, workflows, and the baseline live in
-    // the global tier (see `commands::skills`); a fresh project holds no
-    // bundled copies and is born migrated.
     skills::install_global_in(global)?;
     skills::write_migration_marker(path)?;
     super::vanilla_rename::write_marker(path)?;
-
-    Ok(main_branch)
+    Ok(())
 }
 
 /// The outermost of `path` and its ancestors that does not exist.

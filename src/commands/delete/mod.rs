@@ -9,6 +9,10 @@ use crate::{gh, git, messages, tmux};
 
 use super::feat_delete::{CleanupParams, base_scope, check_safety, cleanup_feature};
 
+mod absent;
+
+pub use absent::delete_named;
+
 /// Collect safety problems across all features. Returns a list of blocking messages.
 fn check_all_features_safety(
     project_root: &Path,
@@ -57,8 +61,9 @@ fn check_all_features_safety(
 pub struct Pending<'a> {
     pub project: &'a str,
     pub features: usize,
-    /// The main checkout, which only `--force` removes.
-    pub main: &'a Path,
+    /// The main checkout, which only `--force` removes; `None` for a
+    /// project that isn't on this machine.
+    pub main: Option<&'a Path>,
     /// What the CLI warns of before it asks: untracked files in feature
     /// worktrees, and with `--force`, what only `main` holds.
     pub warnings: &'a [String],
@@ -138,7 +143,7 @@ pub fn delete(
     let pending = Pending {
         project: &project_name,
         features: features.len(),
-        main: &main_repo,
+        main: Some(&main_repo),
         warnings: &warnings,
     };
     if !confirm(&pending)? {

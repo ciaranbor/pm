@@ -77,10 +77,9 @@ pub(super) fn open_all(server: Option<&str>) -> Result<()> {
                     plural(r.agents_respawned)
                 );
             }
-            ProjectOpen::RootMissing(root) => eprintln!(
-                "warning: {name}: skipped, root missing at {}",
-                root.display()
-            ),
+            ProjectOpen::NotHere => {
+                eprintln!("warning: {name}: skipped, not on this machine: run `pm restore {name}`")
+            }
             ProjectOpen::Failed(e) => eprintln!("warning: {name}: {e}"),
         })?;
     commands::open::confirm_launches(
@@ -169,34 +168,38 @@ pub(super) fn delete(
     server: Option<&str>,
 ) -> Result<()> {
     let projects_dir = paths::global_projects_dir()?;
-    let project_root = project_root(&projects_dir, project.as_deref())?;
-    let deleted =
-        commands::delete::delete(&project_root, &projects_dir, force, server, |pending| {
-            for warning in pending.warnings {
-                eprintln!("warning: {warning}");
-            }
-            if yes {
-                return Ok(true);
-            }
-            let what = if force {
-                format!(" and the checkout at {}", pending.main.display())
-            } else {
-                String::new()
-            };
-            let name = pending.project;
-            match pending.features {
-                0 => eprint!("Delete project '{name}'{what}? [y/N] "),
-                n => eprint!("Delete project '{name}', its {n} feature(s){what}? [y/N] "),
-            }
-            std::io::Write::flush(&mut std::io::stderr())?;
-            let mut answer = String::new();
-            std::io::stdin().read_line(&mut answer)?;
-            let confirmed = answer.trim().eq_ignore_ascii_case("y");
-            if !confirmed {
-                eprintln!("Aborted.");
-            }
-            Ok(confirmed)
-        })?;
+    let confirm = |pending: &commands::delete::Pending| {
+        for warning in pending.warnings {
+            eprintln!("warning: {warning}");
+        }
+        if yes {
+            return Ok(true);
+        }
+        let what = match pending.main {
+            Some(main) if force => format!(" and the checkout at {}", main.display()),
+            _ => String::new(),
+        };
+        let name = pending.project;
+        match pending.features {
+            0 => eprint!("Delete project '{name}'{what}? [y/N] "),
+            n => eprint!("Delete project '{name}', its {n} feature(s){what}? [y/N] "),
+        }
+        std::io::Write::flush(&mut std::io::stderr())?;
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        let confirmed = answer.trim().eq_ignore_ascii_case("y");
+        if !confirmed {
+            eprintln!("Aborted.");
+        }
+        Ok(confirmed)
+    };
+    let deleted = match project.as_deref() {
+        Some(name) => commands::delete::delete_named(&projects_dir, name, force, server, confirm)?,
+        None => {
+            let root = paths::find_project_root(&std::env::current_dir()?)?;
+            commands::delete::delete(&root, &projects_dir, force, server, confirm)?
+        }
+    };
     let Some(deleted) = deleted else {
         return Ok(());
     };

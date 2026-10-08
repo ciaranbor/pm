@@ -194,8 +194,9 @@ fn post(config: &Config, path: &str, body: &str) -> Result<input::Written> {
             lifecycle::restart(config, &agent, body)
         }
         ["features", project, feature, action @ ("merge" | "delete")] => {
-            let Some(root) = project_root(config, project)? else {
-                return Ok(unwritten(error(404, "no such project")));
+            let root = match project_root(config, project)? {
+                Ok(root) => root,
+                Err(missing) => return Ok(unwritten(error(404, missing))),
             };
             if !has_feature(&root, feature)? {
                 return Ok(unwritten(error(404, "no such feature")));
@@ -229,8 +230,16 @@ fn projects_route(
     if action != "notes" && method != "POST" {
         return Ok((error(405, "no such endpoint for this method"), None));
     }
-    let Some(root) = project_root(config, project)? else {
-        return Ok((error(404, "no such project"), None));
+    if action == "delete" {
+        if !registered(config, project)? {
+            return Ok((error(404, "no such project"), None));
+        }
+        let written = lifecycle::delete_project(config, project)?;
+        return Ok((written.reply, Some(written.detail)));
+    }
+    let root = match project_root(config, project)? {
+        Ok(root) => root,
+        Err(missing) => return Ok((error(404, missing), None)),
     };
     if action != "notes" {
         let written = lifecycle::project(config, &root, action)?;
@@ -397,8 +406,9 @@ fn get(config: &Config, path: &str, query: &Query, token_sha256: &str) -> Result
             }
         }
         ["features", project, feature] => {
-            let Some(root) = project_root(config, project)? else {
-                return Ok(error(404, "no such project"));
+            let root = match project_root(config, project)? {
+                Ok(root) => root,
+                Err(missing) => return Ok(error(404, missing)),
             };
             if !has_feature(&root, feature)? {
                 return Ok(error(404, "no such feature"));
@@ -407,8 +417,9 @@ fn get(config: &Config, path: &str, query: &Query, token_sha256: &str) -> Result
             Ok(ok(JSON, serde_json::to_string(&info)?))
         }
         ["features", project, feature, "merge"] => {
-            let Some(root) = project_root(config, project)? else {
-                return Ok(error(404, "no such project"));
+            let root = match project_root(config, project)? {
+                Ok(root) => root,
+                Err(missing) => return Ok(error(404, missing)),
             };
             if !has_feature(&root, feature)? {
                 return Ok(error(404, "no such feature"));
@@ -420,8 +431,9 @@ fn get(config: &Config, path: &str, query: &Query, token_sha256: &str) -> Result
             ))
         }
         ["features", project, feature, "summary"] => {
-            let Some(root) = project_root(config, project)? else {
-                return Ok(error(404, "no such project"));
+            let root = match project_root(config, project)? {
+                Ok(root) => root,
+                Err(missing) => return Ok(error(404, missing)),
             };
             if !has_feature(&root, feature)? {
                 return Ok(error(404, "no such feature"));
@@ -445,8 +457,9 @@ fn get(config: &Config, path: &str, query: &Query, token_sha256: &str) -> Result
             Err(reply) => Ok(reply),
         },
         ["agents", project, scope, agent, "screen"] => {
-            let Some(root) = project_root(config, project)? else {
-                return Ok(error(404, "no such project"));
+            let root = match project_root(config, project)? {
+                Ok(root) => root,
+                Err(missing) => return Ok(error(404, missing)),
             };
             if scope != "main" && !has_feature(&root, scope)? {
                 return Ok(error(404, "no such scope"));
@@ -472,8 +485,9 @@ fn find_agent(
     scope: &str,
     name: &str,
 ) -> Result<std::result::Result<Agent, Reply>> {
-    let Some(root) = project_root(config, project)? else {
-        return Ok(Err(error(404, "no such project")));
+    let root = match project_root(config, project)? {
+        Ok(root) => root,
+        Err(missing) => return Ok(Err(error(404, missing))),
     };
     if scope != "main" && !has_feature(&root, scope)? {
         return Ok(Err(error(404, "no such scope")));
@@ -490,13 +504,25 @@ fn find_agent(
     }))
 }
 
-/// The root of the registered project named `name`.
-fn project_root(config: &Config, name: &str) -> Result<Option<PathBuf>> {
+fn registered(config: &Config, name: &str) -> Result<bool> {
     Ok(ProjectEntry::scan(&config.projects_dir)?
         .projects
+        .iter()
+        .any(|(n, _)| n == name))
+}
+
+/// The root of the registered project named `name`, or the 404 message
+/// when it isn't registered or isn't on this machine.
+fn project_root(config: &Config, name: &str) -> Result<std::result::Result<PathBuf, &'static str>> {
+    let found = ProjectEntry::scan(&config.projects_dir)?
+        .projects
         .into_iter()
-        .find(|(n, _)| n == name)
-        .map(|(_, entry)| entry.root_path()))
+        .find(|(n, _)| n == name);
+    Ok(match found {
+        None => Err("no such project"),
+        Some((_, entry)) if !entry.presence().is_here() => Err("project not on this machine"),
+        Some((_, entry)) => Ok(entry.root_path()),
+    })
 }
 
 fn has_feature(root: &std::path::Path, name: &str) -> Result<bool> {

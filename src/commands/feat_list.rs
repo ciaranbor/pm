@@ -50,12 +50,15 @@ pub fn feat_list(project_root: &Path) -> Result<Vec<String>> {
     Ok(lines)
 }
 
-/// [`feat_list`] for every registered project, each project's rows under a
-/// header. A project whose state can't be read gets a one-line note
-/// instead, so one broken entry doesn't hide the rest.
+/// [`feat_list`] for every registered project on this machine, each
+/// project's rows under a header. A project whose state can't be read gets a
+/// one-line note instead, so one broken entry doesn't hide the rest.
 pub fn feat_list_all(projects_dir: &Path) -> Result<Vec<String>> {
     let mut lines = Vec::new();
     for (name, entry) in ProjectEntry::list(projects_dir)? {
+        if !entry.presence().is_here() {
+            continue;
+        }
         let root = entry.root_path();
         let listed = if paths::pm_dir(&root).is_dir() {
             feat_list(&root).map_err(|e| e.to_string())
@@ -179,7 +182,7 @@ mod tests {
     }
 
     #[test]
-    fn feat_list_all_groups_features_by_project_and_skips_a_missing_one() {
+    fn feat_list_all_groups_features_by_project_and_leaves_out_those_not_here() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let projects_dir = dir.path().join("registry");
@@ -199,6 +202,12 @@ mod tests {
         let gone = dir.path().join(server.scope("gone"));
         init::init(&gone, &projects_dir, None, server.name()).unwrap();
         std::fs::remove_dir_all(&gone).unwrap();
+        let husk = dir.path().join(server.scope("husk"));
+        init::init(&husk, &projects_dir, None, server.name()).unwrap();
+        std::fs::remove_dir_all(paths::main_worktree(&husk)).unwrap();
+        let stateless = dir.path().join(server.scope("stateless"));
+        init::init(&stateless, &projects_dir, None, server.name()).unwrap();
+        std::fs::remove_dir_all(paths::pm_dir(&stateless)).unwrap();
 
         let lines = feat_list_all(&projects_dir).unwrap();
 
@@ -211,8 +220,8 @@ mod tests {
                 "  search  wip  base:main".to_string(),
                 format!(
                     "{}: skipped (no pm project at {})",
-                    server.scope("gone"),
-                    gone.display()
+                    server.scope("stateless"),
+                    stateless.display()
                 ),
             ]
         );

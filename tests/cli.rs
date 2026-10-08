@@ -262,6 +262,7 @@ fn agent_list_outside_worktree_shows_helpful_error() {
     let root = dir.path();
     // Create a pm project but run from project root (not main/ or a feature/)
     std::fs::create_dir(root.join(".pm")).unwrap();
+    std::fs::create_dir(root.join("main")).unwrap();
 
     pm().current_dir(root)
         .args(["agent", "list"])
@@ -359,6 +360,7 @@ fn agent_list_and_fork_take_their_scope_from_the_flag() {
     let dir = tempdir().unwrap();
     let root = dir.path();
     std::fs::create_dir_all(root.join(".pm/agents")).unwrap();
+    std::fs::create_dir(root.join("main")).unwrap();
     std::fs::write(
         root.join(".pm/agents/main.toml"),
         "[agents.reviewer]\ntype = \"agent\"\nsession_id = \"\"\nwindow_name = \"reviewer\"\n\
