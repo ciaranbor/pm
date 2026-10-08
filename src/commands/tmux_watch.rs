@@ -163,9 +163,7 @@ mod tests {
             let bin = dir.path().join(name);
             std::fs::create_dir_all(&bin).unwrap();
             let pm = bin.join("pm");
-            std::fs::write(&pm, "#!/bin/sh\n").unwrap();
-            std::fs::set_permissions(&pm, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-                .unwrap();
+            crate::testing::write_executable(&pm, "#!/bin/sh\n");
             (bin, pm.canonicalize().unwrap())
         };
         let (first_dir, first) = pm_in("first");

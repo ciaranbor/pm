@@ -62,6 +62,27 @@ pub fn lock_in(worktree: &std::path::Path) -> std::path::PathBuf {
     locked
 }
 
+/// Write `contents` to `path` as an executable script. A child process
+/// writes it: a write handle this process held would be inherited by a
+/// child another test thread forks, until that child execs, and an exec of
+/// the script meanwhile fails on Linux with "Text file busy".
+pub fn write_executable(path: &std::path::Path, contents: &str) {
+    use std::io::Write;
+    let mut child = std::process::Command::new("/bin/sh")
+        .args(["-c", "cat > \"$0\" && chmod 755 \"$0\""])
+        .arg(path)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .expect("run sh");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(contents.as_bytes())
+        .expect("write script");
+    assert!(child.wait().unwrap().success(), "write {}", path.display());
+}
+
 pub fn unlock(locked: &std::path::Path) {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(locked, std::fs::Permissions::from_mode(0o755)).unwrap();

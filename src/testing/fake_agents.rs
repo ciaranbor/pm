@@ -210,18 +210,15 @@ impl TestServer {
             crate::harness::Harness::Codex => ("\\n› \\n\\n  footer\\n\\033[3A", "›"),
             _ => ("──── agent ─\\n❯ \\n────────\\n\\033[2A", "❯"),
         };
-        std::fs::write(
+        crate::testing::write_executable(
             &script,
-            format!(
+            &format!(
                 "#!/bin/sh\nclear\nprintf '\\033[?2004h{input_box}\\033[3G'\n\
                  stty raw -echo\nexec {} -u > {}\n",
                 cat.display(),
                 received.display()
             ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .unwrap();
+        );
         let target = self.spawn_harness_agent(
             project_root,
             session_name,

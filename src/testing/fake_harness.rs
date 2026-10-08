@@ -26,7 +26,6 @@ pub fn fake_opencode_sequence(dir: &std::path::Path, answers: &[&str], exit: i32
 /// A [`fake_opencode_sequence`] whose n-th invocation also exits with the
 /// n-th code.
 pub fn fake_opencode_scripted(dir: &std::path::Path, answers: &[(&str, i32)]) -> String {
-    use std::os::unix::fs::PermissionsExt;
     let bin = dir.join("opencode");
     let answer_file = |name: &str| dir.join(format!("answer.{name}"));
     let exit_file = |name: &str| dir.join(format!("exit.{name}"));
@@ -59,9 +58,7 @@ pub fn fake_opencode_scripted(dir: &std::path::Path, answers: &[(&str, i32)]) ->
         answer = dir.join("answer").display(),
         exit = dir.join("exit").display(),
     );
-    std::fs::write(&bin, script).expect("write fake opencode");
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755))
-        .expect("chmod fake opencode");
+    super::write_executable(&bin, &script);
     bin.to_string_lossy().into_owned()
 }
 
@@ -115,7 +112,6 @@ pub(crate) const HOLD_START: &str = "hold-start";
 fn fake_harness_path() -> &'static std::path::Path {
     static DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
     DIR.get_or_init(|| {
-        use std::os::unix::fs::PermissionsExt;
         let dir = test_home().join("fake-path");
         std::fs::create_dir_all(&dir).expect("create fake-path");
         for harness in [
@@ -133,9 +129,7 @@ fn fake_harness_path() -> &'static std::path::Path {
                 program.display()
             );
             let path = dir.join(&name);
-            std::fs::write(&path, script).expect("write fake harness");
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-                .expect("chmod fake harness");
+            super::write_executable(&path, &script);
         }
         dir
     })
@@ -183,17 +177,14 @@ pub(super) fn fake_claude_at_prompt() -> std::path::PathBuf {
     FAKE.get_or_init(|| {
         let claude = fake_claude();
         let script = claude.with_file_name("claude-at-prompt");
-        std::fs::write(
+        super::write_executable(
             &script,
-            format!(
+            &format!(
                 "#!/bin/sh\nclear\nprintf '──── agent ─\\n❯ \\n────────\\n\\033[2A\\033[3G'\n\
                  exec {} 999\n",
                 claude.display()
             ),
-        )
-        .expect("write claude-at-prompt");
-        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .expect("chmod claude-at-prompt");
+        );
         script
     })
     .clone()

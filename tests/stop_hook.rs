@@ -435,22 +435,33 @@ fn a_subagents_dialog_open_as_the_turn_ends_keeps_the_agent_asking() {
 }
 
 /// A stand-in `codex` that records its arguments, one per line, in
-/// `codex-args`, and exits with `code`.
+/// `codex-args`, and exits with `code`. A child process writes it: a write
+/// handle this process held would be inherited by a child another test
+/// thread forks, and running the stub meanwhile fails on Linux with "Text
+/// file busy".
 fn stub_codex(dir: &Path, code: i32) {
-    use std::os::unix::fs::PermissionsExt;
+    use std::io::Write;
     let stubs = dir.join("stubs");
     std::fs::create_dir_all(&stubs).unwrap();
     let codex = stubs.join("codex");
     let args = dir.join("codex-args");
-    std::fs::write(
-        &codex,
-        format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\necho 'queue: refused' >&2\nexit {code}\n",
-            args.display()
-        ),
-    )
-    .unwrap();
-    std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\necho 'queue: refused' >&2\nexit {code}\n",
+        args.display()
+    );
+    let mut writer = Command::new("/bin/sh")
+        .args(["-c", "cat > \"$0\" && chmod 755 \"$0\""])
+        .arg(&codex)
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    writer
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(script.as_bytes())
+        .unwrap();
+    assert!(writer.wait().unwrap().success());
 }
 
 const CODEX_PAYLOAD: &str = r#"{"session_id":"thr-1","hook_event_name":"Stop"}"#;

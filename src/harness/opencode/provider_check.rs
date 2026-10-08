@@ -185,16 +185,13 @@ mod tests {
     /// An opencode that answers `config.get` with `documents`, naming pm's
     /// own file by the path it was handed.
     fn opencode_answering(dir: &Path, documents: &str) -> OpenCodeConfig {
-        use std::os::unix::fs::PermissionsExt;
         let bin = dir.join("opencode");
-        std::fs::write(
+        crate::testing::write_executable(
             &bin,
-            format!(
+            &format!(
                 "#!/bin/sh\nsed \"s|@OWN@|$OPENCODE_CONFIG|\" <<'ANSWER'\n{documents}\nANSWER\n"
             ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
         OpenCodeConfig {
             binary: Some(bin.to_string_lossy().into_owned()),
             providers: providers(

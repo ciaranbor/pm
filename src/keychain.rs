@@ -80,12 +80,10 @@ fn ask(program: &str, limit: Duration) -> Option<Answer> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
 
     fn fake_security(dir: &std::path::Path, body: &str) -> String {
         let path = dir.join("security");
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::testing::write_executable(&path, &format!("#!/bin/sh\n{body}\n"));
         path.display().to_string()
     }
 

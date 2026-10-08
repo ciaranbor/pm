@@ -38,12 +38,7 @@ fn open_runs_restore_hook_for_new_sessions() {
 
     // Create a restore hook
     let restore_path = project_path.join(hooks::RESTORE_PATH);
-    std::fs::write(&restore_path, "#!/bin/sh\necho restored\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&restore_path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    crate::testing::write_executable(&restore_path, "#!/bin/sh\necho restored\n");
 
     // Kill all sessions to force recreation
     tmux::kill_session(server.name(), &tmux::session_name(&name, "main")).unwrap();
@@ -77,12 +72,7 @@ fn open_skips_restore_hook_for_existing_sessions() {
 
     // Create a restore hook
     let restore_path = project_path.join(hooks::RESTORE_PATH);
-    std::fs::write(&restore_path, "#!/bin/sh\necho restored\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&restore_path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    crate::testing::write_executable(&restore_path, "#!/bin/sh\necho restored\n");
 
     // Sessions already exist from init — open should NOT run restore hook
     open(&project_path, &projects_dir, server.name()).unwrap();

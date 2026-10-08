@@ -432,15 +432,12 @@ mod tests {
     /// A script named `claude` in a directory of its own, so a pane running
     /// it runs the harness, that runs `body` and then execs [`fake_claude`].
     fn fake_claude_doing(dir: &Path, name: &str, body: &str) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
         let bin = dir.join(name).join("claude");
         std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
-        std::fs::write(
+        crate::testing::write_executable(
             &bin,
-            format!("#!/bin/sh\n{body}\nexec {} 999\n", fake_claude().display()),
-        )
-        .unwrap();
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+            &format!("#!/bin/sh\n{body}\nexec {} 999\n", fake_claude().display()),
+        );
         bin
     }
 

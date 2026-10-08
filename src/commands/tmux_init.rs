@@ -259,13 +259,10 @@ mod tests {
     fn recording_bin(dir: &Path) -> (String, std::path::PathBuf) {
         let log = dir.join("calls");
         let bin = dir.join("pm-bin with space");
-        std::fs::write(
+        crate::testing::write_executable(
             &bin,
-            format!("#!/bin/sh\necho \"$@\" >> '{}'\n", log.display()),
-        )
-        .unwrap();
-        std::fs::set_permissions(&bin, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .unwrap();
+            &format!("#!/bin/sh\necho \"$@\" >> '{}'\n", log.display()),
+        );
         (bin.display().to_string(), log)
     }
 
