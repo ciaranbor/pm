@@ -85,17 +85,14 @@ pub(crate) fn worktrees_on_disk(project_root: &Path) -> Result<Vec<PathBuf>> {
 
 /// [`worktrees_on_disk`] with each worktree's scope name.
 pub(crate) fn scoped_worktrees_on_disk(project_root: &Path) -> Result<Vec<(String, PathBuf)>> {
-    let mut out = vec![("main".to_string(), paths::main_worktree(project_root))];
-    let features_dir = paths::features_dir(project_root);
-    if features_dir.is_dir() {
-        for (name, _) in crate::state::feature::FeatureState::list(&features_dir)? {
-            let wt = project_root.join(&name);
-            if wt.is_dir() {
-                out.push((name, wt));
-            }
-        }
-    }
-    Ok(out)
+    Ok(crate::state::scope::names(project_root)?
+        .into_iter()
+        .map(|scope| {
+            let wt = paths::scope_worktree(project_root, &scope);
+            (scope, wt)
+        })
+        .filter(|(scope, wt)| scope == crate::state::scope::MAIN || wt.is_dir())
+        .collect())
 }
 
 /// Remove the project's bundled copies (see [`stale_bundled_copies`]) and

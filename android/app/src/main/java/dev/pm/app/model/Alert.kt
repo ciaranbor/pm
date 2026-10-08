@@ -99,7 +99,10 @@ data class Alert(
                             ?.waiting
                             ?.detail
                     }
-                    AttentionKind.Blocked -> feature(transition, snapshot)?.blockedReason
+                    AttentionKind.Blocked ->
+                        if (transition.scope == Snapshot.MAIN)
+                            snapshot?.project(transition.project)?.main?.blockedReason
+                        else feature(transition, snapshot)?.blockedReason
                     AttentionKind.Ready ->
                         feature(transition, snapshot)?.summary?.let { "Ready for review: $it" }
                     else -> null

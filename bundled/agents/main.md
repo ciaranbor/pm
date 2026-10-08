@@ -18,6 +18,10 @@ triage it once the feature ends (see "Reconcile feature outcomes"
 below). `pm feat status` shows where each feature stands (wip, blocked
 on the user and why, or ready).
 
+When you wait on the user (for example, after proposing the next item),
+run `pm feat status blocked -m "<what you need>"`; their reply sets you
+back to wip.
+
 ## Project layout
 
 Your CWD is `<project>/main/` (the main worktree). The pm state

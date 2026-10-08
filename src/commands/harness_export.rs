@@ -310,9 +310,7 @@ pub(super) mod tests {
         let now = chrono::Utc::now();
         crate::state::feature::FeatureState {
             status: crate::state::feature::FeatureStatus::Wip,
-            progress: Default::default(),
-            blocked_reason: None,
-            blocked_by: None,
+            team: Default::default(),
             branch: name.to_string(),
             worktree: name.to_string(),
             base: String::new(),

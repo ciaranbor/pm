@@ -78,6 +78,9 @@ pub enum PmError {
     #[error("Invalid feature name \"{0}\": must not contain '/'")]
     InvalidFeatureName(String),
 
+    #[error("Feature name \"{0}\" is reserved for the project's main scope; choose another")]
+    ReservedFeatureName(String),
+
     #[error(
         "Branch '{branch}' is already checked out in worktree '{worktree}' — use --from to replace it"
     )]

@@ -5,5 +5,6 @@ pub mod feature;
 pub mod paths;
 pub mod project;
 pub mod runtime;
+pub mod scope;
 pub mod serve_files;
 pub mod workflow;

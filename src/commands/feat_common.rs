@@ -107,9 +107,7 @@ pub fn write_initializing_state(
         workflow: fields.workflow.map(|s| s.to_string()),
         created: now,
         last_active: now,
-        progress: Default::default(),
-        blocked_reason: None,
-        blocked_by: None,
+        team: Default::default(),
     };
     state.save(features_dir, name)?;
     Ok(state)

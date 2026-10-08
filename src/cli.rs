@@ -728,15 +728,17 @@ pub enum FeatCommands {
     /// GitHub PR management
     #[command(subcommand)]
     Pr(PrCommands),
-    /// Set where the feature's work stands: wip, blocked (waiting on the
-    /// user), or ready (done; notifies the orchestrator, needs a summary).
-    /// Without a status, show what needs attention: this feature, or every
-    /// feature, most urgent first, when run from main or with --all
+    /// Set where the scope's work stands: wip, blocked (waiting on the
+    /// user), or, for a feature only, ready (done; notifies the
+    /// orchestrator, needs a summary). Works in main too, which is never
+    /// ready. Without a status, show what needs attention: this feature, or
+    /// main and every feature, most urgent first, when run from main or
+    /// with --all
     Status {
         /// wip, blocked or ready; omit to view. Alone, a value that is not
-        /// a status is taken as the feature name to view
+        /// a status is taken as the scope name to view (`main` included)
         status: Option<String>,
-        /// Feature name (detected from CWD if omitted)
+        /// Feature name, or `main` (detected from CWD if omitted)
         name: Option<String>,
         /// What the user is to answer (only with `blocked`)
         #[arg(short = 'm', long)]

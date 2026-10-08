@@ -126,13 +126,15 @@ workflow.
 
 Agents record where a feature stands with `pm feat status`: `wip` while
 working, `blocked` when waiting on you (with the question), `ready` when
-done and waiting on your merge or delete. pm also sees, without the agent
-saying so, when an agent's harness shows a dialog or sits at its prompt
-where no message will wake it. It surfaces all of it in tmux:
+done and waiting on your merge or delete. `main` records `wip` or
+`blocked` the same way, run in `main`; it is never `ready`. pm also sees,
+without the agent saying so, when an agent's harness shows a dialog or
+sits at its prompt where no message will wake it. It surfaces all of it in tmux:
 
 - the **status line**: a glyph, count and name per kind, and an
-  announcement when a feature becomes blocked or ready, or an agent —
-  `main` included — starts asking (except in that agent's own window);
+  announcement when a feature or `main` becomes blocked, a feature
+  becomes ready, or an agent — `main`'s included — starts asking (except
+  in that agent's own window);
 - **pm's tree** (prefix `s` / `w`): each session's activity, attention and
   each agent's state, labelled. Enter on a session goes straight to the
   pane of the agent it is waiting on;
@@ -152,21 +154,24 @@ first of these that applies, most urgent first:
 | `unarmed` | an agent sits at its prompt where no message wakes it ([why](#agents-are-message-processors)) |
 | `stalled` | status `wip`, but every agent is idle with no unread messages: the team stopped without saying why |
 
-`main` gets a row too when one of its agents is asking, dead or unarmed.
+`main` gets a row too when it is blocked, or one of its agents is asking,
+dead or unarmed; it has no PR to clean up or merge, and an idle `main` is
+not stalled.
 Run `pm feat status` in the `main` session (`--all` for every project on
 this machine; `pm status` prints it too) and work down from the top:
 answer what is blocked or asking, merge what is ready, restart what is
 dead, prompt what is unarmed, and ask a stalled team why it stopped. In a
-feature, `pm feat status` shows just that feature. Its `--json` form is a
-stable contract for scripts ([docs/remote-api.md](docs/remote-api.md#attention-snapshot)).
+feature, `pm feat status` shows just that feature; `pm feat status main`
+shows `main`. Its `--json` form is a stable contract for scripts
+([docs/remote-api.md](docs/remote-api.md#attention-snapshot)).
 
 ### Work with the agents
 
 Type straight into an agent's window to answer a question, redirect, or
-add work. Typing into a blocked feature's agent sets the feature back to
-`wip`. An *idle* agent — one waiting for its next message — sits at its
-prompt, so what you type starts a turn at once, and the agent waits for
-messages again after it. `pm msg send <agent> "…"` from any pane reaches an
+add work. Typing into an agent of a blocked feature, or of a blocked
+`main`, sets it back to `wip`. An *idle* agent — one waiting for its next
+message — sits at its prompt, so what you type starts a turn at once, and
+the agent waits for messages again after it. `pm msg send <agent> "…"` from any pane reaches an
 agent either way.
 
 You can split an agent's window to work beside it: pm watches and jumps to
@@ -559,6 +564,7 @@ the hook process (concurrent projects never see each other's values):
 | `PM_MAIN_WORKTREE`  | the main worktree (`$PM_PROJECT_ROOT/main`)                           |
 | `PM_WORKTREE`       | the worktree the hook concerns (its working directory)                |
 | `PM_SESSION`        | the tmux session the hook window is in                                |
+| `PM_SCOPE`          | scope owning `PM_WORKTREE`/`PM_SESSION`: `main` or the feature's name |
 | `PM_FEATURE`        | feature owning `PM_WORKTREE`/`PM_SESSION`; **empty** (set, `""`) in main scope |
 | `PM_MERGED_FEATURE` | `post-merge` only: the feature that was merged into `PM_WORKTREE`     |
 

@@ -53,7 +53,7 @@ object Poll {
 
         for (p in snapshot.projects) {
             val main = p.main ?: continue
-            judge(p.name, Snapshot.MAIN, main.attention, main.agents, setOf(AttentionKind.Asking))
+            judge(p.name, Snapshot.MAIN, main.attention, main.agents, MAIN_ALERTING)
         }
         for (f in snapshot.features) {
             judge(f.project, f.name, f.attention, f.agents, ALERTING)
@@ -63,4 +63,5 @@ object Poll {
 
     private val STANDING = setOf(AttentionKind.Blocked, AttentionKind.Ready)
     private val ALERTING = STANDING + AttentionKind.Asking
+    private val MAIN_ALERTING = setOf(AttentionKind.Blocked, AttentionKind.Asking)
 }

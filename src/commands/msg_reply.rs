@@ -99,9 +99,7 @@ mod tests {
             workflow: None,
             created: now,
             last_active: now,
-            progress: Default::default(),
-            blocked_reason: None,
-            blocked_by: None,
+            team: Default::default(),
         };
         state.save(&pm_dir.join("features"), feature_name).unwrap();
 
@@ -153,23 +151,6 @@ mod tests {
         std::fs::create_dir_all(&main_worktree).unwrap();
         let main_session = crate::tmux::session_name(&config.project.name, "main");
         crate::tmux::create_session(server.name(), &main_session, &main_worktree).unwrap();
-
-        let now = Utc::now();
-        let main_state = FeatureState {
-            status: FeatureStatus::Wip,
-            branch: "main".to_string(),
-            worktree: "main".to_string(),
-            base: String::new(),
-            pr: String::new(),
-            context: String::new(),
-            workflow: None,
-            created: now,
-            last_active: now,
-            progress: Default::default(),
-            blocked_reason: None,
-            blocked_by: None,
-        };
-        main_state.save(&pm_dir.join("features"), "main").unwrap();
 
         // The reply target must be an active agent — messaging no longer spawns.
         server.spawn_fake_agent(&root, &main_session, "main", "reviewer");

@@ -77,7 +77,7 @@ The API is under `/v1`; every path needs a paired device's token:
 | Path | Returns |
 |---|---|
 | `snapshot` | `pm feat status --all --json` ([Attention snapshot](#attention-snapshot)) |
-| `events` | server-sent events: `snapshot` (the snapshot, at connect and on each change), `transition` (`{project, scope, kind, detail, agent}` as a feature or `main` becomes blocked, asking or ready — alerted as tmux alerts — or an agent dies); with `?watch={project}/{scope}/{agent}[&after={cursor}]`, also `transcript` (below); a comment line every 25 s of silence; `revoked` (`{}`) as the device is unpaired, after which the stream ends |
+| `events` | server-sent events: `snapshot` (the snapshot, at connect and on each change), `transition` (`{project, scope, kind, detail, agent}` as a feature or `main` becomes blocked or asking, or a feature ready — alerted as tmux alerts — or an agent dies); with `?watch={project}/{scope}/{agent}[&after={cursor}]`, also `transcript` (below); a comment line every 25 s of silence; `revoked` (`{}`) as the device is unpaired, after which the stream ends |
 | `features/{project}/{feature}` | the fields of `pm feat info`, with `lifecycle` as last synced (no GitHub query), and the feature's brief; JSON |
 | `features/{project}/{feature}/summary` | the feature's summary, Markdown |
 | `projects/{project}/notes` | `GET`: the project's [notes](../README.md#project-notes), Markdown (empty when there are none), with their version as the `ETag`; `PUT` the new Markdown with `If-Match: <that ETag>` (up to 256 KB; longer notes, which only `pm notes` can write, get `413`): `{"version"}`, the new `ETag`, or `409` with `{"error", "refused": "changed", "text", "version"}` (the notes as they are now) when they changed since; `428` without `If-Match` |
@@ -250,9 +250,9 @@ applies; here is each kind's detail:
 | `unarmed` | `<agent>: <cause>` |
 | `stalled` | `every agent idle, no unread messages` (`null` in JSON) |
 
-Anything else shows its status. A `main` scope has no status: it gets a row
-only when one of its agents is `asking`, `dead` or `unarmed`, in that
-order. PR state is what `pm feat sync` last recorded: the view never calls
+Anything else shows its status. A `main` scope is `wip` or `blocked`,
+never `ready`: it gets a row only when it is `blocked`, or one of its
+agents is `asking`, `dead` or `unarmed`, in that order. PR state is what `pm feat sync` last recorded: the view never calls
 GitHub, so it is cheap to poll.
 
 ### Agent states and activity
@@ -289,6 +289,9 @@ consumer must tolerate values it doesn't know:
       "session_exists": true,
       "agents": [],
       "attention": { "kind": "none", "detail": null, "agent": null },
+      "progress": "wip",
+      "blocked_reason": null,
+      "blocked_by": null,
       "working": false,
       "background_since": null,
       "last_activity": null
@@ -330,7 +333,7 @@ nothing here can open it. `features` is sorted like the rows. `attention.kind` i
 kinds or `none`; `progress` stays `ready` while a busy agent holds
 [`ready`](../README.md#follow-what-needs-you) back; `skipped` says why a
 project's features are missing, and
-`main` (its session and agents, shaped like a feature's) is then `null`,
+`main` (its status, session and agents, shaped like a feature's) is then `null`,
 and `root` empty if its registry entry is unreadable;
 `summary` is the summary's first line whatever the status; `window` is the
 agent's tmux target, `null` while it has none. `waiting` is what an

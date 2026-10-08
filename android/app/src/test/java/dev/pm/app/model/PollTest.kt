@@ -55,6 +55,33 @@ class PollTest {
     }
 
     @Test
+    fun a_blocked_main_alerts_once_but_not_when_first_seen() {
+        fun main(progress: String, kind: String) =
+            quiet.copy(
+                projects =
+                    quiet.projects.map {
+                        it.copy(
+                            main =
+                                it.main!!.copy(
+                                    progress = progress,
+                                    attention = Attention(kind, agent = "main"),
+                                )
+                        )
+                    }
+            )
+        val blocked = main("blocked", "blocked")
+
+        val (standing, none) = Poll.judge(null, blocked)
+        assertTrue(none.isEmpty())
+        assertTrue(Poll.judge(standing, blocked).second.isEmpty())
+
+        val (calm, _) = Poll.judge(null, main("wip", "none"))
+        val (alerted, made) = Poll.judge(calm, blocked)
+        assertEquals(listOf(push("blocked", scope = "main", agent = "main")), made)
+        assertTrue(Poll.judge(alerted, blocked).second.isEmpty())
+    }
+
+    @Test
     fun a_ready_feature_whose_agent_asks_alerts_the_question_then_ready_once_answered() {
         val ready =
             quiet.withFeature("login") {

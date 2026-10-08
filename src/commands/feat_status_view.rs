@@ -12,6 +12,7 @@ use crate::error::Result;
 use crate::state::feature::{FeatureState, Progress};
 use crate::state::paths;
 use crate::state::runtime;
+use crate::state::scope::{self, TeamStatus};
 
 use super::attention::{
     self, Activity, AgentSnapshot, Attention, AttentionKind, FeatureSnapshot, ProjectSnapshot,
@@ -20,20 +21,27 @@ use super::attention::{
 /// Summary lines shown in a single feature's view.
 const SUMMARY_HEAD_LINES: usize = 10;
 
-/// One feature: its progress, reason, last activity and summary head.
+/// One scope: its progress, reason, last activity and, for a feature, its
+/// summary head.
 pub fn feature(project_root: &Path, name: &str) -> Result<Vec<String>> {
-    let state = FeatureState::load(&paths::features_dir(project_root), name)?;
-    let active = runtime::scope_last_activity(project_root, name).unwrap_or(state.last_active);
-    let mut lines = vec![format!(
-        "{name}  {}  (last active {})",
-        state.progress,
-        age(active, Utc::now())
-    )];
-    if let Some(reason) = reason(&state) {
-        match &state.blocked_by {
+    let team = TeamStatus::load(project_root, name)?;
+    let recorded = match name {
+        scope::MAIN => None,
+        _ => Some(FeatureState::load(&paths::features_dir(project_root), name)?.last_active),
+    };
+    let mut head = format!("{name}  {}", team.progress);
+    if let Some(active) = runtime::scope_last_activity(project_root, name).or(recorded) {
+        head.push_str(&format!("  (last active {})", age(active, Utc::now())));
+    }
+    let mut lines = vec![head];
+    if let Some(reason) = team.reason() {
+        match team.agent() {
             Some(agent) => lines.push(format!("blocked on: {reason} ({agent})")),
             None => lines.push(format!("blocked on: {reason}")),
         }
+    }
+    if name == scope::MAIN {
+        return Ok(lines);
     }
     let path = paths::summary_path(project_root, name);
     match std::fs::read_to_string(&path) {
@@ -214,12 +222,6 @@ fn detail(attention: &Attention) -> String {
     }
 }
 
-fn reason(state: &FeatureState) -> Option<&str> {
-    (state.progress == Progress::Blocked)
-        .then_some(state.blocked_reason.as_deref())
-        .flatten()
-}
-
 /// The summary's first line of text, skipping headings.
 pub(crate) fn first_line(project_root: &Path, name: &str) -> Option<String> {
     let summary = std::fs::read_to_string(paths::summary_path(project_root, name)).ok()?;
@@ -398,6 +400,9 @@ mod tests {
                 session_exists: true,
                 agents: vec![scope_agent("main", AgentState::Asking)],
                 attention,
+                progress: Progress::Wip,
+                blocked_reason: None,
+                blocked_by: None,
                 working: false,
                 background_since: None,
                 last_activity: None,
@@ -459,6 +464,35 @@ mod tests {
         let lines = feature(&project, "login").unwrap();
 
         assert_eq!(lines[0], "login  wip  (last active 3h ago)");
+    }
+
+    #[test]
+    fn a_blocked_main_has_a_view_of_its_own_and_a_row_in_the_projects() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        assert_eq!(feature(&project, "main").unwrap(), ["main  wip"]);
+
+        feat_status(
+            &project,
+            "main",
+            Progress::Blocked,
+            Some("next item?"),
+            Some("main"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            feature(&project, "main").unwrap(),
+            ["main  blocked", "blocked on: next item? (main)"]
+        );
+        assert_eq!(
+            super::project(&project, None, false, server.name()).unwrap(),
+            [
+                "main   blocked  no session  main: next item?",
+                "login  wip      no session",
+            ]
+        );
     }
 
     #[test]

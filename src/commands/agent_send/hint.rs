@@ -19,11 +19,11 @@ pub(super) fn agent_not_found_hint(
         }
     }
 
-    // Common mistake: sending to "main" agent from a feature scope when they
-    // meant to send to an agent in the main scope.
+    // From a feature, a bare `main` names an agent of the sender's own
+    // scope; the orchestrator is the agent `main` of the main scope.
     if recipient == "main" && sender_scope != "main" {
-        return "\n  Hint: 'main' is a scope, not an agent. To send to an agent in the main scope, \
-             use `pm msg send <agent>@main` or `pm msg reply`"
+        return "\n  Hint: the orchestrator is `main@main`, the agent `main` in the main scope. \
+             Use `pm msg send main@main` (or `<agent>@main`), or `pm msg reply`"
             .to_string();
     }
 
@@ -49,15 +49,14 @@ mod tests {
     #[test]
     fn hint_main_as_recipient_from_feature() {
         let hint = agent_not_found_hint("main", "login", "login");
-        assert!(hint.contains("'main' is a scope, not an agent"));
-        assert!(hint.contains("pm msg send <agent>@main"));
+        assert!(hint.contains("pm msg send main@main"), "{hint}");
     }
 
     #[test]
     fn hint_main_from_main_no_scope_suggestion() {
         // From main scope, "main" as recipient is just a missing agent, not a scope confusion
         let hint = agent_not_found_hint("main", "main", "main");
-        assert!(!hint.contains("'main' is a scope"));
+        assert!(!hint.contains("main@main"));
         assert!(hint.contains("different scope"));
     }
 

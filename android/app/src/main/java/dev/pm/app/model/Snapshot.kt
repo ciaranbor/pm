@@ -79,6 +79,7 @@ data class Snapshot(
                     it.lastActivity,
                     it.working,
                     it.backgroundSince,
+                    it.progress,
                 )
             }
         } +
@@ -156,7 +157,7 @@ data class Need(
     val lastActivity: String?,
     val working: Boolean = false,
     val backgroundSince: String? = null,
-    /** A feature's team status (`pm feat status`); empty for `main`. */
+    /** The scope's team status (`pm feat status`); `main`'s is never `ready`. */
     val progress: String = "",
 ) {
     val since: Instant?
@@ -181,6 +182,9 @@ data class ScopeSnapshot(
     @SerialName("session_exists") val sessionExists: Boolean = false,
     val agents: List<AgentSnapshot> = emptyList(),
     val attention: Attention = Attention(),
+    val progress: String = "",
+    @SerialName("blocked_reason") val blockedReason: String? = null,
+    @SerialName("blocked_by") val blockedBy: String? = null,
     val working: Boolean = false,
     @SerialName("background_since") val backgroundSince: String? = null,
     @SerialName("last_activity") val lastActivity: String? = null,

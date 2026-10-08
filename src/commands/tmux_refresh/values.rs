@@ -55,8 +55,9 @@ fn reason(attention: &Attention) -> Option<String> {
     detail.map(format_text).filter(|r| !r.is_empty())
 }
 
-/// A main session has no feature or progress. Its badge is its main
-/// agent's, whatever its attention.
+/// A main session has no feature. Its badge is its main agent's, unless
+/// it is blocked: then, as a feature's, its attention's. An asking main
+/// keeps the agent's badge, which shows the question.
 pub(super) fn main_values(
     project: &str,
     main: &ScopeSnapshot,
@@ -68,25 +69,37 @@ pub(super) fn main_values(
         .iter()
         .find(|a| a.name == "main")
         .or(main.agents.first());
-    let [activity, activity_label] = main_activity(main, lead, now)
+    let blocked = main.attention.kind == AttentionKind::Blocked;
+    let [activity, activity_label] = main_activity(main, lead.filter(|_| !blocked), now)
         .map(|a| drawn(a, now).map(Some))
         .unwrap_or_default();
+    let (badge, label) = if blocked {
+        (
+            badge::attention(AttentionKind::Blocked),
+            badge::attention_label(AttentionKind::Blocked),
+        )
+    } else {
+        (
+            lead.map(|a| badge::agent(a.state, a.unread)),
+            lead.map(|a| badge::agent_label(a.state, a.unread)),
+        )
+    };
     vec![
         (PROJECT, Some(format_text(project))),
         (FEATURE, None),
-        (PROGRESS, None),
+        (PROGRESS, Some(main.progress.to_string())),
         (REASON, reason(&main.attention)),
         (ATTENTION, judged.attention.map(|k| k.to_string())),
-        (BADGE, lead.map(|a| badge::agent(a.state, a.unread))),
-        (LABEL, lead.map(|a| badge::agent_label(a.state, a.unread))),
+        (BADGE, badge),
+        (LABEL, label),
         (ACTIVITY, activity),
         (ACTIVITY_LABEL, activity_label),
         (ALERTED, judged.alerted_list()),
     ]
 }
 
-/// A main scope's activity, without the busy glyph its `lead`'s badge
-/// already shows. Background work still shows, for its age.
+/// A main scope's activity, without the busy glyph its badge already shows
+/// when that is its `lead`'s. Background work still shows, for its age.
 fn main_activity(
     main: &ScopeSnapshot,
     lead: Option<&AgentSnapshot>,

@@ -296,6 +296,16 @@ fn sanitize_uses_override_when_provided() {
 }
 
 #[test]
+fn sanitize_refuses_the_main_scopes_name() {
+    for (branch, name) in [("feat/x", Some("main")), ("main", None)] {
+        assert!(matches!(
+            sanitize_feature_name(branch, name).unwrap_err(),
+            PmError::ReservedFeatureName(n) if n == "main"
+        ));
+    }
+}
+
+#[test]
 fn sanitize_rejects_override_with_slash() {
     let result = sanitize_feature_name("ciaran/eval", Some("foo/bar"));
     assert!(result.is_err());

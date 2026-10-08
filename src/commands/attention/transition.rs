@@ -82,31 +82,34 @@ pub struct Verdict {
 /// Judge `feature` against what its last judgement left, `None` when it has
 /// had none.
 pub fn judge_feature(previous: Option<&Judged>, feature: &FeatureSnapshot) -> Verdict {
-    let kind = feature.attention.kind;
-    let mut judged = carried(previous, |k| feature_holds(feature, k));
+    judge(previous, feature.attention.kind, |k| {
+        feature_holds(feature, k)
+    })
+}
+
+/// Judge a main scope, which is never ready: it alerts on blocked and
+/// asking.
+pub fn judge_main(previous: Option<&Judged>, main: &ScopeSnapshot) -> Verdict {
+    judge(previous, main.attention.kind, |k| main_holds(main, k))
+}
+
+/// Judge a scope showing `kind`, where `holds` says whether what makes it
+/// need a kind still does.
+fn judge(
+    previous: Option<&Judged>,
+    kind: AttentionKind,
+    holds: impl Fn(AttentionKind) -> bool,
+) -> Verdict {
+    let mut judged = carried(previous, &holds);
     if previous.is_none() {
         for standing in [AttentionKind::Blocked, AttentionKind::Ready] {
-            if feature_holds(feature, standing) {
+            if holds(standing) {
                 judged.record(standing);
             }
         }
     }
     let shown = previous.and_then(|p| p.attention);
     let alert = ALERTING.contains(&kind) && shown != Some(kind) && !judged.alerted.contains(&kind);
-    if alert {
-        judged.record(kind);
-    }
-    judged.attention = (kind != AttentionKind::None).then_some(kind);
-    Verdict { judged, alert }
-}
-
-/// Judge a main scope, which alerts only on an agent asking.
-pub fn judge_main(previous: Option<&Judged>, main: &ScopeSnapshot) -> Verdict {
-    let kind = main.attention.kind;
-    let mut judged = carried(previous, |k| main_holds(&main.agents, k));
-    let shown = previous.and_then(|p| p.attention);
-    let alert =
-        kind == AttentionKind::Asking && shown != Some(kind) && !judged.alerted.contains(&kind);
     if alert {
         judged.record(kind);
     }
@@ -136,8 +139,12 @@ fn feature_holds(feature: &FeatureSnapshot, kind: AttentionKind) -> bool {
     }
 }
 
-fn main_holds(agents: &[AgentSnapshot], kind: AttentionKind) -> bool {
-    kind == AttentionKind::Asking && asking(agents)
+fn main_holds(main: &ScopeSnapshot, kind: AttentionKind) -> bool {
+    match kind {
+        AttentionKind::Blocked => main.progress == Progress::Blocked,
+        AttentionKind::Asking => asking(&main.agents),
+        _ => false,
+    }
 }
 
 fn asking(agents: &[AgentSnapshot]) -> bool {
@@ -301,6 +308,7 @@ mod tests {
     use super::*;
     use crate::commands::attention::{ProjectSnapshot, VERSION, WaitingSnapshot, attention};
     use crate::state::runtime::WaitingKind;
+    use crate::state::scope::TeamStatus;
 
     fn agent(state: AgentState) -> AgentSnapshot {
         AgentSnapshot {
@@ -350,15 +358,7 @@ mod tests {
                 name: "main".into(),
                 ..agent(state)
             }];
-            ScopeSnapshot {
-                session: "app/main".into(),
-                session_exists: true,
-                attention: super::super::main_attention(&agents),
-                agents,
-                working: false,
-                background_since: None,
-                last_activity: None,
-            }
+            ScopeSnapshot::main_of(agents, TeamStatus::default())
         });
         Snapshot {
             version: VERSION,
@@ -370,6 +370,43 @@ mod tests {
             }],
             features,
         }
+    }
+
+    fn main_with(progress: Progress, state: AgentState) -> ScopeSnapshot {
+        let agents = vec![AgentSnapshot {
+            name: "main".into(),
+            ..agent(state)
+        }];
+        ScopeSnapshot::main_of(
+            agents,
+            TeamStatus {
+                progress,
+                ..TeamStatus::default()
+            },
+        )
+    }
+
+    #[test]
+    fn a_blocked_main_alerts_once_per_episode_but_not_when_first_judged() {
+        let blocked = main_with(Progress::Blocked, AgentState::Idle);
+        let wip = main_with(Progress::Wip, AgentState::Idle);
+
+        let first = judge_main(None, &blocked);
+        assert!(!first.alert, "standing since before");
+        let entered = judge_main(Some(&judge_main(None, &wip).judged), &blocked);
+        assert!(entered.alert);
+        assert_eq!(entered.judged.alerted, [AttentionKind::Blocked]);
+
+        let asked = judge_main(
+            Some(&entered.judged),
+            &main_with(Progress::Blocked, AgentState::Asking),
+        );
+        assert!(!asked.alert, "blocked outranks the agent asking");
+        assert!(!judge_main(Some(&asked.judged), &blocked).alert);
+
+        let answered = judge_main(Some(&entered.judged), &wip);
+        assert!(answered.judged.alerted.is_empty());
+        assert!(judge_main(Some(&answered.judged), &blocked).alert);
     }
 
     #[test]

@@ -54,7 +54,8 @@ state](remote-api.md#agent-states-and-activity), a feature session's the
 attention it needs. A kind that means what a state means shares its glyph.
 The window list shows glyphs only; pm's tree, which has room, labels each
 one: a session line reads `<glyph> blocked  implementer: which DB?` (on
-`main`, its main agent's state), a window line `<glyph> idle <envelope> 2`,
+`main`, its main agent's state unless `main` is blocked; an asking `main`
+keeps its agent's badge), a window line `<glyph> idle <envelope> 2`,
 and a session's activity `<gear> working`, `<spinner> background 1d` or
 `quiet 2h`. Follow a badge with a space in your own formats: some terminals
 (Ghostty) draw a glyph small when the next cell isn't blank.
@@ -83,12 +84,12 @@ unset, text is escaped for formats, and each name is set at one scope only:
 | Scope | Option | Value |
 |---|---|---|
 | feature or main session | `@pm_project`, `@pm_feature` | names; a `main` session has no `@pm_feature` |
-| | `@pm_progress` | `wip`, `blocked` or `ready`; unset on `main` |
+| | `@pm_progress` | `wip`, `blocked` or `ready`; `main` is never `ready` |
 | | `@pm_attention` | the attention kind; unset for `none` |
 | | `@pm_reason` | the attention detail, or for `stalled` what the attention view shows; unset without one |
-| | `@pm_badge` | the kind's glyph, styled; unset for `none`; on `main`, its main agent's badge |
-| | `@pm_label` | `@pm_badge` with words, as pm's tree shows it: the kind after its glyph; on `main`, its main agent's `@pm_agent_label` |
-| | `@pm_activity` | the busy glyph while the scope is working, else the background glyph and how long its oldest background wait has run (`1d`), else how long it has been quiet (`2h`, styled); unset under 10 minutes quiet, and on `main` while its badge already shows its main agent busy |
+| | `@pm_badge` | the kind's glyph, styled; unset for `none`; on `main`, its main agent's badge unless `main` is blocked |
+| | `@pm_label` | `@pm_badge` with words, as pm's tree shows it: the kind after its glyph; on `main`, its main agent's `@pm_agent_label` unless `main` is blocked |
+| | `@pm_activity` | the busy glyph while the scope is working, else the background glyph and how long its oldest background wait has run (`1d`), else how long it has been quiet (`2h`, styled); unset under 10 minutes quiet, and on `main` while its badge is its main agent's and shows it busy |
 | | `@pm_activity_label` | `@pm_activity` with words, as pm's tree shows it: `working` or `background 1d` after the glyph, or `quiet 2h`; unset when it is |
 | | `@pm_alerted` | pm's own bookkeeping: the kinds already alerted on |
 | agent window | `@pm_agent` | the agent's name |

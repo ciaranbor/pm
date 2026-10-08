@@ -115,7 +115,7 @@ pub(super) fn spawn_session_with_config(
     global: &GlobalConfig,
 ) -> Result<SpawnedSession> {
     let session_name = tmux::session_name(&config.project.name, params.feature);
-    let worktree_path = params.project_root.join(params.feature);
+    let worktree_path = paths::scope_worktree(params.project_root, params.feature);
 
     let effective_definition = effective_definition(params.agent_definition, params.agent_name);
 

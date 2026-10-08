@@ -69,7 +69,7 @@ pub fn info(project_root: &Path, projects_dir: &Path, name: &str) -> Result<Feat
     });
     Ok(FeatureInfo {
         name: name.to_string(),
-        progress: state.progress,
+        progress: state.team.progress,
         lifecycle: state.status,
         divergence: git::branch_divergence(&main_repo, &state.branch, &base).ok(),
         remote: git::remote_tracking_branch(&main_repo, &state.branch).unwrap_or(None),

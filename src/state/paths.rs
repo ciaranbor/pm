@@ -145,7 +145,12 @@ pub fn migration_marker(project_root: &Path, name: &str) -> PathBuf {
 /// Single source of truth for the main worktree directory name convention.
 /// Returns `<project_root>/main`.
 pub fn main_worktree(project_root: &Path) -> PathBuf {
-    project_root.join("main")
+    scope_worktree(project_root, crate::state::scope::MAIN)
+}
+
+/// A scope's worktree: `<project_root>/<scope>`, main's included.
+pub fn scope_worktree(project_root: &Path, scope: &str) -> PathBuf {
+    project_root.join(scope)
 }
 
 /// Walk up from `start` to find the project root: the nearest directory
@@ -212,13 +217,40 @@ pub fn detect_feature_from_cwd(project_root: &Path, cwd: &Path) -> Option<String
 /// `cd`'d to, which may be outside any worktree (an `--add-dir` root).
 pub const AGENT_WORKTREE_ENV: &str = "PM_AGENT_WORKTREE";
 
-/// The project root and scope of the agent this process runs for: resolved
-/// from [`AGENT_WORKTREE_ENV`] when set, else the current directory.
+/// The worktree of the agent this process runs for, from
+/// [`AGENT_WORKTREE_ENV`]; `None` outside an agent.
+pub fn agent_worktree() -> Option<PathBuf> {
+    std::env::var_os(AGENT_WORKTREE_ENV)
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+}
+
+/// [`agent_worktree`], else the current directory.
+pub fn agent_dir() -> Result<PathBuf> {
+    match agent_worktree() {
+        Some(dir) => Ok(dir),
+        None => Ok(std::env::current_dir()?),
+    }
+}
+
+/// The scope a command run from `cwd` acts on: the one `cwd` is in, else,
+/// from outside every worktree, that of `agent_worktree` — an agent whose
+/// shell left its worktree (main's works in `.pm/docs`).
+pub fn command_scope(
+    project_root: &Path,
+    cwd: &Path,
+    agent_worktree: Option<&Path>,
+) -> Result<String> {
+    match (resolve_scope_from(project_root, cwd), agent_worktree) {
+        (Err(PmError::NotInWorktree), Some(dir)) => resolve_scope_from(project_root, dir),
+        (resolved, _) => resolved,
+    }
+}
+
+/// The project root and scope of the agent this process runs for, resolved
+/// from [`agent_dir`].
 pub fn agent_scope() -> Result<(PathBuf, String)> {
-    let dir = match std::env::var_os(AGENT_WORKTREE_ENV).filter(|d| !d.is_empty()) {
-        Some(dir) => PathBuf::from(dir),
-        None => std::env::current_dir()?,
-    };
+    let dir = agent_dir()?;
     let project_root = find_project_root(&dir)?;
     let scope = resolve_scope_from(&project_root, &dir)?;
     Ok((project_root, scope))
@@ -308,6 +340,26 @@ mod tests {
         let feat_dir = root.join(".pm").join("features");
         std::fs::create_dir_all(&feat_dir).unwrap();
         std::fs::write(feat_dir.join(format!("{name}.toml")), "").unwrap();
+    }
+
+    #[test]
+    fn a_command_acts_on_the_cwds_scope_and_on_the_agents_only_from_outside_any() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        create_feature_state(root, "login");
+        let login = root.join("login");
+        let main = main_worktree(root);
+        let docs = docs_dir(root);
+        for d in [&login, &main, &docs] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+
+        assert_eq!(command_scope(root, &login, Some(&main)).unwrap(), "login");
+        assert_eq!(command_scope(root, &docs, Some(&main)).unwrap(), "main");
+        assert!(matches!(
+            command_scope(root, &docs, None).unwrap_err(),
+            PmError::NotInWorktree
+        ));
     }
 
     #[test]

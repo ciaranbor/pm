@@ -1,15 +1,16 @@
-//! `pm feat status`: the team's own account of where a feature stands.
+//! `pm feat status`: the team's own account of where a scope stands.
 //!
-//! `ready` requires a non-empty summary and messages `main` each time it is
-//! set, so re-marking a feature ready is how a revised summary reaches
-//! `main`. `main` reviews it for gaps; triage waits for the merge or delete
-//! notice (see [`super::feat_delete`]). The message carries the sender's
-//! feature scope, so `main` can reply to the agent with follow-up questions
-//! while the team is still running. `blocked` and `wip` message no one.
+//! Every scope has one ([`TeamStatus`]). `ready` is a feature's alone: it
+//! means waiting on a merge or delete, which main never is. It requires a
+//! non-empty summary and messages `main` each time it is set, so
+//! re-marking a feature ready is how a revised summary reaches `main`.
+//! `main` reviews it for gaps; triage waits for the merge or delete notice
+//! (see [`super::feat_delete`]). The message carries the sender's feature
+//! scope, so `main` can reply to the agent with follow-up questions while
+//! the team is still running. `blocked` and `wip` message no one.
 //!
-//! A blocked feature may carry a reason, the question the user is to
-//! answer, and records the agent that set it. Any later status change drops
-//! both.
+//! A blocked scope may carry a reason, the question the user is to answer,
+//! and records the agent that set it. Any later status change drops both.
 
 use std::path::Path;
 
@@ -17,14 +18,14 @@ use crate::error::{PmError, Result};
 use crate::messages;
 use crate::state::feature::{FeatureState, Progress};
 use crate::state::paths;
+use crate::state::scope::{self, TeamStatus};
 
-/// Set a feature's progress, with `reason` only for `blocked`. `agent` is
-/// the agent running the command, if any: recorded as the one a `blocked`
-/// feature waits in, and the one `main` can reply to about a `ready`
-/// message.
+/// Set `scope`'s progress, with `reason` only for `blocked`. `agent` is the
+/// agent running the command, if any: recorded as the one a `blocked` scope
+/// waits in, and the one `main` can reply to about a `ready` message.
 pub fn feat_status(
     project_root: &Path,
-    name: &str,
+    scope: &str,
     progress: Progress,
     reason: Option<&str>,
     agent: Option<&str>,
@@ -34,43 +35,54 @@ pub fn feat_status(
             "a reason is only given with `blocked`, not `{progress}`"
         )));
     }
-    let features_dir = paths::features_dir(project_root);
-    let mut state = FeatureState::load(&features_dir, name)?;
-
-    let summary = paths::summary_path(project_root, name);
-    let written = std::fs::read_to_string(&summary).is_ok_and(|s| !s.trim().is_empty());
-    if progress == Progress::Ready && !written {
-        let mut msg = format!(
-            "feature '{name}' has no summary; write one at {} (`pm feat summary path`) \
-             before marking it ready",
-            summary.display()
-        );
-        let legacy = project_root.join(&state.worktree).join("summary.md");
-        if legacy.exists() {
-            msg.push_str(&format!(
-                ". Its worktree has a summary.md: move it there with `mv {} {}`",
-                legacy.display(),
-                summary.display()
-            ));
-        }
-        return Err(PmError::Summary(msg));
+    if progress == Progress::Ready {
+        check_ready(project_root, scope)?;
     }
-
-    state.progress = progress;
-    state.blocked_reason = reason
-        .map(str::trim)
-        .filter(|r| !r.is_empty())
-        .map(str::to_string);
-    state.blocked_by = agent
-        .filter(|_| progress == Progress::Blocked)
-        .map(str::to_string);
-    state.last_active = chrono::Utc::now();
-    state.save(&features_dir, name)?;
+    TeamStatus {
+        progress,
+        blocked_reason: reason
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
+            .map(str::to_string),
+        blocked_by: agent
+            .filter(|_| progress == Progress::Blocked)
+            .map(str::to_string),
+    }
+    .save(project_root, scope)?;
 
     if progress == Progress::Ready {
-        notify_ready(project_root, name, agent)?;
+        notify_ready(project_root, scope, agent)?;
     }
     Ok(())
+}
+
+/// `Ok` if `scope` may be marked ready: a feature with a summary.
+fn check_ready(project_root: &Path, scope: &str) -> Result<()> {
+    if scope == scope::MAIN {
+        return Err(PmError::SafetyCheck(
+            "main can't be ready: ready means waiting on a merge or delete, and main has neither"
+                .into(),
+        ));
+    }
+    let state = FeatureState::load(&paths::features_dir(project_root), scope)?;
+    let summary = paths::summary_path(project_root, scope);
+    if std::fs::read_to_string(&summary).is_ok_and(|s| !s.trim().is_empty()) {
+        return Ok(());
+    }
+    let mut msg = format!(
+        "feature '{scope}' has no summary; write one at {} (`pm feat summary path`) \
+         before marking it ready",
+        summary.display()
+    );
+    let legacy = project_root.join(&state.worktree).join("summary.md");
+    if legacy.exists() {
+        msg.push_str(&format!(
+            ". Its worktree has a summary.md: move it there with `mv {} {}`",
+            legacy.display(),
+            summary.display()
+        ));
+    }
+    Err(PmError::Summary(msg))
 }
 
 /// Tell `main` that `name` is ready and where its summary is.
@@ -113,7 +125,7 @@ pub enum Request {
 }
 
 /// Read the positionals: a first word that is not a status is the name of
-/// a feature to view.
+/// a scope to view.
 pub fn request(
     project_root: &Path,
     status: Option<String>,
@@ -124,15 +136,12 @@ pub fn request(
         (None, name) => Request::View { name },
         (Some(word), name) => match <Progress as clap::ValueEnum>::from_str(&word, false) {
             Ok(progress) => Request::Set { progress, name },
-            Err(_)
-                if name.is_none()
-                    && FeatureState::exists(&paths::features_dir(project_root), &word) =>
-            {
+            Err(_) if name.is_none() && scope::exists(project_root, &word) => {
                 Request::View { name: Some(word) }
             }
             Err(_) if name.is_none() => {
                 return Err(PmError::SafetyCheck(format!(
-                    "'{word}' is neither a status (wip, blocked, ready) nor a feature"
+                    "'{word}' is neither a status (wip, blocked, ready) nor a scope"
                 )));
             }
             Err(_) => {
@@ -161,9 +170,7 @@ mod tests {
     }
 
     fn progress(project: &Path, name: &str) -> Progress {
-        FeatureState::load(&paths::features_dir(project), name)
-            .unwrap()
-            .progress
+        TeamStatus::load(project, name).unwrap().progress
     }
 
     #[test]
@@ -305,8 +312,8 @@ mod tests {
         let (project, _) =
             TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
         let blocked = |project: &Path| {
-            let state = FeatureState::load(&paths::features_dir(project), "login").unwrap();
-            (state.blocked_reason, state.blocked_by)
+            let team = TeamStatus::load(project, "login").unwrap();
+            (team.blocked_reason, team.blocked_by)
         };
 
         feat_status(
@@ -324,6 +331,36 @@ mod tests {
 
         feat_status(&project, "login", Progress::Wip, None, Some("implementer")).unwrap();
         assert_eq!(blocked(&project), (None, None));
+    }
+
+    #[test]
+    fn main_is_blocked_or_wip_never_ready_and_tells_no_one() {
+        let dir = tempdir().unwrap();
+        let (project, _) =
+            TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
+
+        feat_status(
+            &project,
+            "main",
+            Progress::Blocked,
+            Some("next item?"),
+            Some("main"),
+        )
+        .unwrap();
+        let blocked = TeamStatus::load(&project, "main").unwrap();
+        assert_eq!(
+            (blocked.reason(), blocked.agent()),
+            (Some("next item?"), Some("main"))
+        );
+
+        let err = feat_status(&project, "main", Progress::Ready, None, Some("main")).unwrap_err();
+        assert!(err.to_string().contains("main can't be ready"), "{err}");
+        assert_eq!(TeamStatus::load(&project, "main").unwrap(), blocked);
+
+        feat_status(&project, "main", Progress::Wip, None, Some("main")).unwrap();
+        assert_eq!(progress(&project, "main"), Progress::Wip);
+        assert_eq!(progress(&project, "login"), Progress::Wip);
+        assert!(main_inbox(&project).is_empty());
     }
 
     #[test]
@@ -384,12 +421,20 @@ mod tests {
             req(Some("login"), None, false).unwrap(),
             view(Some("login"))
         );
+        assert_eq!(req(Some("main"), None, false).unwrap(), view(Some("main")));
+        assert_eq!(
+            req(Some("blocked"), Some("main"), false).unwrap(),
+            Request::Set {
+                progress: Progress::Blocked,
+                name: Some("main".to_string())
+            }
+        );
 
         let err = |status, name, reason| req(status, name, reason).unwrap_err().to_string();
         assert!(err(Some("bogus"), Some("login"), false).contains("'bogus' is not a status"));
         assert!(
             err(Some("blcked"), None, false)
-                .contains("'blcked' is neither a status (wip, blocked, ready) nor a feature")
+                .contains("'blcked' is neither a status (wip, blocked, ready) nor a scope")
         );
         assert!(err(None, None, true).contains("--reason needs a status"));
         assert!(err(Some("login"), None, true).contains("--reason needs a status"));

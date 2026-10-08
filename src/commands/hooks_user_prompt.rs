@@ -1,5 +1,5 @@
 //! `pm harness hooks user-prompt`: the user typing into an agent's window
-//! answers a blocked feature, so the feature goes back to `wip`.
+//! answers a blocked scope, so the scope goes back to `wip`.
 //!
 //! Only the user's input resets it. pm's own prompts are ignored: the
 //! launch prompts a codex agent starts with ([`is_launch_prompt`]), a
@@ -9,7 +9,7 @@
 //! the notice of a loop that stopped itself; so are prompts the harness
 //! wrote itself ([`Harness::synthesized_prompt`]), a background task's end
 //! among them. A `block` continuation runs no UserPromptSubmit. Blocked is
-//! per feature, so input to any of its agents resets it.
+//! per scope, main included, so input to any of its agents resets it.
 //!
 //! A continuation that reaches an agent with nothing unread is dropped: it
 //! is a duplicate — a waiter's wake mid-turn, a typed re-arm, a queue item
@@ -43,9 +43,10 @@ use crate::error::Result;
 use crate::harness::Harness;
 use crate::messages;
 use crate::state::agent::AgentRegistry;
-use crate::state::feature::{FeatureState, Progress};
+use crate::state::feature::Progress;
 use crate::state::paths;
 use crate::state::runtime;
+use crate::state::scope::TeamStatus;
 
 /// What became of a prompt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,7 +93,7 @@ fn user_prompt_inner() -> Result<Option<(Prompted, u32)>> {
 }
 
 /// Any prompt to `agent`: drop a continuation with nothing unread, else
-/// unblock its feature if the prompt is the user's, then clear its marker
+/// unblock its scope if the prompt is the user's, then clear its marker
 /// and claim its transcript's turn end.
 fn on_prompt(project_root: &Path, scope: &str, agent: &str, prompt: &str) -> Result<Prompted> {
     let registry = AgentRegistry::load(&paths::agents_dir(project_root), scope)?;
@@ -128,7 +129,7 @@ fn is_users(prompt: &str, harness: Option<Harness>) -> bool {
         && !harness.is_some_and(|h| h.synthesized_prompt(prompt))
 }
 
-/// Set `scope` back to `wip` if it is a blocked feature and `prompt`, to an
+/// Set `scope` back to `wip` if it is blocked and `prompt`, to an
 /// agent running `harness`, is the user's. Returns whether it did.
 fn on_user_prompt(
     project_root: &Path,
@@ -136,11 +137,10 @@ fn on_user_prompt(
     prompt: &str,
     harness: Option<Harness>,
 ) -> Result<bool> {
-    if scope == "main" || !is_users(prompt, harness) {
+    if !is_users(prompt, harness) {
         return Ok(false);
     }
-    let state = FeatureState::load(&paths::features_dir(project_root), scope)?;
-    if state.progress != Progress::Blocked {
+    if TeamStatus::load(project_root, scope)?.progress != Progress::Blocked {
         return Ok(false);
     }
     feat_status(project_root, scope, Progress::Wip, None, None)?;
@@ -154,8 +154,8 @@ mod tests {
     use crate::testing::TestServer;
     use tempfile::tempdir;
 
-    fn state(project: &Path) -> FeatureState {
-        FeatureState::load(&paths::features_dir(project), "login").unwrap()
+    fn state(project: &Path) -> TeamStatus {
+        TeamStatus::load(project, "login").unwrap()
     }
 
     fn blocked_feature(dir: &Path) -> std::path::PathBuf {
@@ -235,11 +235,43 @@ mod tests {
     }
 
     #[test]
-    fn main_scope_does_nothing() {
+    fn the_users_prompt_in_main_unblocks_main_alone_and_pms_own_does_not() {
         let dir = tempdir().unwrap();
         let project = blocked_feature(dir.path());
+        assert!(
+            !on_user_prompt(&project, "main", "use postgres", None).unwrap(),
+            "an unblocked main, which has no status file"
+        );
 
-        assert!(!on_user_prompt(&project, "main", "use postgres", None).unwrap());
+        feat_status(
+            &project,
+            "main",
+            Progress::Blocked,
+            Some("next?"),
+            Some("main"),
+        )
+        .unwrap();
+        crate::messages::send(
+            &paths::messages_dir(&project),
+            "main",
+            "main",
+            "login",
+            "ready",
+        )
+        .unwrap();
+        let wake = hooks_stop::continuation(&project, "main", "main").unwrap();
+        assert!(!on_user_prompt(&project, "main", &wake, None).unwrap());
+        assert_eq!(
+            TeamStatus::load(&project, "main").unwrap().progress,
+            Progress::Blocked,
+            "a notice that wakes main is pm's, not the user's"
+        );
+
+        assert!(on_user_prompt(&project, "main", "do search next", None).unwrap());
+        assert_eq!(
+            TeamStatus::load(&project, "main").unwrap(),
+            TeamStatus::default()
+        );
         assert_eq!(state(&project).progress, Progress::Blocked);
     }
 

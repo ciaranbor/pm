@@ -84,6 +84,17 @@ class PushTest {
     }
 
     @Test
+    fun a_blocked_main_holds_while_main_is_blocked() {
+        val blocked =
+            snapshot.copy(
+                projects =
+                    snapshot.projects.map { it.copy(main = it.main!!.copy(progress = "blocked")) }
+            )
+        assertTrue(push("blocked", scope = "main", agent = "main").holds(blocked))
+        assertFalse(push("blocked", scope = "main", agent = "main").holds(snapshot))
+    }
+
+    @Test
     fun a_vanished_scope_ends_its_alert_but_an_unreadable_project_keeps_it() {
         assertFalse(push("blocked", scope = "gone").holds(snapshot))
         assertFalse(PushedTransition("other", "login", "blocked").holds(snapshot))

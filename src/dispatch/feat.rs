@@ -1,9 +1,9 @@
 use pm::commands;
 use pm::error::{PmError, Result};
-use pm::state::paths;
+use pm::state::{paths, scope};
 
 use super::report::report_failed_launches;
-use super::scope::{resolve_feature_name, resolve_scope};
+use super::scope::{current_feature, resolve_feature_name, resolve_scope, resolve_scope_with_flag};
 use super::window::{finish_in_own_session, push, running_agent};
 use crate::cli::{FeatCommands, PrCommands, SummaryCommands};
 
@@ -221,15 +221,18 @@ fn in_project(cmd: FeatCommands, server: Option<&str>) -> Result<()> {
                     return Ok(());
                 }
             };
-            let name = resolve_feature_name(name, &project_root)?;
+            let scope = resolve_scope_with_flag(&project_root, name)?;
             commands::feat_status::feat_status(
                 &project_root,
-                &name,
+                &scope,
                 status,
                 reason.as_deref(),
                 running_agent().as_deref(),
             )?;
-            println!("Feature '{name}' is {status}");
+            match scope.as_str() {
+                scope::MAIN => println!("main is {status}"),
+                _ => println!("Feature '{scope}' is {status}"),
+            }
             push();
             Ok(())
         }
@@ -254,9 +257,7 @@ fn in_project(cmd: FeatCommands, server: Option<&str>) -> Result<()> {
             Ok(())
         }
         FeatCommands::Sync { name } => {
-            let name = name.or_else(|| {
-                paths::detect_feature_from_cwd(&project_root, &std::env::current_dir().ok()?)
-            });
+            let name = name.or_else(|| current_feature(&project_root));
             let messages = commands::feat_sync::feat_sync(&project_root, name.as_deref())?;
             for msg in messages {
                 println!("{msg}");
