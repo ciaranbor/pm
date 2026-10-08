@@ -897,7 +897,7 @@ mod tests {
         super::super::init::init(&project_path, &projects_dir, None, server.name()).unwrap();
         let main = paths::main_worktree(&project_path);
         let origin = dir.path().join("origin.git");
-        git::run_git(dir.path(), &["init", "--bare", &origin.to_string_lossy()]).unwrap();
+        git::init_bare(&origin).unwrap();
         git::add_remote(&main, "origin", &origin.to_string_lossy()).unwrap();
         git::push(&main, "origin", "main").unwrap();
         git::fetch_remote(&main, "origin").unwrap();

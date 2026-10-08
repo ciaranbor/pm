@@ -237,7 +237,6 @@ pub fn loop_fingerprint(harness: Harness) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use tempfile::tempdir;
 
     #[test]
@@ -269,11 +268,9 @@ mod tests {
         // With PM_AGENT_NAME set the guard execs `pm`, resolved from PATH —
         // here a stub that echoes its parent and arguments. Its parent is
         // this test process, so no shell sits between the harness and pm.
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempdir().unwrap();
         let stub = dir.path().join("pm");
-        fs::write(&stub, "#!/bin/sh\necho \"stub $PPID $*\"\n").unwrap();
-        fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+        crate::testing::write_executable(&stub, "#!/bin/sh\necho \"stub $PPID $*\"\n");
 
         for (command, args) in [
             (

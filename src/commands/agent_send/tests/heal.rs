@@ -110,7 +110,7 @@ fn send_to_agent_whose_harness_exited_relaunches_it_in_its_pane() {
 
 #[test]
 fn send_leaves_an_exited_harness_alone_while_its_pane_is_watched() {
-    let server = TestServer::new();
+    let server = TestServer::own("heal-watched");
     let dir = tempdir().unwrap();
     let (root, session_name, feature) = setup_project_with_tmux(dir.path(), &server);
     create_agent_definition(&root, "reviewer");

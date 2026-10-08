@@ -1,12 +1,14 @@
 # The checks every change to main must pass. Caches are saved only from main:
 # a PR's cache is visible to that PR alone and counts against the repo's cache
-# quota. The weekly run catches advisories published with no change to pm.
+# quota. The weekly run catches advisories published with no change to pm;
+# `gh workflow run check --ref <branch>` checks a branch with no PR.
 name: check
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
   schedule:
     - cron: "17 6 * * 1"
 

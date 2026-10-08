@@ -211,18 +211,12 @@ mod tests {
     /// `${VAR+set}`).
     fn hook_env_seen_by(ctx: &HookContext) -> Vec<String> {
         let script = ctx.project_root.join("dump.sh");
-        std::fs::write(
+        crate::testing::write_executable(
             &script,
             "#!/bin/sh\nprintf '%s\\n' \"$PM_PROJECT_ROOT\" \"$PM_MAIN_WORKTREE\" \
              \"$PM_WORKTREE\" \"$PM_SESSION\" \"${PM_FEATURE+set}:$PM_FEATURE\" \
              \"${PM_MERGED_FEATURE+set}:$PM_MERGED_FEATURE\"\n",
-        )
-        .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        );
         let out = std::process::Command::new("sh")
             .arg("-c")
             .arg(hook_command(ctx, &script))

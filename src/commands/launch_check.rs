@@ -390,14 +390,17 @@ fn drawn(tmux_server: Option<&str>, window: &str, launched: &Path, shell: Option
 }
 
 /// Whether `line` is a diagnostic of the shell running as `command`: its
-/// program's name, then `: `. A login shell's leading `-` is optional on
-/// both, since bash keeps it in what it prints and zsh drops it.
+/// program's name, or its path as dash prints it, then `: `. A login
+/// shell's leading `-` is optional on both, since bash keeps it in what it
+/// prints and zsh drops it.
 fn shell_says(command: &str, line: &str) -> bool {
     let program = command.split(' ').next().unwrap_or(command);
     let name = program.rsplit('/').next().unwrap_or(program);
-    line.trim_start_matches('-')
-        .strip_prefix(name.trim_start_matches('-'))
-        .is_some_and(|rest| rest.starts_with(": "))
+    let line = line.trim_start_matches('-');
+    [program, name].iter().any(|prefix| {
+        line.strip_prefix(prefix.trim_start_matches('-'))
+            .is_some_and(|rest| rest.starts_with(": "))
+    })
 }
 
 fn non_empty(text: &str) -> Vec<&str> {
@@ -429,15 +432,12 @@ mod tests {
     /// A script named `claude` in a directory of its own, so a pane running
     /// it runs the harness, that runs `body` and then execs [`fake_claude`].
     fn fake_claude_doing(dir: &Path, name: &str, body: &str) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
         let bin = dir.join(name).join("claude");
         std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
-        std::fs::write(
+        crate::testing::write_executable(
             &bin,
-            format!("#!/bin/sh\n{body}\nexec {} 999\n", fake_claude().display()),
-        )
-        .unwrap();
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+            &format!("#!/bin/sh\n{body}\nexec {} 999\n", fake_claude().display()),
+        );
         bin
     }
 
@@ -449,6 +449,7 @@ mod tests {
             ("/bin/bash -l", format!("bash: {setpgid}")),
             ("-zsh", "zsh: command not found: claude".to_string()),
             ("/bin/sh", format!("sh: {setpgid}")),
+            ("/bin/sh", "/bin/sh: 1: claude: not found".to_string()),
         ] {
             assert!(shell_says(command, &line), "{command}: {line}");
         }
