@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn an_unarmed_agent_at_an_empty_prompt_is_typed_its_messages_prompt() {
-        let server = TestServer::new();
+        let server = TestServer::own("rearm-unarmed");
         let dir = tempdir().unwrap();
         let (project, target) = at_prompt(&server, dir.path(), WaitingKind::HookEnded);
         let users = server.split_before(&target);
@@ -203,7 +203,7 @@ mod tests {
     }
 
     fn a_pane_in_a_mode_is_left_in_it_untyped(enter: &str) {
-        let server = TestServer::new();
+        let server = TestServer::own(&format!("rearm-{enter}"));
         let dir = tempdir().unwrap();
         let (project, target) = at_prompt(&server, dir.path(), WaitingKind::HookEnded);
         let pane = server.pane_id(&target);
@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn a_pane_a_client_is_viewing_is_left_untyped() {
-        let server = TestServer::new();
+        let server = TestServer::own("rearm-viewed");
         let dir = tempdir().unwrap();
         let (project, target) = at_prompt(&server, dir.path(), WaitingKind::HookEnded);
         server.tmux_stdout(&["select-window", "-t", &target]);

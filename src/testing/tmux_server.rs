@@ -97,7 +97,9 @@ fn start_hermetic_server(name: &str) -> bool {
 /// A tmux server of one test's own, `pm-test-<pid>-<suffix>`, killed on
 /// drop (and reaped with the shared server's if the run dies). For a test
 /// that attaches a client: on the shared server it would be the client
-/// other tests' `switch-client` and `#{client_session}` find.
+/// other tests' `switch-client` and `#{client_session}` find, and tmux
+/// before 3.8 can crash notifying a control client that is exiting of
+/// another test's session closing.
 pub struct OwnServer(String);
 
 impl OwnServer {
@@ -172,6 +174,7 @@ fn shared_server_name() -> &'static str {
 /// are killed — the shared server stays alive for other tests.
 pub struct TestServer {
     pub(super) prefix: String,
+    own: Option<OwnServer>,
 }
 
 impl Default for TestServer {
@@ -191,6 +194,7 @@ impl TestServer {
         let id = TMUX_SERVER_COUNTER.fetch_add(1, Ordering::SeqCst);
         let server = Self {
             prefix: format!("t{id}"),
+            own: None,
         };
 
         // Soft cap: if the shared server is holding an unreasonable number
@@ -213,9 +217,21 @@ impl TestServer {
         project_path.parent().unwrap().join("registry")
     }
 
-    /// Get the shared server name to pass to tmux functions as `Some(&str)`.
+    /// A [`TestServer`] on an [`OwnServer`], for a test that attaches a
+    /// client.
+    pub fn own(suffix: &str) -> Self {
+        let own = OwnServer::start(suffix);
+        let mut server = Self::new();
+        server.own = Some(own);
+        server
+    }
+
+    /// The server's name to pass to tmux functions as `Some(&str)`.
     pub fn name(&self) -> Option<&str> {
-        Some(shared_server_name())
+        match &self.own {
+            Some(own) => own.name(),
+            None => Some(shared_server_name()),
+        }
     }
 
     /// Return a name scoped to this test instance. Use this for project names
