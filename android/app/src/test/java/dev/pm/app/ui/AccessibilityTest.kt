@@ -14,6 +14,7 @@ import com.github.takahirom.roborazzi.checkRoboAccessibility
 import dev.pm.app.SNAPSHOT
 import dev.pm.app.api.PmClient
 import dev.pm.app.data.Connection
+import dev.pm.app.model.AgentSnapshot
 import dev.pm.app.model.Pairing
 import dev.pm.app.model.Snapshot
 import java.time.Instant
@@ -68,22 +69,26 @@ class AccessibilityTest {
     private val scope =
         @Composable {
             val login = snapshot.feature("app", "login")!!
+            val team = login.agents + AgentSnapshot("reviewer", "idle")
             Column {
                 WorkspaceTabs(
-                    tabsOf("login", login.agents, null),
-                    Tab.Summary,
-                    login.agents,
+                    tabsOf(team, null),
+                    "implementer",
+                    team,
                     select = {},
                 )
-                SummaryTab(
+                FeaturePage(
                     login,
-                    viewModel { ReadModel(client) { "Adds login." } },
+                    Page.Summary,
+                    select = {},
                     now,
                     stale = false,
                     merging = false,
                     busy = false,
                     merge = {},
-                )
+                ) {
+                    SummaryScreen(viewModel { ReadModel(client) { "Adds login." } })
+                }
             }
         }
 

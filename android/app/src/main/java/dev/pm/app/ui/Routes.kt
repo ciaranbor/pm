@@ -18,9 +18,14 @@ sealed interface Route : NavKey {
 
     @Serializable data class Project(val project: String) : Route
 
-    /** A scope's workspace, a feature's or `main`'s, opened on `tab`, else on its default. */
+    /** A scope's workspace, a feature's or `main`'s, showing `agent`, else its default. */
     @Serializable
-    data class Scope(val project: String, val scope: String, val tab: Tab? = null) : Route
+    data class Scope(val project: String, val scope: String, val agent: String? = null) : Route
+
+    /** A feature's own page: where it stands, with its summary, brief or details. */
+    @Serializable
+    data class Feature(val project: String, val scope: String, val page: Page = Page.Summary) :
+        Route
 
     @Serializable data class Notes(val project: String) : Route
 
@@ -35,6 +40,7 @@ sealed interface Route : NavKey {
                 Settings -> "Settings" to null
                 is Project -> project to null
                 is Scope -> scope to project
+                is Feature -> scope to "$project · Feature"
                 is Notes -> "Notes" to project
             }
 
@@ -47,29 +53,33 @@ sealed interface Route : NavKey {
                 Settings,
                 is Project -> Home
                 is Scope -> Project(project)
+                is Feature -> Scope(project, scope)
                 is Notes -> Project(project)
             }
 
-    /** Whether this is the page `other` names: a workspace is one page whichever tab it is on. */
+    /**
+     * Whether this is the page `other` names: a workspace is one page whichever agent it shows, and
+     * a feature's page one whichever of its pages.
+     */
     fun samePage(other: Route): Boolean =
-        if (this is Scope && other is Scope) project == other.project && scope == other.scope
-        else this == other
+        when {
+            this is Scope && other is Scope -> project == other.project && scope == other.scope
+            this is Feature && other is Feature -> project == other.project && scope == other.scope
+            else -> this == other
+        }
 }
 
-/** A workspace's tab: one per agent, then a feature's pages. */
+/** What a feature's page shows under where the feature stands. */
 @Serializable
-sealed interface Tab {
-    @Serializable data class Agent(val name: String) : Tab
-
-    @Serializable data object Summary : Tab
-
-    @Serializable data object Brief : Tab
-
-    @Serializable data object Details : Tab
+enum class Page {
+    Summary,
+    Brief,
+    Details,
 }
 
-/** The workspace a notification's target opens, on the agent it names. */
-fun Target.route(): Route.Scope = Route.Scope(project, scope, agent?.let(Tab::Agent))
+/** Where a notification's target opens: a ready alert, the feature's page; else its workspace. */
+fun Target.route(): Route =
+    if (ready) Route.Feature(project, scope) else Route.Scope(project, scope, agent)
 
 internal fun NavBackStack<NavKey>.replaceWith(routes: List<Route>) {
     clear()
@@ -77,15 +87,20 @@ internal fun NavBackStack<NavKey>.replaceWith(routes: List<Route>) {
 }
 
 /**
- * Open `route` over what is shown, so Back returns there; the workspace shown already switches to
- * its tab instead.
+ * Open `route` over what is shown, so Back returns there. A shown page that is `route`'s page
+ * switches to what it names instead; so does the page below when the shown page is its child, which
+ * closes.
  */
 internal fun NavBackStack<NavKey>.open(route: Route) {
+    val below = getOrNull(lastIndex - 1) as? Route
+    val shownParent = (lastOrNull() as? Route)?.parent
+    if (below != null && below.samePage(route) && shownParent?.samePage(below) == true)
+        removeLastOrNull()
     val top = lastOrNull() as? Route
     when {
         top == route -> Unit
         top != null && top.samePage(route) ->
-            if ((route as? Route.Scope)?.tab != null) set(lastIndex, route)
+            if (route !is Route.Scope || route.agent != null) set(lastIndex, route)
         else -> add(route)
     }
 }
@@ -131,6 +146,7 @@ internal fun kotlin.Pair<String, String>.covers(other: kotlin.Pair<String, Strin
 internal fun Route.scopeOf(): kotlin.Pair<String, String>? =
     when (this) {
         is Route.Scope -> project to scope
+        is Route.Feature -> project to scope
         is Route.Project -> project to Snapshot.MAIN
         is Route.Notes -> project to Snapshot.MAIN
         else -> null
@@ -149,8 +165,11 @@ internal fun Snapshot.has(project: String, scope: String): Boolean? {
     }
 }
 
-/** Where a workspace page sits in the stack's state: the same whichever tab it shows. */
+/** Where a workspace sits in the stack's state: the same whichever agent it shows. */
 internal fun Route.Scope.contentKey(): String = "scope/$project/$scope"
+
+/** Where a feature's page sits in the stack's state: the same whichever page it shows. */
+internal fun Route.Feature.contentKey(): String = "feature/$project/$scope"
 
 /**
  * The scopes the back stack shows that this snapshot no longer has, of those an earlier snapshot

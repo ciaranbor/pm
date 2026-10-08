@@ -1,6 +1,5 @@
 package dev.pm.app.ui
 
-import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.Surface
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -21,9 +20,9 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * A Markdown page and a ready feature's workspace, compared with the images in
- * `src/test/screenshots` on every test run: headings at title sizes, inline code without wide
- * padding. `gradlew recordRoborazziGoogleDebug` records anew.
+ * A Markdown page and a ready feature's page, compared with the images in `src/test/screenshots` on
+ * every test run: headings at title sizes, inline code without wide padding. `gradlew
+ * recordRoborazziGoogleDebug` records anew.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -55,9 +54,7 @@ class PageScreenshotTest {
 
     @Test @Config(qualifiers = "+night") fun summary_dark() = page()
 
-    /**
-     * A ready feature's workspace: its agents' tabs, then its pages, open on Summary with Merge.
-     */
+    /** A ready feature's page: where it stands, its pages, open on Summary, and Merge. */
     private fun ready() {
         val snapshot = Snapshot.parse(SNAPSHOT)
         val agents =
@@ -72,17 +69,17 @@ class PageScreenshotTest {
         compose.setContent {
             PmTheme(dynamic = false) {
                 Surface {
-                    Column {
-                        WorkspaceTabs(tabsOf("search", agents, null), Tab.Summary, agents, {})
-                        SummaryTab(
-                            feature,
-                            viewModel { ReadModel(client) { summary } },
-                            Instant.parse("2026-10-02T10:00:00Z"),
-                            stale = false,
-                            merging = false,
-                            busy = false,
-                            merge = {},
-                        )
+                    FeaturePage(
+                        feature,
+                        Page.Summary,
+                        select = {},
+                        Instant.parse("2026-10-02T10:00:00Z"),
+                        stale = false,
+                        merging = false,
+                        busy = false,
+                        merge = {},
+                    ) {
+                        SummaryScreen(viewModel { ReadModel(client) { summary } })
                     }
                 }
             }
@@ -93,7 +90,7 @@ class PageScreenshotTest {
         compose.onRoot().captureRoboImage()
     }
 
-    @Test @Config(qualifiers = "w360dp-h640dp") fun workspace_ready_light() = ready()
+    @Test @Config(qualifiers = "w360dp-h640dp") fun feature_ready_light() = ready()
 
-    @Test @Config(qualifiers = "w360dp-h640dp-night") fun workspace_ready_dark() = ready()
+    @Test @Config(qualifiers = "w360dp-h640dp-night") fun feature_ready_dark() = ready()
 }

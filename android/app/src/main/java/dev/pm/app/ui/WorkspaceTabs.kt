@@ -33,19 +33,19 @@ import dev.pm.app.model.Marks
 import dev.pm.app.model.Tone
 
 /**
- * The workspace's tabs, `selected` marked; an agent's with its state, neutral while `stale`, and
- * unread messages.
+ * The workspace's agent tabs, `selected` marked; each with its agent's state, neutral while
+ * `stale`, and unread messages.
  *
- * Material's scrollable tab row centres the selected tab, which on a feature opened at Summary
- * pushes its first agents off-screen; this row scrolls only as far as brings the selected tab into
+ * Material's scrollable tab row centres the selected tab, which on a team opened at its last agent
+ * pushes its first ones off-screen; this row scrolls only as far as brings the selected tab into
  * view.
  */
 @Composable
 fun WorkspaceTabs(
-    tabs: List<Tab>,
-    selected: Tab?,
+    tabs: List<String>,
+    selected: String?,
     agents: List<AgentSnapshot>,
-    select: (Tab) -> Unit,
+    select: (String) -> Unit,
     modifier: Modifier = Modifier,
     stale: Boolean = false,
 ) {
@@ -88,32 +88,25 @@ private val TAB_PADDING = 16.dp
 private val INDICATOR = 3.dp
 
 @Composable
-private fun TabLabel(tab: Tab, agents: List<AgentSnapshot>, stale: Boolean) {
-    when (tab) {
-        is Tab.Agent -> {
-            val agent = agents.find { it.name == tab.name }
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
-                modifier =
-                    Modifier.clearAndSetSemantics {
-                        contentDescription = agent?.let { describe(it, stale) } ?: tab.name
-                    },
-            ) {
-                val mark = Marks.agent(agent?.stateOf ?: AgentState.Unknown)
-                MarkIcon(if (stale) mark.copy(tone = Tone.Neutral) else mark, null)
-                Text(tab.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (agent != null && agent.unread > 0) {
-                    Text(
-                        "${agent.unread}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Tone.Caution.color(),
-                    )
-                }
-            }
+private fun TabLabel(name: String, agents: List<AgentSnapshot>, stale: Boolean) {
+    val agent = agents.find { it.name == name }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+        modifier =
+            Modifier.clearAndSetSemantics {
+                contentDescription = agent?.let { describe(it, stale) } ?: name
+            },
+    ) {
+        val mark = Marks.agent(agent?.stateOf ?: AgentState.Unknown)
+        MarkIcon(if (stale) mark.copy(tone = Tone.Neutral) else mark, null)
+        Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (agent != null && agent.unread > 0) {
+            Text(
+                "${agent.unread}",
+                style = MaterialTheme.typography.labelSmall,
+                color = Tone.Caution.color(),
+            )
         }
-        Tab.Summary -> Text("Summary")
-        Tab.Brief -> Text("Brief")
-        Tab.Details -> Text("Details")
     }
 }

@@ -22,23 +22,38 @@ import dev.pm.app.model.Snapshot
 import dev.pm.app.update.Update
 import org.unifiedpush.android.connector.UnifiedPush
 
-/** Where a notification leads: the scope, and the agent when one is named. */
-data class Target(val project: String, val scope: String, val agent: String?) {
+/**
+ * Where a notification leads: the scope, and the agent when one is named; `ready` when it says the
+ * feature is ready for review.
+ */
+data class Target(
+    val project: String,
+    val scope: String,
+    val agent: String?,
+    val ready: Boolean = false,
+) {
     fun into(intent: Intent): Intent =
         intent
             .putExtra(EXTRA_PROJECT, project)
             .putExtra(EXTRA_SCOPE, scope)
             .putExtra(EXTRA_AGENT, agent)
+            .putExtra(EXTRA_READY, ready)
 
     companion object {
         private const val EXTRA_PROJECT = "dev.pm.app.project"
         private const val EXTRA_SCOPE = "dev.pm.app.scope"
         private const val EXTRA_AGENT = "dev.pm.app.agent"
+        private const val EXTRA_READY = "dev.pm.app.ready"
 
         fun from(intent: Intent?): Target? {
             val project = intent?.getStringExtra(EXTRA_PROJECT) ?: return null
             val scope = intent.getStringExtra(EXTRA_SCOPE) ?: return null
-            return Target(project, scope, intent.getStringExtra(EXTRA_AGENT))
+            return Target(
+                project,
+                scope,
+                intent.getStringExtra(EXTRA_AGENT),
+                intent.getBooleanExtra(EXTRA_READY, false),
+            )
         }
     }
 }

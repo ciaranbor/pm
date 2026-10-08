@@ -7,6 +7,7 @@ import dev.pm.app.model.AgentSnapshot
 import dev.pm.app.model.Attention
 import dev.pm.app.model.Need
 import dev.pm.app.model.Snapshot
+import dev.pm.app.push.Target
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -16,20 +17,62 @@ class RoutesTest {
     private fun stack(vararg routes: Route) = NavBackStack<NavKey>(*routes)
 
     @Test
-    fun a_target_opens_over_what_is_shown_or_switches_the_tab_of_the_workspace_shown() {
+    fun a_target_opens_over_what_is_shown_or_switches_the_agent_of_the_workspace_shown() {
         val notes = stack(Route.Home, Route.Notes("app"))
-        notes.open(Route.Scope("app", "login", Tab.Agent("qa")))
+        notes.open(Route.Scope("app", "login", "qa"))
         assertEquals(
-            listOf(Route.Home, Route.Notes("app"), Route.Scope("app", "login", Tab.Agent("qa"))),
+            listOf(Route.Home, Route.Notes("app"), Route.Scope("app", "login", "qa")),
             notes.toList(),
         )
 
-        notes.open(Route.Scope("app", "login", Tab.Agent("implementer")))
-        assertEquals(Route.Scope("app", "login", Tab.Agent("implementer")), notes.last())
+        notes.open(Route.Scope("app", "login", "implementer"))
+        assertEquals(Route.Scope("app", "login", "implementer"), notes.last())
         assertEquals(3, notes.size)
 
         notes.open(login)
-        assertEquals(Route.Scope("app", "login", Tab.Agent("implementer")), notes.last())
+        assertEquals(Route.Scope("app", "login", "implementer"), notes.last())
+    }
+
+    @Test
+    fun a_features_page_switches_in_place_and_a_target_for_its_chat_returns_there() {
+        val shown = stack(Route.Home, Route.Scope("app", "login", "qa"))
+        shown.open(Route.Feature("app", "login"))
+        shown.open(Route.Feature("app", "login", Page.Brief))
+        assertEquals(
+            listOf(
+                Route.Home,
+                Route.Scope("app", "login", "qa"),
+                Route.Feature("app", "login", Page.Brief),
+            ),
+            shown.toList(),
+        )
+
+        shown.open(Route.Scope("app", "login", "implementer"))
+        assertEquals(listOf(Route.Home, Route.Scope("app", "login", "implementer")), shown.toList())
+    }
+
+    @Test
+    fun a_ready_alert_opens_the_features_page() {
+        assertEquals(
+            Route.Feature("app", "search"),
+            Target("app", "search", null, ready = true).route(),
+        )
+        assertEquals(Route.Scope("app", "login", "qa"), Target("app", "login", "qa").route())
+    }
+
+    @Test
+    fun up_from_a_features_page_goes_to_its_chat() {
+        val shown =
+            stack(Route.Home, Route.Scope("app", "login", "qa"), Route.Feature("app", "login"))
+        shown.up()
+        assertEquals(listOf(Route.Home, Route.Scope("app", "login", "qa")), shown.toList())
+
+        val fromTarget = stack(Route.Home, Route.Feature("app", "search"))
+        fromTarget.up()
+        assertEquals(
+            listOf(Route.Home, Route.Project("app"), Route.Scope("app", "search")),
+            fromTarget.toList(),
+        )
     }
 
     @Test
@@ -54,10 +97,11 @@ class RoutesTest {
                 Route.Home,
                 Route.Project("app"),
                 login,
+                Route.Feature("app", "login"),
                 Route.Settings,
             )
         shown.leave("app", "search")
-        assertEquals(4, shown.size)
+        assertEquals(5, shown.size)
         shown.leave("app", "login")
         assertEquals(listOf(Route.Home, Route.Project("app")), shown.toList())
     }
@@ -65,7 +109,13 @@ class RoutesTest {
     @Test
     fun a_scope_is_dropped_once_a_snapshot_that_had_it_no_longer_does() {
         val snapshot = Snapshot.parse(SNAPSHOT)
-        val shown = listOf(Route.Home, login, Route.Scope("app", "new"), Route.Scope("app", "main"))
+        val shown =
+            listOf(
+                Route.Home,
+                Route.Feature("app", "login"),
+                Route.Scope("app", "new"),
+                Route.Scope("app", "main"),
+            )
         val seen = mutableSetOf<Pair<String, String>>()
         assertEquals(emptyList<Pair<String, String>>(), snapshot.dropped(shown, seen))
         assertEquals(setOf("app" to "login", "app" to "main"), seen)
@@ -109,29 +159,20 @@ class WorkspaceTabsTest {
     private val snapshot = Snapshot.parse(SNAPSHOT)
 
     @Test
-    fun a_workspace_opens_where_it_is_needed() {
+    fun a_workspace_opens_on_the_agent_it_most_needs() {
         val login = snapshot.feature("app", "login")!!
-        assertEquals(Tab.Agent("implementer"), defaultTab(login, null, login.agents))
+        assertEquals("implementer", defaultAgent(login, null, login.agents))
 
-        val search = snapshot.feature("app", "search")!!
-        assertEquals(Tab.Summary, defaultTab(search, null, emptyList()))
-
-        val asking = AgentSnapshot("qa", "asking")
-        val agents = listOf(AgentSnapshot("implementer", "busy"), asking)
-        assertEquals(Tab.Agent("qa"), defaultTab(null, Attention(), agents))
-        assertEquals(null, defaultTab(null, Attention(), emptyList()))
+        val agents = listOf(AgentSnapshot("implementer", "idle"), AgentSnapshot("qa", "asking"))
+        val ready = snapshot.feature("app", "search")!!.copy(agents = agents)
+        assertEquals("qa", defaultAgent(ready, null, agents))
+        assertEquals(null, defaultAgent(ready, null, emptyList()))
     }
 
     @Test
-    fun a_target_agent_the_snapshot_lacks_still_gets_a_tab_and_main_has_no_pages() {
-        assertEquals(
-            listOf(Tab.Agent("qa"), Tab.Summary, Tab.Brief, Tab.Details),
-            tabsOf("login", emptyList(), Tab.Agent("qa")),
-        )
-        assertEquals(
-            listOf(Tab.Agent("main")),
-            tabsOf(Snapshot.MAIN, listOf(AgentSnapshot("main")), null),
-        )
+    fun a_target_agent_the_snapshot_lacks_still_gets_a_tab() {
+        assertEquals(listOf("qa"), tabsOf(emptyList(), "qa"))
+        assertEquals(listOf("main"), tabsOf(listOf(AgentSnapshot("main")), "main"))
     }
 }
 

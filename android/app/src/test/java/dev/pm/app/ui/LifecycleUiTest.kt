@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasStateDescription
@@ -219,10 +220,57 @@ class LifecycleUiTest {
                 .isNotEmpty()
         }
         compose.onNodeWithText("Merge").assertIsNotEnabled()
-        compose
-            .onNodeWithContentDescription("Merge: Behind main: rebase first")
-            .assertIsNotEnabled()
         assertEquals(emptyList<String>(), synchronized(posted) { posted.toList() })
+    }
+
+    @Test
+    fun a_chats_menu_merge_is_off_with_the_servers_reason() {
+        mergeCheck =
+            MockResponse.Builder()
+                .code(200)
+                .body("""{"mergeable":false,"reason":"Behind main: rebase first"}""")
+                .build()
+        open(Target("app", "login", "implementer"))
+
+        compose.onNodeWithContentDescription("More actions").performClick()
+        compose.waitUntil(WAIT) {
+            compose
+                .onAllNodesWithText("Behind main: rebase first")
+                .fetchSemanticsNodes()
+                .isNotEmpty()
+        }
+        compose
+            .onNode(hasText("Merge") and hasText("Behind main: rebase first"))
+            .assertIsNotEnabled()
+    }
+
+    @Test
+    fun a_feature_page_says_why_it_cant_merge_and_notices_once_it_can() {
+        mergeCheck =
+            MockResponse.Builder()
+                .code(200)
+                .body("""{"mergeable":false,"reason":"Behind main: rebase first"}""")
+                .build()
+        open(Target("app", "login", "implementer"))
+
+        compose.onNodeWithContentDescription("Feature info").performClick()
+        compose.waitUntil(WAIT) {
+            compose
+                .onAllNodesWithText("Can't merge: behind main: rebase first")
+                .fetchSemanticsNodes()
+                .isNotEmpty()
+        }
+        compose.onNodeWithContentDescription("Merge", substring = true).assertIsNotEnabled()
+
+        mergeCheck = MockResponse.Builder().code(200).body("""{"mergeable":true}""").build()
+        compose.mainClock.advanceTimeBy(30_000)
+        compose.waitUntil(WAIT) {
+            compose
+                .onAllNodesWithText("Can't merge: behind main: rebase first")
+                .fetchSemanticsNodes()
+                .isEmpty()
+        }
+        compose.onNodeWithContentDescription("Merge").assertIsEnabled()
     }
 
     @Test
