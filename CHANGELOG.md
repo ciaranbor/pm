@@ -6,6 +6,11 @@ notes.
 
 ## Unreleased
 
+- Removed: `pm upgrade --all`. `pm upgrade` already covers every project, so
+drop the flag from any script or hook that passes it. Updating from 0.5.0 or
+earlier with `pm self-update` runs the removed `pm upgrade --all` and fails
+with a warning, so run `pm upgrade` once afterwards.
+
 ## 0.6.0 — 2026-10-08
 
 - pm's global files follow XDG on macOS as on Linux: settings and the
