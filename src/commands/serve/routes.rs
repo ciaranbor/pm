@@ -16,7 +16,7 @@ use crate::state::project::ProjectEntry;
 use crate::tmux;
 
 use super::transcript::{Agent, DEFAULT_LIMIT, MAX_LIMIT, TranscriptWatch, page_json};
-use super::{Config, input, lifecycle, notes, push};
+use super::{Config, docs, input, lifecycle, notes, push};
 
 pub(super) enum Reply {
     Body {
@@ -207,7 +207,8 @@ fn post(config: &Config, path: &str, body: &str) -> Result<input::Written> {
     }
 }
 
-/// `/v1/projects/{project}/notes`, the project's notes, and
+/// `/v1/projects/{project}/notes`, the project's notes,
+/// `GET /v1/projects/{project}/docs[/{filename}]`, its information store, and
 /// `POST /v1/projects/{project}/{open|close|delete}`; with what a write did,
 /// for the request log.
 fn projects_route(
@@ -219,15 +220,19 @@ fn projects_route(
 ) -> Result<(Reply, Option<String>)> {
     let segments = segments(path);
     let segments: Vec<&str> = segments.iter().map(String::as_str).collect();
-    let (project, action) = match segments[..] {
+    let (project, action, doc) = match segments[..] {
         [
             "projects",
             project,
-            action @ ("notes" | "open" | "close" | "delete"),
-        ] => (project, action),
+            action @ ("notes" | "docs" | "open" | "close" | "delete"),
+        ] => (project, action, None),
+        ["projects", project, "docs", doc] => (project, "docs", Some(doc)),
         _ => return Ok((error(404, "no such endpoint"), None)),
     };
-    if action != "notes" && method != "POST" {
+    if action == "docs" && method != "GET" {
+        return Ok((error(405, "GET is served here"), None));
+    }
+    if !matches!(action, "notes" | "docs") && method != "POST" {
         return Ok((error(405, "no such endpoint for this method"), None));
     }
     if action == "delete" {
@@ -241,6 +246,13 @@ fn projects_route(
         Ok(root) => root,
         Err(missing) => return Ok((error(404, missing), None)),
     };
+    if action == "docs" {
+        let reply = match doc {
+            None => docs::list(&root)?,
+            Some(doc) => docs::get(&root, doc)?,
+        };
+        return Ok((reply, None));
+    }
     if action != "notes" {
         let written = lifecycle::project(config, &root, action)?;
         return Ok((written.reply, Some(written.detail)));

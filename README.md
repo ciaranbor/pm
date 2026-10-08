@@ -429,7 +429,8 @@ Each project has an information store at `.pm/docs/`: todos, issues, ideas,
 findings (the default categories, in `categories.toml`; add your own).
 `main` manages it and keeps it lean: completed items are deleted (git
 history is the record), with durable learnings moved into `findings.md`
-first. The store holds knowledge; messaging is a queue.
+first. The store holds knowledge; messaging is a queue. The phone app
+reads it, beside a project's notes, but doesn't edit it: `main` writes it.
 
 A feature's **summary** is the hand-off its workflow's summary owner writes
 for `main` (`pm workflow show` says what belongs in it), kept at

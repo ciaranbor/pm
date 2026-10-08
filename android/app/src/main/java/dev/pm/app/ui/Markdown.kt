@@ -121,3 +121,42 @@ private val EMPHASIS = Regex("""(\*\*|__|~~|\*|`)(\S(?:.*?\S)?)\1""")
 /** One line of Markdown as plain text, for an excerpt: markers dropped, links as their text. */
 fun plainExcerpt(markdown: String): String =
     markdown.replace(LEAD, "").replace(LINK, "$1").replace(EMPHASIS, "$2").replace(EMPHASIS, "$2")
+
+private val HEADING = Regex("""^ {0,3}#{1,6}(\s|$)""")
+
+/**
+ * `markdown` cut into parts that render alone as they render together, so a long doc can be drawn a
+ * part at a time: before each heading, and in a long stretch without one, at a blank line once a
+ * part passes `longest` characters. Never inside fenced code, nor before an indented line, which
+ * would continue a list item.
+ */
+fun markdownParts(markdown: String, longest: Int = IMMEDIATE): List<String> {
+    val parts = mutableListOf<String>()
+    val part = StringBuilder()
+    fun cut() {
+        if (part.isNotBlank()) parts += part.toString().trim('\n')
+        part.clear()
+    }
+    val lines = markdown.lines()
+    var fenced = false
+    lines.forEachIndexed { i, line ->
+        if (!fenced) {
+            val next = lines.getOrNull(i + 1)
+            val paragraphEnds =
+                line.isBlank() &&
+                    part.length >= longest &&
+                    next != null &&
+                    next.isNotBlank() &&
+                    !next[0].isWhitespace()
+            if (HEADING.containsMatchIn(line)) cut()
+            else if (paragraphEnds) {
+                cut()
+                return@forEachIndexed
+            }
+        }
+        if (FENCE.containsMatchIn(line)) fenced = !fenced
+        part.append(line).append('\n')
+    }
+    cut()
+    return parts
+}

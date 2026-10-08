@@ -2,6 +2,7 @@ package dev.pm.app.api
 
 import dev.pm.app.model.Dialog
 import dev.pm.app.model.DialogAnswer
+import dev.pm.app.model.DocCategory
 import dev.pm.app.model.FeatureInfo
 import dev.pm.app.model.MergeCheck
 import dev.pm.app.model.Notes
@@ -179,6 +180,17 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
         ) {
             json.decodeFromString(Saved.serializer(), it.body.string()).version
         }
+
+    /**
+     * The categories of the project's information store; [PmError.Unsupported] from a server that
+     * predates it.
+     */
+    suspend fun docs(project: String): List<DocCategory> =
+        json.decodeFromString(DocList.serializer(), get(url("projects", project, "docs"))).docs
+
+    /** The doc `filename` of the project's information store, Markdown. */
+    suspend fun doc(project: String, filename: String): String =
+        get(url("projects", project, "docs", filename))
 
     suspend fun screen(project: String, scope: String, agent: String): String =
         get(url("agents", project, scope, agent, "screen"))
@@ -480,6 +492,8 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
     @Serializable private data class Subscription(val endpoint: String, val keys: Keys)
 
     @Serializable private data class Saved(val version: String)
+
+    @Serializable private data class DocList(val docs: List<DocCategory>)
 
     @Serializable private data class Ended(val warnings: List<String> = emptyList())
 
