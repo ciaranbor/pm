@@ -58,9 +58,9 @@ Design decisions you can't recover by reading the tree. Preserve them.
 
 - **Agent definitions** (`agents/<name>.md`) describe a job: what the agent
   does and how it evaluates work. No routing prose.
-- **Workflows** (`workflows/<name>/workflow.md` + `config.toml`) define the
-  per-feature topology: the team, who receives the brief, who hands off to
-  whom, who reports to the user.
+- **Workflows** (`workflows/<name>/workflow.md` + `config.toml`) define a
+  scope's topology (main's is `orchestrator`): the team, who receives the
+  brief, who hands off to whom, who reports to the user.
 - One definition can play different routing roles in different features;
   every agent runs `pm workflow show` (the `pm-workflow` skill) each task.
 - Definitions resolve only from the canonical `.agents/agents/` stores
@@ -110,7 +110,7 @@ Design decisions you can't recover by reading the tree. Preserve them.
 - Team status and the PR-derived `status` are separate: sync can't clobber it.
   `main` has a team status too, `wip` or `blocked`, never `ready`, kept
   outside `features/` so main never lists as a feature.
-- Each `workflow.md` names the single summary owner; content guidance is
+- Each feature workflow names the single summary owner; content guidance is
   single-sourced in `pm workflow show`, never in defs, workflows, or skills.
 - The `feat new` brief is non-repliable: the agent has no `main` reply target.
 

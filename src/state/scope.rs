@@ -14,6 +14,18 @@ use crate::state::paths;
 /// The orchestrator's scope.
 pub const MAIN: &str = "main";
 
+/// The workflow main's scope runs; a project shadows it like any bundled one.
+pub const MAIN_WORKFLOW: &str = "orchestrator";
+
+/// The workflow `scope` runs: [`MAIN_WORKFLOW`] for main, else the one the
+/// feature was created with, if any.
+pub fn workflow(project_root: &Path, scope: &str) -> Result<Option<String>> {
+    if scope == MAIN {
+        return Ok(Some(MAIN_WORKFLOW.to_string()));
+    }
+    Ok(FeatureState::load(&paths::features_dir(project_root), scope)?.workflow)
+}
+
 /// Where a scope's team stands, set by its agents with `pm feat status`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TeamStatus {

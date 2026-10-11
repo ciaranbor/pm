@@ -347,9 +347,9 @@ Two decoupled layers:
 - **Agent definitions** describe an agent's *job*: what it does and how it
   evaluates work. They carry no routing, and no tool allowlist — each
   agent has its harness's full tool set.
-- **Workflows** define a feature's *topology*: the team, who receives the
+- **Workflows** define a scope's *topology*: the team, who receives the
   brief, who hands off to whom, who reports to the user, who writes the
-  summary.
+  summary. Main's scope runs the `orchestrator` workflow.
 
 So one `implementer` plays different roles in different features. Every
 agent runs `pm workflow show` at the start of each task to learn its

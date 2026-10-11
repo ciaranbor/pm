@@ -127,6 +127,11 @@ pub enum PmError {
     WorkflowNotFound(String),
 
     #[error(
+        "Workflow '{0}' runs the project's main scope, not a feature; pick another with `pm workflow list`"
+    )]
+    MainScopeWorkflow(String),
+
+    #[error(
         "{kind} '{name}' is bundled but disabled by `[bundled.disable] {key}` in the global pm config.\n  \
          Hint: add a project custom at {custom}, or remove '{name}' from that list and run \
          `pm upgrade`."
