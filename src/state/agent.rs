@@ -115,14 +115,30 @@ impl AgentRegistry {
 
     /// Save the agent registry for a feature.
     pub fn save(&self, agents_dir: &Path, feature: &str) -> Result<()> {
-        std::fs::create_dir_all(agents_dir)?;
         let path = agents_dir.join(format!("{feature}.toml"));
-        let content = toml::to_string_pretty(self)?;
+        crate::fs_utils::write_atomic(&path, toml::to_string_pretty(self)?.as_bytes())
+    }
 
-        let tmp = agents_dir.join(format!(".{feature}.toml.tmp"));
-        std::fs::write(&tmp, &content)?;
-        std::fs::rename(&tmp, &path)?;
-        Ok(())
+    /// Load the feature's registry, apply `change`, and save it if that
+    /// changed it, holding a lock on `agents_dir` throughout. It excludes
+    /// only other `update` callers: for writers that can run alongside one
+    /// another (a harness hook, a spawn while its team's hooks run), where
+    /// a plain load and save would drop the other's write.
+    pub fn update<R>(
+        agents_dir: &Path,
+        feature: &str,
+        change: impl FnOnce(&mut Self) -> Result<R>,
+    ) -> Result<R> {
+        std::fs::create_dir_all(agents_dir)?;
+        let lock = std::fs::File::open(agents_dir)?;
+        lock.lock()?;
+        let loaded = Self::load(agents_dir, feature)?;
+        let mut registry = loaded.clone();
+        let changed = change(&mut registry)?;
+        if registry != loaded {
+            registry.save(agents_dir, feature)?;
+        }
+        Ok(changed)
     }
 
     /// When the registry file for a feature was last written; `None` when
@@ -174,6 +190,36 @@ impl AgentRegistry {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn concurrent_updates_each_land() {
+        let dir = tempdir().unwrap();
+        let agents_dir = dir.path().join("agents");
+        std::thread::scope(|scope| {
+            for n in 0..16 {
+                let agents_dir = &agents_dir;
+                scope.spawn(move || {
+                    AgentRegistry::update(agents_dir, "login", |registry| {
+                        registry.register(&format!("agent-{n}"), make_agent(&n.to_string()));
+                        Ok(())
+                    })
+                    .unwrap();
+                });
+            }
+        });
+        let registry = AgentRegistry::load(&agents_dir, "login").unwrap();
+        assert_eq!(registry.names().len(), 16);
+        assert_eq!(std::fs::read_dir(&agents_dir).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn an_update_that_changes_nothing_writes_nothing() {
+        let dir = tempdir().unwrap();
+        let agents_dir = dir.path().join("agents");
+        let found = AgentRegistry::update(&agents_dir, "gone", |r| Ok(r.get("x").is_some()));
+        assert!(!found.unwrap());
+        assert!(!agents_dir.join("gone.toml").exists());
+    }
 
     fn make_agent(session_id: &str) -> AgentEntry {
         AgentEntry {

@@ -187,7 +187,9 @@ Agents also message across projects: `pm msg send main --project tools
 another project or request something of it without you relaying it.
 
 When an agent misbehaves, `pm agent restart <name>` respawns it on the same
-conversation; `pm agent spawn <name>` adds one to the feature. `pm doctor`
+conversation, or on a new one, saying so, when there is none to resume (its
+harness changed, or it never took a turn); `pm agent spawn <name>` adds one
+to the feature. `pm doctor`
 reports an agent whose harness has exited.
 
 A spawn or restart succeeds once the agent's harness has started its
@@ -391,8 +393,9 @@ Agents never sit idle: after every turn, pm's waiter waits until the agent
 has unread messages, then wakes it to read them, so the brief at feature
 creation is just the first message. The turn has ended meanwhile, so the
 agent's prompt is yours. An agent left with no waiter — interrupted or
-failed in a turn a message started, its harness ending the waiter, or a
-codex turn interrupted at all — is `unarmed`: no message wakes it until
+failed in a turn a message started, its harness ending the waiter, a
+session whose start armed none, or a codex turn interrupted at all — is
+`unarmed`: no message wakes it until
 something prompts it. [`pm msg send`](#messaging) re-arms it when its input
 line is empty and takes text (not vim NORMAL mode) and no one is using its
 pane (a tmux mode such as copy or tree mode, or shown on an attached

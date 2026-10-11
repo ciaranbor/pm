@@ -202,8 +202,6 @@ pub(super) fn spawn_session_with_config(
     // Register before the command is sent: the harness's SessionStart hook
     // reads the entry, and a hook that fires first would find no agent —
     // on codex that means no role and no baseline, silently.
-    let agents_dir = paths::agents_dir(params.project_root);
-    let mut registry = AgentRegistry::load(&agents_dir, params.feature)?;
     // Only persist `agent_definition` when it explicitly differs from
     // the registry key — keeps existing on-disk TOML clean for the
     // common case where display name == definition.
@@ -211,19 +209,23 @@ pub(super) fn spawn_session_with_config(
         Some(def) if def != name => Some(def.to_string()),
         _ => None,
     };
-    registry.register(
-        name,
-        AgentEntry {
-            agent_type: AgentType::Agent,
-            session_id: registered_session(&pre.session_id, &spec),
-            window_name: name.to_string(),
-            active: true,
-            agent_definition: stored_definition,
-            harness: settings.harness,
-            spawned_at: Some(chrono::Utc::now()),
+    let entry = AgentEntry {
+        agent_type: AgentType::Agent,
+        session_id: registered_session(&pre.session_id, &spec),
+        window_name: name.to_string(),
+        active: true,
+        agent_definition: stored_definition,
+        harness: settings.harness,
+        spawned_at: Some(chrono::Utc::now()),
+    };
+    AgentRegistry::update(
+        &paths::agents_dir(params.project_root),
+        params.feature,
+        |registry| {
+            registry.register(name, entry);
+            Ok(())
         },
-    );
-    registry.save(&agents_dir, params.feature)?;
+    )?;
     // Replaces whatever an earlier spawn left; the session's start
     // clears it, so one that outlives the start grace is a dialog
     // before the session (README, "Follow what needs you").
@@ -297,9 +299,7 @@ mod tests {
         let (session_name, feature) = setup_project(dir.path(), &server);
         agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
         let agents_dir = paths::agents_dir(dir.path());
-        let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
-        registry.get_mut("reviewer").unwrap().session_id = "sess-abc123".to_string();
-        registry.save(&agents_dir, &feature).unwrap();
+        record_session(dir.path(), &feature, "reviewer", "sess-abc123");
         tmux::kill_session(server.name(), &session_name).unwrap();
         tmux::create_session(server.name(), &session_name, &dir.path().join("login")).unwrap();
 
@@ -412,14 +412,13 @@ mod tests {
             "PM_AGENT_NAME=reviewer && codex --no-daemon -a 'never' -s 'danger-full-access' 'Stand by.'",
         );
         let agents_dir = paths::agents_dir(dir.path());
-        let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
         assert_eq!(registry.get("reviewer").unwrap().harness, Harness::Codex);
         assert!(Harness::Codex.worktree_trusted(&paths::home_dir().unwrap(), &worktree));
 
         // codex starts its waiter only as a turn ends, so a resume is
         // launched with a prompt too: one that calls off nothing.
-        registry.get_mut("reviewer").unwrap().session_id = "codex-session".to_string();
-        registry.save(&agents_dir, &feature).unwrap();
+        record_session(dir.path(), &feature, "reviewer", "codex-session");
         tmux::kill_session(server.name(), &session_name).unwrap();
         tmux::create_session(server.name(), &session_name, &worktree).unwrap();
         let (outcome, _, _) =

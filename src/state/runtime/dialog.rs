@@ -331,6 +331,26 @@ pub fn dialog_answer_taken(project_root: &Path, scope: &str, agent: &str, id: &s
     dialog_file(project_root, scope, agent, id, TAKEN).is_some_and(|f| f.exists())
 }
 
+/// Whether a dialog of the agent's closed with its hook taking an answer at
+/// or after `since`.
+pub fn dialog_answered_since(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    since: DateTime<Utc>,
+) -> bool {
+    let Ok(entries) = std::fs::read_dir(dialogs_dir(project_root, scope, agent)) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        entry.file_name().to_string_lossy().ends_with(TAKEN)
+            && entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .is_ok_and(|at| DateTime::<Utc>::from(at) >= since)
+    })
+}
+
 /// Leave `answer` for its dialog's hook, unless an answer is already left
 /// for it: false then, so of two answers the first stands. Linked into
 /// place whole, so the hook never reads it half written.

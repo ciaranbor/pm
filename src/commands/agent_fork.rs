@@ -18,7 +18,8 @@ use super::agent_spawn::{SpawnParams, notes_suffix, spawn_session};
 ///
 /// Errors if:
 /// - `source` does not exist in the registry
-/// - `source` has no `session_id` (nothing to fork from)
+/// - `source` has no `session_id`, or its harness has no conversation for
+///   it (a session that never took a turn): nothing to fork from
 /// - `new_name` already exists in the registry
 pub fn agent_fork(
     project_root: &Path,
@@ -85,6 +86,18 @@ pub fn agent_fork(
             "agent '{source}' ran on harness {}, but config now selects {harness} for \
              '{inherited_definition}' — its session cannot be forked across harnesses",
             source_entry.harness
+        )));
+    }
+
+    if harness.resume_needs_conversation()
+        && source_entry
+            .conversation(project_root, feature, source)?
+            .is_none()
+    {
+        return Err(PmError::Agent(format!(
+            "agent '{source}' has no conversation to fork: {harness} has none for session {} \
+             (it never took a turn); spawn a new agent instead",
+            source_entry.session_id
         )));
     }
 
@@ -169,8 +182,8 @@ mod tests {
         (session_name, feature_name.to_string())
     }
 
-    /// Spawn a source agent and stamp a session_id (simulating what
-    /// claude's SessionStart hook would do).
+    /// Spawn a source agent and record its session with a conversation
+    /// (what claude's SessionStart hook and first turn would leave).
     fn spawn_source_with_session_id(
         dir: &Path,
         feature: &str,
@@ -179,10 +192,7 @@ mod tests {
         server: &TestServer,
     ) {
         agent_spawn::agent_spawn(dir, feature, name, None, None, server.name()).unwrap();
-        let agents_dir = paths::agents_dir(dir);
-        let mut registry = AgentRegistry::load(&agents_dir, feature).unwrap();
-        registry.get_mut(name).unwrap().session_id = session_id.to_string();
-        registry.save(&agents_dir, feature).unwrap();
+        agent_spawn::test_support::record_session(dir, feature, name, session_id);
     }
 
     #[test]
@@ -285,9 +295,12 @@ mod tests {
         )
         .unwrap();
         let agents_dir = paths::agents_dir(dir.path());
-        let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
-        registry.get_mut("frontend-dev").unwrap().session_id = "src-session-id".to_string();
-        registry.save(&agents_dir, &feature).unwrap();
+        agent_spawn::test_support::record_session(
+            dir.path(),
+            &feature,
+            "frontend-dev",
+            "src-session-id",
+        );
 
         agent_fork(
             dir.path(),
@@ -302,6 +315,45 @@ mod tests {
         let fork_entry = registry.get("frontend-dev-2").unwrap();
         // Fork inherits the source's stored definition
         assert_eq!(fork_entry.agent_definition.as_deref(), Some("implementer"));
+    }
+
+    #[test]
+    fn fork_refuses_a_session_that_never_took_a_turn() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+        agent_spawn::agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name())
+            .unwrap();
+        let agents_dir = paths::agents_dir(dir.path());
+        let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        registry.get_mut("reviewer").unwrap().session_id = "sess-unturned".to_string();
+        registry.save(&agents_dir, &feature).unwrap();
+
+        let err = agent_fork(
+            dir.path(),
+            &feature,
+            "reviewer",
+            "reviewer-2",
+            server.name(),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            PmError::Agent(
+                "agent 'reviewer' has no conversation to fork: claude-code has none for session \
+                 sess-unturned (it never took a turn); spawn a new agent instead"
+                    .into()
+            )
+            .to_string()
+        );
+        let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        assert!(registry.get("reviewer-2").is_none());
+        assert!(
+            tmux::find_window(server.name(), &session_name, "reviewer-2")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

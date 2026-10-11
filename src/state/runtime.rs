@@ -33,7 +33,7 @@
 //!
 //! The **start stamp** is a file the harness's session start writes
 //! ([`hooks_session_start`](crate::commands::hooks_session_start)), every
-//! harness's, a resume's included, so its existence says the harness got
+//! harness's, a resume's included but not a compaction's, so its existence says the harness got
 //! through its own startup and is up, and its mtime says when; the launch
 //! check reads it ([`launch_check`](crate::commands::launch_check)). Every
 //! spawn removes it with the launch stamp.
@@ -396,12 +396,20 @@ pub fn clear_restart_at_idle(project_root: &Path, scope: &str, agent: &str) -> R
     }
 }
 
+/// Whether `agent` is still in its scope's registry. A feature's or
+/// project's delete removes the entry before it kills the agent's session,
+/// so a hook that session's end signals checks this before it writes: a
+/// write would bring back state the delete removed.
+pub fn registered(project_root: &Path, scope: &str, agent: &str) -> bool {
+    crate::state::agent::AgentRegistry::load(&paths::agents_dir(project_root), scope)
+        .is_ok_and(|registry| registry.get(agent).is_some())
+}
+
 /// Append `line` to the agent's Stop hook log, stamped with the time and
 /// this process's pid. Best-effort: a log that can't be written is skipped,
-/// as is one for a project whose `.pm` is gone, which a hook signalled by
-/// its project's delete would otherwise bring back.
+/// as is one for an agent no longer [registered].
 pub fn log_stop_hook(project_root: &Path, scope: &str, agent: &str, line: &str) {
-    if !paths::pm_dir(project_root).is_dir() {
+    if !registered(project_root, scope, agent) {
         return;
     }
     let Ok(dir) = agent_dir(project_root, scope, agent) else {

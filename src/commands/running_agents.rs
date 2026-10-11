@@ -23,6 +23,10 @@
 //! idle: a superseded one lingers up to a poll interval, maybe into its
 //! agent's next turn.
 //!
+//! An agent with no marker and no waiter is busy unless nothing has run
+//! since its session started, past a grace: then that start armed no
+//! waiter, and it is unarmed.
+//!
 //! [`Windows`] reads every pane on the server and the process table once,
 //! so classifying any number of agents costs one `tmux` and one `ps` call.
 
@@ -213,6 +217,11 @@ pub fn classify(
     if liveness(processes, harness, config) == Liveness::Dead {
         return (Liveness::Dead, None);
     }
+    let at = at.or_else(|| {
+        (!waiter)
+            .then(|| never_armed(project_root, scope, name, Utc::now()))
+            .flatten()
+    });
     let at = at.map(|w| match w.kind {
         WaitingKind::Background if !waiter => Waiting {
             kind: WaitingKind::Idle,
@@ -222,6 +231,38 @@ pub fn classify(
         _ => w,
     });
     (Liveness::Busy, at)
+}
+
+/// What an agent with no marker and no waiter is at when its session
+/// started over [`START_GRACE`](super::doctor::START_GRACE) ago and no hook
+/// has run since — no prompt, no tool call, no waiter's marker: its start
+/// armed no waiter, so it sits at its prompt with nothing to wake it. The
+/// start is claimed like a turn end ([`runtime::claim_turn_end`]).
+fn never_armed(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    now: DateTime<Utc>,
+) -> Option<Waiting> {
+    let started = runtime::started_at(project_root, scope, agent)?;
+    let grace = chrono::Duration::from_std(super::doctor::START_GRACE).ok()?;
+    if now - started <= grace
+        || runtime::last_activity(project_root, scope, agent).is_some_and(|at| at > started)
+    {
+        return None;
+    }
+    let entry = format!("start-{}", started.timestamp_millis());
+    if runtime::turn_end_claimed(project_root, scope, agent, &entry) {
+        return None;
+    }
+    Some(Waiting {
+        since: started,
+        entry: Some(entry),
+        ..Waiting::now(
+            WaitingKind::HookEnded,
+            Some("its session started, but armed no waiter".into()),
+        )
+    })
 }
 
 /// Whether `agent`'s waiter is one of `processes`.

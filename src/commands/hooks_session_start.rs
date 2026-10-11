@@ -17,7 +17,8 @@
 //! and one started now would read the agent idle mid-turn.
 //!
 //! A compaction (`source: compact`) is no start: the session runs on, and
-//! the hook neither clears the marker nor starts a waiter. Claude Code
+//! the hook neither clears the marker, stamps the start, nor starts a
+//! waiter. Claude Code
 //! compacts mid-turn, and idle too (2.1.294, "Compacted while idle"), where
 //! the waiter of the last turn still holds the agent: clearing its idle
 //! marker would leave an armed agent reading busy.
@@ -162,8 +163,8 @@ fn parse_payload(json_str: &str) -> crate::error::Result<Payload> {
     })
 }
 
-/// Clear the agent's waiting marker unless the session was compacted, stamp
-/// its activity and its start, record its session paths, and update its
+/// Stamp the agent's activity and, unless the session was compacted, its
+/// start, clearing its waiting marker; record its session paths, and update its
 /// session_id in the registry, returning the harness and effective definition its entry records. An
 /// unregistered agent is left alone (`None`): the spawn registers before
 /// launching, so this is a non-pm session.
@@ -173,35 +174,34 @@ fn record_start(
     agent_name: &str,
     payload: &Payload,
 ) -> Result<Option<(Harness, String)>> {
-    let agents_dir = paths::agents_dir(project_root);
-    let mut registry = AgentRegistry::load(&agents_dir, feature)?;
-
-    let Some(entry) = registry.get_mut(agent_name) else {
+    let recorded = AgentRegistry::update(&paths::agents_dir(project_root), feature, |registry| {
+        Ok(registry.get_mut(agent_name).map(|entry| {
+            entry.session_id = payload.session_id.clone();
+            (
+                entry.harness,
+                entry.effective_definition(agent_name).to_string(),
+            )
+        }))
+    })?;
+    let Some((harness, _)) = &recorded else {
         return Ok(None);
     };
     runtime::touch_activity(project_root, feature, agent_name)?;
-    runtime::mark_started(project_root, feature, agent_name)?;
     if !compacted(payload) {
+        runtime::mark_started(project_root, feature, agent_name)?;
         runtime::clear_waiting(project_root, feature, agent_name)?;
     }
     let session_path = |which, path: Option<&Path>| {
         runtime::write_session_path(project_root, feature, agent_name, which, path)
     };
     session_path(SessionPath::Transcript, payload.transcript.as_deref())?;
-    let config_dir = entry
-        .harness
+    let config_dir = harness
         .config_dir_env()
         .and_then(std::env::var_os)
         .filter(|dir| !dir.is_empty())
         .map(PathBuf::from);
     session_path(SessionPath::ConfigDir, config_dir.as_deref())?;
-    entry.session_id = payload.session_id.clone();
-    let recorded = (
-        entry.harness,
-        entry.effective_definition(agent_name).to_string(),
-    );
-    registry.save(&agents_dir, feature)?;
-    Ok(Some(recorded))
+    Ok(recorded)
 }
 
 #[cfg(test)]

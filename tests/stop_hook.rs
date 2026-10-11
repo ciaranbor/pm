@@ -14,9 +14,12 @@ use tempfile::tempdir;
 
 const AGENT: &str = "implementer";
 
+/// A project whose main scope has the agent registered: a hook writes
+/// nothing for an agent that is not.
 fn project(dir: &Path) {
     std::fs::create_dir_all(dir.join(".pm")).unwrap();
     std::fs::create_dir_all(dir.join("main")).unwrap();
+    register(dir, Harness::ClaudeCode);
 }
 
 /// The blocking hook under `/bin/sh -c`, with the built `pm` first on
@@ -602,6 +605,11 @@ fn a_compaction_and_a_codex_session_start_run_no_waiter() {
         assert!(out.status.success(), "{harness} {source}: {out:?}");
         assert_eq!(runtime::read_waiter(dir.path(), "main", AGENT), None);
         assert_eq!(kind(dir.path()), None, "{harness} {source}");
+        assert_eq!(
+            runtime::started_at(dir.path(), "main", AGENT).is_some(),
+            source != "compact",
+            "a compaction is no start that should have armed a waiter"
+        );
         let registry =
             pm::state::agent::AgentRegistry::load(&paths::agents_dir(dir.path()), "main").unwrap();
         assert_eq!(registry.get(AGENT).unwrap().session_id, "s1", "recorded");

@@ -75,6 +75,18 @@ impl Harness {
         })
     }
 
+    /// Whether resuming a session needs its [conversation](Self::conversation)
+    /// on disk: a file-store harness's resume exits ("No conversation found")
+    /// for a session that never wrote one, as a session that never took a
+    /// turn may not have. opencode checks its own store at
+    /// [`pre_launch`](Self::pre_launch).
+    pub fn resume_needs_conversation(self) -> bool {
+        match self {
+            Harness::ClaudeCode | Harness::Codex => true,
+            Harness::OpenCode => false,
+        }
+    }
+
     /// The harness's name in an export's file and root directory names.
     pub fn export_tag(self) -> &'static str {
         match self {
