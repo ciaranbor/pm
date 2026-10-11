@@ -407,9 +407,9 @@ pub enum HarnessAgentsCommands {
 
 #[derive(Subcommand)]
 pub enum HarnessSettingsCommands {
-    /// List settings files (main or feature)
+    /// List a scope's settings files
     List {
-        /// Feature name (detected from CWD if omitted; works from main worktree too)
+        /// Scope: `main` or a feature (detected from CWD if omitted)
         name: Option<String>,
     },
     /// Push feature's settings to main

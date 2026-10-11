@@ -8,7 +8,7 @@ use pm::harness::Harness;
 use pm::state::paths;
 use pm::state::project::GlobalConfig;
 
-use super::scope::{optional_project_root, resolve_feature_name, resolve_scope};
+use super::scope::{optional_project_root, resolve_feature_name, resolve_scope_with_flag};
 use super::window::{
     agent_window, publish, push, restart_at_idle, running_agent, tmux_server_from_env,
 };
@@ -21,22 +21,13 @@ pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
             match command {
                 HarnessSettingsCommands::List { name } => {
-                    let scope = match name {
-                        Some(n) => n,
-                        None => resolve_scope(&project_root)?,
-                    };
-                    let (label, lines) = if scope == "main" {
-                        (
-                            "main".to_string(),
-                            commands::harness_settings::list_main(&project_root, harness)?,
-                        )
-                    } else {
-                        let lines =
-                            commands::harness_settings::list(&project_root, &scope, harness)?;
-                        (scope, lines)
-                    };
+                    let scope = resolve_scope_with_flag(&project_root, name)?;
+                    let lines = commands::harness_settings::list(
+                        &paths::scope_worktree(&project_root, &scope),
+                        harness,
+                    )?;
                     if lines.is_empty() {
-                        println!("No settings files found for '{label}'");
+                        println!("No settings files found for '{scope}'");
                     } else {
                         for line in lines {
                             println!("{line}");

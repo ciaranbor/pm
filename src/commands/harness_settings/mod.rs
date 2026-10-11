@@ -10,7 +10,7 @@ mod merge;
 mod transfer;
 
 pub use diff::diff;
-pub use list::{list, list_main};
+pub use list::list;
 pub use merge::merge;
 pub use transfer::{pull, push};
 
