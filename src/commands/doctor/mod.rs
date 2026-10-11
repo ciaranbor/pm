@@ -6,6 +6,7 @@ mod agents;
 mod assets;
 mod config;
 mod hooks;
+mod install;
 mod report;
 mod scope;
 mod warnings;
@@ -54,9 +55,6 @@ pub enum IssueKind {
     PrCheckFailed,
     /// pm hooks not installed in the harness's user-level settings file.
     HooksNotInstalled,
-    /// pm hook entries an earlier release wrote into a project-level
-    /// settings file are still there.
-    StaleProjectHooks,
     /// A canonical agent definition has no projected copy for a harness in
     /// use, so validation passes but the harness can't launch it.
     AssetNotProjected,
@@ -183,7 +181,7 @@ enum FixAction {
     },
     /// Update feature status to match GH PR state.
     UpdateStatus { new_status: FeatureStatus },
-    /// Install the pm hooks at the user level and strip them from project files.
+    /// Install the pm hooks at the user level.
     InstallStopHook,
     /// (Re)install the bundled assets into the global tier.
     InstallGlobalAssets,

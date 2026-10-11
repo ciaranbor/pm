@@ -10,7 +10,6 @@ use super::hooks::hook_issues;
 use super::{Depth, Finding, Fix, FixAction, Issue, IssueKind, PROJECT};
 use crate::commands::bundled_disable::Disabled;
 use crate::commands::feat_delete;
-use crate::commands::hooks_install;
 use crate::error::Result;
 use crate::harness::Probe;
 use crate::state::feature::{FeatureState, FeatureStatus};
@@ -211,16 +210,6 @@ fn project_issues(
     main_branch: Option<&str>,
 ) -> Result<Vec<Issue>> {
     let mut issues = hook_issues(project_root, probe)?;
-    for path in hooks_install::stale_project_files(project_root)? {
-        issues.push(Issue {
-            kind: IssueKind::StaleProjectHooks,
-            message: format!(
-                "pm hooks still in {} (run `pm harness hooks install`)",
-                path.strip_prefix(project_root).unwrap_or(&path).display()
-            ),
-            fix: Fix::Auto(FixAction::InstallStopHook),
-        });
-    }
     issues.extend(harness_config_issues(project_root)?);
     issues.extend(legacy_vanilla_row_issues(project_root)?);
     issues.extend(asset_issues(project_root, projections)?);

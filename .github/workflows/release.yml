@@ -76,10 +76,13 @@ jobs:
       SIGNER_SHA256: 088ab70bc5d231494e285b9255ab6b73551abc23c0556e5ec0e5cee20123abec
     steps:
       - uses: actions/checkout@v7
+      # Restores the cache android.yml saves from main: a tag's own cache is
+      # visible to that tag alone.
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
+          cache: gradle
       - name: Write the signing key
         env:
           PM_KEYSTORE_B64: ${{ secrets.PM_KEYSTORE_B64 }}

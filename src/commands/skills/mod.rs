@@ -46,10 +46,10 @@ pub use global_store::{
     GlobalStore, install_global, install_global_dry_run, install_global_dry_run_in,
     install_global_in,
 };
+pub(crate) use migration::scoped_worktrees_on_disk;
 pub use migration::{
     is_migrated, migrate_project_to_global, stale_bundled_copies, write_migration_marker,
 };
-pub(crate) use migration::{scoped_worktrees_on_disk, worktrees_on_disk};
 pub use projection::{global_customs_in, harnesses_in_use, project_assets};
 
 use bundled::{is_installed, items_of_kind};

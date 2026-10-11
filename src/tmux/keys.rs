@@ -94,7 +94,8 @@ pub fn prefix_table(server: Option<&str>) -> Result<BTreeMap<String, Binding>> {
 /// The bindings tmux makes in the prefix table by default, by key name as
 /// [`prefix_table`] has it, each as the config line that makes it, note
 /// included. Read from a server of its own started without a config, which
-/// exits once it has answered.
+/// exits once it has answered; its socket, which tmux leaves behind, is
+/// removed.
 pub fn default_prefix_table() -> Result<BTreeMap<String, String>> {
     let server = format!("pm-defaults-{}", std::process::id());
     let output = run_tmux(
@@ -103,6 +104,10 @@ pub fn default_prefix_table() -> Result<BTreeMap<String, String>> {
             "-f",
             "/dev/null",
             "start-server",
+            ";",
+            "display-message",
+            "-p",
+            "#{socket_path}",
             ";",
             "list-keys",
             "-T",
@@ -118,7 +123,11 @@ pub fn default_prefix_table() -> Result<BTreeMap<String, String>> {
     )?;
     let mut lines = BTreeMap::new();
     let mut notes = BTreeMap::new();
-    for line in output.lines() {
+    let mut output = output.lines().peekable();
+    if let Some(socket) = output.next_if(|line| line.starts_with('/')) {
+        let _ = std::fs::remove_file(socket);
+    }
+    for line in output {
         let Some(rest) = line.strip_prefix("bind-key") else {
             if let Some((key, note)) = line.trim_start().split_once(char::is_whitespace) {
                 notes.insert(key.to_string(), note.trim().to_string());
@@ -223,6 +232,11 @@ mod tests {
         let made = prefix_table(server.name()).unwrap();
         let defaults = default_prefix_table().unwrap();
         assert!(defaults.contains_key("\\;"), "{:?}", defaults.keys());
+        let throwaway = format!("pm-defaults-{}", std::process::id());
+        assert!(
+            !crate::testing::server_socket_exists(&throwaway),
+            "the defaults' server left its socket"
+        );
 
         let mut commands: Vec<Command> = vec![vec![
             "unbind-key".into(),

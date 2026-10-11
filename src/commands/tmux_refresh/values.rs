@@ -3,7 +3,6 @@
 
 use chrono::{DateTime, Utc};
 
-use crate::state::scope;
 use crate::tmux::options::format_text;
 
 use super::super::attention::{
@@ -56,19 +55,21 @@ fn reason(attention: &Attention) -> Option<String> {
     detail.map(format_text).filter(|r| !r.is_empty())
 }
 
-/// A main session has no feature. Its badge is its main agent's, unless
-/// it is blocked: then, as a feature's, its attention's. An asking main
-/// keeps the agent's badge, which shows the question.
+/// A main session has no feature. Its badge is its `orchestrator`'s (the
+/// agent [`crate::state::scope::orchestrator`] names), unless it is blocked: then, as a
+/// feature's, its attention's. An asking main keeps the agent's badge,
+/// which shows the question.
 pub(super) fn main_values(
     project: &str,
     main: &ScopeSnapshot,
+    orchestrator: &str,
     judged: &Judged,
     now: DateTime<Utc>,
 ) -> Vec<(&'static str, Option<String>)> {
     let lead = main
         .agents
         .iter()
-        .find(|a| a.name == scope::DEFAULT_ORCHESTRATOR)
+        .find(|a| a.name == orchestrator)
         .or(main.agents.first());
     let blocked = main.attention.kind == AttentionKind::Blocked;
     let [activity, activity_label] = main_activity(main, lead.filter(|_| !blocked), now)
@@ -196,6 +197,33 @@ mod tests {
             agent: None,
         };
         assert_eq!(reason(&stalled).as_deref(), Some(STALLED));
+    }
+
+    #[test]
+    fn mains_badge_is_its_orchestrators_whatever_it_is_called() {
+        let agent = |name: &str, state| AgentSnapshot {
+            name: name.into(),
+            state,
+            unread: 0,
+            window: None,
+            pane: None,
+            waiting: None,
+        };
+        let main = ScopeSnapshot::main_of(
+            vec![
+                agent("main", AgentState::Busy),
+                agent("boss", AgentState::Idle),
+            ],
+            Default::default(),
+        );
+        let badge_of = |orchestrator| {
+            main_values("app", &main, orchestrator, &Judged::default(), Utc::now())
+                .into_iter()
+                .find(|(option, _)| *option == BADGE)
+                .and_then(|(_, value)| value)
+        };
+        assert_eq!(badge_of("boss"), Some(badge::agent(AgentState::Idle, 0)));
+        assert_eq!(badge_of("main"), Some(badge::agent(AgentState::Busy, 0)));
     }
 
     #[test]

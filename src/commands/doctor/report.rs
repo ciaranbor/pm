@@ -109,6 +109,7 @@ fn run(
     warnings.extend(registry_warnings(projects_dir)?);
     warnings.extend(serve_warnings(depth));
     warnings.extend(keychain_warning(depth));
+    warnings.extend(super::install::install_warnings(depth));
 
     let findings = diagnose(project_root, projects_dir, tmux_server, depth)?;
     let feature_count = FeatureState::list(&paths::features_dir(project_root))?.len();
@@ -229,7 +230,7 @@ fn apply_fix(
             git::add_worktree(main_repo, worktree_path, branch)?;
         }
         FixAction::InstallStopHook => {
-            hooks_install::install(Some(project_root))?;
+            hooks_install::install()?;
         }
         FixAction::RecordMainBranch { branch } => {
             let mut entry = ProjectEntry::load(projects_dir, project_name)?;

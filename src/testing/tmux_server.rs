@@ -42,8 +42,15 @@ extern "C" fn atexit_kill_shared_server() {
     if pid == 0 {
         return;
     }
-    let name = format!("pm-test-{pid}");
-    let _ = crate::tmux::kill_server(Some(&name));
+    kill_test_server(&format!("pm-test-{pid}"));
+}
+
+/// Kill the test server on socket `name` and unlink the socket, which tmux
+/// leaves behind after `kill-server` (3.8 does even for a live server), so
+/// it would list as a stale sandbox.
+fn kill_test_server(name: &str) {
+    let _ = crate::tmux::kill_server(Some(name));
+    let _ = std::fs::remove_file(tmux_socket_dir().join(name));
 }
 
 /// The shell every window of the shared test server runs.
@@ -66,8 +73,7 @@ pub(super) const HERMETIC_SHELL: &str = "/bin/sh";
 fn start_hermetic_server(name: &str) -> bool {
     // A socket left under `name` by a dead run whose pid ours reuses would
     // stop tmux from starting a server on it.
-    let _ = crate::tmux::kill_server(Some(name));
-    let _ = std::fs::remove_file(tmux_socket_dir().join(name));
+    kill_test_server(name);
     std::process::Command::new("tmux")
         .env("SHELL", HERMETIC_SHELL)
         .env("PATH", window_path())
@@ -134,7 +140,7 @@ fn tmux_stdout(server: Option<&str>, args: &[&str]) -> String {
 
 impl Drop for OwnServer {
     fn drop(&mut self) {
-        let _ = crate::tmux::kill_server(self.name());
+        kill_test_server(&self.0);
     }
 }
 

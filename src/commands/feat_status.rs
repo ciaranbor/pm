@@ -136,14 +136,15 @@ pub fn request(
         (None, name) => Request::View { name },
         (Some(word), name) => match <Progress as clap::ValueEnum>::from_str(&word, false) {
             Ok(progress) => Request::Set { progress, name },
-            Err(_) if name.is_none() && scope::exists(project_root, &word) => {
-                Request::View { name: Some(word) }
-            }
-            Err(_) if name.is_none() => {
-                return Err(PmError::SafetyCheck(format!(
-                    "'{word}' is neither a status (wip, blocked, ready) nor a scope"
-                )));
-            }
+            Err(_) if name.is_none() => match scope::check(project_root, &word) {
+                Ok(()) => Request::View { name: Some(word) },
+                Err(e @ PmError::WorktreeMissing { .. }) => return Err(e),
+                Err(_) => {
+                    return Err(PmError::SafetyCheck(format!(
+                        "'{word}' is neither a status (wip, blocked, ready) nor a scope"
+                    )));
+                }
+            },
             Err(_) => {
                 return Err(PmError::SafetyCheck(format!(
                     "'{word}' is not a status (wip, blocked, ready)"
@@ -438,5 +439,12 @@ mod tests {
         );
         assert!(err(None, None, true).contains("--reason needs a status"));
         assert!(err(Some("login"), None, true).contains("--reason needs a status"));
+
+        std::fs::remove_dir_all(paths::main_worktree(&project)).unwrap();
+        assert!(
+            err(Some("main"), None, false).starts_with("main worktree missing at "),
+            "{}",
+            err(Some("main"), None, false)
+        );
     }
 }

@@ -144,14 +144,25 @@ pub fn active_worktree(project_root: &Path, scope: &str) -> Result<Option<PathBu
         .then(|| project_root.join(&state.worktree)))
 }
 
-/// Whether `scope` is main or a known feature.
+/// Whether `scope` is main with its worktree on disk, or a known feature.
 pub fn exists(project_root: &Path, scope: &str) -> bool {
-    scope == MAIN || FeatureState::exists(&paths::features_dir(project_root), scope)
+    check(project_root, scope).is_ok()
 }
 
-/// `Ok` if `scope` is main or a known feature.
+/// `Ok` if `scope` is main with its worktree on disk, or a known feature.
 pub fn check(project_root: &Path, scope: &str) -> Result<()> {
-    if exists(project_root, scope) {
+    if scope == MAIN {
+        let path = paths::main_worktree(project_root);
+        return if path.is_dir() {
+            Ok(())
+        } else {
+            Err(PmError::WorktreeMissing {
+                scope: MAIN.to_string(),
+                path,
+            })
+        };
+    }
+    if FeatureState::exists(&paths::features_dir(project_root), scope) {
         Ok(())
     } else {
         Err(PmError::FeatureNotFound(scope.to_string()))
@@ -235,12 +246,17 @@ mod tests {
     }
 
     #[test]
-    fn a_scope_is_main_or_a_known_feature() {
+    fn a_scope_is_main_on_disk_or_a_known_feature() {
         let dir = tempdir().unwrap();
         let features_dir = paths::features_dir(dir.path());
         std::fs::create_dir_all(&features_dir).unwrap();
         std::fs::write(features_dir.join("login.toml"), "").unwrap();
 
+        assert!(matches!(
+            check(dir.path(), MAIN).unwrap_err(),
+            PmError::WorktreeMissing { scope, .. } if scope == MAIN
+        ));
+        std::fs::create_dir(paths::main_worktree(dir.path())).unwrap();
         assert!(check(dir.path(), MAIN).is_ok());
         assert!(check(dir.path(), "login").is_ok());
         assert!(matches!(

@@ -33,6 +33,15 @@ fn a_device_is_told_why_merge_is_off_whenever_the_cli_would_refuse_or_the_branch
     assert!(refusal().contains("feature 'login' has uncommitted changes"));
     run_git(&feature, &["rm", "-qf", "draft.txt"]).unwrap();
 
+    std::fs::write(feature.join("notes.txt"), "notes").unwrap();
+    assert_eq!(blocker().as_deref(), Some("Untracked files"));
+    assert!(refusal().contains("feature 'login' has untracked files"));
+    assert!(refusal().contains("notes.txt"));
+    std::fs::write(feature.join(".gitignore"), "notes.txt\n").unwrap();
+    git::stage_file(&feature, ".gitignore").unwrap();
+    git::commit(&feature, "ignore notes").unwrap();
+    assert_eq!(blocker(), None);
+
     commit(&main, "upstream.txt");
     assert_eq!(blocker().as_deref(), Some("Behind main: rebase first"));
     TestServer::pause_rebase(&feature, "main");

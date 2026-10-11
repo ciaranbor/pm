@@ -29,7 +29,6 @@ fn is_open_recoverable(kind: IssueKind) -> bool {
         | IssueKind::PrClosed
         | IssueKind::PrCheckFailed
         | IssueKind::HooksNotInstalled
-        | IssueKind::StaleProjectHooks
         | IssueKind::AssetNotProjected
         | IssueKind::GlobalStoreMissing
         | IssueKind::StaleBundledCopies

@@ -15,10 +15,10 @@ use std::fs;
 
 #[test]
 fn install_creates_user_file_on_fresh_machine() {
-    let (_dir, home, root) = setup();
+    let (_dir, home) = setup();
     assert!(!home.exists());
 
-    let lines = install_in(&home, Some(&root), false).unwrap();
+    let lines = install_in(&home, false).unwrap();
     assert_eq!(lines.len(), 3, "{lines:?}");
     assert!(lines[0].starts_with("Installed pm hooks in "), "{lines:?}");
     assert!(
@@ -121,8 +121,6 @@ fn install_creates_user_file_on_fresh_machine() {
             .len(),
         1
     );
-    // A fresh project gets no project-level file.
-    assert!(!paths::main_worktree(&root).join(".claude").exists());
     assert_eq!(
         lines[2],
         format!("Installed pm plugin in {}", plugin_dir(&home).display())
@@ -130,27 +128,8 @@ fn install_creates_user_file_on_fresh_machine() {
 }
 
 #[test]
-fn install_ignores_the_project_config() {
-    // Which harnesses a project uses is not consulted, so a malformed
-    // config can't block the install or narrow it.
-    let (_dir, home, root) = setup();
-    let pm_dir = root.join(".pm");
-    fs::create_dir_all(&pm_dir).unwrap();
-    fs::write(
-        pm_dir.join("config.toml"),
-        "[agents.harness]\n[agents.harness]\n",
-    )
-    .unwrap();
-
-    let lines = install_in(&home, Some(&root), false).unwrap();
-    assert_eq!(lines.len(), 3, "{lines:?}");
-    assert!(claude_installed_in(&home).unwrap());
-    assert!(is_installed_in(Harness::Codex, &home).unwrap());
-}
-
-#[test]
 fn install_preserves_the_users_own_settings_and_hooks() {
-    let (_dir, home, _root) = setup();
+    let (_dir, home) = setup();
     write_json(
         &user_file(&home),
         &json!({
@@ -164,7 +143,7 @@ fn install_preserves_the_users_own_settings_and_hooks() {
         }),
     );
 
-    install_in(&home, None, false).unwrap();
+    install_in(&home, false).unwrap();
 
     let parsed = read_json(&user_file(&home));
     assert_eq!(parsed["model"], "sonnet");
@@ -190,21 +169,21 @@ fn install_preserves_the_users_own_settings_and_hooks() {
 
 #[test]
 fn install_is_idempotent() {
-    let (_dir, home, root) = setup();
-    install_in(&home, Some(&root), false).unwrap();
+    let (_dir, home) = setup();
+    install_in(&home, false).unwrap();
     let first = fs::read_to_string(user_file(&home)).unwrap();
 
-    let lines = install_in(&home, Some(&root), false).unwrap();
+    let lines = install_in(&home, false).unwrap();
     assert!(lines.is_empty(), "{lines:?}");
     assert_eq!(fs::read_to_string(user_file(&home)).unwrap(), first);
-    assert!(install_dry_run_in(&home, &root).is_empty());
+    assert!(install_in(&home, true).unwrap().is_empty());
 }
 
 #[test]
 fn install_refuses_a_malformed_user_file() {
-    let (_dir, home, _root) = setup();
+    let (_dir, home) = setup();
     fs::create_dir_all(home.join(".claude")).unwrap();
     fs::write(user_file(&home), "[]").unwrap();
-    assert!(install_in(&home, None, false).is_err());
+    assert!(install_in(&home, false).is_err());
     assert_eq!(fs::read_to_string(user_file(&home)).unwrap(), "[]");
 }

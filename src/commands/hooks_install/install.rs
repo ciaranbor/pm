@@ -1,5 +1,5 @@
 //! Writing pm's entries into every supported harness's user-level hooks
-//! file and its plugin files, then stripping the project-level copies.
+//! file and its plugin files.
 
 use std::path::Path;
 
@@ -7,19 +7,17 @@ use serde_json::Value;
 
 use super::check::{install_location, stale_plugin_files};
 use super::entries::pm_entries;
-use super::project::strip_project;
 use super::settings::{load_settings, upsert_hook, write_settings};
 use crate::error::Result;
 use crate::fs_utils::write_atomic;
 use crate::harness::Harness;
 use crate::state::paths;
 
-/// Install pm hooks into the user-level file of every supported harness
-/// and, when inside a project, strip pm's entries from its project-level
-/// files. Returns a human-readable status, one line per file changed.
-pub fn install(project_root: Option<&Path>) -> Result<String> {
+/// Install pm hooks into the user-level file of every supported harness.
+/// Returns a human-readable status, one line per file changed.
+pub fn install() -> Result<String> {
     let home = paths::home_dir()?;
-    let lines = install_in(&home, project_root, false)?;
+    let lines = install_in(&home, false)?;
     if lines.is_empty() {
         let files: Vec<String> = Harness::SUPPORTED
             .iter()
@@ -36,18 +34,14 @@ pub fn install(project_root: Option<&Path>) -> Result<String> {
 
 /// Dry-run variant of [`install`]: one `Would …` line per file that would
 /// change; empty when everything is up to date.
-pub fn install_dry_run(project_root: Option<&Path>) -> Result<Vec<String>> {
-    install_in(&paths::home_dir()?, project_root, true)
+pub fn install_dry_run() -> Result<Vec<String>> {
+    install_in(&paths::home_dir()?, true)
 }
 
 /// [`install`] against an explicit `home`, for tests that must not share
 /// the per-binary test home. Returns one line per file changed (or, with
 /// `dry_run`, per file that would change).
-pub(crate) fn install_in(
-    home: &Path,
-    project_root: Option<&Path>,
-    dry_run: bool,
-) -> Result<Vec<String>> {
+pub(crate) fn install_in(home: &Path, dry_run: bool) -> Result<Vec<String>> {
     let mut lines = Vec::new();
     let verb = if dry_run {
         "Would install"
@@ -64,15 +58,6 @@ pub(crate) fn install_in(
             && let Some(dir) = install_location(*harness, home)
         {
             lines.push(format!("{verb} pm plugin in {}", dir.display()));
-        }
-    }
-    if let Some(root) = project_root {
-        for path in strip_project(root, dry_run)? {
-            lines.push(format!(
-                "{} pm hooks from {}",
-                if dry_run { "Would remove" } else { "Removed" },
-                path.strip_prefix(root).unwrap_or(&path).display()
-            ));
         }
     }
     Ok(lines)

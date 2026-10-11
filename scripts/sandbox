@@ -378,11 +378,12 @@ stop_pids() {
   done
 }
 
-# Whether NAME is the pid of a live process: its sandbox belongs to a
-# running test binary or smoke run.
+# Whether NAME is, or starts with `<pid>-` for, the pid of a live process:
+# its sandbox or server belongs to a running test binary or smoke run.
 live_pid() {
-  case $1 in *[!0-9]*) return 1 ;; esac
-  kill -0 "$1" 2>/dev/null
+  local pid=${1%%-*}
+  case $pid in ""|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null
 }
 
 # Every sandbox name with a HOME or a socket, except a live pid's.
@@ -408,7 +409,7 @@ meta() {
 # Why sandbox NAME is stale, or nothing if it is not.
 stale_reason() {
   local wt
-  case $1 in *[!0-9]*) ;; *) echo "test run $1 exited"; return ;; esac
+  case ${1%%-*} in ""|*[!0-9]*) ;; *) echo "test run ${1%%-*} exited"; return ;; esac
   [ -d "$tmpbase/pm-test-home-$1" ] || { echo "no HOME"; return; }
   tmux -L "pm-test-$1" has-session 2>/dev/null || { echo "server not running"; return; }
   wt=$(meta "$1" worktree)

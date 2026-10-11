@@ -18,7 +18,7 @@ use std::path::Path;
 use crate::error::{PmError, Result};
 use crate::messages;
 use crate::state::agent::AgentRegistry;
-use crate::state::paths;
+use crate::state::{paths, scope};
 use hint::agent_not_found_hint;
 
 /// Whether the recipient agent is currently flagged active — the only
@@ -75,7 +75,8 @@ pub fn agent_send(
     // agent — agents are stood up by `pm feat new`/`feat adopt` (the whole
     // team) or `pm agent spawn`.
     if !recipient_is_active(project_root, feature, recipient)? {
-        let hint = agent_not_found_hint(recipient, sender_scope, feature);
+        let orchestrator = scope::orchestrator(project_root);
+        let hint = agent_not_found_hint(recipient, sender_scope, feature, &orchestrator);
         return Err(PmError::AgentNotFound(format!(
             "No active agent called '{recipient}' exists in scope '{feature}'.{hint}"
         )));

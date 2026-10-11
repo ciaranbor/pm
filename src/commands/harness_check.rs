@@ -361,7 +361,7 @@ mod tests {
     /// A home with pm's hooks and plugin installed for every harness.
     fn home_with_hooks(dir: &Path) -> std::path::PathBuf {
         let home = dir.join("home");
-        hooks_install::install_in(&home, None, false).unwrap();
+        hooks_install::install_in(&home, false).unwrap();
         home
     }
 
@@ -555,7 +555,7 @@ mod tests {
                 "{stale:?}"
             );
 
-            crate::commands::hooks_install::install_in(&home, None, false).unwrap();
+            crate::commands::hooks_install::install_in(&home, false).unwrap();
             assert_eq!(problems(), Vec::new(), "{event}");
         }
     }
