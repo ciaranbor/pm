@@ -156,7 +156,7 @@ pub fn rows(
             (
                 kind,
                 [
-                    name(&p.name, "main"),
+                    name(&p.name, scope::MAIN),
                     kind.to_string(),
                     agents(main.session_exists, &main.agents),
                     quiet(main.working, main.background_since, main.last_activity),

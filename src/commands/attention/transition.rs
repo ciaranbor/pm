@@ -22,6 +22,7 @@ use std::collections::{HashMap, HashSet};
 use serde::Serialize;
 
 use crate::state::feature::{FeatureStatus, Progress};
+use crate::state::scope;
 
 use super::{
     AgentSnapshot, AgentState, Attention, AttentionKind, FeatureSnapshot, ScopeSnapshot, Snapshot,
@@ -238,7 +239,7 @@ impl Watch {
                 next.unread.insert(p.name.clone());
                 continue;
             };
-            let key = (p.name.clone(), "main".to_string());
+            let key = (p.name.clone(), scope::MAIN.to_string());
             let verdict = judge_main(previous(&key), main);
             scopes.push((key, verdict, &main.attention, &main.agents));
         }

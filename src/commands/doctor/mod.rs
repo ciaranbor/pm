@@ -133,7 +133,7 @@ pub enum IssueKind {
     RebaseInProgress,
 }
 
-/// A single issue detected for a feature.
+/// A single issue detected for a scope or the project.
 pub struct Issue {
     kind: IssueKind,
     message: String,
@@ -204,19 +204,24 @@ enum FixAction {
     PullFeatureAssets,
 }
 
-/// Diagnostic finding for a single scope (a feature or `main`).
+/// The label of the finding for checks that span the whole project; git
+/// refuses `[` in a branch name, so no branch-derived feature name has it.
+pub const PROJECT: &str = "[project]";
+
+/// Diagnostic finding for a scope (`main` or a feature), or for the whole
+/// project ([`PROJECT`]).
 pub struct Finding {
-    feature: String,
+    scope: String,
     issues: Vec<Issue>,
 }
 
 impl Finding {
-    /// Name of the scope this finding pertains to (`main` or a feature name).
-    pub fn feature(&self) -> &str {
-        &self.feature
+    /// The scope this finding pertains to, or [`PROJECT`].
+    pub fn scope(&self) -> &str {
+        &self.scope
     }
 
-    /// Issues detected for this scope.
+    /// Issues detected.
     pub fn issues(&self) -> &[Issue] {
         &self.issues
     }

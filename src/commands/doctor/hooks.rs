@@ -12,7 +12,7 @@ use crate::harness::Probe;
 use crate::state::paths;
 use crate::state::project::harness_config;
 
-/// Main-scope findings about each harness in use's hooks: pm's entries
+/// Project findings about each harness in use's hooks: pm's entries
 /// missing from its user-level file, entries in a shape it would ignore,
 /// pm hooks it has not been told to trust, and worktrees whose agents run
 /// on it that it would stop at a trust prompt for. The trust findings exist
@@ -87,7 +87,7 @@ fn hook_issues_in(project_root: &Path, home: &Path, probe: Probe) -> Result<Vec<
 mod tests {
     use super::*;
     use crate::commands::doctor::test_support::*;
-    use crate::commands::doctor::{Depth, Finding, diagnose, doctor};
+    use crate::commands::doctor::{Depth, Finding, PROJECT, diagnose, doctor};
     use crate::commands::hooks_install;
     use crate::harness::Harness;
     use crate::state::agent::{AgentRegistry, AgentType};
@@ -97,7 +97,7 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn no_features_still_reports_main_scope_findings() {
+    fn no_features_still_reports_project_findings() {
         // Hook and trust findings are about the machine, not a feature, so
         // a project that has none yet must still hear about them.
         let dir = tempdir().unwrap();
@@ -129,20 +129,20 @@ mod tests {
             .unwrap();
 
         let findings = diagnose(&project_path, &projects_dir, server.name(), Depth::Quick).unwrap();
-        let main_kinds: Vec<IssueKind> = findings
+        let project_kinds: Vec<IssueKind> = findings
             .iter()
-            .filter(|f| f.feature() == "main")
+            .filter(|f| f.scope() == PROJECT)
             .flat_map(|f| f.issues())
             .map(|i| i.kind())
             .collect();
         assert!(
-            main_kinds.iter().any(|k| matches!(
+            project_kinds.iter().any(|k| matches!(
                 k,
                 IssueKind::HooksNotInstalled
                     | IssueKind::HookUntrusted
                     | IssueKind::WorktreeUntrusted
             )),
-            "{main_kinds:?}"
+            "{project_kinds:?}"
         );
         let lines = doctor(&project_path, &projects_dir, false, server.name())
             .unwrap()
@@ -285,7 +285,7 @@ mod tests {
             hook_kinds(
                 findings
                     .iter()
-                    .filter(|f| f.feature() == "main")
+                    .filter(|f| f.scope() == PROJECT)
                     .flat_map(|f| f.issues().iter()),
             )
         };
@@ -454,7 +454,7 @@ mod tests {
         }
 
         let findings = diagnose(&project_path, &projects_dir, server.name(), Depth::Quick).unwrap();
-        let main = findings.iter().find(|f| f.feature() == "main").unwrap();
+        let main = findings.iter().find(|f| f.scope() == PROJECT).unwrap();
         let stale: Vec<&str> = main
             .issues()
             .iter()
@@ -494,8 +494,8 @@ mod tests {
         }
         let findings = diagnose(&project_path, &projects_dir, server.name(), Depth::Quick).unwrap();
         assert!(
-            findings.iter().all(|f| f.feature() != "main"),
-            "main still has issues after fix"
+            findings.iter().all(|f| f.scope() != PROJECT),
+            "project still has issues after fix"
         );
     }
 }

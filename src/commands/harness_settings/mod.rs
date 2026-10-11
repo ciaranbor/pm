@@ -10,7 +10,7 @@ mod merge;
 mod transfer;
 
 pub use diff::diff;
-pub use list::{list, list_main};
+pub use list::list;
 pub use merge::merge;
 pub use transfer::{pull, push};
 
@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
 use crate::harness::Harness;
-use crate::state::paths;
+use crate::state::{paths, scope};
 
 /// The harness's settings files, or why it has none to manage.
 pub fn settings_files(harness: Harness) -> Result<&'static [&'static str]> {
@@ -30,12 +30,9 @@ pub fn settings_files(harness: Harness) -> Result<&'static [&'static str]> {
     }
 }
 
-fn main_dir(project_root: &Path, harness: Harness) -> PathBuf {
-    paths::main_worktree(project_root).join(harness.config_dir())
-}
-
-fn feature_dir(project_root: &Path, feature_name: &str, harness: Harness) -> PathBuf {
-    project_root.join(feature_name).join(harness.config_dir())
+/// The directory holding `harness`'s settings files in `scope`'s worktree.
+fn settings_dir(project_root: &Path, scope: &str, harness: Harness) -> PathBuf {
+    paths::scope_worktree(project_root, scope).join(harness.config_dir())
 }
 
 /// A pair of optional file contents (main, feature) for a single settings file.
@@ -52,8 +49,8 @@ fn load_file_pairs(
     files: &[&'static str],
     harness: Harness,
 ) -> Result<Vec<FilePair>> {
-    let main_dir = main_dir(project_root, harness);
-    let feature_dir = feature_dir(project_root, feature_name, harness);
+    let main_dir = settings_dir(project_root, scope::MAIN, harness);
+    let feature_dir = settings_dir(project_root, feature_name, harness);
     let read = |path: PathBuf| -> Result<Option<String>> {
         Ok(if path.exists() {
             Some(std::fs::read_to_string(&path)?)

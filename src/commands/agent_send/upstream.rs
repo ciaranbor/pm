@@ -7,6 +7,7 @@ use crate::commands::feat_delete::MissingBase;
 use crate::error::{PmError, Result};
 use crate::state::feature::{FeatureState, base_checkout};
 use crate::state::paths;
+use crate::state::scope;
 
 /// Resolve the `--upstream` flag to the scope holding the current feature's
 /// base branch. Errors if the current scope is "main" (no parent), if the
@@ -18,7 +19,7 @@ pub fn resolve_upstream(
     main_branch: &str,
     current_scope: &str,
 ) -> Result<String> {
-    if current_scope == "main" {
+    if current_scope == scope::MAIN {
         return Err(PmError::Messaging(
             "--upstream cannot be used from the main scope (there is no parent scope)".to_string(),
         ));

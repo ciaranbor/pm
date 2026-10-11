@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use pm::commands;
 use pm::error::Result;
 use pm::state::paths;
+use pm::state::scope;
 use pm::tmux;
 
 use super::report::{plural, report_main_spawn};
@@ -107,7 +108,7 @@ pub(super) fn open_all(server: Option<&str>) -> Result<()> {
     let current = paths::find_project_root(&std::env::current_dir()?)
         .and_then(|root| pm::state::project::ProjectConfig::load(&paths::pm_dir(&root)));
     if let Ok(config) = current {
-        let main_session = tmux::session_name(&config.project.name, "main");
+        let main_session = tmux::session_name(&config.project.name, scope::MAIN);
         if tmux::has_session(server, &main_session).unwrap_or(false) {
             connect(server, &main_session);
         }

@@ -1,8 +1,9 @@
 //! What a merge needs before it starts: the base checked out, and the
 //! feature's and the base's worktrees settled (no uncommitted changes, no
-//! paused merge or rebase, whose commits the branch doesn't reach yet). A
-//! feature already recorded merged only cleans up, so only its own worktree
-//! is checked, and not at all when it is kept.
+//! paused merge or rebase, whose commits the branch doesn't reach yet). The
+//! merge lands on whatever the base's worktree has checked out, so that must
+//! be the base branch itself. A feature already recorded merged only cleans
+//! up, so only its own worktree is checked, and not at all when it is kept.
 //!
 //! `pm feat merge` refuses with these checks in the CLI's words; `pm serve`
 //! runs the same ones to tell a device, in a few words, why its Merge is
@@ -46,6 +47,8 @@ pub(super) enum Unsettled {
     Merging,
     Rebasing,
     Uncommitted,
+    /// The base's worktree has another branch, or none, checked out.
+    OffBase,
 }
 
 impl Plan {
@@ -99,7 +102,8 @@ impl Plan {
             return Ok(Err(Refusal::Unsettled { base: false, why }));
         }
         if !self.already_merged()
-            && let Some(why) = unsettled(&checkout.worktree)?
+            && let Some(why) =
+                unsettled(&checkout.worktree)?.or(off_base(&checkout.worktree, self.base()))
         {
             return Ok(Err(Refusal::Unsettled { base: true, why }));
         }
@@ -145,6 +149,16 @@ impl Plan {
                 "{subject} has a merge in progress in {at}: finish it with \
                  `git commit` (or `git merge --abort`) before {action}"
             ),
+            Unsettled::OffBase => {
+                let base = self.base();
+                let on = git::head_branch(worktree)
+                    .map(|branch| format!("'{branch}'"))
+                    .unwrap_or_else(|_| "a detached HEAD".to_string());
+                format!(
+                    "{subject} has {on} checked out, not '{base}': check out '{base}' in {at} \
+                     before {action}"
+                )
+            }
         })
     }
 
@@ -161,6 +175,7 @@ impl Plan {
                     Unsettled::Uncommitted => "Uncommitted changes",
                     Unsettled::Rebasing => "Rebase in progress",
                     Unsettled::Merging => "Merge in progress",
+                    Unsettled::OffBase => "Base not checked out",
                 };
                 match (&self.checkout, base) {
                     (Ok(checkout), true) => format!("{what} in {}", checkout.scope),
@@ -169,6 +184,11 @@ impl Plan {
             }
         }
     }
+}
+
+/// [`Unsettled::OffBase`] unless `worktree` has `base` checked out.
+fn off_base(worktree: &Path, base: &str) -> Option<Unsettled> {
+    (git::head_branch(worktree).ok().as_deref() != Some(base)).then_some(Unsettled::OffBase)
 }
 
 /// What keeps `worktree`'s work from being merged as it stands. A paused

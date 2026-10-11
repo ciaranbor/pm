@@ -4,6 +4,7 @@ use super::agent_send::Sent;
 use crate::error::{PmError, Result};
 use crate::messages;
 use crate::state::paths;
+use crate::state::scope;
 
 /// Reply to the last-read message, auto-routing to the sender's scope.
 ///
@@ -32,7 +33,7 @@ pub fn msg_reply(
         let pm_dir = paths::pm_dir(project_root);
         let config = crate::state::project::ProjectConfig::load(&pm_dir)?;
         let our_project = &config.project.name;
-        let target_scope = last_read.sender_scope.as_deref().unwrap_or("main");
+        let target_scope = last_read.sender_scope.as_deref().unwrap_or(scope::MAIN);
 
         super::agent_send::agent_send_cross_project(&super::agent_send::CrossProjectSendParams {
             target_project_name: sender_project,

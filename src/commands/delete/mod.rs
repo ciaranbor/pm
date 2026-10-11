@@ -204,7 +204,7 @@ pub fn delete(
             messages::delete_feature(&messages_dir, name)?;
 
             if kill_session && tmux::has_session(tmux_server, &session_name)? {
-                let main_session = tmux::session_name(&project_name, "main");
+                let main_session = tmux::session_name(&project_name, scope::MAIN);
                 tmux::clients::move_off(
                     tmux_server,
                     std::slice::from_ref(&session_name),
@@ -233,7 +233,7 @@ pub fn delete(
         let _ = std::fs::remove_dir(project_root);
     }
 
-    let main_session = tmux::session_name(&project_name, "main");
+    let main_session = tmux::session_name(&project_name, scope::MAIN);
     if own.as_ref().is_none_or(|own| own.name != main_session)
         && tmux::has_session(tmux_server, &main_session)?
     {

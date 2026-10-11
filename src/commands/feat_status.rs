@@ -85,14 +85,14 @@ fn check_ready(project_root: &Path, scope: &str) -> Result<()> {
     Err(PmError::Summary(msg))
 }
 
-/// Tell `main` that `name` is ready and where its summary is.
+/// Tell the orchestrator that `name` is ready and where its summary is.
 fn notify_ready(project_root: &Path, name: &str, agent: Option<&str>) -> Result<()> {
     let body = ready_body(project_root, name, agent.is_some());
     let sender = agent.map_or_else(messages::default_user_name, str::to_string);
     messages::send_with_scope(
         &paths::messages_dir(project_root),
-        "main",
-        "main",
+        scope::MAIN,
+        &scope::orchestrator(project_root),
         &sender,
         &body,
         Some(name),

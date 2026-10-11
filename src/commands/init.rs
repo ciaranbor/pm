@@ -9,6 +9,7 @@ use crate::hooks;
 use crate::state::agent::AgentRegistry;
 use crate::state::paths;
 use crate::state::project::{AgentsConfig, ProjectConfig, ProjectEntry, ProjectInfo};
+use crate::state::scope;
 use crate::tmux;
 
 /// Initialize a new pm project at the given path.
@@ -91,7 +92,7 @@ pub fn init_in(
     // everything under it are new. The registry is saved last, so a failure
     // leaves no entry to undo.
     let created = topmost_missing(path);
-    let session_name = tmux::session_name(&name, "main");
+    let session_name = tmux::session_name(&name, scope::MAIN);
     let built = populate(path, &name, global, git_url).and_then(|main_branch| {
         tmux::create_session(tmux_server, &session_name, &paths::main_worktree(path))?;
         let entry = ProjectEntry {
@@ -190,19 +191,36 @@ pub fn default_path(git_url: &str) -> Result<PathBuf> {
     Ok(PathBuf::from(name))
 }
 
-/// Spawn the project's `main` agent in its main session: into the session's
-/// first window, the shell it was created with, unless `main` already has
-/// one of its own.
+/// Spawn the project's orchestrator ([`scope::orchestrator_definition`],
+/// named after it) in its main session: into the session's first window,
+/// the shell it was created with, unless it already has one of its own.
 pub fn spawn_main(project_root: &Path, tmux_server: Option<&str>) -> Result<String> {
     let config = ProjectConfig::load(&paths::pm_dir(project_root))?;
-    let registered = AgentRegistry::load(&paths::agents_dir(project_root), "main")?
-        .get("main")
+    let orchestrator = scope::orchestrator_definition(project_root);
+    let registered = AgentRegistry::load(&paths::agents_dir(project_root), scope::MAIN)?
+        .get(&orchestrator)
         .is_some();
     let (_, msg, _) = if registered {
-        agent_spawn(project_root, "main", "main", None, None, tmux_server)?
+        agent_spawn(
+            project_root,
+            scope::MAIN,
+            &orchestrator,
+            None,
+            None,
+            tmux_server,
+        )?
     } else {
-        let first = format!("{}:0", tmux::session_name(&config.project.name, "main"));
-        agent_spawn_in(project_root, "main", "main", &first, tmux_server)?
+        let first = format!(
+            "{}:0",
+            tmux::session_name(&config.project.name, scope::MAIN)
+        );
+        agent_spawn_in(
+            project_root,
+            scope::MAIN,
+            &orchestrator,
+            &first,
+            tmux_server,
+        )?
     };
     Ok(msg)
 }

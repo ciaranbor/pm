@@ -1,5 +1,5 @@
-//! [`diagnose`]: each scope's checks, and the per-feature worktree, branch,
-//! session, workflow and PR checks.
+//! [`diagnose`]: the project-wide checks, the checks every scope shares, and
+//! the per-feature worktree, branch, workflow and PR checks.
 
 use std::path::Path;
 
@@ -7,112 +7,74 @@ use super::agents::{agent_issues, legacy_vanilla_agent_issues};
 use super::assets::{DefinitionProjections, asset_issues, feature_projection_issues};
 use super::config::{harness_config_issues, legacy_vanilla_row_issues};
 use super::hooks::hook_issues;
-use super::{Depth, Finding, Fix, FixAction, Issue, IssueKind};
+use super::{Depth, Finding, Fix, FixAction, Issue, IssueKind, PROJECT};
 use crate::commands::bundled_disable::Disabled;
 use crate::commands::feat_delete;
 use crate::commands::hooks_install;
 use crate::error::Result;
+use crate::harness::Probe;
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
 use crate::state::project::{ProjectConfig, ProjectEntry};
+use crate::state::scope::MAIN;
 use crate::state::workflow;
 use crate::{gh, git, tmux};
 
 /// Run all diagnostic checks without applying any fixes.
 ///
-/// For each feature, checks:
-/// 1. Worktree directory exists on disk
-/// 2. Git worktree list includes it
-/// 3. Branch exists locally
-/// 4. Tmux session exists
-/// 5. Status stuck on "initializing"
-/// 6. Referenced workflow directory exists
-/// 7. If PR linked and `depth` is [`Depth::Full`], check GH status drift
-///
-/// Also runs main-scope checks (Stop hook installed, main session present, main
-/// agent windows alive) when there is at least one feature, mirroring the
-/// existing `doctor` behaviour.
-///
-/// Returns one [`Finding`] per scope that has issues (or per scope, including
-/// healthy ones — callers can filter by inspecting [`Finding::issues`]).
+/// Returns a [`PROJECT`] finding for the project-wide checks (hooks, harness
+/// config, asset tiers, the registry's main branch) when it has issues, then
+/// one finding per scope — main, then each feature — healthy ones included;
+/// callers can filter by inspecting [`Finding::issues`]. Every scope is
+/// checked for a paused rebase, legacy agent names and, while active, its
+/// session and agents; a feature also for its worktree, branch,
+/// initializing, workflow and projection, and PR drift at [`Depth::Full`].
 pub fn diagnose(
     project_root: &Path,
     projects_dir: &Path,
     tmux_server: Option<&str>,
     depth: Depth,
 ) -> Result<Vec<Finding>> {
-    let probe = depth.probe();
     let features_dir = paths::features_dir(project_root);
-    let pm_dir = paths::pm_dir(project_root);
-    let config = ProjectConfig::load(&pm_dir)?;
+    let config = ProjectConfig::load(&paths::pm_dir(project_root))?;
     let project_name = &config.project.name;
-
-    let features = FeatureState::list(&features_dir)?;
     let main_repo = paths::main_worktree(project_root);
-    let mut findings: Vec<Finding> = Vec::new();
-
-    // Main-scope checks: stop hook installed, main tmux session present.
-    let main_session = tmux::session_name(project_name, "main");
-    let mut main_issues: Vec<Issue> = Vec::new();
-    main_issues.extend(hook_issues(project_root, probe)?);
-    for path in hooks_install::stale_project_files(project_root)? {
-        main_issues.push(Issue {
-            kind: IssueKind::StaleProjectHooks,
-            message: format!(
-                "pm hooks still in {} (run `pm harness hooks install`)",
-                path.strip_prefix(project_root).unwrap_or(&path).display()
-            ),
-            fix: Fix::Auto(FixAction::InstallStopHook),
-        });
-    }
-    main_issues.extend(harness_config_issues(project_root)?);
-    main_issues.extend(legacy_vanilla_row_issues(project_root)?);
-    let projections = DefinitionProjections::load(project_root)?;
-    main_issues.extend(asset_issues(project_root, &projections)?);
-    main_issues.extend(rebase_issue(&main_repo));
-    main_issues.extend(legacy_vanilla_agent_issues(project_root, "main"));
     let main_branch = ProjectEntry::load(projects_dir, project_name)
         .ok()
         .map(|e| e.main_branch);
-    main_issues.extend(
-        main_branch
-            .as_deref()
-            .and_then(|recorded| main_branch_issue(&main_repo, recorded)),
-    );
-    if !tmux::has_session(tmux_server, &main_session)? {
-        main_issues.push(Issue {
-            kind: IssueKind::TmuxSessionMissing,
-            message: format!("tmux session '{main_session}' missing (run `pm open` to fix)"),
-            fix: Fix::Auto(FixAction::RecreateTmuxSession {
-                session_name: main_session.clone(),
-                worktree_path: main_repo.clone(),
-            }),
-        });
-    } else {
-        main_issues.extend(agent_issues(
-            project_root,
-            "main",
-            &main_session,
-            tmux_server,
-        )?);
-    }
-    if !main_issues.is_empty() {
+    let projections = DefinitionProjections::load(project_root)?;
+
+    let mut findings: Vec<Finding> = Vec::new();
+    let project_issues = project_issues(
+        project_root,
+        depth.probe(),
+        &projections,
+        main_branch.as_deref(),
+    )?;
+    if !project_issues.is_empty() {
         findings.push(Finding {
-            feature: "main".to_string(),
-            issues: main_issues,
+            scope: PROJECT.to_string(),
+            issues: project_issues,
         });
     }
 
+    let scope = ScopeCheck {
+        project_root,
+        project_name,
+        tmux_server,
+    };
+    findings.push(Finding {
+        scope: MAIN.to_string(),
+        issues: scope.issues(MAIN, &main_repo, true)?,
+    });
+
     let worktrees = git::list_worktrees(&main_repo)?;
-    for (name, state) in &features {
+    for (name, state) in FeatureState::list(&features_dir)? {
         let mut issues = Vec::new();
 
         let worktree_path = project_root.join(&state.worktree);
 
-        // Check 1: worktree directory exists on disk
         let dir_exists = worktree_path.exists();
-
-        // Check 2: git worktree list includes it
         let in_git_worktrees = if let Ok(canonical) = worktree_path.canonicalize() {
             worktrees
                 .iter()
@@ -121,12 +83,10 @@ pub fn diagnose(
             let wt_str = worktree_path.to_string_lossy();
             worktrees.iter().any(|w| w.ends_with(wt_str.as_ref()))
         };
-
-        // Check 3: branch exists locally
         let branch_exists = git::branch_exists(&main_repo, &state.branch)?;
 
-        // Detect orphaned state: no directory, no branch, not initializing.
-        // Report as a single issue instead of redundant individual checks.
+        // No directory, no branch, not initializing: one issue instead of
+        // redundant individual checks.
         if !dir_exists && !branch_exists && state.status != FeatureStatus::Initializing {
             issues.push(Issue {
                 kind: IssueKind::OrphanedState,
@@ -135,13 +95,12 @@ pub fn diagnose(
             });
 
             findings.push(Finding {
-                feature: name.clone(),
+                scope: name,
                 issues,
             });
             continue;
         }
 
-        // Report individual check failures (non-orphan)
         if !dir_exists {
             // Auto-fix only when the branch exists and git doesn't have a
             // stale worktree registration (which would cause add to fail).
@@ -181,35 +140,6 @@ pub fn diagnose(
             });
         }
 
-        // Check 4: tmux session exists (only for active features)
-        if state.status.is_active() {
-            let session_name = tmux::session_name(project_name, name);
-            if !tmux::has_session(tmux_server, &session_name)? {
-                let fix_action = if dir_exists {
-                    Fix::Auto(FixAction::RecreateTmuxSession {
-                        session_name: session_name.clone(),
-                        worktree_path: worktree_path.clone(),
-                    })
-                } else {
-                    Fix::Skip
-                };
-                issues.push(Issue {
-                    kind: IssueKind::TmuxSessionMissing,
-                    message: format!("tmux session '{session_name}' missing"),
-                    fix: fix_action,
-                });
-            } else {
-                // Check 4b: agents within the existing session
-                issues.extend(agent_issues(
-                    project_root,
-                    name,
-                    &session_name,
-                    tmux_server,
-                )?);
-            }
-        }
-
-        // Check 5: stuck on initializing
         if state.status == FeatureStatus::Initializing {
             issues.push(Issue {
                 kind: IssueKind::StuckInitializing,
@@ -220,14 +150,14 @@ pub fn diagnose(
                     base_scope: main_branch
                         .as_deref()
                         .map(|mb| feat_delete::base_scope(project_root, mb, state.base_branch(mb)))
-                        .unwrap_or_else(|| "main".to_string()),
+                        .unwrap_or_else(|| MAIN.to_string()),
                 }),
             });
         }
 
-        // Check 6: referenced workflow directory exists. Non-fatal warning —
-        // the workflow may have been deleted by accident or not installed on
-        // this machine. No auto-fix: a custom workflow can't be regenerated.
+        // Non-fatal: the workflow may have been deleted by accident or not
+        // installed on this machine. No auto-fix: a custom workflow can't be
+        // regenerated.
         if let Some(wf) = &state.workflow
             && !workflow::exists(project_root, wf)
         {
@@ -253,64 +183,131 @@ pub fn diagnose(
             issues.extend(feature_projection_issues(
                 project_root,
                 &projections,
-                name,
+                &name,
                 &worktree_path,
             )?);
         }
 
-        if dir_exists {
-            issues.extend(rebase_issue(&worktree_path));
-        }
+        issues.extend(scope.issues(&name, &worktree_path, state.status.is_active())?);
 
-        issues.extend(legacy_vanilla_agent_issues(project_root, name));
-
-        // Check 7: PR status drift.
         if depth == Depth::Full && !state.pr.is_empty() {
-            match gh::pr_info(&main_repo, &state.pr).map(|i| i.state) {
-                Ok(gh_state) => match gh_state.as_str() {
-                    "MERGED" if state.status != FeatureStatus::Merged => {
-                        issues.push(Issue {
-                            kind: IssueKind::PrMerged,
-                            message: format!(
-                                "PR #{} is merged but status is '{}'",
-                                state.pr, state.status
-                            ),
-                            fix: Fix::Auto(FixAction::UpdateStatus {
-                                new_status: FeatureStatus::Merged,
-                            }),
-                        });
-                    }
-                    "CLOSED" if state.status.is_active() => {
-                        issues.push(Issue {
-                            kind: IssueKind::PrClosed,
-                            message: format!(
-                                "PR #{} is closed but status is '{}'",
-                                state.pr, state.status
-                            ),
-                            fix: Fix::Auto(FixAction::UpdateStatus {
-                                new_status: FeatureStatus::Stale,
-                            }),
-                        });
-                    }
-                    _ => {}
-                },
-                Err(_) => {
-                    issues.push(Issue {
-                        kind: IssueKind::PrCheckFailed,
-                        message: format!("could not check PR #{} (gh CLI failed)", state.pr),
-                        fix: Fix::None,
-                    });
-                }
-            }
+            issues.extend(pr_drift_issue(&main_repo, &state));
         }
 
         findings.push(Finding {
-            feature: name.clone(),
+            scope: name,
             issues,
         });
     }
 
     Ok(findings)
+}
+
+/// Checks about the project as a whole rather than one scope.
+fn project_issues(
+    project_root: &Path,
+    probe: Probe,
+    projections: &DefinitionProjections,
+    main_branch: Option<&str>,
+) -> Result<Vec<Issue>> {
+    let mut issues = hook_issues(project_root, probe)?;
+    for path in hooks_install::stale_project_files(project_root)? {
+        issues.push(Issue {
+            kind: IssueKind::StaleProjectHooks,
+            message: format!(
+                "pm hooks still in {} (run `pm harness hooks install`)",
+                path.strip_prefix(project_root).unwrap_or(&path).display()
+            ),
+            fix: Fix::Auto(FixAction::InstallStopHook),
+        });
+    }
+    issues.extend(harness_config_issues(project_root)?);
+    issues.extend(legacy_vanilla_row_issues(project_root)?);
+    issues.extend(asset_issues(project_root, projections)?);
+    issues.extend(
+        main_branch
+            .and_then(|recorded| main_branch_issue(&paths::main_worktree(project_root), recorded)),
+    );
+    Ok(issues)
+}
+
+/// What [`ScopeCheck::issues`] needs about the project.
+struct ScopeCheck<'a> {
+    project_root: &'a Path,
+    project_name: &'a str,
+    tmux_server: Option<&'a str>,
+}
+
+impl ScopeCheck<'_> {
+    /// Checks every scope shares: a paused rebase, legacy vanilla agent
+    /// names, and, while `active`, its tmux session and agent windows.
+    fn issues(&self, scope: &str, worktree: &Path, active: bool) -> Result<Vec<Issue>> {
+        let dir_exists = worktree.exists();
+        let mut issues = Vec::new();
+        if active {
+            let session_name = tmux::session_name(self.project_name, scope);
+            if !tmux::has_session(self.tmux_server, &session_name)? {
+                issues.push(Issue {
+                    kind: IssueKind::TmuxSessionMissing,
+                    message: format!("tmux session '{session_name}' missing"),
+                    fix: if dir_exists {
+                        Fix::Auto(FixAction::RecreateTmuxSession {
+                            session_name,
+                            worktree_path: worktree.to_path_buf(),
+                        })
+                    } else {
+                        Fix::Skip
+                    },
+                });
+            } else {
+                issues.extend(agent_issues(
+                    self.project_root,
+                    scope,
+                    &session_name,
+                    self.tmux_server,
+                )?);
+            }
+        }
+        if dir_exists {
+            issues.extend(rebase_issue(worktree));
+        }
+        issues.extend(legacy_vanilla_agent_issues(self.project_root, scope));
+        Ok(issues)
+    }
+}
+
+/// A linked PR whose GitHub state the feature's status hasn't caught up with.
+fn pr_drift_issue(main_repo: &Path, state: &FeatureState) -> Option<Issue> {
+    match gh::pr_info(main_repo, &state.pr).map(|i| i.state) {
+        Ok(gh_state) => match gh_state.as_str() {
+            "MERGED" if state.status != FeatureStatus::Merged => Some(Issue {
+                kind: IssueKind::PrMerged,
+                message: format!(
+                    "PR #{} is merged but status is '{}'",
+                    state.pr, state.status
+                ),
+                fix: Fix::Auto(FixAction::UpdateStatus {
+                    new_status: FeatureStatus::Merged,
+                }),
+            }),
+            "CLOSED" if state.status.is_active() => Some(Issue {
+                kind: IssueKind::PrClosed,
+                message: format!(
+                    "PR #{} is closed but status is '{}'",
+                    state.pr, state.status
+                ),
+                fix: Fix::Auto(FixAction::UpdateStatus {
+                    new_status: FeatureStatus::Stale,
+                }),
+            }),
+            _ => None,
+        },
+        Err(_) => Some(Issue {
+            kind: IssueKind::PrCheckFailed,
+            message: format!("could not check PR #{} (gh CLI failed)", state.pr),
+            fix: Fix::None,
+        }),
+    }
 }
 
 /// A rebase paused in `worktree`.
@@ -386,7 +383,7 @@ mod tests {
         TestServer::pause_rebase(&main, "HEAD~1");
 
         let findings = diagnose(&project_path, &projects_dir, server.name(), Depth::Quick).unwrap();
-        let main_finding = findings.iter().find(|f| f.feature() == "main").unwrap();
+        let main_finding = findings.iter().find(|f| f.scope() == "main").unwrap();
         assert!(
             main_finding
                 .issues()
@@ -404,7 +401,10 @@ mod tests {
         let lines = doctor(&project_path, &projects_dir, false, server.name())
             .unwrap()
             .lines();
-        assert_eq!(lines, vec!["Checked main and 0 feature(s): all healthy"]);
+        assert_eq!(
+            lines,
+            vec!["Checked main and 0 feature(s): all healthy", "  main — ok"]
+        );
     }
 
     #[test]
@@ -440,14 +440,14 @@ mod tests {
         git::rename_branch(&main, "main", "master").unwrap();
 
         let findings = diagnose(&project_path, &projects_dir, server.name(), Depth::Quick).unwrap();
-        let main_scope = findings.iter().find(|f| f.feature == "main").unwrap();
+        let project = findings.iter().find(|f| f.scope == PROJECT).unwrap();
         assert!(
-            main_scope
+            project
                 .issues
                 .iter()
                 .any(|i| i.kind() == IssueKind::MainBranchMissing),
             "{:?}",
-            main_scope
+            project
                 .issues
                 .iter()
                 .map(Issue::message)
@@ -615,7 +615,7 @@ mod tests {
         state.save(&features_dir, "child").unwrap();
 
         let findings = diagnose(&project_path, &projects_dir, server.name(), Depth::Quick).unwrap();
-        let child = findings.iter().find(|f| f.feature == "child").unwrap();
+        let child = findings.iter().find(|f| f.scope == "child").unwrap();
         let base_scope = child
             .issues
             .iter()

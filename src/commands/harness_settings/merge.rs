@@ -3,10 +3,11 @@
 
 use std::path::Path;
 
-use super::{load_file_pairs, main_dir, settings_files};
+use super::{load_file_pairs, settings_dir, settings_files};
 use crate::commands::feat_common::require_feature;
 use crate::error::Result;
 use crate::harness::Harness;
+use crate::state::scope;
 
 /// Merge main and feature settings with union semantics, writing the result to main.
 /// When `ours` is true, the feature (ours) wins on scalar conflicts; otherwise main (theirs)
@@ -15,7 +16,7 @@ pub fn merge(project_root: &Path, feature_name: &str, ours: bool, harness: Harne
     let files = settings_files(harness)?;
     require_feature(project_root, feature_name)?;
 
-    let dst = main_dir(project_root, harness);
+    let dst = settings_dir(project_root, scope::MAIN, harness);
 
     for pair in load_file_pairs(project_root, feature_name, files, harness)? {
         let merged = match (pair.main, pair.feature) {

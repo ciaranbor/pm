@@ -4,12 +4,13 @@
 
 use std::path::Path;
 
-use super::{feature_dir, main_dir, settings_files};
+use super::{settings_dir, settings_files};
 use crate::commands::feat_common::require_feature;
 use crate::commands::seed::{Seeded, seed_file};
 use crate::error::{PmError, Result};
 use crate::harness::Harness;
 use crate::state::paths;
+use crate::state::scope;
 
 /// Copy a single settings file from src_dir to dst_dir if it exists in src_dir.
 fn copy_settings_file(src_dir: &Path, dst_dir: &Path, filename: &str) -> Result<()> {
@@ -26,7 +27,7 @@ pub fn push(project_root: &Path, feature_name: &str, harness: Harness) -> Result
     let files = settings_files(harness)?;
     require_feature(project_root, feature_name)?;
 
-    let src = feature_dir(project_root, feature_name, harness);
+    let src = settings_dir(project_root, feature_name, harness);
     if !src.exists() {
         return Err(PmError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
@@ -38,7 +39,7 @@ pub fn push(project_root: &Path, feature_name: &str, harness: Harness) -> Result
         )));
     }
 
-    let dst = main_dir(project_root, harness);
+    let dst = settings_dir(project_root, scope::MAIN, harness);
     for filename in files {
         copy_settings_file(&src, &dst, filename)?;
     }

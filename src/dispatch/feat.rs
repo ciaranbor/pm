@@ -198,7 +198,7 @@ fn in_project(cmd: FeatCommands, server: Option<&str>) -> Result<()> {
                 Request::View { name } => {
                     let name = match name {
                         Some(name) => Some(name),
-                        None if resolve_scope(&project_root)? == "main" => None,
+                        None if resolve_scope(&project_root)? == scope::MAIN => None,
                         None => Some(resolve_feature_name(None, &project_root)?),
                     };
                     let lines = match name {

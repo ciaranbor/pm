@@ -66,10 +66,10 @@ The default harness; it needs no setup beyond `claude` on your `PATH`
 
 - pm launches `claude --agent <def>` (no `--agent` for `plain`), appends the
   [baseline](../README.md#shared-baseline-and-notice-board) with
-  `--append-system-prompt-file`, and gives feature agents the summaries
-  directory with `--add-dir`. It passes no `--permission-mode` unless an
-  `[agents.permissions]` row sets one, so your own Claude Code default
-  (auto mode, say) applies.
+  `--append-system-prompt-file`, and gives every agent the summaries
+  directory with `--add-dir`, the orchestrator the information store too.
+  It passes no `--permission-mode` unless an `[agents.permissions]` row
+  sets one, so your own Claude Code default (auto mode, say) applies.
 - A feature gets main's `.claude/settings.json` when created; `pm harness
   settings list|diff|pull|push|merge` compares and syncs the two later.
   `settings.local.json` is shared by every worktree at the main checkout,

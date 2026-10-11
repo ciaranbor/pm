@@ -89,18 +89,16 @@ fn definition_file(project_root: &Path, definition: &str) -> Result<Option<Vec<u
     Ok(None)
 }
 
-/// The stamp a spawn of agent `name` of `scope`, registered as `entry`,
-/// would write now.
+/// The stamp a spawn of agent `name`, registered as `entry`, would write now.
 pub fn current(
     project_root: &Path,
-    scope: &str,
     name: &str,
     entry: &AgentEntry,
     config: &ProjectConfig,
     global: &GlobalConfig,
 ) -> Result<String> {
     let definition = entry.effective_definition(name);
-    let launch = resolve_launch(project_root, scope, definition, config, global)?;
+    let launch = resolve_launch(project_root, definition, config, global)?;
     stamp(project_root, definition, &launch)
 }
 
@@ -117,5 +115,5 @@ pub fn is_stale(
     let Some(had) = runtime::read_launch_stamp(project_root, scope, name) else {
         return Ok(true);
     };
-    Ok(current(project_root, scope, name, entry, config, global)? != had)
+    Ok(current(project_root, name, entry, config, global)? != had)
 }

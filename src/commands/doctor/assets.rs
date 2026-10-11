@@ -11,7 +11,7 @@ use crate::harness::Harness;
 use crate::state::paths;
 use crate::state::workflow;
 
-/// Main-scope findings about the two asset tiers: what the global tier is
+/// Project findings about the two asset tiers: what the global tier is
 /// missing, pre-migration copies still shadowing it, definitions a harness
 /// can't see, and project skills its global namesake shadows.
 pub(super) fn asset_issues(

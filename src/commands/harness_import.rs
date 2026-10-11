@@ -17,11 +17,10 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::error::{PmError, Result};
 use crate::harness::{Harness, ImportOutcome, SessionStore};
-use crate::state::feature::FeatureState;
-use crate::state::paths;
 use crate::state::project::{HarnessConfig, ProjectEntry, harness_config_in};
+use crate::state::{paths, scope};
 
-use super::harness_export::{MANIFEST, PROJECTS_DIR, export_root};
+use super::harness_export::{MANIFEST, PROJECTS_DIR, export_root, scope_label};
 
 /// The harness an export's manifest entry belongs to. Exports written
 /// before other harnesses had sessions to export name none.
@@ -164,22 +163,16 @@ pub fn import(
             config: &config,
         };
         for wt in worktrees {
-            let (label, to) = match wt.feature {
-                None => (name.to_string(), paths::main_worktree(&root)),
-                Some(feature) => {
-                    let label = format!("{name}/{feature}");
-                    if !FeatureState::exists(&paths::features_dir(&root), feature) {
-                        report.miss(&label, "not a feature here");
-                        continue;
-                    }
-                    let to = root.join(feature);
-                    if !to.is_dir() {
-                        report.miss(&label, "no worktree here");
-                        continue;
-                    }
-                    (label, to)
-                }
-            };
+            let label = scope_label(name, wt.scope);
+            if !scope::exists(&root, wt.scope) {
+                report.miss(&label, "not a feature here");
+                continue;
+            }
+            let to = paths::scope_worktree(&root, wt.scope);
+            if !to.is_dir() {
+                report.miss(&label, "no worktree here");
+                continue;
+            }
             if !wt.sessions.exists() {
                 report.miss(&label, "session data not found in tarball");
                 continue;
@@ -205,8 +198,7 @@ pub fn import(
 
 /// One worktree's sessions in an export.
 struct Worktree<'a> {
-    /// `None` for main.
-    feature: Option<&'a str>,
+    scope: &'a str,
     /// Where the sessions were recorded.
     from: &'a Path,
     /// Their directory in the extracted export.
@@ -227,10 +219,12 @@ fn worktrees<'a>(
     if !is_single_name(name) {
         return Err(refused("a name that is a path".to_string()));
     }
-    let worktree = |feature: Option<&'a str>, entry: &'a serde_json::Value| {
-        let of = feature
-            .map(|f| format!(" for feature '{f}'"))
-            .unwrap_or_default();
+    let worktree = |scope: &'a str, entry: &'a serde_json::Value| {
+        let of = if scope == scope::MAIN {
+            String::new()
+        } else {
+            format!(" for feature '{scope}'")
+        };
         let field = |key: &str| {
             entry[key].as_str().ok_or_else(|| {
                 PmError::ExportImport(format!("missing '{key}' for project '{name}'{of}"))
@@ -247,14 +241,16 @@ fn worktrees<'a>(
             return Err(refused(format!("path '{path}'{of}, which is not absolute")));
         }
         Ok(Worktree {
-            feature,
+            scope,
             from,
             sessions: export_root.join(PROJECTS_DIR).join(key),
         })
     };
     let mut out = Vec::new();
+    // Main's sessions are on the project entry itself, a feature's under
+    // `features`.
     if info.get("key").is_some() {
-        out.push(worktree(None, info)?);
+        out.push(worktree(scope::MAIN, info)?);
     }
     if let Some(features) = info.get("features") {
         let features = features
@@ -264,7 +260,10 @@ fn worktrees<'a>(
             if !is_single_name(feature) {
                 return Err(refused(format!("feature '{feature}', which is a path")));
             }
-            out.push(worktree(Some(feature), entry)?);
+            if feature == scope::MAIN {
+                return Err(refused("a feature named 'main'".to_string()));
+            }
+            out.push(worktree(feature, entry)?);
         }
     }
     if out.is_empty() {
@@ -673,7 +672,7 @@ mod tests {
     }
 
     #[test]
-    fn import_refuses_a_feature_name_or_key_that_leaves_the_export() {
+    fn import_refuses_a_feature_name_that_is_a_path_or_main_or_a_key_that_leaves_the_export() {
         let main = r#""path": "/old/myapp/main", "key": "-old-myapp-main""#;
         for (feature, key, refusal) in [
             (
@@ -686,6 +685,7 @@ mod tests {
                 "../outside",
                 "key '../outside' for feature 'login'",
             ),
+            ("main", "-old-myapp-main", "a feature named 'main'"),
         ] {
             let entry = format!(
                 r#"{{{main}, "features": {{"{feature}": {{"path": "/old/myapp/{feature}", "key": "{key}"}}}}}}"#

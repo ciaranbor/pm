@@ -8,8 +8,10 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
+use crate::state::agent::AgentRegistry;
 use crate::state::feature::{FeatureState, Progress};
 use crate::state::paths;
+use crate::state::workflow::WorkflowDef;
 
 /// The orchestrator's scope.
 pub const MAIN: &str = "main";
@@ -24,6 +26,20 @@ pub fn workflow(project_root: &Path, scope: &str) -> Result<Option<String>> {
         return Ok(Some(MAIN_WORKFLOW.to_string()));
     }
     Ok(FeatureState::load(&paths::features_dir(project_root), scope)?.workflow)
+}
+
+/// The bundled orchestrator definition: what [`orchestrator_definition`]
+/// falls back to when main's workflow can't be read.
+pub const DEFAULT_ORCHESTRATOR: &str = "main";
+
+/// The definition main's orchestrator runs: the lead (first) of
+/// [`MAIN_WORKFLOW`]'s team, so a project that shadows the workflow with
+/// another lead gets it everywhere pm treats the orchestrator specially.
+pub fn orchestrator_definition(project_root: &Path) -> String {
+    WorkflowDef::load(project_root, MAIN_WORKFLOW)
+        .ok()
+        .and_then(|def| def.effective_team().first().cloned())
+        .unwrap_or_else(|| DEFAULT_ORCHESTRATOR.to_string())
 }
 
 /// Where a scope's team stands, set by its agents with `pm feat status`.
@@ -83,6 +99,25 @@ impl TeamStatus {
     }
 }
 
+/// The agent in main's registry that runs [`orchestrator_definition`]: the
+/// first active one by name, else the first inactive one; while none does,
+/// the definition's name, which is what `pm init` spawns it as.
+pub fn orchestrator(project_root: &Path) -> String {
+    let definition = orchestrator_definition(project_root);
+    let Ok(registry) = AgentRegistry::load(&paths::agents_dir(project_root), MAIN) else {
+        return definition;
+    };
+    let mut runs_it = registry
+        .agents
+        .iter()
+        .filter(|(name, entry)| entry.effective_definition(name) == definition);
+    let first = runs_it.clone().next();
+    runs_it
+        .find(|(_, entry)| entry.active)
+        .or(first)
+        .map_or(definition.clone(), |(name, _)| name.clone())
+}
+
 /// Main's team status: `<project>/.pm/main.toml`.
 fn main_status_path(project_root: &Path) -> PathBuf {
     paths::pm_dir(project_root).join("main.toml")
@@ -94,6 +129,19 @@ pub fn names(project_root: &Path) -> Result<Vec<String>> {
     Ok(std::iter::once(MAIN.to_string())
         .chain(features.into_iter().map(|(name, _)| name))
         .collect())
+}
+
+/// `scope`'s worktree while its team runs: main's always, a feature's
+/// while its status is active; `None` otherwise.
+pub fn active_worktree(project_root: &Path, scope: &str) -> Result<Option<PathBuf>> {
+    if scope == MAIN {
+        return Ok(Some(paths::main_worktree(project_root)));
+    }
+    let state = FeatureState::load(&paths::features_dir(project_root), scope)?;
+    Ok(state
+        .status
+        .is_active()
+        .then(|| project_root.join(&state.worktree)))
 }
 
 /// Whether `scope` is main or a known feature.
@@ -114,6 +162,53 @@ pub fn check(project_root: &Path, scope: &str) -> Result<()> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn the_orchestrator_is_mains_agent_running_its_definition() {
+        let dir = tempdir().unwrap();
+        assert_eq!(orchestrator(dir.path()), DEFAULT_ORCHESTRATOR);
+
+        let agents_dir = paths::agents_dir(dir.path());
+        std::fs::create_dir_all(&agents_dir).unwrap();
+        std::fs::write(
+            agents_dir.join("main.toml"),
+            "[agents.a-old]\ntype = \"agent\"\nactive = false\nagent_definition = \"main\"\n\n\
+             [agents.helper]\ntype = \"agent\"\nagent_definition = \"plain\"\n\n\
+             [agents.orch]\ntype = \"agent\"\nagent_definition = \"main\"\n",
+        )
+        .unwrap();
+        assert_eq!(orchestrator(dir.path()), "orch");
+
+        std::fs::write(
+            agents_dir.join("main.toml"),
+            "[agents.a-old]\ntype = \"agent\"\nactive = false\nagent_definition = \"main\"\n",
+        )
+        .unwrap();
+        assert_eq!(orchestrator(dir.path()), "a-old");
+    }
+
+    #[test]
+    fn a_project_workflow_names_its_own_orchestrator() {
+        let dir = tempdir().unwrap();
+        let workflow = paths::workflows_dir(dir.path()).join(MAIN_WORKFLOW);
+        std::fs::create_dir_all(&workflow).unwrap();
+        std::fs::write(
+            workflow.join("config.toml"),
+            "description = \"d\"\nagents = [\"lead\", \"scribe\"]\n",
+        )
+        .unwrap();
+        assert_eq!(orchestrator_definition(dir.path()), "lead");
+
+        let agents_dir = paths::agents_dir(dir.path());
+        std::fs::create_dir_all(&agents_dir).unwrap();
+        std::fs::write(
+            agents_dir.join("main.toml"),
+            "[agents.main]\ntype = \"agent\"\n\n\
+             [agents.boss]\ntype = \"agent\"\nagent_definition = \"lead\"\n",
+        )
+        .unwrap();
+        assert_eq!(orchestrator(dir.path()), "boss");
+    }
 
     #[test]
     fn mains_status_is_wip_until_saved_and_round_trips() {

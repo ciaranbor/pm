@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
 use crate::harness::{ExportJob, Harness};
-use crate::state::paths;
 use crate::state::project::{HarnessConfig, ProjectConfig, ProjectEntry, harness_config_in};
+use crate::state::{paths, scope};
 
 pub(super) const MANIFEST: &str = "manifest.json";
 pub(super) const PROJECTS_DIR: &str = "projects";
@@ -31,6 +31,15 @@ pub struct ExportParams<'a> {
     pub global: &'a HarnessConfig,
 }
 
+/// `project`, or `project/feature`: how messages name a scope.
+pub(super) fn scope_label(project: &str, scope: &str) -> String {
+    if scope == scope::MAIN {
+        project.to_string()
+    } else {
+        format!("{project}/{scope}")
+    }
+}
+
 /// The tarball's root directory.
 pub(super) fn export_root(harness: Harness) -> String {
     format!("pm-{}-export", harness.export_tag())
@@ -44,9 +53,9 @@ struct Project {
     worktrees: Vec<Worktree>,
 }
 
-/// One worktree of a project: `None` for main, else the feature's name.
+/// One scope's worktree in a project.
 struct Worktree {
-    feature: Option<String>,
+    scope: String,
     /// Resolved: the form every harness records a session's directory in,
     /// and so the one an import has to find in the transcripts.
     recorded: PathBuf,
@@ -56,19 +65,15 @@ fn resolved(path: PathBuf) -> PathBuf {
     path.canonicalize().unwrap_or(path)
 }
 
+/// Main's worktree comes first.
 fn project(name: String, root: PathBuf) -> Result<Project> {
-    let mut worktrees = vec![Worktree {
-        feature: None,
-        recorded: resolved(paths::main_worktree(&root)),
-    }];
-    for (scope, path) in super::skills::scoped_worktrees_on_disk(&root)? {
-        if scope != "main" {
-            worktrees.push(Worktree {
-                feature: Some(scope),
-                recorded: resolved(path),
-            });
-        }
-    }
+    let worktrees = super::skills::scoped_worktrees_on_disk(&root)?
+        .into_iter()
+        .map(|(scope, path)| Worktree {
+            scope,
+            recorded: resolved(path),
+        })
+        .collect();
     Ok(Project {
         name,
         root,
@@ -187,21 +192,21 @@ pub fn export(params: &ExportParams<'_>) -> Result<(PathBuf, Vec<String>)> {
                 continue;
             };
             let key = staging_key(&wt.recorded);
-            match &wt.feature {
-                None => {
-                    messages.push(format!("Exported '{name}' ({detail})"));
-                    entry["key"] = key.into();
-                }
-                Some(feature) => {
-                    messages.push(format!("Exported '{name}/{feature}' ({detail})"));
-                    features.insert(
-                        feature.clone(),
-                        serde_json::json!({
-                            "path": wt.recorded.to_string_lossy(),
-                            "key": key,
-                        }),
-                    );
-                }
+            messages.push(format!(
+                "Exported '{}' ({detail})",
+                scope_label(name, &wt.scope)
+            ));
+            // The manifest keeps main's sessions on the project entry itself.
+            if wt.scope == scope::MAIN {
+                entry["key"] = key.into();
+            } else {
+                features.insert(
+                    wt.scope.clone(),
+                    serde_json::json!({
+                        "path": wt.recorded.to_string_lossy(),
+                        "key": key,
+                    }),
+                );
             }
         }
         if entry.get("key").is_none() && features.is_empty() {

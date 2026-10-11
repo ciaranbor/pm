@@ -12,9 +12,8 @@ use std::path::{Path, PathBuf};
 use crate::commands::launch_check::{self, FailedLaunch, Launch};
 use crate::error::{PmError, Result};
 use crate::hooks;
-use crate::state::feature::FeatureState;
-use crate::state::paths;
 use crate::state::project::{ProjectConfig, ProjectEntry};
+use crate::state::{paths, scope};
 use crate::tmux;
 
 /// Result of an `open` operation, containing restore statistics.
@@ -67,8 +66,8 @@ pub fn confirm_launches<'a>(
 
 /// Open a project: ensure all tmux sessions exist, then respawn agents.
 ///
-/// Creates the `<project>/main` session if missing, then creates sessions for
-/// any active features that are missing their sessions. Existing sessions are
+/// Creates the session of every active scope that is missing one — main is
+/// always active, and a missing main worktree is fatal. Existing sessions are
 /// left untouched (resurrect-aware).
 ///
 /// Before doing any recreation, runs `pm doctor`'s diagnostic checks (without
@@ -80,8 +79,7 @@ pub fn confirm_launches<'a>(
 /// After session creation, respawns agents marked `active = true` via
 /// `agent_spawn_all`. Agents whose windows already exist are skipped.
 ///
-/// Finally, selects a sensible landing window in each restored session: the
-/// first agent window if any agents were respawned, otherwise window 0.
+/// Each session that had agents respawned lands on its first agent window.
 ///
 /// Features in `initializing` state are skipped — those represent incomplete
 /// creations that `pm doctor` should handle.
@@ -154,88 +152,48 @@ fn open_project(
 
     let mut sessions_restored: usize = 0;
     let mut launched = Vec::new();
+    let mut warnings = Vec::new();
     let agents_dir = paths::agents_dir(project_root);
-
-    // Ensure <project>/main session exists
-    let main_session = tmux::session_name(project_name, "main");
     let restore_hook = project_root.join(hooks::RESTORE_PATH);
-    if !tmux::has_session(tmux_server, &main_session)? {
-        let main_path = paths::main_worktree(project_root);
-        if !main_path.exists() {
-            return Err(PmError::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("main worktree missing: {}", main_path.display()),
-            )));
-        }
-        tmux::create_session(tmux_server, &main_session, &main_path)?;
-        hooks::run_hook(
-            tmux_server,
-            &hooks::HookContext::scope(project_root, project_name, "main"),
-            &restore_hook,
-        );
-        sessions_restored += 1;
-    }
 
-    // Respawn agents marked active in the main scope. If the session was just
-    // recreated, their windows are gone and agent_spawn will create new ones.
-    // If the session already existed, agent_spawn is idempotent (skips agents
-    // whose windows are still present).
-    let mut warnings = respawn_agents_for_scope(
-        project_root,
-        "main",
-        &main_session,
-        &agents_dir,
-        tmux_server,
-        false,
-        &mut launched,
-    )?;
-
-    // Ensure sessions exist for all active features
-    let features_dir = paths::features_dir(project_root);
-    let features = FeatureState::list(&features_dir)?;
-
-    // Track which features have active sessions (for agent respawn)
-    let mut active_features: Vec<String> = Vec::new();
-
-    for (name, state) in &features {
-        if !state.status.is_active() {
+    for scope in scope::names(project_root)? {
+        let Some(worktree) = scope::active_worktree(project_root, &scope)? else {
             continue;
-        }
-        let session_name = tmux::session_name(project_name, name);
+        };
+        let session_name = tmux::session_name(project_name, &scope);
         if !tmux::has_session(tmux_server, &session_name)? {
-            let worktree_path = project_root.join(&state.worktree);
-            if !worktree_path.exists() {
+            if !worktree.exists() {
+                if scope == scope::MAIN {
+                    return Err(PmError::Io(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!("main worktree missing: {}", worktree.display()),
+                    )));
+                }
                 warnings.push(format!(
-                    "skipping '{name}': worktree missing at {}",
-                    worktree_path.display()
+                    "skipping '{scope}': worktree missing at {}",
+                    worktree.display()
                 ));
                 continue;
             }
-            tmux::create_session(tmux_server, &session_name, &worktree_path)?;
+            tmux::create_session(tmux_server, &session_name, &worktree)?;
             hooks::run_hook(
                 tmux_server,
                 &hooks::HookContext {
-                    worktree: worktree_path.clone(),
-                    ..hooks::HookContext::scope(project_root, project_name, name)
+                    worktree,
+                    ..hooks::HookContext::scope(project_root, project_name, &scope)
                 },
                 &restore_hook,
             );
             sessions_restored += 1;
         }
-        active_features.push(name.clone());
-    }
-
-    // Respawn agents for ALL active features (not just restored sessions).
-    // agent_spawn is idempotent — skips agents whose windows already exist.
-    for feature in &active_features {
-        let session_name = tmux::session_name(project_name, feature);
+        // agent_spawn skips agents whose windows still exist, so a session
+        // that survived only gets its dead agents back.
         warnings.extend(respawn_agents_for_scope(
             project_root,
-            feature,
+            &scope,
             &session_name,
             &agents_dir,
             tmux_server,
-            true,
             &mut launched,
         )?);
     }
@@ -243,7 +201,7 @@ fn open_project(
     Ok(OpenResult {
         sessions_restored,
         agents_respawned: launched.len(),
-        main_session,
+        main_session: tmux::session_name(project_name, scope::MAIN),
         project_root: project_root.to_path_buf(),
         launched,
         failed_launches: Vec::new(),
