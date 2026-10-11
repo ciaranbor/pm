@@ -6,6 +6,27 @@ notes.
 
 ## Unreleased
 
+- `main` runs a bundled workflow, `orchestrator`, like a feature runs its own:
+`pm workflow show` in main prints its plan, and the `main` agent definition
+keeps only its job. A project can override it in `.pm/workflows/orchestrator/`;
+the first agent of its team is the orchestrator, which receives pm's ready and
+end notices. `pm self-update` runs `pm upgrade`; after a build from source,
+run it yourself, or `pm workflow show` in main fails.
+- `main`'s agents can now edit `.pm/docs` and `.pm/summaries` without asking.
+- `pm feat merge` refuses, and the app's Merge is disabled, while the feature
+has untracked files (they were deleted with the worktree), or while the base's
+worktree has another branch checked out (the merge landed on that branch).
+- Fixes: two agents starting at once could leave one never hearing messages,
+showing busy indefinitely; such an agent now reads `unarmed`, and a message
+wakes it. Restarting an agent that never took a turn starts it fresh instead
+of failing, and forking one says why it can't. Deleting a feature leaves no
+runtime files behind. The app no longer shows a dialog answered from the phone
+as still open for a few seconds.
+- `pm doctor` reports project-wide problems under `[project]`, always lists
+`main`, and warns when several `pm` binaries are on `PATH` or tmux is older
+than 3.6.
+- `pm tmux init` no longer leaves a dead socket in tmux's socket directory
+on every run (tmux 3.8 keeps the file after `kill-server`).
 - Removed: `pm upgrade --all`. `pm upgrade` already covers every project, so
 drop the flag from any script or hook that passes it. Updating from 0.5.0 or
 earlier with `pm self-update` runs the removed `pm upgrade --all` and fails
