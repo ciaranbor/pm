@@ -639,6 +639,9 @@ impl ScopeReader<'_> {
 
     /// A busy agent, refined by what it is `at` or a stopped loop. A
     /// startup marker counts only once the start has had time to finish.
+    /// An asking marker with no open dialog counts as busy once one of the
+    /// agent's dialogs has been answered since the marker was set: the
+    /// dialog's hook closes the dialog before it re-marks the agent.
     fn busy(
         &self,
         scope: &str,
@@ -650,14 +653,22 @@ impl ScopeReader<'_> {
         let grace = super::doctor::START_GRACE.as_secs() as i64;
         let waiting = at
             .filter(|w| w.kind != WaitingKind::Startup || (now - w.since).num_seconds() > grace)
-            .map(|w| WaitingSnapshot {
+            .map(|w| {
+                let dialog = (w.kind.class() == WaitingClass::Asking)
+                    .then(|| hooks_dialog::current_for(self.project_root, scope, agent, &w))
+                    .flatten();
+                (w, dialog)
+            })
+            .filter(|(w, dialog)| {
+                dialog.is_some()
+                    || w.kind.class() != WaitingClass::Asking
+                    || !runtime::dialog_answered_since(self.project_root, scope, agent, w.since)
+            })
+            .map(|(w, dialog)| WaitingSnapshot {
                 kind: w.kind,
                 detail: w.describe(),
                 since: Some(w.since),
-                dialog: (w.kind.class() == WaitingClass::Asking)
-                    .then(|| hooks_dialog::current_for(self.project_root, scope, agent, &w))
-                    .flatten()
-                    .map(|record| record.dialog.id),
+                dialog: dialog.map(|record| record.dialog.id),
             })
             .or_else(|| {
                 let reason = harness.loop_stopped(self.project_root, scope, agent)?;
@@ -1219,7 +1230,20 @@ mod tests {
         };
         runtime::write_dialog(&project, "login", "asking", &record).unwrap();
         let login = &super::project(&project, server.name()).unwrap().features[0];
-        assert_eq!(login.agents[0].waiting.as_ref().unwrap().dialog, Some(id));
+        assert_eq!(
+            login.agents[0].waiting.as_ref().unwrap().dialog,
+            Some(id.clone())
+        );
+
+        // Answered from the app: busy before its hook re-marks the agent,
+        // and asking again at a dialog that opens after.
+        runtime::close_dialog(&project, "login", "asking", &id, true).unwrap();
+        let login = &super::project(&project, server.name()).unwrap().features[0];
+        assert_eq!(login.agents[0].state, AgentState::Busy);
+        let next = Waiting::now(WaitingKind::Permission, Some("Bash: ls".into()));
+        runtime::write_waiting(&project, "login", "asking", &next).unwrap();
+        let login = &super::project(&project, server.name()).unwrap().features[0];
+        assert_eq!(login.agents[0].state, AgentState::Asking);
 
         let at = |minutes| Utc::now() - chrono::Duration::minutes(minutes);
         runtime::set_activity(&project, "login", "starting", at(1));
