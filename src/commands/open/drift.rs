@@ -90,7 +90,7 @@ fn collect_drift_warnings(
             };
             warnings.push(format!(
                 "  {} — {}{suffix}",
-                finding.feature(),
+                finding.scope(),
                 issue.message()
             ));
         }

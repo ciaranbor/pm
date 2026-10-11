@@ -124,7 +124,7 @@ fn run(
         if finding.issues.is_empty() {
             entries.push(Entry {
                 issue: false,
-                line: format!("  {} — ok", finding.feature),
+                line: format!("  {} — ok", finding.scope),
             });
             continue;
         }
@@ -135,7 +135,7 @@ fn run(
                     action,
                     project_root,
                     projects_dir,
-                    &finding.feature,
+                    &finding.scope,
                     project_name,
                     tmux_server,
                 ) {
@@ -143,21 +143,21 @@ fn run(
                         fixed_count += 1;
                         format!(
                             "  {} — fixed: {}{}",
-                            finding.feature,
+                            finding.scope,
                             issue.message,
                             agent_spawn::notes_suffix(&notes)
                         )
                     }
                     Err(e) => format!(
                         "  {} — fix failed ({}): {}",
-                        finding.feature, e, issue.message
+                        finding.scope, e, issue.message
                     ),
                 },
                 Fix::Skip if fix => format!(
                     "  {} — skipped (ambiguous): {}",
-                    finding.feature, issue.message
+                    finding.scope, issue.message
                 ),
-                _ => format!("  {} — {}", finding.feature, issue.message),
+                _ => format!("  {} — {}", finding.scope, issue.message),
             };
             entries.push(Entry { issue: true, line });
         }
