@@ -68,7 +68,7 @@ pub(super) fn main_values(
     let lead = main
         .agents
         .iter()
-        .find(|a| a.name == scope::ORCHESTRATOR)
+        .find(|a| a.name == scope::DEFAULT_ORCHESTRATOR)
         .or(main.agents.first());
     let blocked = main.attention.kind == AttentionKind::Blocked;
     let [activity, activity_label] = main_activity(main, lead.filter(|_| !blocked), now)

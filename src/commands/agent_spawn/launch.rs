@@ -76,7 +76,7 @@ fn global_dirs() -> Vec<std::path::PathBuf> {
 /// information store.
 fn edit_dirs(project_root: &Path, definition: &str) -> Vec<std::path::PathBuf> {
     let summaries = paths::summaries_dir(project_root);
-    if definition == scope::ORCHESTRATOR {
+    if definition == scope::orchestrator_definition(project_root) {
         vec![paths::docs_dir(project_root), summaries]
     } else {
         vec![summaries]
@@ -152,7 +152,7 @@ mod tests {
     fn the_orchestrator_also_edits_the_information_store() {
         let root = Path::new("/proj");
         assert_eq!(
-            edit_dirs(root, scope::ORCHESTRATOR),
+            edit_dirs(root, scope::DEFAULT_ORCHESTRATOR),
             [
                 PathBuf::from("/proj/.pm/docs"),
                 PathBuf::from("/proj/.pm/summaries")

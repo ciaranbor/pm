@@ -191,19 +191,20 @@ pub fn default_path(git_url: &str) -> Result<PathBuf> {
     Ok(PathBuf::from(name))
 }
 
-/// Spawn the project's `main` agent in its main session: into the session's
-/// first window, the shell it was created with, unless `main` already has
-/// one of its own.
+/// Spawn the project's orchestrator ([`scope::orchestrator_definition`],
+/// named after it) in its main session: into the session's first window,
+/// the shell it was created with, unless it already has one of its own.
 pub fn spawn_main(project_root: &Path, tmux_server: Option<&str>) -> Result<String> {
     let config = ProjectConfig::load(&paths::pm_dir(project_root))?;
+    let orchestrator = scope::orchestrator_definition(project_root);
     let registered = AgentRegistry::load(&paths::agents_dir(project_root), scope::MAIN)?
-        .get(scope::ORCHESTRATOR)
+        .get(&orchestrator)
         .is_some();
     let (_, msg, _) = if registered {
         agent_spawn(
             project_root,
             scope::MAIN,
-            scope::ORCHESTRATOR,
+            &orchestrator,
             None,
             None,
             tmux_server,
@@ -216,7 +217,7 @@ pub fn spawn_main(project_root: &Path, tmux_server: Option<&str>) -> Result<Stri
         agent_spawn_in(
             project_root,
             scope::MAIN,
-            scope::ORCHESTRATOR,
+            &orchestrator,
             &first,
             tmux_server,
         )?
