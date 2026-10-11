@@ -126,6 +126,7 @@ mod tests {
     use crate::commands::agent_send::agent_send;
     use crate::commands::running_agents::waiting;
     use crate::testing::{ControlClient, TestServer};
+    use chrono::Utc;
     use tempfile::tempdir;
 
     const PROMPT: &str = "You have new messages from reviewer. Run `pm msg read` to read them.";
@@ -237,6 +238,59 @@ mod tests {
         let _viewing = ControlClient::attach(server.name(), &session);
 
         assert_left_alone(&server, &project);
+    }
+
+    /// An agent at its prompt with no marker, whose session started past
+    /// the grace with its last activity at `active`.
+    fn started_long_ago(
+        server: &TestServer,
+        dir: &Path,
+        active: chrono::Duration,
+    ) -> (std::path::PathBuf, String) {
+        let (project, target) = at_prompt(server, dir, WaitingKind::Idle);
+        runtime::clear_waiting(&project, "login", "implementer").unwrap();
+        let started = Utc::now() - chrono::Duration::minutes(2);
+        runtime::mark_started(&project, "login", "implementer").unwrap();
+        std::fs::File::options()
+            .append(true)
+            .open(paths::pm_dir(&project).join("runtime/login/implementer/started"))
+            .unwrap()
+            .set_modified(started.into())
+            .unwrap();
+        runtime::set_activity(&project, "login", "implementer", started + active);
+        (project, target)
+    }
+
+    #[test]
+    fn an_agent_active_since_its_start_is_busy_and_left_alone() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (project, target) = started_long_ago(&server, dir.path(), chrono::Duration::seconds(1));
+
+        assert_eq!(
+            send(&server, &project),
+            "Message 001 sent to 'implementer' (from 'reviewer')"
+        );
+        assert!(!screen(&server, &target).contains(PROMPT));
+    }
+
+    #[test]
+    fn an_agent_whose_start_armed_no_waiter_is_re_armed_once() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (project, target) = started_long_ago(&server, dir.path(), chrono::Duration::zero());
+
+        let status = send(&server, &project);
+
+        assert!(
+            status.ends_with("\nRe-armed 'implementer' (its session started, but armed no waiter)"),
+            "{status}"
+        );
+        server.wait_for_pane_text(&target, &format!("❯ {PROMPT}"));
+        assert_eq!(
+            send(&server, &project),
+            "Message 002 sent to 'implementer' (from 'reviewer')"
+        );
     }
 
     #[test]

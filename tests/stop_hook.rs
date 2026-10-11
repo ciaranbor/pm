@@ -605,6 +605,11 @@ fn a_compaction_and_a_codex_session_start_run_no_waiter() {
         let registry =
             pm::state::agent::AgentRegistry::load(&paths::agents_dir(dir.path()), "main").unwrap();
         assert_eq!(registry.get(AGENT).unwrap().session_id, "s1", "recorded");
+        assert_eq!(
+            runtime::started_at(dir.path(), "main", AGENT).is_some(),
+            source != "compact",
+            "a compaction is no start that should have armed a waiter"
+        );
     }
 }
 

@@ -33,7 +33,7 @@
 //!
 //! The **start stamp** is a file the harness's session start writes
 //! ([`hooks_session_start`](crate::commands::hooks_session_start)), every
-//! harness's, a resume's included, so its existence says the harness got
+//! harness's, a resume's included but not a compaction's, so its existence says the harness got
 //! through its own startup and is up, and its mtime says when; the launch
 //! check reads it ([`launch_check`](crate::commands::launch_check)). Every
 //! spawn removes it with the launch stamp.
