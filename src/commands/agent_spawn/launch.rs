@@ -90,7 +90,8 @@ pub(crate) fn definition_flag(effective_definition: &str) -> Option<&str> {
     (!workflow::is_vanilla(effective_definition)).then_some(effective_definition)
 }
 
-/// What config has a spawn of `definition` (the effective one) launch with: the one resolution a spawn and its
+/// What config has a spawn of `definition` (the effective one) launch with:
+/// the one resolution a spawn and its
 /// [`launch_stamp`](crate::commands::launch_stamp) share.
 pub(crate) struct LaunchConfig {
     /// Re-resolved from config on every spawn, never stored on the registry

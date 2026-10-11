@@ -2,9 +2,8 @@
 //! feature's and the base's worktrees settled (no uncommitted changes, no
 //! paused merge or rebase, whose commits the branch doesn't reach yet). The
 //! merge lands on whatever the base's worktree has checked out, so that must
-//! be the base branch itself. A
-//! feature already recorded merged only cleans up, so only its own worktree
-//! is checked, and not at all when it is kept.
+//! be the base branch itself. A feature already recorded merged only cleans
+//! up, so only its own worktree is checked, and not at all when it is kept.
 //!
 //! `pm feat merge` refuses with these checks in the CLI's words; `pm serve`
 //! runs the same ones to tell a device, in a few words, why its Merge is

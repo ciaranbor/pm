@@ -22,10 +22,7 @@ pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
             match command {
                 HarnessSettingsCommands::List { name } => {
                     let scope = resolve_scope_with_flag(&project_root, name)?;
-                    let lines = commands::harness_settings::list(
-                        &paths::scope_worktree(&project_root, &scope),
-                        harness,
-                    )?;
+                    let lines = commands::harness_settings::list(&project_root, &scope, harness)?;
                     if lines.is_empty() {
                         println!("No settings files found for '{scope}'");
                     } else {

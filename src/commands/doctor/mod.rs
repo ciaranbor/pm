@@ -204,8 +204,9 @@ enum FixAction {
     PullFeatureAssets,
 }
 
-/// The label of the finding for checks that span the whole project.
-pub const PROJECT: &str = "project";
+/// The label of the finding for checks that span the whole project; git
+/// refuses `[` in a branch name, so no branch-derived feature name has it.
+pub const PROJECT: &str = "[project]";
 
 /// Diagnostic finding for a scope (`main` or a feature), or for the whole
 /// project ([`PROJECT`]).

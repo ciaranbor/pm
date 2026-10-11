@@ -2,14 +2,14 @@
 
 use std::path::Path;
 
-use super::{BOLD, RESET, settings_files};
+use super::{BOLD, RESET, settings_dir, settings_files};
 use crate::error::Result;
 use crate::harness::Harness;
 
-/// The contents of the settings files in a scope's `worktree`.
-pub fn list(worktree: &Path, harness: Harness) -> Result<Vec<String>> {
+/// The contents of the settings files in `scope`'s worktree.
+pub fn list(project_root: &Path, scope: &str, harness: Harness) -> Result<Vec<String>> {
     list_settings_dir(
-        &worktree.join(harness.config_dir()),
+        &settings_dir(project_root, scope, harness),
         settings_files(harness)?,
     )
 }
@@ -55,7 +55,7 @@ mod tests {
             "{\n  \"permissions\": true\n}",
         );
 
-        let lines = list(&paths::main_worktree(&project), CC).unwrap();
+        let lines = list(&project, "main", CC).unwrap();
         let output = strip_ansi(&lines.join("\n"));
         assert!(output.contains("settings.json"));
         assert!(output.contains("\"permissions\": true"));
@@ -71,7 +71,7 @@ mod tests {
         write_json(&main_claude, "settings.json", r#"{"a":1}"#);
         write_json(&main_claude, "settings.local.json", r#"{"b":2}"#);
 
-        let lines = list(&paths::main_worktree(&project), CC).unwrap();
+        let lines = list(&project, "main", CC).unwrap();
         let output = strip_ansi(&lines.join("\n"));
         assert!(output.contains("settings.json"));
         assert!(!output.contains("settings.local.json"));
@@ -87,7 +87,7 @@ mod tests {
         // strip it to exercise the "no .claude/ dir" branch.
         let _ = std::fs::remove_dir_all(paths::main_worktree(&project).join(".claude"));
 
-        let lines = list(&paths::main_worktree(&project), CC).unwrap();
+        let lines = list(&project, "main", CC).unwrap();
         assert!(lines.is_empty());
     }
 
@@ -104,7 +104,7 @@ mod tests {
             "{\n  \"permissions\": true\n}",
         );
 
-        let lines = list(&project.join("login"), CC).unwrap();
+        let lines = list(&project, "login", CC).unwrap();
         let output = strip_ansi(&lines.join("\n"));
         assert!(output.contains("settings.json"));
         assert!(output.contains("\"permissions\": true"));
@@ -120,7 +120,7 @@ mod tests {
         write_json(&feat_claude, "settings.json", r#"{"a":1}"#);
         write_json(&feat_claude, "settings.local.json", r#"{"b":2}"#);
 
-        let lines = list(&project.join("login"), CC).unwrap();
+        let lines = list(&project, "login", CC).unwrap();
         let output = strip_ansi(&lines.join("\n"));
         assert!(output.contains("settings.json"));
         assert!(!output.contains("settings.local.json"));
@@ -139,7 +139,7 @@ mod tests {
             std::fs::remove_dir_all(&feat_claude).unwrap();
         }
 
-        let lines = list(&project.join("login"), CC).unwrap();
+        let lines = list(&project, "login", CC).unwrap();
         assert!(lines.is_empty());
     }
 }

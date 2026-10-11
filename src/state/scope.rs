@@ -27,7 +27,8 @@ pub fn workflow(project_root: &Path, scope: &str) -> Result<Option<String>> {
     Ok(FeatureState::load(&paths::features_dir(project_root), scope)?.workflow)
 }
 
-/// The orchestrator's definition.
+/// The orchestrator's definition, and the agent name `pm init` registers
+/// it under.
 pub const ORCHESTRATOR: &str = "main";
 
 /// Where a scope's team stands, set by its agents with `pm feat status`.
@@ -87,20 +88,22 @@ impl TeamStatus {
     }
 }
 
-/// The agent in main's registry that runs the [`ORCHESTRATOR`] definition,
-/// the first by name when several do; the definition's own name, which is
-/// what `pm init` spawns it as, while none does.
+/// The agent in main's registry that runs the [`ORCHESTRATOR`] definition:
+/// the first active one by name, else the first inactive one; while none
+/// does, the name `pm init` spawns it as.
 pub fn orchestrator(project_root: &Path) -> String {
-    AgentRegistry::load(&paths::agents_dir(project_root), MAIN)
-        .ok()
-        .and_then(|registry| {
-            registry
-                .agents
-                .iter()
-                .find(|(name, entry)| entry.effective_definition(name) == ORCHESTRATOR)
-                .map(|(name, _)| name.clone())
-        })
-        .unwrap_or_else(|| ORCHESTRATOR.to_string())
+    let Ok(registry) = AgentRegistry::load(&paths::agents_dir(project_root), MAIN) else {
+        return ORCHESTRATOR.to_string();
+    };
+    let mut runs_it = registry
+        .agents
+        .iter()
+        .filter(|(name, entry)| entry.effective_definition(name) == ORCHESTRATOR);
+    let first = runs_it.clone().next();
+    runs_it
+        .find(|(_, entry)| entry.active)
+        .or(first)
+        .map_or_else(|| ORCHESTRATOR.to_string(), |(name, _)| name.clone())
 }
 
 /// Main's team status: `<project>/.pm/main.toml`.
@@ -157,11 +160,19 @@ mod tests {
         std::fs::create_dir_all(&agents_dir).unwrap();
         std::fs::write(
             agents_dir.join("main.toml"),
-            "[agents.helper]\ntype = \"agent\"\nagent_definition = \"plain\"\n\n\
+            "[agents.a-old]\ntype = \"agent\"\nactive = false\nagent_definition = \"main\"\n\n\
+             [agents.helper]\ntype = \"agent\"\nagent_definition = \"plain\"\n\n\
              [agents.orch]\ntype = \"agent\"\nagent_definition = \"main\"\n",
         )
         .unwrap();
         assert_eq!(orchestrator(dir.path()), "orch");
+
+        std::fs::write(
+            agents_dir.join("main.toml"),
+            "[agents.a-old]\ntype = \"agent\"\nactive = false\nagent_definition = \"main\"\n",
+        )
+        .unwrap();
+        assert_eq!(orchestrator(dir.path()), "a-old");
     }
 
     #[test]

@@ -23,7 +23,7 @@ pub(super) fn agent_not_found_hint(
 
     // From a feature, a bare `main` names an agent of the sender's own
     // scope; the orchestrator is the agent `main` of the main scope.
-    if recipient == scope::ORCHESTRATOR && sender_scope != scope::MAIN {
+    if recipient == scope::MAIN && sender_scope != scope::MAIN {
         return "\n  Hint: the orchestrator is `main@main`, the agent `main` in the main scope. \
              Use `pm msg send main@main` (or `<agent>@main`), or `pm msg reply`"
             .to_string();
