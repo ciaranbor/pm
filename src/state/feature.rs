@@ -167,9 +167,9 @@ impl FeatureState {
     }
 }
 
-/// Where a base branch is checked out within the project: the scope whose
-/// session pm returns to after a feature is torn down, and the worktree pm
-/// merges into.
+/// The scope a base branch belongs to, by pm's record rather than by what
+/// its worktree has checked out: the scope whose session pm returns to after
+/// a feature is torn down, and the worktree pm merges into.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BaseCheckout {
     /// `main`, or the name of the feature whose branch is `base`.

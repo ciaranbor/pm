@@ -158,3 +158,30 @@ fn merge_stacked_feature_cleans_up_by_default() {
     let features_dir = paths::features_dir(&project_path);
     assert!(!FeatureState::exists(&features_dir, "child"));
 }
+
+#[test]
+fn merge_refuses_while_the_base_checkout_is_on_another_branch() {
+    let dir = tempdir().unwrap();
+    let server = TestServer::new();
+    let (project_path, projects_dir, _) = server.setup_master_project(dir.path());
+    let main_repo = paths::main_worktree(&project_path);
+    feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
+        &project_path,
+        &projects_dir,
+        "login",
+        server.name(),
+    ))
+    .unwrap();
+    TestServer::add_feature_commit(&project_path, "login");
+    git::run_git(&main_repo, &["checkout", "-b", "spike"]).unwrap();
+
+    let err = feat_merge(&project_path, &projects_dir, "login", false, server.name()).unwrap_err();
+
+    let msg = format!("{err}");
+    assert!(msg.contains("'spike'") && msg.contains("'master'"), "{msg}");
+    assert!(!main_repo.join("feature.txt").exists());
+    assert!(FeatureState::exists(
+        &paths::features_dir(&project_path),
+        "login"
+    ));
+}
