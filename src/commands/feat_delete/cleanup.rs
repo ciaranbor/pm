@@ -8,6 +8,7 @@ use super::TimingLog;
 use crate::error::Result;
 use crate::state::agent::AgentRegistry;
 use crate::state::feature::FeatureState;
+use crate::state::scope;
 use crate::{git, messages, tmux};
 
 /// Parameters for feature cleanup.
@@ -219,17 +220,18 @@ pub(crate) fn cleanup_feature_with_timing(
         Ok(())
     })?;
 
-    // Step 4.5: Tell main how the feature ended, before killing the session
+    // Step 4.5: Tell the orchestrator how the feature ended, before killing the session
     // (the session kill terminates this process if run from within the
     // feature session)
     run!(tlog, "notify-main", params.best_effort, {
         if let Some(ending) = params.ending
             && let Some(pm_dir) = params.features_dir.parent()
+            && let Some(project_root) = pm_dir.parent()
         {
             messages::send_with_scope(
                 &pm_dir.join("messages"),
-                "main",
-                "main",
+                scope::MAIN,
+                &scope::orchestrator(project_root),
                 params.name,
                 &ending_body(params.name, ending, summary.as_deref()),
                 Some(params.name),

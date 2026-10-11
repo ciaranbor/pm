@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
+use crate::state::agent::AgentRegistry;
 use crate::state::feature::{FeatureState, Progress};
 use crate::state::paths;
 
@@ -86,6 +87,22 @@ impl TeamStatus {
     }
 }
 
+/// The agent in main's registry that runs the [`ORCHESTRATOR`] definition,
+/// the first by name when several do; the definition's own name, which is
+/// what `pm init` spawns it as, while none does.
+pub fn orchestrator(project_root: &Path) -> String {
+    AgentRegistry::load(&paths::agents_dir(project_root), MAIN)
+        .ok()
+        .and_then(|registry| {
+            registry
+                .agents
+                .iter()
+                .find(|(name, entry)| entry.effective_definition(name) == ORCHESTRATOR)
+                .map(|(name, _)| name.clone())
+        })
+        .unwrap_or_else(|| ORCHESTRATOR.to_string())
+}
+
 /// Main's team status: `<project>/.pm/main.toml`.
 fn main_status_path(project_root: &Path) -> PathBuf {
     paths::pm_dir(project_root).join("main.toml")
@@ -130,6 +147,22 @@ pub fn check(project_root: &Path, scope: &str) -> Result<()> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn the_orchestrator_is_mains_agent_running_its_definition() {
+        let dir = tempdir().unwrap();
+        assert_eq!(orchestrator(dir.path()), ORCHESTRATOR);
+
+        let agents_dir = paths::agents_dir(dir.path());
+        std::fs::create_dir_all(&agents_dir).unwrap();
+        std::fs::write(
+            agents_dir.join("main.toml"),
+            "[agents.helper]\ntype = \"agent\"\nagent_definition = \"plain\"\n\n\
+             [agents.orch]\ntype = \"agent\"\nagent_definition = \"main\"\n",
+        )
+        .unwrap();
+        assert_eq!(orchestrator(dir.path()), "orch");
+    }
 
     #[test]
     fn mains_status_is_wip_until_saved_and_round_trips() {
