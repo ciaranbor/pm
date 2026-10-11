@@ -25,9 +25,10 @@ use crate::{gh, git, tmux};
 /// Returns a [`PROJECT`] finding for the project-wide checks (hooks, harness
 /// config, asset tiers, the registry's main branch) when it has issues, then
 /// one finding per scope — main, then each feature — healthy ones included;
-/// callers can filter by inspecting [`Finding::issues`]. Every scope gets
-/// [`scope_issues`]; a feature also gets its worktree, branch, initializing,
-/// workflow and projection checks, and PR drift at [`Depth::Full`].
+/// callers can filter by inspecting [`Finding::issues`]. Every scope is
+/// checked for a paused rebase, legacy agent names and, while active, its
+/// session and agents; a feature also for its worktree, branch,
+/// initializing, workflow and projection, and PR drift at [`Depth::Full`].
 pub fn diagnose(
     project_root: &Path,
     projects_dir: &Path,
