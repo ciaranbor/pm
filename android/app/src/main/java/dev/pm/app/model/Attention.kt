@@ -5,8 +5,8 @@ import java.time.Instant
 
 /** What a scope needs from the user, most urgent first, as pm ranks it. */
 enum class AttentionKind(val wire: String) {
-    Blocked("blocked"),
     Asking("asking"),
+    Blocked("blocked"),
     Cleanup("cleanup"),
     Ready("ready"),
     Dead("dead"),

@@ -11,7 +11,8 @@ import okio.BufferedSink
 
 /**
  * docs/remote-api.md's example snapshot, with a field, kind, state and version detail this app
- * doesn't know.
+ * doesn't know, and login's attention `blocked` though its agent asks, which pm would rank
+ * `asking`.
  */
 val SNAPSHOT =
     """

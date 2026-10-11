@@ -56,9 +56,9 @@ fn reason(attention: &Attention) -> Option<String> {
 }
 
 /// A main session has no feature. Its badge is its `orchestrator`'s (the
-/// agent [`crate::state::scope::orchestrator`] names), unless it is blocked: then, as a
-/// feature's, its attention's. An asking main keeps the agent's badge,
-/// which shows the question.
+/// agent [`crate::state::scope::orchestrator`] names), unless it needs
+/// something: an asking main shows the asking agent's badge, which shows the
+/// question, and a blocked one, as a feature's, its attention's.
 pub(super) fn main_values(
     project: &str,
     main: &ScopeSnapshot,
@@ -66,25 +66,26 @@ pub(super) fn main_values(
     judged: &Judged,
     now: DateTime<Utc>,
 ) -> Vec<(&'static str, Option<String>)> {
-    let lead = main
-        .agents
-        .iter()
-        .find(|a| a.name == orchestrator)
-        .or(main.agents.first());
-    let blocked = main.attention.kind == AttentionKind::Blocked;
-    let [activity, activity_label] = main_activity(main, lead.filter(|_| !blocked), now)
+    let named = |name: &str| main.agents.iter().find(|a| a.name == name);
+    let lead = named(orchestrator).or(main.agents.first());
+    let shown = match (main.attention.kind, main.attention.agent.as_deref()) {
+        (AttentionKind::Blocked, _) => None,
+        (AttentionKind::Asking, Some(asking)) => named(asking).or(lead),
+        _ => lead,
+    };
+    let [activity, activity_label] = main_activity(main, shown, now)
         .map(|a| drawn(a, now).map(Some))
         .unwrap_or_default();
-    let (badge, label) = if blocked {
-        (
+    let (badge, label) = match shown {
+        Some(a) => (
+            Some(badge::agent(a.state, a.unread)),
+            Some(badge::agent_label(a.state, a.unread)),
+        ),
+        None if main.attention.kind == AttentionKind::Blocked => (
             badge::attention(AttentionKind::Blocked),
             badge::attention_label(AttentionKind::Blocked),
-        )
-    } else {
-        (
-            lead.map(|a| badge::agent(a.state, a.unread)),
-            lead.map(|a| badge::agent_label(a.state, a.unread)),
-        )
+        ),
+        None => (None, None),
     };
     vec![
         (PROJECT, Some(format_text(project))),
@@ -101,15 +102,16 @@ pub(super) fn main_values(
 }
 
 /// A main scope's activity, without the busy glyph its badge already shows
-/// when that is its `lead`'s. Background work still shows, for its age.
+/// when that is the `shown` agent's. Background work still shows, for its
+/// age.
 fn main_activity(
     main: &ScopeSnapshot,
-    lead: Option<&AgentSnapshot>,
+    shown: Option<&AgentSnapshot>,
     now: DateTime<Utc>,
 ) -> Option<Activity> {
-    let lead_busy = lead.is_some_and(|a| a.state == AgentState::Busy);
+    let shown_busy = shown.is_some_and(|a| a.state == AgentState::Busy);
     attention::activity(main.working, main.background_since, main.last_activity, now)
-        .filter(|a| !(*a == Activity::Working && lead_busy))
+        .filter(|a| !(*a == Activity::Working && shown_busy))
 }
 
 /// `activity` as `@pm_activity` and `@pm_activity_label`: the busy glyph,

@@ -3,8 +3,8 @@ package dev.pm.app.model
 /**
  * What a poll of the snapshot alerts, for a phone no push reaches: the alerts `pm serve` would have
  * pushed since the last poll, by the server's rule (`attention/transition.rs`). A scope alerts as
- * its attention, the top-ranked kind it needs, enters blocked, asking or ready (a `main` only
- * asking), once per episode of that kind: while the kind's condition holds
+ * its attention, the top-ranked kind it needs, enters asking, blocked or ready (a `main` only
+ * asking or blocked), once per episode of that kind: while the kind's condition holds
  * ([PushedTransition.holds]) it does not alert again, even after something outranking it passes. A
  * kind outranked as it begins alerts later, once it is the scope's attention. A busy agent holds a
  * ready feature's attention back, and so its alert. An agent alerts as it dies.

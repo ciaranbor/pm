@@ -149,20 +149,20 @@ first of these that applies, most urgent first:
 
 | Kind | When |
 |---|---|
+| `asking` | an agent's harness shows a dialog: a question, a permission prompt, a plan to approve, or a startup prompt (folder or hook trust, login) still up a minute after spawn; it stops that agent now, so it outranks even `blocked`, which may be old |
 | `blocked` | status `blocked`: an agent asked you a question |
-| `asking` | an agent's harness shows a dialog: a question, a permission prompt, a plan to approve, or a startup prompt (folder or hook trust, login) still up a minute after spawn |
 | `cleanup` | its PR merged, or it went stale: delete it |
 | `ready` | status `ready`, or PR approved, and no agent busy: merge it |
 | `dead` | an agent's window is gone from an open session, or its harness exited |
 | `unarmed` | an agent sits at its prompt where no message wakes it ([why](#agents-are-message-processors)) |
 | `stalled` | status `wip`, but every agent is idle with no unread messages: the team stopped without saying why |
 
-`main` gets a row too when it is blocked, or one of its agents is asking,
-dead or unarmed; it has no PR to clean up or merge, and an idle `main` is
+`main` gets a row too when one of its agents is asking, it is blocked, or
+an agent is dead or unarmed; it has no PR to clean up or merge, and an idle `main` is
 not stalled.
 Run `pm feat status` in the `main` session (`--all` for every project on
 this machine; `pm status` prints it too) and work down from the top:
-answer what is blocked or asking, merge what is ready, restart what is
+answer what is asking or blocked, merge what is ready, restart what is
 dead, prompt what is unarmed, and ask a stalled team why it stopped. In a
 feature, `pm feat status` shows just that feature; `pm feat status main`
 shows `main`. Its `--json` form is a stable contract for scripts

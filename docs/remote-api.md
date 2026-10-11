@@ -242,8 +242,8 @@ applies; here is each kind's detail:
 
 | Attention | Detail |
 |---|---|
-| `blocked` | `<agent>: <question>`, the agent that set it (in JSON, `agent` and `detail`) |
 | `asking` | `<agent>: <what it asks>` |
+| `blocked` | `<agent>: <question>`, the agent that set it (in JSON, `agent` and `detail`) |
 | `cleanup` | `PR merged` or `stale` |
 | `ready` | the summary's first line, or `PR approved` |
 | `dead` | `<agent>: window missing` or `<agent>: harness exited` |
@@ -251,8 +251,8 @@ applies; here is each kind's detail:
 | `stalled` | `every agent idle, no unread messages` (`null` in JSON) |
 
 Anything else shows its status. A `main` scope is `wip` or `blocked`,
-never `ready`: it gets a row only when it is `blocked`, or one of its
-agents is `asking`, `dead` or `unarmed`, in that order. PR state is what `pm feat sync` last recorded: the view never calls
+never `ready`: it gets a row only when one of its agents is `asking`, it
+is `blocked`, or an agent is `dead` or `unarmed`, in that order. PR state is what `pm feat sync` last recorded: the view never calls
 GitHub, so it is cheap to poll.
 
 ### Agent states and activity
@@ -300,7 +300,7 @@ consumer must tolerate values it doesn't know:
   "features": [{
     "project": "app",
     "name": "login",
-    "attention": { "kind": "blocked", "detail": "which DB?", "agent": "implementer" },
+    "attention": { "kind": "asking", "detail": "implementer: Postgres or SQLite?", "agent": "implementer" },
     "progress": "blocked",
     "blocked_reason": "which DB?",
     "blocked_by": "implementer",
