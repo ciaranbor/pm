@@ -349,7 +349,8 @@ Two decoupled layers:
   agent has its harness's full tool set.
 - **Workflows** define a scope's *topology*: the team, who receives the
   brief, who hands off to whom, who reports to the user, who writes the
-  summary. Main's scope runs the `orchestrator` workflow.
+  summary. Main's scope runs the `orchestrator` workflow; the first member
+  of its team is the orchestrator.
 
 So one `implementer` plays different roles in different features. Every
 agent runs `pm workflow show` at the start of each task to learn its
