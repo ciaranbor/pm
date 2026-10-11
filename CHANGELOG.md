@@ -6,6 +6,8 @@ notes.
 
 ## Unreleased
 
+## 0.6.1 — 2026-10-11
+
 - `main` runs a bundled workflow, `orchestrator`, like a feature runs its own:
 `pm workflow show` in main prints its plan, and the `main` agent definition
 keeps only its job. A project can override it in `.pm/workflows/orchestrator/`;
