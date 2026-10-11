@@ -96,6 +96,19 @@ pub fn names(project_root: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
+/// `scope`'s worktree while its team runs: main's always, a feature's
+/// while its status is active; `None` otherwise.
+pub fn active_worktree(project_root: &Path, scope: &str) -> Result<Option<PathBuf>> {
+    if scope == MAIN {
+        return Ok(Some(paths::main_worktree(project_root)));
+    }
+    let state = FeatureState::load(&paths::features_dir(project_root), scope)?;
+    Ok(state
+        .status
+        .is_active()
+        .then(|| project_root.join(&state.worktree)))
+}
+
 /// Whether `scope` is main or a known feature.
 pub fn exists(project_root: &Path, scope: &str) -> bool {
     scope == MAIN || FeatureState::exists(&paths::features_dir(project_root), scope)

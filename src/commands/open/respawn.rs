@@ -11,16 +11,14 @@ use crate::tmux;
 
 /// Respawn agents for a given scope.
 ///
-/// Adds each agent respawned to `launched`; returns the spawn errors. If
-/// `select_window_zero` is true and no agents were respawned, selects window
-/// 0 as the landing window.
+/// Adds each agent respawned to `launched`; returns the spawn errors. A
+/// session that had agents respawned lands on its first agent window.
 pub(super) fn respawn_agents_for_scope(
     project_root: &Path,
     scope: &str,
     session_name: &str,
     agents_dir: &Path,
     tmux_server: Option<&str>,
-    select_window_zero: bool,
     launched: &mut Vec<Launch>,
 ) -> Result<Vec<String>> {
     let spawn_result = agent_spawn::agent_spawn_all(project_root, scope, tmux_server)?;
@@ -45,8 +43,6 @@ pub(super) fn respawn_agents_for_scope(
         if let Some(target) = first_agent {
             let _ = tmux::select_window(tmux_server, &target);
         }
-    } else if select_window_zero {
-        let _ = tmux::select_window(tmux_server, &format!("{session_name}:0"));
     }
 
     Ok(spawn_result

@@ -10,5 +10,6 @@ use super::*;
 use crate::commands::{feat_new, init};
 use crate::git;
 use crate::state::agent::{AgentRegistry, AgentType};
+use crate::state::feature::FeatureState;
 use crate::testing::TestServer;
 use tempfile::tempdir;
