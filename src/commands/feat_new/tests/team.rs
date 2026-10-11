@@ -273,6 +273,21 @@ fn feat_new_refuses_a_team_whose_harnesses_cannot_run_it_and_creates_nothing() {
 }
 
 #[test]
+fn feat_new_refuses_mains_workflow_before_creating_anything() {
+    let dir = tempdir().unwrap();
+    let server = TestServer::new();
+    let (project_path, projects_dir, _) = server.setup_project(dir.path());
+
+    let err = feat_new(&FeatNewParams {
+        workflow: Some(crate::state::scope::MAIN_WORKFLOW),
+        ..FeatNewParams::with_defaults(&project_path, &projects_dir, "login", server.name())
+    })
+    .unwrap_err();
+    assert!(matches!(err, PmError::MainScopeWorkflow(_)), "{err}");
+    assert!(!crate::state::scope::exists(&project_path, "login"));
+}
+
+#[test]
 fn feat_new_nonexistent_workflow_errors() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();

@@ -213,6 +213,20 @@ pub(super) const BUNDLED_ITEMS: &[BundledItem] = &[
     },
     BundledItem {
         kind: BundledKind::Workflow,
+        name: "orchestrator",
+        files: &[
+            (
+                "orchestrator/config.toml",
+                include_str!("../../../bundled/workflows/orchestrator/config.toml"),
+            ),
+            (
+                "orchestrator/workflow.md",
+                include_str!("../../../bundled/workflows/orchestrator/workflow.md"),
+            ),
+        ],
+    },
+    BundledItem {
+        kind: BundledKind::Workflow,
         name: "pr-review",
         files: &[
             (

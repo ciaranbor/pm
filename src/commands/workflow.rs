@@ -1,9 +1,9 @@
 //! `pm workflow show` and `pm workflow list`.
 //!
-//! - `show` prints the feature's active `workflow.md` plus the appended
+//! - `show` prints the scope's active `workflow.md` plus the appended
 //!   `## Status and summary` guidance (so agents see it through the command
 //!   they actually run). Used by the bundled
-//!   `pm-workflow` skill so agents can discover their per-feature routing
+//!   `pm-workflow` skill so agents can discover their scope's routing
 //!   at the start of every turn.
 //! - `list` enumerates installed workflows across both tiers with one-line
 //!   descriptions, tagged by tier and origin.
@@ -12,8 +12,8 @@ use std::path::Path;
 
 use crate::commands::bundled_disable::Disabled;
 use crate::error::{PmError, Result};
-use crate::state::feature::FeatureState;
 use crate::state::paths;
+use crate::state::scope;
 use crate::state::workflow::{self, WorkflowDef};
 
 /// Appended to every `pm workflow show` so the status and summary guidance
@@ -60,21 +60,14 @@ follow-up messages. After changing the summary while ready, run
 ";
 
 /// Resolve the active workflow for the current scope and return its
-/// `workflow.md` content. Returns `Ok(None)` for scopes with no active
-/// workflow (main scope, legacy features, or features created without
-/// `--workflow`).
+/// `workflow.md` content. Returns `Ok(None)` for a feature created without
+/// a workflow.
 pub fn show(project_root: &Path, scope: &str) -> Result<Option<String>> {
-    // Main scope has no feature state and therefore no workflow.
-    if scope == "main" {
-        return Ok(None);
-    }
-    let features_dir = paths::features_dir(project_root);
-    let state = FeatureState::load(&features_dir, scope)?;
-    let Some(workflow_name) = state.workflow.as_deref() else {
+    let Some(workflow_name) = scope::workflow(project_root, scope)? else {
         return Ok(None);
     };
 
-    let md_path = match workflow::workflow_md_path(project_root, workflow_name) {
+    let md_path = match workflow::workflow_md_path(project_root, &workflow_name) {
         Some(p) if p.is_file() => p,
         Some(p) => {
             return Err(PmError::WorkflowNotFound(format!(
@@ -83,10 +76,9 @@ pub fn show(project_root: &Path, scope: &str) -> Result<Option<String>> {
             )));
         }
         None => {
-            return Err(Disabled::load().explain(
-                project_root,
-                PmError::WorkflowNotFound(workflow_name.to_string()),
-            ));
+            return Err(
+                Disabled::load().explain(project_root, PmError::WorkflowNotFound(workflow_name))
+            );
         }
     };
     let mut body = std::fs::read_to_string(&md_path)?;
@@ -114,9 +106,10 @@ pub struct ListOutput {
 /// `pm upgrade`, and a project entry shadowing a same-named global one —
 /// plus a warning per broken `config.toml` so users don't discover the
 /// breakage only when `pm feat new --workflow <name>` fails. Outside a
-/// project (`None`) only the global tier is listed. A workflow whose team
-/// names an agent `[bundled.disable]` lists, with no custom resolving it, is
-/// marked unavailable.
+/// project (`None`) only the global tier is listed. Main's workflow is
+/// marked as not for features. A workflow whose team names an agent
+/// `[bundled.disable]` lists, with no custom resolving it, is marked
+/// unavailable.
 pub fn list_rows(project_root: Option<&Path>) -> Result<ListOutput> {
     list_rows_in(
         project_root,
@@ -176,6 +169,9 @@ pub fn list_rows_in(
             name_w = max_name,
             tag_w = max_tag,
         );
+        if w.name == scope::MAIN_WORKFLOW {
+            row.push_str(" (main's scope, not for features)");
+        }
         if let Some(agent) = w
             .def
             .effective_team()
@@ -214,6 +210,7 @@ pub fn get(project_root: &Path, name: &str) -> Result<Option<WorkflowDef>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::feature::FeatureState;
     use chrono::Utc;
     use tempfile::tempdir;
 
@@ -333,9 +330,17 @@ mod tests {
     }
 
     #[test]
-    fn show_returns_none_in_main_scope() {
+    fn show_in_main_scope_renders_the_orchestrator_workflow() {
         let (_dir, root) = setup_project_root();
-        assert!(show(&root, "main").unwrap().is_none());
+        write_workflow(
+            &root,
+            scope::MAIN_WORKFLOW,
+            "description = \"d\"\n",
+            "# mine\n",
+        );
+
+        let body = show(&root, scope::MAIN).unwrap().unwrap();
+        assert!(body.starts_with("# mine\n\n## Status and summary\n"));
     }
 
     #[test]
@@ -407,6 +412,8 @@ mod tests {
         assert!(find("solo").contains("[project, user]") && find("solo").contains("my solo"));
         assert!(find("extra").contains("[project, user]"));
         assert!(find("pr-review").contains("[global, bundled]"));
+        assert!(find(scope::MAIN_WORKFLOW).ends_with("(main's scope, not for features)"));
+        assert!(!find("solo").contains("main's scope"));
         assert_eq!(out.rows.iter().filter(|r| r.contains("solo ")).count(), 1);
 
         // Outside a project only the global tier shows.

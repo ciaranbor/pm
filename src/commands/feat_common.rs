@@ -21,6 +21,7 @@ use crate::error::{PmError, Result};
 use crate::messages;
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
+use crate::state::scope;
 use crate::state::workflow::WorkflowDef;
 
 /// Workflow used when `--context` is given without `--workflow`: a brief
@@ -29,10 +30,11 @@ pub const DEFAULT_WORKFLOW: &str = "solo";
 
 /// Resolve the effective workflow for a feature-creation command.
 ///
-/// Explicit `--workflow` always wins. Otherwise, a `--context` with no
-/// workflow defaults to [`DEFAULT_WORKFLOW`] (checked to be installed so
-/// the failure is actionable, not a generic not-found). No context and no
-/// workflow stays agentless.
+/// Explicit `--workflow` always wins, unless it names main's workflow.
+/// Otherwise, a `--context` with no workflow defaults to
+/// [`DEFAULT_WORKFLOW`] (checked to be installed so the failure is
+/// actionable, not a generic not-found). No context and no workflow stays
+/// agentless.
 pub fn resolve_workflow<'a>(
     project_root: &Path,
     workflow: Option<&'a str>,
@@ -56,6 +58,7 @@ pub fn resolve_workflow_in<'a>(
     disabled: &Disabled,
 ) -> Result<Option<&'a str>> {
     match (workflow, context) {
+        (Some(w), _) if w == scope::MAIN_WORKFLOW => Err(PmError::MainScopeWorkflow(w.into())),
         (Some(w), _) => Ok(Some(w)),
         (None, Some(_)) => {
             if crate::state::workflow::resolve_dir(Some(project_root), DEFAULT_WORKFLOW, global_dir)
