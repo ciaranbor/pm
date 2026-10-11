@@ -516,10 +516,7 @@ mod tests {
         agent_spawn::agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name())
             .unwrap();
 
-        let agents_dir = paths::agents_dir(dir.path());
-        let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
-        registry.get_mut("reviewer").unwrap().session_id = "sess-abc".to_string();
-        registry.save(&agents_dir, &feature).unwrap();
+        agent_spawn::test_support::record_session(dir.path(), &feature, "reviewer", "sess-abc");
 
         let msg = restart(dir.path(), &feature, "reviewer", server.name()).unwrap();
         assert!(msg.contains("resumed session"));
@@ -530,6 +527,34 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    #[test]
+    fn restart_of_a_session_that_never_took_a_turn_starts_fresh_and_says_so() {
+        // SessionStart recorded the id, but Claude Code writes no transcript
+        // until a turn, and its `--resume` of that id would exit.
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+        agent_spawn::agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name())
+            .unwrap();
+        let agents_dir = paths::agents_dir(dir.path());
+        let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
+        registry.get_mut("reviewer").unwrap().session_id = "sess-unturned".to_string();
+        registry.save(&agents_dir, &feature).unwrap();
+
+        let msg = restart(dir.path(), &feature, "reviewer", server.name()).unwrap();
+        assert_eq!(
+            msg,
+            "Restarted agent 'reviewer' (claude-code has no conversation for session \
+             sess-unturned; previous session not resumed)"
+        );
+        let target = tmux::find_window(server.name(), &session_name, "reviewer")
+            .unwrap()
+            .unwrap();
+        server.wait_for_pane_text(&target, "PM_AGENT_NAME=reviewer && claude");
+        let text = tmux::capture_pane(server.name(), &target).unwrap();
+        assert!(!text.contains("--resume"), "{text}");
     }
 
     #[test]

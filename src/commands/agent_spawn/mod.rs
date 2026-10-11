@@ -238,7 +238,15 @@ fn spawn_agent(
         // Agent existed but its window is gone or its harness exited — respawn.
         validate_definition_resolves(project_root, effective_definition)?;
         let harness = configured_harness(effective_definition, &config.agents, &global.agents)?;
-        let resume_id = harness::resumable_session(&entry.session_id, entry.harness, harness);
+        let mut resume_id = harness::resumable_session(&entry.session_id, entry.harness, harness);
+        let no_conversation = resume_id.is_some()
+            && harness.resume_needs_conversation()
+            && entry
+                .conversation(project_root, feature, agent_name)?
+                .is_none();
+        if no_conversation {
+            resume_id = None;
+        }
         queue_context()?;
         let reuse = match &exited {
             Some((exited_id, _)) => {
@@ -254,6 +262,15 @@ fn spawn_agent(
         } = spawn(None, resume_id.as_deref(), reuse)?;
         // A pane respawned in reports the window it is in.
         let window_target = exited.map_or(window_target, |(_, exited_window)| exited_window);
+        if no_conversation {
+            notes.insert(
+                0,
+                format!(
+                    "{harness} has no conversation for session {}; previous session not resumed",
+                    entry.session_id
+                ),
+            );
+        }
         if entry.harness != harness && !entry.session_id.is_empty() {
             notes.insert(
                 0,
@@ -310,6 +327,26 @@ pub(crate) mod test_support {
     use crate::tmux;
     use chrono::Utc;
     use std::path::Path;
+
+    /// Record session `id` for `name`, with the conversation a resume
+    /// needs (what its harness's SessionStart hook would have pointed at).
+    pub(crate) fn record_session(project_root: &Path, feature: &str, name: &str, id: &str) {
+        let agents_dir = paths::agents_dir(project_root);
+        let mut registry = crate::state::agent::AgentRegistry::load(&agents_dir, feature).unwrap();
+        registry.get_mut(name).unwrap().session_id = id.to_string();
+        registry.save(&agents_dir, feature).unwrap();
+        let transcript = project_root.join("transcripts").join(format!("{id}.jsonl"));
+        std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        std::fs::write(&transcript, "").unwrap();
+        crate::state::runtime::write_session_path(
+            project_root,
+            feature,
+            name,
+            crate::state::runtime::SessionPath::Transcript,
+            Some(&transcript),
+        )
+        .unwrap();
+    }
 
     /// Write stub `.agents/agents/<name>.md` files in the main worktree so
     /// `agent_spawn`'s pre-spawn definition check resolves in tests that
@@ -479,18 +516,13 @@ mod tests {
         // Spawn agent, then manually set a session_id
         agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
 
-        let agents_dir = paths::agents_dir(dir.path());
-        let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
-        let entry = registry.get_mut("reviewer").unwrap();
-        entry.session_id = "sess-abc123".to_string();
-        registry.save(&agents_dir, &feature).unwrap();
-
         // Kill and recreate the session to clear the window, as a crash or
         // reboot does, and respawn it.
         let worktree = dir.path().join("login");
         let respawn = || {
             tmux::kill_session(server.name(), &session_name).unwrap();
             tmux::create_session(server.name(), &session_name, &worktree).unwrap();
+            record_session(dir.path(), &feature, "reviewer", "sess-abc123");
             let spawned =
                 agent_spawn(dir.path(), &feature, "reviewer", None, None, server.name()).unwrap();
             let window = format!("{session_name}:reviewer");

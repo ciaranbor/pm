@@ -187,7 +187,9 @@ Agents also message across projects: `pm msg send main --project tools
 another project or request something of it without you relaying it.
 
 When an agent misbehaves, `pm agent restart <name>` respawns it on the same
-conversation; `pm agent spawn <name>` adds one to the feature. `pm doctor`
+conversation, or on a new one, saying so, when there is none to resume (its
+harness changed, or it never took a turn); `pm agent spawn <name>` adds one
+to the feature. `pm doctor`
 reports an agent whose harness has exited.
 
 A spawn or restart succeeds once the agent's harness has started its

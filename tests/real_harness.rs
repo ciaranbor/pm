@@ -300,7 +300,8 @@ fn opencode_a_failed_move_is_reported_and_can_be_retried() {
 /// Catches: a Claude Code agent launched with no prompt that a message does
 /// not wake, from its spawn or from a resume; a resume with nothing unread
 /// that is not told to carry on; and a restart that starts it afresh
-/// instead of resuming — a new session id, or a second transcript. Three
+/// instead of resuming — a new session id, or a second transcript — or that
+/// resumes a session that never took a turn, which has no transcript. Three
 /// turns on the cheapest model: one per message, and the resume notice's.
 #[test]
 #[ignore]
@@ -317,6 +318,25 @@ fn claude_restart_resumes_the_recorded_session() {
         .success();
     wait_for("the session id", TURN, &s, || {
         s.session_id(&proj, "main").is_some()
+    });
+    let unturned = s.session_id(&proj, "main").unwrap();
+    let idle = || {
+        wait_for("the agent idle", TURN, &s, || {
+            pm::state::runtime::read_waiting(&proj, "main", "plain")
+                .is_some_and(|w| w.kind == pm::state::runtime::WaitingKind::Idle)
+        });
+    };
+    idle();
+    s.pm(&main)
+        .args(["agent", "restart", "plain"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains(format!(
+            "claude-code has no conversation for session {unturned}; previous session not \
+             resumed"
+        )));
+    wait_for("a new session id", TURN, &s, || {
+        s.session_id(&proj, "main").is_some_and(|id| id != unturned)
     });
     let id = s.session_id(&proj, "main").unwrap();
     let transcripts = || -> Vec<PathBuf> {
@@ -340,13 +360,6 @@ fn claude_restart_resumes_the_recorded_session() {
                 .unwrap_or_default()
                 .contains(text)
         })
-    };
-    // Idle before any turn: its SessionStart hook started the waiter.
-    let idle = || {
-        wait_for("the agent idle", TURN, &s, || {
-            pm::state::runtime::read_waiting(&proj, "main", "plain")
-                .is_some_and(|w| w.kind == pm::state::runtime::WaitingKind::Idle)
-        });
     };
     let message = |text: &str| {
         idle();
