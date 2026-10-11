@@ -221,7 +221,11 @@ fn a_merge_whose_worktree_cannot_be_removed_still_ends_the_feature() {
     let server = TestServer::new();
     let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
     TestServer::add_feature_commit(&project_path, "login");
-    let locked = lock_in(&project_path.join("login"));
+    let worktree = project_path.join("login");
+    std::fs::write(worktree.join(".gitignore"), "locked/\n").unwrap();
+    git::stage_file(&worktree, ".gitignore").unwrap();
+    git::commit(&worktree, "ignore locked").unwrap();
+    let locked = lock_in(&worktree);
     let projects_dir = TestServer::registry_dir(&project_path);
 
     let Ended { warnings, .. } =

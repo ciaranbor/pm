@@ -1,9 +1,12 @@
 //! What a merge needs before it starts: the base checked out, and the
 //! feature's and the base's worktrees settled (no uncommitted changes, no
 //! paused merge or rebase, whose commits the branch doesn't reach yet). The
-//! merge lands on whatever the base's worktree has checked out, so that must
-//! be the base branch itself. A feature already recorded merged only cleans
-//! up, so only its own worktree is checked, and not at all when it is kept.
+//! feature's worktree must also hold no untracked, non-ignored files: its
+//! removal after the merge would delete them, and only committed work is
+//! merged. The merge lands on whatever the base's worktree has checked out,
+//! so that must be the base branch itself. A feature already recorded
+//! merged only cleans up, so only its own worktree is checked, and not at
+//! all when it is kept.
 //!
 //! `pm feat merge` refuses with these checks in the CLI's words; `pm serve`
 //! runs the same ones to tell a device, in a few words, why its Merge is
@@ -47,6 +50,8 @@ pub(super) enum Unsettled {
     Merging,
     Rebasing,
     Uncommitted,
+    /// Untracked, non-ignored files; checked in the feature's worktree only.
+    Untracked,
     /// The base's worktree has another branch, or none, checked out.
     OffBase,
 }
@@ -98,7 +103,15 @@ impl Plan {
             Err(missing) => return Ok(Err(Refusal::MissingBase(*missing))),
         };
         let feature_checked = self.live && !(self.already_merged() && keep);
-        if feature_checked && let Some(why) = unsettled(&self.worktree)? {
+        let feature_unsettled = if feature_checked {
+            match unsettled(&self.worktree)? {
+                Some(why) => Some(why),
+                None => untracked(&self.worktree)?,
+            }
+        } else {
+            None
+        };
+        if let Some(why) = feature_unsettled {
             return Ok(Err(Refusal::Unsettled { base: false, why }));
         }
         if !self.already_merged()
@@ -141,6 +154,14 @@ impl Plan {
             Unsettled::Uncommitted => {
                 format!("{subject} has uncommitted changes — commit or stash before {action}")
             }
+            Unsettled::Untracked => {
+                let files = git::untracked_files(worktree).unwrap_or_default();
+                format!(
+                    "{subject} has untracked files, which removing its worktree would delete: \
+                     {} — commit, ignore, or remove them before {action}",
+                    files.join(", ")
+                )
+            }
             Unsettled::Rebasing => format!(
                 "{subject} has a rebase in progress in {at}: finish it with \
                  `git rebase --continue` (or `git rebase --abort`) before {action}"
@@ -173,6 +194,7 @@ impl Plan {
             Refusal::Unsettled { base, why } => {
                 let what = match why {
                     Unsettled::Uncommitted => "Uncommitted changes",
+                    Unsettled::Untracked => "Untracked files",
                     Unsettled::Rebasing => "Rebase in progress",
                     Unsettled::Merging => "Merge in progress",
                     Unsettled::OffBase => "Base not checked out",
@@ -189,6 +211,11 @@ impl Plan {
 /// [`Unsettled::OffBase`] unless `worktree` has `base` checked out.
 fn off_base(worktree: &Path, base: &str) -> Option<Unsettled> {
     (git::head_branch(worktree).ok().as_deref() != Some(base)).then_some(Unsettled::OffBase)
+}
+
+/// [`Unsettled::Untracked`] when `worktree` has untracked, non-ignored files.
+fn untracked(worktree: &Path) -> Result<Option<Unsettled>> {
+    Ok((!git::untracked_files(worktree)?.is_empty()).then_some(Unsettled::Untracked))
 }
 
 /// What keeps `worktree`'s work from being merged as it stands. A paused

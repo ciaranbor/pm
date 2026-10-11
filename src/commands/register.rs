@@ -134,7 +134,7 @@ pub fn register(
 
     // Bootstrap default hook scripts and the harness's user-level hooks
     hooks::bootstrap(&wrapper_dir)?;
-    super::hooks_install::install(Some(&wrapper_dir))?;
+    super::hooks_install::install()?;
     // The bundled definitions, `main`'s included, live in the global tier.
     super::skills::install_global()?;
 

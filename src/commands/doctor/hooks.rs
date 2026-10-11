@@ -373,7 +373,7 @@ mod tests {
         // in a home of the test's own: trust written to the shared test home
         // would outlive this test and reach every other one.
         let trusted_home = dir.path().join("trusted-home");
-        hooks_install::install_in(&trusted_home, None, false).unwrap();
+        hooks_install::install_in(&trusted_home, false).unwrap();
         for wt in ["main", "login"] {
             Harness::Codex
                 .trust_worktree(&trusted_home, &project_path.join(wt))
@@ -436,66 +436,5 @@ mod tests {
             "{found:?}"
         );
         assert!(found[2].1.contains(".codex/hooks.json"), "{found:?}");
-    }
-
-    #[test]
-    fn fix_strips_stale_project_hooks() {
-        // A project last upgraded by a release that wrote the hooks into
-        // main/.claude/settings.json (and seeded them into the feature).
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
-        let legacy = r#"{"permissions":{"allow":["Read"]},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"pm harness hooks stop"}]}]}}"#;
-        for wt in ["main", "login"] {
-            let claude = project_path.join(wt).join(".claude");
-            std::fs::create_dir_all(&claude).unwrap();
-            std::fs::write(claude.join("settings.json"), legacy).unwrap();
-        }
-
-        let findings = diagnose(&project_path, &projects_dir, server.name(), Depth::Quick).unwrap();
-        let main = findings.iter().find(|f| f.scope() == PROJECT).unwrap();
-        let stale: Vec<&str> = main
-            .issues()
-            .iter()
-            .filter(|i| i.kind() == IssueKind::StaleProjectHooks)
-            .map(|i| i.message())
-            .collect();
-        assert_eq!(stale.len(), 2, "{stale:?}");
-        assert!(stale[0].contains("main/.claude/settings.json"), "{stale:?}");
-        assert!(
-            stale[1].contains("login/.claude/settings.json"),
-            "{stale:?}"
-        );
-        assert!(
-            !main
-                .issues()
-                .iter()
-                .any(|i| i.kind() == IssueKind::HooksNotInstalled)
-        );
-
-        let lines = doctor(&project_path, &projects_dir, true, server.name())
-            .unwrap()
-            .lines();
-        assert!(
-            lines
-                .iter()
-                .any(|l| l.contains("fixed") && l.contains("pm hooks still in")),
-            "got: {lines:?}"
-        );
-        for wt in ["main", "login"] {
-            let settings: serde_json::Value = serde_json::from_str(
-                &std::fs::read_to_string(project_path.join(wt).join(".claude/settings.json"))
-                    .unwrap(),
-            )
-            .unwrap();
-            assert_eq!(settings["permissions"]["allow"][0], "Read", "{wt}");
-            assert!(settings.get("hooks").is_none(), "{wt}: {settings}");
-        }
-        let findings = diagnose(&project_path, &projects_dir, server.name(), Depth::Quick).unwrap();
-        assert!(
-            findings.iter().all(|f| f.scope() != PROJECT),
-            "project still has issues after fix"
-        );
     }
 }

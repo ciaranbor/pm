@@ -19,8 +19,7 @@ use super::upgrade_restart;
 pub fn upgrade_project(project_root: &Path) -> Result<Vec<String>> {
     let mut updated: Vec<String> = Vec::new();
 
-    // Install hooks at the user level, moving any out of the project files
-    let _ = hooks_install::install(Some(project_root))?;
+    let _ = hooks_install::install()?;
     updated.push("hooks".to_string());
 
     // Bootstrap information store and state repo (both idempotent)
@@ -73,7 +72,7 @@ pub fn upgrade_project(project_root: &Path) -> Result<Vec<String>> {
 /// taken, empty when the project is fully up to date, and whether the hooks
 /// agents launch with would change.
 fn upgrade_project_dry_run(project_root: &Path) -> Result<(Vec<String>, bool)> {
-    let mut actions = hooks_install::install_dry_run(Some(project_root))?;
+    let mut actions = hooks_install::install_dry_run()?;
     let hooks_change = !actions.is_empty();
 
     // Information store (.pm/docs/) bootstrap
@@ -466,8 +465,8 @@ last_active = "2026-01-01T00:00:00Z"
     fn upgrade_migrates_pre_global_layout_and_keeps_live_state() {
         // A project last touched by a release that installed bundled copies
         // per project: everything under `main/.claude/` and `.pm/workflows/`,
-        // old-generation hook commands, a user custom def, live
-        // registry/feature/message state. One upgrade must leave it working.
+        // a user custom def, live registry/feature/message state. One upgrade
+        // must leave it working.
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
         let main = paths::main_worktree(&root);
@@ -478,11 +477,6 @@ last_active = "2026-01-01T00:00:00Z"
         fs::write(claude.join("agents/custom.md"), "user's own def").unwrap();
         fs::write(claude.join("skills/pm/SKILL.md"), "stale skill").unwrap();
         fs::write(claude.join("pm-baseline.md"), "stale baseline").unwrap();
-        fs::write(
-            claude.join("settings.json"),
-            r#"{"permissions":{"allow":["Read"]},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo mine"}]},{"hooks":[{"type":"command","command":"pm harness hooks stop","timeout":86400}]}],"SessionStart":[{"hooks":[{"type":"command","command":"pm harness hooks session-start"}]}]}}"#,
-        )
-        .unwrap();
         let solo = paths::workflows_dir(&root).join("solo");
         fs::create_dir_all(&solo).unwrap();
         fs::write(
@@ -521,10 +515,6 @@ last_active = "2026-01-01T00:00:00Z"
             dry.contains(&"Would remove .pm/workflows/solo".to_string()),
             "{dry:?}"
         );
-        assert!(
-            dry.contains(&"Would remove pm hooks from main/.claude/settings.json".to_string()),
-            "{dry:?}"
-        );
         assert!(claude.join("agents/reviewer.md").exists(), "dry-run wrote");
 
         let summary = upgrade_project(&root).unwrap().join("\n");
@@ -549,20 +539,7 @@ last_active = "2026-01-01T00:00:00Z"
         );
         assert_eq!(fs::read_to_string(&msg).unwrap(), "hello");
 
-        // Hooks moved to the user level; the project's own settings and
-        // hooks stayed behind.
         assert!(hooks_install::is_installed_for(Harness::ClaudeCode).unwrap());
-        let settings: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(claude.join("settings.json")).unwrap())
-                .unwrap();
-        assert_eq!(settings["permissions"]["allow"][0], "Read");
-        let stop = settings["hooks"]["Stop"].as_array().unwrap();
-        assert_eq!(stop.len(), 1, "{settings}");
-        assert_eq!(stop[0]["hooks"][0]["command"], "echo mine");
-        assert!(
-            settings["hooks"].get("SessionStart").is_none(),
-            "{settings}"
-        );
 
         // `solo` now resolves from the global tier, and a second run is a no-op.
         assert!(crate::state::workflow::exists(&root, "solo"));
@@ -754,19 +731,6 @@ last_active = "2026-01-01T00:00:00Z"
         assert!(
             !dry_run().contains(&upgrade_restart::DRY_RUN_CAVEAT.to_string()),
             "a projection changes nothing agents launch with"
-        );
-        let settings = paths::main_worktree(&root).join(".claude/settings.json");
-        fs::create_dir_all(settings.parent().unwrap()).unwrap();
-        fs::write(
-            &settings,
-            r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"pm harness hooks stop"}]}]}}"#,
-        )
-        .unwrap();
-        let lines = dry_run();
-        assert_eq!(
-            lines.last().map(String::as_str),
-            Some(upgrade_restart::DRY_RUN_CAVEAT),
-            "{lines:#?}"
         );
     }
 

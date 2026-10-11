@@ -83,8 +83,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
         let (project, _, _) = server.setup_project_no_tmux(dir.path());
-        // `pm init` now installs the Stop hook into main/.claude/settings.json;
-        // strip it to exercise the "no .claude/ dir" branch.
+        // Setup may seed main/.claude/; remove it to exercise the "no
+        // .claude/ dir" branch.
         let _ = std::fs::remove_dir_all(paths::main_worktree(&project).join(".claude"));
 
         let lines = list(&project, "main", CC).unwrap();

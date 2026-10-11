@@ -67,6 +67,11 @@ fn run_tmux_untrimmed(server: Option<&str>, args: &[&str]) -> Result<String> {
     }
 }
 
+/// The installed tmux's `tmux -V` line, as `tmux 3.6a`.
+pub fn version() -> Result<String> {
+    run_tmux(None, &["-V"])
+}
+
 /// Create a new detached tmux session with the given name and start directory.
 pub fn create_session(server: Option<&str>, name: &str, start_dir: &Path) -> Result<()> {
     run_tmux(

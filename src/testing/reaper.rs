@@ -46,8 +46,7 @@ pub(super) fn reap_dead_test_servers(dir: &std::path::Path) {
         if pid_is_alive(pid) {
             continue;
         }
-        // `kill-server` does NOT remove the socket when the server is
-        // already dead, so it is unlinked explicitly.
+        // `kill-server` leaves the socket behind, so it is unlinked.
         kill_server_at(&entry.path());
         let _ = std::fs::remove_file(entry.path());
     }

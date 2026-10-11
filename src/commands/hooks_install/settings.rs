@@ -1,7 +1,7 @@
 //! Reading and editing a hooks file's nested `hooks` shape: upserting pm's
-//! entry under an event, stripping every pm entry, and locating one.
+//! entry under an event, and locating one.
 //!
-//! Only pm's inner hook is ever replaced or removed, so a foreign hook the
+//! Only pm's inner hook is ever replaced, so a foreign hook the
 //! user bundled into the same entry survives. Codex runs no hook until the
 //! user has trusted it interactively (`pm doctor` reports a missing trust
 //! entry) and keys that trust on the entry's index, so pm appends its
@@ -11,7 +11,6 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use super::entries::pm_events;
 use crate::error::{PmError, Result};
 use crate::fs_utils::write_atomic;
 use crate::harness::Harness;
@@ -98,44 +97,6 @@ pub(super) fn upsert_hook(
     Ok(true)
 }
 
-/// Remove every pm-owned hook from the arrays of every event pm installs
-/// for any harness, pruning an emptied entry, event array and `hooks`
-/// object. Only the pm inner hook is removed, so a foreign hook bundled into
-/// the same entry survives. Returns `true` when the value changed.
-pub(super) fn strip_pm_entries(root: &mut Value) -> bool {
-    let Some(hooks) = root.get_mut("hooks").and_then(|h| h.as_object_mut()) else {
-        return false;
-    };
-    let mut changed = false;
-    let events = Harness::SUPPORTED.iter().flat_map(|h| pm_events(*h));
-    for (event, markers) in events {
-        let Some(array) = hooks.get_mut(event).and_then(|v| v.as_array_mut()) else {
-            continue;
-        };
-        for entry in array.iter_mut() {
-            let Some(inner) = entry.get_mut("hooks").and_then(|v| v.as_array_mut()) else {
-                continue;
-            };
-            let before = inner.len();
-            inner.retain(|hook| !command_matches(hook, markers));
-            changed |= inner.len() != before;
-        }
-        array.retain(|entry| {
-            entry
-                .get("hooks")
-                .and_then(|v| v.as_array())
-                .is_none_or(|inner| !inner.is_empty())
-        });
-        if array.is_empty() {
-            hooks.remove(event);
-        }
-    }
-    if hooks.is_empty() {
-        root.as_object_mut().unwrap().remove("hooks");
-    }
-    changed
-}
-
 fn command_matches(hook: &Value, markers: &[&str]) -> bool {
     hook.get("command")
         .and_then(|v| v.as_str())
@@ -164,37 +125,4 @@ pub fn pm_hook_position(root: &Value, event: &str, markers: &[&str]) -> Option<(
         let j = inner.iter().position(|h| command_matches(h, markers))?;
         Some((i, j))
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::commands::hooks_install::stop_hook_command;
-
-    #[test]
-    fn strip_prunes_emptied_hooks_object_and_keeps_bundled_foreign_hook() {
-        let mut only_pm = json!({"hooks": {
-            "Stop": [{"hooks": [{"type": "command", "command": "pm harness hooks stop"}]}],
-            "SessionStart": [{"hooks": [{"type": "command", "command": "pm harness hooks session-start"}]}]
-        }, "model": "opus"});
-        assert!(strip_pm_entries(&mut only_pm));
-        assert_eq!(only_pm, json!({"model": "opus"}));
-
-        let mut bundled = json!({"hooks": {"Stop": [{"matcher": "x", "hooks": [
-            {"type": "command", "command": stop_hook_command(Harness::ClaudeCode)},
-            {"type": "command", "command": "echo mine"}
-        ]}]}});
-        assert!(strip_pm_entries(&mut bundled));
-        assert_eq!(
-            bundled,
-            json!({"hooks": {"Stop": [{"matcher": "x", "hooks": [
-                {"type": "command", "command": "echo mine"}
-            ]}]}})
-        );
-
-        let mut foreign = json!({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "pm msg wait && notify"}]}]}});
-        let before = foreign.clone();
-        assert!(!strip_pm_entries(&mut foreign));
-        assert_eq!(foreign, before);
-    }
 }

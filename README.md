@@ -20,7 +20,7 @@ and the mental model.
 ## Requirements
 
 - tmux 3.6 or later (older releases, such as Ubuntu 24.04's 3.4, break the
-  plugin's status, alerts and attention key), with a
+  plugin's status, alerts and attention key; `pm doctor` warns), with a
   [Nerd Font](https://www.nerdfonts.com) (v3) as your terminal font for the
   plugin's badges
 - git
@@ -42,7 +42,10 @@ says which pm you have. Elsewhere, or to run your own changes, build from
 source (Rust 1.91 or later): `cargo install --path .` in a checkout, or
 `cargo install --git https://github.com/ciaranbor/pm`. Such a build
 reports its commit in its version (`0.2.0+3.gabc1234`), and `pm
-self-update` leaves it alone unless given `--force`.
+self-update` leaves it alone unless given `--force`. Keep one pm on
+`PATH`: with a source build in `~/.cargo/bin` and a release in
+`~/.local/bin`, an upgrade of one leaves the other running, and `pm doctor`
+warns.
 
 Then add pm's tmux plugin, one line at the end of your tmux config:
 
@@ -256,9 +259,12 @@ pm feat delete             # or discard it
 
 The feature is the one your CWD is in, and tmux moves you to the base's
 session before the feature's goes. From elsewhere, name it:
-`pm feat merge login`. A worktree pm can't fully remove (a locked file, say)
-doesn't stop the rest: the feature goes, and pm names what is left to delete
-by hand.
+`pm feat merge login`. Merge takes only committed work: it refuses while
+the feature's worktree has uncommitted changes or untracked files that
+aren't ignored, which removing the worktree would delete, and the app's
+Merge stays off with the same reason. A worktree pm can't fully remove (a
+locked file, say) doesn't stop the rest: the feature goes, and pm names what
+is left to delete by hand.
 
 Either tells `main`, which triages the summary into the project's
 information store (`.pm/docs/`): follow-up todos, issues, ideas, and

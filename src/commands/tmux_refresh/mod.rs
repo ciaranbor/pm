@@ -24,6 +24,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::error::{PmError, Result};
+use crate::state::scope;
 use crate::tmux;
 use crate::tmux::options::{self, Command, Holder, Options, Scope, format_text};
 
@@ -194,7 +195,8 @@ fn commands(snapshot: &Snapshot, published: &Options, now: DateTime<Utc>) -> Vec
             alerts.push(alert(&main.session, &main.attention, &main.agents));
         }
         needing.extend(verdict.judged.attention);
-        let values = main_values(&project.name, main, &verdict.judged, now);
+        let orchestrator = scope::orchestrator(Path::new(&project.root));
+        let values = main_values(&project.name, main, &orchestrator, &verdict.judged, now);
         diff(&mut writes, Scope::Session(&main.session), held, &values);
         agent_windows(&mut writes, &mut windows, published, &main.agents);
     }

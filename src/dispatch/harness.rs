@@ -119,8 +119,7 @@ pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
         },
         HarnessCommands::Hooks(hooks_cmd) => match hooks_cmd {
             HarnessHooksCommands::Install => {
-                let project_root = optional_project_root()?;
-                let msg = commands::hooks_install::install(project_root.as_deref())?;
+                let msg = commands::hooks_install::install()?;
                 println!("{msg}");
                 Ok(())
             }

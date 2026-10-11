@@ -1,13 +1,10 @@
 //! Install pm hooks into the user-level hooks file of every supported
 //! harness (`~/.claude/settings.json`, `$CODEX_HOME/hooks.json`
-//! — both take the same nested `hooks` shape) — once per machine — and strip
-//! the entries earlier releases wrote into `main/.claude/settings.json` and
-//! its seeded feature copies. A harness whose loop is a plugin gets
-//! [`Harness::plugin_files`] written instead. Both halves are idempotent, so
-//! `pm init`, `pm upgrade`, `pm harness hooks install` and `pm doctor --fix`
-//! all run them unconditionally; the global upsert runs first so a live
-//! session is never left without the hook mid-migration (Claude Code merges
-//! the user and project files and runs a duplicated handler once).
+//! — both take the same nested `hooks` shape) — once per machine. A
+//! harness whose loop is a plugin gets [`Harness::plugin_files`] written
+//! instead. The install is idempotent, so `pm init`, `pm upgrade`,
+//! `pm harness hooks install` and `pm doctor --fix` all run it
+//! unconditionally.
 //!
 //! Every supported harness, not only those in use, creating `$CODEX_HOME`
 //! if absent: which harnesses are in use is a per-project answer and the
@@ -18,13 +15,11 @@
 //! checks only the harnesses the project's agents run on.
 //!
 //! Entries written by older releases are rewritten in place in the user
-//! file and removed from project files (see `entries` for how they are
-//! recognised).
+//! file (see `entries` for how they are recognised).
 
 mod check;
 mod entries;
 mod install;
-mod project;
 mod settings;
 
 pub use check::{
@@ -41,7 +36,6 @@ pub use entries::{
 };
 pub(crate) use install::install_in;
 pub use install::{install, install_dry_run};
-pub use project::stale_project_files;
 pub use settings::{pm_hook_position, user_hooks_root};
 
 #[cfg(doc)]
@@ -52,19 +46,16 @@ use crate::harness::Harness;
 pub(crate) mod test_support {
     use crate::error::Result;
     use crate::harness::Harness;
-    use crate::state::paths;
     use serde_json::Value;
     use std::fs;
     use std::path::{Path, PathBuf};
     use tempfile::{TempDir, tempdir};
 
-    /// An isolated home and a project root under one tempdir.
-    pub(crate) fn setup() -> (TempDir, PathBuf, PathBuf) {
+    /// An isolated home under a tempdir.
+    pub(crate) fn setup() -> (TempDir, PathBuf) {
         let dir = tempdir().unwrap();
         let home = dir.path().join("home");
-        let root = dir.path().join("proj");
-        fs::create_dir_all(paths::main_worktree(&root)).unwrap();
-        (dir, home, root)
+        (dir, home)
     }
 
     pub(crate) fn user_file(home: &Path) -> PathBuf {
@@ -81,10 +72,6 @@ pub(crate) mod test_support {
 
     pub(crate) fn claude_installed_in(home: &Path) -> Result<bool> {
         super::is_installed_in(Harness::ClaudeCode, home)
-    }
-
-    pub(crate) fn install_dry_run_in(home: &Path, root: &Path) -> Vec<String> {
-        super::install_in(home, Some(root), true).unwrap()
     }
 
     pub(crate) fn read_json(path: &Path) -> Value {

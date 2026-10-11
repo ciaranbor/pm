@@ -89,7 +89,7 @@ impl Smoke {
         ATEXIT_PID.store(pid, Ordering::SeqCst);
         ATEXIT.call_once(|| {
             // Safety: `libc::atexit` is always safe to call; the handler only
-            // spawns `tmux kill-server` and removes a directory.
+            // spawns `tmux kill-server` and removes a socket and a directory.
             unsafe {
                 libc::atexit(atexit_teardown);
             }
@@ -452,9 +452,19 @@ extern "C" fn atexit_teardown() {
     if pid == 0 {
         return;
     }
+    let server = format!("pm-test-{pid}");
     let _ = StdCommand::new("tmux")
-        .args(["-L", &format!("pm-test-{pid}"), "kill-server"])
+        .args(["-L", &server, "kill-server"])
         .output();
+    // tmux leaves the socket behind, which `scripts/sandbox list` would
+    // show as a stale sandbox.
+    let base = std::env::var("TMUX_TMPDIR")
+        .ok()
+        .filter(|d| !d.is_empty())
+        .unwrap_or_else(|| "/tmp".to_string());
+    // Safety: getuid is always safe to call.
+    let uid = unsafe { libc::getuid() };
+    let _ = std::fs::remove_file(Path::new(&base).join(format!("tmux-{uid}")).join(server));
     if let Some(home) = SANDBOX_HOME.get() {
         let _ = std::fs::remove_dir_all(home);
     }

@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn is_installed_false_with_foreign_stop_hook_only() {
-        let (_dir, home, _root) = setup();
+        let (_dir, home) = setup();
         assert!(!claude_installed_in(&home).unwrap());
         write_json(
             &user_file(&home),

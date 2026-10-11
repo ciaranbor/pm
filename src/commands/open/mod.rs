@@ -164,10 +164,10 @@ fn open_project(
         if !tmux::has_session(tmux_server, &session_name)? {
             if !worktree.exists() {
                 if scope == scope::MAIN {
-                    return Err(PmError::Io(std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        format!("main worktree missing: {}", worktree.display()),
-                    )));
+                    return Err(PmError::WorktreeMissing {
+                        scope: scope.clone(),
+                        path: worktree,
+                    });
                 }
                 warnings.push(format!(
                     "skipping '{scope}': worktree missing at {}",

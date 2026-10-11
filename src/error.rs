@@ -17,6 +17,9 @@ pub enum PmError {
     #[error("Feature not found: {0}")]
     FeatureNotFound(String),
 
+    #[error("{scope} worktree missing at {}", .path.display())]
+    WorktreeMissing { scope: String, path: PathBuf },
+
     #[error("Branch not found: {0}")]
     BranchNotFound(String),
 

@@ -2,9 +2,9 @@ use super::*;
 
 #[test]
 fn install_writes_the_opencode_plugin_and_replaces_a_stale_copy() {
-    let (_dir, home, _root) = setup();
+    let (_dir, home) = setup();
     assert!(!is_installed_in(Harness::OpenCode, &home).unwrap());
-    let dry = install_in(&home, None, true).unwrap();
+    let dry = install_in(&home, true).unwrap();
     assert!(
         dry.contains(&format!(
             "Would install pm plugin in {}",
@@ -14,13 +14,13 @@ fn install_writes_the_opencode_plugin_and_replaces_a_stale_copy() {
     );
     assert!(!plugin_dir(&home).exists(), "dry-run wrote the plugin");
 
-    install_in(&home, None, false).unwrap();
+    install_in(&home, false).unwrap();
     assert!(is_installed_in(Harness::OpenCode, &home).unwrap());
     let index = plugin_dir(&home).join("index.ts");
     let bundled = fs::read_to_string(&index).unwrap();
     // The entry point resolves its import beside itself.
     assert!(plugin_dir(&home).join("loop.ts").is_file());
-    assert!(install_in(&home, None, false).unwrap().is_empty());
+    assert!(install_in(&home, false).unwrap().is_empty());
 
     // An older release's copy, and a user's own plugin beside pm's.
     fs::write(&index, "export default {}").unwrap();
@@ -33,7 +33,7 @@ fn install_writes_the_opencode_plugin_and_replaces_a_stale_copy() {
         vec![index.clone()]
     );
 
-    let lines = install_in(&home, None, false).unwrap();
+    let lines = install_in(&home, false).unwrap();
     assert_eq!(
         lines,
         vec![format!(
@@ -50,7 +50,7 @@ fn install_writes_the_opencode_plugin_and_replaces_a_stale_copy() {
 
 #[test]
 fn install_appends_after_a_codex_users_own_hooks() {
-    let (_dir, home, root) = setup();
+    let (_dir, home) = setup();
     // A codex user with a hook of their own, at index 0.
     let codex_hooks = codex_file(&home);
     write_json(
@@ -61,7 +61,7 @@ fn install_appends_after_a_codex_users_own_hooks() {
         }}),
     );
 
-    let lines = install_in(&home, Some(&root), false).unwrap();
+    let lines = install_in(&home, false).unwrap();
     assert_eq!(lines.len(), 3, "{lines:?}");
     assert!(
         lines[1].ends_with(&codex_hooks.display().to_string()),
@@ -102,5 +102,5 @@ fn install_appends_after_a_codex_users_own_hooks() {
     assert!(Harness::Codex.malformed_hook_events(&parsed).is_empty());
 
     // Idempotent across both files.
-    assert!(install_in(&home, Some(&root), true).unwrap().is_empty());
+    assert!(install_in(&home, true).unwrap().is_empty());
 }
