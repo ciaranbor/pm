@@ -26,6 +26,9 @@ pub fn workflow(project_root: &Path, scope: &str) -> Result<Option<String>> {
     Ok(FeatureState::load(&paths::features_dir(project_root), scope)?.workflow)
 }
 
+/// The orchestrator's definition.
+pub const ORCHESTRATOR: &str = "main";
+
 /// Where a scope's team stands, set by its agents with `pm feat status`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TeamStatus {

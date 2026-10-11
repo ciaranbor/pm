@@ -119,13 +119,7 @@ pub(super) fn spawn_session_with_config(
 
     let effective_definition = effective_definition(params.agent_definition, params.agent_name);
 
-    let launch = resolve_launch(
-        params.project_root,
-        params.feature,
-        effective_definition,
-        config,
-        global,
-    )?;
+    let launch = resolve_launch(params.project_root, effective_definition, config, global)?;
     let settings = &launch.settings;
 
     let needs_prompt = settings.harness.needs_launch_prompt();

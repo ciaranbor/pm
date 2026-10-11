@@ -5,12 +5,12 @@ use std::path::Path;
 
 use crate::error::Result;
 use crate::harness::Harness;
-use crate::state::paths;
 use crate::state::project::{
     AgentSettings, AgentsConfig, GlobalConfig, HarnessConfig, ProjectConfig,
     resolve_agent_settings, resolve_harness_config,
 };
 use crate::state::workflow;
+use crate::state::{paths, scope};
 
 /// The agent definition a spawn keys on — for the harness's definition flag
 /// and for the per-agent settings lookup alike. The explicit override wins;
@@ -71,6 +71,18 @@ fn global_dirs() -> Vec<std::path::PathBuf> {
     out
 }
 
+/// The pm state dirs outside its worktree that an agent of `definition`
+/// edits: every agent may own a summary, and the orchestrator also keeps the
+/// information store.
+fn edit_dirs(project_root: &Path, definition: &str) -> Vec<std::path::PathBuf> {
+    let summaries = paths::summaries_dir(project_root);
+    if definition == scope::ORCHESTRATOR {
+        vec![paths::docs_dir(project_root), summaries]
+    } else {
+        vec![summaries]
+    }
+}
+
 /// The definition that reaches the harness: the effective definition, except
 /// the reserved vanilla name (any alias), which launches a definition-less
 /// session even if a matching definition file happens to exist.
@@ -78,8 +90,7 @@ pub(crate) fn definition_flag(effective_definition: &str) -> Option<&str> {
     (!workflow::is_vanilla(effective_definition)).then_some(effective_definition)
 }
 
-/// What config has a spawn of `definition` (the effective one) in `scope`
-/// launch with: the one resolution a spawn and its
+/// What config has a spawn of `definition` (the effective one) launch with: the one resolution a spawn and its
 /// [`launch_stamp`](crate::commands::launch_stamp) share.
 pub(crate) struct LaunchConfig {
     /// Re-resolved from config on every spawn, never stored on the registry
@@ -92,7 +103,6 @@ pub(crate) struct LaunchConfig {
 
 pub(crate) fn resolve_launch(
     project_root: &Path,
-    scope: &str,
     definition: &str,
     config: &ProjectConfig,
     global: &GlobalConfig,
@@ -100,11 +110,7 @@ pub(crate) fn resolve_launch(
     let settings = resolve_agent_settings(&config.agents, &global.agents, definition)?;
     let harness_config = resolve_harness_config(&config.harness, &global.harness);
     let writable_dirs = writable_dirs(project_root, &harness_config);
-    let edit_dirs = if scope == "main" {
-        Vec::new()
-    } else {
-        vec![paths::summaries_dir(project_root)]
-    };
+    let edit_dirs = edit_dirs(project_root, definition);
     Ok(LaunchConfig {
         settings,
         harness_config,
@@ -139,6 +145,22 @@ mod tests {
             "vanilla spawn must not pass --agent, got: {cmd}"
         );
         assert_eq!(definition_flag("reviewer"), Some("reviewer"));
+    }
+
+    #[test]
+    fn the_orchestrator_also_edits_the_information_store() {
+        let root = Path::new("/proj");
+        assert_eq!(
+            edit_dirs(root, scope::ORCHESTRATOR),
+            [
+                PathBuf::from("/proj/.pm/docs"),
+                PathBuf::from("/proj/.pm/summaries")
+            ]
+        );
+        assert_eq!(
+            edit_dirs(root, "reviewer"),
+            [PathBuf::from("/proj/.pm/summaries")]
+        );
     }
 
     #[test]
