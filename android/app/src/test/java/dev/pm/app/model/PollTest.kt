@@ -6,7 +6,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PollTest {
-    // login: blocked, its implementer asking; search: ready.
+    // search: ready.
     private val snapshot = Snapshot.parse(SNAPSHOT)
 
     private fun push(kind: String, scope: String = "login", agent: String? = null) =
@@ -18,9 +18,16 @@ class PollTest {
     private fun FeatureSnapshot.showing(kind: String, agent: String? = null) =
         copy(attention = Attention(kind, agent = agent))
 
-    /** login no longer blocked: its implementer's question is its attention. */
-    private val asking =
-        snapshot.withFeature("login") { it.copy(progress = "wip").showing("asking", "implementer") }
+    /** login blocked, its implementer idle. */
+    private val blocked =
+        snapshot.withFeature("login") {
+            it.copy(agents = listOf(AgentSnapshot("implementer", "idle")))
+                .showing("blocked", "implementer")
+        }
+
+    /** login still blocked, its implementer's question its attention. */
+    private val askingWhileBlocked =
+        snapshot.withFeature("login") { it.showing("asking", "implementer") }
 
     /** login with nothing going on. */
     private val quiet =
@@ -29,29 +36,44 @@ class PollTest {
         }
 
     @Test
-    fun the_first_poll_alerts_only_a_dialog_up_that_is_its_scopes_attention() {
-        val (kept, made) = Poll.judge(null, snapshot)
-        assertTrue("blocked outranks the question", made.isEmpty())
-        assertTrue(Poll.judge(kept, snapshot).second.isEmpty())
+    fun the_first_poll_alerts_only_a_dialog_up() {
+        val (kept, made) = Poll.judge(null, blocked)
+        assertTrue("a standing blocked", made.isEmpty())
+        assertTrue(Poll.judge(kept, blocked).second.isEmpty())
 
-        assertEquals(listOf(push("asking", agent = "implementer")), Poll.judge(null, asking).second)
+        assertEquals(
+            listOf(push("asking", agent = "implementer")),
+            Poll.judge(null, askingWhileBlocked).second,
+        )
     }
 
     @Test
-    fun a_scope_alerts_its_top_kind_and_an_outranked_one_once_it_is_on_top() {
+    fun a_blocked_scope_alerts_a_dialog_but_not_blocked_again_once_answered() {
         val (calm, _) = Poll.judge(null, quiet)
 
-        val (blocked, made) = Poll.judge(calm, snapshot)
+        val (alerted, made) = Poll.judge(calm, blocked)
         assertEquals(listOf(push("blocked", agent = "implementer")), made)
-        assertTrue(Poll.judge(blocked, snapshot).second.isEmpty())
+        assertTrue(Poll.judge(alerted, blocked).second.isEmpty())
 
-        val (answered, next) = Poll.judge(blocked, asking)
+        val (asked, next) = Poll.judge(alerted, askingWhileBlocked)
         assertEquals(listOf(push("asking", agent = "implementer")), next)
-        assertTrue(Poll.judge(answered, asking).second.isEmpty())
+        val (answered, none) = Poll.judge(asked, blocked)
+        assertTrue("the same blocked episode", none.isEmpty())
 
-        val (lapsed, none) = Poll.judge(answered, quiet)
-        assertTrue(none.isEmpty())
-        assertEquals(made, Poll.judge(lapsed, snapshot).second)
+        val (lapsed, _) = Poll.judge(answered, quiet)
+        assertEquals(made, Poll.judge(lapsed, blocked).second)
+    }
+
+    @Test
+    fun a_kind_outranked_as_it_begins_alerts_once_it_is_on_top() {
+        val (calm, _) = Poll.judge(null, quiet)
+
+        val (asked, made) = Poll.judge(calm, askingWhileBlocked)
+        assertEquals(listOf(push("asking", agent = "implementer")), made)
+        assertEquals(
+            listOf(push("blocked", agent = "implementer")),
+            Poll.judge(asked, blocked).second,
+        )
     }
 
     @Test

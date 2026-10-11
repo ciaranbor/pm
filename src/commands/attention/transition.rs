@@ -7,15 +7,17 @@
 //!
 //! A scope alerts as it enters blocked, asking or ready. A kind's episode
 //! lasts while its condition holds, not while it is the scope's attention:
-//! a ready feature whose agent asks, then is answered, reads ready again
-//! without being newly ready, and neither does one whose agent turns busy
-//! and goes idle again: a busy agent holds back only the attention, not the
-//! episode, so a feature marked ready mid-turn alerts once, when its team
-//! is next not busy. A scope judged for the first time — a session just
-//! opened, or a watcher just started — shows a standing blocked or ready
-//! without alerting it, even while a busy agent holds it back: it was set
-//! before, and alerted then if anyone was watching. A dialog up now still
-//! alerts.
+//! a blocked or ready scope whose agent asks alerts the dialog, which
+//! outranks both, and once it is answered reads blocked or ready again
+//! without being newly so; a kind that begins while outranked alerts once
+//! it is the attention. Nor is a ready feature newly ready whose agent
+//! turns busy and goes idle again: a busy agent holds back only the
+//! attention, not the episode, so a feature marked ready mid-turn alerts
+//! once, when its team is next not busy. A scope judged for the first
+//! time — a session just opened, or a watcher just started — shows a
+//! standing blocked or ready without alerting it, even while a busy agent
+//! holds it back: it was set before, and alerted then if anyone was
+//! watching. A dialog up now still alerts.
 
 use std::collections::{HashMap, HashSet};
 
@@ -402,12 +404,57 @@ mod tests {
             Some(&entered.judged),
             &main_with(Progress::Blocked, AgentState::Asking),
         );
-        assert!(!asked.alert, "blocked outranks the agent asking");
-        assert!(!judge_main(Some(&asked.judged), &blocked).alert);
+        assert!(asked.alert, "a dialog alerts while blocked");
+        assert_eq!(asked.judged.attention, Some(AttentionKind::Asking));
+        let closed = judge_main(Some(&asked.judged), &blocked);
+        assert!(!closed.alert, "still the same blocked episode");
+        assert_eq!(closed.judged.alerted, [AttentionKind::Blocked]);
 
         let answered = judge_main(Some(&entered.judged), &wip);
         assert!(answered.judged.alerted.is_empty());
         assert!(judge_main(Some(&answered.judged), &blocked).alert);
+    }
+
+    #[test]
+    fn a_dialog_in_a_blocked_or_ready_feature_alerts_and_ends_alone() {
+        for progress in [Progress::Blocked, Progress::Ready] {
+            let standing = snapshot(
+                vec![feature(progress, false, AgentState::Idle)],
+                Some(AgentState::Idle),
+            );
+            let watch = Watch::start(&standing);
+            let (asking, transitions) = watch.observe(&snapshot(
+                vec![feature(progress, false, AgentState::Asking)],
+                Some(AgentState::Idle),
+            ));
+            let begun: Vec<(&str, AttentionKind, Option<&str>)> = transitions
+                .iter()
+                .map(|t| {
+                    (
+                        t.scope.as_str(),
+                        t.attention.kind,
+                        t.attention.detail.as_deref(),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                begun,
+                [(
+                    "login",
+                    AttentionKind::Asking,
+                    Some("implementer: permission")
+                )],
+                "{progress}"
+            );
+
+            let (answered, transitions) = asking.observe(&standing);
+            assert!(transitions.is_empty(), "{progress}: {transitions:?}");
+            assert_eq!(
+                asking.ended(&answered),
+                [ended("app", "login", AttentionKind::Asking, None)],
+                "{progress}"
+            );
+        }
     }
 
     #[test]

@@ -235,8 +235,8 @@ pub struct Attention {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AttentionKind {
-    Blocked,
     Asking,
+    Blocked,
     Cleanup,
     Ready,
     Dead,
@@ -292,15 +292,15 @@ fn agent_attention(agent: &AgentSnapshot, kind: AttentionKind) -> Attention {
 /// [`AttentionKind`]'s order. A feature is ready only while none of its
 /// agents is busy; its stored progress stays ready meanwhile.
 pub fn attention(feature: &FeatureSnapshot) -> Attention {
+    if let Some(asking) = agent_in(&feature.agents, AgentState::Asking, AttentionKind::Asking) {
+        return asking;
+    }
     if feature.progress == Progress::Blocked {
         return of(
             AttentionKind::Blocked,
             feature.blocked_reason.clone(),
             feature.blocked_by.clone(),
         );
-    }
-    if let Some(asking) = agent_in(&feature.agents, AgentState::Asking, AttentionKind::Asking) {
-        return asking;
     }
     match feature.lifecycle {
         FeatureStatus::Merged => return of(AttentionKind::Cleanup, Some("PR merged".into()), None),
@@ -337,10 +337,13 @@ pub fn attention(feature: &FeatureSnapshot) -> Attention {
     of(AttentionKind::None, None, None)
 }
 
-/// The attention a main scope needs: blocked, or an agent asking, dead or
-/// unarmed, in that order. Main has no PR to clean up or merge, and an idle
-/// orchestrator is its resting state, not a stall.
+/// The attention a main scope needs: an agent asking, blocked, or an agent
+/// dead or unarmed, in that order. Main has no PR to clean up or merge, and
+/// an idle orchestrator is its resting state, not a stall.
 pub fn main_attention(main: &ScopeSnapshot) -> Attention {
+    if let Some(asking) = agent_in(&main.agents, AgentState::Asking, AttentionKind::Asking) {
+        return asking;
+    }
     if main.progress == Progress::Blocked {
         return of(
             AttentionKind::Blocked,
@@ -349,7 +352,6 @@ pub fn main_attention(main: &ScopeSnapshot) -> Attention {
         );
     }
     [
-        (AgentState::Asking, AttentionKind::Asking),
         (AgentState::Dead, AttentionKind::Dead),
         (AgentState::Unarmed, AttentionKind::Unarmed),
     ]
@@ -1024,7 +1026,7 @@ mod tests {
     }
 
     #[test]
-    fn an_asking_agent_ranks_after_blocked_and_before_everything_else() {
+    fn an_asking_agent_ranks_before_everything_else() {
         let mut f = feature(Progress::Wip, FeatureStatus::Merged);
         f.agents = vec![
             agent("implementer", AgentState::Dead, 0),
@@ -1044,6 +1046,8 @@ mod tests {
             }
         );
         f.progress = Progress::Blocked;
+        assert_eq!(kind(&f), AttentionKind::Asking);
+        f.agents.pop();
         assert_eq!(kind(&f), AttentionKind::Blocked);
     }
 
@@ -1123,8 +1127,9 @@ mod tests {
     }
 
     #[test]
-    fn a_blocked_main_needs_its_answer_first_and_an_idle_one_never_stalls() {
+    fn a_blocked_main_needs_its_answer_after_any_dialog_and_an_idle_one_never_stalls() {
         let asking = waiting("c", AgentState::Asking, WaitingKind::Plan, "plan approval");
+        let dead = agent("c", AgentState::Dead, 0);
         let blocked = TeamStatus {
             progress: Progress::Blocked,
             blocked_reason: Some("next item?".into()),
@@ -1132,7 +1137,13 @@ mod tests {
         };
 
         assert_eq!(
-            ScopeSnapshot::main_of(vec![asking], blocked).attention,
+            ScopeSnapshot::main_of(vec![asking], blocked.clone())
+                .attention
+                .kind,
+            AttentionKind::Asking
+        );
+        assert_eq!(
+            ScopeSnapshot::main_of(vec![dead], blocked).attention,
             Attention {
                 kind: AttentionKind::Blocked,
                 detail: Some("next item?".into()),

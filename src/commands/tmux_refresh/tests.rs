@@ -577,6 +577,69 @@ fn a_blocked_main_shows_its_attention_badge_and_alerts_once_but_not_when_reopene
     assert_eq!(sets(&reopened, ATTENTION), ["blocked"]);
 }
 
+#[test]
+fn a_blocked_main_shows_a_dialog_and_alerts_it_then_shows_blocked_again_without_alerting() {
+    let blocked = TeamStatus {
+        progress: Progress::Blocked,
+        blocked_reason: Some("next item?".into()),
+        blocked_by: Some("main".into()),
+    };
+    let lead = main_agent(AgentState::Idle, WaitingKind::Idle, "idle");
+    let main_with = |helper: AgentState, kind: WaitingKind, detail: &str| {
+        let helper = AgentSnapshot {
+            name: "helper".into(),
+            window: Some("app/main:2".into()),
+            ..main_agent(helper, kind, detail)
+        };
+        let mut snapshot = main_scope(Vec::new());
+        snapshot.projects[0].main = Some(ScopeSnapshot::main_of(
+            vec![lead.clone(), helper],
+            blocked.clone(),
+        ));
+        snapshot
+    };
+    let asking = main_with(AgentState::Asking, WaitingKind::Permission, "Bash: ls");
+    let answered = main_with(AgentState::Idle, WaitingKind::Idle, "idle");
+    let session = |options: &[(&'static str, &str)]| Options {
+        clients: vec![Client::named("c1")],
+        sessions: vec![Holder::session("app/main", options)],
+        ..Options::default()
+    };
+    let now = Utc::now();
+    let alerted_blocked = session(&[
+        (PROJECT, "app"),
+        (ATTENTION, "blocked"),
+        (ALERTED, "blocked"),
+    ]);
+
+    let commands = commands(&asking, &alerted_blocked, now);
+    assert_eq!(sets(&commands, ATTENTION), ["asking"]);
+    assert_eq!(sets(&commands, REASON), ["helper: Bash: ls"]);
+    assert_eq!(
+        sets(&commands, BADGE),
+        [badge::agent(AgentState::Asking, 0)]
+    );
+    assert_eq!(sets(&commands, ALERTED), ["blocked,asking"]);
+    assert_eq!(
+        announced(&commands),
+        ["pm: app/main asking: helper: Bash: ls"]
+    );
+
+    let shown_asking = session(&[
+        (PROJECT, "app"),
+        (ATTENTION, "asking"),
+        (ALERTED, "blocked,asking"),
+    ]);
+    let commands = super::commands(&answered, &shown_asking, now);
+    assert_eq!(sets(&commands, ATTENTION), ["blocked"]);
+    assert_eq!(
+        sets(&commands, BADGE),
+        [badge::attention(AttentionKind::Blocked).unwrap()]
+    );
+    assert_eq!(sets(&commands, ALERTED), ["blocked"]);
+    assert!(announced(&commands).is_empty(), "the same blocked episode");
+}
+
 fn feature_scope(progress: Progress, busy: bool, agents: Vec<AgentSnapshot>) -> Snapshot {
     let mut feature = FeatureSnapshot {
         project: "app".into(),

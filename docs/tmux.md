@@ -54,8 +54,8 @@ state](remote-api.md#agent-states-and-activity), a feature session's the
 attention it needs. A kind that means what a state means shares its glyph.
 The window list shows glyphs only; pm's tree, which has room, labels each
 one: a session line reads `<glyph> blocked  implementer: which DB?` (on
-`main`, its main agent's state unless `main` is blocked; an asking `main`
-keeps its agent's badge), a window line `<glyph> idle <envelope> 2`,
+`main`, its main agent's state unless `main` is blocked and none of its
+agents is asking), a window line `<glyph> idle <envelope> 2`,
 and a session's activity `<gear> working`, `<spinner> background 1d` or
 `quiet 2h`. Follow a badge with a space in your own formats: some terminals
 (Ghostty) draw a glyph small when the next cell isn't blank.
