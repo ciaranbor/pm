@@ -4,6 +4,7 @@ use crate::error::{PmError, Result};
 use crate::hooks;
 use crate::state::paths;
 use crate::state::project::{ProjectConfig, ProjectEntry, ProjectInfo};
+use crate::state::scope;
 use crate::tmux;
 
 /// Register an existing git repo as a pm project.
@@ -154,7 +155,7 @@ pub fn register(
     entry.save(projects_dir, &project_name)?;
 
     // Create main tmux session
-    let session_name = tmux::session_name(&project_name, "main");
+    let session_name = tmux::session_name(&project_name, scope::MAIN);
     let main_path = paths::main_worktree(&wrapper_dir);
     tmux::create_session(tmux_server, &session_name, &main_path)?;
 

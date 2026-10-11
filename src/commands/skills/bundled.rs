@@ -114,7 +114,7 @@ pub(super) const BUNDLED_ITEMS: &[BundledItem] = &[
     },
     BundledItem {
         kind: BundledKind::Agent,
-        name: "main",
+        name: crate::state::scope::ORCHESTRATOR,
         files: &[("main.md", include_str!("../../../bundled/agents/main.md"))],
     },
     // Baseline (shared operating prompt appended to every spawned agent)

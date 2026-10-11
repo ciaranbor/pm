@@ -181,7 +181,7 @@ impl BaseCheckout {
     /// The main scope's checkout.
     pub fn main(project_root: &Path) -> Self {
         Self {
-            scope: "main".to_string(),
+            scope: crate::state::scope::MAIN.to_string(),
             worktree: crate::state::paths::main_worktree(project_root),
         }
     }

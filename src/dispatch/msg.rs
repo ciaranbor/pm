@@ -2,6 +2,7 @@ use pm::commands;
 use pm::commands::attention::AgentState;
 use pm::error::{PmError, Result};
 use pm::state::paths;
+use pm::state::scope;
 
 use super::report::report_sent;
 use super::scope::resolve_scope_with_flag;
@@ -37,7 +38,7 @@ pub(super) fn run(cmd: MsgCommands, server: Option<&str>) -> Result<()> {
             let effective_scope = shorthand_scope.map(|s| s.to_string()).or(scope);
 
             if let Some(ref proj_name) = target_project {
-                let target_scope = effective_scope.as_deref().unwrap_or("main");
+                let target_scope = effective_scope.as_deref().unwrap_or(scope::MAIN);
                 let pm_dir = paths::pm_dir(&project_root);
                 let sender_project_config = pm::state::project::ProjectConfig::load(&pm_dir)?;
                 let sender_project_name = &sender_project_config.project.name;

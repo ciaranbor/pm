@@ -6,6 +6,7 @@ use std::path::Path;
 use crate::error::{PmError, Result};
 use crate::git;
 use crate::state::feature::base_checkout;
+use crate::state::scope;
 
 /// The scope to land in after a feature's session is killed: that of its
 /// `base` branch, or `main` when the branch has no checkout (a parent feature
@@ -13,7 +14,7 @@ use crate::state::feature::base_checkout;
 pub fn base_scope(project_root: &Path, main_branch: &str, base: &str) -> String {
     base_checkout(project_root, main_branch, base)
         .map(|c| c.scope)
-        .unwrap_or_else(|_| "main".to_string())
+        .unwrap_or_else(|_| scope::MAIN.to_string())
 }
 
 /// Why a feature's base branch has no checkout in this project.

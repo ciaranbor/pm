@@ -13,6 +13,7 @@ use crate::state::devices::{Devices, Push};
 use crate::state::feature::FeatureState;
 use crate::state::paths;
 use crate::state::project::ProjectEntry;
+use crate::state::scope;
 use crate::tmux;
 
 use super::transcript::{Agent, DEFAULT_LIMIT, MAX_LIMIT, TranscriptWatch, page_json};
@@ -473,7 +474,7 @@ fn get(config: &Config, path: &str, query: &Query, token_sha256: &str) -> Result
                 Ok(root) => root,
                 Err(missing) => return Ok(error(404, missing)),
             };
-            if scope != "main" && !has_feature(&root, scope)? {
+            if scope != scope::MAIN && !has_feature(&root, scope)? {
                 return Ok(error(404, "no such scope"));
             }
             let agents = attention::scope_agents(&root, scope, server)?;
@@ -501,7 +502,7 @@ fn find_agent(
         Ok(root) => root,
         Err(missing) => return Ok(Err(error(404, missing))),
     };
-    if scope != "main" && !has_feature(&root, scope)? {
+    if scope != scope::MAIN && !has_feature(&root, scope)? {
         return Ok(Err(error(404, "no such scope")));
     }
     let registry = AgentRegistry::load(&paths::agents_dir(&root), scope)?;

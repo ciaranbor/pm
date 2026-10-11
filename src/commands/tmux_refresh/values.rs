@@ -3,6 +3,7 @@
 
 use chrono::{DateTime, Utc};
 
+use crate::state::scope;
 use crate::tmux::options::format_text;
 
 use super::super::attention::{
@@ -67,7 +68,7 @@ pub(super) fn main_values(
     let lead = main
         .agents
         .iter()
-        .find(|a| a.name == "main")
+        .find(|a| a.name == scope::ORCHESTRATOR)
         .or(main.agents.first());
     let blocked = main.attention.kind == AttentionKind::Blocked;
     let [activity, activity_label] = main_activity(main, lead.filter(|_| !blocked), now)

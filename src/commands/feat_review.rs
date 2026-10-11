@@ -11,6 +11,7 @@ use crate::hooks;
 use crate::state::feature::{FeatureState, FeatureStatus};
 use crate::state::paths;
 use crate::state::project::ProjectConfig;
+use crate::state::scope;
 use crate::state::workflow;
 use crate::{gh, git, tmux};
 
@@ -167,7 +168,7 @@ fn setup_review(
             project_name,
             tmux_server,
             delete_branch: true, // fetch_pr created the local branch, so we own it
-            base_scope: "main",
+            base_scope: scope::MAIN,
         });
         return Err(e);
     }
