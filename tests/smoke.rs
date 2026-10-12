@@ -364,6 +364,39 @@ fn a_deferred_restart_runs_once_the_agent_is_idle_again() {
     assert!(s.find_window("proj/login", "reviewer").is_some());
 }
 
+/// Catches: a scheduled send never leaving the store because the waiter
+/// that sweeps it runs as a hook, from the harness's environment, not the
+/// sender's.
+#[test]
+#[ignore]
+fn a_scheduled_send_is_delivered_by_the_recipients_waiter() {
+    let s = Smoke::new();
+    let login = s.init_with_spawned_reviewer();
+    s.argv_records("reviewer", 1);
+
+    s.pm(&login)
+        .args(["msg", "send", "--in", "1s", "reviewer", "hi"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("scheduled for"));
+
+    let log = s.proj().join(".pm/runtime/login/reviewer/stop-hook.log");
+    let start = Instant::now();
+    loop {
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        if text.contains("to 'reviewer@login': sent") {
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(20), "{text}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    s.pm(&login)
+        .args(["msg", "scheduled"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No scheduled sends"));
+}
+
 /// Catches: tmux output parsed under launchd's environment — no UTF-8
 /// locale and no `$TMUX` — where tmux prints tabs as `_` and every live
 /// session reads as closed.

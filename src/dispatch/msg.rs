@@ -22,6 +22,7 @@ pub(super) fn run(cmd: MsgCommands, server: Option<&str>) -> Result<()> {
             scope,
             upstream,
             project: target_project,
+            delay,
         } => {
             let message = read_message_body(message)?;
             let sender = pm::messages::default_user_name();
@@ -40,52 +41,72 @@ pub(super) fn run(cmd: MsgCommands, server: Option<&str>) -> Result<()> {
             }
             let effective_scope = shorthand_scope.map(|s| s.to_string()).or(scope);
 
-            let sent = if let Some(ref proj_name) = target_project {
-                // `--project` names the recipient's project; the sender's
-                // home, if it has one, is where a reply comes back.
+            // The sender's home, if it has one, is where a reply comes back.
+            let (target_root, target_scope, home) = if let Some(ref proj_name) = target_project {
                 let home = optional_agent_scope()?;
                 let (_, target_root) =
                     ProjectEntry::load_here(&paths::global_projects_dir()?, proj_name)?;
-                let home = home.as_ref().map(|(root, scope)| Home { root, scope });
                 let target_scope = effective_scope
                     .or_else(|| own_scope(&target_root))
                     .unwrap_or_else(|| scope::MAIN.to_string());
-                commands::agent_send::send_as(
-                    &target_root,
-                    &target_scope,
-                    recipient,
-                    Sender {
-                        name: &sender,
-                        home,
-                    },
-                    &message,
-                    server,
-                )?
+                (target_root, target_scope, home)
             } else {
                 let (project_root, feature) = paths::agent_scope()?;
                 let target_scope = if upstream {
                     let main_branch =
                         ProjectEntry::main_branch(&project_root, &paths::global_projects_dir()?)?;
-                    Some(commands::agent_send::resolve_upstream(
-                        &project_root,
-                        &main_branch,
-                        &feature,
-                    )?)
+                    commands::agent_send::resolve_upstream(&project_root, &main_branch, &feature)?
                 } else {
-                    effective_scope
+                    effective_scope.unwrap_or_else(|| feature.clone())
                 };
-                commands::agent_send::agent_send(
-                    &project_root,
-                    &feature,
-                    target_scope.as_deref(),
-                    recipient,
-                    &sender,
-                    &message,
-                    server,
-                )?
+                (
+                    project_root.clone(),
+                    target_scope,
+                    Some((project_root, feature)),
+                )
             };
+            let sender = Sender {
+                name: &sender,
+                home: home.as_ref().map(|(root, scope)| Home { root, scope }),
+            };
+            if let Some(delay) = delay {
+                let send = commands::msg_scheduled::schedule(
+                    &target_root,
+                    &target_scope,
+                    recipient,
+                    sender,
+                    &message,
+                    delay,
+                )?;
+                println!("{}", commands::msg_scheduled::describe_scheduled(&send));
+                return Ok(());
+            }
+            let sent = commands::agent_send::send_as(
+                &target_root,
+                &target_scope,
+                recipient,
+                sender,
+                &message,
+                server,
+            )?;
             report_sent(sent, server);
             push();
+            Ok(())
+        }
+        MsgCommands::Scheduled { target } => {
+            let (project_root, _) = target_project(target.project.as_deref())?;
+            let lines = commands::msg_scheduled::list(&project_root)?;
+            if lines.is_empty() {
+                println!("No scheduled sends");
+            }
+            for line in lines {
+                println!("{line}");
+            }
+            Ok(())
+        }
+        MsgCommands::Cancel { id, target } => {
+            let (project_root, _) = target_project(target.project.as_deref())?;
+            println!("{}", commands::msg_scheduled::cancel(&project_root, &id)?);
             Ok(())
         }
         MsgCommands::Read {

@@ -495,6 +495,9 @@ Details here.
 EOF
 pm msg send main --scope main "x"        # agent in another scope of this project
 pm msg send main --project pm "x"         # agent in another project
+pm msg send --in 1h30m reviewer "x"       # held until then; prints an id
+pm msg scheduled                          # this project's held sends
+pm msg cancel a3f                         # cancel one by id, or a leading part of it
 pm msg read                               # next unread from the oldest sender, advances the cursor
 pm msg read --from b --index -1           # re-read without moving the cursor
 pm msg reply "short reply"                # reply to the last-read message, across scopes
@@ -524,6 +527,16 @@ else's name the inbox they replied from. No agent has to read another
 project's inbox to hear back. `pm msg send --project` works
 from outside every project, but the recipient can't reply to it. `read`,
 `list` and `wait --project` inspect another project's inbox.
+
+A send `--in` a delay is checked like any send, then held until it falls
+due. No daemon holds it: the recipient's project's waiters deliver it at
+their next poll, so it goes out within seconds to an idle agent, at its next
+turn's end to a busy one, and once any agent of that project runs again if
+none does. It stays on the machine that scheduled it: one still held when
+you move to another machine stays behind. It lives in the *recipient's* project, so
+`pm msg scheduled` and `cancel` take `--project` for a send to another
+project's agent. A recipient gone by the due time leaves the send listed as
+failed until it is cancelled.
 
 Identity resolves as `PM_AGENT_NAME` (set at spawn) > `$USER` > `"user"`;
 there is no flag to act as another agent. An agent's scope resolves from the

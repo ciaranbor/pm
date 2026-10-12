@@ -107,6 +107,8 @@ pub struct Sent {
     /// The lines saying what was sent, and any re-arm.
     pub status: String,
     pub heal: Option<Heal>,
+    /// What went wrong after the message was queued.
+    pub warnings: Vec<String>,
 }
 
 /// A dead recipient window a send respawned, for its caller to confirm
@@ -120,33 +122,44 @@ pub struct Heal {
     pub report: String,
 }
 
-/// Send a message from `sender` to an agent in the sender's own project:
-/// [`send_as`] with a home of `(project_root, sender_scope)`. `target_scope`
-/// defaults to `sender_scope`.
-pub fn agent_send(
-    project_root: &Path,
-    sender_scope: &str,
-    target_scope: Option<&str>,
+/// Fail as [`send_as`] would for a `recipient` in `feature` of the project
+/// at `target_root` that no message can reach, without sending anything.
+pub fn check_recipient(
+    target_root: &Path,
+    feature: &str,
     recipient: &str,
-    sender: &str,
-    body: &str,
-    tmux_server: Option<&str>,
-) -> Result<Sent> {
-    let sender = Sender {
-        name: sender,
-        home: Some(Home {
-            root: project_root,
-            scope: sender_scope,
-        }),
-    };
-    send_as(
-        project_root,
-        target_scope.unwrap_or(sender_scope),
-        recipient,
-        sender,
-        body,
-        tmux_server,
-    )
+    sender: Sender<'_>,
+) -> Result<()> {
+    let route = Route::of(sender.home, target_root, feature)?;
+    require_recipient(&route, target_root, feature, recipient, sender)
+}
+
+/// The recipient must be an active agent. Messaging never conjures a new
+/// agent — agents are stood up by `pm feat new`/`feat adopt` (the whole
+/// team) or `pm agent spawn`.
+fn require_recipient(
+    route: &Route,
+    target_root: &Path,
+    feature: &str,
+    recipient: &str,
+    sender: Sender<'_>,
+) -> Result<()> {
+    if recipient_is_active(target_root, feature, recipient)? {
+        return Ok(());
+    }
+    let orchestrator = scope::orchestrator(target_root);
+    Err(PmError::AgentNotFound(if route.outside_target() {
+        let project = paths::project_name(target_root);
+        let hint = hint::other_project_hint(recipient, feature, &orchestrator);
+        format!(
+            "No active agent called '{recipient}' exists in scope '{feature}' of project \
+             '{project}'.{hint}"
+        )
+    } else {
+        let sender_scope = sender.home.map_or(feature, |h| h.scope);
+        let hint = agent_not_found_hint(recipient, sender_scope, feature, &orchestrator);
+        format!("No active agent called '{recipient}' exists in scope '{feature}'.{hint}")
+    }))
 }
 
 /// Send a message to `recipient` in scope `feature` of the project at
@@ -165,24 +178,7 @@ pub fn send_as(
 ) -> Result<Sent> {
     let route = Route::of(sender.home, target_root, feature)?;
 
-    // The recipient must be an active agent. Messaging never conjures a new
-    // agent — agents are stood up by `pm feat new`/`feat adopt` (the whole
-    // team) or `pm agent spawn`.
-    if !recipient_is_active(target_root, feature, recipient)? {
-        let orchestrator = scope::orchestrator(target_root);
-        return Err(PmError::AgentNotFound(if route.outside_target() {
-            let project = paths::project_name(target_root);
-            let hint = hint::other_project_hint(recipient, feature, &orchestrator);
-            format!(
-                "No active agent called '{recipient}' exists in scope '{feature}' of project \
-                 '{project}'.{hint}"
-            )
-        } else {
-            let sender_scope = sender.home.map_or(feature, |h| h.scope);
-            let hint = agent_not_found_hint(recipient, sender_scope, feature, &orchestrator);
-            format!("No active agent called '{recipient}' exists in scope '{feature}'.{hint}")
-        }));
-    }
+    require_recipient(&route, target_root, feature, recipient, sender)?;
 
     // Deliver the message first, then heal a dead window. This ensures the
     // message is durably queued in the inbox before the agent starts, so it
@@ -216,9 +212,10 @@ pub fn send_as(
     // output byte-identical.
     //
     // The message is already queued, so a heal failure (e.g. the tmux
-    // socket is unreachable from a sandbox) is not a delivery failure: warn
-    // and exit 0 rather than make the sender think the message was lost.
+    // socket is unreachable from a sandbox) is not a delivery failure: a
+    // warning, not an error, so the sender never thinks the message was lost.
     let mut heal = None;
+    let mut warnings = Vec::new();
     match super::agent_spawn::agent_spawn(target_root, feature, recipient, None, None, tmux_server)
     {
         Ok((outcome, spawn_msg, _)) if outcome.is_new_window() => {
@@ -234,19 +231,23 @@ pub fn send_as(
                 status = format!("{status}\nRe-armed '{recipient}' ({})", waiting.describe());
             }
             Ok(None) => {}
-            Err(e) => eprintln!(
-                "warning: message {index:03} is queued for '{recipient}@{feature}', but it could \
-                 not be re-armed: {e}"
-            ),
+            Err(e) => warnings.push(format!(
+                "message {index:03} is queued for '{recipient}@{feature}', but it could not be \
+                 re-armed: {e}"
+            )),
         },
-        Err(e) => eprintln!(
-            "warning: message {index:03} is queued for '{recipient}@{feature}', but its tmux \
-             window could not be respawned: {e}\n  It will be read if and when that agent next runs."
-        ),
+        Err(e) => warnings.push(format!(
+            "message {index:03} is queued for '{recipient}@{feature}', but its tmux window could \
+             not be respawned: {e}\n  It will be read if and when that agent next runs."
+        )),
     }
 
-    Ok(Sent { status, heal })
+    Ok(Sent {
+        status,
+        heal,
+        warnings,
+    })
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

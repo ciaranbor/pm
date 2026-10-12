@@ -54,6 +54,7 @@ pub mod list;
 pub mod migrate_check;
 pub mod msg_list;
 pub mod msg_reply;
+pub mod msg_scheduled;
 pub mod notes;
 pub mod onboard;
 pub mod open;

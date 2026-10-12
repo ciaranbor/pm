@@ -37,6 +37,7 @@ use serde_json::json;
 
 use crate::commands::agent_wait;
 use crate::commands::attention::AgentState;
+use crate::commands::msg_scheduled::{self, Sweeper};
 use crate::harness::{Harness, Wake};
 use crate::messages;
 use crate::state::paths;
@@ -65,10 +66,14 @@ pub(crate) fn continuation(
 /// wait (idle or background), as it delivers (busy), as it yields
 /// (background) and as it ends without a decision (unarmed); it must not
 /// block.
-pub fn stop(harness: Option<Harness>, on_turn: &mut dyn FnMut(AgentState, u32)) -> i32 {
+pub fn stop(
+    harness: Option<Harness>,
+    sweeper: Sweeper<'_>,
+    on_turn: &mut dyn FnMut(AgentState, u32),
+) -> i32 {
     match harness.filter(|h| h.wake() != Wake::Block) {
-        Some(harness) => wake::run(harness, on_turn),
-        None => blocking(on_turn),
+        Some(harness) => wake::run(harness, sweeper, on_turn),
+        None => blocking(sweeper, on_turn),
     }
 }
 
@@ -76,26 +81,47 @@ pub fn stop(harness: Option<Harness>, on_turn: &mut dyn FnMut(AgentState, u32)) 
 /// has read: SessionStart's, on a harness whose SessionStart hook
 /// [waits](Harness::waits_at_session_start). Returns the exit code, as
 /// [`stop`] does.
-pub fn wait_from(harness: Harness, payload: &str, on_turn: &mut dyn FnMut(AgentState, u32)) -> i32 {
-    wake::run_on(harness, payload, on_turn)
+pub fn wait_from(
+    harness: Harness,
+    payload: &str,
+    sweeper: Sweeper<'_>,
+    on_turn: &mut dyn FnMut(AgentState, u32),
+) -> i32 {
+    wake::run_on(harness, payload, sweeper, on_turn)
 }
 
 /// Run `harness`'s waiter for the turn starting, from its UserPromptSubmit
 /// hook ([`Harness::turn_waiter_hook_options`]): it wakes the agent for a
 /// message that arrives mid-turn, should the user interrupt the turn.
 /// Returns the exit code, as [`stop`] does.
-pub fn turn_waiter(harness: Harness, on_turn: &mut dyn FnMut(AgentState, u32)) -> i32 {
+pub fn turn_waiter(
+    harness: Harness,
+    sweeper: Sweeper<'_>,
+    on_turn: &mut dyn FnMut(AgentState, u32),
+) -> i32 {
     if std::env::var_os("PM_AGENT_NAME").is_none() {
         return 0;
     }
-    wake::run_in_turn(harness, &read_stdin(), on_turn)
+    wake::run_in_turn(harness, &read_stdin(), sweeper, on_turn)
+}
+
+/// Send the project's due scheduled sends ([`msg_scheduled`]), logging
+/// what became of each.
+fn sweep(project_root: &std::path::Path, scope: &str, agent: &str, sweeper: Sweeper<'_>) {
+    let swept = msg_scheduled::deliver_due(project_root, chrono::Utc::now(), sweeper.tmux_server);
+    for line in &swept.lines {
+        runtime::log_stop_hook(project_root, scope, agent, line);
+    }
+    if swept.delivered {
+        (sweeper.on_delivered)();
+    }
 }
 
 /// The blocking hook. Prints its answer as JSON and returns 0. Ending
 /// without a decision while the harness is still there — it sent the
 /// signal, or the wait failed — prints the reason as a `systemMessage`,
 /// which opencode's plugin reports as the hook's failure.
-fn blocking(on_turn: &mut dyn FnMut(AgentState, u32)) -> i32 {
+fn blocking(sweeper: Sweeper<'_>, on_turn: &mut dyn FnMut(AgentState, u32)) -> i32 {
     let caller = Caller::current();
     // Resolve identity before reading stdin: a non-pm session bails here.
     let Ok(agent) = std::env::var("PM_AGENT_NAME") else {
@@ -110,18 +136,26 @@ fn blocking(on_turn: &mut dyn FnMut(AgentState, u32)) -> i32 {
     let log = |line: &str| runtime::log_stop_hook(&project_root, &scope, &agent, line);
     log("blocking hook");
     let signals = Signals::install();
-    let decided = wait_and_decide(&project_root, &scope, &agent, None, on_turn, |interval| {
-        match &signals {
-            Some(signals) => {
-                let caught = signals.pause(interval);
-                if let Some(caught) = caught.iter().find(|c| caller.sent(c)) {
-                    return Some(Ended::By(format!("ended by {caught}")));
+    let decided = wait_and_decide(
+        &project_root,
+        &scope,
+        &agent,
+        sweeper,
+        None,
+        on_turn,
+        |interval| {
+            match &signals {
+                Some(signals) => {
+                    let caught = signals.pause(interval);
+                    if let Some(caught) = caught.iter().find(|c| caller.sent(c)) {
+                        return Some(Ended::By(format!("ended by {caught}")));
+                    }
                 }
+                None => std::thread::sleep(interval),
             }
-            None => std::thread::sleep(interval),
-        }
-        (!caller.alive()).then_some(Ended::HarnessGone)
-    });
+            (!caller.alive()).then_some(Ended::HarnessGone)
+        },
+    );
     match &decided {
         Ok(Decided::Answer(json)) => log(&format!("answered {json}")),
         Ok(Decided::Ended(ended)) => log(&format!("ended undecided: {ended:?}")),
@@ -191,12 +225,14 @@ fn wait_and_decide(
     project_root: &std::path::Path,
     feature: &str,
     agent: &str,
+    sweeper: Sweeper<'_>,
     poll_interval: Option<Duration>,
     on_turn: &mut dyn FnMut(AgentState, u32),
     mut pause: impl FnMut(Duration) -> Option<Ended>,
 ) -> crate::error::Result<Decided> {
     runtime::touch_activity(project_root, feature, agent)?;
     runtime::clear_waiting(project_root, feature, agent)?;
+    sweep(project_root, feature, agent, sweeper);
     if unread_senders(project_root, feature, agent)?.is_empty() {
         let waiter = std::process::id();
         runtime::take_waiter(project_root, feature, agent, waiter, None)?;
@@ -210,6 +246,9 @@ fn wait_and_decide(
                     (runtime::read_waiter(project_root, feature, agent) != Some(waiter))
                         .then_some(Ended::Superseded)
                 });
+                if ended.is_none() {
+                    sweep(project_root, feature, agent, sweeper);
+                }
                 ended.is_none()
             })?;
         if waited.is_none() {
@@ -335,6 +374,18 @@ mod tests {
     use std::time::Instant;
     use tempfile::tempdir;
 
+    pub(super) const NO_SWEEP: Sweeper = Sweeper {
+        tmux_server: None,
+        on_delivered: &|| {},
+    };
+
+    pub(super) fn sweeper(server: &crate::testing::TestServer) -> Sweeper<'_> {
+        Sweeper {
+            tmux_server: server.name(),
+            on_delivered: &|| {},
+        }
+    }
+
     impl Decided {
         fn answer(self) -> String {
             match self {
@@ -376,6 +427,7 @@ mod tests {
             &root,
             "login",
             "reviewer",
+            NO_SWEEP,
             Some(Duration::from_millis(50)),
             &mut |state, unread| turns.push((state, unread)),
             |_| None,
@@ -406,6 +458,7 @@ mod tests {
                 &root_clone,
                 "login",
                 "reviewer",
+                NO_SWEEP,
                 Some(Duration::from_millis(50)),
                 &mut |state, unread| turns.push((state, unread)),
                 |_| None,
@@ -439,6 +492,7 @@ mod tests {
                 &waiting,
                 "login",
                 "reviewer",
+                NO_SWEEP,
                 Some(Duration::from_millis(10)),
                 &mut |_, _| {},
                 |_| None,
@@ -472,6 +526,7 @@ mod tests {
             &root,
             "login",
             "reviewer",
+            NO_SWEEP,
             Some(Duration::from_millis(10)),
             &mut |state, unread| turns.push((state, unread)),
             |_| {
@@ -504,6 +559,7 @@ mod tests {
             &root,
             "login",
             "reviewer",
+            NO_SWEEP,
             Some(Duration::from_millis(50)),
             &mut |_, _| {},
             |_| None,
@@ -529,6 +585,7 @@ mod tests {
             &root,
             "login",
             "reviewer",
+            NO_SWEEP,
             Some(Duration::from_millis(10)),
             &mut |state, unread| turns.push((state, unread)),
             |_| {
@@ -555,6 +612,7 @@ mod tests {
             &root,
             "login",
             "reviewer",
+            NO_SWEEP,
             Some(Duration::from_millis(10)),
             &mut |state, unread| turns.push((state, unread)),
             |_| {
@@ -580,9 +638,106 @@ mod tests {
         runtime::write_waiting(&root, "login", "reviewer", &asked).unwrap();
         send(&root);
 
-        wait_and_decide(&root, "login", "reviewer", None, &mut |_, _| {}, |_| None).unwrap();
+        wait_and_decide(
+            &root,
+            "login",
+            "reviewer",
+            NO_SWEEP,
+            None,
+            &mut |_, _| {},
+            |_| None,
+        )
+        .unwrap();
         assert_eq!(runtime::read_waiting(&root, "login", "reviewer"), None);
         assert!(runtime::last_activity(&root, "login", "reviewer").is_some());
+    }
+
+    // --- scheduled sends -------------------------------------------------
+
+    /// Store a send to `recipient` in `login` that fell due a second ago.
+    pub(super) fn due_send(root: &std::path::Path, recipient: &str) {
+        let now = chrono::Utc::now();
+        let send = runtime::scheduled::Scheduled {
+            id: String::new(),
+            due: now - chrono::Duration::seconds(1),
+            created: now,
+            scope: "login".into(),
+            recipient: recipient.into(),
+            sender: "lead".into(),
+            home: Some(runtime::scheduled::ScheduledHome {
+                root: root.to_path_buf(),
+                scope: "login".into(),
+            }),
+            body: "reminder".into(),
+            failed: None,
+            retrying_since: None,
+        };
+        runtime::scheduled::schedule(root, send).unwrap();
+    }
+
+    #[test]
+    fn an_idle_waiter_delivers_a_send_due_to_another_agent() {
+        let server = crate::testing::TestServer::new();
+        let dir = tempdir().unwrap();
+        let (root, session, scope) =
+            crate::commands::agent_send::tests::setup_project_with_tmux(dir.path(), &server);
+        server.spawn_fake_agent(&root, &session, &scope, "reviewer");
+        let mdir = paths::messages_dir(&root);
+        let pushed = std::cell::Cell::new(0);
+        let mut polls = 0;
+        let mut due = false;
+
+        let result = wait_and_decide(
+            &root,
+            "login",
+            "implementer",
+            Sweeper {
+                tmux_server: server.name(),
+                on_delivered: &|| pushed.set(pushed.get() + 1),
+            },
+            Some(Duration::from_millis(10)),
+            &mut |_, _| {},
+            |_| {
+                polls += 1;
+                if !due {
+                    due_send(&root, "reviewer");
+                    due = true;
+                }
+                (polls > 2).then_some(Ended::HarnessGone)
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result, Decided::Ended(Ended::HarnessGone));
+        assert_eq!(crate::messages::unread_count(&mdir, "login", "reviewer"), 1);
+        assert_eq!(pushed.get(), 1, "a delivery pushes");
+        assert!(runtime::scheduled::list(&root).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_send_due_to_the_waiters_own_agent_wakes_it() {
+        let server = crate::testing::TestServer::new();
+        let dir = tempdir().unwrap();
+        let (root, session, scope) =
+            crate::commands::agent_send::tests::setup_project_with_tmux(dir.path(), &server);
+        server.spawn_fake_agent(&root, &session, &scope, "reviewer");
+        due_send(&root, "reviewer");
+        let mut turns = Vec::new();
+
+        let answer = wait_and_decide(
+            &root,
+            "login",
+            "reviewer",
+            sweeper(&server),
+            Some(Duration::from_millis(10)),
+            &mut |state, unread| turns.push((state, unread)),
+            |_| panic!("waited on a due send"),
+        )
+        .unwrap()
+        .answer();
+
+        assert_eq!(turns, [(AgentState::Busy, 1)]);
+        assert!(answer.contains("lead@login"), "{answer}");
     }
 
     // --- busy parsing ----------------------------------------------------

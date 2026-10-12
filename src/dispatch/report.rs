@@ -88,6 +88,9 @@ pub(super) fn restart_select(stale: bool) -> commands::agent_restart_all::Select
 /// launch is a warning.
 pub(super) fn report_sent(sent: commands::agent_send::Sent, server: Option<&str>) {
     println!("{}", sent.status);
+    for warning in &sent.warnings {
+        eprintln!("warning: {warning}");
+    }
     if let Some(heal) = sent.heal {
         let agents = [heal.agent];
         match commands::launch_check::confirm(&heal.root, &heal.scope, &agents, server).first() {

@@ -3,6 +3,7 @@ use pm::commands::attention::AgentState;
 use pm::commands::harness_export::ExportParams;
 use pm::commands::harness_migrate::MigrateParams;
 use pm::commands::hooks_session_start::Started;
+use pm::commands::msg_scheduled::Sweeper;
 use pm::error::Result;
 use pm::harness::Harness;
 use pm::state::paths;
@@ -123,9 +124,11 @@ pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
                 println!("{msg}");
                 Ok(())
             }
-            HarnessHooksCommands::Stop { harness } => {
-                exit_unless_ok(commands::hooks_stop::stop(harness, &mut waiter_turns()))
-            }
+            HarnessHooksCommands::Stop { harness } => exit_unless_ok(commands::hooks_stop::stop(
+                harness,
+                waiter_sweeper(tmux_server_from_env().as_deref()),
+                &mut waiter_turns(),
+            )),
             HarnessHooksCommands::RestartAtIdle { agent, scope } => {
                 let root = paths::find_project_root(&std::env::current_dir()?)?;
                 commands::restart_at_idle::run(
@@ -145,9 +148,14 @@ pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
                 }
                 match started {
                     Started::Done => Ok(()),
-                    Started::Wait { harness, payload } => exit_unless_ok(
-                        commands::hooks_stop::wait_from(harness, &payload, &mut waiter_turns()),
-                    ),
+                    Started::Wait { harness, payload } => {
+                        exit_unless_ok(commands::hooks_stop::wait_from(
+                            harness,
+                            &payload,
+                            waiter_sweeper(tmux_server_from_env().as_deref()),
+                            &mut waiter_turns(),
+                        ))
+                    }
                 }
             }
             HarnessHooksCommands::SessionEnd { harness } => exit_unless_ok(
@@ -162,9 +170,13 @@ pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
                     push();
                 }))
             }
-            HarnessHooksCommands::TurnWaiter { harness } => exit_unless_ok(
-                commands::hooks_stop::turn_waiter(harness, &mut waiter_turns()),
-            ),
+            HarnessHooksCommands::TurnWaiter { harness } => {
+                exit_unless_ok(commands::hooks_stop::turn_waiter(
+                    harness,
+                    waiter_sweeper(tmux_server_from_env().as_deref()),
+                    &mut waiter_turns(),
+                ))
+            }
             HarnessHooksCommands::Waiting { harness } => {
                 exit_unless_ok(commands::hooks_waiting::waiting(
                     harness,
@@ -307,6 +319,15 @@ pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
             );
             Ok(())
         }
+    }
+}
+
+/// What a waiter delivers scheduled sends with: a delivery pushes, as a
+/// direct send does.
+fn waiter_sweeper(server: Option<&str>) -> Sweeper<'_> {
+    Sweeper {
+        tmux_server: server,
+        on_delivered: &push,
     }
 }
 
