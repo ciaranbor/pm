@@ -92,9 +92,14 @@ fun AgentScreen(
     val interrupting by model.interrupting.collectAsStateWithLifecycle()
     val feedback = LocalFeedback.current
     LaunchedEffect(model) {
-        model.interrupted.collect { failure ->
-            if (failure == null) feedback.done("Interrupted $agent")
-            else feedback.failed("Couldn't interrupt: $failure", model::interrupt)
+        model.interrupted.collect {
+            when (it) {
+                Interrupt.Stopped,
+                Interrupt.Sent -> feedback.done("Interrupted $agent")
+                Interrupt.Running -> feedback.failed("$agent didn't stop", model::interrupt)
+                is Interrupt.Failed ->
+                    feedback.failed("Couldn't interrupt: ${it.reason}", model::interrupt)
+            }
         }
     }
     LaunchedEffect(model) {

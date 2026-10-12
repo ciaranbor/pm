@@ -78,6 +78,12 @@ fun Throwable.reason(): String =
         else -> message ?: javaClass.simpleName
     }
 
+/**
+ * Whether an interrupted agent was seen to stop (`POST …/interrupt`); null from a server that
+ * predates saying.
+ */
+@Serializable private data class Interrupted(val stopped: Boolean? = null)
+
 /** How typed text reached an agent (`POST …/input`). */
 @Serializable
 data class Delivered(
@@ -246,10 +252,17 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
             ),
         )
 
-    /** Press Escape in the agent's pane, ending its turn. */
-    suspend fun interrupt(project: String, scope: String, agent: String) {
-        post(url("agents", project, scope, agent, "interrupt"), "{}")
-    }
+    /**
+     * Interrupt the agent's turn: whether it was seen to stop, null from a server that predates
+     * saying.
+     */
+    suspend fun interrupt(project: String, scope: String, agent: String): Boolean? =
+        json
+            .decodeFromString(
+                Interrupted.serializer(),
+                post(url("agents", project, scope, agent, "interrupt"), "{}"),
+            )
+            .stopped
 
     /** Press `keys`, by tmux's names for them, in the agent's pane. */
     suspend fun pressKeys(project: String, scope: String, agent: String, keys: List<String>) {

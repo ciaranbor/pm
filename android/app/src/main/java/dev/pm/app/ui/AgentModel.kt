@@ -58,6 +58,20 @@ sealed interface Outbox {
     data class Failed(override val text: String, val reason: String) : Outbox
 }
 
+/** How an interrupt went. */
+sealed interface Interrupt {
+    /** The agent was seen to stop. */
+    data object Stopped : Interrupt
+
+    /** The keys were pressed, but the agent was still running a while after. */
+    data object Running : Interrupt
+
+    /** The keys were pressed; the server predates saying whether the agent stopped. */
+    data object Sent : Interrupt
+
+    data class Failed(val reason: String) : Interrupt
+}
+
 /** Why an answer to the dialog `id` was refused. */
 data class DialogNotice(val id: String, val text: String)
 
@@ -110,10 +124,10 @@ class AgentModel(
     private val _interrupting = MutableStateFlow(false)
     val interrupting: StateFlow<Boolean> = _interrupting.asStateFlow()
 
-    private val _interrupted = Channel<String?>(Channel.BUFFERED)
+    private val _interrupted = Channel<Interrupt>(Channel.BUFFERED)
 
-    /** How each interrupt went, once: null once sent, else why it wasn't. */
-    val interrupted: Flow<String?> = _interrupted.receiveAsFlow()
+    /** How each interrupt went, once. */
+    val interrupted: Flow<Interrupt> = _interrupted.receiveAsFlow()
 
     /** Why the last answer was refused; cleared by the next, or by another dialog opening. */
     private val _notice = MutableStateFlow<DialogNotice?>(null)
@@ -281,18 +295,21 @@ class AgentModel(
         if (_interrupting.value) return
         _interrupting.value = true
         viewModelScope.launch {
-            val failure =
+            val outcome =
                 try {
-                    client.interrupt(project, scope, agent)
-                    null
+                    when (client.interrupt(project, scope, agent)) {
+                        true -> Interrupt.Stopped
+                        false -> Interrupt.Running
+                        null -> Interrupt.Sent
+                    }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    e.message ?: e.javaClass.simpleName
+                    Interrupt.Failed(e.reason())
                 } finally {
                     _interrupting.value = false
                 }
-            _interrupted.send(failure)
+            _interrupted.send(outcome)
         }
     }
 

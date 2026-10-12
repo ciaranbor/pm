@@ -345,7 +345,7 @@ class AgentModelTest {
 
     @Test
     fun an_interrupt_is_sent_once_while_on_its_way_and_says_why_it_failed() = modelTest {
-        val outcomes = mutableListOf<String?>()
+        val outcomes = mutableListOf<Interrupt>()
         backgroundScope.launch { model.interrupted.collect { outcomes += it } }
         server.enqueue(
             MockResponse.Builder()
@@ -359,25 +359,41 @@ class AgentModelTest {
         assertEquals(true, model.interrupting.value)
         eventually { outcomes.isNotEmpty() }
 
-        assertEquals(listOf<String?>("the agent isn't running"), outcomes)
+        assertEquals(listOf(Interrupt.Failed("the agent isn't running")), outcomes)
         assertEquals(false, model.interrupting.value)
         assertEquals(1, server.requestCount)
     }
 
     @Test
-    fun an_interrupt_that_goes_through_reports_no_failure() = modelTest {
-        val outcomes = mutableListOf<String?>()
+    fun an_interrupt_says_whether_the_agent_stopped() = modelTest {
+        val outcomes = mutableListOf<Interrupt>()
         backgroundScope.launch { model.interrupted.collect { outcomes += it } }
+        server.enqueue(MockResponse.Builder().body("""{"stopped":true}""").build())
+        server.enqueue(MockResponse.Builder().body("""{"stopped":false}""").build())
         server.enqueue(MockResponse.Builder().body("{}").build())
 
-        model.interrupt()
-        eventually { outcomes.isNotEmpty() }
+        repeat(3) { n ->
+            model.interrupt()
+            eventually { outcomes.size > n }
+        }
 
-        assertEquals(listOf<String?>(null), outcomes)
+        assertEquals(listOf(Interrupt.Stopped, Interrupt.Running, Interrupt.Sent), outcomes)
         assertEquals(
             "/v1/agents/app/login/implementer/interrupt",
             server.takeRequest().url.encodedPath,
         )
+    }
+
+    @Test
+    fun an_unreachable_server_is_named_not_its_socket_error() = modelTest {
+        val outcomes = mutableListOf<Interrupt>()
+        backgroundScope.launch { model.interrupted.collect { outcomes += it } }
+        server.close()
+
+        model.interrupt()
+        eventually { outcomes.isNotEmpty() }
+
+        assertEquals(listOf(Interrupt.Failed("pm serve unreachable")), outcomes)
     }
 
     @Test
