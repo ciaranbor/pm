@@ -106,8 +106,8 @@ pub(crate) fn is_duplicate(
 }
 
 /// Any prompt to `agent`: drop a continuation with nothing unread, else
-/// unblock its scope if the prompt is the user's, then clear its marker
-/// and claim its transcript's turn end.
+/// unblock its scope if the prompt is the user's, then clear its marker,
+/// end stamp and denial and claim its transcript's turn end.
 fn on_prompt(project_root: &Path, scope: &str, agent: &str, prompt: &str) -> Result<Prompted> {
     let registry = AgentRegistry::load(&paths::agents_dir(project_root), scope)?;
     let harness = registry.get(agent).map(|e| e.harness);
@@ -120,6 +120,8 @@ fn on_prompt(project_root: &Path, scope: &str, agent: &str, prompt: &str) -> Res
     }
     runtime::touch_activity(project_root, scope, agent)?;
     runtime::clear_waiting(project_root, scope, agent)?;
+    runtime::clear_ended(project_root, scope, agent)?;
+    runtime::clear_denial(project_root, scope, agent)?;
     if let Some(harness) = harness
         && let Some(ended) = running_agents::waiting(project_root, scope, agent, harness)
         && let Some(id) = ended.entry
@@ -297,15 +299,24 @@ mod tests {
     }
 
     #[test]
-    fn any_prompt_clears_the_agents_marker_in_main_too() {
+    fn any_prompt_clears_the_agents_marker_end_and_denial_in_main_too() {
         use crate::state::runtime::{Waiting, WaitingKind};
         let dir = tempdir().unwrap();
         let project = blocked_feature(dir.path());
         let interrupted = Waiting::now(WaitingKind::Interrupted, None);
 
         runtime::write_waiting(&project, "main", "main", &interrupted).unwrap();
+        runtime::mark_ended(&project, "main", "main", 4242).unwrap();
+        let denial = runtime::Denial {
+            detail: "Bash: git clean -fdx".into(),
+            reason: None,
+            since: chrono::Utc::now(),
+        };
+        runtime::write_denial(&project, "main", "main", &denial).unwrap();
         on_prompt(&project, "main", "main", "go on").unwrap();
         assert_eq!(runtime::read_waiting(&project, "main", "main"), None);
+        assert_eq!(runtime::read_ended(&project, "main", "main"), None);
+        assert_eq!(runtime::read_denial(&project, "main", "main"), None);
 
         runtime::write_waiting(&project, "login", "implementer", &interrupted).unwrap();
         on_prompt(&project, "login", "implementer", SPAWN_PROMPT).unwrap();

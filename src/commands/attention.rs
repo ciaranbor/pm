@@ -163,6 +163,10 @@ pub struct AgentSnapshot {
     /// Its last reply, on one line; never read for [`scope_agents`], whose
     /// callers show none.
     pub latest: Option<Latest>,
+    /// The tool call the harness's classifier refused the agent since it
+    /// was last prompted ([`runtime::Denial`]), described.
+    #[serde(skip)]
+    pub denied: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -252,6 +256,7 @@ pub enum AttentionKind {
     Ready,
     Dead,
     Unarmed,
+    Denied,
     Stalled,
     None,
 }
@@ -266,6 +271,7 @@ impl std::fmt::Display for AttentionKind {
             Self::Stalled => "stalled",
             Self::Dead => "dead",
             Self::Unarmed => "unarmed",
+            Self::Denied => "denied",
             Self::None => "none",
         })
     }
@@ -297,6 +303,20 @@ fn agent_attention(agent: &AgentSnapshot, kind: AttentionKind) -> Attention {
         Some(format!("{}: {what}", agent.name)),
         Some(agent.name.clone()),
     )
+}
+
+/// The first of `agents` between turns with a denial standing, as denied
+/// attention naming it. A busy agent may be working around its denial.
+fn denied_in(agents: &[AgentSnapshot]) -> Option<Attention> {
+    let (agent, denied) = agents.iter().find_map(|a| {
+        let between = matches!(a.state, AgentState::Idle | AgentState::Background);
+        Some((a, a.denied.as_ref().filter(|_| between)?))
+    })?;
+    Some(of(
+        AttentionKind::Denied,
+        Some(format!("{}: {denied}", agent.name)),
+        Some(agent.name.clone()),
+    ))
 }
 
 /// The attention a feature needs: the first kind that applies, in
@@ -332,6 +352,9 @@ pub fn attention(feature: &FeatureSnapshot) -> Attention {
     if let Some(unarmed) = agent_in(&feature.agents, AgentState::Unarmed, AttentionKind::Unarmed) {
         return unarmed;
     }
+    if let Some(denied) = denied_in(&feature.agents) {
+        return denied;
+    }
     let running: Vec<&AgentSnapshot> = feature
         .agents
         .iter()
@@ -348,9 +371,9 @@ pub fn attention(feature: &FeatureSnapshot) -> Attention {
     of(AttentionKind::None, None, None)
 }
 
-/// The attention a main scope needs: an agent asking, blocked, or an agent
-/// dead or unarmed, in that order. Main has no PR to clean up or merge, and
-/// an idle orchestrator is its resting state, not a stall.
+/// The attention a main scope needs: an agent asking, blocked, an agent
+/// dead or unarmed, or one denied, in that order. Main has no PR to clean
+/// up or merge, and an idle orchestrator is its resting state, not a stall.
 pub fn main_attention(main: &ScopeSnapshot) -> Attention {
     if let Some(asking) = agent_in(&main.agents, AgentState::Asking, AttentionKind::Asking) {
         return asking;
@@ -368,6 +391,7 @@ pub fn main_attention(main: &ScopeSnapshot) -> Attention {
     ]
     .into_iter()
     .find_map(|(state, kind)| agent_in(&main.agents, state, kind))
+    .or_else(|| denied_in(&main.agents))
     .unwrap_or_else(|| of(AttentionKind::None, None, None))
 }
 
@@ -649,6 +673,8 @@ impl ScopeReader<'_> {
                     background_since = Some(background_since.map_or(since, |b| b.min(since)));
                 }
                 last_activity = last_activity.max(active);
+                let denied =
+                    runtime::read_denial(self.project_root, scope, agent).map(|d| d.describe());
                 AgentSnapshot {
                     name: agent.clone(),
                     state,
@@ -660,6 +686,7 @@ impl ScopeReader<'_> {
                         .latest
                         .then(|| latest::latest(self.project_root, scope, agent, entry))
                         .flatten(),
+                    denied,
                 }
             })
             .collect();
@@ -773,6 +800,7 @@ mod tests {
             pane: None,
             waiting: None,
             latest: None,
+            denied: None,
         }
     }
 
@@ -1022,6 +1050,7 @@ mod tests {
             AttentionKind::Ready,
             AttentionKind::Dead,
             AttentionKind::Unarmed,
+            AttentionKind::Denied,
             AttentionKind::Stalled,
             AttentionKind::None,
         ]
@@ -1030,7 +1059,9 @@ mod tests {
         .collect();
         assert_eq!(
             kinds,
-            ["cleanup", "ready", "dead", "unarmed", "stalled", "none"]
+            [
+                "cleanup", "ready", "dead", "unarmed", "denied", "stalled", "none"
+            ]
         );
         let states: Vec<serde_json::Value> = [
             AgentState::Busy,
@@ -1121,6 +1152,50 @@ mod tests {
         assert_eq!(kind(&f), AttentionKind::Unarmed);
         f.agents.push(agent("reviewer", AgentState::Dead, 0));
         assert_eq!(kind(&f), AttentionKind::Dead);
+    }
+
+    #[test]
+    fn a_denial_needs_the_user_once_its_agent_is_between_turns() {
+        let denied = |name: &str, state| AgentSnapshot {
+            denied: Some("Bash: rm -rf build [Irreversible Local Destruction]".into()),
+            ..agent(name, state, 0)
+        };
+        let mut f = feature(Progress::Wip, FeatureStatus::Wip);
+        f.agents = vec![
+            agent("reviewer", AgentState::Idle, 0),
+            denied("implementer", AgentState::Busy),
+        ];
+        assert_eq!(
+            kind(&f),
+            AttentionKind::None,
+            "a busy agent works around it"
+        );
+        f.agents.push(denied("qa", AgentState::Background));
+        assert_eq!(
+            attention(&f),
+            Attention {
+                kind: AttentionKind::Denied,
+                detail: Some("qa: Bash: rm -rf build [Irreversible Local Destruction]".into()),
+                agent: Some("qa".into()),
+            }
+        );
+        f.agents.push(waiting(
+            "lead",
+            AgentState::Unarmed,
+            WaitingKind::Error,
+            "API error",
+        ));
+        assert_eq!(kind(&f), AttentionKind::Unarmed);
+
+        let main = |agents| ScopeSnapshot::main_of(agents, TeamStatus::default());
+        assert_eq!(
+            main(vec![denied("main", AgentState::Busy)]).attention.kind,
+            AttentionKind::None
+        );
+        assert_eq!(
+            main(vec![denied("main", AgentState::Idle)]).attention.kind,
+            AttentionKind::Denied
+        );
     }
 
     #[test]

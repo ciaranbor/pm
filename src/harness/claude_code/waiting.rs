@@ -16,14 +16,18 @@
 //!   approval, MCP elicitation), and `idle_prompt` once the agent has sat at
 //!   its prompt for 60s; it never replaces an idle marker.
 //! - `StopFailure` fires instead of Stop when an API error ends the turn.
+//! - `PermissionDenied` fires when the auto-mode classifier refuses a tool
+//!   call, and for nothing else: not a denial at a dialog, a PreToolUse
+//!   block or a `deny` rule. The turn goes on, the model told of the
+//!   refusal (code.claude.com/docs/en/hooks, 2.1.296).
 //!
-//! Its stdout is read as a decision by `PermissionRequest`, so the handler
-//! prints nothing.
+//! Its stdout is read as a decision by `PermissionRequest`, and as a retry
+//! by `PermissionDenied`, so the handler prints nothing.
 
 use serde_json::Value;
 
 use crate::harness::{WaitingEvent, one_line};
-use crate::state::runtime::{Waiting, WaitingClass, WaitingKind};
+use crate::state::runtime::{Denial, Waiting, WaitingClass, WaitingKind};
 
 pub(in crate::harness) const EVENTS: &[&str] = &[
     "PermissionRequest",
@@ -31,6 +35,7 @@ pub(in crate::harness) const EVENTS: &[&str] = &[
     "PostToolUseFailure",
     "StopFailure",
     "Notification",
+    "PermissionDenied",
 ];
 
 /// Notification types that stand for a dialog on screen.
@@ -76,6 +81,30 @@ pub(in crate::harness) fn event(payload: &Value) -> Option<WaitingEvent> {
     }
 }
 
+pub(in crate::harness) fn denial(payload: &Value) -> Option<Denial> {
+    if payload.get("hook_event_name")?.as_str()? != "PermissionDenied" {
+        return None;
+    }
+    let text = |key: &str| payload.get(key).and_then(Value::as_str).map(one_line);
+    Some(Denial {
+        detail: tool_detail(payload),
+        reason: text("reason").filter(|r| !r.is_empty()),
+        since: chrono::Utc::now(),
+    })
+}
+
+/// The tool a payload names and what it acts on.
+fn tool_detail(payload: &Value) -> String {
+    let tool = payload
+        .get("tool_name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    match payload.get("tool_input").and_then(target) {
+        Some(target) => format!("{tool}: {}", one_line(target)),
+        None => tool.to_string(),
+    }
+}
+
 fn permission(payload: &Value) -> Waiting {
     let tool = payload
         .get("tool_name")
@@ -97,13 +126,7 @@ fn permission(payload: &Value) -> Waiting {
                 .and_then(Value::as_str)
                 .and_then(plan_title),
         ),
-        _ => {
-            let detail = match input.and_then(target) {
-                Some(target) => format!("{tool}: {}", one_line(target)),
-                None => tool.to_string(),
-            };
-            Waiting::now(WaitingKind::Permission, Some(detail))
-        }
+        _ => Waiting::now(WaitingKind::Permission, Some(tool_detail(payload))),
     }
 }
 
@@ -199,6 +222,24 @@ mod tests {
                        "error_details": "429"})
             ),
             (WaitingKind::Error, Some("API error: rate_limit".into()))
+        );
+    }
+
+    #[test]
+    fn a_classifier_refusal_is_a_denial_of_that_tool() {
+        let refused = denial(
+            &json!({"hook_event_name": "PermissionDenied", "tool_name": "Bash",
+            "tool_input": {"command": "git clean -fdx"}, "tool_use_id": "t1",
+            "reason": "[Irreversible Local Destruction]", "agent_id": "a1"}),
+        )
+        .unwrap();
+        assert_eq!(
+            refused.describe(),
+            "Bash: git clean -fdx [Irreversible Local Destruction]"
+        );
+        assert_eq!(
+            denial(&json!({"hook_event_name": "PostToolUse", "tool_use_id": "t2"})),
+            None
         );
     }
 

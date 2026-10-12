@@ -473,6 +473,7 @@ fn main_agent(state: AgentState, kind: WaitingKind, detail: &str) -> AgentSnapsh
             dialog: None,
         }),
         latest: None,
+        denied: None,
     }
 }
 
@@ -945,6 +946,7 @@ fn agent_in(state: AgentState) -> AgentSnapshot {
         pane: None,
         waiting: None,
         latest: None,
+        denied: None,
     }
 }
 
@@ -997,6 +999,7 @@ fn a_main_session_shows_work_once() {
                 pane: None,
                 waiting: None,
                 latest: None,
+                denied: None,
             },
             AgentSnapshot {
                 name: "helper".into(),
@@ -1006,6 +1009,7 @@ fn a_main_session_shows_work_once() {
                 pane: None,
                 waiting: None,
                 latest: None,
+                denied: None,
             },
         ]);
         let scope = snapshot.projects[0].main.as_mut().unwrap();

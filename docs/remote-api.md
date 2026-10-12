@@ -248,11 +248,12 @@ applies; here is each kind's detail:
 | `ready` | the summary's first line, or `PR approved` |
 | `dead` | `<agent>: window missing` or `<agent>: harness exited` |
 | `unarmed` | `<agent>: <cause>` |
+| `denied` | `<agent>: <tool>: <target> <reason>` |
 | `stalled` | `every agent idle, no unread messages` (`null` in JSON) |
 
 Anything else shows its status. A `main` scope is `wip` or `blocked`,
 never `ready`: it gets a row only when one of its agents is `asking`, it
-is `blocked`, or an agent is `dead` or `unarmed`, in that order. PR state is what `pm feat sync` last recorded: the view never calls
+is `blocked`, or an agent is `dead`, `unarmed` or `denied`, in that order. PR state is what `pm feat sync` last recorded: the view never calls
 GitHub, so it is cheap to poll.
 
 ### Agent states and activity

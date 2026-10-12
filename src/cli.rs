@@ -576,6 +576,11 @@ pub enum HarnessHooksCommands {
     },
     /// SessionStart hook handler — called by the harness on session start (not for direct use)
     SessionStart,
+    /// SessionEnd hook handler — reads the agent dead once its harness exits (not for direct use)
+    SessionEnd {
+        /// The harness whose hook payload arrives on stdin
+        harness: pm::harness::Harness,
+    },
     /// UserPromptSubmit hook handler — unblocks a feature on the user's input (not for direct use)
     UserPrompt,
     /// UserPromptSubmit waiter — wakes an interrupted turn for a message sent during it (not for direct use)

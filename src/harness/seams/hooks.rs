@@ -73,6 +73,25 @@ impl Harness {
         }
     }
 
+    /// The event pm's session-end hook runs on; `None` for a harness with
+    /// none that tells an exit ([`hooks_session_end`](crate::commands::hooks_session_end)).
+    pub fn session_end_event(self) -> Option<&'static str> {
+        match self {
+            Harness::ClaudeCode => Some(claude_code::SESSION_END_EVENT),
+            Harness::Codex | Harness::OpenCode => None,
+        }
+    }
+
+    /// Whether a payload of the [session-end event](Self::session_end_event)
+    /// says the harness process is exiting, rather than one session giving
+    /// way to another in the same process.
+    pub fn session_exited(self, payload: &serde_json::Value) -> bool {
+        match self {
+            Harness::ClaudeCode => claude_code::session_exited(payload),
+            Harness::Codex | Harness::OpenCode => false,
+        }
+    }
+
     /// The harness's trust in the hooks of its user-level file — the gate
     /// without which codex runs no hooks, silently. Every hook reads trusted
     /// for a harness without hook trust, and when `config` has pm launch the

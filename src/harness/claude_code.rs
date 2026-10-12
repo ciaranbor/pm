@@ -66,6 +66,27 @@ pub(super) const STOP_HOOK_OPTIONS: &[(&str, bool)] = &[("asyncRewake", true)];
 /// See the module docs.
 pub(super) const SESSION_START_HOOK_OPTIONS: &[(&str, bool)] = STOP_HOOK_OPTIONS;
 
+/// The event pm's session-end hook runs on. It also fires, with the
+/// process running on, on `/clear` and an interactive `/resume`, so only
+/// [`EXIT_REASONS`] mark an exit. The harness gives it 1.5 s
+/// (code.claude.com/docs/en/hooks, 2.1.296).
+pub(super) const SESSION_END_EVENT: &str = "SessionEnd";
+
+const EXIT_REASONS: &[&str] = &[
+    "prompt_input_exit",
+    "logout",
+    "bypass_permissions_disabled",
+    "other",
+];
+
+/// Whether a SessionEnd `payload` ends the process.
+pub(super) fn session_exited(payload: &serde_json::Value) -> bool {
+    payload
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|reason| EXIT_REASONS.contains(&reason))
+}
+
 const REWAKE_SUMMARY: &str = "<summary>Stop hook feedback</summary>";
 const REWAKE_ERROR: &str = "Stop hook blocking error from command";
 
@@ -232,6 +253,26 @@ fn run_probe(arg: &str, probe: Probe) -> std::io::Result<probe::Exit> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_session_end_that_ends_the_process_is_an_exit() {
+        let end = |reason: &str| {
+            crate::harness::Harness::ClaudeCode.session_exited(
+                &serde_json::json!({"hook_event_name": "SessionEnd", "reason": reason}),
+            )
+        };
+        for reason in [
+            "prompt_input_exit",
+            "logout",
+            "bypass_permissions_disabled",
+            "other",
+        ] {
+            assert!(end(reason), "{reason}");
+        }
+        for reason in ["clear", "resume"] {
+            assert!(!end(reason), "{reason}");
+        }
+    }
 
     #[test]
     fn build_cmd_with_agent() {

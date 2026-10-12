@@ -43,6 +43,7 @@ private val Glyph.icon: Int
             Glyph.Hand -> R.drawable.ic_pan_tool
             Glyph.Broom -> R.drawable.ic_cleaning_services
             Glyph.CheckCircle -> R.drawable.ic_check_circle
+            Glyph.Ban -> R.drawable.ic_block
             Glyph.Pause -> R.drawable.ic_pause
             Glyph.Unknown -> R.drawable.ic_circle
         }

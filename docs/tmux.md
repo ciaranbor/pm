@@ -69,6 +69,7 @@ and a session's activity `<gear> working`, `<spinner> background 1d` or
 | `nf-fa-check_circle` | green | | `ready` |
 | `nf-md-skull` | red | `dead` | `dead` |
 | `nf-fa-bell_slash` | magenta | `unarmed` | `unarmed` |
+| `nf-fa-ban` | yellow | | `denied` |
 | `nf-fa-pause` | yellow | | `stalled` |
 | `nf-fa-gear` | green | `busy` | |
 | `nf-fa-spinner` | green | `background` | |
