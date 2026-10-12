@@ -126,10 +126,12 @@ private fun LazyListScope.needRows(
 
 /**
  * What a need's row says it is about: the attention's detail, else the question or command its
- * agent waits on.
+ * agent waits on, else its agents' latest line.
  */
 fun preview(need: Need): String? =
-    needLine(need.attention) ?: need.agent?.waiting?.detail?.takeIf { it.isNotBlank() }
+    needLine(need.attention)
+        ?: need.agent?.waiting?.detail?.takeIf { it.isNotBlank() }
+        ?: latestLine(need.agents)
 
 @Composable
 private fun WorkingRow(scope: Need, now: Instant, stale: Boolean, open: () -> Unit) {
@@ -148,19 +150,30 @@ private fun WorkingRow(scope: Need, now: Instant, stale: Boolean, open: () -> Un
 }
 
 /**
- * What a working row says: its agents at work, after `ready` for a feature its team marked so while
- * an agent still works, which pm doesn't rank as needing the user.
+ * What a working row says: the latest line of its agents at work, else their names; after `ready`
+ * for a feature its team marked so while an agent still works, which pm doesn't rank as needing the
+ * user.
  */
-fun workingLine(scope: Need): String? =
-    listOfNotNull(
+fun workingLine(scope: Need): String? {
+    val working =
+        scope.agents.filter { it.stateOf == AgentState.Busy || it.stateOf == AgentState.Background }
+    return listOfNotNull(
             scope.progress.takeIf { it == AttentionKind.Ready.wire }?.let(::progressLabel),
-            scope.agents
-                .filter { it.stateOf == AgentState.Busy || it.stateOf == AgentState.Background }
-                .joinToString(", ") { it.name }
-                .ifEmpty { null },
+            latestLine(working) ?: working.joinToString(", ") { it.name }.ifEmpty { null },
         )
         .joinToString(" · ")
         .ifEmpty { null }
+}
+
+/**
+ * `agent: line`, the latest line of whichever of `agents` replied last; an agent whose reply has no
+ * time counts as earliest.
+ */
+fun latestLine(agents: List<AgentSnapshot>): String? =
+    agents
+        .filter { !it.latest?.text.isNullOrBlank() }
+        .maxWithOrNull(compareBy(nullsFirst()) { it.latest?.atOf })
+        ?.let { "${it.name}: ${it.latest?.text}" }
 
 /** Between list rows: inset, so the rows read as one list rather than boxes. */
 @Composable
@@ -390,7 +403,7 @@ fun ScopesList(
                 ProjectScopeRow(
                     name = Snapshot.MAIN,
                     attention = main.attention,
-                    line = needLine(main.attention),
+                    line = needLine(main.attention) ?: latestLine(main.agents),
                     agents = main.agents,
                     closed = !main.sessionExists,
                     activity = activity(main.working, main.backgroundSince, main.lastActivity, now),
@@ -417,9 +430,14 @@ fun ScopesList(
     }
 }
 
-/** What a feature row says under its name: the attention's detail, else its status. */
+/**
+ * What a feature row says under its name: the attention's detail, else its agents' latest line,
+ * else its status.
+ */
 fun featureLine(feature: FeatureSnapshot): String? =
-    needLine(feature.attention) ?: progressLabel(feature.progress).takeIf { it.isNotEmpty() }
+    needLine(feature.attention)
+        ?: latestLine(feature.agents)
+        ?: progressLabel(feature.progress).takeIf { it.isNotEmpty() }
 
 /**
  * A scope on its project's page: its attention where it needs the user, else what it is doing; a

@@ -152,6 +152,17 @@ pub(crate) fn window_values(agent: &AgentSnapshot) -> Vec<(&'static str, Option<
     ]
 }
 
+/// `@pm_agent_latest`, which [`window_values`] leaves out: the agent's own
+/// window write knows only its state, and would clear it.
+pub(super) fn latest_value(agent: &AgentSnapshot) -> Option<String> {
+    let latest = agent.latest.as_ref()?;
+    Some(format_text(&attention::cut(
+        &latest.text,
+        attention::LATEST_WIDTH,
+    )))
+    .filter(|t| !t.is_empty())
+}
+
 /// The totals of `kinds`, the attention of each session that publishes
 /// one, so the count matches what the attention tree lists.
 /// The `(session, alerted kinds)` entries of a [`FEATURES_ALERTED`] value,
@@ -210,6 +221,7 @@ mod tests {
             window: None,
             pane: None,
             waiting: None,
+            latest: None,
         };
         let main = ScopeSnapshot::main_of(
             vec![

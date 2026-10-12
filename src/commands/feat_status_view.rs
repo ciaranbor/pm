@@ -1,8 +1,8 @@
 //! Bare `pm feat status`: what needs the user's attention, for one feature
 //! or, from `main`, the [`super::attention`] snapshot of every feature in
 //! the project (all projects with `--all`), with a row for a main scope
-//! that needs it too. `pm feat list` is the inventory (branch, base, PR);
-//! this view omits those.
+//! that needs it too. Each agent's latest line follows its scope's row.
+//! `pm feat list` is the inventory (branch, base, PR); this view omits those.
 
 use std::path::Path;
 
@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use crate::error::Result;
 use crate::state::feature::{FeatureState, Progress};
 use crate::state::paths;
-use crate::state::runtime;
+use crate::state::runtime::{self, Latest};
 use crate::state::scope::{self, TeamStatus};
 
 use super::attention::{
@@ -39,6 +39,15 @@ pub fn feature(project_root: &Path, name: &str) -> Result<Vec<String>> {
             Some(agent) => lines.push(format!("blocked on: {reason} ({agent})")),
             None => lines.push(format!("blocked on: {reason}")),
         }
+    }
+    let latest = attention::scope_latest(project_root, name)?;
+    if !latest.is_empty() {
+        lines.push("latest:".to_string());
+        lines.extend(
+            latest
+                .iter()
+                .map(|(agent, latest)| latest_line("  ", agent, latest)),
+        );
     }
     if name == scope::MAIN {
         return Ok(lines);
@@ -147,6 +156,7 @@ pub fn rows(
                 quiet(f.working, f.background_since, f.last_activity),
                 detail(&f.attention),
             ],
+            &f.agents[..],
         )
     });
     let mains = projects.iter().filter_map(|p| {
@@ -162,25 +172,27 @@ pub fn rows(
                     quiet(main.working, main.background_since, main.last_activity),
                     detail(&main.attention),
                 ],
+                &main.agents[..],
             )
         })
     });
-    let mut rendered: Vec<(AttentionKind, [String; 5])> = features.chain(mains).collect();
-    rendered.sort_by_key(|(kind, _)| *kind);
+    let mut rendered: Vec<(AttentionKind, [String; 5], &[AgentSnapshot])> =
+        features.chain(mains).collect();
+    rendered.sort_by_key(|(kind, _, _)| *kind);
     let widths: Vec<usize> = (0..5)
         .map(|col| {
             rendered
                 .iter()
-                .map(|(_, r)| r[col].len())
+                .map(|(_, r, _)| r[col].len())
                 .max()
                 .unwrap_or(0)
         })
         .collect();
     rendered
         .iter()
-        .map(|(_, cells)| {
+        .flat_map(|(_, cells, agents)| {
             // A column empty in every row takes no space.
-            cells
+            let row = cells
                 .iter()
                 .zip(&widths)
                 .filter(|(_, width)| **width > 0)
@@ -188,9 +200,25 @@ pub fn rows(
                 .collect::<Vec<_>>()
                 .join("  ")
                 .trim_end()
-                .to_string()
+                .to_string();
+            std::iter::once(row).chain(latest_lines(agents, "    "))
         })
         .collect()
+}
+
+/// `<indent><agent>: <latest line>` for each of `agents` that has one.
+fn latest_lines<'a>(
+    agents: &'a [AgentSnapshot],
+    indent: &'a str,
+) -> impl Iterator<Item = String> + 'a {
+    agents
+        .iter()
+        .filter_map(move |a| Some(latest_line(indent, &a.name, a.latest.as_ref()?)))
+}
+
+fn latest_line(indent: &str, agent: &str, latest: &Latest) -> String {
+    let width = attention::LATEST_WIDTH.saturating_sub(agent.chars().count() + 2);
+    format!("{indent}{agent}: {}", attention::cut(&latest.text, width))
 }
 
 /// `agent:state` for each agent, `+N` for its unread messages; `no session`
@@ -340,6 +368,47 @@ mod tests {
         assert_eq!(lines.len(), 14);
     }
 
+    #[test]
+    fn feature_view_lists_each_agents_latest_line_before_the_summary() {
+        use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
+        let dir = tempdir().unwrap();
+        let (project, _) =
+            TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
+        let agents_dir = paths::agents_dir(&project);
+        let mut registry = AgentRegistry::load(&agents_dir, "login").unwrap();
+        registry.register(
+            "worker",
+            AgentEntry {
+                agent_type: AgentType::Agent,
+                session_id: "s1".into(),
+                window_name: "worker".into(),
+                active: true,
+                agent_definition: None,
+                harness: crate::harness::Harness::ClaudeCode,
+                spawned_at: None,
+            },
+        );
+        registry.save(&agents_dir, "login").unwrap();
+        let transcript = dir.path().join("s1.jsonl");
+        let reply = serde_json::json!({"type": "assistant", "uuid": "a1",
+            "message": {"content": [{"type": "text", "text": "Login works"}]}});
+        std::fs::write(&transcript, format!("{reply}\n")).unwrap();
+        runtime::write_session_path(
+            &project,
+            "login",
+            "worker",
+            runtime::SessionPath::Transcript,
+            Some(&transcript),
+        )
+        .unwrap();
+
+        let lines = feature(&project, "login").unwrap();
+        assert_eq!(
+            lines[1..4],
+            ["latest:", "  worker: Login works", "no summary"]
+        );
+    }
+
     fn scope_agent(name: &str, state: AgentState) -> AgentSnapshot {
         AgentSnapshot {
             name: name.into(),
@@ -348,6 +417,7 @@ mod tests {
             window: None,
             pane: None,
             waiting: None,
+            latest: None,
         }
     }
 
@@ -458,6 +528,45 @@ mod tests {
         };
         assert_eq!(row(AgentState::Busy), "login  wip  implementer:busy");
         assert_eq!(row(AgentState::Idle), "login  ready  implementer:idle");
+    }
+
+    #[test]
+    fn each_agents_latest_line_follows_its_scopes_row_cut_to_fit() {
+        let said = |name: &str, text: &str| AgentSnapshot {
+            latest: Some(Latest {
+                text: text.into(),
+                at: None,
+            }),
+            ..scope_agent(name, AgentState::Idle)
+        };
+        let features = [
+            snapshot_feature(
+                "login",
+                needs(AttentionKind::None, None),
+                vec![
+                    said("implementer", "Fixed the bug"),
+                    scope_agent("qa", AgentState::Idle),
+                    said("reviewer", &"word ".repeat(40)),
+                ],
+                None,
+            ),
+            snapshot_feature("api", needs(AttentionKind::None, None), Vec::new(), None),
+        ];
+        let lines = rows(&features, &[], false);
+        assert_eq!(
+            lines[0],
+            "login  wip  implementer:idle qa:idle reviewer:idle"
+        );
+        assert_eq!(lines[1], "    implementer: Fixed the bug");
+        assert!(
+            lines[2].starts_with("    reviewer: word word"),
+            "{}",
+            lines[2]
+        );
+        assert!(lines[2].ends_with("word…"), "{}", lines[2]);
+        assert!(lines[2].trim_start().chars().count() <= attention::LATEST_WIDTH);
+        assert_eq!(lines[3], "api    wip");
+        assert_eq!(lines.len(), 4);
     }
 
     #[test]

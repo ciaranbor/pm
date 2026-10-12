@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::error::{PmError, Result};
 use crate::state::project::HarnessConfig;
 
-use super::transcript::items::{Body, Page, Tail};
+use super::transcript::items::{Body, Item, Page, Tail};
 use super::transcript::jsonl::{self, Parse};
 use super::{Harness, claude_code, opencode};
 
@@ -139,6 +139,35 @@ impl Conversation {
                 jsonl::full_result(path, reference, *parse).map_err(unreadable)
             }
             Location::Session { db, id } => opencode::chat::full_result(db, id, reference),
+        }
+    }
+
+    /// The last reply the agent wrote, read back from the conversation's
+    /// end only so far: `None` when it wrote none that recently.
+    pub fn last_reply(&self) -> Result<Option<Item>> {
+        match &self.location {
+            Location::Jsonl { path, parse } => jsonl::last_reply(path, *parse).map_err(unreadable),
+            Location::Session { db, id } => opencode::chat::last_reply(db, id),
+        }
+    }
+
+    /// What changes whenever the conversation may have: its file and that
+    /// file's size and mtime, or its session's latest row update. `None`
+    /// when it can't be told.
+    pub fn version(&self) -> Option<String> {
+        match &self.location {
+            Location::Jsonl { path, .. } => {
+                let (len, mtime) = self.stamp()?;
+                let nanos = mtime
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos();
+                Some(format!("{}:{len}:{nanos}", path.display()))
+            }
+            Location::Session { db, id } => {
+                let updated = opencode::chat::version(db, id).ok()?;
+                Some(format!("{}:{id}:{updated}", db.display()))
+            }
         }
     }
 

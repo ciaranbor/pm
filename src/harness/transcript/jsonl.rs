@@ -324,6 +324,27 @@ fn find_call(src: &mut Source, before: u64, id: &str, parse: Parse) -> io::Resul
     Ok(None)
 }
 
+/// The last reply the agent wrote, from at most [`SEARCH_SCAN`] back from
+/// the end: an agent deep in a run of tool calls longer than that has none.
+pub(in crate::harness) fn last_reply(path: &Path, parse: Parse) -> io::Result<Option<Item>> {
+    let mut src = open(path)?;
+    let mut back = Backward::new(src.complete_len()?, SEARCH_SCAN);
+    while let Some((offset, line)) = back.next(&mut src)? {
+        let reply =
+            parse_line(offset, &line, parse)
+                .into_iter()
+                .rev()
+                .find_map(|entry| match entry {
+                    Entry::Item(item) if matches!(item.body, Body::Assistant { .. }) => Some(item),
+                    _ => None,
+                });
+        if reply.is_some() {
+            return Ok(reply);
+        }
+    }
+    Ok(None)
+}
+
 /// The whole output a truncated result's `full` reference names.
 pub(in crate::harness) fn full_result(
     path: &Path,
@@ -636,6 +657,39 @@ mod tests {
         assert_eq!(
             page(&compressed, None, 10, parse).unwrap(),
             page(&plain, None, 10, parse).unwrap()
+        );
+    }
+
+    #[test]
+    fn the_last_reply_is_found_back_past_the_calls_after_it() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        let reply = |uuid: &str, text: &str| {
+            json!({"type": "assistant", "uuid": uuid,
+                   "message": {"content": [{"type": "text", "text": text}]}})
+            .to_string()
+        };
+        append(&path, &[typed("u0", "go"), call("a0", "toolu_0")]);
+        assert_eq!(last_reply(&path, parse).unwrap(), None);
+
+        append(
+            &path,
+            &[
+                result("r0", "toolu_0", "ok"),
+                reply("a1", "first"),
+                reply("a2", "Found it"),
+                call("a3", "toolu_1"),
+                super::super::testing::bulky(),
+                result("r1", "toolu_1", "ok"),
+            ],
+        );
+        let found = last_reply(&path, parse).unwrap().unwrap();
+        assert_eq!(found.id, "a2");
+        assert_eq!(
+            found.body,
+            Body::Assistant {
+                text: "Found it".into()
+            }
         );
     }
 }

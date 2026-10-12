@@ -101,6 +101,7 @@ fn options_are_published_and_cleared_once_their_value_goes_away() {
             "0",
             "#[fg=colour245]\u{f252}#[default]",
             idle_label,
+            "",
         ]
     );
     let busy_label = "#[fg=green]\u{f013} busy#[default] #[fg=yellow]\u{f0e0} 1#[default]";
@@ -112,11 +113,12 @@ fn options_are_published_and_cleared_once_their_value_goes_away() {
             "1",
             "#[fg=green]\u{f013} #[fg=yellow]\u{f0e0}#[default]",
             busy_label,
+            "",
         ]
     );
     assert_eq!(
         values(&now.windows, &shell, WINDOW_OPTIONS),
-        ["", "", "", "mine", ""],
+        ["", "", "", "mine", "", ""],
         "a window that is no agent's"
     );
     let display =
@@ -201,11 +203,12 @@ fn options_are_published_and_cleared_once_their_value_goes_away() {
             "0",
             "#[fg=colour245]\u{f04d}#[default]",
             "#[fg=colour245]\u{f04d} stopped#[default]",
+            "",
         ]
     );
     assert_eq!(
         values(&now.windows, &reviewer, WINDOW_OPTIONS),
-        ["", "", "", "", ""],
+        ["", "", "", "", "", ""],
         "a window whose agent is gone from the registry"
     );
     assert_eq!([now.global.get(COUNT), now.global.get(SUMMARY)], ["0", ""]);
@@ -239,6 +242,7 @@ fn main_agents_get_badges_and_main_carries_its_project_and_its_agents_badge() {
             "1",
             "#[fg=colour245]\u{f252} #[fg=yellow]\u{f0e0}#[default]",
             "#[fg=colour245]\u{f252} idle#[default] #[fg=yellow]\u{f0e0} 1#[default]",
+            "",
         ]
     );
     assert_eq!(
@@ -267,7 +271,7 @@ fn main_agents_get_badges_and_main_carries_its_project_and_its_agents_badge() {
     let now = published(&server);
     assert_eq!(
         values(&now.windows, &orchestrator, WINDOW_OPTIONS),
-        ["", "", "", "", ""]
+        ["", "", "", "", "", ""]
     );
 }
 
@@ -344,7 +348,7 @@ fn a_project_removed_from_the_registry_takes_its_options_with_it() {
     }
     assert_eq!(
         values(&now.windows, &window, WINDOW_OPTIONS),
-        ["", "", "", "", ""]
+        ["", "", "", "", "", ""]
     );
 }
 
@@ -468,6 +472,7 @@ fn main_agent(state: AgentState, kind: WaitingKind, detail: &str) -> AgentSnapsh
             since: None,
             dialog: None,
         }),
+        latest: None,
     }
 }
 
@@ -939,6 +944,7 @@ fn agent_in(state: AgentState) -> AgentSnapshot {
         window: Some("app/login:1".into()),
         pane: None,
         waiting: None,
+        latest: None,
     }
 }
 
@@ -990,6 +996,7 @@ fn a_main_session_shows_work_once() {
                 window: Some("app/main:1".into()),
                 pane: None,
                 waiting: None,
+                latest: None,
             },
             AgentSnapshot {
                 name: "helper".into(),
@@ -998,6 +1005,7 @@ fn a_main_session_shows_work_once() {
                 window: Some("app/main:2".into()),
                 pane: None,
                 waiting: None,
+                latest: None,
             },
         ]);
         let scope = snapshot.projects[0].main.as_mut().unwrap();
@@ -1136,4 +1144,55 @@ fn a_client_gone_since_the_read_fails_no_refresh() {
 
     let now = published(&server);
     assert_eq!(values(&now.sessions, &session, &[ATTENTION]), ["blocked"]);
+}
+
+#[test]
+fn an_agents_latest_line_survives_its_own_window_write() {
+    let _serial = serial();
+    let dir = tempdir().unwrap();
+    let server = TestServer::new();
+    let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+    let projects_dir = TestServer::registry_dir(&project);
+    let session = tmux::session_name(&project_name, "login");
+    let window = server.spawn_idle_fake_agent(&project, &session, "login", "implementer");
+    let transcript = dir.path().join("s.jsonl");
+    let reply = serde_json::json!({"type": "assistant", "uuid": "a1",
+        "message": {"content": [{"type": "text", "text": "## Fixed\nthe #[fg=red] bug"}]}});
+    std::fs::write(&transcript, format!("{reply}\n")).unwrap();
+    crate::state::runtime::write_session_path(
+        &project,
+        "login",
+        "implementer",
+        crate::state::runtime::SessionPath::Transcript,
+        Some(&transcript),
+    )
+    .unwrap();
+
+    refresh(&projects_dir, server.name()).unwrap();
+    let latest = |server: &TestServer| {
+        values(
+            &published(server).windows,
+            &window,
+            &[AGENT_STATE, AGENT_LATEST],
+        )
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>()
+    };
+    assert_eq!(latest(&server), ["idle", "Fixed the ##[fg=red] bug"]);
+
+    let pane = std::process::Command::new("tmux")
+        .args(["-L", server.name().unwrap(), "display", "-p", "-t", &window])
+        .arg("#{pane_id}")
+        .output()
+        .unwrap();
+    let pane = String::from_utf8_lossy(&pane.stdout).trim().to_string();
+    let mut own = crate::commands::tmux_push::AgentWindow::new(server.name(), &pane, "implementer");
+    own.publish(AgentState::Busy, 0);
+    let start = std::time::Instant::now();
+    while latest(&server)[0] != "busy" {
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(latest(&server), ["busy", "Fixed the ##[fg=red] bug"]);
 }

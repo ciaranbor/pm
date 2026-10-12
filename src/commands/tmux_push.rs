@@ -75,6 +75,7 @@ impl AgentWindow {
             window: None,
             pane: None,
             waiting: None,
+            latest: None,
         };
         let scope = options::Scope::PaneWindow(&self.pane);
         let commands: Vec<options::Command> = window_values(&agent)
@@ -138,6 +139,7 @@ mod tests {
             "2",
             "#[fg=green]\u{f013} #[fg=yellow]\u{f0e0}#[default]",
             "#[fg=green]\u{f013} busy#[default] #[fg=yellow]\u{f0e0} 2#[default]",
+            "",
         ];
         let start = Instant::now();
         while window_values(&server, &window) != want {
