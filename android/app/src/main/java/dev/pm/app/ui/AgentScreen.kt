@@ -107,11 +107,11 @@ fun AgentScreen(
     }
     val draftKey = "$project/$scope/$agent"
     Column(modifier.fillMaxSize().imePadding()) {
+        banner?.invoke()
         Box(Modifier.weight(1f)) { Chat(model) }
         val density = LocalDensity.current
         DisposableEffect(feedback) { onDispose { feedback.lift = 0.dp } }
         Column(Modifier.onSizeChanged { feedback.lift = with(density) { it.height.toDp() } }) {
-            banner?.invoke()
             answered?.let { AnsweredRow(it) }
             val sent = outbox?.takeUnless { it is Outbox.Seen }
             if (sent != null) {

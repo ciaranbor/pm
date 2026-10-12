@@ -177,7 +177,7 @@ internal fun defaultAgent(
         ?.name
 }
 
-/** Over a ready feature's composer: that it is ready, and the way to its summary. */
+/** Over a ready feature's chat: that it is ready, and the way to its summary. */
 @Composable
 private fun ReadyStrip(openFeature: () -> Unit) {
     Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
@@ -247,14 +247,14 @@ fun headerNeedLine(attention: Attention, feature: FeatureSnapshot?): String? =
     else needLine(attention)
 
 /**
- * A feature's status and its PR's, in words: `In progress · PR #12 open`. A status its attention
+ * A feature's status and its PR's, in words: `in progress · PR #12 open`. A status its attention
  * badge already says (ready, blocked) is left out.
  */
 fun statusLine(feature: FeatureSnapshot): String =
     listOfNotNull(
             feature.progress
                 .takeIf { it.isNotEmpty() && it != feature.attention.kindOf.wire }
-                ?.let { progressLabel(it).replaceFirstChar { c -> c.uppercase() } },
+                ?.let(::progressLabel),
             feature.pr?.let { pr ->
                 listOfNotNull("PR #$pr", prLabel(feature.lifecycle)).joinToString(" ")
             },
