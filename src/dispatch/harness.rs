@@ -156,6 +156,9 @@ pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
                     push();
                 }))
             }
+            HarnessHooksCommands::TurnWaiter { harness } => exit_unless_ok(
+                commands::hooks_stop::turn_waiter(harness, &mut waiter_turns()),
+            ),
             HarnessHooksCommands::Waiting { harness } => exit_unless_ok(
                 commands::hooks_waiting::waiting(harness, |state, unread| {
                     publish(state, unread);

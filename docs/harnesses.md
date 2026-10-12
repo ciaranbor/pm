@@ -27,7 +27,13 @@ file of every supported harness (`~/.claude/settings.json` for Claude Code,
 - a **UserPromptSubmit** hook, which sets a blocked feature back to `wip`
   when you type into one of its agents; pm's own prompts don't count. It
   also drops a wake that arrives once its messages are read — a duplicate
-  — so no turn runs for it.
+  — so no turn runs for it. On Claude Code a second, `asyncRewake`
+  UserPromptSubmit entry (`pm harness hooks turn-waiter`) waits through the
+  turn for a message sent during it; the harness delivers that wake after
+  the turn's next step, or at once if you press Esc, which ends the turn
+  without a Stop hook. The SessionStart hook also records the session's
+  messaging socket, which `pm msg send` posts to when the agent has no
+  waiter.
 - the **status hook** (`pm harness hooks waiting`), on the events that open
   and close a harness's dialogs and end its turns without Stop, which keeps
   each agent's `asking`/`unarmed` state; opencode's plugin reports the

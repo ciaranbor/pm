@@ -62,6 +62,17 @@ impl Harness {
         }
     }
 
+    /// The keys pm's turn waiter entry under UserPromptSubmit carries
+    /// beyond its command and the Stop hook's timeout, which make the
+    /// harness run it in the background and wake the session with its
+    /// continuation; `None` for a harness that gets no turn waiter.
+    pub fn turn_waiter_hook_options(self) -> Option<serde_json::Map<String, serde_json::Value>> {
+        match self {
+            Harness::ClaudeCode => Some(hook_options(claude_code::STOP_HOOK_OPTIONS)),
+            Harness::Codex | Harness::OpenCode => None,
+        }
+    }
+
     /// The harness's trust in the hooks of its user-level file — the gate
     /// without which codex runs no hooks, silently. Every hook reads trusted
     /// for a harness without hook trust, and when `config` has pm launch the

@@ -29,6 +29,7 @@
 
 pub(super) mod chat;
 pub(super) mod dialog;
+pub(super) mod inbound;
 pub(super) mod input;
 pub(super) mod sessions;
 pub(super) mod transcript;

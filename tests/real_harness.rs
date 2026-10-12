@@ -398,6 +398,101 @@ fn claude_restart_resumes_the_recorded_session() {
         .success();
 }
 
+/// Catches: an agent the user interrupted, or one whose waiter is gone,
+/// left asleep with a message waiting, or woken by keys typed into its
+/// window. A message sent after an Esc wakes it through the waiter its
+/// prompt started; with no waiter, `pm msg send` posts the continuation to
+/// Claude Code's messaging socket, which reaches a pane in copy mode. A
+/// few turns on the cheapest model.
+#[test]
+#[ignore]
+fn claude_an_interrupted_or_unarmed_agent_is_woken_without_typing() {
+    use pm::state::runtime::{self, SessionPath, WaitingKind};
+    require("claude");
+    let s = Smoke::real();
+    let proj = s.project_on("proj", "claude-code", Some("haiku"));
+    let main = proj.join("main");
+    sandbox_ok(&s.name, &["trust", &main.to_string_lossy()]);
+    s.pm(&main)
+        .args(["agent", "spawn", "plain"])
+        .assert()
+        .success();
+    let idle = || {
+        wait_for("the agent idle", TURN, &s, || {
+            runtime::read_waiting(&proj, "main", "plain")
+                .is_some_and(|w| w.kind == WaitingKind::Idle)
+        });
+    };
+    let transcript = || {
+        runtime::read_session_path(&proj, "main", "plain", SessionPath::Transcript)
+            .and_then(|t| std::fs::read_to_string(t).ok())
+            .unwrap_or_default()
+    };
+    let session = s
+        .sessions()
+        .into_iter()
+        .find(|n| n.contains("main"))
+        .unwrap();
+    let window = s.find_window(&session, "plain").unwrap();
+    let send = |text: &str| {
+        let out = s
+            .pm(&main)
+            .args(["msg", "send", "plain", text])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    idle();
+    assert!(runtime::read_inbound(&proj, "main", "plain").is_some());
+
+    send("first: write a 400-word story about a lighthouse.");
+    wait_for("the woken turn", TURN, &s, || {
+        transcript().contains("Stop hook feedback")
+    });
+    s.tmux_ok(&["send-keys", "-t", &window, "Escape"]);
+    wait_for("the interrupt", TURN, &s, || {
+        transcript().contains("[Request interrupted by user")
+    });
+    std::thread::sleep(Duration::from_secs(2));
+    let before = transcript().len();
+    send("second: reply with the word kiwi and nothing else.");
+    wait_for("a turn after the interrupt", TURN, &s, || {
+        transcript()[before..].contains("\"type\":\"assistant\"")
+    });
+
+    idle();
+    let waiter = std::fs::read_to_string(proj.join(".pm/runtime/main/plain/waiter")).unwrap();
+    let waiter = waiter.split_whitespace().next().unwrap().to_string();
+    assert!(
+        std::process::Command::new("kill")
+            .args(["-9", &waiter])
+            .status()
+            .unwrap()
+            .success()
+    );
+    s.tmux_ok(&["copy-mode", "-t", &window]);
+    let before = transcript().len();
+    let status = send("third: reply with the word plum and nothing else.");
+    assert!(
+        status.contains("Re-armed 'plain' (its waiter is gone)"),
+        "{status}"
+    );
+    wait_for("the posted continuation's turn", TURN, &s, || {
+        let new = &transcript()[before..];
+        new.contains("\"turnOrigin\":\"peer\"") && new.contains("\"type\":\"assistant\"")
+    });
+    assert_eq!(
+        s.tmux_ok(&["display", "-p", "-t", &window, "#{pane_in_mode}"]),
+        "1",
+        "nothing was typed into the pane"
+    );
+    s.pm(&main)
+        .args(["agent", "stop", "plain"])
+        .assert()
+        .success();
+}
+
 /// Catches: the spawn and doctor missing what codex's interactive hook-trust
 /// gate does to an agent — before trust its hooks never run, so it never
 /// comes up and its session never starts; after trust, a fresh spawn

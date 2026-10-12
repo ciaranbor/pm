@@ -11,8 +11,11 @@
 //!   notification summarised `Stop hook feedback`, its text in a
 //!   `<system-reminder>`), a background task's
 //!   notification (`origin.kind: "task-notification"`), or the summary a
-//!   compaction leaves (`isCompactSummary`). Other `isMeta` prompts (a
-//!   skill's text) are context, not conversation.
+//!   compaction leaves (`isCompactSummary`). A prompt pm posted to the
+//!   session's socket is `isMeta` too, with `origin.kind: "peer"`
+//!   ([`super::inbound`]). Other `isMeta` prompts (a skill's text, a
+//!   subagent's report, another session's message) are context, not
+//!   conversation.
 //!   A long paste in a prompt is wrapped in `<pasted_content id=…>` tags,
 //!   which are dropped.
 //! - What the user typed while a turn ran is taken in at a step's end and
@@ -140,6 +143,11 @@ fn user(
             failure: false,
         });
     }
+    if let Some(said) = posted_by_pm(line, &text) {
+        return item(Body::Continuation {
+            text: said.to_string(),
+        });
+    }
     if flag("isMeta") {
         return match text.strip_prefix(CONTINUATION) {
             Some(rest) => item(Body::Continuation {
@@ -167,6 +175,18 @@ fn user(
             text: as_typed(&text),
         }),
     }
+}
+
+/// What a post to the session's socket from outside any session — pm's —
+/// said, from the prompt `line` records it as. A post from another session
+/// names it in `origin.from`; one from outside has none to name (2.1.296).
+fn posted_by_pm<'a>(line: &Value, text: &'a str) -> Option<&'a str> {
+    let origin = line.get("origin")?;
+    let from = origin.get("from").and_then(Value::as_str);
+    if origin.get("kind")? != "peer" || from.is_some_and(|from| from != "unknown") {
+        return None;
+    }
+    super::inbound::said(text)
 }
 
 /// A prompt's text as the user typed it: a slash command by its name, a
@@ -419,6 +439,30 @@ mod tests {
             panic!("not one item");
         };
         assert_eq!(item.id, "@42");
+    }
+
+    #[test]
+    fn a_prompt_pm_posted_reads_as_a_continuation_and_another_sessions_is_hidden() {
+        let text = "You have new messages from ciaranorourke@main. Run `pm msg read` to read them.";
+        // As 2.1.296 recorded a post of pm's.
+        let mut line = serde_json::json!({
+            "type": "user", "isMeta": true, "promptSource": "system", "turnOrigin": "peer",
+            "origin": {"kind": "peer", "from": "unknown"},
+            "uuid": "u",
+            "message": {"role": "user", "content": super::super::inbound::testing::wrapped(text)},
+        });
+        let [Entry::Item(item)] = &parse(&line, 0)[..] else {
+            panic!("not one item");
+        };
+        assert_eq!(
+            item.body,
+            Body::Continuation {
+                text: text.to_string()
+            }
+        );
+
+        line["origin"]["from"] = "a4fd0560d48438bfd".into();
+        assert!(parse(&line, 0).is_empty());
     }
 
     #[test]

@@ -18,6 +18,7 @@ pub const NO_SERVER: Option<&str> = Some("pm-test-none");
 mod control_client;
 mod fake_agents;
 mod fake_harness;
+mod fake_socket;
 mod home;
 mod projects;
 mod pty_budget;
@@ -31,6 +32,7 @@ pub use fake_harness::{
     fake_opencode, fake_opencode_argv, fake_opencode_calls, fake_opencode_scripted,
     fake_opencode_sequence,
 };
+pub use fake_socket::FakeSocket;
 pub use home::test_home;
 pub use tmux_server::{OwnServer, TestServer, server_socket_exists};
 

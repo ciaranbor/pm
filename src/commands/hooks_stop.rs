@@ -80,6 +80,17 @@ pub fn wait_from(harness: Harness, payload: &str, on_turn: &mut dyn FnMut(AgentS
     wake::run_on(harness, payload, on_turn)
 }
 
+/// Run `harness`'s waiter for the turn starting, from its UserPromptSubmit
+/// hook ([`Harness::turn_waiter_hook_options`]): it wakes the agent for a
+/// message that arrives mid-turn, should the user interrupt the turn.
+/// Returns the exit code, as [`stop`] does.
+pub fn turn_waiter(harness: Harness, on_turn: &mut dyn FnMut(AgentState, u32)) -> i32 {
+    if std::env::var_os("PM_AGENT_NAME").is_none() {
+        return 0;
+    }
+    wake::run_in_turn(harness, &read_stdin(), on_turn)
+}
+
 /// The blocking hook. Prints its answer as JSON and returns 0. Ending
 /// without a decision while the harness is still there — it sent the
 /// signal, or the wait failed — prints the reason as a `systemMessage`,

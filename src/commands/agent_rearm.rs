@@ -1,23 +1,28 @@
-//! Re-arms an agent no message can wake (unarmed, at its prompt) by typing
-//! the prompt its waiter would have given, so it reads its messages and its
-//! next turn's end starts a waiter again.
+//! Re-arms an agent no message can wake (unarmed, at its prompt) by giving
+//! it the prompt its waiter would have given, so it reads its messages and
+//! its next turn's end starts a waiter again.
 //!
-//! Keystrokes reach whatever the window shows, so every condition guards
-//! against typing into something other than an empty prompt: the marker
-//! must say unarmed (never asking — the keys would answer the dialog — nor
-//! a loop that stopped itself on purpose), the window must run its harness
-//! with no live waiter, the pane must not be in use ([`tmux::panes::in_use`]:
-//! in a mode, or in front of an attached client — never cancelled, since
+//! The marker must say unarmed — never asking, nor a loop that stopped
+//! itself on purpose — and the window must run its harness with no live
+//! waiter. Removing the marker is the claim to prompt, so of two concurrent
+//! senders only one does; the prompt's UserPromptSubmit would clear it
+//! anyway. A turn's end read from the transcript is claimed by its entry
+//! instead ([`runtime::claim_turn_end`]). The claim comes before the
+//! prompt, and is given back when none is given.
+//!
+//! The prompt is posted to the session's inbound channel when it reported
+//! one ([`Harness::post_prompt`]), which needs no keystroke, so neither the
+//! pane nor the input line matters: the harness holds a post behind an
+//! open dialog and leaves a draft alone. A channel that nothing listens on
+//! any more is an error, and the agent stays unarmed. A session with no
+//! channel is typed into instead, and keystrokes reach whatever the window
+//! shows, so then the pane must not be in use ([`tmux::panes::in_use`]: in
+//! a mode, or in front of an attached client — never cancelled, since
 //! either is the user's), and the harness must read its input line as empty
 //! and taking text. No key is pressed to change the harness's own mode: a
 //! box in vim NORMAL mode, like a dialog, reads as unknown and is left
-//! alone. A draft is never cleared; when any check fails the message
-//! just stays queued and the agent stays visibly unarmed. Removing the
-//! marker is the claim to type, so of two concurrent senders only one does;
-//! the prompt's UserPromptSubmit would clear it anyway. A turn's end read
-//! from the transcript is claimed by its entry instead
-//! ([`runtime::claim_turn_end`]). The claim comes before any key is
-//! pressed, and is given back when nothing is typed.
+//! alone. A draft is never cleared; when any check fails the message just
+//! stays queued and the agent stays visibly unarmed.
 
 use std::path::Path;
 
@@ -32,8 +37,8 @@ use crate::tmux;
 use super::hooks_stop;
 use super::running_agents::{AgentAt, Liveness, Windows, classify};
 
-/// Re-arm `agent` if it is unarmed at an empty prompt. Returns the marker
-/// it was re-armed from, or `None` when it was left alone.
+/// Re-arm `agent` if it is unarmed. Returns the marker it was re-armed
+/// from, or `None` when it was left alone.
 pub fn rearm(
     project_root: &Path,
     scope: &str,
@@ -86,7 +91,13 @@ pub fn rearm(
             runtime::release_turn_end(project_root, scope, agent, entry)
         }
     };
-    match type_prompt(project_root, scope, agent, harness, &pane.id, tmux_server) {
+    let prompted = match runtime::read_inbound(project_root, scope, agent) {
+        Some(inbound) => hooks_stop::continuation(project_root, scope, agent)
+            .and_then(|prompt| harness.post_prompt(&inbound, &prompt))
+            .map(|()| true),
+        None => type_prompt(project_root, scope, agent, harness, &pane.id, tmux_server),
+    };
+    match prompted {
         Ok(true) => Ok(Some(waiting)),
         Ok(false) => release().map(|()| None),
         Err(e) => {
@@ -188,6 +199,82 @@ mod tests {
         server.wait_for_pane_text(&target, &format!("❯ {PROMPT}"));
         let users = server.tmux_stdout(&["capture-pane", "-p", "-t", &users]);
         assert!(!users.contains("You have new messages"), "{users}");
+    }
+
+    /// Record `socket` as the agent's session's inbound channel.
+    fn listening(project: &Path, socket: &Path) {
+        let inbound = runtime::Inbound {
+            socket: socket.to_path_buf(),
+            token: Some("t0k".into()),
+        };
+        runtime::write_inbound(project, "login", "implementer", Some(&inbound)).unwrap();
+    }
+
+    #[test]
+    fn an_unarmed_agent_with_a_socket_is_posted_its_prompt_whatever_its_pane_shows() {
+        let server = TestServer::own("rearm-socket");
+        let dir = tempdir().unwrap();
+        let (project, target) = at_prompt(&server, dir.path(), WaitingKind::HookEnded);
+        let socket = crate::testing::FakeSocket::bind(dir.path());
+        listening(&project, &socket.path);
+        let pane = server.pane_id(&target);
+        server.tmux_stdout(&["copy-mode", "-t", &pane]);
+
+        let status = send(&server, &project);
+
+        assert!(
+            status.ends_with("\nRe-armed 'implementer' (Stop hook ended)"),
+            "{status}"
+        );
+        let prompt = serde_json::json!({
+            "type": "user",
+            "message": {"role": "user", "content": PROMPT},
+        });
+        assert_eq!(
+            socket.post(),
+            format!(
+                "{}\n{prompt}\n",
+                serde_json::json!({"type": "auth", "token": "t0k"})
+            )
+        );
+        assert_eq!(
+            runtime::read_waiting(&project, "login", "implementer"),
+            None
+        );
+        assert!(tmux::paste::in_mode(server.name(), &pane).unwrap());
+        assert!(!screen(&server, &target).contains("You have new messages"));
+    }
+
+    #[test]
+    fn an_agent_asking_the_user_is_posted_nothing() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (project, _) = at_prompt(&server, dir.path(), WaitingKind::Permission);
+        let socket = crate::testing::FakeSocket::bind(dir.path());
+        listening(&project, &socket.path);
+
+        assert_eq!(
+            send(&server, &project),
+            "Message 001 sent to 'implementer' (from 'reviewer')"
+        );
+        assert!(!socket.posted());
+    }
+
+    #[test]
+    fn a_socket_nothing_listens_on_leaves_the_agent_unarmed_and_says_so() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (project, target) = at_prompt(&server, dir.path(), WaitingKind::HookEnded);
+        listening(&project, &dir.path().join("gone.sock"));
+
+        let err = rearm(&project, "login", "implementer", server.name()).unwrap_err();
+
+        assert!(err.to_string().contains("gone.sock is gone"), "{err}");
+        assert_eq!(
+            runtime::read_waiting(&project, "login", "implementer").map(|w| w.kind),
+            Some(WaitingKind::HookEnded)
+        );
+        assert!(!screen(&server, &target).contains("You have new messages"));
     }
 
     /// Send the agent a message and check it is left alone, still unarmed.

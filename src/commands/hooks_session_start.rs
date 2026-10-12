@@ -164,7 +164,8 @@ fn parse_payload(json_str: &str) -> crate::error::Result<Payload> {
 }
 
 /// Stamp the agent's activity and, unless the session was compacted, its
-/// start, clearing its waiting marker; record its session paths, and update its
+/// start, clearing its waiting marker; record its session paths and inbound
+/// channel, and update its
 /// session_id in the registry, returning the harness and effective definition its entry records. An
 /// unregistered agent is left alone (`None`): the spawn registers before
 /// launching, so this is a non-pm session.
@@ -201,6 +202,12 @@ fn record_start(
         .filter(|dir| !dir.is_empty())
         .map(PathBuf::from);
     session_path(SessionPath::ConfigDir, config_dir.as_deref())?;
+    runtime::write_inbound(
+        project_root,
+        feature,
+        agent_name,
+        harness.inbound_from_env().as_ref(),
+    )?;
     Ok(recorded)
 }
 

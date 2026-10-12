@@ -27,6 +27,10 @@
 //!
 //! The UserPromptSubmit hook is `pm harness hooks user-prompt`, which sets a
 //! blocked feature back to `wip` (see [`crate::commands::hooks_user_prompt`]).
+//! Beside it, in an entry of its own, a harness with
+//! [`Harness::turn_waiter_hook_options`] gets `pm harness hooks turn-waiter
+//! <harness>`, the waiter for the turn the prompt starts
+//! ([`crate::commands::hooks_stop::turn_waiter`]).
 //!
 //! The status hook is `pm harness hooks waiting <harness>`, installed under
 //! each event of [`Harness::waiting_events`] — a different list per
@@ -78,6 +82,11 @@ pub const USER_PROMPT_EVENT: &str = "UserPromptSubmit";
 pub const PM_USER_PROMPT_MARKER: &str = "pm harness hooks user-prompt";
 pub(super) const USER_PROMPT_MARKERS: &[&str] = &[PM_USER_PROMPT_MARKER];
 
+/// Marker string for pm-owned turn waiter entries, under
+/// [`USER_PROMPT_EVENT`] beside the UserPromptSubmit hook's.
+pub const PM_TURN_WAITER_MARKER: &str = "pm harness hooks turn-waiter";
+const TURN_WAITER_MARKERS: &[&str] = &[PM_TURN_WAITER_MARKER];
+
 /// Marker string for pm-owned status hook entries.
 pub const PM_WAITING_MARKER: &str = "pm harness hooks waiting";
 pub(super) const WAITING_MARKERS: &[&str] = &[PM_WAITING_MARKER];
@@ -100,6 +109,7 @@ pub fn pm_events(harness: Harness) -> Vec<(&'static str, &'static [&'static str]
     LOOP_EVENTS
         .iter()
         .copied()
+        .chain(turn_waiter_events(harness))
         .chain(waiting_events(harness))
         .chain(dialog_events(harness))
         .collect()
@@ -113,6 +123,16 @@ pub fn dialog_events(
         .dialog_events()
         .iter()
         .map(|event| (*event, DIALOG_MARKERS))
+}
+
+/// `harness`'s turn waiter event, if it gets one, with its marker.
+fn turn_waiter_events(
+    harness: Harness,
+) -> impl Iterator<Item = (&'static str, &'static [&'static str])> {
+    harness
+        .turn_waiter_hook_options()
+        .map(|_| (USER_PROMPT_EVENT, TURN_WAITER_MARKERS))
+        .into_iter()
 }
 
 /// `harness`'s status hook events, with their marker.
@@ -165,6 +185,25 @@ pub fn session_start_hook_command() -> String {
     format!("{GUARD}{PM_SESSION_START_MARKER}")
 }
 
+/// pm's turn waiter entry for `harness`, if it gets one.
+fn turn_waiter_hook_entry(harness: Harness) -> Option<Value> {
+    let options = harness.turn_waiter_hook_options()?;
+    let mut entry = json!({
+        "type": "command",
+        "command": turn_waiter_hook_command(harness),
+        "timeout": STOP_HOOK_TIMEOUT_SECS,
+    });
+    if let Value::Object(fields) = &mut entry {
+        fields.extend(options);
+    }
+    Some(entry)
+}
+
+/// The shell command registered as `harness`'s turn waiter.
+pub fn turn_waiter_hook_command(harness: Harness) -> String {
+    format!("{GUARD}{PM_TURN_WAITER_MARKER} {harness}")
+}
+
 /// The shell command registered as the UserPromptSubmit hook.
 pub fn user_prompt_hook_command() -> String {
     format!("{GUARD}{PM_USER_PROMPT_MARKER}")
@@ -197,6 +236,9 @@ pub(super) fn pm_entries(harness: Harness) -> Vec<(&'static str, &'static [&'sta
             command(user_prompt_hook_command()),
         ),
     ];
+    if let Some(entry) = turn_waiter_hook_entry(harness) {
+        entries.push((USER_PROMPT_EVENT, TURN_WAITER_MARKERS, entry));
+    }
     for (event, markers) in waiting_events(harness) {
         entries.push((event, markers, command(waiting_hook_command(harness))));
     }

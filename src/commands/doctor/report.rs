@@ -4,7 +4,7 @@ use std::path::Path;
 
 use super::warnings::{
     baseline_capability_warnings, global_config_warning, keychain_warning, registry_warnings,
-    serve_warnings,
+    serve_warnings, wake_warnings,
 };
 use super::{Depth, Fix, FixAction, diagnose};
 use crate::commands::feat_delete::{self, CleanupParams};
@@ -105,6 +105,7 @@ fn run(
     depth: Depth,
 ) -> Result<Report> {
     let mut warnings = baseline_capability_warnings(project_root, depth.probe())?;
+    warnings.extend(wake_warnings(project_root, depth.probe())?);
     warnings.extend(global_config_warning());
     warnings.extend(registry_warnings(projects_dir)?);
     warnings.extend(serve_warnings(depth));
