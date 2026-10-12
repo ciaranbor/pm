@@ -197,10 +197,23 @@ impl Project<'_> {
     /// and the registry's repo_url.
     fn branches(&mut self) -> Result<()> {
         let origin = git::remote_url(self.main, "origin")?;
+        // A main/ as `pm init` left it holds nothing a move could lose.
+        let empty = origin.is_none() && git::holds_only_an_empty_commit(self.main)?;
         match (&self.entry.repo_url, &origin) {
+            (None, _) if empty && self.entry.state_remote.is_some() => {
+                self.notes.push(Finding::note(
+                    "registry",
+                    "no repo_url, and main/ holds only its initial empty commit: `pm restore` \
+                     starts it empty and brings back the .pm/ state"
+                        .to_string(),
+                ))
+            }
             (None, _) => {
                 self.registry.problem("no repo_url");
-                self.registry.detail("`pm restore` clones from repo_url");
+                self.registry.detail(
+                    "`pm restore` clones from repo_url; without one it starts main/ as an \
+                     empty repo and brings back only the .pm/ state",
+                );
                 self.registry.steps(BACKFILL);
             }
             (Some(url), Some(actual)) if url != actual => self.notes.push(Finding::note(
@@ -215,7 +228,7 @@ impl Project<'_> {
             &self.branch(main_branch, Some(self.main), None, None),
             remote.as_ref(),
         )?;
-        if origin.is_none() {
+        if origin.is_none() && (!empty || checked.dirty) {
             checked.line.problem("no origin, so nothing to clone from");
             checked.line.git("remote add origin <url>");
             checked.line.git(format!("push -u origin {main_branch}"));
@@ -644,6 +657,41 @@ mod tests {
 
         git::merge_no_ff(&main, "login").unwrap();
         assert!(!login_line().in_flight);
+    }
+
+    #[test]
+    fn a_main_with_only_its_initial_commit_needs_no_code_remote() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (root, _, name) = server.setup_project_no_tmux(dir.path());
+        let main = paths::main_worktree(&root);
+        let pm_dir = paths::pm_dir(&root);
+        let state = bare(&dir.path().join("state.git"));
+        git::add_remote(&pm_dir, "origin", &state).unwrap();
+        git::add_all(&pm_dir).unwrap();
+        git::commit_with_message(&pm_dir, "state").unwrap();
+        git::push(&pm_dir, "origin", &git::current_branch(&pm_dir).unwrap()).unwrap();
+        let entry = ProjectEntry {
+            root: path_utils::to_portable(&root),
+            main_branch: "main".to_string(),
+            repo_url: None,
+            state_remote: Some(state),
+        };
+        assert_eq!(blockers(&name, &entry), []);
+
+        std::fs::write(main.join("code.rs"), "fn main() {}").unwrap();
+        let found = blockers(&name, &entry);
+        let main_line = found.iter().find(|f| f.subject == "main/");
+        assert!(
+            main_line.is_some_and(|f| f.what.contains("no origin")),
+            "{found:#?}"
+        );
+        git::add_all(&main).unwrap();
+        git::commit_with_message(&main, "code").unwrap();
+        let found = blockers(&name, &entry);
+        let subjects: Vec<&str> = found.iter().map(|f| f.subject.as_str()).collect();
+        assert!(subjects.contains(&"main/"), "{found:#?}");
+        assert!(subjects.contains(&"registry"), "{found:#?}");
     }
 
     #[test]

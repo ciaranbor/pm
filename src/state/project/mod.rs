@@ -6,6 +6,7 @@ mod config;
 mod entry;
 mod harness_config;
 mod presence;
+mod schema;
 
 use std::path::Path;
 
@@ -13,7 +14,7 @@ use crate::error::{PmError, Result};
 use crate::state::paths;
 
 pub(crate) use agent_settings::layered;
-pub use agent_settings::{AgentSettings, WILDCARD_AGENT, resolve_agent_settings};
+pub use agent_settings::{AgentSettings, WILDCARD_AGENT, resolve_agent_settings, winning_row};
 pub use config::{
     AgentsConfig, BundledConfig, BundledDisable, GlobalConfig, GlobalProjectConfig, ProjectConfig,
     ProjectInfo, ServeConfig, UpgradeConfig,
@@ -24,6 +25,7 @@ pub use harness_config::{
     resolve_harness_config,
 };
 pub use presence::Presence;
+pub use schema::{Shape, shape_of};
 
 /// Check whether creating a new feature would exceed the configured limit.
 ///

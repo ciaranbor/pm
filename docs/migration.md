@@ -57,7 +57,9 @@ and rewrites the recorded paths when the home directory differs.
 `pm harness migrate --from <old path>` does the same for a project moved
 on one machine. A root that exists without its `main/` checkout is completed
 too: restore clones into `main/`, writing a fresh project config when the
-root has none and the state remote doesn't supply one.
+root has none and the state remote doesn't supply one. A project whose code
+has no remote (no `repo_url`) but whose `.pm/` has one gets an empty repo as
+`main/`, and its state pulled into `.pm/`; its code doesn't move.
 
 The registry repo syncs your global custom workflows, never the bundled
 ones or machine-local files.

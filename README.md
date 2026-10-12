@@ -638,9 +638,28 @@ git push
 Settings live in `<project>/.pm/config.toml`, or `config.toml` in the pm
 config dir ([Where pm keeps its files](#where-pm-keeps-its-files)) for every
 project. Agent settings are re-read at every spawn, so
-restart, fork, `pm open`, and a dead-window heal pick up edits; there is no
+restart, fork, `pm open`, and a dead-window heal pick up edits, and `pm
+upgrade` restarts the idle agents an edit leaves stale; there is no
 spawn-time flag. For a one-off change, edit the row and restart the agent,
 or switch inside the session (`/model`).
+
+`pm config` reads and edits both files without opening them, from any
+directory:
+
+```sh
+pm config get agents.models.reviewer      # effective value, and which file or row it came from
+pm config set agents.harness.qa opencode  # into this project's config (--project <name> for another)
+pm config set --global serve.port 7800    # into the global config
+pm config unset agents.models.qa
+pm config list [agents]                   # every setting either file holds
+```
+
+Keys are the files' dotted paths, and only those pm reads are accepted. An
+unknown key is refused with the valid ones listed, and so is a value of
+the wrong type or a harness pm doesn't support. Model ids and permission
+modes pass through as written. A write keeps the file's comments and other
+content. After a write, pm reports what a spawn would say about the row,
+such as a model row it drops or a missing one.
 
 ```toml
 [agents.models]              # alias or full id, in the harness's own terms

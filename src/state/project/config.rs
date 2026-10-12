@@ -39,6 +39,18 @@ pub struct AgentsConfig {
     pub harness: std::collections::BTreeMap<String, String>,
 }
 
+impl AgentsConfig {
+    /// The `[agents.<table>]` rows, for a table this struct has.
+    pub fn rows(&self, table: &str) -> Option<&std::collections::BTreeMap<String, String>> {
+        match table {
+            "permissions" => Some(&self.permissions),
+            "models" => Some(&self.models),
+            "harness" => Some(&self.harness),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectInfo {
     pub name: String,

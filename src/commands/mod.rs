@@ -13,6 +13,7 @@ pub mod agent_wait;
 pub mod attention;
 pub mod bundled_disable;
 pub mod close;
+pub mod config;
 pub mod delete;
 pub mod docs;
 pub mod doctor;

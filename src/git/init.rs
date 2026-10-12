@@ -25,6 +25,16 @@ pub fn init_repo(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Whether the repo at `path` holds nothing but one commit with an empty
+/// tree, as [`init_repo`] leaves it: no other commit on any ref, stash
+/// included. Uncommitted work is not looked at.
+pub fn holds_only_an_empty_commit(path: &Path) -> Result<bool> {
+    if run_git(path, &["rev-list", "--all", "--count"])? != "1" {
+        return Ok(false);
+    }
+    Ok(run_git(path, &["ls-tree", "HEAD"])?.is_empty())
+}
+
 /// Init a bare repo (test helper for simulating a remote) whose default
 /// branch is `main`, as a hosted remote's is, whatever `init.defaultBranch`
 /// says.

@@ -115,16 +115,24 @@ fn tier_row<'a>(
 /// One per-agent key across the two tiers: project named row, project
 /// wildcard, global named row, global wildcard; the first present wins and
 /// `""` masks.
-pub(crate) fn layered(
-    project: &std::collections::BTreeMap<String, String>,
-    global: &std::collections::BTreeMap<String, String>,
-    key: &str,
-) -> Option<String> {
-    tier_row(project, key)
-        .or_else(|| tier_row(global, key))
-        .map(|(_, v)| v)
+pub(crate) fn layered(project: &Rows, global: &Rows, key: &str) -> Option<String> {
+    winning_row(project, global, key)
+        .map(|(_, _, v)| v)
         .filter(|v| !v.is_empty())
         .cloned()
+}
+
+/// The row a lookup of `key` in one `[agents.*]` table settles on: its
+/// tier (`"project"` or `"global"`), the key it matched, and its value,
+/// `""` included.
+pub fn winning_row<'a>(
+    project: &'a Rows,
+    global: &'a Rows,
+    key: &str,
+) -> Option<(&'static str, &'a str, &'a String)> {
+    tier_row(project, key)
+        .map(|(k, v)| ("project", k, v))
+        .or_else(|| tier_row(global, key).map(|(k, v)| ("global", k, v)))
 }
 
 #[cfg(test)]

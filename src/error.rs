@@ -194,6 +194,10 @@ pub enum PmError {
     #[error("{0}")]
     Messaging(String),
 
+    /// A `pm config` key or value refused.
+    #[error("{0}")]
+    Config(String),
+
     #[error("{0}")]
     Summary(String),
 
