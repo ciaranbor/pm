@@ -69,6 +69,20 @@ class SnapshotTest {
     }
 
     @Test
+    fun home_is_pinned_before_more_urgent_projects() {
+        val snapshot =
+            Snapshot.parse(
+                """{"version": 1,
+                    "projects": [
+                      {"name": "a", "main": {"attention": {"kind": "dead"}}},
+                      {"name": "home", "home": true, "main": {"attention": {"kind": "none"}}},
+                      {"name": "b"}],
+                    "features": []}"""
+            )
+        assertEquals(listOf("home", "a", "b"), snapshot.projectsByUrgency().map { it.name })
+    }
+
+    @Test
     fun a_need_names_its_agent_only_while_the_scope_still_has_it() {
         val needs = Snapshot.parse(json).needsYou()
         assertEquals("implementer", needs.first { it.scope == "login" }.agent?.name)

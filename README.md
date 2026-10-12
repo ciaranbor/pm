@@ -57,6 +57,9 @@ It makes prefix `s` / `w` pm's tree, badges each agent's window, and puts
 what needs you on the status line. [docs/tmux.md](docs/tmux.md) has its
 options and what to do if tmux can't find `pm`.
 
+Then `pm onboard` starts the [supervisor](#supervisor), which walks you
+through the rest: harnesses and models, phone pairing, existing repos.
+
 ### Android app
 
 On an arm64 phone, open the
@@ -257,6 +260,31 @@ Notes over 256 KB are edited with `pm notes` only.
 A save from the phone replaces the file, so vim warns that it changed if
 you have it open; `:set autoread` reloads it instead when you have no
 unsaved changes.
+
+### Supervisor
+
+The supervisor is one agent for the whole machine. Ask it to change pm
+settings, globally or per project; to tell you how every project stands;
+or to message, restart, spawn or stop any agent. It acts only through `pm`
+commands. It never edits another project's `.pm/` by hand, asks that
+project's `main` to start features there rather than starting them itself,
+and merges or deletes a feature only when you name it.
+
+`pm onboard` sets it up. It reports which harnesses are installed, logged
+in and trusted, asks which one the supervisor runs on (`--harness` skips
+the question), and saves the answer as `[agents.harness] supervisor`.
+Then it creates the home project and leaves you in its `home/main`
+session with the supervisor, which starts by onboarding you. Run it again
+any time: once home exists it just opens home.
+
+Home is an ordinary project at `$XDG_DATA_HOME/pm/home` (default
+`~/.local/share/pm/home`). Its `main/` is an empty repo, and its
+`.pm/workflows/orchestrator/` puts the supervisor in place of `main`. So it
+lists, closes, upgrades and deletes like any other project. The global
+config's `home` key names it on this machine, and the phone app pins it
+first. Like any project, home syncs between machines only if you give it a
+state remote; on another machine, `pm restore --project home` and then
+`pm onboard` set it up there.
 
 ### Finish a feature
 
@@ -707,6 +735,9 @@ that produced it, so after a harness change the next respawn starts fresh
 harnesses, `pm agent list` each agent's. **codex needs one interactive
 hook-trust step per machine** and fails silently without it;
 [docs/harnesses.md](docs/harnesses.md) has that and what each harness needs.
+
+**`home`**, in the global config only, names this machine's
+[home project](#supervisor); `pm onboard` sets it.
 
 **`[bundled.disable]`** is global only; see [Disabling bundled
 items](#agents-workflows-and-skills).

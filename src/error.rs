@@ -194,6 +194,10 @@ pub enum PmError {
     #[error("{0}")]
     Messaging(String),
 
+    /// `pm onboard` could not set up the home project.
+    #[error("{0}")]
+    Onboard(String),
+
     /// A `pm config` key or value refused.
     #[error("{0}")]
     Config(String),

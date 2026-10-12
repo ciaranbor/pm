@@ -13,6 +13,7 @@ mod feat;
 mod harness;
 mod maintenance;
 mod msg;
+mod onboard;
 mod project;
 mod report;
 mod scope;
@@ -32,6 +33,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             r#move,
             no_main,
         } => project::register(path, name, r#move, no_main, server),
+        Commands::Onboard { harness } => onboard::run(harness, server),
         Commands::List => project::list(),
         Commands::Open { all: true, .. } => project::open_all(server),
         Commands::Open { project, .. } => project::open(project, server),

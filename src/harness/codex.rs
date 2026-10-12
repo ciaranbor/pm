@@ -424,6 +424,9 @@ fn version_problem(found: Option<&str>) -> Option<String> {
     }
 }
 
+/// Exits 0 only when codex holds credentials.
+pub(super) const LOGIN_STATUS: &[&str] = &["login", "status"];
+
 /// The manual step that gives a new machine's codex its credentials,
 /// which live in `$CODEX_HOME/auth.json`.
 pub(super) const CREDENTIALS_STEP: &str = "log in to codex (`codex login`)";

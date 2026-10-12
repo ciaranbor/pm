@@ -66,9 +66,11 @@ fun Home(
 ) {
     val needs = snapshot.needsYou()
     val atWork = snapshot.atWork()
-    // A project with no session up is closed, and listed apart, after the rest.
+    // A project with no session up is closed, and listed apart, after the rest; home stays pinned.
     val (shown, closed) =
-        snapshot.projectsByUrgency().partition { it.skipped != null || snapshot.anyOpen(it.name) }
+        snapshot.projectsByUrgency().partition {
+            it.home || it.skipped != null || snapshot.anyOpen(it.name)
+        }
     LazyColumn(modifier) {
         item(key = "needs") { Heading("Needs you") }
         if (needs.isEmpty()) {
@@ -167,6 +169,9 @@ internal fun RowDivider() =
         Modifier.padding(start = Rows.dividerInset + MARK_SLOT),
         color = MaterialTheme.colorScheme.outlineVariant,
     )
+
+/** What home's row says it is, beside its name. */
+private const val HOME_LABEL = "Supervisor"
 
 /** The width a row's leading mark takes, with its gap. */
 private val MARK_SLOT = 18.dp + Spacing.m
@@ -319,7 +324,13 @@ private fun ProjectRow(
             .clickable(onClick = open)
             .clearAndSetSemantics {
                 contentDescription =
-                    listOfNotNull(project.name, status, describe(working, stale)).joinToString(", ")
+                    listOfNotNull(
+                            project.name,
+                            HOME_LABEL.takeIf { project.home },
+                            status,
+                            describe(working, stale),
+                        )
+                        .joinToString(", ")
             }
             .heightIn(min = 56.dp)
             .padding(Rows.padding),
@@ -327,7 +338,17 @@ private fun ProjectRow(
     ) {
         Box(Modifier.width(MARK_SLOT))
         Column(Modifier.weight(1f)) {
-            Text(project.name, style = MaterialTheme.typography.titleSmall)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(project.name, style = MaterialTheme.typography.titleSmall)
+                if (project.home) {
+                    Text(
+                        HOME_LABEL,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(start = Spacing.s),
+                    )
+                }
+            }
             Text(
                 status,
                 style = MaterialTheme.typography.bodyMedium,

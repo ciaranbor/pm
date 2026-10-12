@@ -194,7 +194,12 @@ pub fn default_path(git_url: &str) -> Result<PathBuf> {
 /// Spawn the project's orchestrator ([`scope::orchestrator_definition`],
 /// named after it) in its main session: into the session's first window,
 /// the shell it was created with, unless it already has one of its own.
-pub fn spawn_main(project_root: &Path, tmux_server: Option<&str>) -> Result<String> {
+/// `context` is queued for it as `agent spawn --context` does.
+pub fn spawn_main(
+    project_root: &Path,
+    context: Option<&str>,
+    tmux_server: Option<&str>,
+) -> Result<String> {
     let config = ProjectConfig::load(&paths::pm_dir(project_root))?;
     let orchestrator = scope::orchestrator_definition(project_root);
     let registered = AgentRegistry::load(&paths::agents_dir(project_root), scope::MAIN)?
@@ -206,7 +211,7 @@ pub fn spawn_main(project_root: &Path, tmux_server: Option<&str>) -> Result<Stri
             scope::MAIN,
             &orchestrator,
             None,
-            None,
+            context,
             tmux_server,
         )?
     } else {
@@ -218,6 +223,7 @@ pub fn spawn_main(project_root: &Path, tmux_server: Option<&str>) -> Result<Stri
             project_root,
             scope::MAIN,
             &orchestrator,
+            context,
             &first,
             tmux_server,
         )?
@@ -562,8 +568,8 @@ mod tests {
         init(&project_path, &projects_dir, None, server.name()).unwrap();
         let session = tmux::session_name(&name, "main");
 
-        spawn_main(&project_path, server.name()).unwrap();
-        let again = spawn_main(&project_path, server.name()).unwrap();
+        spawn_main(&project_path, None, server.name()).unwrap();
+        let again = spawn_main(&project_path, None, server.name()).unwrap();
 
         assert!(again.contains("already active"), "{again}");
         assert_eq!(

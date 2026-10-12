@@ -282,6 +282,30 @@ pub fn launch_problems(
     Ok(problems.members.into_iter().zip(problems.lines).collect())
 }
 
+/// What [`check_team`] would refuse `definition` on in a project with no
+/// config of its own, were its global `[agents.harness]` row `harness`.
+pub fn problems_on(
+    harness: Harness,
+    definition: &str,
+    global: &GlobalConfig,
+    worktree: &Path,
+    home: &Path,
+) -> Result<Vec<String>> {
+    let mut agents = global.agents.clone();
+    agents
+        .harness
+        .insert(definition.to_string(), harness.to_string());
+    Ok(team_problems(
+        &AgentsConfig::default(),
+        &agents,
+        &global.harness,
+        worktree,
+        home,
+        &[definition.to_string()],
+    )?
+    .lines)
+}
+
 fn team_problems(
     project: &AgentsConfig,
     global: &AgentsConfig,

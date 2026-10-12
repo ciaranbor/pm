@@ -405,6 +405,7 @@ mod tests {
             name: "app".into(),
             root: "/src/app".into(),
             skipped: None,
+            home: false,
             main: Some(attention::ScopeSnapshot {
                 session: "app/main".into(),
                 session_exists: true,

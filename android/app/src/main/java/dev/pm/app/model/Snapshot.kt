@@ -122,12 +122,11 @@ data class Snapshot(
             }
             .sortedWith(compareBy<Need> { it.project }.thenBy { it.scope })
 
-    /** The projects, those with the most urgent need first, then by name. */
+    /** The projects: home pinned first, then those with the most urgent need, then by name. */
     fun projectsByUrgency(): List<ProjectSnapshot> =
         projects.sortedWith(
-            compareBy<ProjectSnapshot> {
-                    attentionCounts(it.name).firstOrNull()?.first?.ordinal ?: Int.MAX_VALUE
-                }
+            compareBy<ProjectSnapshot> { !it.home }
+                .thenBy { attentionCounts(it.name).firstOrNull()?.first?.ordinal ?: Int.MAX_VALUE }
                 .thenBy { it.name }
         )
 
@@ -174,6 +173,8 @@ data class ProjectSnapshot(
     val root: String = "",
     val skipped: String? = null,
     val main: ScopeSnapshot? = null,
+    /** This machine's home project, where the supervisor runs. */
+    val home: Boolean = false,
 )
 
 @Serializable

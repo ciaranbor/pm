@@ -369,6 +369,7 @@ mod tests {
                 name: "app".into(),
                 root: "/src/app".into(),
                 skipped: None,
+                home: false,
                 main,
             }],
             features,

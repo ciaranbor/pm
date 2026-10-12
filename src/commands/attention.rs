@@ -97,6 +97,9 @@ pub struct ProjectSnapshot {
     pub skipped: Option<String>,
     /// The project's main scope; `None` when the project was skipped.
     pub main: Option<ScopeSnapshot>,
+    /// Whether this is the machine's home project, where the supervisor
+    /// runs (the global config's `home`).
+    pub home: bool,
 }
 
 /// A scope's team status, session and agents: all the main scope has.
@@ -388,7 +391,8 @@ impl ScopeSnapshot {
 /// rest. Nothing is printed: the tmux watcher runs this.
 pub fn all(projects_dir: &Path, tmux_server: Option<&str>) -> Result<Snapshot> {
     let windows = Windows::read(tmux_server)?;
-    let global = GlobalConfig::load_or_default().harness;
+    let config = GlobalConfig::load_or_default();
+    let global = config.harness.clone();
     let mut snapshot = Snapshot {
         version: VERSION,
         projects: Vec::new(),
@@ -413,6 +417,7 @@ pub fn all(projects_dir: &Path, tmux_server: Option<&str>) -> Result<Snapshot> {
             Err(e) => (Some(e), None),
         };
         snapshot.projects.push(ProjectSnapshot {
+            home: super::onboard::is_home(&config, &name, &root),
             name,
             root: root.display().to_string(),
             skipped,
@@ -430,6 +435,7 @@ pub fn all(projects_dir: &Path, tmux_server: Option<&str>) -> Result<Snapshot> {
                 bad.error
             )),
             main: None,
+            home: false,
         }));
     snapshot.projects.sort_by(|a, b| a.name.cmp(&b.name));
     sort(&mut snapshot.features);
@@ -439,7 +445,8 @@ pub fn all(projects_dir: &Path, tmux_server: Option<&str>) -> Result<Snapshot> {
 /// The snapshot of the project at `project_root`.
 pub fn project(project_root: &Path, tmux_server: Option<&str>) -> Result<Snapshot> {
     let windows = Windows::read(tmux_server)?;
-    let global = GlobalConfig::load_or_default().harness;
+    let config = GlobalConfig::load_or_default();
+    let global = config.harness.clone();
     let ProjectRead {
         name,
         mut features,
@@ -449,6 +456,7 @@ pub fn project(project_root: &Path, tmux_server: Option<&str>) -> Result<Snapsho
     Ok(Snapshot {
         version: VERSION,
         projects: vec![ProjectSnapshot {
+            home: super::onboard::is_home(&config, &name, project_root),
             name,
             root: project_root.display().to_string(),
             skipped: None,
@@ -873,6 +881,7 @@ mod tests {
                 name: "app".into(),
                 root: "/src/app".into(),
                 skipped: None,
+                home: false,
                 main: Some(ScopeSnapshot {
                     session: "app/main".into(),
                     session_exists: true,
@@ -911,6 +920,7 @@ mod tests {
                     "name": "app",
                     "root": "/src/app",
                     "skipped": null,
+                    "home": false,
                     "main": {
                         "session": "app/main",
                         "session_exists": true,

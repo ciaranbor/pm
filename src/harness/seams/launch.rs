@@ -3,11 +3,15 @@
 
 use std::path::Path;
 
+use crate::bounded;
 use crate::error::Result;
 use crate::harness::{
     Harness, LaunchContext, PreLaunch, Probe, SpawnSpec, claude_code, codex, opencode,
 };
 use crate::state::project::HarnessConfig;
+
+/// How long a harness's login status may take: it may wait on the keychain.
+const LOGIN_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 impl Harness {
     /// What must happen before the harness's command runs, beyond
@@ -125,6 +129,22 @@ impl Harness {
             Harness::Codex => codex::CREDENTIALS_STEP.to_string(),
             Harness::OpenCode => opencode::credentials_step(&config.opencode),
         }
+    }
+
+    /// Whether the harness holds credentials to run an agent; `None` when
+    /// it can't tell: it has no status command (opencode, whose keys pm
+    /// config names), or the command did not answer in time.
+    pub fn logged_in(self) -> Option<bool> {
+        let (binary, args) = match self {
+            Harness::ClaudeCode => (claude_code::BINARY, claude_code::LOGIN_STATUS),
+            Harness::Codex => (codex::BINARY, codex::LOGIN_STATUS),
+            Harness::OpenCode => return None,
+        };
+        let mut command = std::process::Command::new(binary);
+        command.args(args).stdin(std::process::Stdio::null());
+        bounded::run(&mut command, LOGIN_LIMIT)
+            .ok()
+            .map(|out| out.status.success())
     }
 
     /// Whether the harness reads the macOS keychain as it starts, so a

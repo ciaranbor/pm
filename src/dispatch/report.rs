@@ -10,7 +10,7 @@ use super::window::push;
 /// Spawn a new project's `main` agent. The project is set up by now, so a
 /// failure is reported with the command that retries it, not returned.
 pub(super) fn report_main_spawn(project_root: &Path, server: Option<&str>) {
-    match commands::init::spawn_main(project_root, server) {
+    match commands::init::spawn_main(project_root, None, server) {
         Ok(msg) => println!("{msg}"),
         Err(e) => eprintln!(
             "warning: could not spawn the main agent: {e}; run `pm agent spawn main` in the \
