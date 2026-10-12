@@ -8,6 +8,7 @@ use pm::commands;
 use pm::state::paths;
 
 mod agent;
+mod config;
 mod feat;
 mod harness;
 mod maintenance;
@@ -77,5 +78,6 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
             commands::tmux_watch::watch(&paths::global_projects_dir()?, server)
         }
         Commands::Workflow(cmd) => workflow::run(cmd),
+        Commands::Config(cmd) => config::run(cmd),
     }
 }
