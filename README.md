@@ -438,14 +438,16 @@ has unread messages, then wakes it to read them, so the brief at feature
 creation is just the first message. The turn has ended meanwhile, so the
 agent's prompt is yours. A Claude Code turn you interrupt with Esc still
 has a waiter, so a message sent after the Esc wakes the agent: Esc stops the
-turn, not the agent (`pm agent stop` does that). An agent left with no
-waiter — failed in a turn a message started, its harness ending the waiter,
-a session whose start armed none, or a codex turn interrupted at all — is
-`unarmed`: no message wakes it until something prompts it.
-[`pm msg send`](#messaging) re-arms it. A Claude Code agent gets the prompt
-through its session's messaging socket when the session reported one,
-whatever its window shows; `pm doctor` warns when Claude Code is too old for
-that or a `crossSessionInbound` setting refuses or holds it. Otherwise the
+turn, not the agent (`pm agent stop` does that). A codex turn you interrupt
+wakes the agent at once for a message that arrived during it. An agent left
+with no waiter — failed in a turn a message started, its harness ending the
+waiter, a session whose start armed none, or a codex turn interrupted with
+nothing unread — is `unarmed`: no message wakes it until something prompts
+it. [`pm msg send`](#messaging) re-arms it. A Claude Code agent gets the
+prompt through its session's messaging socket when the session reported
+one, and a codex agent through its own app-server, whatever its window
+shows; `pm doctor` warns when Claude Code is too old for that or a
+`crossSessionInbound` setting refuses or holds it. Otherwise the
 agent is typed the prompt, and only when its input line is empty and takes text (not vim NORMAL mode) and no one
 is using its pane (a tmux mode such as copy or tree mode, or shown on an
 attached client); otherwise the message waits for a later send. A loop that wakes an

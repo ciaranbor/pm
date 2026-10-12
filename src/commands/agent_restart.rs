@@ -592,7 +592,7 @@ mod tests {
             .unwrap();
         server.wait_for_pane_text(
             &target,
-            "&& codex --no-daemon -a 'never' -s 'danger-full-access' 'Stand by.'",
+            "&& pm harness codex-host --approval 'never' --sandbox 'danger-full-access' --prompt 'Stand by.'",
         );
         let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
         assert_eq!(registry.get("reviewer").unwrap().harness, Harness::Codex);

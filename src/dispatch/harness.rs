@@ -159,16 +159,42 @@ pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
             HarnessHooksCommands::TurnWaiter { harness } => exit_unless_ok(
                 commands::hooks_stop::turn_waiter(harness, &mut waiter_turns()),
             ),
-            HarnessHooksCommands::Waiting { harness } => exit_unless_ok(
-                commands::hooks_waiting::waiting(harness, |state, unread| {
-                    publish(state, unread);
-                    push();
-                }),
-            ),
+            HarnessHooksCommands::Waiting { harness } => {
+                exit_unless_ok(commands::hooks_waiting::waiting(
+                    harness,
+                    tmux_server_from_env().as_deref(),
+                    |state, unread| {
+                        publish(state, unread);
+                        push();
+                    },
+                ))
+            }
             HarnessHooksCommands::Dialog { harness } => {
                 exit_unless_ok(commands::hooks_dialog::dialog(harness, push))
             }
         },
+        HarnessCommands::CodexHost {
+            approval,
+            sandbox,
+            writable,
+            model,
+            bypass_hook_trust,
+            resume,
+            fork,
+            prompt,
+        } => {
+            let code = pm::harness::run_codex_host(&pm::harness::CodexHost {
+                approval,
+                sandbox,
+                writable,
+                model,
+                bypass_hook_trust,
+                fork: fork.is_some(),
+                resume: fork.or(resume),
+                prompt,
+            })?;
+            std::process::exit(code)
+        }
         HarnessCommands::Pull { name, dry_run } => {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
             let name = resolve_feature_name(name, &project_root)?;

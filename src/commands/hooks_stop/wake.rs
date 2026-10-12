@@ -1,5 +1,5 @@
 //! The waiter: pm's Stop hook on a harness that runs it in the background
-//! once the turn has ended ([`Wake::Rewake`], [`Wake::Queue`]), so the
+//! once the turn has ended ([`Wake::Rewake`], [`Wake::Post`]), so the
 //! agent sits at its prompt between turns and takes typing and keys as
 //! the user's. A SessionStart hook that
 //! [waits](crate::harness::Harness::waits_at_session_start) runs it too, so
@@ -17,7 +17,7 @@
 //! as a later turn starts, so one can outlive several turns and fire
 //! mid-turn; each new one supersedes it, and a superseded waiter, or one
 //! whose harness is gone, ends without a word or a marker. Whatever is
-//! delivered twice — a mid-turn wake, a re-arm, a stale queue item —
+//! delivered twice — a mid-turn wake, a re-arm —
 //! UserPromptSubmit drops once the inbox is empty
 //! ([`hooks_user_prompt`](crate::commands::hooks_user_prompt)).
 //!
@@ -130,15 +130,15 @@ pub(super) fn run_on(
             eprint!("{prompt}");
             2
         }
-        Wake::Queue => match session_id(payload)
-            .ok_or_else(|| "the Stop payload names no session".to_string())
-            .and_then(|id| {
+        Wake::Post => match runtime::read_inbound(&project_root, &scope, &agent)
+            .ok_or_else(|| "its session reported no inbound channel".to_string())
+            .and_then(|inbound| {
                 harness
-                    .queue_prompt(&id, &prompt)
+                    .post_prompt(&inbound, &prompt)
                     .map_err(|e| e.to_string())
             }) {
             Ok(()) => 0,
-            Err(e) => failed(format!("could not queue the continuation: {e}"), on_turn),
+            Err(e) => failed(format!("could not post the continuation: {e}"), on_turn),
         },
         Wake::Block => failed("ran as a waiter for a harness it blocks".into(), on_turn),
     }
@@ -256,14 +256,6 @@ fn wait_in_turn(
 
 /// How often a turn waiter checks the inbox, as [`agent_wait`] does.
 const POLL: Duration = Duration::from_secs(2);
-
-fn session_id(payload: &str) -> Option<String> {
-    serde_json::from_str::<serde_json::Value>(payload)
-        .ok()?
-        .get("session_id")?
-        .as_str()
-        .map(str::to_string)
-}
 
 /// Wait for `agent`'s inbox as its newest waiter. `gone` sleeps up to the
 /// poll interval and returns whether the harness that ran the waiter is

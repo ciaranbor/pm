@@ -206,7 +206,9 @@ fn record_start(
         project_root,
         feature,
         agent_name,
-        harness.inbound_from_env().as_ref(),
+        harness
+            .inbound(project_root, feature, agent_name, &payload.session_id)
+            .as_ref(),
     )?;
     Ok(recorded)
 }

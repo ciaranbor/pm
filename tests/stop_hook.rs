@@ -2,6 +2,10 @@
 //! blocking hook opencode's plugin runs, against signals from the harness
 //! and from anyone else, and Claude Code's waiter, from Stop and SessionStart.
 
+#[path = "../src/testing/fake_app_server.rs"]
+#[allow(dead_code)]
+mod fake_app_server;
+
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -524,43 +528,19 @@ fn a_subagents_dialog_open_as_the_turn_ends_keeps_the_agent_asking() {
     hook.wait().unwrap();
 }
 
-/// A stand-in `codex` that records its arguments, one per line, in
-/// `codex-args`, and exits with `code`. A child process writes it: a write
-/// handle this process held would be inherited by a child another test
-/// thread forks, and running the stub meanwhile fails on Linux with "Text
-/// file busy".
-fn stub_codex(dir: &Path, code: i32) {
-    use std::io::Write;
-    let stubs = dir.join("stubs");
-    std::fs::create_dir_all(&stubs).unwrap();
-    let codex = stubs.join("codex");
-    let args = dir.join("codex-args");
-    let script = format!(
-        "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\necho 'queue: refused' >&2\nexit {code}\n",
-        args.display()
-    );
-    let mut writer = Command::new("/bin/sh")
-        .args(["-c", "cat > \"$0\" && chmod 755 \"$0\""])
-        .arg(&codex)
-        .stdin(Stdio::piped())
-        .spawn()
-        .unwrap();
-    writer
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(script.as_bytes())
-        .unwrap();
-    assert!(writer.wait().unwrap().success());
-}
-
 const CODEX_PAYLOAD: &str = r#"{"session_id":"thr-1","hook_event_name":"Stop"}"#;
 
 #[test]
-fn a_codex_waiter_queues_the_continuation_on_the_session_it_ended() {
+fn a_codex_waiter_starts_a_turn_on_its_sessions_thread() {
     let dir = tempdir().unwrap();
     project(dir.path());
-    stub_codex(dir.path(), 0);
+    let server = fake_app_server::FakeAppServer::bind(dir.path());
+    let inbound = runtime::Inbound {
+        socket: server.path.clone(),
+        token: None,
+        thread: Some("thr-1".into()),
+    };
+    runtime::write_inbound(dir.path(), "main", AGENT, Some(&inbound)).unwrap();
     send(dir.path());
 
     let mut hook = start_with(
@@ -572,19 +552,20 @@ fn a_codex_waiter_queues_the_continuation_on_the_session_it_ended() {
     let out = hook.wait_with_output().unwrap();
 
     assert_eq!(out.status.code(), Some(0), "{out:?}");
-    let args = std::fs::read_to_string(dir.path().join("codex-args")).unwrap();
     assert_eq!(
-        args.lines().collect::<Vec<_>>(),
-        ["queue", "--thread", "thr-1", "--message", CONTINUATION]
+        server.turn(),
+        Some(serde_json::json!({
+            "threadId": "thr-1",
+            "input": [{"type": "text", "text": CONTINUATION}],
+        }))
     );
     assert_eq!(kind(dir.path()), None);
 }
 
 #[test]
-fn a_codex_waiter_that_cannot_queue_leaves_the_agent_unarmed() {
+fn a_codex_waiter_with_no_session_to_post_to_leaves_the_agent_unarmed() {
     let dir = tempdir().unwrap();
     project(dir.path());
-    stub_codex(dir.path(), 1);
     send(dir.path());
 
     let mut hook = start_with(
@@ -598,7 +579,10 @@ fn a_codex_waiter_that_cannot_queue_leaves_the_agent_unarmed() {
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     let waiting = runtime::read_waiting(dir.path(), "main", AGENT).unwrap();
     assert_eq!(waiting.kind, WaitingKind::HookEnded);
-    assert!(waiting.describe().contains("queue: refused"), "{waiting:?}");
+    assert!(
+        waiting.describe().contains("reported no inbound channel"),
+        "{waiting:?}"
+    );
 }
 
 /// Register the agent as running `harness`, as a spawn does before

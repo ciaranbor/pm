@@ -6,6 +6,13 @@
 //! harness is named on the command line because the hooks file it is
 //! installed in, or the plugin calling it, already knows it.
 //!
+//! An interrupt ends a turn without a Stop hook, so no waiter follows it:
+//! when messages are unread then, and the session has an inbound channel,
+//! it re-arms the agent ([`agent_rearm`]), which
+//! posts the continuation. A message that arrived during the turn would
+//! otherwise wait for the next one sent. It must be quick: codex gives the
+//! Interrupt hook 3 s.
+//!
 //! It runs on every tool call, so the common path — a tool finished, no
 //! marker — costs one stamp of the agent's activity, one failed unlink and
 //! one failed read of its dialogs dir, with no registry read. Its stdout can
@@ -15,7 +22,7 @@ use std::io::Read;
 use std::path::Path;
 
 use crate::commands::attention::AgentState;
-use crate::commands::hooks_dialog;
+use crate::commands::{agent_rearm, hooks_dialog};
 use crate::error::Result;
 use crate::harness::{Harness, WaitingEvent};
 use crate::messages;
@@ -23,16 +30,20 @@ use crate::state::paths;
 use crate::state::runtime::{self, Dialog, Waiting, WaitingKind};
 use chrono::{DateTime, Utc};
 
-/// Run the hook. `on_change` is told the agent's new state and unread count
-/// when its marker changed.
-pub fn waiting(harness: Harness, on_change: impl FnOnce(AgentState, u32)) -> i32 {
-    if let Ok(Some((state, unread))) = waiting_inner(harness) {
+/// Run the hook, the agent's window on `tmux_server`. `on_change` is told
+/// the agent's new state and unread count when its marker changed.
+pub fn waiting(
+    harness: Harness,
+    tmux_server: Option<&str>,
+    on_change: impl FnOnce(AgentState, u32),
+) -> i32 {
+    if let Ok(Some((state, unread))) = waiting_inner(harness, tmux_server) {
         on_change(state, unread);
     }
     0
 }
 
-fn waiting_inner(harness: Harness) -> Result<Option<(AgentState, u32)>> {
+fn waiting_inner(harness: Harness, tmux_server: Option<&str>) -> Result<Option<(AgentState, u32)>> {
     let Some(agent) = std::env::var("PM_AGENT_NAME")
         .ok()
         .filter(|a| !a.is_empty())
@@ -50,7 +61,36 @@ fn waiting_inner(harness: Harness) -> Result<Option<(AgentState, u32)>> {
         return Ok(None);
     };
     let unread = messages::unread_count(&paths::messages_dir(&project_root), &scope, &agent);
+    if rearm_after_interrupt(&project_root, &scope, &agent, unread, tmux_server)? {
+        return Ok(Some((AgentState::Busy, unread)));
+    }
     Ok(Some((state, unread)))
+}
+
+/// Re-arm an agent an interrupt left with `unread` messages, when its
+/// session has an inbound channel to post to. Returns whether it did.
+fn rearm_after_interrupt(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    unread: u32,
+    tmux_server: Option<&str>,
+) -> Result<bool> {
+    let interrupted = runtime::read_waiting(project_root, scope, agent)
+        .is_some_and(|w| w.kind == WaitingKind::Interrupted);
+    if !interrupted || unread == 0 || runtime::read_inbound(project_root, scope, agent).is_none() {
+        return Ok(false);
+    }
+    let rearmed = agent_rearm::rearm(project_root, scope, agent, tmux_server);
+    if let Err(e) = &rearmed {
+        runtime::log_stop_hook(
+            project_root,
+            scope,
+            agent,
+            &format!("could not re-arm after an interrupt: {e}"),
+        );
+    }
+    Ok(rearmed.is_ok_and(|r| r.is_some()))
 }
 
 /// Apply what `payload` says to the agent's dialogs and marker, recording a
@@ -479,6 +519,49 @@ mod tests {
         .unwrap();
         assert_eq!(notify(root, "permission_prompt"), Some(AgentState::Asking));
         assert_eq!(kind(root), Some(WaitingKind::Dialog));
+    }
+
+    #[test]
+    fn an_interrupt_with_messages_unread_starts_one_turn_and_with_none_nothing() {
+        let server = crate::testing::TestServer::new();
+        let dir = tempdir().unwrap();
+        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let session = crate::tmux::session_name(&project_name, "login");
+        server.spawn_recording_agent(&project, &session, "login", "implementer", Harness::Codex);
+        let app_server = crate::testing::FakeAppServer::bind(dir.path());
+        let inbound = runtime::Inbound {
+            socket: app_server.path.clone(),
+            token: None,
+            thread: Some("t1".into()),
+        };
+        runtime::write_inbound(&project, "login", "implementer", Some(&inbound)).unwrap();
+        let interrupt = |unread| {
+            send(
+                &project,
+                Harness::Codex,
+                json!({"hook_event_name": "Interrupt"}),
+            );
+            rearm_after_interrupt(&project, "login", "implementer", unread, server.name()).unwrap()
+        };
+
+        assert!(!interrupt(0));
+        assert_eq!(app_server.turn(), None);
+        assert_eq!(kind(&project), Some(WaitingKind::Interrupted));
+
+        // Sent mid-turn: no waiter was there to take it.
+        crate::messages::send(
+            &paths::messages_dir(&project),
+            "login",
+            "implementer",
+            "reviewer",
+            "hi",
+        )
+        .unwrap();
+        assert!(interrupt(1));
+        let turn = app_server.turn().expect("a turn");
+        assert_eq!(turn["threadId"], "t1");
+        assert_eq!(app_server.turn(), None);
+        assert_eq!(kind(&project), None);
     }
 
     #[test]

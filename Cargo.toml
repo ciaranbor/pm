@@ -32,6 +32,7 @@ web-push-native = "0.5.0"
 ureq = { version = "3.4.2", default-features = false, features = ["rustls"] }
 http = "1"
 semver = "1.0.28"
+tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
 
 [dev-dependencies]
 assert_cmd = "2.2.0"

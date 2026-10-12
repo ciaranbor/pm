@@ -409,7 +409,7 @@ mod tests {
             .expect("window");
         server.wait_for_pane_text(
             &target,
-            "PM_AGENT_NAME=reviewer && codex --no-daemon -a 'never' -s 'danger-full-access' 'Stand by.'",
+            "PM_AGENT_NAME=reviewer && pm harness codex-host --approval 'never' --sandbox 'danger-full-access' --prompt 'Stand by.'",
         );
         let agents_dir = paths::agents_dir(dir.path());
         let registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
@@ -476,7 +476,7 @@ mod tests {
             .unwrap();
         server.wait_for_pane_text(
             &target,
-            "&& codex --no-daemon -a 'never' -s 'danger-full-access' 'Stand by.'",
+            "&& pm harness codex-host --approval 'never' --sandbox 'danger-full-access' --prompt 'Stand by.'",
         );
         let text = tmux::capture_pane(server.name(), &target).unwrap();
         assert!(!text.contains("-m "), "{text}");
@@ -541,7 +541,7 @@ mod tests {
             .unwrap();
         server.wait_for_pane_text(
             &target,
-            "&& codex --no-daemon -a 'never' -s 'danger-full-access' 'Stand by.'",
+            "&& pm harness codex-host --approval 'never' --sandbox 'danger-full-access' --prompt 'Stand by.'",
         );
         let text = tmux::capture_pane(server.name(), &target).unwrap();
         assert!(!text.contains("resume"), "{text}");

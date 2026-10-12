@@ -487,7 +487,7 @@ mod tests {
         assert!(runs(Harness::ClaudeCode, "/opt/bin/claude --resume x"));
         assert!(runs(
             Harness::Codex,
-            "node /usr/local/bin/codex --no-daemon"
+            "node /usr/local/bin/codex --remote unix:///r/app-server.sock"
         ));
         assert!(runs(Harness::OpenCode, "opencode --standalone"));
         assert!(!runs(Harness::ClaudeCode, "/bin/zsh"));

@@ -17,6 +17,7 @@ pub const NO_SERVER: Option<&str> = Some("pm-test-none");
 
 mod control_client;
 mod fake_agents;
+mod fake_app_server;
 mod fake_harness;
 mod fake_socket;
 mod home;
@@ -27,6 +28,7 @@ mod system_ptys;
 mod tmux_server;
 
 pub use control_client::ControlClient;
+pub use fake_app_server::FakeAppServer;
 pub(crate) use fake_harness::{HOLD_START, fake_claude, fake_harness_binary, window_path};
 pub use fake_harness::{
     fake_opencode, fake_opencode_argv, fake_opencode_calls, fake_opencode_scripted,

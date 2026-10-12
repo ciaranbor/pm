@@ -36,41 +36,38 @@ impl Harness {
     }
 
     /// Whether this harness's waiter, alive, wakes an agent at `kind`. A
-    /// rewake reaches a session however its turn ended; codex's queue
-    /// skips an interrupted thread; a waiter that blocks inside the turn
-    /// waits only where it marked the agent idle.
+    /// rewake or a post reaches a session however its turn ended; a waiter
+    /// that blocks inside the turn waits only where it marked the agent
+    /// idle.
     pub fn waiter_wakes(self, kind: WaitingKind) -> bool {
         match self.wake() {
-            Wake::Rewake => matches!(
+            Wake::Rewake | Wake::Post => matches!(
                 kind,
                 WaitingKind::Idle
                     | WaitingKind::Interrupted
                     | WaitingKind::Error
                     | WaitingKind::Prompt
             ),
-            Wake::Queue | Wake::Block => kind == WaitingKind::Idle,
-        }
-    }
-
-    /// Put `text` on the queue of the session `session_id`, which starts it
-    /// as a turn once the session is idle ([`Wake::Queue`]).
-    pub fn queue_prompt(self, session_id: &str, text: &str) -> Result<()> {
-        match self {
-            Harness::Codex => codex::queue_prompt(session_id, text),
-            Harness::ClaudeCode | Harness::OpenCode => {
-                Err(PmError::Agent(format!("{self} has no prompt queue")))
-            }
+            Wake::Block => kind == WaitingKind::Idle,
         }
     }
 
     /// The channel a process outside the session posts it prompts through
-    /// ([`post_prompt`](Self::post_prompt)), read from the environment its
-    /// hooks run in; `None` for a harness with none there, which is then
-    /// typed into.
-    pub fn inbound_from_env(self) -> Option<Inbound> {
+    /// ([`post_prompt`](Self::post_prompt)), as its SessionStart hook,
+    /// run for `agent`'s session `session_id`, finds it: in the environment
+    /// the hook runs in, or the agent's runtime dir. `None` for a harness
+    /// with none, which is then typed into.
+    pub fn inbound(
+        self,
+        project_root: &Path,
+        scope: &str,
+        agent: &str,
+        session_id: &str,
+    ) -> Option<Inbound> {
         match self {
             Harness::ClaudeCode => claude_code::inbound::from_env(),
-            Harness::Codex | Harness::OpenCode => None,
+            Harness::Codex => codex::inbound(project_root, scope, agent, session_id),
+            Harness::OpenCode => None,
         }
     }
 
@@ -80,9 +77,8 @@ impl Harness {
     pub fn post_prompt(self, inbound: &Inbound, text: &str) -> Result<()> {
         match self {
             Harness::ClaudeCode => claude_code::inbound::post(inbound, text),
-            Harness::Codex | Harness::OpenCode => {
-                Err(PmError::Agent(format!("{self} has no inbound channel")))
-            }
+            Harness::Codex => codex::post(inbound, text),
+            Harness::OpenCode => Err(PmError::Agent(format!("{self} has no inbound channel"))),
         }
     }
 
@@ -224,9 +220,9 @@ pub enum Wake {
     /// It runs on once the turn has ended, and exits 2 with the
     /// continuation on stderr, which wakes the session.
     Rewake,
-    /// It runs on once the turn has ended, and puts the continuation on the
-    /// session's queue ([`Harness::queue_prompt`]).
-    Queue,
+    /// It runs on once the turn has ended, and posts the continuation to
+    /// the session's inbound channel ([`Harness::post_prompt`]).
+    Post,
 }
 
 /// A change to an agent's waiting marker.

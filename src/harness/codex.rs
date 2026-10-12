@@ -1,15 +1,21 @@
-//! Codex: `codex --no-daemon -a <policy> -s <sandbox> … [resume|fork <id>]
-//! [prompt]`. `-a never` is the default because an approval prompt in an
-//! unwatched tmux window stalls the agent.
+//! Codex: the window runs `pm harness codex-host` ([`host`]), which starts
+//! the agent's own `codex app-server` and runs the TUI against it
+//! (`codex --remote unix://<socket>`). Approval `never` is the default because
+//! an approval prompt in an unwatched tmux window stalls the agent.
 //!
-//! `--no-daemon` is unconditional. Without it the TUI attaches to the
-//! per-user app-server daemon (started on demand since 0.157), and hooks then
-//! execute in the daemon, whose environment is that of whichever client
-//! started it: `PM_AGENT_NAME` is absent or another agent's, so pm's guarded
-//! hooks exit silently — no session id, no role, no Stop block — and the
-//! agent idles after its first turn. With the flag the TUI runs its own
-//! server in-process and hooks inherit the window's environment, whether or
-//! not a daemon is running.
+//! The server is the agent's alone: hooks execute in the server, with its
+//! environment, which is the window's. A TUI attached to the per-user
+//! app-server daemon (started on demand since 0.157) would run hooks in
+//! the daemon, whose environment is that of whichever client started it:
+//! `PM_AGENT_NAME` absent or another agent's, so pm's guarded hooks exit
+//! silently and the agent idles after its first turn.
+//!
+//! pm prompts the agent through its server ([`app_server`]): `turn/start`
+//! starts a turn on an idle thread, on one Esc interrupted, and on one
+//! not yet prompted, and steers into a running turn, delivered after its
+//! next tool result. It works from inside codex's Interrupt hook, whose
+//! timeout codex clamps to 3 s. A session reports the server's socket and
+//! its thread as its inbound channel at SessionStart ([`inbound`]).
 //!
 //! Codex has no launch-time role channel (no `--agent`), so pm's composed
 //! prompt — definition body, baseline, notice boards — is injected by the
@@ -43,18 +49,20 @@
 //! A resume or fork carries `-c tui.resume_cwd="current"`: when a session
 //! was last run in another directory the TUI otherwise stops at an
 //! interactive directory chooser, which stalls an unwatched window. The
-//! session then continues in the window's directory.
+//! session then continues in the window's directory, which a remote TUI
+//! needs named with `-C`, canonical, or it asks to trust the directory.
 //!
 //! The waiter starts only as a turn ends, so a spawn launches codex with a
-//! prompt (`agent_spawn`'s `SPAWN_PROMPT`, or `RESUME_PROMPT` on a resume).
-//! Arming without one is not possible (codex 0.160 source): SessionStart
-//! runs only as the first turn starts, so with no prompt it never fires; an
-//! async SessionStart's exit 2 is ignored; and `codex queue` cannot reach a
-//! thread before its first user message, which is what persists it.
+//! prompt (`agent_spawn`'s `SPAWN_PROMPT`, or `RESUME_PROMPT` on a resume),
+//! which [`host`] gives with `turn/start`. SessionStart runs only as the
+//! first turn starts, and an async SessionStart's exit 2 is ignored, so
+//! no hook arms a session that has had no turn.
 
+pub(super) mod app_server;
 pub(super) mod chat;
 pub(super) mod dialog;
 pub(super) mod hook_trust;
+pub(super) mod host;
 pub(super) mod input;
 pub(super) mod sessions;
 pub(super) mod transcript;
@@ -70,6 +78,7 @@ use crate::fs_utils::write_atomic;
 use crate::harness::probe::{self, Probe};
 use crate::harness::{SpawnSpec, Wake};
 use crate::state::project::CodexConfig;
+use crate::state::runtime::Inbound;
 use crate::tmux;
 
 pub(super) const CONFIG_DIR: &str = ".codex";
@@ -83,19 +92,17 @@ pub(super) const READS_KEYCHAIN: bool = true;
 pub(super) const HOOKS_FILE: &str = "hooks.json";
 const CONFIG_FILE: &str = "config.toml";
 
-/// Earliest release that accepts `--no-daemon`; older ones reject the
-/// command line outright.
-pub(super) const MIN_VERSION: (u32, u32, u32) = (0, 156, 0);
+/// The release whose app-server and remote TUI pm's launch was verified
+/// on.
+pub(super) const MIN_VERSION: (u32, u32, u32) = (0, 160, 0);
 
-/// The only sandbox mode that takes `--add-dir`.
+/// The sandbox mode whose writable roots pm opens up.
 const WORKSPACE_WRITE: &str = "workspace-write";
-/// Codex refuses to start given `--add-dir` under this mode, and without
-/// the writable roots `pm msg read` and `send` fail, so pm swaps it for
-/// [`READ_ONLY_PROFILE`].
+/// Without the writable roots `pm msg read` and `send` fail, and this mode
+/// has none, so pm swaps it for [`READ_ONLY_PROFILE`].
 const READ_ONLY: &str = "read-only";
-/// The permission profile pm defines on the command line for a
-/// `read-only` agent: the whole disk readable, only the writable roots
-/// writable.
+/// The permission profile pm defines on the server for a `read-only`
+/// agent: the whole disk readable, only the writable roots writable.
 const READ_ONLY_PROFILE: &str = "pm-read-only";
 const DEFAULT_SANDBOX: &str = "danger-full-access";
 const DEFAULT_APPROVAL: &str = "never";
@@ -103,33 +110,43 @@ const DEFAULT_APPROVAL: &str = "never";
 const RESUME_IN_CURRENT_DIR: &str = "tui.resume_cwd=\"current\"";
 
 /// pm's Stop hook is `async`: codex runs it in the background once the
-/// turn has ended, and it outlives the turn and Esc. Its continuation goes
-/// on the session's queue ([`queue_prompt`]).
+/// turn has ended, and it outlives the turn and Esc. Its continuation is
+/// posted to the session's server ([`post`]).
 pub(super) const STOP_HOOK_OPTIONS: &[(&str, bool)] = &[("async", true)];
 
 /// See the module docs.
 pub(super) const NEEDS_LAUNCH_PROMPT: bool = true;
 
-/// `codex queue`: add `text` to the persistent queue (`queue_*.sqlite`)
-/// of thread `session_id`. A running TUI, `--no-daemon` too, starts it as
-/// a turn once the thread is idle — at once when a turn completes, else
-/// within its 10 s poll — and never for an interrupted thread; an item it
-/// has not started survives a restart and runs on resume (codex 0.160;
-/// the app-server's `thread/queue/add` is `#[experimental]`). It writes the
-/// queue itself, starting no daemon.
-pub(super) fn queue_prompt(session_id: &str, text: &str) -> Result<()> {
-    let output = std::process::Command::new(BINARY)
-        .args(["queue", "--thread", session_id, "--message", text])
-        .stdin(std::process::Stdio::null())
-        .output()?;
-    if output.status.success() {
-        return Ok(());
-    }
-    Err(PmError::Agent(format!(
-        "`codex queue` failed: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    )))
+/// The inbound channel of `agent`'s session `thread`: its server's socket,
+/// once the server listens there. A session launched without
+/// [`host`] has none.
+pub(super) fn inbound(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    thread: &str,
+) -> Option<Inbound> {
+    let socket = host::socket_path(project_root, scope, agent).ok()?;
+    std::fs::symlink_metadata(&socket).ok()?;
+    Some(Inbound {
+        socket,
+        token: None,
+        thread: Some(thread.to_string()).filter(|t| !t.is_empty()),
+    })
 }
+
+/// Start a turn of the session on `inbound` with `text`, or steer it into
+/// the turn running.
+pub(super) fn post(inbound: &Inbound, text: &str) -> Result<()> {
+    let thread = inbound.thread.as_deref().ok_or_else(|| {
+        PmError::Agent("its codex session reported no thread to prompt".to_string())
+    })?;
+    app_server::Client::within(&inbound.socket, POST_WITHIN)?.start_turn(thread, text, None)
+}
+
+/// How long a post may take, connecting included: codex kills the
+/// Interrupt hook, which may post, 3 s after it starts.
+const POST_WITHIN: std::time::Duration = std::time::Duration::from_millis(1500);
 
 pub(super) const HOOK_TRUST_REMEDY: &str = "start `codex` once in a trusted directory and \
     choose \"Trust all and continue\" (or set `[harness.codex] bypass_hook_trust = true`)";
@@ -157,6 +174,8 @@ fn sandbox_mode<'a>(cfg: &'a CodexConfig, permission_mode: Option<&'a str>) -> &
         .unwrap_or(DEFAULT_SANDBOX)
 }
 
+/// The window's command: `pm harness codex-host` with the settings
+/// [`host`] launches the server and TUI with.
 pub(super) fn build_cmd(spec: &SpawnSpec<'_>, cfg: &CodexConfig) -> String {
     let SpawnSpec {
         definition: _,
@@ -175,54 +194,33 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>, cfg: &CodexConfig) -> String {
     // supplies the harness-wide default.
     let sandbox = sandbox_mode(cfg, permission_mode);
 
-    let mut parts = vec![
-        BINARY.to_string(),
-        "--no-daemon".to_string(),
-        "-a".to_string(),
-        tmux::shell_quote(approval),
-    ];
-    if sandbox == READ_ONLY {
-        parts.extend(
-            read_only_profile(writable_dirs)
-                .into_iter()
-                .flat_map(|kv| ["-c".to_string(), tmux::shell_quote(&kv)]),
-        );
-    } else {
-        parts.push("-s".to_string());
-        parts.push(tmux::shell_quote(sandbox));
-    }
-
-    if cfg.bypass_hook_trust == Some(true) {
-        parts.push("--dangerously-bypass-hook-trust".to_string());
-    }
-
-    if sandbox == WORKSPACE_WRITE {
+    let mut parts: Vec<String> = ["pm", "harness", "codex-host", "--approval"]
+        .map(str::to_string)
+        .to_vec();
+    parts.push(tmux::shell_quote(approval));
+    parts.push("--sandbox".to_string());
+    parts.push(tmux::shell_quote(sandbox));
+    if sandbox == WORKSPACE_WRITE || sandbox == READ_ONLY {
         for dir in writable_dirs {
-            parts.push("--add-dir".to_string());
+            parts.push("--writable".to_string());
             parts.push(tmux::shell_quote(&dir.to_string_lossy()));
         }
     }
-
     if let Some(id) = model {
-        parts.push("-m".to_string());
+        parts.push("--model".to_string());
         parts.push(tmux::shell_quote(id));
     }
-
-    if resume_session.is_some() {
-        parts.push("-c".to_string());
-        parts.push(tmux::shell_quote(RESUME_IN_CURRENT_DIR));
+    if cfg.bypass_hook_trust == Some(true) {
+        parts.push("--bypass-hook-trust".to_string());
     }
-
-    // Subcommands come after the global options.
     if let Some(session_id) = resume_session {
-        parts.push(if fork_session { "fork" } else { "resume" }.to_string());
-        parts.push(session_id.to_string());
+        parts.push(if fork_session { "--fork" } else { "--resume" }.to_string());
+        parts.push(tmux::shell_quote(session_id));
     }
-
     if let Some(p) = prompt {
+        parts.push("--prompt".to_string());
         parts.push(tmux::shell_quote(p));
     }
-
     parts.join(" ")
 }
 
@@ -417,8 +415,8 @@ fn version_problem(found: Option<&str>) -> Option<String> {
     match parse_version(found) {
         Some(version) if version >= MIN_VERSION => None,
         _ => Some(format!(
-            "installed codex is `{found}`; pm launches it with --no-daemon, which needs {} or \
-             later",
+            "installed codex is `{found}`; pm runs each agent on an app-server of its own, \
+             which needs {} or later",
             min_version_string()
         )),
     }
@@ -431,11 +429,11 @@ pub(super) const LOGIN_STATUS: &[&str] = &["login", "status"];
 /// which live in `$CODEX_HOME/auth.json`.
 pub(super) const CREDENTIALS_STEP: &str = "log in to codex (`codex login`)";
 pub(super) const EXPORT_TAG: &str = "codex";
-pub(super) const WAKE: Wake = Wake::Queue;
+pub(super) const WAKE: Wake = Wake::Post;
 
 pub(super) fn prompt_mechanism() -> String {
     format!(
-        "SessionStart hook context injection outside the shared daemon \
+        "SessionStart hook context injection on the agent's own app-server \
          (needs codex >= {})",
         min_version_string()
     )
@@ -455,30 +453,30 @@ mod tests {
     }
 
     #[test]
-    fn build_cmd_defaults_to_never_and_full_access() {
+    fn build_cmd_runs_the_host_with_what_config_resolved() {
+        let dirs = vec![PathBuf::from("/proj/.pm"), PathBuf::from("/proj/main/.git")];
+        // The definition and prompt file are delivered by the SessionStart
+        // hook, never on the command line.
         let cmd = build_cmd(
             &SpawnSpec {
                 definition: Some("reviewer"),
                 append_prompt_file: Some("/x/baseline.md"),
                 prompt: Some("Stand by."),
+                writable_dirs: &dirs,
                 ..Default::default()
             },
             &cfg(),
         );
-        // The definition and prompt file are delivered by the SessionStart
-        // hook, never on the command line.
         assert_eq!(
             cmd,
-            "codex --no-daemon -a 'never' -s 'danger-full-access' 'Stand by.'"
+            "pm harness codex-host --approval 'never' --sandbox 'danger-full-access' \
+             --prompt 'Stand by.'"
         );
-    }
 
-    #[test]
-    fn build_cmd_sandboxed_agent_gets_writable_dirs_and_permission_row_wins() {
-        let dirs = vec![PathBuf::from("/proj/.pm"), PathBuf::from("/proj/main/.git")];
         let config = CodexConfig {
             sandbox: Some("read-only".into()),
             approval: Some("on-request".into()),
+            bypass_hook_trust: Some(true),
             ..Default::default()
         };
         let cmd = build_cmd(
@@ -486,99 +484,17 @@ mod tests {
                 permission_mode: Some("workspace-write"),
                 model: Some("gpt-5"),
                 writable_dirs: &dirs,
+                resume_session: Some("abc"),
+                fork_session: true,
                 ..Default::default()
             },
             &config,
         );
         assert_eq!(
             cmd,
-            "codex --no-daemon -a 'on-request' -s 'workspace-write' --add-dir '/proj/.pm' \
-             --add-dir '/proj/main/.git' -m 'gpt-5'"
-        );
-
-        // Without a permission row the harness-wide sandbox applies; outside
-        // workspace-write the roots are omitted.
-        let cmd = build_cmd(
-            &SpawnSpec {
-                writable_dirs: &dirs,
-                ..Default::default()
-            },
-            &cfg(),
-        );
-        assert_eq!(cmd, "codex --no-daemon -a 'never' -s 'danger-full-access'");
-
-        let cmd = build_cmd(
-            &SpawnSpec {
-                permission_mode: Some("read-only"),
-                writable_dirs: &dirs,
-                ..Default::default()
-            },
-            &cfg(),
-        );
-        assert_eq!(
-            cmd,
-            "codex --no-daemon -a 'never' -c 'default_permissions=\"pm-read-only\"' \
-             -c 'permissions.pm-read-only.filesystem={ \":root\" = \"read\", \
-             \"/proj/.pm\" = \"write\", \"/proj/main/.git\" = \"write\" }'"
-        );
-    }
-
-    #[test]
-    fn build_cmd_resume_and_fork_are_subcommands_after_options() {
-        let cmd = build_cmd(
-            &SpawnSpec {
-                resume_session: Some("abc"),
-                prompt: Some("go"),
-                ..Default::default()
-            },
-            &cfg(),
-        );
-        assert_eq!(
-            cmd,
-            "codex --no-daemon -a 'never' -s 'danger-full-access' \
-             -c 'tui.resume_cwd=\"current\"' resume abc 'go'"
-        );
-        let cmd = build_cmd(
-            &SpawnSpec {
-                resume_session: Some("abc"),
-                fork_session: true,
-                ..Default::default()
-            },
-            &cfg(),
-        );
-        assert_eq!(
-            cmd,
-            "codex --no-daemon -a 'never' -s 'danger-full-access' \
-             -c 'tui.resume_cwd=\"current\"' fork abc"
-        );
-        // A fork without a source is a plain spawn.
-        let cmd = build_cmd(
-            &SpawnSpec {
-                fork_session: true,
-                ..Default::default()
-            },
-            &cfg(),
-        );
-        assert_eq!(cmd, "codex --no-daemon -a 'never' -s 'danger-full-access'");
-    }
-
-    #[test]
-    fn build_cmd_bypass_hook_trust_is_opt_in() {
-        let config = CodexConfig {
-            bypass_hook_trust: Some(true),
-            ..Default::default()
-        };
-        assert_eq!(
-            build_cmd(&SpawnSpec::default(), &config),
-            "codex --no-daemon -a 'never' -s 'danger-full-access' --dangerously-bypass-hook-trust"
-        );
-        let config = CodexConfig {
-            bypass_hook_trust: Some(false),
-            ..Default::default()
-        };
-        assert_eq!(
-            build_cmd(&SpawnSpec::default(), &config),
-            "codex --no-daemon -a 'never' -s 'danger-full-access'"
+            "pm harness codex-host --approval 'on-request' --sandbox 'workspace-write' \
+             --writable '/proj/.pm' --writable '/proj/main/.git' --model 'gpt-5' \
+             --bypass-hook-trust --fork 'abc'"
         );
     }
 
@@ -692,10 +608,10 @@ mod tests {
         );
         assert_eq!(
             version_problem(Some("codex-cli 0.155.9")).unwrap(),
-            "installed codex is `codex-cli 0.155.9`; pm launches it with --no-daemon, which \
-             needs 0.156.0 or later"
+            "installed codex is `codex-cli 0.155.9`; pm runs each agent on an app-server of its \
+             own, which needs 0.160.0 or later"
         );
-        assert_eq!(version_problem(Some("codex-cli 0.156.0")), None);
+        assert_eq!(version_problem(Some("codex-cli 0.160.0")), None);
     }
 
     #[test]
@@ -704,7 +620,7 @@ mod tests {
         assert_eq!(parse_version("codex-cli 1.2.0-alpha.3\n"), Some((1, 2, 0)));
         assert_eq!(parse_version("codex-cli"), None);
         assert_eq!(parse_version(""), None);
-        assert!(parse_version("codex-cli 0.156.0").unwrap() >= MIN_VERSION);
-        assert!(parse_version("codex-cli 0.155.1").unwrap() < MIN_VERSION);
+        assert!(parse_version("codex-cli 0.160.0").unwrap() >= MIN_VERSION);
+        assert!(parse_version("codex-cli 0.159.1").unwrap() < MIN_VERSION);
     }
 }

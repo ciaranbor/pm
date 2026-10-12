@@ -602,9 +602,10 @@ fn open_restores_sessions_and_respawns_agents_from_the_registry() {
     assert_eq!(records.len(), 2);
 }
 
-/// Catches: the codex command line through the real shell and the directory
-/// trust entry written under the real `~/.codex` (no `CODEX_HOME`), keyed by
-/// the worktree path pm actually resolves.
+/// Catches: the codex host's TUI command line, reached through the real
+/// shell and `pm harness codex-host`, and the directory trust entry written
+/// under the real `~/.codex` (no `CODEX_HOME`), keyed by the worktree path
+/// pm actually resolves.
 #[test]
 #[ignore]
 fn codex_spawn_builds_the_command_and_trusts_the_worktree() {
@@ -619,14 +620,13 @@ fn codex_spawn_builds_the_command_and_trusts_the_worktree() {
 
     let records = s.argv_records("reviewer", 1);
     let rec = &records[0];
+    let socket = s.proj().join(".pm/runtime/login/reviewer/app-server.sock");
     let expected: Vec<String> = [
         s.home().join("bin/codex").to_string_lossy().to_string(),
-        "--no-daemon".into(),
-        "-a".into(),
-        "never".into(),
-        "-s".into(),
-        "danger-full-access".into(),
-        "Stand by.".into(),
+        "--remote".into(),
+        format!("unix://{}", socket.display()),
+        "-C".into(),
+        login.canonicalize().unwrap().to_string_lossy().to_string(),
     ]
     .into();
     assert_eq!(rec.argv, expected);
@@ -639,6 +639,47 @@ fn codex_spawn_builds_the_command_and_trusts_the_worktree() {
         "{trust}"
     );
     assert!(trust.contains("trust_level = \"trusted\""), "{trust}");
+}
+
+/// Catches: a codex agent's app-server outliving its window. The TUI holds
+/// the terminal's foreground, so only the host that started the server can
+/// end it as the window closes; a survivor would take wakes as turns
+/// nobody sees.
+#[test]
+#[ignore]
+fn stopping_a_codex_agent_ends_its_app_server() {
+    let s = Smoke::new();
+    let login = s.init_with_feature();
+    s.set_agents_config("harness", "\"*\" = \"codex\"");
+    s.pm(&login)
+        .args(["agent", "spawn", "reviewer"])
+        .assert()
+        .success();
+    s.argv_records("reviewer", 1);
+    let socket = s.proj().join(".pm/runtime/login/reviewer/app-server.sock");
+    let pid: i32 = std::fs::read_to_string(&socket)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let alive = |pid: i32| {
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .unwrap()
+            .success()
+    };
+    assert!(alive(pid));
+
+    s.pm(&login)
+        .args(["agent", "stop", "reviewer"])
+        .assert()
+        .success();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while alive(pid) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(!alive(pid), "the app-server outlived its window");
 }
 
 /// Catches: opencode's env-prefixed command line through the real shell;

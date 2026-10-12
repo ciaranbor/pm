@@ -1,7 +1,7 @@
 //! The **inbound channel**: where a process outside the agent's session
 //! posts it a prompt without typing into its window, as the session
 //! reported at its start
-//! ([`Harness::inbound_from_env`](crate::harness::Harness::inbound_from_env)).
+//! ([`Harness::inbound`](crate::harness::Harness::inbound)).
 //! Every spawn forgets it until the new session starts.
 
 use std::path::{Path, PathBuf};
@@ -22,6 +22,9 @@ pub struct Inbound {
     /// What tells the session a post is from one of its own, if it gave one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
+    /// The conversation to post to, for a socket that serves several.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<String>,
 }
 
 /// Record `inbound` as the agent's current session's, or forget it (`None`).

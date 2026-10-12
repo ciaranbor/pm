@@ -697,3 +697,128 @@ fn codex_async_question_reads_asking_and_is_answered_through_serve() {
         .assert()
         .success();
 }
+
+/// Catches: a codex agent not woken through its own app-server — after Esc
+/// ends a turn (no Stop hook runs), whether the message came before the Esc
+/// or after it — and pm's sandbox lost on a resume or a fork, where the TUI
+/// takes no permission flags: a read-only agent must still write pm's
+/// state and nothing else. Then that stopping the agents leaves no server
+/// to run a wake as a turn nobody sees. A few turns on codex's default
+/// model.
+#[test]
+#[ignore]
+fn codex_is_woken_without_typing_and_keeps_its_sandbox() {
+    use pm::state::runtime::{self, WaitingKind};
+    require("codex");
+    let s = Smoke::real();
+    let proj = s.project_on("proj", "codex", None);
+    let config = proj.join(".pm/config.toml");
+    let text = std::fs::read_to_string(&config).unwrap().replace(
+        "[agents.permissions]\n",
+        "[agents.permissions]\nplain = \"read-only\"\n",
+    );
+    std::fs::write(&config, text).unwrap();
+    let main = proj.join("main");
+    let messages = proj.join(".pm/messages");
+    let unread = |agent: &str| pm::messages::unread_count(&messages, "main", agent);
+    let marker = |agent: &str| runtime::read_waiting(&proj, "main", agent).map(|w| w.kind);
+    let send = |agent: &str, text: &str| {
+        let out = s
+            .pm(&main)
+            .args(["msg", "send", agent, text])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let idle_and_read = |agent: &str| {
+        wait_for("the agent to read its messages and idle", TURN, &s, || {
+            unread(agent) == 0 && marker(agent) == Some(WaitingKind::Idle)
+        });
+    };
+
+    // Trust pm's hooks once, through codex's own gate, so no resume stops
+    // at its review.
+    let _ = s.pm(&main).args(["agent", "spawn", "plain"]).output();
+    s.tmux_ok(&["send-keys", "-t", "proj/main:plain", "2", "Enter"]);
+    idle_and_read("plain");
+
+    send(
+        "plain",
+        "Run the shell command `sleep 60` in the foreground, then reply done.",
+    );
+    wait_for("the turn", TURN, &s, || {
+        unread("plain") == 0 && marker("plain").is_none()
+    });
+    std::thread::sleep(Duration::from_secs(8));
+    send("plain", "Reply with the word plum and nothing else.");
+    s.tmux_ok(&["send-keys", "-t", "proj/main:plain", "Escape"]);
+    idle_and_read("plain");
+
+    send(
+        "plain",
+        "Run the shell command `sleep 60` in the foreground, then reply done.",
+    );
+    wait_for("the turn", TURN, &s, || {
+        unread("plain") == 0 && marker("plain").is_none()
+    });
+    std::thread::sleep(Duration::from_secs(8));
+    s.tmux_ok(&["send-keys", "-t", "proj/main:plain", "Escape"]);
+    wait_for("the interrupt", TURN, &s, || {
+        marker("plain") == Some(WaitingKind::Interrupted)
+    });
+    let status = send("plain", "Reply with the word fig and nothing else.");
+    assert!(
+        status.contains("Re-armed 'plain' (interrupted)"),
+        "{status}"
+    );
+    idle_and_read("plain");
+
+    let writes = |agent: &str| {
+        let allowed = proj.join(format!(".pm/{agent}-allowed"));
+        let denied = main.join(format!("{agent}-denied"));
+        send(
+            agent,
+            &format!(
+                "Run exactly these two shell commands, each on its own, and reply with their \
+                 exit statuses: `touch {}` and `touch {}`.",
+                allowed.display(),
+                denied.display()
+            ),
+        );
+        idle_and_read(agent);
+        assert!(allowed.exists(), "{agent} could not write pm's state");
+        assert!(!denied.exists(), "{agent} wrote its read-only worktree");
+    };
+    s.pm(&main)
+        .args(["agent", "restart", "--force", "plain"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("resumed session"));
+    idle_and_read("plain");
+    writes("plain");
+    s.pm(&main)
+        .args(["agent", "fork", "plain", "twin"])
+        .assert()
+        .success();
+    idle_and_read("twin");
+    writes("twin");
+
+    s.pm(&main)
+        .args(["agent", "stop", "plain", "twin"])
+        .assert()
+        .success();
+    let servers = || {
+        let out = std::process::Command::new("pgrep")
+            .args([
+                "-f",
+                &format!("app-server --listen unix://{}", proj.display()),
+            ])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    wait_for("the servers to end", Duration::from_secs(10), &s, || {
+        servers().is_empty()
+    });
+}
