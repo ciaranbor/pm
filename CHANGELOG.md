@@ -6,6 +6,8 @@ notes.
 
 ## Unreleased
 
+## 0.7.0 — 2026-10-12
+
 - A machine-wide supervisor: `pm onboard` creates a `home` project at
 `~/.local/share/pm/home` whose main runs a `supervisor` agent. It changes pm
 settings and acts on any project's agents when you ask, and walks a new user
