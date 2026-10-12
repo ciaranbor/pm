@@ -170,7 +170,15 @@ mod tests {
             server.name(),
         ))
         .unwrap();
-        feat_status(&project, "login", Progress::Blocked, Some("why?"), None).unwrap();
+        feat_status(
+            &project,
+            "login",
+            Progress::Blocked,
+            Some("why?"),
+            None,
+            crate::testing::NO_SERVER,
+        )
+        .unwrap();
         let count = || tmux_out(server.name(), &["show", "-gqv", "@pm_count"]);
 
         push(&projects_dir, server.name()).unwrap();

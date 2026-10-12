@@ -47,7 +47,7 @@ pub fn cursor_for(messages_dir: &Path, feature: &str, agent: &str, sender: &str)
 pub fn next(messages_dir: &Path, feature: &str, agent: &str, sender: &str) -> Result<u32> {
     validate_name(feature, "feature")?;
     validate_name(agent, "agent")?;
-    validate_name(sender, "sender")?;
+    super::address::validate_key(sender)?;
 
     let sdir = super::layout::sender_dir(messages_dir, feature, agent, sender);
     let latest = super::layout::max_index(&sdir)?;
@@ -86,18 +86,27 @@ mod tests {
         send(&mdir, "login", "reviewer", "implementer", "three").unwrap();
 
         assert_eq!(
-            cursor_for(&mdir, "login", "reviewer", "implementer").unwrap(),
+            cursor_for(&mdir, "login", "reviewer", "implementer@login").unwrap(),
             0
         );
-        assert_eq!(next(&mdir, "login", "reviewer", "implementer").unwrap(), 1);
         assert_eq!(
-            cursor_for(&mdir, "login", "reviewer", "implementer").unwrap(),
+            next(&mdir, "login", "reviewer", "implementer@login").unwrap(),
             1
         );
-        assert_eq!(next(&mdir, "login", "reviewer", "implementer").unwrap(), 2);
-        assert_eq!(next(&mdir, "login", "reviewer", "implementer").unwrap(), 3);
         assert_eq!(
-            cursor_for(&mdir, "login", "reviewer", "implementer").unwrap(),
+            cursor_for(&mdir, "login", "reviewer", "implementer@login").unwrap(),
+            1
+        );
+        assert_eq!(
+            next(&mdir, "login", "reviewer", "implementer@login").unwrap(),
+            2
+        );
+        assert_eq!(
+            next(&mdir, "login", "reviewer", "implementer@login").unwrap(),
+            3
+        );
+        assert_eq!(
+            cursor_for(&mdir, "login", "reviewer", "implementer@login").unwrap(),
             3
         );
     }
@@ -108,9 +117,9 @@ mod tests {
         let mdir = messages_dir(dir.path());
 
         send(&mdir, "login", "reviewer", "implementer", "one").unwrap();
-        next(&mdir, "login", "reviewer", "implementer").unwrap();
+        next(&mdir, "login", "reviewer", "implementer@login").unwrap();
 
-        let err = next(&mdir, "login", "reviewer", "implementer").unwrap_err();
+        let err = next(&mdir, "login", "reviewer", "implementer@login").unwrap_err();
         assert!(matches!(err, PmError::Messaging(_)));
         assert!(format!("{err}").contains("no messages to advance past"));
     }
@@ -121,7 +130,7 @@ mod tests {
         let mdir = messages_dir(dir.path());
 
         // No messages from "implementer" yet.
-        let err = next(&mdir, "login", "reviewer", "implementer").unwrap_err();
+        let err = next(&mdir, "login", "reviewer", "implementer@login").unwrap_err();
         assert!(matches!(err, PmError::Messaging(_)));
     }
 
@@ -133,12 +142,15 @@ mod tests {
         send(&mdir, "login", "reviewer", "implementer", "impl").unwrap();
         send(&mdir, "login", "reviewer", "user", "user").unwrap();
 
-        next(&mdir, "login", "reviewer", "implementer").unwrap();
+        next(&mdir, "login", "reviewer", "implementer@login").unwrap();
 
         assert_eq!(
-            cursor_for(&mdir, "login", "reviewer", "implementer").unwrap(),
+            cursor_for(&mdir, "login", "reviewer", "implementer@login").unwrap(),
             1
         );
-        assert_eq!(cursor_for(&mdir, "login", "reviewer", "user").unwrap(), 0);
+        assert_eq!(
+            cursor_for(&mdir, "login", "reviewer", "user@login").unwrap(),
+            0
+        );
     }
 }

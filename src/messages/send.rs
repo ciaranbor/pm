@@ -4,6 +4,7 @@ use std::path::Path;
 
 use chrono::Utc;
 
+use super::address;
 use super::layout::{max_index, meta_dir, sender_dir};
 use super::types::MessageMeta;
 use super::validation::validate_name;
@@ -64,7 +65,7 @@ pub fn send_full(
     send_meta(messages_dir, feature, recipient, &meta, body)
 }
 
-/// Send a message carrying `meta`, whose sender names the queue.
+/// Send a message carrying `meta`, whose sender's address names the queue.
 pub fn send_meta(
     messages_dir: &Path,
     feature: &str,
@@ -72,10 +73,12 @@ pub fn send_meta(
     meta: &MessageMeta,
     body: &str,
 ) -> Result<u32> {
-    let sender = meta.sender.as_str();
     validate_name(feature, "feature")?;
     validate_name(recipient, "recipient")?;
-    validate_name(sender, "sender")?;
+    validate_name(&meta.sender, "sender")?;
+    let key = address::queue_key(meta, feature);
+    let sender = key.as_str();
+    address::validate_key(sender)?;
 
     let sdir = sender_dir(messages_dir, feature, recipient, sender);
     let mdir = meta_dir(messages_dir, feature, recipient, sender);
@@ -122,17 +125,17 @@ mod tests {
         let dir = tempdir().unwrap();
         let messages_dir = dir.path();
         send(messages_dir, "login", "reviewer", "user", "first").unwrap();
-        next(messages_dir, "login", "reviewer", "user").unwrap();
+        next(messages_dir, "login", "reviewer", "user@login").unwrap();
         std::fs::write(
-            meta_dir(messages_dir, "login", "reviewer", "user").join("002.json"),
+            meta_dir(messages_dir, "login", "reviewer", "user@login").join("002.json"),
             "{",
         )
         .unwrap();
 
         send(messages_dir, "login", "reviewer", "user", "second").unwrap();
 
-        let cursor = cursor_for(messages_dir, "login", "reviewer", "user").unwrap();
-        let read = read_at(messages_dir, "login", "reviewer", "user", cursor + 1)
+        let cursor = cursor_for(messages_dir, "login", "reviewer", "user@login").unwrap();
+        let read = read_at(messages_dir, "login", "reviewer", "user@login", cursor + 1)
             .unwrap()
             .unwrap();
         assert_eq!(read.body, "second");
@@ -157,7 +160,7 @@ mod tests {
         while !senders.iter().all(|t| t.is_finished()) {
             let listed = list(&messages_dir, "login", "reviewer", None).unwrap();
             let latest = listed.last().unwrap().index;
-            read_at(&messages_dir, "login", "reviewer", "user", latest).unwrap();
+            read_at(&messages_dir, "login", "reviewer", "user@login", latest).unwrap();
         }
         for t in senders {
             t.join().unwrap();
@@ -175,7 +178,7 @@ mod tests {
         let index = send(&mdir, "login", "reviewer", "implementer", "Please review").unwrap();
         assert_eq!(index, 1);
 
-        let msg_path = mdir.join("login/reviewer/from-implementer/001.md");
+        let msg_path = mdir.join("login/reviewer/from-implementer@login/001.md");
         assert!(msg_path.exists());
         assert_eq!(std::fs::read_to_string(&msg_path).unwrap(), "Please review");
     }
@@ -187,7 +190,7 @@ mod tests {
 
         send(&mdir, "login", "reviewer", "implementer", "hello").unwrap();
 
-        let meta_path = mdir.join("login/reviewer/.meta/from-implementer/001.json");
+        let meta_path = mdir.join("login/reviewer/.meta/from-implementer@login/001.json");
         assert!(meta_path.exists());
 
         let content = std::fs::read_to_string(&meta_path).unwrap();
@@ -232,7 +235,7 @@ mod tests {
         assert_eq!(i3, 3);
 
         // Delete message 002
-        let msg2_path = mdir.join("login/reviewer/from-implementer/002.md");
+        let msg2_path = mdir.join("login/reviewer/from-implementer@login/002.md");
         std::fs::remove_file(&msg2_path).unwrap();
 
         // Next index should still be 4 (based on max existing)

@@ -74,8 +74,7 @@ pub struct SpawnParams<'a> {
 
 /// Spawn an agent session in a tmux window. If `resume_session` is
 /// provided, the harness resumes it. Sets `PM_AGENT_NAME` in the spawned
-/// shell so the agent auto-identifies in `pm msg send/check/read` without
-/// `--as-agent`.
+/// shell: it is the agent's identity in `pm msg`.
 ///
 /// # Safety
 /// Callers must validate `agent_name` via `validate_name()` before calling —

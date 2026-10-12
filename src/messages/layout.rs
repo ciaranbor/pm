@@ -1,9 +1,11 @@
 //! Where an inbox lives on disk.
 //!
-//! `<messages>/<feature>/<agent>/` holds one `from-<sender>/` queue of
-//! numbered `NNN.md` bodies per sender, their metadata under
-//! `.meta/from-<sender>/NNN.json`, and the `.cursor` and `.last_read` files.
-//! A queue's latest index is its highest-numbered body.
+//! `<messages>/<feature>/<agent>/` holds one `from-<address>/` queue of
+//! numbered `NNN.md` bodies per sender address, their metadata under
+//! `.meta/from-<address>/NNN.json`, and the `.cursor` and `.last_read` files.
+//! A queue's latest index is its highest-numbered body. A queue whose key
+//! starts with a dot is pm's own working copy, never a sender's
+//! ([`rekey`](super::rekey)).
 
 use std::path::{Path, PathBuf};
 
@@ -58,6 +60,7 @@ pub(super) fn list_senders(inbox: &Path) -> Result<Vec<String>> {
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if let Some(sender) = name.strip_prefix("from-")
+            && !sender.starts_with('.')
             && entry.path().is_dir()
         {
             senders.push(sender.to_string());
@@ -65,4 +68,12 @@ pub(super) fn list_senders(inbox: &Path) -> Result<Vec<String>> {
     }
     senders.sort();
     Ok(senders)
+}
+
+/// Remove `dir` and everything in it; one already gone is fine.
+pub(super) fn remove_dir(dir: &Path) -> Result<()> {
+    match std::fs::remove_dir_all(dir) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+        _ => Ok(()),
+    }
 }

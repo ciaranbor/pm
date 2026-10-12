@@ -52,6 +52,7 @@ pub mod msg_list;
 pub mod msg_reply;
 pub mod notes;
 pub mod open;
+pub mod ready_notice;
 pub mod reexec;
 pub mod register;
 pub mod restart_at_idle;

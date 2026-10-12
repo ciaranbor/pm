@@ -1405,7 +1405,15 @@ mod tests {
             .unwrap();
             roots.push(root);
         }
-        feat_status(&roots[1], "search", Progress::Blocked, Some("why?"), None).unwrap();
+        feat_status(
+            &roots[1],
+            "search",
+            Progress::Blocked,
+            Some("why?"),
+            None,
+            crate::testing::NO_SERVER,
+        )
+        .unwrap();
         let gone = dir.path().join(server.scope("gone"));
         init::init(&gone, &projects_dir, None, server.name()).unwrap();
         std::fs::remove_dir_all(&gone).unwrap();

@@ -62,7 +62,7 @@ fn merge_tells_main_the_feature_merged_and_keeps_its_summary() {
         &paths::messages_dir(&project_path),
         "main",
         "main",
-        "login",
+        "login@login",
         1,
     )
     .unwrap()

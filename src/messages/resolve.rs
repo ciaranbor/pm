@@ -1,18 +1,27 @@
-//! Which sender a read takes next: the given one, or else the sender whose
-//! earliest unread message is oldest.
+//! Which sender a read takes next: the one `--from` names, or else the
+//! sender whose earliest unread message is oldest.
 
 use std::path::Path;
 
 use chrono::Utc;
 
+use super::address;
 use super::cursor;
+use super::layout::{inbox_dir, list_senders};
 use super::read::{check, load_meta};
 use super::types::SenderChoice;
-use super::validation::validate_name;
 use crate::error::Result;
 
-/// Resolve which sender a read operates on: `from` when given, otherwise the
-/// sender whose earliest unread message is oldest. `pending` lists every
+/// The sender address `from` names in an agent's inbox
+/// ([`address::resolve`]).
+pub fn resolve_from(messages_dir: &Path, feature: &str, agent: &str, from: &str) -> Result<String> {
+    let keys = list_senders(&inbox_dir(messages_dir, feature, agent))?;
+    address::resolve(keys.iter().map(String::as_str), from)
+}
+
+/// Resolve which sender a read operates on: the one `from` names when
+/// given ([`resolve_from`]), otherwise the sender whose earliest unread
+/// message is oldest. `pending` lists every
 /// other sender with unread messages, oldest first. `None` only when nothing
 /// is unread and no `from` was given.
 ///
@@ -25,9 +34,9 @@ pub fn resolve_sender(
     agent: &str,
     from: Option<&str>,
 ) -> Result<Option<SenderChoice>> {
-    if let Some(s) = from {
-        validate_name(s, "sender")?;
-    }
+    let from = from
+        .map(|from| resolve_from(messages_dir, feature, agent, from))
+        .transpose()?;
 
     let csr = cursor::load_cursor(&cursor::cursor_path(messages_dir, feature, agent))?;
     let mut dated: Vec<(Option<chrono::DateTime<Utc>>, String)> =
@@ -47,8 +56,8 @@ pub fn resolve_sender(
 
     let sender = match from {
         Some(s) => {
-            senders.retain(|name| name != s);
-            s.to_string()
+            senders.retain(|name| *name != s);
+            s
         }
         None if senders.is_empty() => return Ok(None),
         None => senders.remove(0),
@@ -92,7 +101,7 @@ mod tests {
         send(&mdir, "login", "reviewer", "user", "b").unwrap();
 
         let r = resolve_sender(&mdir, "login", "reviewer", Some("user")).unwrap();
-        assert_eq!(r, Some(choice("user", &["implementer"])));
+        assert_eq!(r, Some(choice("user@login", &["implementer@login"])));
     }
 
     #[test]
@@ -102,7 +111,7 @@ mod tests {
 
         send(&mdir, "login", "reviewer", "implementer", "msg").unwrap();
         let r = resolve_sender(&mdir, "login", "reviewer", None).unwrap();
-        assert_eq!(r, Some(choice("implementer", &[])));
+        assert_eq!(r, Some(choice("implementer@login", &[])));
     }
 
     #[test]
@@ -120,7 +129,7 @@ mod tests {
         let mdir = messages_dir(dir.path());
 
         send(&mdir, "login", "reviewer", "implementer", "msg").unwrap();
-        next(&mdir, "login", "reviewer", "implementer").unwrap();
+        next(&mdir, "login", "reviewer", "implementer@login").unwrap();
 
         let r = resolve_sender(&mdir, "login", "reviewer", None).unwrap();
         assert_eq!(r, None);
@@ -138,7 +147,7 @@ mod tests {
         }
 
         let r = resolve_sender(&mdir, "login", "reviewer", None).unwrap();
-        assert_eq!(r, Some(choice("zed", &["amy", "mid"])));
+        assert_eq!(r, Some(choice("zed@login", &["amy@login", "mid@login"])));
     }
 
     #[test]
@@ -153,10 +162,10 @@ mod tests {
         send(&mdir, "login", "reviewer", "zed", "unread").unwrap();
         std::thread::sleep(std::time::Duration::from_millis(2));
         send(&mdir, "login", "reviewer", "amy", "unread").unwrap();
-        next(&mdir, "login", "reviewer", "amy").unwrap();
+        next(&mdir, "login", "reviewer", "amy@login").unwrap();
 
         let r = resolve_sender(&mdir, "login", "reviewer", None).unwrap();
-        assert_eq!(r, Some(choice("zed", &["amy"])));
+        assert_eq!(r, Some(choice("zed@login", &["amy@login"])));
     }
 
     #[test]
@@ -169,14 +178,14 @@ mod tests {
         send(&mdir, "login", "reviewer", "amy", "dated").unwrap();
         send(&mdir, "login", "reviewer", "zed", "undated").unwrap();
         std::fs::write(
-            meta_dir(&mdir, "login", "reviewer", "zed").join("001.json"),
+            meta_dir(&mdir, "login", "reviewer", "zed@login").join("001.json"),
             "",
         )
         .unwrap();
 
         assert_eq!(check(&mdir, "login", "reviewer").unwrap().len(), 2);
         let r = resolve_sender(&mdir, "login", "reviewer", None).unwrap();
-        assert_eq!(r, Some(choice("zed", &["amy"])));
+        assert_eq!(r, Some(choice("zed@login", &["amy@login"])));
     }
 
     #[test]
@@ -188,9 +197,9 @@ mod tests {
 
         send(&mdir, "login", "reviewer", "implementer", "a").unwrap();
         send(&mdir, "login", "reviewer", "user", "b").unwrap();
-        next(&mdir, "login", "reviewer", "implementer").unwrap();
+        next(&mdir, "login", "reviewer", "implementer@login").unwrap();
 
         let r = resolve_sender(&mdir, "login", "reviewer", None).unwrap();
-        assert_eq!(r, Some(choice("user", &[])));
+        assert_eq!(r, Some(choice("user@login", &[])));
     }
 }

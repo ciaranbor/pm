@@ -599,9 +599,6 @@ pub enum MsgCommands {
         agent: String,
         /// Message body (if omitted, reads from stdin)
         message: Option<String>,
-        /// Sender identity (defaults to $PM_AGENT_NAME or $USER)
-        #[arg(long)]
-        as_agent: Option<String>,
         /// Deliver to a different scope (feature name or "main")
         #[arg(long)]
         scope: Option<String>,
@@ -614,8 +611,10 @@ pub enum MsgCommands {
     },
     /// Read the next unread message and advance the cursor
     Read {
-        /// Which sender's queue to read from. Required with --index.
-        /// Without --index, inferred when exactly one sender has unread messages.
+        /// Which sender's queue to read from: its address (name@scope, plus
+        /// @project for another project's), or any leading part of it that
+        /// names one sender. Required with --index. Without it, a read takes
+        /// the sender whose earliest unread message is oldest.
         #[arg(long)]
         from: Option<String>,
         /// Re-read a specific message without advancing the cursor.
@@ -623,9 +622,6 @@ pub enum MsgCommands {
         /// If omitted, reads the next unread message and advances.
         #[arg(long, value_name = "SPEC")]
         index: Option<String>,
-        /// Agent name (defaults to $PM_AGENT_NAME or $USER)
-        #[arg(long)]
-        as_agent: Option<String>,
         /// Read from a different scope's inbox (feature name or "main")
         #[arg(long)]
         scope: Option<String>,
@@ -634,12 +630,9 @@ pub enum MsgCommands {
     },
     /// List all messages in your inbox, with cursor position markers
     List {
-        /// Only show messages from this sender
+        /// Only show messages from the senders this address, or leading part of one, names
         #[arg(long)]
         from: Option<String>,
-        /// Agent name (defaults to $PM_AGENT_NAME or $USER)
-        #[arg(long)]
-        as_agent: Option<String>,
         /// List messages from a different scope's inbox (feature name or "main")
         #[arg(long)]
         scope: Option<String>,
@@ -650,9 +643,6 @@ pub enum MsgCommands {
     Reply {
         /// Reply body (if omitted, reads from stdin)
         message: Option<String>,
-        /// Sender identity (defaults to $PM_AGENT_NAME or $USER)
-        #[arg(long)]
-        as_agent: Option<String>,
         /// Reply from a different scope's inbox (feature name or "main")
         #[arg(long)]
         scope: Option<String>,
@@ -661,12 +651,9 @@ pub enum MsgCommands {
     },
     /// Block until a message arrives in your inbox
     Wait {
-        /// Only block on messages from this sender
+        /// Only block on messages from the senders this address, or leading part of one, names
         #[arg(long)]
         from: Option<String>,
-        /// Agent name (defaults to $PM_AGENT_NAME or $USER)
-        #[arg(long)]
-        as_agent: Option<String>,
         /// Wait on a different scope's inbox (feature name or "main")
         #[arg(long)]
         scope: Option<String>,

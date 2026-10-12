@@ -64,6 +64,10 @@
 //! harness, so a deleted file is restored by the next spawn. The directory
 //! ignores itself, keeping machine-specific files out of the `.pm/` state
 //! repo.
+//!
+//! The **ready notice** files are the scope's own, not an agent's: they live
+//! in `<project>/.pm/runtime/<scope>/` and go with the scope
+//! ([`ready_notice`](crate::commands::ready_notice)).
 
 use std::path::{Path, PathBuf};
 
@@ -102,7 +106,17 @@ fn scope_dir(project_root: &Path, scope: &str) -> PathBuf {
 
 /// The agent's runtime dir, created if missing.
 pub fn agent_dir(project_root: &Path, scope: &str, agent: &str) -> Result<PathBuf> {
-    let dir = scope_dir(project_root, scope).join(agent);
+    created(scope_dir(project_root, scope).join(agent), project_root)
+}
+
+/// The path of a scope's own runtime file `name`, its dir created if
+/// missing. `name` starts with a dot, which no agent's name does.
+pub fn scope_file(project_root: &Path, scope: &str, name: &str) -> Result<PathBuf> {
+    debug_assert!(name.starts_with('.'));
+    Ok(created(scope_dir(project_root, scope), project_root)?.join(name))
+}
+
+fn created(dir: PathBuf, project_root: &Path) -> Result<PathBuf> {
     std::fs::create_dir_all(&dir)?;
     let ignore = root(project_root).join(".gitignore");
     if !ignore.exists() {

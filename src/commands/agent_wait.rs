@@ -7,7 +7,8 @@ use crate::state::paths;
 
 /// Poll for new messages in an agent's inbox, blocking until at least one
 /// arrives. Returns the total unread count when messages are found. If
-/// `from` is specified, only messages from that sender count.
+/// `from` is specified, only messages from the senders it
+/// [matches](messages::address::matches) count.
 pub fn agent_wait(
     project_root: &Path,
     feature: &str,
@@ -40,7 +41,7 @@ pub fn agent_wait_while(
         let summaries = messages::check(&messages_dir, feature, agent)?;
         let total: u32 = summaries
             .iter()
-            .filter(|s| from.is_none_or(|f| s.sender == f))
+            .filter(|s| from.is_none_or(|f| messages::address::matches(&s.sender, f)))
             .map(|s| s.count)
             .sum();
 

@@ -2,20 +2,20 @@
 //!
 //! Every scope has one ([`TeamStatus`]). `ready` is a feature's alone: it
 //! means waiting on a merge or delete, which main never is. It requires a
-//! non-empty summary and messages `main` each time it is set, so
-//! re-marking a feature ready is how a revised summary reaches `main`.
-//! `main` reviews it for gaps; triage waits for the merge or delete notice
-//! (see [`super::feat_delete`]). The message carries the sender's feature
-//! scope, so `main` can reply to the agent with follow-up questions while
-//! the team is still running. `blocked` and `wip` message no one.
+//! non-empty summary and tells `main` ([`ready_notice`] has when, and when
+//! not again). `main` reviews it for gaps; triage waits for the merge or
+//! delete notice (see [`super::feat_delete`]). The notice carries the
+//! sender's feature scope, so `main` can reply to the agent with follow-up
+//! questions while the team is still running. `blocked` and `wip` message
+//! no one.
 //!
 //! A blocked scope may carry a reason, the question the user is to answer,
 //! and records the agent that set it. Any later status change drops both.
 
 use std::path::Path;
 
+use super::ready_notice::{self, Notice};
 use crate::error::{PmError, Result};
-use crate::messages;
 use crate::state::feature::{FeatureState, Progress};
 use crate::state::paths;
 use crate::state::scope::{self, TeamStatus};
@@ -23,13 +23,15 @@ use crate::state::scope::{self, TeamStatus};
 /// Set `scope`'s progress, with `reason` only for `blocked`. `agent` is the
 /// agent running the command, if any: recorded as the one a `blocked` scope
 /// waits in, and the one `main` can reply to about a `ready` message.
+/// Returns what became of the ready notice when marking a feature ready.
 pub fn feat_status(
     project_root: &Path,
     scope: &str,
     progress: Progress,
     reason: Option<&str>,
     agent: Option<&str>,
-) -> Result<()> {
+    tmux_server: Option<&str>,
+) -> Result<Option<Notice>> {
     if reason.is_some() && progress != Progress::Blocked {
         return Err(PmError::SafetyCheck(format!(
             "a reason is only given with `blocked`, not `{progress}`"
@@ -51,9 +53,17 @@ pub fn feat_status(
     .save(project_root, scope)?;
 
     if progress == Progress::Ready {
-        notify_ready(project_root, scope, agent)?;
+        return Ok(Some(ready_notice::mark_ready(
+            project_root,
+            scope,
+            agent,
+            tmux_server,
+        )?));
     }
-    Ok(())
+    if scope != scope::MAIN {
+        ready_notice::leave_ready(project_root, scope)?;
+    }
+    Ok(None)
 }
 
 /// `Ok` if `scope` may be marked ready: a feature with a summary.
@@ -83,34 +93,6 @@ fn check_ready(project_root: &Path, scope: &str) -> Result<()> {
         ));
     }
     Err(PmError::Summary(msg))
-}
-
-/// Tell the orchestrator that `name` is ready and where its summary is.
-fn notify_ready(project_root: &Path, name: &str, agent: Option<&str>) -> Result<()> {
-    let body = ready_body(project_root, name, agent.is_some());
-    let sender = agent.map_or_else(messages::default_user_name, str::to_string);
-    messages::send_with_scope(
-        &paths::messages_dir(project_root),
-        scope::MAIN,
-        &scope::orchestrator(project_root),
-        &sender,
-        &body,
-        Some(name),
-    )?;
-    Ok(())
-}
-
-/// The ready message for `name`; `repliable` when an agent sent it.
-fn ready_body(project_root: &Path, name: &str, repliable: bool) -> String {
-    let mut body = format!(
-        "Feature '{name}' is ready: its work is done and waits on the user to merge or delete it. \
-         Review its summary at {} for gaps; triage happens at merge or delete.",
-        paths::summary_path(project_root, name).display()
-    );
-    if repliable {
-        body.push_str(" The team is still running; reply here with any follow-up questions.");
-    }
-    body
 }
 
 /// What `pm feat status [STATUS] [NAME] [-m REASON]` asks for.
@@ -163,6 +145,7 @@ pub fn request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::messages;
     use crate::testing::TestServer;
     use tempfile::tempdir;
 
@@ -186,6 +169,7 @@ mod tests {
             Progress::Ready,
             None,
             Some("implementer"),
+            crate::testing::NO_SERVER,
         )
         .unwrap_err();
 
@@ -208,6 +192,7 @@ mod tests {
             Progress::Ready,
             None,
             Some("implementer"),
+            crate::testing::NO_SERVER,
         )
         .unwrap_err();
 
@@ -236,19 +221,20 @@ mod tests {
             Progress::Ready,
             None,
             Some("implementer"),
+            crate::testing::NO_SERVER,
         )
         .unwrap();
 
         assert_eq!(progress(&project, "login"), Progress::Ready);
         let inbox = main_inbox(&project);
         assert_eq!(inbox.len(), 1);
-        assert_eq!(inbox[0].sender, "implementer");
+        assert_eq!(inbox[0].sender, "implementer@login");
         assert_eq!(inbox[0].count, 1);
         let msg = messages::read_at(
             &paths::messages_dir(&project),
             "main",
             "main",
-            "implementer",
+            "implementer@login",
             1,
         )
         .unwrap()
@@ -279,7 +265,8 @@ mod tests {
                 "login",
                 Progress::Ready,
                 None,
-                Some("implementer")
+                Some("implementer"),
+                crate::testing::NO_SERVER
             )
             .is_err()
         );
@@ -298,10 +285,19 @@ mod tests {
             Progress::Blocked,
             None,
             Some("implementer"),
+            crate::testing::NO_SERVER,
         )
         .unwrap();
         assert_eq!(progress(&project, "login"), Progress::Blocked);
-        feat_status(&project, "login", Progress::Wip, None, Some("implementer")).unwrap();
+        feat_status(
+            &project,
+            "login",
+            Progress::Wip,
+            None,
+            Some("implementer"),
+            crate::testing::NO_SERVER,
+        )
+        .unwrap();
         assert_eq!(progress(&project, "login"), Progress::Wip);
 
         assert!(main_inbox(&project).is_empty());
@@ -323,6 +319,7 @@ mod tests {
             Progress::Blocked,
             Some("which DB?"),
             Some("implementer"),
+            crate::testing::NO_SERVER,
         )
         .unwrap();
         assert_eq!(
@@ -330,7 +327,15 @@ mod tests {
             (Some("which DB?".into()), Some("implementer".into()))
         );
 
-        feat_status(&project, "login", Progress::Wip, None, Some("implementer")).unwrap();
+        feat_status(
+            &project,
+            "login",
+            Progress::Wip,
+            None,
+            Some("implementer"),
+            crate::testing::NO_SERVER,
+        )
+        .unwrap();
         assert_eq!(blocked(&project), (None, None));
     }
 
@@ -346,6 +351,7 @@ mod tests {
             Progress::Blocked,
             Some("next item?"),
             Some("main"),
+            crate::testing::NO_SERVER,
         )
         .unwrap();
         let blocked = TeamStatus::load(&project, "main").unwrap();
@@ -354,11 +360,27 @@ mod tests {
             (Some("next item?"), Some("main"))
         );
 
-        let err = feat_status(&project, "main", Progress::Ready, None, Some("main")).unwrap_err();
+        let err = feat_status(
+            &project,
+            "main",
+            Progress::Ready,
+            None,
+            Some("main"),
+            crate::testing::NO_SERVER,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("main can't be ready"), "{err}");
         assert_eq!(TeamStatus::load(&project, "main").unwrap(), blocked);
 
-        feat_status(&project, "main", Progress::Wip, None, Some("main")).unwrap();
+        feat_status(
+            &project,
+            "main",
+            Progress::Wip,
+            None,
+            Some("main"),
+            crate::testing::NO_SERVER,
+        )
+        .unwrap();
         assert_eq!(progress(&project, "main"), Progress::Wip);
         assert_eq!(progress(&project, "login"), Progress::Wip);
         assert!(main_inbox(&project).is_empty());
@@ -376,7 +398,15 @@ mod tests {
         .unwrap();
 
         for status in [Progress::Wip, Progress::Ready] {
-            let err = feat_status(&project, "login", status, Some("why"), None).unwrap_err();
+            let err = feat_status(
+                &project,
+                "login",
+                status,
+                Some("why"),
+                None,
+                crate::testing::NO_SERVER,
+            )
+            .unwrap_err();
             assert!(
                 err.to_string().contains("only given with `blocked`"),
                 "{err}"

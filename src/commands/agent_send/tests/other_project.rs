@@ -107,7 +107,7 @@ fn send_to_another_project_heals_a_dead_window_there() {
         &paths::messages_dir(&beta),
         "main",
         "reviewer",
-        "implementer",
+        &format!("implementer@login@{}", project_name(&alpha)),
         1,
     )
     .unwrap()
@@ -199,7 +199,7 @@ fn a_reply_reaches_the_inbox_the_original_sender_watches_both_ways() {
         &paths::messages_dir(&beta),
         "main",
         "reviewer",
-        "implementer",
+        &format!("implementer@login@{}", project_name(&alpha)),
         2,
     )
     .unwrap()
@@ -236,9 +236,15 @@ fn a_reply_from_another_projects_inbox_routes_back_to_the_repliers_home() {
     )
     .unwrap();
 
-    let reply = messages::read_at(&beta_messages, "main", "reviewer", "implementer", 1)
-        .unwrap()
-        .unwrap();
+    let reply = messages::read_at(
+        &beta_messages,
+        "main",
+        "reviewer",
+        &format!("implementer@login@{}", project_name(&alpha)),
+        1,
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(reply.meta.sender_scope.as_deref(), Some("login"));
     assert_eq!(reply.meta.sender_project.as_deref(), Some("alpha"));
 }
@@ -303,4 +309,11 @@ fn a_home_spelled_differently_from_the_target_root_is_the_same_project() {
         sent.status,
         "Message 001 sent to 'reviewer' (from 'implementer')"
     );
+}
+
+fn project_name(root: &std::path::Path) -> String {
+    crate::state::project::ProjectConfig::load(&paths::pm_dir(root))
+        .unwrap()
+        .project
+        .name
 }

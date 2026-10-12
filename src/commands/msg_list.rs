@@ -23,20 +23,11 @@ pub fn msg_list(
     let mut lines = Vec::new();
     let mut current_sender: Option<String> = None;
     for s in &summaries {
-        // Messages are grouped by sender name (the inbox keys dirs on name, not
-        // scope), so the group header takes its scope from the first message in
-        // the group. If a same-named sender ever messaged from two scopes, only
-        // the first scope would show here — `pm msg read` annotates per-message.
         if current_sender.as_deref() != Some(s.sender.as_str()) {
             if current_sender.is_some() {
                 lines.push(String::new());
             }
-            let sender_display = messages::format_sender_display(
-                &s.sender,
-                s.sender_scope.as_deref(),
-                s.sender_project.as_deref(),
-            );
-            lines.push(format!("from {sender_display}:"));
+            lines.push(format!("from {}:", s.sender));
             current_sender = Some(s.sender.clone());
         }
 
@@ -94,12 +85,12 @@ mod tests {
         messages::send(&mdir, "login", "reviewer", "implementer", "one").unwrap();
         messages::send(&mdir, "login", "reviewer", "implementer", "two").unwrap();
         messages::send(&mdir, "login", "reviewer", "user", "hello from user").unwrap();
-        messages::next(&mdir, "login", "reviewer", "implementer").unwrap();
+        messages::next(&mdir, "login", "reviewer", "implementer@login").unwrap();
 
         let lines = msg_list(&root, "login", "reviewer", None).unwrap();
-        // Expect: "from implementer:", then 001 (read), 002 (next),
-        // blank, "from user:", then 001 (next).
-        assert_eq!(lines[0], "from implementer:");
+        // Expect: "from implementer@login:", then 001 (read), 002 (next),
+        // blank, "from user@login:", then 001 (next).
+        assert_eq!(lines[0], "from implementer@login:");
         assert!(lines[1].contains("[001]"));
         assert!(lines[1].contains("read"));
         assert!(lines[1].contains("one"));
@@ -108,7 +99,7 @@ mod tests {
         assert!(lines[2].starts_with("  > "));
         assert!(lines[2].contains("two"));
         assert_eq!(lines[3], "");
-        assert_eq!(lines[4], "from user:");
+        assert_eq!(lines[4], "from user@login:");
         assert!(lines[5].contains("[001]"));
         assert!(lines[5].contains("next"));
         assert!(lines[5].contains("hello from user"));
@@ -123,8 +114,8 @@ mod tests {
         messages::send(&mdir, "login", "reviewer", "implementer", "impl").unwrap();
         messages::send(&mdir, "login", "reviewer", "user", "user").unwrap();
 
-        let lines = msg_list(&root, "login", "reviewer", Some("user")).unwrap();
-        assert_eq!(lines[0], "from user:");
+        let lines = msg_list(&root, "login", "reviewer", Some("user@login")).unwrap();
+        assert_eq!(lines[0], "from user@login:");
         assert_eq!(lines.len(), 2);
         assert!(lines[1].contains("user"));
     }
@@ -142,7 +133,7 @@ mod tests {
 
         let lines = msg_list(&root, "login", "reviewer", None).unwrap();
         // Senders are grouped alphabetically: implementer, then main.
-        assert_eq!(lines[0], "from implementer:");
+        assert_eq!(lines[0], "from implementer@login:");
         assert!(lines[1].contains("same scope"));
         assert_eq!(lines[3], "from main@main:");
         assert!(lines[4].contains("hi"));
@@ -166,7 +157,7 @@ mod tests {
         .unwrap();
 
         let lines = msg_list(&root, "login", "reviewer", None).unwrap();
-        assert_eq!(lines[0], "from main@main (other-project):");
+        assert_eq!(lines[0], "from main@main@other-project:");
     }
 
     #[test]
@@ -178,8 +169,8 @@ mod tests {
         let mdir = paths::messages_dir(&root);
         messages::send(&mdir, "login", "reviewer", "implementer", "a").unwrap();
         messages::send(&mdir, "login", "reviewer", "implementer", "b").unwrap();
-        messages::next(&mdir, "login", "reviewer", "implementer").unwrap();
-        messages::next(&mdir, "login", "reviewer", "implementer").unwrap();
+        messages::next(&mdir, "login", "reviewer", "implementer@login").unwrap();
+        messages::next(&mdir, "login", "reviewer", "implementer@login").unwrap();
 
         let lines = msg_list(&root, "login", "reviewer", None).unwrap();
         assert!(lines[1].contains("read"));

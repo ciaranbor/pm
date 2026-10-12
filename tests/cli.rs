@@ -70,6 +70,7 @@ fn std_pm(home: &std::path::Path) -> std::process::Command {
         .env("PATH", path_without_pm())
         .env_remove("TMUX")
         .env_remove("TMUX_PANE")
+        .env_remove("PM_AGENT_NAME")
         .env_remove(pm::state::paths::AGENT_WORKTREE_ENV);
     for var in pm::state::dirs::XDG_VARS {
         pm.env_remove(var);
@@ -514,22 +515,32 @@ fn a_named_project_is_reached_from_outside_every_project() {
         pm.current_dir(home);
         pm
     };
+    let as_reviewer = || {
+        let mut pm = pm_at_home();
+        pm.env("PM_AGENT_NAME", "reviewer");
+        pm
+    };
 
-    pm_at_home()
+    as_reviewer()
         .args(["msg", "list", "--project", "alpha", "--scope", "main"])
-        .args(["--as-agent", "reviewer"])
         .assert()
         .success()
         .stdout(predicate::str::contains("lead"));
-    pm_at_home()
+    as_reviewer()
         .args(["msg", "read", "--project", "alpha", "--scope", "main"])
-        .args(["--as-agent", "reviewer"])
         .assert()
         .success()
         .stdout(predicate::str::contains("hello reviewer"));
-    pm_at_home()
-        .args(["msg", "reply", "--project", "alpha", "--scope", "main"])
-        .args(["--as-agent", "reviewer", "thanks"])
+    as_reviewer()
+        .args([
+            "msg",
+            "reply",
+            "--project",
+            "alpha",
+            "--scope",
+            "main",
+            "thanks",
+        ])
         .assert()
         .success();
     let replies = pm::messages::list(
@@ -566,7 +577,8 @@ fn activate(root: &std::path::Path, scope: &str, agents: &[&str]) {
     std::fs::write(root.join(format!(".pm/agents/{scope}.toml")), entries).unwrap();
 }
 
-/// The scope and project a reply recorded as its route back.
+/// The scope and project a reply from the `sender` address recorded as its
+/// route back.
 fn route_of(
     root: &std::path::Path,
     recipient: &str,
@@ -616,13 +628,13 @@ fn an_agent_replying_from_another_projects_inbox_is_answered_at_home() {
     as_implementer(&["msg", "reply", "answer"]);
 
     assert_eq!(
-        route_of(&beta, "lead", "implementer"),
+        route_of(&beta, "lead", "implementer@login@alpha"),
         (Some("login".to_string()), Some("alpha".to_string()))
     );
 }
 
 #[test]
-fn a_reply_as_another_agent_is_routed_to_the_inbox_it_came_from() {
+fn a_reply_by_no_agent_is_routed_back_from_the_inbox_it_came_from() {
     let home = tempdir().unwrap();
     let home = home.path();
     let alpha = registered_project(home, "alpha");
@@ -641,15 +653,9 @@ fn a_reply_as_another_agent_is_routed_to_the_inbox_it_came_from() {
     let in_beta = |args: &[&str]| {
         Command::from_std(std_pm(home))
             .current_dir(beta.join("main"))
+            .env("USER", "reviewer")
             .args(args)
-            .args([
-                "--project",
-                "alpha",
-                "--scope",
-                "main",
-                "--as-agent",
-                "reviewer",
-            ])
+            .args(["--project", "alpha", "--scope", "main"])
             .assert()
             .success();
     };
@@ -658,7 +664,7 @@ fn a_reply_as_another_agent_is_routed_to_the_inbox_it_came_from() {
     in_beta(&["msg", "reply", "thanks"]);
 
     assert_eq!(
-        route_of(&beta, "lead", "reviewer"),
+        route_of(&beta, "lead", "reviewer@main@alpha"),
         (Some("main".to_string()), Some("alpha".to_string()))
     );
 }
@@ -674,14 +680,8 @@ fn a_send_naming_its_own_project_defaults_to_its_own_scope() {
 
     Command::from_std(std_pm(home))
         .current_dir(alpha.join("login"))
-        .args([
-            "msg",
-            "send",
-            "--project",
-            "alpha",
-            "--as-agent",
-            "implementer",
-        ])
+        .env("PM_AGENT_NAME", "implementer")
+        .args(["msg", "send", "--project", "alpha"])
         .args(["reviewer", "hi"])
         .assert()
         .success()

@@ -81,6 +81,7 @@ mod tests {
             Progress::Blocked,
             Some("which DB?"),
             Some("reviewer"),
+            crate::testing::NO_SERVER,
         )
         .unwrap();
         assert_eq!(destination(&snapshot(), &item), server.pane_id(&reviewer));
@@ -154,6 +155,7 @@ mod tests {
             Progress::Blocked,
             Some("which DB?"),
             Some("implementer"),
+            crate::testing::NO_SERVER,
         )
         .unwrap();
 

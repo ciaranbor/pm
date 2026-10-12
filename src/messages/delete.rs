@@ -2,17 +2,12 @@
 
 use std::path::Path;
 
-use super::layout::inbox_dir;
+use super::layout::{inbox_dir, remove_dir};
 use crate::error::Result;
 
 /// Delete all messages for a feature. No-op if the directory doesn't exist.
 pub fn delete_feature(messages_dir: &Path, feature: &str) -> Result<()> {
-    let dir = messages_dir.join(feature);
-    match std::fs::remove_dir_all(&dir) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e.into()),
-    }
+    remove_dir(&messages_dir.join(feature))
 }
 
 /// Delete a single agent's inbox within a feature (queues, `.meta/`,
@@ -20,12 +15,7 @@ pub fn delete_feature(messages_dir: &Path, feature: &str) -> Result<()> {
 /// Used by `pm agent delete` to ensure no stale state is left behind
 /// for a registry entry that has been permanently removed.
 pub fn delete_inbox(messages_dir: &Path, feature: &str, agent: &str) -> Result<()> {
-    let dir = inbox_dir(messages_dir, feature, agent);
-    match std::fs::remove_dir_all(&dir) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e.into()),
-    }
+    remove_dir(&inbox_dir(messages_dir, feature, agent))
 }
 
 #[cfg(test)]

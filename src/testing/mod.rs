@@ -11,6 +11,10 @@
 //! [`KILL_ALL_TEST_SERVERS`](system_ptys::KILL_ALL_TEST_SERVERS).
 use std::sync::RwLock;
 
+/// A tmux server no test starts: a command given it finds no windows, and
+/// never reaches the default server.
+pub const NO_SERVER: Option<&str> = Some("pm-test-none");
+
 mod control_client;
 mod fake_agents;
 mod fake_harness;

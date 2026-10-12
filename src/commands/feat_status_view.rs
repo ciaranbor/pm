@@ -283,10 +283,19 @@ mod tests {
             Progress::Blocked,
             Some("which DB?"),
             Some("implementer"),
+            crate::testing::NO_SERVER,
         )
         .unwrap();
         write_summary(&project, "auth", "# auth\n\nAdds OAuth login\n\n## More\n");
-        feat_status(&project, "auth", Progress::Ready, None, None).unwrap();
+        feat_status(
+            &project,
+            "auth",
+            Progress::Ready,
+            None,
+            None,
+            crate::testing::NO_SERVER,
+        )
+        .unwrap();
 
         let lines = super::project(&project, None, false, server.name()).unwrap();
 
@@ -311,6 +320,7 @@ mod tests {
             Progress::Blocked,
             Some("which DB?"),
             Some("implementer"),
+            crate::testing::NO_SERVER,
         )
         .unwrap();
         assert_eq!(feature(&project, "login").unwrap()[2], "no summary");
@@ -479,6 +489,7 @@ mod tests {
             Progress::Blocked,
             Some("next item?"),
             Some("main"),
+            crate::testing::NO_SERVER,
         )
         .unwrap();
 

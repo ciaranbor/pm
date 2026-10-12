@@ -221,7 +221,15 @@ mod tests {
             .expect("a second watcher returns at once")
             .unwrap();
 
-        feat_status(&project, "login", Progress::Blocked, Some("why?"), None).unwrap();
+        feat_status(
+            &project,
+            "login",
+            Progress::Blocked,
+            Some("why?"),
+            None,
+            crate::testing::NO_SERVER,
+        )
+        .unwrap();
         until("a later tick", &|| published_count(&server) == "1");
 
         options::run(

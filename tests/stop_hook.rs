@@ -57,6 +57,11 @@ fn start_with(dir: &Path, command: &str, payload: &str) -> Child {
 
 /// [`start_with`], run in `cwd`.
 fn start_in(dir: &Path, cwd: &Path, command: &str, payload: &str) -> Child {
+    start_for(dir, &dir.join("main"), cwd, command, payload)
+}
+
+/// [`start_in`] for an agent spawned in `worktree`.
+fn start_for(dir: &Path, worktree: &Path, cwd: &Path, command: &str, payload: &str) -> Child {
     let bin = assert_cmd::cargo::cargo_bin("pm");
     // `stubs` holds stand-ins for harness CLIs a test needs.
     let path = format!(
@@ -80,7 +85,7 @@ fn start_in(dir: &Path, cwd: &Path, command: &str, payload: &str) -> Child {
         .env("HOME", dir)
         .env("PATH", path)
         .env("PM_AGENT_NAME", AGENT)
-        .env(paths::AGENT_WORKTREE_ENV, dir.join("main"))
+        .env(paths::AGENT_WORKTREE_ENV, worktree)
         .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -137,7 +142,7 @@ fn a_signal_from_another_process_leaves_the_hook_armed() {
     assert_eq!(decision["decision"], "block");
     assert_eq!(
         decision["reason"],
-        "You have new messages from researcher. Run `pm msg read` to read them."
+        "You have new messages from researcher@main. Run `pm msg read` to read them."
     );
 }
 
@@ -216,7 +221,8 @@ fn await_idle(dir: &Path, hook: &Child) {
     }
 }
 
-const CONTINUATION: &str = "You have new messages from researcher. Run `pm msg read` to read them.";
+const CONTINUATION: &str =
+    "You have new messages from researcher@main. Run `pm msg read` to read them.";
 
 #[test]
 fn a_waiter_with_messages_unread_wakes_the_agent_at_once() {
@@ -282,6 +288,83 @@ fn a_waiter_going_idle_runs_the_deferred_restart_of_a_marked_agent() {
         hook.wait().unwrap().code(),
         Some(2),
         "it still wakes the agent"
+    );
+}
+
+/// The agent that marks its feature ready is mid-turn, so the notice to
+/// `main` waits for a waiter going idle with the rest of the team idle.
+#[test]
+fn a_waiter_going_idle_sends_its_features_due_ready_notice_once() {
+    use pm::state::feature::{FeatureState, FeatureStatus, Progress};
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("main")).unwrap();
+    std::fs::create_dir_all(root.join("login")).unwrap();
+    pm::state::project::ProjectConfig {
+        project: pm::state::project::ProjectInfo {
+            name: "proj".into(),
+            max_features: None,
+        },
+        agents: Default::default(),
+        harness: Default::default(),
+    }
+    .save(&paths::pm_dir(root))
+    .unwrap();
+    let now = chrono::Utc::now();
+    let mut state = FeatureState {
+        status: FeatureStatus::Wip,
+        branch: "login".into(),
+        worktree: "login".into(),
+        base: "main".into(),
+        pr: String::new(),
+        context: String::new(),
+        workflow: None,
+        created: now,
+        last_active: now,
+        team: Default::default(),
+    };
+    state.team.progress = Progress::Ready;
+    state.save(&paths::features_dir(root), "login").unwrap();
+    std::fs::create_dir_all(paths::summary_path(root, "login").parent().unwrap()).unwrap();
+    std::fs::write(paths::summary_path(root, "login"), "notes").unwrap();
+    register_in(root, "login", Harness::ClaudeCode);
+    pm::commands::ready_notice::make_due(root, "login", Some(AGENT)).unwrap();
+    let notices = || pm::messages::unread_count(&paths::messages_dir(root), "main", "main");
+    let worktree = root.join("login");
+    let command = stop_hook_command(Harness::ClaudeCode);
+
+    for _ in 0..2 {
+        let mut hook = start_for(root, &worktree, &worktree, &command, "");
+        let start = Instant::now();
+        while runtime::read_waiting(root, "login", AGENT).map(|w| w.kind) != Some(WaitingKind::Idle)
+            || runtime::read_waiter(root, "login", AGENT) != Some(hook.id())
+        {
+            assert!(start.elapsed() < Duration::from_secs(10), "never waited");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        while notices() == 0 {
+            assert!(start.elapsed() < Duration::from_secs(10), "never told main");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        pm::messages::send(&paths::messages_dir(root), "login", AGENT, "reviewer", "hi").unwrap();
+        wait_for_exit(&mut hook);
+        pm::messages::next(&paths::messages_dir(root), "login", AGENT, "reviewer@login").ok();
+    }
+
+    assert_eq!(notices(), 1);
+    let notice = pm::messages::read_at(
+        &paths::messages_dir(root),
+        "main",
+        "main",
+        "implementer@login",
+        1,
+    )
+    .unwrap()
+    .unwrap();
+    assert!(
+        notice.body.contains("Feature 'login' is ready"),
+        "{}",
+        notice.body
     );
 }
 
@@ -377,7 +460,7 @@ fn a_wake_after_a_read_is_not_wasted() {
         wait_for_exit(&mut hook);
         let out = hook.wait_with_output().unwrap();
         assert_eq!(String::from_utf8_lossy(&out.stderr), CONTINUATION);
-        pm::messages::next(&messages, "main", AGENT, "researcher").unwrap();
+        pm::messages::next(&messages, "main", AGENT, "researcher@main").unwrap();
     }
     assert_eq!(runtime::loop_tripped(dir.path(), "main", AGENT), None);
 }
@@ -521,6 +604,11 @@ fn a_codex_waiter_that_cannot_queue_leaves_the_agent_unarmed() {
 /// Register the agent as running `harness`, as a spawn does before
 /// launching it.
 fn register(dir: &Path, harness: Harness) {
+    register_in(dir, "main", harness);
+}
+
+/// [`register`] in `scope`.
+fn register_in(dir: &Path, scope: &str, harness: Harness) {
     use pm::state::agent::{AgentEntry, AgentRegistry, AgentType};
     let mut registry = AgentRegistry::default();
     registry.register(
@@ -535,7 +623,7 @@ fn register(dir: &Path, harness: Harness) {
             spawned_at: None,
         },
     );
-    registry.save(&paths::agents_dir(dir), "main").unwrap();
+    registry.save(&paths::agents_dir(dir), scope).unwrap();
 }
 
 /// pm's SessionStart hook, run as the harness runs it, on a session that

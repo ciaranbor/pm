@@ -143,7 +143,7 @@ fn on_user_prompt(
     if TeamStatus::load(project_root, scope)?.progress != Progress::Blocked {
         return Ok(false);
     }
-    feat_status(project_root, scope, Progress::Wip, None, None)?;
+    feat_status(project_root, scope, Progress::Wip, None, None, None)?;
     Ok(true)
 }
 
@@ -166,6 +166,7 @@ mod tests {
             Progress::Blocked,
             Some("which DB?"),
             Some("implementer"),
+            crate::testing::NO_SERVER,
         )
         .unwrap();
         project
@@ -228,7 +229,15 @@ mod tests {
             "notes",
         )
         .unwrap();
-        feat_status(&project, "login", Progress::Ready, None, None).unwrap();
+        feat_status(
+            &project,
+            "login",
+            Progress::Ready,
+            None,
+            None,
+            crate::testing::NO_SERVER,
+        )
+        .unwrap();
 
         assert!(!on_user_prompt(&project, "login", "one more thing", None).unwrap());
         assert_eq!(state(&project).progress, Progress::Ready);
@@ -249,6 +258,7 @@ mod tests {
             Progress::Blocked,
             Some("next?"),
             Some("main"),
+            crate::testing::NO_SERVER,
         )
         .unwrap();
         crate::messages::send(
@@ -387,7 +397,7 @@ mod tests {
         let messages = paths::messages_dir(&project);
         crate::messages::send(&messages, "login", "implementer", "reviewer", "hi").unwrap();
         let continuation = hooks_stop::continuation(&project, "login", "implementer").unwrap();
-        crate::messages::next(&messages, "login", "implementer", "reviewer").unwrap();
+        crate::messages::next(&messages, "login", "implementer", "reviewer@login").unwrap();
         let idle = Waiting::now(WaitingKind::Idle, None);
         runtime::write_waiting(&project, "login", "implementer", &idle).unwrap();
 

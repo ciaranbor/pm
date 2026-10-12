@@ -123,7 +123,7 @@ pub fn agent_read(
                         feature,
                         agent,
                         &messages::LastRead {
-                            sender: m.sender.clone(),
+                            sender: m.meta.sender.clone(),
                             sender_scope: m.meta.sender_scope.clone(),
                             sender_project: m.meta.sender_project.clone(),
                             from_outside: m.meta.from_outside,
@@ -144,9 +144,10 @@ pub fn agent_read(
             // --index requires explicit --from: the caller is deliberately
             // addressing a historical message, not "the next unread".
             // Does NOT advance the cursor.
-            let sender = from.ok_or_else(|| {
+            let from = from.ok_or_else(|| {
                 PmError::Messaging("--index requires --from <sender>".to_string())
             })?;
+            let sender = &messages::resolve_from(&messages_dir, feature, agent, from)?;
             let cur = messages::cursor_for(&messages_dir, feature, agent, sender)?;
             let resolved = spec.resolve(cur)?;
             let msg = messages::read_at(&messages_dir, feature, agent, sender, resolved)?;
@@ -175,12 +176,6 @@ fn pending_footer(pending: &[String]) -> String {
 }
 
 fn format_message(m: &Message, current_scope: Option<&str>) -> Vec<String> {
-    let sender_display = messages::format_sender_display(
-        &m.sender,
-        m.meta.sender_scope.as_deref(),
-        m.meta.sender_project.as_deref(),
-    );
-
     let is_cross_scope = match (&m.meta.sender_scope, current_scope) {
         (Some(scope), Some(cs)) => scope != cs,
         _ => false,
@@ -198,8 +193,8 @@ fn format_message(m: &Message, current_scope: Option<&str>) -> Vec<String> {
     // The opencode never-idle plugin's MESSAGE_HEADER matches this prefix to
     // tell that a read took a message.
     let header = format!(
-        "--- from {sender_display} [{:03}] {timestamp}{note} ---",
-        m.index
+        "--- from {} [{:03}] {timestamp}{note} ---",
+        m.sender, m.index
     );
     let mut lines = vec![header, m.body.clone()];
 
@@ -289,7 +284,7 @@ mod tests {
         messages::send(&mdir, "login", "reviewer", "implementer", "fix the bug").unwrap();
 
         let lines = agent_read(&root, "login", "reviewer", None, None).unwrap();
-        assert!(lines[0].starts_with("--- from implementer [001]"));
+        assert!(lines[0].starts_with("--- from implementer@login [001]"));
         assert_eq!(lines[1], "fix the bug");
     }
 
@@ -333,21 +328,21 @@ mod tests {
         let lines = agent_read(&root, "login", "reviewer", None, None).unwrap();
         assert!(lines[1].contains("one"));
         assert_eq!(
-            messages::cursor_for(&mdir, "login", "reviewer", "implementer").unwrap(),
+            messages::cursor_for(&mdir, "login", "reviewer", "implementer@login").unwrap(),
             1
         );
 
         let lines = agent_read(&root, "login", "reviewer", None, None).unwrap();
         assert!(lines[1].contains("two"));
         assert_eq!(
-            messages::cursor_for(&mdir, "login", "reviewer", "implementer").unwrap(),
+            messages::cursor_for(&mdir, "login", "reviewer", "implementer@login").unwrap(),
             2
         );
 
         let lines = agent_read(&root, "login", "reviewer", None, None).unwrap();
         assert!(lines[1].contains("three"));
         assert_eq!(
-            messages::cursor_for(&mdir, "login", "reviewer", "implementer").unwrap(),
+            messages::cursor_for(&mdir, "login", "reviewer", "implementer@login").unwrap(),
             3
         );
 
@@ -375,7 +370,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            messages::cursor_for(&mdir, "login", "reviewer", "implementer").unwrap(),
+            messages::cursor_for(&mdir, "login", "reviewer", "implementer@login").unwrap(),
             0
         );
     }
@@ -402,27 +397,27 @@ mod tests {
         }
 
         let lines = agent_read(&root, "login", "reviewer", None, None).unwrap();
-        assert!(lines[0].starts_with("--- from zed [001]"));
+        assert!(lines[0].starts_with("--- from zed@login [001]"));
         assert_eq!(lines[1], "from zed");
         assert_eq!(
             lines.last().unwrap(),
-            "2 more senders pending: amy, mid — pm msg read --from amy"
+            "2 more senders pending: amy@login, mid@login — pm msg read --from amy@login"
         );
         assert_eq!(
-            messages::cursor_for(&mdir, "login", "reviewer", "amy").unwrap(),
+            messages::cursor_for(&mdir, "login", "reviewer", "amy@login").unwrap(),
             0,
             "pending senders' cursors must not move"
         );
 
         let lines = agent_read(&root, "login", "reviewer", None, None).unwrap();
-        assert!(lines[0].starts_with("--- from amy [001]"));
+        assert!(lines[0].starts_with("--- from amy@login [001]"));
         assert_eq!(
             lines.last().unwrap(),
-            "1 more sender pending: mid — pm msg read --from mid"
+            "1 more sender pending: mid@login — pm msg read --from mid@login"
         );
 
         let lines = agent_read(&root, "login", "reviewer", None, None).unwrap();
-        assert!(lines[0].starts_with("--- from mid [001]"));
+        assert!(lines[0].starts_with("--- from mid@login [001]"));
         assert!(!lines.iter().any(|l| l.contains("pending")));
 
         assert_eq!(
@@ -441,10 +436,10 @@ mod tests {
         messages::send(&mdir, "login", "reviewer", "amy", "b").unwrap();
 
         let lines = agent_read(&root, "login", "reviewer", Some("amy"), None).unwrap();
-        assert!(lines[0].starts_with("--- from amy [001]"));
+        assert!(lines[0].starts_with("--- from amy@login [001]"));
         assert_eq!(
             lines.last().unwrap(),
-            "1 more sender pending: zed — pm msg read --from zed"
+            "1 more sender pending: zed@login — pm msg read --from zed@login"
         );
     }
 
@@ -522,7 +517,7 @@ mod tests {
             Some(IndexSpec::Absolute(2)),
         )
         .unwrap();
-        assert!(lines[0].starts_with("--- from implementer [002]"));
+        assert!(lines[0].starts_with("--- from implementer@login [002]"));
         assert_eq!(lines[1], "two");
     }
 
@@ -545,7 +540,7 @@ mod tests {
             Some(IndexSpec::RelativePlus(2)),
         )
         .unwrap();
-        assert!(lines[0].starts_with("--- from implementer [002]"));
+        assert!(lines[0].starts_with("--- from implementer@login [002]"));
         assert_eq!(lines[1], "two");
     }
 
@@ -557,8 +552,8 @@ mod tests {
         let mdir = paths::messages_dir(&root);
         messages::send(&mdir, "login", "reviewer", "implementer", "one").unwrap();
         messages::send(&mdir, "login", "reviewer", "implementer", "two").unwrap();
-        messages::next(&mdir, "login", "reviewer", "implementer").unwrap();
-        messages::next(&mdir, "login", "reviewer", "implementer").unwrap();
+        messages::next(&mdir, "login", "reviewer", "implementer@login").unwrap();
+        messages::next(&mdir, "login", "reviewer", "implementer@login").unwrap();
 
         // Cursor at 2 (= last processed). -1 → the last processed message,
         // i.e. index 2 ("two"). This matches the symmetry: +1 is the next
@@ -571,7 +566,7 @@ mod tests {
             Some(IndexSpec::RelativeMinus(1)),
         )
         .unwrap();
-        assert!(lines[0].starts_with("--- from implementer [002]"));
+        assert!(lines[0].starts_with("--- from implementer@login [002]"));
         assert_eq!(lines[1], "two");
     }
 
@@ -583,8 +578,8 @@ mod tests {
         let mdir = paths::messages_dir(&root);
         messages::send(&mdir, "login", "reviewer", "implementer", "one").unwrap();
         messages::send(&mdir, "login", "reviewer", "implementer", "two").unwrap();
-        messages::next(&mdir, "login", "reviewer", "implementer").unwrap();
-        messages::next(&mdir, "login", "reviewer", "implementer").unwrap();
+        messages::next(&mdir, "login", "reviewer", "implementer@login").unwrap();
+        messages::next(&mdir, "login", "reviewer", "implementer@login").unwrap();
 
         // Cursor at 2. -2 → cursor + 1 - 2 = index 1 ("one").
         let lines = agent_read(
@@ -595,7 +590,7 @@ mod tests {
             Some(IndexSpec::RelativeMinus(2)),
         )
         .unwrap();
-        assert!(lines[0].starts_with("--- from implementer [001]"));
+        assert!(lines[0].starts_with("--- from implementer@login [001]"));
         assert_eq!(lines[1], "one");
     }
 
@@ -624,7 +619,7 @@ mod tests {
             Some(IndexSpec::Absolute(99)),
         )
         .unwrap();
-        assert_eq!(lines, vec!["No message [099] from implementer"]);
+        assert_eq!(lines, vec!["No message [099] from implementer@login"]);
     }
 
     #[test]
@@ -637,10 +632,10 @@ mod tests {
 
         let mdir = paths::messages_dir(&root);
         messages::send(&mdir, "login", "reviewer", "implementer", "msg").unwrap();
-        messages::next(&mdir, "login", "reviewer", "implementer").unwrap();
+        messages::next(&mdir, "login", "reviewer", "implementer@login").unwrap();
 
         let lines = agent_read(&root, "login", "reviewer", Some("implementer"), None).unwrap();
-        assert_eq!(lines, vec!["No new messages from implementer"]);
+        assert_eq!(lines, vec!["No new messages from implementer@login"]);
     }
 
     #[test]
@@ -683,7 +678,7 @@ mod tests {
         .unwrap();
 
         let lines = agent_read(&root, "main", "reviewer", None, None).unwrap();
-        assert!(lines[0].contains("implementer@login (other-app)"));
+        assert!(lines[0].contains("implementer@login@other-app"));
         assert_eq!(lines[1], "cross-project msg");
     }
 
@@ -706,26 +701,37 @@ mod tests {
 
         let lines = agent_read(&root, "main", "reviewer", None, None).unwrap();
 
-        assert!(lines[0].starts_with("--- from lead@main (beta) [001]"));
+        assert!(lines[0].starts_with("--- from lead@main@beta [001]"));
         assert_eq!(
             lines.last().unwrap(),
-            "1 more sender pending: implementer — pm msg read --from implementer"
+            "1 more sender pending: implementer@main — pm msg read --from implementer@main"
         );
     }
 
     #[test]
-    fn read_omits_scope_when_not_set() {
+    fn same_named_senders_from_two_scopes_are_told_apart() {
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
-
         let mdir = paths::messages_dir(&root);
-        // Use plain send (no scope)
-        messages::send(&mdir, "login", "reviewer", "implementer", "same-scope msg").unwrap();
+        messages::send_with_scope(&mdir, "main", "main", "implementer", "a", Some("login"))
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        messages::send_with_scope(&mdir, "main", "main", "implementer", "b", Some("signup"))
+            .unwrap();
 
-        let lines = agent_read(&root, "login", "reviewer", None, None).unwrap();
-        // Should be "--- from implementer [001]" without any @scope
-        assert!(lines[0].starts_with("--- from implementer [001]"));
-        assert!(!lines[0].contains('@'));
+        let lines = agent_read(&root, "main", "main", None, None).unwrap();
+        assert!(lines[0].starts_with("--- from implementer@login [001]"));
+        assert_eq!(
+            lines.last().unwrap(),
+            "1 more sender pending: implementer@signup — pm msg read --from implementer@signup"
+        );
+        let err = agent_read(&root, "main", "main", Some("implementer"), None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("implementer@login, implementer@signup")
+        );
+        let lines = agent_read(&root, "main", "main", Some("implementer@signup"), None).unwrap();
+        assert_eq!(lines[1], "b");
     }
 
     #[test]
