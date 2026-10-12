@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod devices;
 pub mod dirs;
+pub mod docs;
 pub mod feature;
 pub mod paths;
 pub mod project;

@@ -108,6 +108,15 @@ pub enum Commands {
         /// Project name (defaults to current project from CWD)
         project: Option<String>,
     },
+    /// Read the project's information store: list its categories, or show
+    /// one
+    Docs {
+        /// The category to show, by filename, with or without `.md`
+        /// (e.g. `todo`); lists the categories when omitted
+        category: Option<String>,
+        #[command(flatten)]
+        target: ProjectFlag,
+    },
     /// Show project dashboard (what each feature needs, health)
     Status {
         /// Project name (defaults to current project from CWD)
@@ -640,6 +649,20 @@ pub enum AgentCommands {
         /// such agent is interrupted
         #[arg(long)]
         force: bool,
+        /// Target scope (feature name or "main"; defaults to current scope)
+        #[arg(long)]
+        scope: Option<String>,
+        #[command(flatten)]
+        target: ProjectFlag,
+    },
+    /// Show the end of an agent's conversation, readably, whatever its
+    /// harness
+    Log {
+        /// Agent name
+        name: String,
+        /// How many of the conversation's last entries to show
+        #[arg(short = 'n', long, default_value_t = 20, value_parser = clap::value_parser!(u16).range(1..=200))]
+        lines: u16,
         /// Target scope (feature name or "main"; defaults to current scope)
         #[arg(long)]
         scope: Option<String>,

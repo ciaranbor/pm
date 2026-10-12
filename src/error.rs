@@ -205,6 +205,10 @@ pub enum PmError {
     #[error("{0}")]
     Summary(String),
 
+    /// `pm docs` named no category of the information store.
+    #[error("{0}")]
+    Docs(String),
+
     #[error("Export/import error: {0}")]
     ExportImport(String),
 

@@ -199,6 +199,12 @@ shows the whole project. `--project` doesn't combine with `--all` or
 `--global`, which already span every project. On `pm msg send`, `--project`
 names the recipient's project instead ([Messaging](#messaging)).
 
+`pm agent log <name>` prints the end of an agent's conversation, whatever
+its harness: what you and it wrote, and each tool call with the first lines
+of its output (`-n` sets how many entries, 20 by default). It answers "what
+is it stuck on" without opening its window, from the phone through the
+[Supervisor](#supervisor) too.
+
 When an agent misbehaves, `pm agent restart <name>` respawns it on the same
 conversation, or on a new one, saying so, when there is none to resume (its
 harness changed, or it never took a turn); `pm agent spawn <name>` adds one
@@ -496,8 +502,10 @@ Each project has an information store at `.pm/docs/`: todos, issues, ideas,
 findings (the default categories, in `categories.toml`; add your own).
 `main` manages it and keeps it lean: completed items are deleted (git
 history is the record), with durable learnings moved into `findings.md`
-first. The store holds knowledge; messaging is a queue. The phone app
-reads it ([Android](docs/android.md#projects)) but doesn't edit it.
+first. The store holds knowledge; messaging is a queue. `pm docs` lists
+its categories and `pm docs todo` prints one (`--project <name>` reads
+another project's); the phone app reads it too
+([Android](docs/android.md#projects)). Neither edits it.
 
 A feature's **summary** is the hand-off its workflow's summary owner writes
 for `main` (`pm workflow show` says what belongs in it), kept at

@@ -217,6 +217,15 @@ pub(super) fn notes(project: Option<String>) -> Result<()> {
     commands::notes::edit(&project_root)
 }
 
+pub(super) fn docs(category: Option<String>, project: Option<String>) -> Result<()> {
+    let project_root = project_root(&paths::global_projects_dir()?, project.as_deref())?;
+    print!(
+        "{}",
+        commands::docs::show(&project_root, category.as_deref())?
+    );
+    Ok(())
+}
+
 pub(super) fn status(project: Option<String>, server: Option<&str>) -> Result<()> {
     let projects_dir = paths::global_projects_dir()?;
     let project_root = project_root(&projects_dir, project.as_deref())?;
