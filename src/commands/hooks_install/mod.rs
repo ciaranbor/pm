@@ -23,15 +23,15 @@ mod install;
 mod settings;
 
 pub use check::{
-    hooks_registered, install_location, missing_dialog_hooks, missing_status_hooks,
-    stale_loop_entries, stale_plugin_files,
+    hooks_registered, install_location, missing_dialog_hooks, missing_guard_hooks,
+    missing_status_hooks, stale_loop_entries, stale_plugin_files,
 };
 #[cfg(test)]
 pub(crate) use check::{is_installed_for, is_installed_in};
 pub use entries::{
-    PM_DIALOG_MARKER, PM_HOOK_MARKER, PM_SESSION_START_MARKER, PM_USER_PROMPT_MARKER,
-    PM_WAITING_MARKER, STOP_HOOK_TIMEOUT_SECS, USER_PROMPT_EVENT, dialog_events,
-    dialog_hook_command, loop_fingerprint, pm_events, session_end_hook_command,
+    PM_DIALOG_MARKER, PM_GUARD_MARKER, PM_HOOK_MARKER, PM_SESSION_START_MARKER,
+    PM_USER_PROMPT_MARKER, PM_WAITING_MARKER, STOP_HOOK_TIMEOUT_SECS, USER_PROMPT_EVENT,
+    dialog_events, dialog_hook_command, loop_fingerprint, pm_events, session_end_hook_command,
     session_start_hook_command, stop_hook_command, user_prompt_hook_command, waiting_events,
     waiting_hook_command,
 };

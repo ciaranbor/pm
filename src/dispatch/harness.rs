@@ -176,6 +176,9 @@ pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
                     push,
                 ))
             }
+            HarnessHooksCommands::Guard { harness } => {
+                exit_unless_ok(commands::hooks_guard::guard(harness))
+            }
             HarnessHooksCommands::Dialog { harness } => {
                 exit_unless_ok(commands::hooks_dialog::dialog(harness, push))
             }

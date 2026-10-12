@@ -88,6 +88,16 @@ fn edit_dirs(project_root: &Path, definition: &str) -> Vec<std::path::PathBuf> {
     dirs
 }
 
+/// The directories an agent of `scope` must not edit: main's checkout,
+/// for every scope but main's.
+pub(crate) fn protected_dirs(project_root: &Path, scope: &str) -> Vec<std::path::PathBuf> {
+    if scope == scope::MAIN {
+        Vec::new()
+    } else {
+        vec![paths::main_worktree(project_root)]
+    }
+}
+
 /// The definition that reaches the harness: the effective definition, except
 /// the reserved vanilla name (any alias), which launches a definition-less
 /// session even if a matching definition file happens to exist.
@@ -105,10 +115,12 @@ pub(crate) struct LaunchConfig {
     pub harness_config: HarnessConfig,
     pub writable_dirs: Vec<std::path::PathBuf>,
     pub edit_dirs: Vec<std::path::PathBuf>,
+    pub protected_dirs: Vec<std::path::PathBuf>,
 }
 
 pub(crate) fn resolve_launch(
     project_root: &Path,
+    scope: &str,
     definition: &str,
     config: &ProjectConfig,
     global: &GlobalConfig,
@@ -122,6 +134,7 @@ pub(crate) fn resolve_launch(
         harness_config,
         writable_dirs,
         edit_dirs,
+        protected_dirs: protected_dirs(project_root, scope),
     })
 }
 
@@ -178,6 +191,16 @@ mod tests {
                 PathBuf::from("/proj/.pm/summaries"),
                 paths::global_config_dir().unwrap()
             ]
+        );
+    }
+
+    #[test]
+    fn only_agents_outside_main_are_kept_out_of_main() {
+        let root = Path::new("/proj");
+        assert!(protected_dirs(root, scope::MAIN).is_empty());
+        assert_eq!(
+            protected_dirs(root, "feat-x"),
+            [PathBuf::from("/proj/main")]
         );
     }
 

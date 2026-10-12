@@ -403,6 +403,10 @@ so a stale local main doesn't matter; the new branch tracks nothing. The
 `fresh_base` setting ([Configuration](#configuration)) makes that the
 default for every feature based on main; `--no-fresh` opts out.
 
+A feature's agents cannot edit files in the main worktree; they work in
+their own, and `.pm/` stays writable to them. Only file-editing tools are
+blocked; a shell command that writes into `main/` may still get through.
+
 pm locks each feature's worktree (`git worktree lock`), so a `git worktree
 prune` run while its directory is out of reach (a moved or unmounted
 directory) keeps it; `pm feat merge`/`delete` unlock it before removing it.

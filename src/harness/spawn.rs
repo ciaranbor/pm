@@ -29,6 +29,34 @@ pub struct SpawnSpec<'a> {
     /// tools (the feature summary's), for a harness that gates those edits
     /// by directory. Each lies within a `writable_dirs` entry.
     pub edit_dirs: &'a [PathBuf],
+    /// Directories the agent must not edit (main's checkout, for an agent
+    /// of another scope). Each harness enforces this its own way; see its
+    /// module docs.
+    pub protected_dirs: &'a [PathBuf],
+}
+
+/// `dir` as a glob pattern's literal prefix: `None` when it holds a
+/// character a harness's path glob would read as a metacharacter, so the
+/// harness cannot express a rule for it.
+pub(super) fn glob_literal(dir: &Path) -> Option<String> {
+    let text = dir.to_str()?;
+    (!text.contains(['*', '?', '[', ']', '{', '}', '\\'])).then(|| text.to_string())
+}
+
+/// The spawn note for the protected dirs that [`glob_literal`] cannot
+/// name, for a harness whose rules are globs.
+pub(super) fn unguarded_note(protected_dirs: &[PathBuf]) -> Option<String> {
+    let names: Vec<String> = protected_dirs
+        .iter()
+        .filter(|dir| glob_literal(dir).is_none())
+        .map(|dir| dir.display().to_string())
+        .collect();
+    (!names.is_empty()).then(|| {
+        format!(
+            "not guarding {} against edits: a permission rule cannot name its path",
+            names.join(", ")
+        )
+    })
 }
 
 /// Where a spawn happens, for [`Harness::pre_launch`].
@@ -78,6 +106,7 @@ mod tests {
         // Every field set at once, pinning flag order through the seam.
         let dirs = vec![PathBuf::from("/proj/.pm")];
         let edit = vec![PathBuf::from("/proj/.pm/summaries")];
+        let protected = vec![PathBuf::from("/proj/main")];
         let cmd = Harness::ClaudeCode.build_cmd(
             &SpawnSpec {
                 definition: Some("reviewer"),
@@ -89,6 +118,7 @@ mod tests {
                 model: Some("opus"),
                 writable_dirs: &dirs,
                 edit_dirs: &edit,
+                protected_dirs: &protected,
             },
             &HarnessConfig::default(),
             &PreLaunch::default(),
@@ -98,6 +128,7 @@ mod tests {
             "claude --agent reviewer --model 'opus' \
              --append-system-prompt-file '/proj/main/.agents/pm-baseline.md' \
              --permission-mode 'acceptEdits' --add-dir='/proj/.pm/summaries' \
+             --settings '{\"permissions\":{\"deny\":[\"Edit(//proj/main/**)\"]}}' \
              --resume abc123 --fork-session 'go'"
         );
     }

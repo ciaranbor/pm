@@ -292,6 +292,7 @@ impl TestServer {
         let entry = registry.get(agent_name).unwrap();
         let stamp = crate::commands::launch_stamp::current(
             project_root,
+            feature,
             agent_name,
             entry,
             &config,

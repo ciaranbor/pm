@@ -1,11 +1,14 @@
 //! The per-spawn config file, and the agent's `[agents.models]` and
 //! `[agents.permissions]` rows as opencode takes them.
 
+use std::path::PathBuf;
+
 use serde_json::{Value, json};
 
 use super::providers;
 use crate::error::{PmError, Result};
 use crate::harness::SpawnSpec;
+use crate::harness::spawn::glob_literal;
 use crate::state::project::OpenCodeConfig;
 
 /// An `[agents.models]` row, as opencode's session API takes it.
@@ -84,6 +87,24 @@ pub(in crate::harness) fn row_issues(
         .collect()
 }
 
+/// Each protected dir a rule can name, spelled as given and, where that
+/// differs, symlinks resolved: opencode matches a path outside the session
+/// dir lexically, in whichever spelling the tool was handed.
+fn protected_spellings(protected_dirs: &[PathBuf]) -> Vec<String> {
+    let mut out = Vec::new();
+    for dir in protected_dirs {
+        let resolved = dir.canonicalize().ok();
+        for spelling in std::iter::once(dir).chain(resolved.as_ref()) {
+            if let Some(text) = glob_literal(spelling)
+                && !out.contains(&text)
+            {
+                out.push(text);
+            }
+        }
+    }
+    out
+}
+
 /// The per-spawn config.
 pub(super) fn render_config(
     spec: &SpawnSpec<'_>,
@@ -115,6 +136,14 @@ pub(super) fn render_config(
     if let Some(row) = spec.permission_mode {
         rules.extend(parse_permission_rules(row)?);
     }
+    // Last match wins, so these follow the row, which cannot undo them.
+    for dir in protected_spellings(spec.protected_dirs) {
+        rules.push(json!({
+            "action": "edit",
+            "resource": format!("{dir}/*"),
+            "effect": "deny",
+        }));
+    }
     if !rules.is_empty() {
         config.insert("permissions".to_string(), Value::Array(rules));
     }
@@ -124,8 +153,6 @@ pub(super) fn render_config(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::*;
 
     /// [`render_config`] for `spec` on the row `local/qwen`, less what the
@@ -194,6 +221,57 @@ mod tests {
                 {"action": "external_directory", "resource": "/proj/main/.git/*", "effect": "allow"},
                 {"action": "external_directory", "resource": "*", "effect": "deny"},
             ]})
+        );
+    }
+
+    #[test]
+    fn protected_dirs_are_denied_after_the_row_with_or_without_auto() {
+        let protected = vec![PathBuf::from("/proj/main")];
+        let spec = SpawnSpec {
+            permission_mode: Some(
+                r#"[{"action":"edit","resource":"/proj/main/*","effect":"allow"}]"#,
+            ),
+            protected_dirs: &protected,
+            ..Default::default()
+        };
+        let expected = json!({"permissions": [
+            {"action": "edit", "resource": "/proj/main/*", "effect": "allow"},
+            {"action": "edit", "resource": "/proj/main/*", "effect": "deny"},
+        ]});
+        for auto in [None, Some(true)] {
+            let cfg = OpenCodeConfig {
+                auto,
+                ..Default::default()
+            };
+            assert_eq!(rendered(&spec, &cfg).unwrap(), expected, "{auto:?}");
+        }
+    }
+
+    #[test]
+    fn a_symlinked_protected_dir_is_denied_in_both_spellings() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().canonicalize().unwrap().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = real.with_file_name("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let protected = vec![link.clone()];
+        let spec = SpawnSpec {
+            protected_dirs: &protected,
+            ..Default::default()
+        };
+        let resources: Vec<Value> =
+            rendered(&spec, &OpenCodeConfig::default()).unwrap()["permissions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|rule| rule["resource"].clone())
+                .collect();
+        assert_eq!(
+            resources,
+            [
+                json!(format!("{}/*", link.display())),
+                json!(format!("{}/*", real.display())),
+            ]
         );
     }
 

@@ -822,3 +822,138 @@ fn codex_is_woken_without_typing_and_keeps_its_sandbox() {
         servers().is_empty()
     });
 }
+
+/// Feature `guard` of a project whose agents run on `harness` with `model`
+/// and the `[agents.permissions]` row `permissions`, with a `plain` agent
+/// spawned in it. Returns the project root.
+fn feature_agent(
+    s: &Smoke,
+    harness: &str,
+    model: Option<&str>,
+    permissions: Option<&str>,
+) -> PathBuf {
+    let proj = s.project_on("proj", harness, model);
+    if let Some(row) = permissions {
+        s.set_agents_config("permissions", &format!("\"*\" = \"{row}\""));
+    }
+    s.pm(&proj.join("main"))
+        .args(["feat", "new", "guard"])
+        .assert()
+        .success();
+    let feature = proj.join("guard");
+    sandbox_ok(&s.name, &["trust", &feature.to_string_lossy()]);
+    // A first-run dialog keeps the spawn from reporting the agent up; the
+    // caller answers it.
+    let spawned = s
+        .pm(&feature)
+        .args(["agent", "spawn", "plain"])
+        .output()
+        .unwrap();
+    eprintln!("spawn: {spawned:?}");
+    proj
+}
+
+/// Asks the feature agent to create a file in main's checkout and one in
+/// its own worktree with its file-editing tool, `typed` at its window (a
+/// model may decline such a request from a message) or else sent as one:
+/// only its own may appear.
+fn edits_only_its_own_worktree(s: &Smoke, proj: &Path, typed: bool) {
+    use pm::state::runtime::{self, WaitingKind};
+    // Nested, so a rule that matches only one level below main fails.
+    let denied = proj.join("main/src/guard-denied.txt");
+    std::fs::create_dir_all(denied.parent().unwrap()).unwrap();
+    let allowed = proj.join("guard/guard-allowed.txt");
+    let idle = || {
+        runtime::read_waiting(proj, "guard", "plain").is_some_and(|w| w.kind == WaitingKind::Idle)
+    };
+    wait_for("the agent to idle", TURN, s, idle);
+    let request = format!(
+        "With your file-editing tool, never the shell, create the file {} holding the word x, \
+         then create the file {} holding the word x. If one is refused, do not retry it \
+         another way.",
+        denied.display(),
+        allowed.display()
+    );
+    if typed {
+        s.tmux_ok(&["send-keys", "-t", "proj/guard:plain", "-l", &request]);
+        std::thread::sleep(Duration::from_secs(1));
+        s.tmux_ok(&["send-keys", "-t", "proj/guard:plain", "Enter"]);
+    } else {
+        s.pm(&proj.join("guard"))
+            .args(["msg", "send", "plain", &request])
+            .assert()
+            .success();
+    }
+    wait_for("the edit to its own worktree", TURN, s, || allowed.exists());
+    wait_for("the turn to end", TURN, s, idle);
+    assert!(
+        !denied.exists(),
+        "the agent edited main's checkout\n{}",
+        s.capture_all()
+    );
+}
+
+/// Catches: a feature's Claude Code agent editing main's checkout with its
+/// file tools, in the mode that approves everything else. One turn on the
+/// cheapest model.
+#[test]
+#[ignore]
+fn claude_a_feature_agent_cannot_edit_main() {
+    require("claude");
+    let s = Smoke::real();
+    let settings = s.home().join(".claude/settings.json");
+    let mut root: serde_json::Value = std::fs::read_to_string(&settings)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    root["skipDangerousModePermissionPrompt"] = true.into();
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    std::fs::write(&settings, root.to_string()).unwrap();
+    let proj = feature_agent(&s, "claude-code", Some("haiku"), Some("bypassPermissions"));
+    edits_only_its_own_worktree(&s, &proj, true);
+}
+
+/// Catches: a feature's codex agent editing main's checkout with
+/// apply_patch, under the default full-access sandbox where only pm's
+/// guard hook stands in the way. pm's hooks are trusted through codex's own
+/// gate. A turn or two on codex's default model.
+#[test]
+#[ignore]
+fn codex_a_feature_agent_cannot_edit_main() {
+    require("codex");
+    let s = Smoke::real();
+    let proj = feature_agent(&s, "codex", None, None);
+    s.tmux_ok(&["send-keys", "-t", "proj/guard:plain", "2", "Enter"]);
+    edits_only_its_own_worktree(&s, &proj, false);
+}
+
+/// Catches: a feature's opencode agent editing main's checkout under
+/// `--auto`. Needs an OpenAI-compatible server at 127.0.0.1:8000 serving a
+/// model with tool calls; its first model is used.
+#[test]
+#[ignore]
+fn opencode_a_feature_agent_cannot_edit_main() {
+    require("opencode");
+    let listed = std::process::Command::new("curl")
+        .args(["-s", "-m", "5", "http://127.0.0.1:8000/v1/models"])
+        .output()
+        .unwrap();
+    let models: serde_json::Value = serde_json::from_slice(&listed.stdout)
+        .unwrap_or_else(|_| panic!("cannot run opencode here: no model server at 127.0.0.1:8000"));
+    let model = models["data"][0]["id"].as_str().unwrap().to_string();
+    let s = Smoke::real();
+    std::fs::create_dir_all(s.global_config().parent().unwrap()).unwrap();
+    std::fs::write(
+        s.global_config(),
+        std::fs::read_to_string(s.global_config()).unwrap_or_default()
+            + &format!(
+                "\n[harness.opencode.providers.local]\n\
+                 package = \"@opencode/ai/providers/openai-compatible\"\n\
+                 settings = {{ baseURL = \"http://127.0.0.1:8000/v1\" }}\n\
+                 [harness.opencode.providers.local.models.\"{model}\"]\n"
+            ),
+    )
+    .unwrap();
+    let proj = feature_agent(&s, "opencode", Some(&format!("local/{model}")), None);
+    edits_only_its_own_worktree(&s, &proj, false);
+}

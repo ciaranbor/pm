@@ -52,6 +52,9 @@
 //! session then continues in the window's directory, which a remote TUI
 //! needs named with `-C`, canonical, or it asks to trust the directory.
 //!
+//! An agent kept out of a directory (`SpawnSpec::protected_dirs`) is kept
+//! out by pm's guard hook ([`guard`]), not at launch.
+//!
 //! The waiter starts only as a turn ends, so a spawn launches codex with a
 //! prompt (`agent_spawn`'s `SPAWN_PROMPT`, or `RESUME_PROMPT` on a resume),
 //! which [`host`] gives with `turn/start`. SessionStart runs only as the
@@ -67,6 +70,7 @@
 pub(super) mod app_server;
 pub(super) mod chat;
 pub(super) mod dialog;
+pub(super) mod guard;
 pub(super) mod hook_trust;
 pub(super) mod host;
 pub(super) mod input;
@@ -193,6 +197,7 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>, cfg: &CodexConfig) -> String {
         model,
         writable_dirs,
         edit_dirs: _,
+        protected_dirs: _,
     } = *spec;
 
     let approval = cfg.approval.as_deref().unwrap_or(DEFAULT_APPROVAL);

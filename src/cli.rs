@@ -598,6 +598,11 @@ pub enum HarnessHooksCommands {
         /// The harness whose dialog payload arrives on stdin
         harness: pm::harness::Harness,
     },
+    /// Guard hook handler — refuses an edit to a directory the agent's scope must not edit (not for direct use)
+    Guard {
+        /// The harness whose tool-call payload arrives on stdin
+        harness: pm::harness::Harness,
+    },
     /// Restart an agent `pm upgrade` deferred, now idle (started by the Stop hook)
     #[command(hide = true)]
     RestartAtIdle {

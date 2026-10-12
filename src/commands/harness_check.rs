@@ -31,10 +31,12 @@ pub enum ProblemKind {
     /// The harness has no trust entry for pm's blocked-reset hook. The agent
     /// still runs, so this alone never refuses a team.
     ResetHookUntrusted,
-    /// The harness has no trust entry for a pm status hook: the agent runs,
-    /// but a dialog waiting on the user reads as busy.
+    /// The harness has no trust entry for a pm hook outside the never-idle
+    /// loop (status, dialog, guard): the agent runs, without what that hook
+    /// does.
     StatusHookUntrusted,
-    /// A pm status hook is missing, with the same effect.
+    /// A pm hook outside the never-idle loop (status, dialog, guard) is
+    /// missing: the agent runs, without what that hook does.
     StatusHooksMissing,
 }
 
@@ -102,6 +104,9 @@ pub fn harness_problems(
             HookTrustStatus::Modified => "trusts only an earlier version of",
             _ => "has not trusted",
         };
+        let (guard, others): (Vec<_>, Vec<_>) = others
+            .into_iter()
+            .partition(|(_, markers, _)| markers.contains(&hooks_install::PM_GUARD_MARKER));
         for (event, _, trust) in others {
             push(
                 if event == hooks_install::USER_PROMPT_EVENT {
@@ -133,6 +138,17 @@ pub fn harness_problems(
                      as busy: {}",
                     state(trust),
                     events.join(", "),
+                    harness.hook_trust_remedy()
+                ),
+            );
+        }
+        for (event, _, trust) in guard {
+            push(
+                ProblemKind::StatusHookUntrusted,
+                format!(
+                    "{harness} {} pm's guard hook ({event}), so a feature's agents may edit \
+                     main's checkout: {}",
+                    state(trust),
                     harness.hook_trust_remedy()
                 ),
             );
@@ -175,6 +191,17 @@ pub fn harness_problems(
                 format!(
                     "pm dialog hook ({}) not installed in {shown}, so a dialog can be answered \
                      at the terminal only (run `pm harness hooks install`)",
+                    missing.join(", ")
+                ),
+            );
+        }
+        let missing = hooks_install::missing_guard_hooks(harness, root.as_ref());
+        if !missing.is_empty() {
+            push(
+                ProblemKind::StatusHooksMissing,
+                format!(
+                    "pm guard hook ({}) not installed in {shown}, so a feature's agents may \
+                     edit main's checkout (run `pm harness hooks install`)",
                     missing.join(", ")
                 ),
             );
@@ -473,6 +500,41 @@ mod tests {
         )
         .unwrap();
         assert_eq!(problems, TeamProblems::default());
+    }
+
+    #[test]
+    fn a_missing_codex_guard_hook_is_reported_as_optional() {
+        let dir = tempdir().unwrap();
+        let home = home_with_hooks(dir.path());
+        let hooks = home.join(".codex/hooks.json");
+        let mut root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&hooks).unwrap()).unwrap();
+        root["hooks"]["PreToolUse"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|e| !e.to_string().contains(hooks_install::PM_GUARD_MARKER));
+        std::fs::write(&hooks, root.to_string()).unwrap();
+        let config = HarnessConfig {
+            codex: crate::state::project::CodexConfig {
+                bypass_hook_trust: Some(true),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let problems = harness_problems(Harness::Codex, &config, &home, Probe::Fresh).unwrap();
+        let found: Vec<(ProblemKind, &str)> = problems
+            .iter()
+            .map(|p| (p.kind, p.message.as_str()))
+            .collect();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].0, ProblemKind::StatusHooksMissing);
+        assert!(
+            found[0]
+                .1
+                .starts_with("pm guard hook (PreToolUse) not installed"),
+            "{found:?}"
+        );
     }
 
     #[test]

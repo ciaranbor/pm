@@ -118,7 +118,13 @@ pub(super) fn spawn_session_with_config(
 
     let effective_definition = effective_definition(params.agent_definition, params.agent_name);
 
-    let launch = resolve_launch(params.project_root, effective_definition, config, global)?;
+    let launch = resolve_launch(
+        params.project_root,
+        params.feature,
+        effective_definition,
+        config,
+        global,
+    )?;
     let settings = &launch.settings;
 
     let needs_prompt = settings.harness.needs_launch_prompt();
@@ -160,6 +166,7 @@ pub(super) fn spawn_session_with_config(
         model: settings.model.as_deref(),
         writable_dirs: &launch.writable_dirs,
         edit_dirs: &launch.edit_dirs,
+        protected_dirs: &launch.protected_dirs,
     };
     let pre = settings
         .harness
@@ -694,8 +701,20 @@ package = "second-pkg"
         .unwrap();
         opencode_tui_argv(dir.path());
 
+        let mut rendered = opencode_config(dir.path());
+        // A feature's agent is kept out of main's checkout.
+        let main = paths::main_worktree(dir.path());
         assert_eq!(
-            opencode_config(dir.path()),
+            rendered["permissions"][0],
+            serde_json::json!({
+                "action": "edit",
+                "resource": format!("{}/*", main.display()),
+                "effect": "deny",
+            })
+        );
+        rendered.as_object_mut().unwrap().remove("permissions");
+        assert_eq!(
+            rendered,
             serde_json::json!({
                 "model": "local/qwen",
                 "enabled_providers": ["local", "second"],
