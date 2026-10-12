@@ -460,6 +460,34 @@ pub enum HarnessCommands {
         #[arg(long, default_value = "claude-code")]
         harness: Harness,
     },
+    /// Run a codex agent's app-server and TUI (what its window runs; not for direct use)
+    #[command(hide = true)]
+    CodexHost {
+        /// Approval policy for the agent's turns
+        #[arg(long)]
+        approval: String,
+        /// Sandbox mode for the agent's turns
+        #[arg(long)]
+        sandbox: String,
+        /// A directory outside the worktree the agent must be able to write (repeatable)
+        #[arg(long)]
+        writable: Vec<PathBuf>,
+        /// Model id
+        #[arg(long)]
+        model: Option<String>,
+        /// Run hooks codex has not been told to trust
+        #[arg(long)]
+        bypass_hook_trust: bool,
+        /// Session to resume
+        #[arg(long, conflicts_with = "fork")]
+        resume: Option<String>,
+        /// Session to fork and open the fork of
+        #[arg(long)]
+        fork: Option<String>,
+        /// The launch prompt
+        #[arg(long, allow_hyphen_values = true)]
+        prompt: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

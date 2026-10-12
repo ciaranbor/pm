@@ -12,8 +12,8 @@
 //! per scope, main included, so input to any of its agents resets it.
 //!
 //! A continuation that reaches an agent with nothing unread is dropped: it
-//! is a duplicate — a waiter's wake mid-turn, a re-arm, a queue item
-//! from before a restart — whose messages an earlier prompt took. The hook
+//! is a duplicate — a waiter's wake mid-turn, a re-arm — whose messages
+//! an earlier prompt took. The hook
 //! blocks it (`{"decision":"block"}`), so no turn runs, and does nothing
 //! else: the waiter that marked the agent idle still waits.
 //!

@@ -108,6 +108,7 @@ pub(in crate::harness) fn from_env() -> Option<Inbound> {
     Some(Inbound {
         socket: var(SOCKET_ENV)?.into(),
         token: var(TOKEN_ENV),
+        thread: None,
     })
 }
 

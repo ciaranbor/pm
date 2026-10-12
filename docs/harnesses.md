@@ -14,7 +14,7 @@ file of every supported harness (`~/.claude/settings.json` for Claude Code,
   once the turn has ended (Claude Code `asyncRewake`, codex `async`), and
   it waits until the agent has unread messages, then wakes it to read
   them — on Claude Code by exiting 2, which the harness delivers as a
-  prompt; on codex through the session's queue (`codex queue`). The agent
+  prompt; on codex by starting a turn on the agent's own app-server. The agent
   reads `background` while a Claude Code background task or session cron
   runs; a message wakes it all the same. Each turn's end starts a new
   waiter, which supersedes the last.
@@ -103,51 +103,59 @@ unattended:
   including your own non-pm ones. `pm doctor` asks codex which of pm's
   hooks it trusts, so it also reports a trust an upgrade has outdated; the
   escape hatch is `[harness.codex] bypass_hook_trust = true`
-  (`--dangerously-bypass-hook-trust`, one warning line per launch).
+  (`--dangerously-bypass-hook-trust`, one warning line per launch). It
+  does not cover a restart: codex reviews untrusted hooks on every resume
+  of an agent's session whatever the flag says, so a restarted agent waits
+  at that review until you answer it. Trusting the hooks avoids it.
 - **Directory trust** pm writes itself: each worktree gets a
   `trust_level = "trusted"` entry in `$CODEX_HOME/config.toml` at spawn
   (`pm doctor --fix` adds any missing).
-- **No sandbox by default.** pm launches codex with `-a never -s
-  danger-full-access`. pm's tmux socket cannot be reached from inside any
+- **No sandbox by default.** pm runs codex agents with approval `never`
+  and sandbox `danger-full-access`. pm's tmux socket cannot be reached from inside any
   codex sandbox, so a sandboxed agent cannot spawn, stop, restart, or heal
   other agents — a codex `main` needs full access. This is the blast radius
   pm's Claude Code agents already run with. To sandbox read-and-report
   agents anyway:
 
   ```toml
-  [agents.permissions]          # for a codex agent, the -s sandbox mode
+  [agents.permissions]          # for a codex agent, the sandbox mode
   reviewer = "workspace-write"
 
   [harness.codex]               # harness-wide, project beats global per key
   sandbox = "workspace-write"   # default for codex agents with no permissions row
-  approval = "never"            # -a; "on-request" would stall an unwatched window
-  writable_roots = ["main/target"]   # extra --add-dir; a project [] masks global
+  approval = "never"            # "on-request" would stall an unwatched window
+  writable_roots = ["main/target"]   # extra writable roots; a project [] masks global
   ```
 
   pm always makes its state dir, the shared `main/.git`, and the pm config
   dir writable, so a sandboxed agent can read, run git, and message; every
-  tmux-touching command fails. Under `workspace-write` that is `--add-dir`;
-  codex refuses `--add-dir` under `read-only`, so pm swaps `read-only` for a
-  permission profile of its own (`pm-read-only`: the disk readable, only
-  those dirs writable) and the worktree stays read-only.
+  tmux-touching command fails. Under `workspace-write` those are writable
+  roots; `read-only` has none, so pm swaps it for a permission profile of
+  its own (`pm-read-only`: the disk readable, only those dirs writable) and
+  the worktree stays read-only. pm applies these over codex's API as each
+  launch's first turn starts, and they hold through restarts and forks.
 - **Role delivery.** Codex has no `--agent`; the definition, baseline, and
   notice boards reach it through the SessionStart hook, on start and on
   every resume.
-- **No shared daemon.** pm launches codex with `--no-daemon`, since hooks
-  attached to codex's background server run in the server's environment,
-  not the agent's. `pm doctor` reports a running agent whose session never
-  reported starting after a grace period; `pm agent restart` it.
-- **Wakes come through codex's queue**, which the TUI polls every 10 s, so
-  an idle codex agent takes a message up to about 10 s after it arrives.
-  The queue skips an interrupted thread, so Esc leaves a codex agent
-  unarmed until `pm msg send` re-arms it. A queued wake survives a restart
-  and runs on resume; if its messages were read meanwhile it is dropped.
-  The queue is an experimental codex API.
+- **An app-server per agent.** An agent's window runs `pm harness
+  codex-host`, which starts a `codex app-server` of the agent's own, runs
+  the TUI against it, and ends the server with the window. Hooks run in
+  that server, with the agent's environment; codex's shared background
+  server would run them in whichever client's started it. Its output is
+  in `.pm/runtime/<scope>/<agent>/app-server.log`. `pm doctor` reports a
+  running agent whose session never reported starting after a grace
+  period; `pm agent restart` it.
+- **Wakes start a turn through the agent's app-server** (`turn/start`,
+  an experimental codex API), so an idle agent takes a message at once,
+  and so does one whose turn you interrupted: a message that arrived
+  during the turn wakes it as you press Esc, and one sent after re-arms
+  it. A wake that reaches a turn still running joins it after its next
+  tool call.
 - **Removing a model row keeps the session's model.** `codex resume` with
   no `-m` reuses the model the session last ran, so deleting an
   `[agents.models]` row changes nothing on restart; set the row to the
   model you want instead.
-- `pm harness probe --harness codex` checks the version (0.156.0 or newer).
+- `pm harness probe --harness codex` checks the version (0.160.0 or newer).
 
 ## opencode
 

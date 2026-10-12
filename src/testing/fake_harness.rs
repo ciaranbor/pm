@@ -104,7 +104,10 @@ pub(crate) fn fake_claude() -> std::path::PathBuf {
 pub(crate) const HOLD_START: &str = "hold-start";
 
 /// A directory of stand-ins for `claude` and `codex`, ahead of the rest of
-/// `PATH` in every test server's windows, so a spawn launches one: each
+/// `PATH` in every test server's windows, so a spawn launches one — and for
+/// `pm`, as the codex one, since a codex agent's window runs `pm harness
+/// codex-host`. That `pm` runs nothing else: any other `pm` command in a
+/// test window fails, rather than reach an installed pm. Each
 /// stamps its session as started, as the harness's session-start hook
 /// would ([`runtime::started_at`](crate::state::runtime::started_at)), then
 /// runs as [`fake_claude`] does. One launched for an agent whose runtime
@@ -130,6 +133,15 @@ fn fake_harness_path() -> &'static std::path::Path {
             );
             let path = dir.join(&name);
             super::write_executable(&path, &script);
+            if harness == crate::harness::Harness::Codex {
+                let pm = script.replacen(
+                    "#!/bin/sh\n",
+                    "#!/bin/sh\n[ \"$1 $2\" = 'harness codex-host' ] || \
+                     { echo \"test pm stand-in runs only harness codex-host: $*\" >&2; exit 127; }\n",
+                    1,
+                );
+                super::write_executable(&dir.join("pm"), &pm);
+            }
         }
         dir
     })

@@ -12,12 +12,18 @@ case $1 in
   --version)
     case $name in
       opencode) echo "opencode v2.0.23" ;;
+      codex) echo "codex-cli 0.160.0" ;;
       *) echo "$name 0.156.0" ;;
     esac
     exit 0 ;;
 esac
 case "$name $1 $2" in
   "claude auth status"|"codex login status") echo "Logged in"; exit 0 ;;
+  # An agent's server: the socket path exists, holding the server's pid, so
+  # pm starts the TUI, but nothing answers on it.
+  "codex app-server --listen")
+    echo $$ > "${3#unix://}"
+    exec sleep 600 ;;
   # No hook-trust answer: pm reads that as untrusted, without waiting.
   "codex app-server"*) exit 0 ;;
 esac

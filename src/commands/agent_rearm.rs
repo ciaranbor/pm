@@ -206,6 +206,7 @@ mod tests {
         let inbound = runtime::Inbound {
             socket: socket.to_path_buf(),
             token: Some("t0k".into()),
+            thread: None,
         };
         runtime::write_inbound(project, "login", "implementer", Some(&inbound)).unwrap();
     }
@@ -243,6 +244,83 @@ mod tests {
         );
         assert!(tmux::paste::in_mode(server.name(), &pane).unwrap());
         assert!(!screen(&server, &target).contains("You have new messages"));
+    }
+
+    /// A codex agent at its composer with `marker`, its session's thread
+    /// `t1` served by a fake app-server. Returns the project, the server,
+    /// and the file the pane's keystrokes go to.
+    fn codex_at_prompt(
+        server: &TestServer,
+        dir: &Path,
+        marker: WaitingKind,
+    ) -> (
+        std::path::PathBuf,
+        crate::testing::FakeAppServer,
+        std::path::PathBuf,
+    ) {
+        let (project, project_name) = server.setup_project_with_feature(dir, "login");
+        let session = tmux::session_name(&project_name, "login");
+        let (_, received) = server.spawn_recording_agent(
+            &project,
+            &session,
+            "login",
+            "implementer",
+            Harness::Codex,
+        );
+        runtime::write_waiting(
+            &project,
+            "login",
+            "implementer",
+            &Waiting::now(marker, None),
+        )
+        .unwrap();
+        let app_server = crate::testing::FakeAppServer::bind(dir);
+        let inbound = runtime::Inbound {
+            socket: app_server.path.clone(),
+            token: None,
+            thread: Some("t1".into()),
+        };
+        runtime::write_inbound(&project, "login", "implementer", Some(&inbound)).unwrap();
+        (project, app_server, received)
+    }
+
+    #[test]
+    fn an_unarmed_codex_agent_is_started_a_turn_on_its_thread_never_typed() {
+        for marker in [WaitingKind::Interrupted, WaitingKind::Idle] {
+            let server = TestServer::new();
+            let dir = tempdir().unwrap();
+            let (project, app_server, received) = codex_at_prompt(&server, dir.path(), marker);
+
+            let status = send(&server, &project);
+
+            assert!(status.contains("\nRe-armed 'implementer'"), "{status}");
+            assert_eq!(
+                app_server.turn(),
+                Some(serde_json::json!({
+                    "threadId": "t1",
+                    "input": [{"type": "text", "text": PROMPT}],
+                }))
+            );
+            assert_eq!(std::fs::read_to_string(received).unwrap_or_default(), "");
+        }
+    }
+
+    #[test]
+    fn a_codex_agent_asking_or_whose_loop_stopped_is_started_nothing() {
+        for marker in [WaitingKind::Permission, WaitingKind::Tripped] {
+            let server = TestServer::new();
+            let dir = tempdir().unwrap();
+            let (project, app_server, _) = codex_at_prompt(&server, dir.path(), marker);
+            if marker == WaitingKind::Tripped {
+                runtime::trip_loop(&project, "login", "implementer", "wasted wakes").unwrap();
+            }
+
+            assert_eq!(
+                send(&server, &project),
+                "Message 001 sent to 'implementer' (from 'reviewer')"
+            );
+            assert_eq!(app_server.turn(), None);
+        }
     }
 
     #[test]
