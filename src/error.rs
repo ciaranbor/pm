@@ -49,6 +49,9 @@ pub enum PmError {
     #[error("Not in a feature or main worktree — run from a worktree directory")]
     NotInWorktree,
 
+    #[error("Not in a worktree of project '{0}' — name the scope (a feature, or main) to act on")]
+    OutsideProject(String),
+
     #[error("Cannot derive a project name from git URL \"{0}\": pass a PATH")]
     UnnamedGitUrl(String),
 

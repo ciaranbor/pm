@@ -1,4 +1,4 @@
-use clap::{ArgGroup, Parser, Subcommand};
+use clap::{ArgGroup, Args, Parser, Subcommand};
 use clap_complete::Shell;
 use std::path::PathBuf;
 
@@ -512,6 +512,8 @@ pub enum AgentCommands {
         /// Target scope (feature name or "main"; defaults to current scope)
         #[arg(long)]
         scope: Option<String>,
+        #[command(flatten)]
+        target: ProjectFlag,
     },
     /// List agents in the current feature
     List {
@@ -521,6 +523,8 @@ pub enum AgentCommands {
         /// Target scope (feature name or "main"; defaults to current scope)
         #[arg(long)]
         scope: Option<String>,
+        #[command(flatten)]
+        target: ProjectFlag,
     },
     /// Stop one or more running agents (kill window, mark inactive)
     Stop {
@@ -530,6 +534,8 @@ pub enum AgentCommands {
         /// Target scope (feature name or "main"; defaults to current scope)
         #[arg(long)]
         scope: Option<String>,
+        #[command(flatten)]
+        target: ProjectFlag,
     },
     /// Delete one or more agents (kill window and remove registry entry entirely; cannot be respawned)
     Delete {
@@ -539,6 +545,8 @@ pub enum AgentCommands {
         /// Target scope (feature name or "main"; defaults to current scope)
         #[arg(long)]
         scope: Option<String>,
+        #[command(flatten)]
+        target: ProjectFlag,
     },
     /// Restart one or more agents (stop then respawn, preserving active flag and session)
     Restart {
@@ -551,7 +559,7 @@ pub enum AgentCommands {
         #[arg(long)]
         all: bool,
         /// With --all: every scope of every registered project
-        #[arg(long, requires = "all", conflicts_with = "scope")]
+        #[arg(long, requires = "all", conflicts_with_all = ["scope", "project"])]
         global: bool,
         /// With --all: only running agents that would launch differently
         /// now; the agent running the command, and any mid-turn, restart at
@@ -566,6 +574,8 @@ pub enum AgentCommands {
         /// Target scope (feature name or "main"; defaults to current scope)
         #[arg(long)]
         scope: Option<String>,
+        #[command(flatten)]
+        target: ProjectFlag,
     },
     /// Fork an existing agent: spawn a new agent that starts with a copy of the source's conversation history
     Fork {
@@ -576,6 +586,8 @@ pub enum AgentCommands {
         /// Target scope (feature name or "main"; defaults to current scope)
         #[arg(long)]
         scope: Option<String>,
+        #[command(flatten)]
+        target: ProjectFlag,
     },
 }
 
@@ -617,6 +629,8 @@ pub enum MsgCommands {
         /// Read from a different scope's inbox (feature name or "main")
         #[arg(long)]
         scope: Option<String>,
+        #[command(flatten)]
+        target: ProjectFlag,
     },
     /// List all messages in your inbox, with cursor position markers
     List {
@@ -629,6 +643,8 @@ pub enum MsgCommands {
         /// List messages from a different scope's inbox (feature name or "main")
         #[arg(long)]
         scope: Option<String>,
+        #[command(flatten)]
+        target: ProjectFlag,
     },
     /// Reply to the last-read message (auto-routes cross-scope)
     Reply {
@@ -637,6 +653,11 @@ pub enum MsgCommands {
         /// Sender identity (defaults to $PM_AGENT_NAME or $USER)
         #[arg(long)]
         as_agent: Option<String>,
+        /// Reply from a different scope's inbox (feature name or "main")
+        #[arg(long)]
+        scope: Option<String>,
+        #[command(flatten)]
+        target: ProjectFlag,
     },
     /// Block until a message arrives in your inbox
     Wait {
@@ -649,6 +670,8 @@ pub enum MsgCommands {
         /// Wait on a different scope's inbox (feature name or "main")
         #[arg(long)]
         scope: Option<String>,
+        #[command(flatten)]
+        target: ProjectFlag,
     },
 }
 
@@ -672,6 +695,8 @@ pub enum FeatCommands {
         /// Run `pm workflow list` for installed workflows.
         #[arg(long)]
         workflow: Option<String>,
+        #[command(flatten)]
+        target: ProjectFlag,
     },
     /// Adopt an existing branch as a feature (worktree + tmux session)
     Adopt {
@@ -691,17 +716,23 @@ pub enum FeatCommands {
         /// Run `pm workflow list` for installed workflows.
         #[arg(long)]
         workflow: Option<String>,
+        #[command(flatten)]
+        target: ProjectFlag,
     },
     /// List all features with their status, lifecycle, branch, base and PR
     List {
         /// List the features of every registered project
-        #[arg(long)]
+        #[arg(long, conflicts_with = "project")]
         all: bool,
+        #[command(flatten)]
+        target: ProjectFlag,
     },
     /// Show detailed info for a feature
     Info {
         /// Feature name (detected from CWD if omitted)
         name: Option<String>,
+        #[command(flatten)]
+        target: ProjectFlag,
     },
     /// Delete a feature (with safety checks)
     Delete {
@@ -710,6 +741,8 @@ pub enum FeatCommands {
         /// Skip safety checks
         #[arg(long)]
         force: bool,
+        #[command(flatten)]
+        target: ProjectFlag,
     },
     /// Merge a feature branch into the base branch
     Merge {
@@ -718,6 +751,8 @@ pub enum FeatCommands {
         /// Keep the feature after merge (preserve session, worktree, branch, and state)
         #[arg(long)]
         keep: bool,
+        #[command(flatten)]
+        target: ProjectFlag,
     },
     /// GitHub PR management
     #[command(subcommand)]
@@ -738,11 +773,13 @@ pub enum FeatCommands {
         #[arg(short = 'm', long)]
         reason: Option<String>,
         /// View every feature of every registered project
-        #[arg(long, conflicts_with_all = ["status", "name", "reason"])]
+        #[arg(long, conflicts_with_all = ["status", "name", "reason", "project"])]
         all: bool,
         /// View as JSON (the attention snapshot; see docs/remote-api.md)
         #[arg(long)]
         json: bool,
+        #[command(flatten)]
+        target: ProjectFlag,
     },
     /// The feature's summary for the orchestrator (kept in pm state, not the branch)
     #[command(subcommand)]
@@ -751,11 +788,15 @@ pub enum FeatCommands {
     Review {
         /// PR number or GitHub PR URL
         pr: String,
+        #[command(flatten)]
+        target: ProjectFlag,
     },
     /// Sync feature statuses with their linked GitHub PRs
     Sync {
         /// Feature name (syncs just this feature). Detected from CWD if omitted. If not in a feature worktree, syncs all features.
         name: Option<String>,
+        #[command(flatten)]
+        target: ProjectFlag,
     },
 }
 
@@ -765,11 +806,15 @@ pub enum SummaryCommands {
     Path {
         /// Feature name (detected from CWD if omitted)
         name: Option<String>,
+        #[command(flatten)]
+        target: ProjectFlag,
     },
     /// Print the feature's summary
     Show {
         /// Feature name (detected from CWD if omitted)
         name: Option<String>,
+        #[command(flatten)]
+        target: ProjectFlag,
     },
 }
 
@@ -786,6 +831,8 @@ pub enum PrCommands {
         /// overrides template)
         #[arg(long)]
         body: Option<String>,
+        #[command(flatten)]
+        target: ProjectFlag,
     },
     /// Edit an existing PR's title and/or description
     #[command(group(ArgGroup::new("edit_fields").required(true).multiple(true).args(["title", "body"])))]
@@ -798,10 +845,22 @@ pub enum PrCommands {
         /// New PR body (literal text, path to a file, or `-` to read from stdin)
         #[arg(long)]
         body: Option<String>,
+        #[command(flatten)]
+        target: ProjectFlag,
     },
     /// Mark a feature's draft PR as ready for review
     Ready {
         /// Feature name (detected from CWD if omitted)
         name: Option<String>,
+        #[command(flatten)]
+        target: ProjectFlag,
     },
+}
+
+/// `--project`: the registered project a command acts on, wherever it runs.
+#[derive(Args)]
+pub struct ProjectFlag {
+    /// Project name (defaults to current project from CWD)
+    #[arg(long)]
+    pub project: Option<String>,
 }

@@ -3,14 +3,14 @@ use pm::commands::attention::AgentState;
 use pm::error::{PmError, Result};
 use pm::state::paths;
 use pm::state::scope;
+use std::path::PathBuf;
 
 use super::report::report_sent;
-use super::scope::resolve_scope_with_flag;
+use super::scope::{own_scope, project_root, resolve_scope, resolve_scope_with_flag};
 use super::window::{agent_window, push, running_agent};
 use crate::cli::MsgCommands;
 
 pub(super) fn run(cmd: MsgCommands, server: Option<&str>) -> Result<()> {
-    let (project_root, feature) = paths::agent_scope()?;
     match cmd {
         MsgCommands::Send {
             agent,
@@ -20,6 +20,9 @@ pub(super) fn run(cmd: MsgCommands, server: Option<&str>) -> Result<()> {
             upstream,
             project: target_project,
         } => {
+            // `--project` here names the recipient's project; the sender
+            // stays in its own.
+            let (project_root, feature) = paths::agent_scope()?;
             let message = read_message_body(message)?;
             let sender = as_agent.unwrap_or_else(pm::messages::default_user_name);
 
@@ -87,7 +90,9 @@ pub(super) fn run(cmd: MsgCommands, server: Option<&str>) -> Result<()> {
             index,
             as_agent,
             scope,
+            target,
         } => {
+            let (project_root, feature) = target_project(target.project.as_deref())?;
             let target_scope = resolve_scope_with_flag(&project_root, scope)?;
             let agent = as_agent.unwrap_or_else(pm::messages::default_user_name);
             let spec = index
@@ -105,7 +110,7 @@ pub(super) fn run(cmd: MsgCommands, server: Option<&str>) -> Result<()> {
                 println!("{line}");
             }
             // The agent reading its own inbox is mid-turn.
-            if target_scope == feature
+            if feature.as_deref() == Some(target_scope.as_str())
                 && running_agent().as_deref() == Some(agent.as_str())
                 && let Some(mut window) = agent_window(server, &agent)
             {
@@ -122,7 +127,9 @@ pub(super) fn run(cmd: MsgCommands, server: Option<&str>) -> Result<()> {
             from,
             as_agent,
             scope,
+            target,
         } => {
+            let (project_root, _) = target_project(target.project.as_deref())?;
             let target_scope = resolve_scope_with_flag(&project_root, scope)?;
             let agent = as_agent.unwrap_or_else(pm::messages::default_user_name);
             let lines = commands::msg_list::msg_list(
@@ -136,11 +143,27 @@ pub(super) fn run(cmd: MsgCommands, server: Option<&str>) -> Result<()> {
             }
             Ok(())
         }
-        MsgCommands::Reply { message, as_agent } => {
+        MsgCommands::Reply {
+            message,
+            as_agent,
+            scope,
+            target,
+        } => {
+            let (project_root, feature) = target_project(target.project.as_deref())?;
+            let current_scope = match (scope, feature) {
+                (Some(scope), _) => resolve_scope_with_flag(&project_root, Some(scope))?,
+                (None, Some(feature)) => feature,
+                (None, None) => resolve_scope(&project_root)?,
+            };
             let message = read_message_body(message)?;
             let sender = as_agent.unwrap_or_else(pm::messages::default_user_name);
-            let sent =
-                commands::msg_reply::msg_reply(&project_root, &feature, &sender, &message, server)?;
+            let sent = commands::msg_reply::msg_reply(
+                &project_root,
+                &current_scope,
+                &sender,
+                &message,
+                server,
+            )?;
             report_sent(&project_root, sent, server);
             push();
             Ok(())
@@ -149,7 +172,9 @@ pub(super) fn run(cmd: MsgCommands, server: Option<&str>) -> Result<()> {
             from,
             as_agent,
             scope,
+            target,
         } => {
+            let (project_root, _) = target_project(target.project.as_deref())?;
             let target_scope = resolve_scope_with_flag(&project_root, scope)?;
             let agent = as_agent.unwrap_or_else(pm::messages::default_user_name);
             let count = commands::agent_wait::agent_wait(
@@ -161,6 +186,22 @@ pub(super) fn run(cmd: MsgCommands, server: Option<&str>) -> Result<()> {
             )?;
             println!("{count} new message{}", if count == 1 { "" } else { "s" });
             Ok(())
+        }
+    }
+}
+
+/// The project a command acts on, and the scope of the agent running it
+/// unless `--project` names a project other than its own.
+fn target_project(project: Option<&str>) -> Result<(PathBuf, Option<String>)> {
+    match project {
+        Some(name) => {
+            let root = project_root(&paths::global_projects_dir()?, Some(name))?;
+            let own = own_scope(&root);
+            Ok((root, own))
+        }
+        None => {
+            let (root, scope) = paths::agent_scope()?;
+            Ok((root, Some(scope)))
         }
     }
 }
