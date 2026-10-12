@@ -208,10 +208,15 @@ mod tests {
         );
         assert!(paths::main_worktree(&f.project).join("wip.txt").exists());
         assert!(FeatureState::load(&paths::features_dir(&f.project), "login").is_err());
-        let told =
-            crate::messages::read_at(&paths::messages_dir(&f.project), "main", "main", "login", 1)
-                .unwrap()
-                .unwrap();
+        let told = crate::messages::read_at(
+            &paths::messages_dir(&f.project),
+            "main",
+            "main",
+            "login@login",
+            1,
+        )
+        .unwrap()
+        .unwrap();
         assert!(told.body.contains("'login' was merged"), "{}", told.body);
     }
 

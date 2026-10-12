@@ -3,10 +3,11 @@
 
 use std::path::Path;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 
+use super::address::{name_of, validate_key};
 use super::cursor;
-use super::layout::{inbox_dir, max_index, meta_dir, sender_dir};
+use super::layout::{inbox_dir, list_senders, max_index, meta_dir, sender_dir};
 use super::types::{Message, MessageMeta, UnreadSummary};
 use super::validation::validate_name;
 use crate::error::Result;
@@ -36,29 +37,34 @@ pub fn check(messages_dir: &Path, feature: &str, agent: &str) -> Result<Vec<Unre
 
     let csr = cursor::load_cursor(&cursor::cursor_path(messages_dir, feature, agent))?;
     let mut summaries = Vec::new();
-
-    for entry in std::fs::read_dir(&inbox)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-
-        if let Some(sender) = name.strip_prefix("from-") {
-            if !entry.path().is_dir() {
-                continue;
-            }
-            let last_read = csr.get(sender).copied().unwrap_or(0);
-            let latest = max_index(&entry.path())?;
-            if latest > last_read {
-                summaries.push(UnreadSummary {
-                    sender: sender.to_string(),
-                    count: latest - last_read,
-                });
-            }
+    for sender in list_senders(&inbox)? {
+        let last_read = csr.get(&sender).copied().unwrap_or(0);
+        let latest = max_index(&sender_dir(messages_dir, feature, agent, &sender))?;
+        if latest > last_read {
+            summaries.push(UnreadSummary {
+                sender,
+                count: latest - last_read,
+            });
         }
     }
-
-    summaries.sort_by(|a, b| a.sender.cmp(&b.sender));
     Ok(summaries)
+}
+
+/// When `sender` last sent a message to any inbox in `feature`, by the
+/// metadata of each inbox's latest from it; `None` if it never has.
+pub fn last_sent(messages_dir: &Path, feature: &str, sender: &str) -> Option<DateTime<Utc>> {
+    std::fs::read_dir(messages_dir.join(feature))
+        .ok()?
+        .filter_map(|entry| {
+            let agent = entry.ok()?.file_name().into_string().ok()?;
+            let latest = max_index(&sender_dir(messages_dir, feature, &agent, sender)).ok()?;
+            Some(
+                load_meta(messages_dir, feature, &agent, sender, latest)
+                    .ok()??
+                    .timestamp,
+            )
+        })
+        .max()
 }
 
 /// Load the metadata recorded for one message, `None` when the message
@@ -91,7 +97,7 @@ pub fn read_at(
 ) -> Result<Option<Message>> {
     validate_name(feature, "feature")?;
     validate_name(agent, "agent")?;
-    validate_name(sender, "sender")?;
+    validate_key(sender)?;
 
     if index == 0 {
         return Ok(None);
@@ -105,7 +111,7 @@ pub fn read_at(
 
     let body = std::fs::read_to_string(&msg_path)?;
     let meta = load_meta(messages_dir, feature, agent, sender, index)?.unwrap_or(MessageMeta {
-        sender: sender.to_string(),
+        sender: name_of(sender).to_string(),
         timestamp: Utc::now(),
         sender_scope: None,
         sender_project: None,
@@ -146,7 +152,7 @@ mod tests {
 
         let summaries = check(&mdir, "login", "reviewer").unwrap();
         assert_eq!(summaries.len(), 1);
-        assert_eq!(summaries[0].sender, "implementer");
+        assert_eq!(summaries[0].sender, "implementer@login");
         assert_eq!(summaries[0].count, 2);
     }
 
@@ -161,9 +167,9 @@ mod tests {
 
         let summaries = check(&mdir, "login", "reviewer").unwrap();
         assert_eq!(summaries.len(), 2);
-        assert_eq!(summaries[0].sender, "implementer");
+        assert_eq!(summaries[0].sender, "implementer@login");
         assert_eq!(summaries[0].count, 1);
-        assert_eq!(summaries[1].sender, "user");
+        assert_eq!(summaries[1].sender, "user@login");
         assert_eq!(summaries[1].count, 2);
     }
 
@@ -175,14 +181,14 @@ mod tests {
         send(&mdir, "login", "reviewer", "implementer", "hello").unwrap();
         send(&mdir, "login", "reviewer", "implementer", "world").unwrap();
 
-        let m = read_at(&mdir, "login", "reviewer", "implementer", 1)
+        let m = read_at(&mdir, "login", "reviewer", "implementer@login", 1)
             .unwrap()
             .unwrap();
         assert_eq!(m.index, 1);
         assert_eq!(m.body, "hello");
-        assert_eq!(m.sender, "implementer");
+        assert_eq!(m.sender, "implementer@login");
 
-        let m = read_at(&mdir, "login", "reviewer", "implementer", 2)
+        let m = read_at(&mdir, "login", "reviewer", "implementer@login", 2)
             .unwrap()
             .unwrap();
         assert_eq!(m.index, 2);
@@ -197,16 +203,16 @@ mod tests {
 
         send(&mdir, "login", "reviewer", "implementer", "msg").unwrap();
         assert_eq!(
-            cursor_for(&mdir, "login", "reviewer", "implementer").unwrap(),
+            cursor_for(&mdir, "login", "reviewer", "implementer@login").unwrap(),
             0
         );
 
-        read_at(&mdir, "login", "reviewer", "implementer", 1).unwrap();
-        read_at(&mdir, "login", "reviewer", "implementer", 1).unwrap();
-        read_at(&mdir, "login", "reviewer", "implementer", 1).unwrap();
+        read_at(&mdir, "login", "reviewer", "implementer@login", 1).unwrap();
+        read_at(&mdir, "login", "reviewer", "implementer@login", 1).unwrap();
+        read_at(&mdir, "login", "reviewer", "implementer@login", 1).unwrap();
 
         assert_eq!(
-            cursor_for(&mdir, "login", "reviewer", "implementer").unwrap(),
+            cursor_for(&mdir, "login", "reviewer", "implementer@login").unwrap(),
             0
         );
     }
@@ -220,19 +226,19 @@ mod tests {
 
         // Index 0 is reserved for "nothing" and should never resolve.
         assert!(
-            read_at(&mdir, "login", "reviewer", "implementer", 0)
+            read_at(&mdir, "login", "reviewer", "implementer@login", 0)
                 .unwrap()
                 .is_none()
         );
         // Beyond the last sent message.
         assert!(
-            read_at(&mdir, "login", "reviewer", "implementer", 2)
+            read_at(&mdir, "login", "reviewer", "implementer@login", 2)
                 .unwrap()
                 .is_none()
         );
         // Sender that never sent anything.
         assert!(
-            read_at(&mdir, "login", "reviewer", "nobody", 1)
+            read_at(&mdir, "login", "reviewer", "nobody@login", 1)
                 .unwrap()
                 .is_none()
         );
@@ -243,7 +249,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let mdir = messages_dir(dir.path());
 
-        let m = read_at(&mdir, "login", "reviewer", "implementer", 1).unwrap();
+        let m = read_at(&mdir, "login", "reviewer", "implementer@login", 1).unwrap();
         assert!(m.is_none());
     }
 
@@ -255,24 +261,24 @@ mod tests {
         send(&mdir, "login", "reviewer", "implementer", "login msg").unwrap();
         send(&mdir, "signup", "reviewer", "implementer", "signup msg").unwrap();
 
-        let login = read_at(&mdir, "login", "reviewer", "implementer", 1)
+        let login = read_at(&mdir, "login", "reviewer", "implementer@login", 1)
             .unwrap()
             .unwrap();
         assert_eq!(login.body, "login msg");
 
-        let signup = read_at(&mdir, "signup", "reviewer", "implementer", 1)
+        let signup = read_at(&mdir, "signup", "reviewer", "implementer@signup", 1)
             .unwrap()
             .unwrap();
         assert_eq!(signup.body, "signup msg");
 
         // Advancing one feature's cursor does not affect the other.
-        next(&mdir, "login", "reviewer", "implementer").unwrap();
+        next(&mdir, "login", "reviewer", "implementer@login").unwrap();
         assert_eq!(
-            cursor_for(&mdir, "login", "reviewer", "implementer").unwrap(),
+            cursor_for(&mdir, "login", "reviewer", "implementer@login").unwrap(),
             1
         );
         assert_eq!(
-            cursor_for(&mdir, "signup", "reviewer", "implementer").unwrap(),
+            cursor_for(&mdir, "signup", "reviewer", "implementer@signup").unwrap(),
             0
         );
     }

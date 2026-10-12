@@ -2,11 +2,10 @@
 //! the inbox its sender's waiter watches.
 //!
 //! Where the reply is read from (the inbox holding `.last_read`) and who it
-//! is from are separate. The reply's own route back is the replier's home
-//! when it replies as the agent its process runs for (`PM_AGENT_NAME`), so
-//! an agent answering from another project's inbox is still answered in its
-//! own. Anyone else — a human, or one acting `--as-agent` someone else — is
-//! routed back to the inbox it replied from.
+//! is from are separate. An agent's reply (`PM_AGENT_NAME` set) routes back
+//! to its home, so an agent answering from another project's inbox is still
+//! answered in its own. Anyone else is routed back to the inbox it replied
+//! from.
 
 use std::path::Path;
 
@@ -202,7 +201,7 @@ mod tests {
         assert!(result.contains("implementer@login"));
 
         // Verify message arrived in main scope
-        let msg = messages::read_at(&messages_dir, "main", "reviewer", "implementer", 1)
+        let msg = messages::read_at(&messages_dir, "main", "reviewer", "implementer@login", 1)
             .unwrap()
             .unwrap();
         assert_eq!(msg.body, "done, please review");

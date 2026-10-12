@@ -70,6 +70,7 @@ fn options_are_published_and_cleared_once_their_value_goes_away() {
         Progress::Blocked,
         Some("which #[fg=red]DB?"),
         Some("implementer"),
+        crate::testing::NO_SERVER,
     )
     .unwrap();
 
@@ -159,7 +160,15 @@ fn options_are_published_and_cleared_once_their_value_goes_away() {
         ["1", "#[fg=red,bold]\u{f256} 1 blocked#[default]"]
     );
 
-    feat_status(&project, "login", Progress::Wip, None, None).unwrap();
+    feat_status(
+        &project,
+        "login",
+        Progress::Wip,
+        None,
+        None,
+        crate::testing::NO_SERVER,
+    )
+    .unwrap();
     let agents_dir = paths::agents_dir(&project);
     let mut registry = AgentRegistry::load(&agents_dir, "login").unwrap();
     registry.get_mut("implementer").unwrap().active = false;
@@ -364,6 +373,7 @@ fn clients_are_alerted_once_when_a_feature_becomes_blocked_or_ready() {
         Progress::Blocked,
         Some("which DB?"),
         None,
+        crate::testing::NO_SERVER,
     )
     .unwrap();
     refresh(&projects_dir, server.name()).unwrap();
@@ -373,7 +383,15 @@ fn clients_are_alerted_once_when_a_feature_becomes_blocked_or_ready() {
     let summary = paths::summary_path(&project, "login");
     std::fs::create_dir_all(summary.parent().unwrap()).unwrap();
     std::fs::write(&summary, "Adds login\n").unwrap();
-    feat_status(&project, "login", Progress::Ready, None, None).unwrap();
+    feat_status(
+        &project,
+        "login",
+        Progress::Ready,
+        None,
+        None,
+        crate::testing::NO_SERVER,
+    )
+    .unwrap();
     refresh(&projects_dir, server.name()).unwrap();
     announced.take();
     refresh(&projects_dir, server.name()).unwrap();
@@ -1074,6 +1092,7 @@ fn a_project_whose_state_or_registry_entry_cannot_be_read_keeps_what_it_publishe
             Progress::Blocked,
             Some("which DB?"),
             None,
+            crate::testing::NO_SERVER,
         )
         .unwrap();
         refresh(&projects_dir, server.name()).unwrap();
@@ -1105,6 +1124,7 @@ fn a_client_gone_since_the_read_fails_no_refresh() {
         Progress::Blocked,
         Some("which DB?"),
         None,
+        crate::testing::NO_SERVER,
     )
     .unwrap();
 

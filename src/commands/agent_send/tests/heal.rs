@@ -213,7 +213,7 @@ fn send_delivers_when_heal_fails() {
     );
 
     let messages_dir = paths::messages_dir(&root);
-    let msg = messages::read_at(&messages_dir, "login", "reviewer", "implementer", 1)
+    let msg = messages::read_at(&messages_dir, "login", "reviewer", "implementer@login", 1)
         .unwrap()
         .unwrap();
     assert_eq!(msg.body.trim(), "heal-test message");

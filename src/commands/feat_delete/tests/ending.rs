@@ -51,13 +51,14 @@ fn delete_of_a_merged_ready_feature_main_has_read_keeps_its_summary_and_notifies
         crate::state::feature::Progress::Ready,
         None,
         Some("implementer"),
+        crate::testing::NO_SERVER,
     )
     .unwrap();
     messages::next(
         &paths::messages_dir(&project_path),
         "main",
         "main",
-        "implementer",
+        "implementer@login",
     )
     .unwrap();
 

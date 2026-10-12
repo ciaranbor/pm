@@ -92,9 +92,15 @@ fn send_same_scope_does_not_record_sender_scope() {
     .unwrap();
 
     let messages_dir = paths::messages_dir(&root);
-    let msg = messages::read_at(&messages_dir, &feature, "reviewer", "implementer", 1)
-        .unwrap()
-        .unwrap();
+    let msg = messages::read_at(
+        &messages_dir,
+        &feature,
+        "reviewer",
+        &format!("implementer@{feature}"),
+        1,
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(msg.meta.sender_scope, None);
 }
 
@@ -128,7 +134,7 @@ fn send_cross_scope_records_sender_scope_in_metadata() {
     .unwrap();
 
     let messages_dir = paths::messages_dir(&root);
-    let msg = messages::read_at(&messages_dir, "main", "implementer", "reviewer", 1)
+    let msg = messages::read_at(&messages_dir, "main", "implementer", "reviewer@login", 1)
         .unwrap()
         .unwrap();
     assert_eq!(msg.meta.sender_scope.as_deref(), Some("login"));

@@ -105,8 +105,9 @@ Design decisions you can't recover by reading the tree. Preserve them.
 - Feature agents report to the user in their own session, not to `main`.
 - The summary (`.pm/summaries/`, edited in place) is the feature→project
   channel, kept until `main` deletes it. `ready` asks `main` to review it
-  for gaps; the always-sent merge/delete notice, naming which, is the sole
-  triage trigger. `blocked` never messages `main`; nothing pm sends resets it.
+  for gaps, never again for the same summary, nor within one ready period
+  before `main` has answered (`ready_notice`); the always-sent merge/delete
+  notice, naming which, is the sole triage trigger. `blocked` never messages `main`; nothing pm sends resets it.
 - Team status and the PR-derived `status` are separate: sync can't clobber it.
   `main` has a team status too, `wip` or `blocked`, never `ready`, kept
   outside `features/` so main never lists as a feature.

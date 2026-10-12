@@ -39,11 +39,13 @@ pm msg read --from <sender> --index +2 # peek two past cursor (no advance)
 pm msg read --from <sender> --index -1 # re-read last processed (no advance)
 ```
 
-Each read takes one sender's next message. With several senders unread, a
-bare read picks the sender whose earliest unread message is oldest and ends
-with a footer naming the rest (`2 more senders pending: b, c — …`); read
-again to take the next. `--from` overrides the pick and is required with
-`--index`.
+Each read takes one sender's next message. A sender is named by its
+address, `name@scope` (plus `@project` from another project), as the read's
+header shows it. With several senders unread, a bare read picks the sender
+whose earliest unread message is oldest and ends with a footer naming the
+rest (`2 more senders pending: b@x, c@y — …`); read again to take the next.
+`--from` overrides the pick and is required with `--index`; it takes an
+address, or a bare name while only one sender has it.
 
 ## Listing and waiting
 

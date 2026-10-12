@@ -435,9 +435,14 @@ pm msg wait                               # block until a message arrives
 pm msg list                               # the inbox, with cursor markers
 ```
 
-A bare `read` takes one sender: the one whose earliest unread message is
-oldest, ending with `N more senders pending: b, c — pm msg read --from b`
-when others wait. History stays on disk. `pm msg send` never spawns an
+Each sender has its own queue, named by its address: `name@scope`, plus
+`@project` for a sender in another project, so `implementer@login` and
+`implementer@signup` stay apart. `--from` takes an address or any leading
+part of one that names a single sender (`implementer` while only one
+implementer has written). A bare `read` takes one sender: the one whose
+earliest unread message is oldest, ending with
+`N more senders pending: b@x, c@y — pm msg read --from b@x` when others
+wait. History stays on disk. `pm msg send` never spawns an
 agent: it errors on an inactive recipient, and respawns one whose window
 died, or whose harness exited to the shell in a window nobody is looking
 at. To an `unarmed` recipient it types the prompt the waiter would have
@@ -452,8 +457,8 @@ project's inbox to hear back. `pm msg send --project` works
 from outside every project, but the recipient can't reply to it. `read`,
 `list` and `wait --project` inspect another project's inbox.
 
-Identity resolves as `PM_AGENT_NAME` (set at spawn) > `$USER` > `"user"`, so
-spawned agents need no `--as-agent`. An agent's scope resolves from the
+Identity resolves as `PM_AGENT_NAME` (set at spawn) > `$USER` > `"user"`;
+there is no flag to act as another agent. An agent's scope resolves from the
 worktree it was spawned in (`PM_AGENT_WORKTREE`), not where its shell has
 `cd`'d, for `pm msg` and pm's hooks alike.
 
@@ -470,7 +475,10 @@ A feature's **summary** is the hand-off its workflow's summary owner writes
 for `main` (`pm workflow show` says what belongs in it), kept at
 `.pm/summaries/<feature>.md` (`pm feat summary path`; `pm feat summary show`
 prints it), never on the branch.
-`pm feat status ready` requires it and asks `main` to review it. Merging or
+`pm feat status ready` requires it and asks `main` to review it, once none of
+the team's agents is busy. Marking it ready again tells `main` only of a
+changed summary, and, within one ready period, only after `main` has
+answered the last notice. Merging or
 deleting the feature always tells `main` which happened, and the summary
 stays until `main` has triaged and deleted it; until then `pm feat new` and
 `pm feat adopt` refuse that feature name.

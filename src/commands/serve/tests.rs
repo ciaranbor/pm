@@ -264,6 +264,7 @@ fn an_event_stream_sends_changes_transitions_and_heartbeats_and_every_reply_its_
         Progress::Blocked,
         Some("standing"),
         None,
+        crate::testing::NO_SERVER,
     )
     .unwrap();
     let server = start(f.config.clone());
@@ -288,7 +289,15 @@ fn an_event_stream_sends_changes_transitions_and_heartbeats_and_every_reply_its_
     let summary = paths::summary_path(&f.project, "login");
     std::fs::create_dir_all(summary.parent().unwrap()).unwrap();
     std::fs::write(&summary, "Adds login\n").unwrap();
-    feat_status(&f.project, "login", Progress::Ready, None, None).unwrap();
+    feat_status(
+        &f.project,
+        "login",
+        Progress::Ready,
+        None,
+        None,
+        crate::testing::NO_SERVER,
+    )
+    .unwrap();
     let changed = until(&events, |l| l.starts_with("event: transition"));
     assert!(
         changed
@@ -737,6 +746,7 @@ fn a_transition_and_its_end_are_pushed_encrypted_to_each_subscriber_until_its_se
         Progress::Blocked,
         Some("which DB?"),
         None,
+        crate::testing::NO_SERVER,
     )
     .unwrap();
     let pushed = received.recv_timeout(Duration::from_secs(15)).unwrap();
@@ -766,7 +776,15 @@ fn a_transition_and_its_end_are_pushed_encrypted_to_each_subscriber_until_its_se
     let summary = paths::summary_path(&f.project, "login");
     std::fs::create_dir_all(summary.parent().unwrap()).unwrap();
     std::fs::write(&summary, "Adds login\n").unwrap();
-    feat_status(&f.project, "login", Progress::Ready, None, None).unwrap();
+    feat_status(
+        &f.project,
+        "login",
+        Progress::Ready,
+        None,
+        None,
+        crate::testing::NO_SERVER,
+    )
+    .unwrap();
     let pushed = received.recv_timeout(Duration::from_secs(15)).unwrap();
     assert_eq!(pushed.header("urgency"), Some("normal"));
     assert_eq!(
@@ -816,13 +834,22 @@ fn a_push_service_redirecting_is_not_followed() {
         Progress::Blocked,
         Some("which DB?"),
         None,
+        crate::testing::NO_SERVER,
     )
     .unwrap();
     received.recv_timeout(Duration::from_secs(15)).unwrap();
     let summary = paths::summary_path(&f.project, "login");
     std::fs::create_dir_all(summary.parent().unwrap()).unwrap();
     std::fs::write(&summary, "Adds login\n").unwrap();
-    feat_status(&f.project, "login", Progress::Ready, None, None).unwrap();
+    feat_status(
+        &f.project,
+        "login",
+        Progress::Ready,
+        None,
+        None,
+        crate::testing::NO_SERVER,
+    )
+    .unwrap();
     received.recv_timeout(Duration::from_secs(15)).unwrap();
     assert!(
         followed.try_recv().is_err(),
@@ -858,7 +885,15 @@ fn a_transition_is_pushed_once_its_grace_is_out_and_not_at_all_if_its_need_ends_
         .recv_timeout(Duration::from_secs(15))
         .expect("pushed with nothing else happening");
 
-    feat_status(&f.project, "login", Progress::Wip, None, None).unwrap();
+    feat_status(
+        &f.project,
+        "login",
+        Progress::Wip,
+        None,
+        None,
+        crate::testing::NO_SERVER,
+    )
+    .unwrap();
     received.recv_timeout(Duration::from_secs(15)).unwrap();
     drop(server);
 
@@ -869,7 +904,15 @@ fn a_transition_is_pushed_once_its_grace_is_out_and_not_at_all_if_its_need_ends_
     let events = watched(&server, &token);
     block(&f);
     assert_eq!(next_transition(&events), "blocked");
-    feat_status(&f.project, "login", Progress::Wip, None, None).unwrap();
+    feat_status(
+        &f.project,
+        "login",
+        Progress::Wip,
+        None,
+        None,
+        crate::testing::NO_SERVER,
+    )
+    .unwrap();
     assert!(
         received.recv_timeout(Duration::from_secs(5)).is_err(),
         "neither the transition nor its end is pushed"
@@ -930,6 +973,7 @@ fn a_stored_subscription_the_policy_refuses_is_dropped() {
         Progress::Blocked,
         Some("which DB?"),
         None,
+        crate::testing::NO_SERVER,
     )
     .unwrap();
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -1014,7 +1058,15 @@ fn wakes_closer_together_than_the_gap_make_one_read() {
     let summary = paths::summary_path(&f.project, "login");
     std::fs::create_dir_all(summary.parent().unwrap()).unwrap();
     std::fs::write(&summary, "Adds login\n").unwrap();
-    feat_status(&f.project, "login", Progress::Ready, None, None).unwrap();
+    feat_status(
+        &f.project,
+        "login",
+        Progress::Ready,
+        None,
+        None,
+        crate::testing::NO_SERVER,
+    )
+    .unwrap();
     wake(&f.config.files);
 
     assert_eq!(next_transition(&events), "ready", "blocked was never read");
@@ -1022,7 +1074,15 @@ fn wakes_closer_together_than_the_gap_make_one_read() {
 }
 
 fn block(f: &Fixture) {
-    feat_status(&f.project, "login", Progress::Blocked, Some("why?"), None).unwrap();
+    feat_status(
+        &f.project,
+        "login",
+        Progress::Blocked,
+        Some("why?"),
+        None,
+        crate::testing::NO_SERVER,
+    )
+    .unwrap();
 }
 
 #[test]

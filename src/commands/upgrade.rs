@@ -48,6 +48,7 @@ pub fn upgrade_project(project_root: &Path) -> Result<Vec<String>> {
     }
 
     let renamed = super::vanilla_rename::migrate(project_root, false)?;
+    let rekeyed = crate::messages::rekey(&paths::messages_dir(project_root))?;
 
     // Harnesses read from their own dirs, not the canonical store. The
     // projection's own lines (which name any hand-written harness file a
@@ -61,6 +62,11 @@ pub fn upgrade_project(project_root: &Path) -> Result<Vec<String>> {
         lines.push(format!(
             "Vanilla agents {} now launch as '{VANILLA_AGENT}'",
             agent_list(&renamed)
+        ));
+    }
+    if rekeyed > 0 {
+        lines.push(format!(
+            "{rekeyed} inbox messages moved to queues keyed by sender address"
         ));
     }
     lines.extend(notes);
@@ -110,6 +116,13 @@ fn upgrade_project_dry_run(project_root: &Path) -> Result<(Vec<String>, bool)> {
         actions.push(format!(
             "Would relaunch vanilla agents {} as '{VANILLA_AGENT}'",
             agent_list(&renamed)
+        ));
+    }
+
+    let rekeyed = crate::messages::rekey_pending(&paths::messages_dir(project_root))?;
+    if rekeyed > 0 {
+        actions.push(format!(
+            "Would move {rekeyed} inbox messages to queues keyed by sender address"
         ));
     }
 

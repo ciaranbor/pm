@@ -272,7 +272,8 @@ pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
 }
 
 /// What a waiter is told of the agent's turns: publish its window's state,
-/// push once it waits, and run a restart marked for its idle.
+/// push once it waits, and at its idle send its feature's due ready notice
+/// and run a restart marked for it.
 fn waiter_turns() -> impl FnMut(AgentState, u32) {
     let mut window =
         running_agent().and_then(|agent| agent_window(tmux_server_from_env().as_deref(), &agent));
@@ -283,9 +284,18 @@ fn waiter_turns() -> impl FnMut(AgentState, u32) {
         if state != AgentState::Busy {
             push();
         }
-        if state == AgentState::Idle
-            && let Some((root, scope, agent)) = commands::restart_at_idle::marked()
+        if state != AgentState::Idle {
+            return;
+        }
+        if let (Ok((root, scope)), Some(agent)) = (paths::agent_scope(), running_agent())
+            && scope != pm::state::scope::MAIN
+            && let Err(e) =
+                commands::ready_notice::deliver(&root, &scope, tmux_server_from_env().as_deref())
         {
+            let line = format!("the due ready notice was not sent: {e}");
+            pm::state::runtime::log_stop_hook(&root, &scope, &agent, &line);
+        }
+        if let Some((root, scope, agent)) = commands::restart_at_idle::marked() {
             restart_at_idle(&root, &scope, &agent);
         }
     }

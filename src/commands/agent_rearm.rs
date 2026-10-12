@@ -129,7 +129,8 @@ mod tests {
     use chrono::Utc;
     use tempfile::tempdir;
 
-    const PROMPT: &str = "You have new messages from reviewer. Run `pm msg read` to read them.";
+    const PROMPT: &str =
+        "You have new messages from reviewer@login. Run `pm msg read` to read them.";
 
     /// A feature whose `implementer` sits at an empty Claude Code prompt
     /// with `marker` as its waiting marker.

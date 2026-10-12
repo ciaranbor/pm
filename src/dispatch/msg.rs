@@ -19,13 +19,12 @@ pub(super) fn run(cmd: MsgCommands, server: Option<&str>) -> Result<()> {
         MsgCommands::Send {
             agent,
             message,
-            as_agent,
             scope,
             upstream,
             project: target_project,
         } => {
             let message = read_message_body(message)?;
-            let sender = as_agent.unwrap_or_else(pm::messages::default_user_name);
+            let sender = pm::messages::default_user_name();
 
             // Parse agent@scope shorthand
             let (recipient, shorthand_scope) = parse_agent_at_scope(&agent);
@@ -92,13 +91,12 @@ pub(super) fn run(cmd: MsgCommands, server: Option<&str>) -> Result<()> {
         MsgCommands::Read {
             from,
             index,
-            as_agent,
             scope,
             target,
         } => {
             let (project_root, feature) = target_project(target.project.as_deref())?;
             let target_scope = resolve_scope_with_flag(&project_root, scope)?;
-            let agent = as_agent.unwrap_or_else(pm::messages::default_user_name);
+            let agent = pm::messages::default_user_name();
             let spec = index
                 .as_deref()
                 .map(commands::agent_read::IndexSpec::parse)
@@ -129,13 +127,12 @@ pub(super) fn run(cmd: MsgCommands, server: Option<&str>) -> Result<()> {
         }
         MsgCommands::List {
             from,
-            as_agent,
             scope,
             target,
         } => {
             let (project_root, _) = target_project(target.project.as_deref())?;
             let target_scope = resolve_scope_with_flag(&project_root, scope)?;
-            let agent = as_agent.unwrap_or_else(pm::messages::default_user_name);
+            let agent = pm::messages::default_user_name();
             let lines = commands::msg_list::msg_list(
                 &project_root,
                 &target_scope,
@@ -149,7 +146,6 @@ pub(super) fn run(cmd: MsgCommands, server: Option<&str>) -> Result<()> {
         }
         MsgCommands::Reply {
             message,
-            as_agent,
             scope,
             target,
         } => {
@@ -160,9 +156,9 @@ pub(super) fn run(cmd: MsgCommands, server: Option<&str>) -> Result<()> {
                 (None, None) => resolve_scope(&project_root)?,
             };
             let message = read_message_body(message)?;
-            let sender = as_agent.unwrap_or_else(pm::messages::default_user_name);
+            let sender = pm::messages::default_user_name();
             // The reply-route rule is in `msg_reply`'s module docs.
-            let home = if running_agent().as_deref() == Some(sender.as_str()) {
+            let home = if running_agent().is_some() {
                 optional_agent_scope()?
             } else {
                 None
@@ -182,13 +178,12 @@ pub(super) fn run(cmd: MsgCommands, server: Option<&str>) -> Result<()> {
         }
         MsgCommands::Wait {
             from,
-            as_agent,
             scope,
             target,
         } => {
             let (project_root, _) = target_project(target.project.as_deref())?;
             let target_scope = resolve_scope_with_flag(&project_root, scope)?;
-            let agent = as_agent.unwrap_or_else(pm::messages::default_user_name);
+            let agent = pm::messages::default_user_name();
             let count = commands::agent_wait::agent_wait(
                 &project_root,
                 &target_scope,

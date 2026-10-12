@@ -231,16 +231,20 @@ fn in_project(cmd: FeatCommands, server: Option<&str>) -> Result<()> {
                 }
             };
             let scope = resolve_scope_with_flag(&project_root, name)?;
-            commands::feat_status::feat_status(
+            let notice = commands::feat_status::feat_status(
                 &project_root,
                 &scope,
                 status,
                 reason.as_deref(),
                 own_scope(&project_root).and(running_agent()).as_deref(),
+                server,
             )?;
             match scope.as_str() {
                 scope::MAIN => println!("main is {status}"),
-                _ => println!("Feature '{scope}' is {status}"),
+                _ => match notice.as_ref().map(|n| n.describe()) {
+                    Some(told) => println!("Feature '{scope}' is {status}: {told}"),
+                    None => println!("Feature '{scope}' is {status}"),
+                },
             }
             push();
             Ok(())

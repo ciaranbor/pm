@@ -4,16 +4,17 @@ use std::path::Path;
 
 use chrono::Utc;
 
+use super::address::{matches, validate_key};
 use super::cursor;
 use super::layout::{inbox_dir, list_senders, max_index, sender_dir};
 use super::read::load_meta;
 use super::types::{MessageStatus, MessageSummary};
-use super::validation::validate_name;
 use crate::error::Result;
 
-/// Enumerate all messages in an agent's inbox (optionally scoped to one
-/// sender) along with their status relative to the cursor. Returns a list
-/// grouped by sender, then by index ascending. Does not touch the cursor.
+/// Enumerate all messages in an agent's inbox (optionally only the senders
+/// `from` [matches](super::address::matches)) along with their status
+/// relative to the cursor. Returns a list grouped by sender, then by index
+/// ascending. Does not touch the cursor.
 pub fn list(
     messages_dir: &Path,
     feature: &str,
@@ -26,13 +27,13 @@ pub fn list(
     }
 
     let csr = cursor::load_cursor(&cursor::cursor_path(messages_dir, feature, agent))?;
-    let senders = match from {
-        Some(s) => {
-            validate_name(s, "sender")?;
-            vec![s.to_string()]
-        }
-        None => list_senders(&inbox)?,
-    };
+    if let Some(from) = from {
+        validate_key(from)?;
+    }
+    let senders: Vec<String> = list_senders(&inbox)?
+        .into_iter()
+        .filter(|key| from.is_none_or(|from| matches(key, from)))
+        .collect();
 
     let mut out = Vec::new();
     for sender in &senders {
@@ -57,11 +58,8 @@ pub fn list(
                 .take(60)
                 .collect::<String>();
 
-            let (timestamp, sender_scope, sender_project) =
-                match load_meta(messages_dir, feature, agent, sender, i)? {
-                    Some(m) => (m.timestamp, m.sender_scope, m.sender_project),
-                    None => (Utc::now(), None, None),
-                };
+            let timestamp = load_meta(messages_dir, feature, agent, sender, i)?
+                .map_or_else(Utc::now, |m| m.timestamp);
 
             let status = if i <= cur {
                 MessageStatus::Read
@@ -73,8 +71,6 @@ pub fn list(
 
             out.push(MessageSummary {
                 sender: sender.clone(),
-                sender_scope,
-                sender_project,
                 index: i,
                 timestamp,
                 first_line,
@@ -119,7 +115,7 @@ mod tests {
         assert_eq!(v[2].status, MessageStatus::Queued);
 
         // After advancing, cursor is 1: 1 is "read", 2 is "next", 3 is "queued".
-        next(&mdir, "login", "reviewer", "implementer").unwrap();
+        next(&mdir, "login", "reviewer", "implementer@login").unwrap();
         let v = list(&mdir, "login", "reviewer", None).unwrap();
         assert_eq!(v[0].status, MessageStatus::Read);
         assert_eq!(v[1].status, MessageStatus::Next);
@@ -138,11 +134,11 @@ mod tests {
         let v = list(&mdir, "login", "reviewer", None).unwrap();
         // Sender-grouped, sorted alphabetically: implementer then user.
         assert_eq!(v.len(), 3);
-        assert_eq!(v[0].sender, "implementer");
+        assert_eq!(v[0].sender, "implementer@login");
         assert_eq!(v[0].index, 1);
-        assert_eq!(v[1].sender, "implementer");
+        assert_eq!(v[1].sender, "implementer@login");
         assert_eq!(v[1].index, 2);
-        assert_eq!(v[2].sender, "user");
+        assert_eq!(v[2].sender, "user@login");
         assert_eq!(v[2].index, 1);
     }
 
@@ -154,9 +150,9 @@ mod tests {
         send(&mdir, "login", "reviewer", "implementer", "impl").unwrap();
         send(&mdir, "login", "reviewer", "user", "user").unwrap();
 
-        let v = list(&mdir, "login", "reviewer", Some("user")).unwrap();
+        let v = list(&mdir, "login", "reviewer", Some("user@login")).unwrap();
         assert_eq!(v.len(), 1);
-        assert_eq!(v[0].sender, "user");
+        assert_eq!(v[0].sender, "user@login");
     }
 
     #[test]

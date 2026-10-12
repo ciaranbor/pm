@@ -1,15 +1,20 @@
 //! Agent messaging: per-agent inboxes on disk, scoped to a feature (or
-//! `main`), with one ordered queue and one read cursor per sender.
+//! `main`), with one ordered queue and one read cursor per sender, keyed by
+//! the sender's address ([`address`]). Wherever this module's API names a
+//! `sender`, it means that address; a message's own `meta.sender` is the
+//! bare name.
 //!
 //! Sending appends to the sender's queue; reading by index or listing never
 //! moves the cursor, and only [`next`] advances it.
 
+pub mod address;
 mod cursor;
 mod delete;
 mod last_read;
 mod layout;
 mod list;
 mod read;
+mod rekey;
 mod resolve;
 mod send;
 mod types;
@@ -19,33 +24,14 @@ pub use cursor::{cursor_for, next};
 pub use delete::{delete_feature, delete_inbox};
 pub use last_read::{load_last_read, save_last_read};
 pub use list::list;
-pub use read::{check, read_at, read_count, unread_count};
-pub use resolve::resolve_sender;
+pub use read::{check, last_sent, read_at, read_count, unread_count};
+pub use rekey::{rekey, rekey_pending};
+pub use resolve::{resolve_from, resolve_sender};
 pub use send::{send, send_full, send_meta, send_with_scope};
 pub use types::{
     LastRead, Message, MessageMeta, MessageStatus, MessageSummary, SenderChoice, UnreadSummary,
 };
 pub use validation::validate_name;
-
-/// Format a sender for display, annotating it with the scope (and project) it
-/// was sent from when the message carries cross-scope metadata. Mirrors the
-/// sender line shown by `pm msg read`, so `pm msg list` and `pm msg read`
-/// render senders consistently. Same-scope senders (no recorded scope) render
-/// bare.
-pub fn format_sender_display(
-    sender: &str,
-    sender_scope: Option<&str>,
-    sender_project: Option<&str>,
-) -> String {
-    let mut display = match sender_scope {
-        Some(scope) => format!("{sender}@{scope}"),
-        None => sender.to_string(),
-    };
-    if let Some(project) = sender_project {
-        display = format!("{display} ({project})");
-    }
-    display
-}
 
 /// Whether `sender` is one pm itself sends as (a feature brief, a forced
 /// restart's resume), which no agent answers to.

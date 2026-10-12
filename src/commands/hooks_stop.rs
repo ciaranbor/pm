@@ -396,7 +396,7 @@ mod tests {
         assert_eq!(parsed["decision"], "block");
         assert_eq!(
             parsed["reason"],
-            "You have new messages from implementer. Run `pm msg read` to read them."
+            "You have new messages from implementer@login. Run `pm msg read` to read them."
         );
     }
 
@@ -432,7 +432,7 @@ mod tests {
         assert_eq!(parsed["decision"], "block");
         assert_eq!(
             parsed["reason"],
-            "You have new messages from implementer. Run `pm msg read` to read them."
+            "You have new messages from implementer@login. Run `pm msg read` to read them."
         );
     }
 
@@ -521,7 +521,7 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(
             parsed["reason"],
-            "You have new messages from zed, amy. Run `pm msg read` to read them."
+            "You have new messages from zed@login, amy@login. Run `pm msg read` to read them."
         );
     }
 
