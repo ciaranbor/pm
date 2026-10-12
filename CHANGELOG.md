@@ -6,6 +6,35 @@ notes.
 
 ## Unreleased
 
+- A machine-wide supervisor: `pm onboard` creates a `home` project at
+`~/.local/share/pm/home` whose main runs a `supervisor` agent. It changes pm
+settings and acts on any project's agents when you ask, and walks a new user
+through setup. The app lists home first.
+- `pm config get/set/unset/list [--project P | --global]` edits settings by
+command, keeping the file's comments.
+- `pm docs [category]` prints a project's information store and `pm agent log`
+the end of an agent's conversation, for any harness; both take `--project`.
+- `--project <name>` works on `pm agent`, `pm feat` and `pm msg`'s
+read/list/wait/reply. A cross-project `pm msg send` checks the recipient and
+wakes or revives it, as a same-project send does.
+- Claude Code agents that stopped listening (after Esc, an API error, …) are
+woken through Claude Code's messaging socket instead of typed input, and a new
+message wakes an agent you interrupted. Needs Claude Code 2.1.228 or later;
+restart running Claude Code agents to switch them over. `pm doctor` warns if
+`crossSessionInbound` refuses or holds posts.
+- Each sender's messages queue separately per address; `pm upgrade` moves
+existing queues. `main` gets one ready notice per summary instead of
+duplicates. Removed: `pm msg send --as-agent`.
+- An agent's question or permission prompt alerts even while its scope is
+blocked.
+- `pm restore` brings back a project with a state remote but no code remote.
+- The app's Interrupt sends the keys each harness needs and says whether the
+agent stopped. Errors say "pm serve unreachable" or "GitHub unreachable"
+rather than a socket error. Alerts, the snackbar and the status line are
+restyled, and pinch-zoom on the terminal keeps the cell under your fingers.
+- Fixes: Claude Code's vim mode is read from user settings too; `pm agent log`
+and the app's transcript show pm's wake-ups and codex script results properly.
+
 ## 0.6.1 — 2026-10-11
 
 - `main` runs a bundled workflow, `orchestrator`, like a feature runs its own:
