@@ -8,6 +8,10 @@
 //! A root that exists without its main checkout ([`Presence::NotRestored`])
 //! gets the clone in place: what is already under the root stays, and a
 //! failed clone removes only `main/`.
+//!
+//! A project registered with a `state_remote` but no `repo_url` (its code
+//! has no remote) gets an empty repo as `main/` in place of the clone, so
+//! its `.pm/` state still comes back.
 
 use std::path::{Path, PathBuf};
 
@@ -263,58 +267,60 @@ fn restore_project(
     let root = entry.root_path();
     let mut messages = Vec::new();
 
-    // Step 1: Clone if the project isn't on this machine
+    // Step 1: Clone if the project isn't on this machine, or start main/ as
+    // an empty repo when its code has no remote but its state does.
     let presence = Presence::of(&root);
+    let repo_url = entry.repo_url.as_deref();
+    if matches!(presence, Presence::RootMissing | Presence::NotRestored)
+        && repo_url.is_none()
+        && entry.state_remote.is_none()
+    {
+        messages.push(format!(
+            "{name}: skipped (not on this machine, and no repo_url or state_remote to restore \
+             from)"
+        ));
+        return Ok(ProjectResult {
+            messages,
+            ready: false,
+        });
+    }
+    let (fetching, fetched) = match repo_url {
+        Some(url) => (format!("cloning from {url} into main/"), "cloned"),
+        None => (
+            "no repo_url: starting main/ as an empty repo".to_string(),
+            "main/ started",
+        ),
+    };
     if presence == Presence::RootMissing {
-        if let Some(ref repo_url) = entry.repo_url {
-            messages.push(format!("{name}: cloning from {repo_url}..."));
-            super::init::init_in(
-                &root,
-                Some(name),
-                projects_dir,
-                &super::skills::GlobalStore::resolve()?,
-                Some(repo_url),
-                tmux_server,
-            )?;
-            // init creates a fresh registry entry; re-save the original URLs
-            // so state_remote isn't lost
-            let mut refreshed = match ProjectEntry::load(projects_dir, name) {
-                Ok(e) => e,
-                Err(crate::error::PmError::ProjectNotFound(_)) => entry.clone(),
-                Err(e) => {
-                    messages.push(format!(
-                        "{name}: warning: failed to reload registry entry: {e}"
-                    ));
-                    entry.clone()
-                }
-            };
-            refreshed.repo_url = entry.repo_url.clone();
-            refreshed.state_remote = entry.state_remote.clone();
-            refreshed.save(projects_dir, name)?;
-            messages.push(format!("{name}: cloned and initialised"));
-        } else {
-            messages.push(format!(
-                "{name}: skipped (directory does not exist and no repo_url)"
-            ));
-            return Ok(ProjectResult {
-                messages,
-                ready: false,
-            });
-        }
-    } else if presence == Presence::NotRestored {
-        let Some(repo_url) = &entry.repo_url else {
-            messages.push(format!(
-                "{name}: skipped ({} holds no main checkout and no repo_url)",
-                root.display()
-            ));
-            return Ok(ProjectResult {
-                messages,
-                ready: false,
-            });
+        messages.push(format!("{name}: {fetching}..."));
+        super::init::init_in(
+            &root,
+            Some(name),
+            projects_dir,
+            &super::skills::GlobalStore::resolve()?,
+            repo_url,
+            tmux_server,
+        )?;
+        // init creates a fresh registry entry; re-save the original URLs
+        // so state_remote isn't lost
+        let mut refreshed = match ProjectEntry::load(projects_dir, name) {
+            Ok(e) => e,
+            Err(crate::error::PmError::ProjectNotFound(_)) => entry.clone(),
+            Err(e) => {
+                messages.push(format!(
+                    "{name}: warning: failed to reload registry entry: {e}"
+                ));
+                entry.clone()
+            }
         };
-        messages.push(format!("{name}: cloning from {repo_url} into main/..."));
+        refreshed.repo_url = entry.repo_url.clone();
+        refreshed.state_remote = entry.state_remote.clone();
+        refreshed.save(projects_dir, name)?;
+        messages.push(format!("{name}: {fetched} and initialised"));
+    } else if presence == Presence::NotRestored {
+        messages.push(format!("{name}: {fetching}..."));
         complete_root(&root, name, repo_url)?;
-        messages.push(format!("{name}: cloned"));
+        messages.push(format!("{name}: {fetched}"));
     } else {
         messages.push(format!("{name}: directory exists"));
     }
@@ -427,15 +433,19 @@ fn restore_project(
     })
 }
 
-/// Clone `repo_url` into the `main/` that `root` lacks, and scaffold its
-/// `.pm/` state when it has no config. A failure removes `main/` again, and
-/// nothing else under `root`.
-fn complete_root(root: &Path, name: &str, repo_url: &str) -> Result<()> {
+/// Clone `repo_url` into the `main/` that `root` lacks, or start it as an
+/// empty repo without one, and scaffold its `.pm/` state when it has no
+/// config. A failure removes `main/` again, and nothing else under `root`.
+fn complete_root(root: &Path, name: &str, repo_url: Option<&str>) -> Result<()> {
     let main = paths::main_worktree(root);
     if std::fs::symlink_metadata(&main).is_ok() {
         return Err(PmError::PathAlreadyExists(main));
     }
-    let done = git::clone_repo(repo_url, &main).and_then(|()| {
+    let fetched = match repo_url {
+        Some(url) => git::clone_repo(url, &main),
+        None => git::init_repo(&main),
+    };
+    let done = fetched.and_then(|()| {
         if paths::pm_dir(root).join("config.toml").exists() {
             return Ok(());
         }
@@ -474,8 +484,9 @@ mod tests {
 
         let msgs = restore_with_dir(&projects_dir, server.name()).unwrap();
         assert!(
-            msgs.iter()
-                .any(|m| m.contains("skipped (directory does not exist and no repo_url)")),
+            msgs.iter().any(|m| m.contains(
+                "skipped (not on this machine, and no repo_url or state_remote to restore from)"
+            )),
             "{msgs:?}"
         );
     }
@@ -830,7 +841,9 @@ mod tests {
 
         assert_eq!(
             restore(&["wanted"]).unwrap(),
-            ["wanted: skipped (directory does not exist and no repo_url)"]
+            [
+                "wanted: skipped (not on this machine, and no repo_url or state_remote to restore from)"
+            ]
         );
         assert!(restore(&["nope"]).is_err());
     }

@@ -157,7 +157,7 @@ fn restore_skips_a_husk_without_a_repo_url_and_opens_nothing() {
 
     assert!(
         msgs.iter()
-            .any(|m| m.contains("holds no main checkout and no repo_url")),
+            .any(|m| m.contains("no repo_url or state_remote")),
         "{msgs:?}"
     );
     assert!(!tmux::has_session(server.name(), &tmux::session_name(&name, "main")).unwrap());
@@ -182,4 +182,34 @@ fn a_failed_clone_into_a_husk_removes_only_main() {
             .join("messages/main/implementer/x.md")
             .exists()
     );
+}
+
+#[test]
+fn restore_starts_an_empty_main_and_pulls_state_when_only_the_state_has_a_remote() {
+    for root_exists in [false, true] {
+        let (dir, projects_dir, server) = setup();
+        let name = server.scope("home");
+        let root = dir.path().join(&name);
+        if root_exists {
+            husk(&root, false);
+        }
+        let state = state_remote(dir.path(), &name);
+        register(&projects_dir, &name, &root, None, Some(&state));
+
+        let msgs = restore_with_dir(&projects_dir, server.name()).unwrap();
+
+        assert!(git::is_git_repo(&paths::main_worktree(&root)), "{msgs:?}");
+        let config = ProjectConfig::load(&paths::pm_dir(&root)).unwrap();
+        assert_eq!(config.project.max_features, Some(7), "{msgs:?}");
+        assert!(
+            tmux::has_session(server.name(), &tmux::session_name(&name, "main")).unwrap(),
+            "{msgs:?}"
+        );
+        let entry = ProjectEntry::load(&projects_dir, &name).unwrap();
+        assert_eq!(entry.repo_url, None);
+        assert_eq!(
+            entry.state_remote,
+            Some(state.to_string_lossy().into_owned())
+        );
+    }
 }
