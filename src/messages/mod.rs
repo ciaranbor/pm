@@ -8,6 +8,7 @@
 //! moves the cursor, and only [`next`] advances it.
 
 pub mod address;
+mod continuation;
 mod cursor;
 mod delete;
 mod last_read;
@@ -20,6 +21,7 @@ mod send;
 mod types;
 mod validation;
 
+pub use continuation::{is_continuation, wake_text};
 pub use cursor::{cursor_for, next};
 pub use delete::{delete_feature, delete_inbox};
 pub use last_read::{load_last_read, save_last_read};

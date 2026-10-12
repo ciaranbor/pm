@@ -95,6 +95,10 @@ pub(in crate::harness) fn parse(line: &Value, offset: u64) -> Vec<Entry> {
                 None => content_text(output),
             };
             let error = output.get("success").and_then(Value::as_bool) == Some(false);
+            let (text, error) = match exec_results(&text) {
+                Some((outputs, failed)) => (outputs, error || failed),
+                None => (text, error),
+            };
             vec![Entry::Result {
                 call: call.to_string(),
                 text,
@@ -152,6 +156,65 @@ fn script_commands(script: &str) -> Option<String> {
     (!commands.is_empty()).then(|| crate::harness::one_line(&commands.join("; ")))
 }
 
+/// What an `exec` script's result says its `exec_command` calls returned:
+/// their outputs, joined, and whether one exited non-zero or was rejected.
+/// The result is a `Script completed` header, then what the script
+/// printed: JSON holding each call's `output` and, once it has exited, `exit_code`, bare or inside
+/// `Promise.allSettled` entries; anything else is shown as printed.
+/// `None` when it is not a script's result.
+fn exec_results(text: &str) -> Option<(String, bool)> {
+    let (header, printed) = text.split_once("Output:")?;
+    if !header.trim_start().starts_with("Script completed") {
+        return None;
+    }
+    let printed = printed.trim();
+    let as_printed = || Some((printed.to_string(), false));
+    let values: Vec<Value> = match serde_json::from_str(printed) {
+        Ok(value) => vec![value],
+        Err(_) => match printed
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line.trim()).ok())
+            .collect::<Option<_>>()
+        {
+            Some(values) => values,
+            None => return as_printed(),
+        },
+    };
+    let mut outputs = Vec::new();
+    let mut failed = false;
+    let mut found = false;
+    let mut pending: Vec<&Value> = values.iter().rev().collect();
+    while let Some(value) = pending.pop() {
+        match value {
+            Value::Array(items) => pending.extend(items.iter().rev()),
+            Value::Object(fields) => {
+                if let Some(Value::String(out)) = fields.get("output") {
+                    found = true;
+                    failed |= fields
+                        .get("exit_code")
+                        .and_then(Value::as_i64)
+                        .is_some_and(|code| code != 0);
+                    outputs.push(out.trim_end().to_string());
+                } else if fields.get("status").and_then(Value::as_str) == Some("rejected") {
+                    found = true;
+                    failed = true;
+                    let reason = fields.get("reason").unwrap_or(&Value::Null);
+                    outputs.push(content_text(reason));
+                } else {
+                    pending.extend(fields.values().rev());
+                }
+            }
+            _ => {}
+        }
+    }
+    if !found {
+        return as_printed();
+    }
+    let outputs: Vec<String> = outputs.into_iter().filter(|o| !o.is_empty()).collect();
+    Some((outputs.join("\n"), failed))
+}
+
 /// What codex says a message's content is (`user.text` when typed), where
 /// it says.
 fn kinds(payload: &Value) -> Option<Vec<&str>> {
@@ -175,6 +238,11 @@ fn user(text: String, kinds: Option<Vec<&str>>, item: &dyn Fn(Body) -> Vec<Entry
     };
     if !typed || trimmed.is_empty() {
         return Vec::new();
+    }
+    if crate::messages::is_continuation(&text) {
+        return item(Body::Continuation {
+            text: text.trim().to_string(),
+        });
     }
     item(Body::User { text })
 }
@@ -234,11 +302,8 @@ mod tests {
             panic!("no result: {:?}", page.items[8]);
         };
         assert_eq!(name, "exec");
-        assert!(
-            result.text.starts_with("Script completed"),
-            "{}",
-            result.text
-        );
+        assert_eq!(result.text, "", "curl printed nothing");
+        assert!(result.error, "curl exited 6");
     }
 
     #[test]
@@ -270,5 +335,50 @@ mod tests {
                 failure: true,
             }
         );
+    }
+
+    #[test]
+    fn an_exec_result_reads_as_its_commands_output() {
+        let printed = serde_json::json!([
+            {"i": 0, "status": "fulfilled", "value": {"chunk_id": "a", "exit_code": 0,
+                "output": "1\n2\n3\n"}},
+            {"i": 1, "status": "fulfilled", "value": {"chunk_id": "b", "exit_code": 1,
+                "output": "ls: /nonexistent-dir: No such file or directory\n"}},
+        ]);
+        let text = format!("Script completed\nWall time 0.1 seconds\nOutput:\n{printed}");
+        assert_eq!(
+            exec_results(&text),
+            Some((
+                "1\n2\n3\nls: /nonexistent-dir: No such file or directory".to_string(),
+                true
+            ))
+        );
+        let lines = "Script completed\nOutput:\n{\"exit_code\":0,\"output\":\"a\"}\n{\"exit_code\":0,\"output\":\"b\"}";
+        assert_eq!(exec_results(lines), Some(("a\nb".to_string(), false)));
+        let running = "Script completed\nOutput:\n{\"chunk_id\":\"c\",\"exit_code\":null,\"output\":\"so far\"}\n{\"output\":\"started\"}";
+        assert_eq!(
+            exec_results(running),
+            Some(("so far\nstarted".to_string(), false))
+        );
+        let ok = "Script completed\nOutput:\n{\"exit_code\":0,\"output\":\"hi\\n\"}";
+        assert_eq!(exec_results(ok), Some(("hi".to_string(), false)));
+        assert_eq!(
+            exec_results("Script completed\nWall time 0.1 seconds\nOutput:\n\n---\nname: x"),
+            Some(("---\nname: x".to_string(), false))
+        );
+        assert_eq!(exec_results("plain words"), None);
+    }
+
+    #[test]
+    fn a_queued_continuation_reads_as_one() {
+        let line = serde_json::json!({"type": "response_item", "payload": {
+            "type": "message", "id": "m", "role": "user",
+            "content": [{"type": "input_text",
+                         "text": "You have new messages from qa@x. Run `pm msg read` to read them."}],
+            "internal_chat_message_metadata_passthrough": {"content_item_kinds": ["user.text"]}}});
+        let [Entry::Item(item)] = &parse(&line, 0)[..] else {
+            panic!("not one item");
+        };
+        assert!(matches!(item.body, Body::Continuation { .. }), "{item:?}");
     }
 }

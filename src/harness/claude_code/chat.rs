@@ -7,7 +7,9 @@
 //!
 //! - A `user` line whose content is a string is a prompt: typed
 //!   (`promptSource: "typed"`, or `queued`), pm's Stop-hook continuation
-//!   (`isMeta`, text `Stop hook feedback:…`), a background task's
+//!   (`isMeta`, text `Stop hook feedback:…`; from 2.1.296 a task
+//!   notification summarised `Stop hook feedback`, its text in a
+//!   `<system-reminder>`), a background task's
 //!   notification (`origin.kind: "task-notification"`), or the summary a
 //!   compaction leaves (`isCompactSummary`). Other `isMeta` prompts (a
 //!   skill's text) are context, not conversation.
@@ -54,6 +56,22 @@ pub(in crate::harness) fn transcript_path(
 
 const CONTINUATION: &str = "Stop hook feedback:";
 const INTERRUPTED: &str = "[Request interrupted by user";
+/// The summary of the task notification an `asyncRewake` Stop hook's
+/// wake-up is delivered as.
+const STOP_HOOK: &str = "Stop hook feedback";
+
+/// What an `asyncRewake` hook's wake-up said: its `<system-reminder>`, less
+/// the `Stop hook blocking error from command "…": ` Claude Code prefixes;
+/// the summary when it has none.
+fn rewake_text(text: &str) -> String {
+    let reminder = tag(text, "system-reminder").unwrap_or(STOP_HOOK);
+    match reminder.split_once("\": ") {
+        Some((head, rest)) if head.starts_with("Stop hook blocking error from command \"") => {
+            rest.trim().to_string()
+        }
+        _ => reminder.to_string(),
+    }
+}
 
 pub(in crate::harness) fn parse(line: &Value, offset: u64) -> Vec<Entry> {
     if line.get("isSidechain").and_then(Value::as_bool) == Some(true) {
@@ -131,12 +149,15 @@ fn user(
         };
     }
     match line.pointer("/origin/kind").and_then(Value::as_str) {
-        Some("task-notification") => item(Body::Event {
-            text: tag(&text, "summary")
-                .unwrap_or("Background task finished")
-                .to_string(),
-            failure: false,
-        }),
+        Some("task-notification") => match tag(&text, "summary") {
+            Some(STOP_HOOK) => item(Body::Continuation {
+                text: rewake_text(&text),
+            }),
+            summary => item(Body::Event {
+                text: summary.unwrap_or("Background task finished").to_string(),
+                failure: false,
+            }),
+        },
         Some("peer") => item(Body::Event {
             text: crate::harness::one_line(&text),
             failure: false,
@@ -409,5 +430,21 @@ mod tests {
             "message": {"content": [{"type": "text", "text": "hi"}]},
         });
         assert!(parse(&line, 0).is_empty());
+    }
+
+    #[test]
+    fn a_rewake_continuation_reads_as_its_text() {
+        let line = serde_json::json!({"type": "user", "uuid": "u",
+            "origin": {"kind": "task-notification", "producer": "session-task"},
+            "message": {"role": "user", "content": "<task-notification>\n<summary>Stop hook feedback</summary>\n</task-notification>\n<system-reminder>\nStop hook blocking error from command \"SessionStart:startup\": You have new messages from qa. Run `pm msg read` to read them.\n</system-reminder>"}});
+        let [Entry::Item(item)] = &parse(&line, 0)[..] else {
+            panic!("not one item");
+        };
+        assert_eq!(
+            item.body,
+            Body::Continuation {
+                text: "You have new messages from qa. Run `pm msg read` to read them.".into()
+            }
+        );
     }
 }

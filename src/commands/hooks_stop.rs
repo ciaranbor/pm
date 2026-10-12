@@ -44,36 +44,18 @@ use crate::state::runtime::{self, Waiting, WaitingKind};
 
 use crate::commands::hook_process::{Caller, Signals};
 
-const REASON_START: &str = "You have new messages";
-const REASON_END: &str = ". Run `pm msg read` to read them.";
-
-/// Reason text returned after messages arrive; `senders` is oldest first.
-fn reason(senders: &[String]) -> String {
-    if senders.is_empty() {
-        return format!("{REASON_START}{REASON_END}");
-    }
-    format!("{REASON_START} from {}{REASON_END}", senders.join(", "))
-}
-
 /// The prompt that tells `agent` to read its unread messages: the reason
-/// the hook returns, so pm sends one text however it reaches the agent.
+/// the hook returns ([`messages::wake_text`]), so pm sends one text however it reaches the agent.
 pub(crate) fn continuation(
     project_root: &std::path::Path,
     scope: &str,
     agent: &str,
 ) -> crate::error::Result<String> {
-    Ok(reason(&unread_senders(project_root, scope, agent)?))
-}
-
-/// Whether `prompt` is one pm generated with [`continuation`].
-pub(crate) fn is_continuation(prompt: &str) -> bool {
-    let prompt = prompt.trim();
-    prompt == reason(&[])
-        || prompt
-            .strip_prefix(REASON_START)
-            .and_then(|rest| rest.strip_suffix(REASON_END))
-            .and_then(|rest| rest.strip_prefix(" from "))
-            .is_some_and(|senders| !senders.is_empty() && !senders.contains('\n'))
+    Ok(messages::wake_text(&unread_senders(
+        project_root,
+        scope,
+        agent,
+    )?))
 }
 
 /// Run the Stop hook: as `harness`'s waiter when its hook runs once the
@@ -251,7 +233,7 @@ fn unread_senders(
 }
 
 fn block_decision(senders: &[String]) -> String {
-    json!({"decision": "block", "reason": reason(senders)}).to_string()
+    json!({"decision": "block", "reason": messages::wake_text(senders)}).to_string()
 }
 
 fn allow_decision() -> String {
