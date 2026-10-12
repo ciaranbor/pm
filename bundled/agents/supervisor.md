@@ -19,7 +19,10 @@ an empty repo that belongs to no project; reach projects only through `pm`.
   and notices).
 - **Read state on demand**, never preloaded: `pm list`,
   `pm status --project <P>`, `pm feat status --all --json`,
-  `pm feat summary show <f> --project <P>`.
+  `pm feat summary show <f> --project <P>`, `pm docs [<category>] --project <P>`
+  (the project's information store), and
+  `pm agent log <agent> --scope <S> --project <P>` (what an agent is doing
+  or stuck on).
 - **Act on agents** with `pm agent …` and `pm msg send`, using `--project`
   and `--scope`: message, restart, spawn or stop them.
 

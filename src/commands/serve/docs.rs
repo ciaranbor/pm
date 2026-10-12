@@ -1,109 +1,29 @@
 //! `/v1/projects/{project}/docs[/{filename}]`: the project's information
-//! store, read-only. Only the files `categories.toml` lists are served, each
-//! by its listed filename, so a request names a category and never a path:
-//! nothing else under `.pm/` can be reached.
+//! store, read-only, through [`crate::state::docs`].
 
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-
 use crate::error::Result;
-use crate::state::paths;
+use crate::state::docs;
 
 use super::routes::{MARKDOWN, Reply, error, json};
 
-#[derive(Deserialize)]
-struct Categories {
-    #[serde(default)]
-    category: Vec<Category>,
-}
-
-#[derive(Deserialize)]
-struct Category {
-    filename: String,
-    #[serde(default)]
-    description: String,
-}
-
-#[derive(Serialize)]
-struct Listed {
-    filename: String,
-    description: String,
-    /// Bytes; 0 when the file doesn't exist yet.
-    size: u64,
-    modified: Option<DateTime<Utc>>,
-}
-
-/// The categories `categories.toml` lists, in its order, keeping only
-/// those whose filename names a file directly in the docs dir and, if it
-/// is a link, one that stays there; none when it is missing.
-fn categories(root: &Path) -> Result<Vec<Category>> {
-    let path = paths::doc_categories(root);
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(e.into()),
-    };
-    let parsed: Categories = toml::from_str(&text)?;
-    Ok(parsed
-        .category
-        .into_iter()
-        .filter(|c| plain_name(&c.filename) && stays_in(root, &c.filename))
-        .collect())
-}
-
-/// Whether `filename` in the docs dir resolves to a file directly inside
-/// it; a file not written yet does.
-fn stays_in(root: &Path, filename: &str) -> bool {
-    let dir = paths::docs_dir(root);
-    match (dir.join(filename).canonicalize(), dir.canonicalize()) {
-        (Ok(file), Ok(dir)) => file.parent() == Some(dir.as_path()) && file.is_file(),
-        (Err(e), _) => e.kind() == std::io::ErrorKind::NotFound,
-        (Ok(_), Err(_)) => false,
-    }
-}
-
-fn plain_name(name: &str) -> bool {
-    !matches!(name, "" | "." | ".." | "categories.toml") && !name.contains(['/', '\\'])
-}
-
 /// `GET /v1/projects/{project}/docs`.
 pub(super) fn list(root: &Path) -> Result<Reply> {
-    let dir = paths::docs_dir(root);
-    let listed: Vec<Listed> = categories(root)?
-        .into_iter()
-        .map(|c| {
-            let meta = std::fs::metadata(dir.join(&c.filename)).ok();
-            Listed {
-                size: meta.as_ref().map_or(0, std::fs::Metadata::len),
-                modified: meta
-                    .and_then(|m| m.modified().ok())
-                    .map(DateTime::<Utc>::from),
-                filename: c.filename,
-                description: c.description,
-            }
-        })
-        .collect();
-    Ok(json(200, serde_json::json!({ "docs": listed })))
+    Ok(json(200, serde_json::json!({ "docs": docs::list(root)? })))
 }
 
 /// `GET /v1/projects/{project}/docs/{filename}`: a listed doc as Markdown,
 /// empty when its file doesn't exist yet.
 pub(super) fn get(root: &Path, filename: &str) -> Result<Reply> {
-    if !categories(root)?.iter().any(|c| c.filename == filename) {
-        return Ok(error(404, "no such doc"));
-    }
-    let body = match std::fs::read_to_string(paths::docs_dir(root).join(filename)) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e.into()),
-    };
-    Ok(Reply::Body {
-        status: 200,
-        content_type: MARKDOWN,
-        body,
-        etag: None,
+    Ok(match docs::read(root, filename)? {
+        Some(body) => Reply::Body {
+            status: 200,
+            content_type: MARKDOWN,
+            body,
+            etag: None,
+        },
+        None => error(404, "no such doc"),
     })
 }
 

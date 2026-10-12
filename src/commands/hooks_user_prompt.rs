@@ -100,7 +100,7 @@ fn on_prompt(project_root: &Path, scope: &str, agent: &str, prompt: &str) -> Res
     let harness = registry.get(agent).map(|e| e.harness);
     let said = harness.map_or(prompt, |h| h.prompt_said(prompt));
     let unread = messages::unread_count(&paths::messages_dir(project_root), scope, agent);
-    if hooks_stop::is_continuation(said) && unread == 0 {
+    if crate::messages::is_continuation(said) && unread == 0 {
         return Ok(Prompted::Dropped);
     }
     on_user_prompt(project_root, scope, prompt, harness)?;
@@ -124,7 +124,7 @@ fn on_prompt(project_root: &Path, scope: &str, agent: &str, prompt: &str) -> Res
 fn is_users(prompt: &str, harness: Option<Harness>) -> bool {
     let said = harness.map_or(prompt, |h| h.prompt_said(prompt));
     !is_launch_prompt(said)
-        && !hooks_stop::is_continuation(said)
+        && !crate::messages::is_continuation(said)
         && !hooks_stop::is_loop_notice(said)
         && !harness.is_some_and(|h| h.synthesized_prompt(prompt))
 }

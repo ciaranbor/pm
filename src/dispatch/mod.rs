@@ -45,6 +45,7 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
         } => project::delete(project, force, yes, server),
         Commands::Notes { project } => project::notes(project),
         Commands::Status { project } => project::status(project, server),
+        Commands::Docs { category, target } => project::docs(category, target.project),
         Commands::Harness(cmd) => harness::run(cmd),
         Commands::Agent(cmd) => agent::run(cmd, server),
         Commands::Msg(cmd) => msg::run(cmd, server),

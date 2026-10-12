@@ -41,7 +41,7 @@ use crate::messages;
 use crate::state::paths;
 use crate::state::runtime::{self, Breaker, Waiting, WaitingKind};
 
-use super::{background_work, hook_ended, parse_busy, read_stdin, reason, unread_senders};
+use super::{background_work, hook_ended, parse_busy, read_stdin, unread_senders};
 
 /// Wasted wakes in a row that stop the loop.
 pub(super) const MAX_WASTED: u32 = 5;
@@ -227,7 +227,7 @@ fn wait(
         AgentState::Busy,
         messages::unread_count(&messages_dir, scope, agent),
     );
-    Ok(Waited::Wake(reason(&unread_senders(
+    Ok(Waited::Wake(messages::wake_text(&unread_senders(
         project_root,
         scope,
         agent,

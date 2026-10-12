@@ -1,9 +1,9 @@
 use std::fmt::Write;
 use std::path::Path;
 
-use crate::error::Result;
+use crate::error::{PmError, Result};
 use crate::git;
-use crate::state::paths;
+use crate::state::{docs, paths};
 
 struct DefaultCategory {
     filename: &'static str,
@@ -214,6 +214,58 @@ pub fn bootstrap_dry_run(project_root: &Path) -> Vec<std::path::PathBuf> {
     would_create
 }
 
+/// `pm docs`: the store's categories, one per line, when `category` is
+/// `None`; else that category's text. A category is named by its filename,
+/// with or without `.md`.
+pub fn show(project_root: &Path, category: Option<&str>) -> Result<String> {
+    let listed = docs::list(project_root)?;
+    let Some(category) = category else {
+        if listed.is_empty() {
+            return Ok("The information store has no categories.\n".to_string());
+        }
+        return Ok(listing(&listed));
+    };
+    let filename = listed
+        .iter()
+        .map(|c| c.filename.as_str())
+        .find(|f| *f == category || f.strip_suffix(".md") == Some(category));
+    match filename {
+        Some(filename) => Ok(docs::read(project_root, filename)?.unwrap_or_default()),
+        None => {
+            let names: Vec<&str> = listed.iter().map(|c| c.filename.as_str()).collect();
+            Err(PmError::Docs(if names.is_empty() {
+                format!("no category '{category}': the information store has none")
+            } else {
+                format!(
+                    "no category '{category}' in the information store; it has: {}",
+                    names.join(", ")
+                )
+            }))
+        }
+    }
+}
+
+fn listing(listed: &[docs::Listed]) -> String {
+    let width = listed.iter().map(|c| c.filename.len()).max().unwrap_or(0);
+    let mut out = String::new();
+    for c in listed {
+        let state = match c.modified {
+            Some(modified) if c.size > 0 => format!(
+                "updated {}",
+                modified.with_timezone(&chrono::Local).format("%Y-%m-%d")
+            ),
+            _ => "empty".to_string(),
+        };
+        writeln!(
+            out,
+            "{:<width$}  {state:<18}  {}",
+            c.filename, c.description
+        )
+        .unwrap();
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,5 +463,26 @@ mod tests {
         // Content should be preserved
         let content = std::fs::read_to_string(docs.join("todo.md")).unwrap();
         assert!(content.contains("custom item"));
+    }
+
+    #[test]
+    fn show_names_a_category_with_or_without_its_extension() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        bootstrap(&root).unwrap();
+        std::fs::write(paths::docs_dir(&root).join("todo.md"), "# Todo\n- a\n").unwrap();
+
+        assert_eq!(show(&root, Some("todo")).unwrap(), "# Todo\n- a\n");
+        assert_eq!(show(&root, Some("todo.md")).unwrap(), "# Todo\n- a\n");
+        let listing = show(&root, None).unwrap();
+        let names: Vec<&str> = listing
+            .lines()
+            .map(|l| l.split_whitespace().next().unwrap())
+            .collect();
+        assert_eq!(names, ["todo.md", "issues.md", "ideas.md", "findings.md"]);
+        let err = show(&root, Some("categories.toml"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("todo.md, issues.md"), "{err}");
     }
 }
