@@ -84,3 +84,4 @@ pub mod upgrade;
 pub mod upgrade_restart;
 pub mod vanilla_rename;
 pub mod workflow;
+pub mod worktree_include;

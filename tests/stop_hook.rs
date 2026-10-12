@@ -308,6 +308,7 @@ fn a_waiter_going_idle_sends_its_features_due_ready_notice_once() {
         project: pm::state::project::ProjectInfo {
             name: "proj".into(),
             max_features: None,
+            fresh_base: None,
         },
         agents: Default::default(),
         harness: Default::default(),

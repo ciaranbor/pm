@@ -298,6 +298,7 @@ pub(super) mod tests {
             project: crate::state::project::ProjectInfo {
                 name: name.to_string(),
                 max_features: None,
+                fresh_base: None,
             },
             agents: Default::default(),
             harness: Default::default(),

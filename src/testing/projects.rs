@@ -56,6 +56,7 @@ impl TestServer {
             context: None,
             base: Some("parent"),
             workflow: None,
+            fresh: None,
             tmux_server: self.name(),
         })
         .unwrap();
@@ -126,6 +127,7 @@ impl TestServer {
             project: ProjectInfo {
                 name: name.clone(),
                 max_features: None,
+                fresh_base: None,
             },
             agents: AgentsConfig::default(),
             harness: Default::default(),

@@ -200,6 +200,18 @@ fn recreate_worktrees(
                             "{name}: warning: could not seed '{feat_name}': {e}"
                         ));
                     }
+                    match super::worktree_include::copy_into(root, &wt_path) {
+                        Ok(copied) if !copied.is_empty() => messages.push(format!(
+                            "{name}: copied {} file(s) named in {} into '{feat_name}'",
+                            copied.len(),
+                            super::worktree_include::FILE
+                        )),
+                        Ok(_) => {}
+                        Err(e) => messages.push(format!(
+                            "{name}: warning: could not copy {} files into '{feat_name}': {e}",
+                            super::worktree_include::FILE
+                        )),
+                    }
                 }
                 Err(e) => messages.push(format!(
                     "{name}: warning: failed to recreate worktree for '{feat_name}': {e}"

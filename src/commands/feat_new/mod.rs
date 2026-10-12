@@ -96,6 +96,43 @@ pub fn resolve_base(
     Ok(git::head_branch(detect_from).unwrap_or_else(|_| main_branch.to_string()))
 }
 
+/// The remote-tracking ref a new feature's branch starts from instead of
+/// `base`, fetched now, or `None` to start from `base`. `fresh` unset means
+/// fresh when `base` is the main branch and the `fresh_base` config says so;
+/// a fetch that fails then warns and keeps the local `base`, where an
+/// explicit `fresh` fails.
+fn fresh_start(
+    project_root: &Path,
+    main_branch: &str,
+    base: &str,
+    fresh: Option<bool>,
+) -> Result<Option<String>> {
+    let wanted = fresh
+        .unwrap_or_else(|| base == main_branch && crate::state::project::fresh_base(project_root));
+    if !wanted {
+        return Ok(None);
+    }
+    let main_worktree = paths::main_worktree(project_root);
+    let remote = git::branch_remote(&main_worktree, base)?.unwrap_or_else(|| "origin".to_string());
+    let fetched = git::fetch_branch(&main_worktree, &remote, base).map_err(|e| match e {
+        PmError::Git(said) => said,
+        other => other.to_string(),
+    });
+    match fetched {
+        Ok(()) => Ok(Some(format!("{remote}/{base}"))),
+        Err(e) if fresh == Some(true) => Err(PmError::Git(format!(
+            "--fresh could not fetch '{base}' from '{remote}': {e}"
+        ))),
+        Err(e) => {
+            eprintln!(
+                "warning: fresh_base: could not fetch '{base}' from '{remote}', \
+                 starting from the local '{base}': {e}"
+            );
+            Ok(None)
+        }
+    }
+}
+
 /// Parameters for creating a new feature.
 pub struct FeatNewParams<'a> {
     pub project_root: &'a Path,
@@ -107,6 +144,10 @@ pub struct FeatNewParams<'a> {
     /// Which branch to stack on. When `None`, the current branch is detected
     /// from CWD (enabling natural stacking from within a feature worktree).
     pub base: Option<&'a str>,
+    /// Start from the main branch's just-fetched remote copy (`Some(true)`,
+    /// which implies the main branch as base), or not (`Some(false)`);
+    /// `None` follows the `fresh_base` config.
+    pub fresh: Option<bool>,
     /// Workflow to activate for this feature. When `None` and `context` is
     /// provided, defaults to `feat_common::DEFAULT_WORKFLOW` (a context
     /// needs a recipient).
@@ -131,6 +172,7 @@ impl<'a> FeatNewParams<'a> {
             name_override: None,
             context: None,
             base: None,
+            fresh: None,
             workflow: None,
             tmux_server,
         }
@@ -197,7 +239,17 @@ pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
     // Resolve base branch (explicit, or detected from CWD)
     let main_branch = ProjectEntry::load(params.projects_dir, project_name)?.main_branch;
     let cwd = std::env::current_dir()?;
-    let resolved_base = resolve_base(params.project_root, &main_branch, params.base, &cwd)?;
+    let base = match params.fresh {
+        Some(true) => Some(main_branch.as_str()),
+        _ => params.base,
+    };
+    let resolved_base = resolve_base(params.project_root, &main_branch, base, &cwd)?;
+    let fresh_start = fresh_start(
+        params.project_root,
+        &main_branch,
+        &resolved_base,
+        params.fresh,
+    )?;
 
     // Step 1: Write state with status = initializing
     let mut state = feat_common::write_initializing_state(
@@ -221,13 +273,17 @@ pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
 
     let result: Result<()> = (|| {
         // Step 2: Create git branch from the base branch (uses actual branch name, may contain slashes)
-        git::create_branch_from(&main_worktree, branch, &resolved_base)?;
+        match &fresh_start {
+            Some(start) => git::create_branch_untracked(&main_worktree, branch, start)?,
+            None => git::create_branch_from(&main_worktree, branch, &resolved_base)?,
+        }
 
         // Step 3: Create git worktree
         git::add_worktree(&main_worktree, &worktree_path, branch)?;
 
         // Step 3.5: Seed harness assets and settings from main worktree
         seed::seed_feature_assets(params.project_root, &worktree_path)?;
+        super::worktree_include::copy_and_report(params.project_root, &worktree_path)?;
 
         // Step 3.6: Enqueue initial context as a message to every
         // brief_agents agent in the workflow (if context provided). pm's

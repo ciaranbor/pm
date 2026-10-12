@@ -27,6 +27,17 @@ pub use harness_config::{
 pub use presence::Presence;
 pub use schema::{Shape, shape_of};
 
+/// Whether a new feature on the main branch starts from its just-fetched
+/// remote copy by default: `fresh_base` under `[project]`, project over
+/// global, unset meaning no.
+pub fn fresh_base(project_root: &Path) -> bool {
+    ProjectConfig::load(&paths::pm_dir(project_root))
+        .ok()
+        .and_then(|c| c.project.fresh_base)
+        .or_else(|| GlobalConfig::load_or_default().project.fresh_base)
+        .unwrap_or(false)
+}
+
 /// Check whether creating a new feature would exceed the configured limit.
 ///
 /// Counts features that are not Merged or Stale (i.e. Initializing, Wip, Review, Approved).
@@ -90,6 +101,7 @@ mod tests {
             project: ProjectInfo {
                 name: "test".to_string(),
                 max_features: None,
+                fresh_base: None,
             },
             agents: Default::default(),
             harness: Default::default(),
@@ -128,6 +140,7 @@ mod tests {
             project: ProjectInfo {
                 name: "test".to_string(),
                 max_features: Some(2),
+                fresh_base: None,
             },
             agents: Default::default(),
             harness: Default::default(),
@@ -170,6 +183,7 @@ mod tests {
             project: ProjectInfo {
                 name: "test".to_string(),
                 max_features: Some(3),
+                fresh_base: None,
             },
             agents: Default::default(),
             harness: Default::default(),
@@ -208,6 +222,7 @@ mod tests {
             project: ProjectInfo {
                 name: "test".to_string(),
                 max_features: Some(1),
+                fresh_base: None,
             },
             agents: Default::default(),
             harness: Default::default(),
@@ -244,6 +259,7 @@ mod tests {
             project: ProjectInfo {
                 name: "test".to_string(),
                 max_features: Some(1),
+                fresh_base: None,
             },
             agents: Default::default(),
             harness: Default::default(),
@@ -281,6 +297,7 @@ mod tests {
             project: ProjectInfo {
                 name: "test".to_string(),
                 max_features: Some(5),
+                fresh_base: None,
             },
             agents: Default::default(),
             harness: Default::default(),

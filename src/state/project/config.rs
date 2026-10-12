@@ -56,6 +56,10 @@ pub struct ProjectInfo {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_features: Option<u32>,
+    /// Start a feature stacked on the main branch from its just-fetched
+    /// remote copy (`pm feat new --fresh`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fresh_base: Option<bool>,
 }
 
 /// Global configuration stored at ~/.config/pm/config.toml.
@@ -134,6 +138,8 @@ pub struct ServeConfig {
 pub struct GlobalProjectConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_features: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fresh_base: Option<bool>,
 }
 
 impl GlobalConfig {
@@ -209,6 +215,7 @@ mod tests {
             project: ProjectInfo {
                 name: "myapp".to_string(),
                 max_features: None,
+                fresh_base: None,
             },
             agents: Default::default(),
             harness: Default::default(),
@@ -360,6 +367,7 @@ default = "implementer"
             project: ProjectInfo {
                 name: "myapp".to_string(),
                 max_features: None,
+                fresh_base: None,
             },
             agents: Default::default(),
             harness: Default::default(),
@@ -375,6 +383,7 @@ default = "implementer"
         let info = ProjectInfo {
             name: "myapp".to_string(),
             max_features: None,
+            fresh_base: None,
         };
         let serialized = toml::to_string_pretty(&info).unwrap();
         assert!(!serialized.contains("max_features"));
@@ -385,6 +394,7 @@ default = "implementer"
         let info = ProjectInfo {
             name: "myapp".to_string(),
             max_features: Some(3),
+            fresh_base: None,
         };
         let serialized = toml::to_string_pretty(&info).unwrap();
         assert!(serialized.contains("max_features = 3"));

@@ -14,8 +14,8 @@ use crate::state::project::{GlobalConfig, Presence, ProjectEntry, harness_config
 /// Warn when the global `config.toml` exists but doesn't parse. Every reader
 /// falls back to defaults on a parse error so that a bad file can never block a
 /// spawn, which leaves `pm doctor` as the only place a user hand-editing it can
-/// learn that `max_features` and all their per-agent models and permission
-/// modes are being ignored.
+/// learn that its `[project]` settings and all their per-agent models and
+/// permission modes are being ignored.
 pub(super) fn global_config_warning() -> Option<String> {
     global_config_warning_in(&paths::global_config_dir().ok()?)
 }
@@ -24,7 +24,7 @@ fn global_config_warning_in(config_dir: &Path) -> Option<String> {
     let err = GlobalConfig::load(config_dir).err()?;
     let path = config_dir.join("config.toml").display().to_string();
     Some(format!(
-        "global config — {path} could not be read ({err}); max_features, [agents.models] and [agents.permissions] from it are all being ignored"
+        "global config — {path} could not be read ({err}); its [project] settings, [agents.models] and [agents.permissions] are all being ignored"
     ))
 }
 

@@ -46,8 +46,8 @@ pub const DEFAULT_POST_CREATE: &str = concat!(
     "\
 # Uncomment and customize for your project:
 #
-# # Copy gitignored files from the main worktree into the new feature
-# cp \"$PM_MAIN_WORKTREE/.env\" \"$PM_WORKTREE/\"
+# (Gitignored files to copy from the main worktree go in its
+# .worktreeinclude, copied before this runs.)
 #
 # # Install dependencies
 # npm install

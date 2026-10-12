@@ -125,6 +125,7 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
                     backup.display()
                 );
             }
+            git::unlock_worktree(&main_worktree, &existing_wt);
             git::prune_worktrees(&main_worktree)?;
         } else {
             return Err(PmError::WorktreeConflict {
@@ -165,6 +166,7 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
 
         // Step 2.5: Seed harness assets and settings from main worktree
         super::seed::seed_feature_assets(params.project_root, &worktree_path)?;
+        super::worktree_include::copy_and_report(params.project_root, &worktree_path)?;
 
         // Step 2.6: Sessions are recorded at the `--from` path itself, not
         // at the backup the old worktree was moved to.

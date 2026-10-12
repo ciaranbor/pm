@@ -114,6 +114,7 @@ fn setup_review(
 
         // Step 2.5: Seed harness assets and settings from main worktree
         seed::seed_feature_assets(project_root, &worktree_path)?;
+        super::worktree_include::copy_and_report(project_root, &worktree_path)?;
 
         // Step 2.7: Enqueue PR-review context to the reviewer agent's inbox.
         // pm's waiter wakes the reviewer with it once its session starts.

@@ -26,6 +26,7 @@ fn setup_project_files(dir: &Path, project_name: &str) -> PathBuf {
         project: ProjectInfo {
             name: project_name.to_string(),
             max_features: None,
+            fresh_base: None,
         },
         agents: Default::default(),
         harness: Default::default(),

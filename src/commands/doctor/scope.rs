@@ -594,6 +594,7 @@ mod tests {
             context: None,
             base: Some("parent"),
             workflow: None,
+            fresh: None,
             tmux_server: server.name(),
         })
         .unwrap();

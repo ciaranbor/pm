@@ -9,6 +9,7 @@ fn setup(global: &str) -> (TempDir, Files) {
         project: ProjectInfo {
             name: "proj".to_string(),
             max_features: None,
+            fresh_base: None,
         },
         agents: Default::default(),
         harness: Default::default(),
