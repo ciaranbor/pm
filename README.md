@@ -186,6 +186,16 @@ Agents also message across projects: `pm msg send main --project tools
 "…"` reaches the `tools` project's orchestrator, so an agent can ask about
 another project or request something of it without you relaying it.
 
+Every `pm agent` and `pm feat` command, and `pm msg read`, `list`, `wait`
+and `reply`, takes `--project <name>` to act on another registered project
+from anywhere, e.g. `pm feat status --project tools` or
+`pm agent list --project tools --scope main`. The scope still comes from
+where you run it, so from outside that project, name it: `--scope` (a
+feature name for `pm feat`), or nothing for a bare `pm feat status`, which
+shows the whole project. `--project` doesn't combine with `--all` or
+`--global`, which already span every project. On `pm msg send`, `--project`
+names the recipient's project instead; the sender stays in its own.
+
 When an agent misbehaves, `pm agent restart <name>` respawns it on the same
 conversation, or on a new one, saying so, when there is none to resume (its
 harness changed, or it never took a turn); `pm agent spawn <name>` adds one
@@ -450,7 +460,8 @@ reads it ([Android](docs/android.md#projects)) but doesn't edit it.
 
 A feature's **summary** is the hand-off its workflow's summary owner writes
 for `main` (`pm workflow show` says what belongs in it), kept at
-`.pm/summaries/<feature>.md` (`pm feat summary path`), never on the branch.
+`.pm/summaries/<feature>.md` (`pm feat summary path`; `pm feat summary show`
+prints it), never on the branch.
 `pm feat status ready` requires it and asks `main` to review it. Merging or
 deleting the feature always tells `main` which happened, and the summary
 stays until `main` has triaged and deleted it; until then `pm feat new` and

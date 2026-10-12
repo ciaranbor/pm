@@ -3,7 +3,7 @@ use pm::error::{PmError, Result};
 use pm::state::paths;
 
 use super::report::{report_agent_op_results, report_restart_all, restart_select};
-use super::scope::resolve_scope_with_flag;
+use super::scope::{project_root, resolve_scope_with_flag};
 use super::window::push;
 use crate::cli::AgentCommands;
 
@@ -20,13 +20,14 @@ pub(super) fn run(cmd: AgentCommands, server: Option<&str>) -> Result<()> {
             commands::agent_restart_all::global_scopes(&paths::global_projects_dir()?)?;
         return report_restart_all(&scopes, unread, restart_select(stale), force, server);
     }
-    let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+    let project_root = project_root(&paths::global_projects_dir()?, project(&cmd))?;
     match cmd {
         AgentCommands::Spawn {
             name,
             agent_definition,
             context,
             scope,
+            ..
         } => {
             let feature = resolve_scope_with_flag(&project_root, scope)?;
             // `--context -` reads the brief from stdin; any other
@@ -69,14 +70,14 @@ pub(super) fn run(cmd: AgentCommands, server: Option<&str>) -> Result<()> {
             push();
             Ok(())
         }
-        AgentCommands::Stop { names, scope } => {
+        AgentCommands::Stop { names, scope, .. } => {
             let target_scope = resolve_scope_with_flag(&project_root, scope)?;
             let results =
                 commands::agent_stop::agent_stop_many(&project_root, &target_scope, &names, server);
             push();
             report_agent_op_results(results, "stop")
         }
-        AgentCommands::Delete { names, scope } => {
+        AgentCommands::Delete { names, scope, .. } => {
             let target_scope = resolve_scope_with_flag(&project_root, scope)?;
             let results = commands::agent_delete::agent_delete_many(
                 &project_root,
@@ -124,7 +125,7 @@ pub(super) fn run(cmd: AgentCommands, server: Option<&str>) -> Result<()> {
             push();
             reported
         }
-        AgentCommands::List { active, scope } => {
+        AgentCommands::List { active, scope, .. } => {
             let feature = resolve_scope_with_flag(&project_root, scope)?;
             let lines = commands::agent_list::agent_list(&project_root, &feature, active)?;
             for line in lines {
@@ -136,6 +137,7 @@ pub(super) fn run(cmd: AgentCommands, server: Option<&str>) -> Result<()> {
             source,
             name,
             scope,
+            ..
         } => {
             let feature = resolve_scope_with_flag(&project_root, scope)?;
             let msg =
@@ -146,5 +148,17 @@ pub(super) fn run(cmd: AgentCommands, server: Option<&str>) -> Result<()> {
             println!("{msg}");
             Ok(())
         }
+    }
+}
+
+/// The project `--project` names, if any.
+fn project(cmd: &AgentCommands) -> Option<&str> {
+    match cmd {
+        AgentCommands::Spawn { target, .. }
+        | AgentCommands::List { target, .. }
+        | AgentCommands::Stop { target, .. }
+        | AgentCommands::Delete { target, .. }
+        | AgentCommands::Restart { target, .. }
+        | AgentCommands::Fork { target, .. } => target.project.as_deref(),
     }
 }

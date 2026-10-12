@@ -52,6 +52,13 @@ pub(super) fn project_root(projects_dir: &Path, project: Option<&str>) -> Result
     }
 }
 
+/// The scope of the agent this process runs for, if that agent is of the
+/// project at `project_root` — not of another project `--project` named.
+pub(super) fn own_scope(project_root: &Path) -> Option<String> {
+    let (root, scope) = paths::agent_scope().ok()?;
+    (root.canonicalize().ok()? == project_root.canonicalize().ok()?).then_some(scope)
+}
+
 /// The current project root, or `None` when the caller isn't inside a
 /// project — used by commands that also work outside one. Only that case is
 /// swallowed; a genuine I/O failure still propagates.

@@ -235,16 +235,37 @@ pub fn agent_dir() -> Result<PathBuf> {
 
 /// The scope a command run from `cwd` acts on: the one `cwd` is in, else,
 /// from outside every worktree, that of `agent_worktree` — an agent whose
-/// shell left its worktree (main's works in `.pm/docs`).
+/// shell left its worktree (main's works in `.pm/docs`). When neither is
+/// inside the project at all (one named by `--project`), the error is
+/// [`PmError::OutsideProject`].
 pub fn command_scope(
     project_root: &Path,
     cwd: &Path,
     agent_worktree: Option<&Path>,
 ) -> Result<String> {
-    match (resolve_scope_from(project_root, cwd), agent_worktree) {
+    let resolved = match (resolve_scope_from(project_root, cwd), agent_worktree) {
         (Err(PmError::NotInWorktree), Some(dir)) => resolve_scope_from(project_root, dir),
         (resolved, _) => resolved,
+    };
+    let root = project_root.canonicalize().ok();
+    let inside = |dir: &Path| {
+        dir.canonicalize()
+            .ok()
+            .zip(root.as_deref())
+            .is_some_and(|(dir, root)| dir.starts_with(root))
+    };
+    match resolved {
+        Err(PmError::NotInWorktree) if !inside(cwd) && !agent_worktree.is_some_and(inside) => {
+            Err(PmError::OutsideProject(project_name(project_root)))
+        }
+        resolved => resolved,
     }
+}
+
+/// The name `project_root`'s config gives it, else its path.
+fn project_name(project_root: &Path) -> String {
+    crate::state::project::ProjectConfig::load(&pm_dir(project_root))
+        .map_or_else(|_| project_root.display().to_string(), |c| c.project.name)
 }
 
 /// The project root and scope of the agent this process runs for, resolved
@@ -358,6 +379,43 @@ mod tests {
         assert_eq!(command_scope(root, &docs, Some(&main)).unwrap(), "main");
         assert!(matches!(
             command_scope(root, &docs, None).unwrap_err(),
+            PmError::NotInWorktree
+        ));
+    }
+
+    #[test]
+    fn a_command_from_outside_the_project_is_told_to_name_the_scope() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("proj-dir");
+        create_feature_state(&root, "login");
+        crate::state::project::ProjectConfig {
+            project: crate::state::project::ProjectInfo {
+                name: "proj".to_string(),
+                max_features: None,
+            },
+            agents: Default::default(),
+            harness: Default::default(),
+        }
+        .save(&pm_dir(&root))
+        .unwrap();
+        let main = main_worktree(&root);
+        let elsewhere = dir.path().join("other").join("main");
+        for d in [&main, &elsewhere] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+
+        assert_eq!(
+            command_scope(&root, &elsewhere, Some(&main)).unwrap(),
+            "main"
+        );
+        for agent_worktree in [None, Some(elsewhere.as_path())] {
+            match command_scope(&root, &elsewhere, agent_worktree).unwrap_err() {
+                PmError::OutsideProject(name) => assert_eq!(name, "proj"),
+                e => panic!("expected OutsideProject, got {e}"),
+            }
+        }
+        assert!(matches!(
+            command_scope(&root, &root, None).unwrap_err(),
             PmError::NotInWorktree
         ));
     }

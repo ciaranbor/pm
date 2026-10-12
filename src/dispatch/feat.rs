@@ -3,7 +3,10 @@ use pm::error::{PmError, Result};
 use pm::state::{paths, scope};
 
 use super::report::report_failed_launches;
-use super::scope::{current_feature, resolve_feature_name, resolve_scope, resolve_scope_with_flag};
+use super::scope::{
+    current_feature, own_scope, project_root, resolve_feature_name, resolve_scope,
+    resolve_scope_with_flag,
+};
 use super::window::{finish_in_own_session, push, running_agent};
 use crate::cli::{FeatCommands, PrCommands, SummaryCommands};
 
@@ -22,7 +25,7 @@ pub(super) fn run(cmd: FeatCommands, server: Option<&str>) -> Result<()> {
             }
             Ok(())
         }
-        FeatCommands::List { all: true } => {
+        FeatCommands::List { all: true, .. } => {
             let lines = commands::feat_list::feat_list_all(&paths::global_projects_dir()?)?;
             if lines.is_empty() {
                 println!("No projects");
@@ -37,8 +40,8 @@ pub(super) fn run(cmd: FeatCommands, server: Option<&str>) -> Result<()> {
 }
 
 fn in_project(cmd: FeatCommands, server: Option<&str>) -> Result<()> {
-    let project_root = paths::find_project_root(&std::env::current_dir()?)?;
     let projects_dir = paths::global_projects_dir()?;
+    let project_root = project_root(&projects_dir, project(&cmd))?;
     match cmd {
         FeatCommands::New {
             name,
@@ -46,6 +49,7 @@ fn in_project(cmd: FeatCommands, server: Option<&str>) -> Result<()> {
             context,
             base,
             workflow,
+            ..
         } => {
             let feat_name = commands::feat_new::feat_new(&commands::feat_new::FeatNewParams {
                 project_root: &project_root,
@@ -68,6 +72,7 @@ fn in_project(cmd: FeatCommands, server: Option<&str>) -> Result<()> {
             context,
             from,
             workflow,
+            ..
         } => {
             let feat_name =
                 commands::feat_adopt::feat_adopt(&commands::feat_adopt::FeatAdoptParams {
@@ -98,7 +103,7 @@ fn in_project(cmd: FeatCommands, server: Option<&str>) -> Result<()> {
             }
             Ok(())
         }
-        FeatCommands::Info { name } => {
+        FeatCommands::Info { name, .. } => {
             let name = resolve_feature_name(name, &project_root)?;
             let lines = commands::feat_info::feat_info(&project_root, &projects_dir, &name)?;
             for line in lines {
@@ -106,7 +111,7 @@ fn in_project(cmd: FeatCommands, server: Option<&str>) -> Result<()> {
             }
             Ok(())
         }
-        FeatCommands::Delete { name, force } => {
+        FeatCommands::Delete { name, force, .. } => {
             let name = resolve_feature_name(name, &project_root)?;
             let ended = commands::feat_delete::feat_delete(
                 &project_root,
@@ -121,7 +126,7 @@ fn in_project(cmd: FeatCommands, server: Option<&str>) -> Result<()> {
             println!("Deleted feature '{name}'");
             finish_in_own_session(server, ended.own)
         }
-        FeatCommands::Merge { name, keep } => {
+        FeatCommands::Merge { name, keep, .. } => {
             let name = resolve_feature_name(name, &project_root)?;
             let ended = commands::feat_merge::feat_merge(
                 &project_root,
@@ -141,7 +146,9 @@ fn in_project(cmd: FeatCommands, server: Option<&str>) -> Result<()> {
             finish_in_own_session(server, ended.own)
         }
         FeatCommands::Pr(pr_cmd) => match pr_cmd {
-            PrCommands::Create { name, ready, body } => {
+            PrCommands::Create {
+                name, ready, body, ..
+            } => {
                 let name = resolve_feature_name(name, &project_root)?;
                 let resolved_body = body
                     .as_deref()
@@ -157,7 +164,9 @@ fn in_project(cmd: FeatCommands, server: Option<&str>) -> Result<()> {
                 println!("PR linked for feature '{name}'");
                 Ok(())
             }
-            PrCommands::Edit { name, title, body } => {
+            PrCommands::Edit {
+                name, title, body, ..
+            } => {
                 let name = resolve_feature_name(name, &project_root)?;
                 let resolved_body = body
                     .as_deref()
@@ -171,7 +180,7 @@ fn in_project(cmd: FeatCommands, server: Option<&str>) -> Result<()> {
                 )?;
                 Ok(())
             }
-            PrCommands::Ready { name } => {
+            PrCommands::Ready { name, .. } => {
                 let name = resolve_feature_name(name, &project_root)?;
                 commands::feat_pr_ready::feat_pr_ready(&project_root, &name)?;
                 println!("PR marked ready for feature '{name}'");
@@ -182,8 +191,8 @@ fn in_project(cmd: FeatCommands, server: Option<&str>) -> Result<()> {
             status,
             name,
             reason,
-            all: _,
             json,
+            ..
         } => {
             use commands::feat_status::Request;
             let request =
@@ -198,7 +207,7 @@ fn in_project(cmd: FeatCommands, server: Option<&str>) -> Result<()> {
                 Request::View { name } => {
                     let name = match name {
                         Some(name) => Some(name),
-                        None if resolve_scope(&project_root)? == scope::MAIN => None,
+                        None if viewing_project(&project_root)? => None,
                         None => Some(resolve_feature_name(None, &project_root)?),
                     };
                     let lines = match name {
@@ -227,7 +236,7 @@ fn in_project(cmd: FeatCommands, server: Option<&str>) -> Result<()> {
                 &scope,
                 status,
                 reason.as_deref(),
-                running_agent().as_deref(),
+                own_scope(&project_root).and(running_agent()).as_deref(),
             )?;
             match scope.as_str() {
                 scope::MAIN => println!("main is {status}"),
@@ -237,26 +246,26 @@ fn in_project(cmd: FeatCommands, server: Option<&str>) -> Result<()> {
             Ok(())
         }
         FeatCommands::Summary(cmd) => match cmd {
-            SummaryCommands::Path { name } => {
+            SummaryCommands::Path { name, .. } => {
                 let name = resolve_feature_name(name, &project_root)?;
                 let path = commands::feat_summary::path(&project_root, &name)?;
                 println!("{}", path.display());
                 Ok(())
             }
-            SummaryCommands::Show { name } => {
+            SummaryCommands::Show { name, .. } => {
                 let name = resolve_feature_name(name, &project_root)?;
                 let summary = commands::feat_summary::show(&project_root, &name)?;
                 println!("{}", summary.trim_end_matches('\n'));
                 Ok(())
             }
         },
-        FeatCommands::Review { pr } => {
+        FeatCommands::Review { pr, .. } => {
             let feature_name = commands::feat_review::feat_review(&project_root, &pr, server)?;
             println!("Created review feature '{feature_name}'");
             push();
             Ok(())
         }
-        FeatCommands::Sync { name } => {
+        FeatCommands::Sync { name, .. } => {
             let name = name.or_else(|| current_feature(&project_root));
             let messages = commands::feat_sync::feat_sync(&project_root, name.as_deref())?;
             for msg in messages {
@@ -266,4 +275,38 @@ fn in_project(cmd: FeatCommands, server: Option<&str>) -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// Whether a bare status view shows the whole project: run from main, or
+/// from outside the project `--project` names.
+fn viewing_project(project_root: &std::path::Path) -> Result<bool> {
+    match resolve_scope(project_root) {
+        Ok(scope) => Ok(scope == scope::MAIN),
+        Err(PmError::OutsideProject(_)) => Ok(true),
+        Err(e) => Err(e),
+    }
+}
+
+/// The project `--project` names, if any.
+fn project(cmd: &FeatCommands) -> Option<&str> {
+    let target = match cmd {
+        FeatCommands::New { target, .. }
+        | FeatCommands::Adopt { target, .. }
+        | FeatCommands::List { target, .. }
+        | FeatCommands::Info { target, .. }
+        | FeatCommands::Delete { target, .. }
+        | FeatCommands::Merge { target, .. }
+        | FeatCommands::Status { target, .. }
+        | FeatCommands::Review { target, .. }
+        | FeatCommands::Sync { target, .. } => target,
+        FeatCommands::Pr(
+            PrCommands::Create { target, .. }
+            | PrCommands::Edit { target, .. }
+            | PrCommands::Ready { target, .. },
+        ) => target,
+        FeatCommands::Summary(
+            SummaryCommands::Path { target, .. } | SummaryCommands::Show { target, .. },
+        ) => target,
+    };
+    target.project.as_deref()
 }
