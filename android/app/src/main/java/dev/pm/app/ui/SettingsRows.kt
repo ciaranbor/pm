@@ -35,6 +35,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import dev.pm.app.R
+import dev.pm.app.api.reason
 import dev.pm.app.model.Pairing
 import dev.pm.app.push.Notifications
 import kotlinx.coroutines.CancellationException
@@ -180,11 +181,7 @@ internal fun UpdateRows(updates: UpdateControls) {
                             }
                     }
                 },
-                onFailure = { e ->
-                    feedback.failed("Couldn't check: ${e.message ?: e.javaClass.simpleName}") {
-                        check()
-                    }
-                },
+                onFailure = { e -> feedback.failed("Couldn't check: ${e.reason()}") { check() } },
             )
         }
     }

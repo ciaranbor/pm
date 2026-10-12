@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.pm.app.api.PmClient
 import dev.pm.app.api.PmError
+import dev.pm.app.api.reason
 import dev.pm.app.data.Backoff
 import dev.pm.app.model.Conversation
 import dev.pm.app.model.Dialog
@@ -249,7 +250,7 @@ class AgentModel(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    Outbox.Failed(text, e.message ?: e.javaClass.simpleName)
+                    Outbox.Failed(text, e.reason())
                 }
             seen()
         }
@@ -376,7 +377,7 @@ class AgentModel(
                 fetchDialogs()
             } catch (e: Exception) {
                 lastAnswer = sent
-                _answerFailed.send(e.message ?: e.javaClass.simpleName)
+                _answerFailed.send(e.reason())
             } finally {
                 _answering.value = null
             }

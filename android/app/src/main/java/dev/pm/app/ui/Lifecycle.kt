@@ -2,6 +2,7 @@ package dev.pm.app.ui
 
 import dev.pm.app.api.PmClient
 import dev.pm.app.api.PmError
+import dev.pm.app.api.reason
 import dev.pm.app.model.Snapshot
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -179,7 +180,7 @@ class Lifecycle(private val scope: CoroutineScope, private val client: () -> PmC
                 } catch (e: PmError.Unreachable) {
                     ActionState.Failed(action, UNREACHABLE, Outcome.Lost)
                 } catch (e: Exception) {
-                    ActionState.Failed(action, e.message ?: e.javaClass.simpleName, Outcome.Broken)
+                    ActionState.Failed(action, e.reason(), Outcome.Broken)
                 }
         }
     }

@@ -71,6 +71,13 @@ sealed class PmError(message: String) : Exception(message) {
     class Status(val code: Int, message: String) : PmError(message)
 }
 
+/** Why a request failed, in a few words for the user. */
+fun Throwable.reason(): String =
+    when (this) {
+        is PmError.Unreachable -> "pm serve unreachable"
+        else -> message ?: javaClass.simpleName
+    }
+
 /** How typed text reached an agent (`POST …/input`). */
 @Serializable
 data class Delivered(
