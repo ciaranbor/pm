@@ -125,6 +125,32 @@ impl Harness {
         }
     }
 
+    /// Events pm's guard hook installs under, for a harness that keeps an
+    /// agent out of a directory by hook rather than at launch; empty for
+    /// the others.
+    pub fn guard_events(self) -> &'static [&'static str] {
+        match self {
+            Harness::Codex => codex::guard::EVENTS,
+            Harness::ClaudeCode | Harness::OpenCode => &[],
+        }
+    }
+
+    /// The absolute paths a guard hook payload's tool call would write.
+    pub fn edit_targets(self, payload: &serde_json::Value) -> Vec<PathBuf> {
+        match self {
+            Harness::Codex => codex::guard::edit_targets(payload),
+            Harness::ClaudeCode | Harness::OpenCode => Vec::new(),
+        }
+    }
+
+    /// The guard hook's stdout that refuses the tool call, with `reason`.
+    pub fn guard_deny_output(self, reason: &str) -> Option<String> {
+        match self {
+            Harness::Codex => Some(codex::guard::deny_output(reason)),
+            Harness::ClaudeCode | Harness::OpenCode => None,
+        }
+    }
+
     /// Whether pm's composed prompt reaches this harness through the
     /// SessionStart hook rather than the command line.
     pub fn injects_prompt_at_session_start(self) -> bool {

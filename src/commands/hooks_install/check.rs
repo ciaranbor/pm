@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::entries::{LOOP_EVENTS, dialog_events, pm_entries, session_end_events, waiting_events};
+use super::entries::{
+    LOOP_EVENTS, dialog_events, guard_events, pm_entries, session_end_events, waiting_events,
+};
 use super::settings::pm_hook_position;
 use crate::harness::Harness;
 #[cfg(test)]
@@ -88,19 +90,29 @@ pub fn hooks_registered(harness: Harness, home: &Path, root: Option<&Value>) -> 
 /// pm entry in `root`. The status hooks are optional: without them an
 /// agent still runs and wakes.
 pub fn missing_status_hooks(harness: Harness, root: Option<&Value>) -> Vec<&'static str> {
-    waiting_events(harness)
-        .chain(session_end_events(harness))
-        .filter(|(event, markers)| {
-            root.is_none_or(|root| pm_hook_position(root, event, markers).is_none())
-        })
-        .map(|(event, _)| event)
-        .collect()
+    missing(
+        waiting_events(harness).chain(session_end_events(harness)),
+        root,
+    )
 }
 
 /// `harness`'s dialog hook events with no pm entry in `root`. Optional
 /// too: without them a dialog is answered at the terminal only.
 pub fn missing_dialog_hooks(harness: Harness, root: Option<&Value>) -> Vec<&'static str> {
-    dialog_events(harness)
+    missing(dialog_events(harness), root)
+}
+
+/// `harness`'s guard hook events with no pm entry in `root`: without them
+/// its agents may edit main's checkout.
+pub fn missing_guard_hooks(harness: Harness, root: Option<&Value>) -> Vec<&'static str> {
+    missing(guard_events(harness), root)
+}
+
+fn missing(
+    events: impl Iterator<Item = (&'static str, &'static [&'static str])>,
+    root: Option<&Value>,
+) -> Vec<&'static str> {
+    events
         .filter(|(event, markers)| {
             root.is_none_or(|root| pm_hook_position(root, event, markers).is_none())
         })

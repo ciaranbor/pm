@@ -22,6 +22,12 @@
 //! too (`source: compact`), mid-turn and while idle, which is no start
 //! ([`hooks_session_start`](crate::commands::hooks_session_start)).
 //!
+//! An agent kept out of a directory (`SpawnSpec::protected_dirs`) gets a
+//! `--settings` layer with an `Edit` deny rule for it, which holds in every
+//! permission mode and at the symlink-resolved path. It covers Claude Code's
+//! file tools and the shell file commands it recognises (redirects, `sed`,
+//! `tee`), not an arbitrary subprocess such as `cp` (2.1.296).
+//!
 //! A running session picks up edits to the user-level hooks file through
 //! its file watcher (verified on 2.1.272), so a new release's hook entries
 //! need no restart. Its definition, `--append-system-prompt-file` and flags
@@ -35,11 +41,14 @@ pub(super) mod sessions;
 pub(super) mod transcript;
 pub(super) mod waiting;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use serde_json::json;
 
 use crate::error::Result;
 use crate::harness::probe::{self, Probe};
-use crate::harness::{Projection, ProjectionScope, SpawnSpec, Wake};
+use crate::harness::spawn::{glob_literal, unguarded_note};
+use crate::harness::{PreLaunch, Projection, ProjectionScope, SpawnSpec, Wake};
 use crate::tmux;
 
 pub(super) const CONFIG_DIR: &str = ".claude";
@@ -137,6 +146,7 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>) -> String {
         model,
         writable_dirs: _,
         edit_dirs,
+        protected_dirs,
     } = *spec;
 
     let mut parts = vec![BINARY.to_string()];
@@ -173,6 +183,11 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>) -> String {
         ));
     }
 
+    if let Some(settings) = protected_settings(protected_dirs) {
+        parts.push("--settings".to_string());
+        parts.push(tmux::shell_quote(&settings));
+    }
+
     if let Some(session_id) = resume_session {
         parts.push("--resume".to_string());
         parts.push(session_id.to_string());
@@ -189,6 +204,27 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>) -> String {
     }
 
     parts.join(" ")
+}
+
+/// The settings layer that denies edits under `protected_dirs`: a deny
+/// rule holds in every permission mode, bypassPermissions included. A rule
+/// path is `//` for the filesystem root, so the absolute path follows a
+/// single `/`. `None` when no dir can be named in a rule.
+fn protected_settings(protected_dirs: &[PathBuf]) -> Option<String> {
+    let deny: Vec<String> = protected_dirs
+        .iter()
+        .filter_map(|dir| glob_literal(dir))
+        .map(|dir| format!("Edit(/{dir}/**)"))
+        .collect();
+    (!deny.is_empty()).then(|| json!({"permissions": {"deny": deny}}).to_string())
+}
+
+/// What a spawn remarks on: protected dirs no rule can name.
+pub(super) fn pre_launch(spec: &SpawnSpec<'_>) -> PreLaunch {
+    PreLaunch {
+        notes: unguarded_note(spec.protected_dirs).into_iter().collect(),
+        ..Default::default()
+    }
 }
 
 /// The installed version's raw string, or `None` when `claude` can't be run.
@@ -292,6 +328,31 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(cmd, "claude --add-dir='/proj/.pm/summaries' 'go'");
+    }
+
+    #[test]
+    fn build_cmd_denies_edits_under_protected_dirs() {
+        let dirs = [PathBuf::from("/proj/main")];
+        let cmd = build_cmd(&SpawnSpec {
+            prompt: Some("go"),
+            protected_dirs: &dirs,
+            ..Default::default()
+        });
+        assert_eq!(
+            cmd,
+            r#"claude --settings '{"permissions":{"deny":["Edit(//proj/main/**)"]}}' 'go'"#
+        );
+    }
+
+    #[test]
+    fn a_protected_dir_no_rule_can_name_is_left_out_and_noted() {
+        let dirs = [PathBuf::from("/p[1]/main")];
+        let spec = SpawnSpec {
+            protected_dirs: &dirs,
+            ..Default::default()
+        };
+        assert_eq!(build_cmd(&spec), "claude");
+        assert_eq!(pre_launch(&spec).notes.len(), 1);
     }
 
     #[test]

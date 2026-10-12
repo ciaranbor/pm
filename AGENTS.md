@@ -114,6 +114,8 @@ Design decisions you can't recover by reading the tree. Preserve them.
 - Each feature workflow names the single summary owner; content guidance is
   single-sourced in `pm workflow show`, never in defs, workflows, or skills.
 - The `feat new` brief is non-repliable: the agent has no `main` reply target.
+- A non-main scope's agents never edit `main/`: enforced per harness, at
+  launch or by hook (`protected_dirs`), never by prose in a definition.
 
 ### Lifecycle hooks
 

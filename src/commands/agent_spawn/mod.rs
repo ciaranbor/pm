@@ -12,7 +12,9 @@ mod session;
 mod spawn_all;
 mod validate;
 
-pub(crate) use launch::{LaunchConfig, configured_harness, definition_flag, resolve_launch};
+pub(crate) use launch::{
+    LaunchConfig, configured_harness, definition_flag, protected_dirs, resolve_launch,
+};
 pub use session::{
     RESUME_PROMPT, SPAWN_PROMPT, SpawnParams, SpawnedSession, is_launch_prompt, notes_suffix,
     spawn_session,

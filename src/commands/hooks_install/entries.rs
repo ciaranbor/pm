@@ -50,6 +50,13 @@
 //! the status hook's, with the Stop hook's timeout: it blocks until a
 //! dialog is answered remotely (see [`crate::commands::hooks_dialog`]).
 //!
+//! The guard hook is `pm harness hooks guard <harness>`, installed under
+//! each event of [`Harness::guard_events`] in an entry of its own, after
+//! every other pm entry: codex keys hook trust on an entry's index, so one
+//! placed earlier would shift the status hook's and untrust it. It runs
+//! synchronously, since only a synchronous hook can refuse a tool call (see
+//! [`crate::commands::hooks_guard`]).
+//!
 //! Entries written by older releases (the unguarded `pm harness hooks …`)
 //! still match a marker, so they count as pm-owned.
 //!
@@ -105,6 +112,10 @@ const SESSION_END_MARKERS: &[&str] = &[PM_SESSION_END_MARKER];
 pub const PM_DIALOG_MARKER: &str = "pm harness hooks dialog";
 const DIALOG_MARKERS: &[&str] = &[PM_DIALOG_MARKER];
 
+/// Marker string for pm-owned guard hook entries.
+pub const PM_GUARD_MARKER: &str = "pm harness hooks guard";
+const GUARD_MARKERS: &[&str] = &[PM_GUARD_MARKER];
+
 /// The hook events every harness gets, with the command markers that
 /// identify pm's entry under each.
 pub(super) const LOOP_EVENTS: &[(&str, &[&str])] = &[
@@ -123,6 +134,7 @@ pub fn pm_events(harness: Harness) -> Vec<(&'static str, &'static [&'static str]
         .chain(waiting_events(harness))
         .chain(session_end_events(harness))
         .chain(dialog_events(harness))
+        .chain(guard_events(harness))
         .collect()
 }
 
@@ -144,6 +156,16 @@ pub fn dialog_events(
         .dialog_events()
         .iter()
         .map(|event| (*event, DIALOG_MARKERS))
+}
+
+/// `harness`'s guard hook events, with their marker.
+pub fn guard_events(
+    harness: Harness,
+) -> impl Iterator<Item = (&'static str, &'static [&'static str])> {
+    harness
+        .guard_events()
+        .iter()
+        .map(|event| (*event, GUARD_MARKERS))
 }
 
 /// `harness`'s turn waiter event, if it gets one, with its marker.
@@ -245,6 +267,11 @@ pub fn dialog_hook_command(harness: Harness) -> String {
     format!("{GUARD}{PM_DIALOG_MARKER} {harness}")
 }
 
+/// The shell command registered as `harness`'s guard hook.
+pub fn guard_hook_command(harness: Harness) -> String {
+    format!("{GUARD}{PM_GUARD_MARKER} {harness}")
+}
+
 /// Every pm entry of `harness`'s user-level file: its event, the markers
 /// that identify it there, and the entry.
 pub(super) fn pm_entries(harness: Harness) -> Vec<(&'static str, &'static [&'static str], Value)> {
@@ -283,6 +310,9 @@ pub(super) fn pm_entries(harness: Harness) -> Vec<(&'static str, &'static [&'sta
             }),
         ));
     }
+    for (event, markers) in guard_events(harness) {
+        entries.push((event, markers, command(guard_hook_command(harness))));
+    }
     entries
 }
 
@@ -319,6 +349,7 @@ mod tests {
             user_prompt_hook_command(),
             waiting_hook_command(Harness::ClaudeCode),
             session_end_hook_command(Harness::ClaudeCode),
+            guard_hook_command(Harness::Codex),
         ] {
             let out = std::process::Command::new("/bin/sh")
                 .args(["-c", &command])
@@ -330,6 +361,31 @@ mod tests {
             assert!(out.status.success(), "{command}: {out:?}");
             assert!(out.stdout.is_empty(), "{command}: {out:?}");
             assert!(out.stderr.is_empty(), "{command}: {out:?}");
+        }
+    }
+
+    #[test]
+    fn only_codex_gets_the_guard_appended_after_its_status_hook() {
+        let events = |harness| {
+            pm_entries(harness)
+                .into_iter()
+                .map(|(event, markers, _)| (event, markers))
+                .collect::<Vec<_>>()
+        };
+        let codex = events(Harness::Codex);
+        let guard = codex
+            .iter()
+            .position(|e| *e == ("PreToolUse", GUARD_MARKERS));
+        let status = codex
+            .iter()
+            .position(|e| *e == ("PreToolUse", WAITING_MARKERS));
+        assert!(guard > status && status.is_some(), "{codex:?}");
+        assert_eq!(guard, Some(codex.len() - 1));
+        for harness in [Harness::ClaudeCode, Harness::OpenCode] {
+            assert!(
+                !events(harness).iter().any(|(_, m)| *m == GUARD_MARKERS),
+                "{harness}"
+            );
         }
     }
 

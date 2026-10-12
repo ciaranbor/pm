@@ -352,7 +352,7 @@ mod tests {
             kinds(&diagnose(&project_path, &projects_dir, server.name(), Depth::Quick).unwrap());
         assert_eq!(
             found.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
-            vec![IssueKind::HookUntrusted; 4],
+            vec![IssueKind::HookUntrusted; 5],
             "{found:?}"
         );
         assert!(found[0].1.contains("pm's Stop hook"), "{found:?}");
@@ -366,6 +366,10 @@ mod tests {
                 "pm's status hooks (PermissionRequest, PreToolUse, PostToolUse, Interrupt), \
                  so an agent waiting on you reads as busy"
             ),
+            "{found:?}"
+        );
+        assert!(
+            found[4].1.contains("pm's guard hook (PreToolUse)"),
             "{found:?}"
         );
 

@@ -58,12 +58,13 @@ pub(crate) fn stamp(
         model: launch.settings.model.as_deref(),
         writable_dirs: &launch.writable_dirs,
         edit_dirs: &launch.edit_dirs,
+        protected_dirs: &launch.protected_dirs,
     };
     let definition_file = match flag {
         Some(def) => definition_file(project_root, def)?,
         None => None,
     };
-    let inputs = json!({
+    let mut inputs = json!({
         "epoch": LAUNCH_EPOCH,
         "harness": harness.to_string(),
         "definition": flag,
@@ -75,6 +76,11 @@ pub(crate) fn stamp(
         "command": harness.build_cmd(&spec, &launch.harness_config, &PreLaunch::default()),
         "loop": (!harness.hooks_reload_live()).then(|| hooks_install::loop_fingerprint(harness)),
     });
+    // Absent when empty, so an unprotected agent's stamp does not depend
+    // on protection at all.
+    if !launch.protected_dirs.is_empty() {
+        inputs["protected_dirs"] = json!(launch.protected_dirs);
+    }
     Ok(crate::hash::sha256_hex(inputs.to_string().as_bytes()))
 }
 
@@ -89,16 +95,18 @@ fn definition_file(project_root: &Path, definition: &str) -> Result<Option<Vec<u
     Ok(None)
 }
 
-/// The stamp a spawn of agent `name`, registered as `entry`, would write now.
+/// The stamp a spawn of agent `name` of `scope`, registered as `entry`,
+/// would write now.
 pub fn current(
     project_root: &Path,
+    scope: &str,
     name: &str,
     entry: &AgentEntry,
     config: &ProjectConfig,
     global: &GlobalConfig,
 ) -> Result<String> {
     let definition = entry.effective_definition(name);
-    let launch = resolve_launch(project_root, definition, config, global)?;
+    let launch = resolve_launch(project_root, scope, definition, config, global)?;
     stamp(project_root, definition, &launch)
 }
 
@@ -115,5 +123,5 @@ pub fn is_stale(
     let Some(had) = runtime::read_launch_stamp(project_root, scope, name) else {
         return Ok(true);
     };
-    Ok(current(project_root, name, entry, config, global)? != had)
+    Ok(current(project_root, scope, name, entry, config, global)? != had)
 }

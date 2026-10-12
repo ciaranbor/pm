@@ -82,6 +82,10 @@
 //! default, because an approval prompt in an unwatched window stalls the
 //! agent. With `[harness.opencode] auto = false` pm puts allow rules for its
 //! own state dirs ahead of the row, which can still override them.
+//! An agent kept out of a directory (`SpawnSpec::protected_dirs`) gets an
+//! `edit` deny rule for it after the row, under `--auto` too, so neither
+//! can undo it; `edit` gates the edit, write and patch tools, not the shell
+//! (v2.0.24 source). Denying `external_directory` instead would block reads.
 
 mod api;
 pub(super) mod chat;
@@ -239,7 +243,7 @@ pub(super) fn pre_launch(
     }
     let config = render_config(spec, cfg, row, &model)?;
 
-    let mut notes = Vec::new();
+    let mut notes = Vec::from_iter(crate::harness::spawn::unguarded_note(spec.protected_dirs));
     let session_id = match spec.resume_session {
         Some(source) if spec.fork_session => {
             let id = fork_session(cfg, source)?;
