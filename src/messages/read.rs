@@ -109,6 +109,7 @@ pub fn read_at(
         timestamp: Utc::now(),
         sender_scope: None,
         sender_project: None,
+        from_outside: false,
     });
 
     Ok(Some(Message {

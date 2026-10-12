@@ -1,12 +1,16 @@
 use pm::commands;
+use pm::commands::agent_send::{Home, Sender};
 use pm::commands::attention::AgentState;
 use pm::error::{PmError, Result};
 use pm::state::paths;
+use pm::state::project::ProjectEntry;
 use pm::state::scope;
 use std::path::PathBuf;
 
 use super::report::report_sent;
-use super::scope::{own_scope, project_root, resolve_scope, resolve_scope_with_flag};
+use super::scope::{
+    optional_agent_scope, own_scope, project_root, resolve_scope, resolve_scope_with_flag,
+};
 use super::window::{agent_window, push, running_agent};
 use crate::cli::MsgCommands;
 
@@ -20,9 +24,6 @@ pub(super) fn run(cmd: MsgCommands, server: Option<&str>) -> Result<()> {
             upstream,
             project: target_project,
         } => {
-            // `--project` here names the recipient's project; the sender
-            // stays in its own.
-            let (project_root, feature) = paths::agent_scope()?;
             let message = read_message_body(message)?;
             let sender = as_agent.unwrap_or_else(pm::messages::default_user_name);
 
@@ -40,29 +41,32 @@ pub(super) fn run(cmd: MsgCommands, server: Option<&str>) -> Result<()> {
             }
             let effective_scope = shorthand_scope.map(|s| s.to_string()).or(scope);
 
-            if let Some(ref proj_name) = target_project {
-                let target_scope = effective_scope.as_deref().unwrap_or(scope::MAIN);
-                let pm_dir = paths::pm_dir(&project_root);
-                let sender_project_config = pm::state::project::ProjectConfig::load(&pm_dir)?;
-                let sender_project_name = &sender_project_config.project.name;
-                let line = commands::agent_send::agent_send_cross_project(
-                    &commands::agent_send::CrossProjectSendParams {
-                        target_project_name: proj_name,
-                        sender_scope: &feature,
-                        sender_project: sender_project_name,
-                        target_scope,
-                        recipient,
-                        sender: &sender,
-                        body: &message,
+            let sent = if let Some(ref proj_name) = target_project {
+                // `--project` names the recipient's project; the sender's
+                // home, if it has one, is where a reply comes back.
+                let home = optional_agent_scope()?;
+                let (_, target_root) =
+                    ProjectEntry::load_here(&paths::global_projects_dir()?, proj_name)?;
+                let home = home.as_ref().map(|(root, scope)| Home { root, scope });
+                let target_scope = effective_scope
+                    .or_else(|| own_scope(&target_root))
+                    .unwrap_or_else(|| scope::MAIN.to_string());
+                commands::agent_send::send_as(
+                    &target_root,
+                    &target_scope,
+                    recipient,
+                    Sender {
+                        name: &sender,
+                        home,
                     },
-                )?;
-                println!("{line}");
+                    &message,
+                    server,
+                )?
             } else {
+                let (project_root, feature) = paths::agent_scope()?;
                 let target_scope = if upstream {
-                    let main_branch = pm::state::project::ProjectEntry::main_branch(
-                        &project_root,
-                        &paths::global_projects_dir()?,
-                    )?;
+                    let main_branch =
+                        ProjectEntry::main_branch(&project_root, &paths::global_projects_dir()?)?;
                     Some(commands::agent_send::resolve_upstream(
                         &project_root,
                         &main_branch,
@@ -71,7 +75,7 @@ pub(super) fn run(cmd: MsgCommands, server: Option<&str>) -> Result<()> {
                 } else {
                     effective_scope
                 };
-                let sent = commands::agent_send::agent_send(
+                commands::agent_send::agent_send(
                     &project_root,
                     &feature,
                     target_scope.as_deref(),
@@ -79,9 +83,9 @@ pub(super) fn run(cmd: MsgCommands, server: Option<&str>) -> Result<()> {
                     &sender,
                     &message,
                     server,
-                )?;
-                report_sent(&project_root, sent, server);
-            }
+                )?
+            };
+            report_sent(sent, server);
             push();
             Ok(())
         }
@@ -150,21 +154,29 @@ pub(super) fn run(cmd: MsgCommands, server: Option<&str>) -> Result<()> {
             target,
         } => {
             let (project_root, feature) = target_project(target.project.as_deref())?;
-            let current_scope = match (scope, feature) {
+            let inbox_scope = match (scope, feature) {
                 (Some(scope), _) => resolve_scope_with_flag(&project_root, Some(scope))?,
                 (None, Some(feature)) => feature,
                 (None, None) => resolve_scope(&project_root)?,
             };
             let message = read_message_body(message)?;
             let sender = as_agent.unwrap_or_else(pm::messages::default_user_name);
+            // The reply-route rule is in `msg_reply`'s module docs.
+            let home = if running_agent().as_deref() == Some(sender.as_str()) {
+                optional_agent_scope()?
+            } else {
+                None
+            };
             let sent = commands::msg_reply::msg_reply(
+                &paths::global_projects_dir()?,
                 &project_root,
-                &current_scope,
+                &inbox_scope,
                 &sender,
+                home.as_ref().map(|(root, scope)| Home { root, scope }),
                 &message,
                 server,
             )?;
-            report_sent(&project_root, sent, server);
+            report_sent(sent, server);
             push();
             Ok(())
         }

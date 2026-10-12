@@ -1,25 +1,95 @@
-//! `pm msg send`: a queue that never spawns a new agent. Same-scope and
-//! cross-scope sends (`--scope`/`--upstream`, same project) error on an
-//! unregistered or inactive recipient, and heal an active one after
+//! `pm msg send`: a queue that never spawns a new agent. A send errors on
+//! an unregistered or inactive recipient, and heals an active one after
 //! queuing — a dead window, or a harness that exited to the shell in its
-//! pane, is respawned — and re-arm a live one no message would wake
-//! ([`agent_rearm`](super::agent_rearm)); a cross-project send only queues,
-//! since the target agent lives in a project this one can't spawn in.
+//! pane, is respawned — and re-arms a live one no message would wake
+//! ([`agent_rearm`](super::agent_rearm)). This holds for a recipient in
+//! another scope or another project alike: the heal runs in the
+//! recipient's project.
+//!
+//! The message records the sender's *home* — the project and scope whose
+//! inbox its waiter watches — relative to the recipient, so `pm msg reply`
+//! routes back there. A sender with no home (outside every project) can
+//! send with `--project` but cannot be replied to.
 
-mod cross_project;
 mod hint;
 mod upstream;
 
-pub use cross_project::{CrossProjectSendParams, agent_send_cross_project};
 pub use upstream::resolve_upstream;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
-use crate::messages;
+use chrono::Utc;
+
+use crate::messages::{self, MessageMeta};
 use crate::state::agent::AgentRegistry;
+use crate::state::project::ProjectConfig;
 use crate::state::{paths, scope};
 use hint::agent_not_found_hint;
+
+/// The project and scope whose inbox a sender's waiter watches: where a
+/// reply to it is delivered.
+#[derive(Debug, Clone, Copy)]
+pub struct Home<'a> {
+    pub root: &'a Path,
+    pub scope: &'a str,
+}
+
+/// Who a message is from: a name, and the home a reply reaches it in, if
+/// it has one.
+#[derive(Debug, Clone, Copy)]
+pub struct Sender<'a> {
+    pub name: &'a str,
+    pub home: Option<Home<'a>>,
+}
+
+/// Where the sender's home lies relative to the recipient's inbox.
+enum Route {
+    SameScope,
+    OtherScope(String),
+    OtherProject { scope: String, project: String },
+    Outside,
+}
+
+impl Route {
+    fn of(home: Option<Home<'_>>, target_root: &Path, target_scope: &str) -> Result<Self> {
+        let Some(home) = home else {
+            return Ok(Self::Outside);
+        };
+        if !paths::same_root(home.root, target_root) {
+            let project = ProjectConfig::load(&paths::pm_dir(home.root))?.project.name;
+            return Ok(Self::OtherProject {
+                scope: home.scope.to_string(),
+                project,
+            });
+        }
+        Ok(if home.scope == target_scope {
+            Self::SameScope
+        } else {
+            Self::OtherScope(home.scope.to_string())
+        })
+    }
+
+    /// Whether the sender is outside the recipient's project.
+    fn outside_target(&self) -> bool {
+        matches!(self, Self::OtherProject { .. } | Self::Outside)
+    }
+
+    fn meta(&self, sender: &str) -> MessageMeta {
+        let (sender_scope, sender_project) = match self {
+            Self::SameScope | Self::Outside => (None, None),
+            Self::OtherScope(scope) => (Some(scope.clone()), None),
+            Self::OtherProject { scope, project } => (Some(scope.clone()), Some(project.clone())),
+        };
+        MessageMeta {
+            sender: sender.to_string(),
+            timestamp: Utc::now(),
+            sender_scope,
+            sender_project,
+            from_outside: matches!(self, Self::Outside),
+        }
+    }
+}
 
 /// Whether the recipient agent is currently flagged active — the only
 /// thing a send needs to know, since it never resurrects a stopped agent;
@@ -44,22 +114,15 @@ pub struct Sent {
 /// `report`.
 #[derive(Debug)]
 pub struct Heal {
+    pub root: PathBuf,
     pub scope: String,
     pub agent: String,
     pub report: String,
 }
 
-/// Send a message to an agent's inbox.
-///
-/// Delivering to an inactive recipient is an error because nobody could
-/// ever read the message; healing goes through `agent_spawn`, a no-op if
-/// the harness runs.
-///
-/// `target_scope` is the scope (feature or "main") the message is delivered
-/// to. When `None`, defaults to `sender_scope` (same-scope message).
-///
-/// `sender_scope` is the scope the sender is currently in, recorded in
-/// message metadata so the recipient knows where the message came from.
+/// Send a message from `sender` to an agent in the sender's own project:
+/// [`send_as`] with a home of `(project_root, sender_scope)`. `target_scope`
+/// defaults to `sender_scope`.
 pub fn agent_send(
     project_root: &Path,
     sender_scope: &str,
@@ -69,42 +132,79 @@ pub fn agent_send(
     body: &str,
     tmux_server: Option<&str>,
 ) -> Result<Sent> {
-    let feature = target_scope.unwrap_or(sender_scope);
+    let sender = Sender {
+        name: sender,
+        home: Some(Home {
+            root: project_root,
+            scope: sender_scope,
+        }),
+    };
+    send_as(
+        project_root,
+        target_scope.unwrap_or(sender_scope),
+        recipient,
+        sender,
+        body,
+        tmux_server,
+    )
+}
+
+/// Send a message to `recipient` in scope `feature` of the project at
+/// `target_root`.
+///
+/// Delivering to an inactive recipient is an error because nobody could
+/// ever read the message; healing goes through `agent_spawn`, a no-op if
+/// the harness runs.
+pub fn send_as(
+    target_root: &Path,
+    feature: &str,
+    recipient: &str,
+    sender: Sender<'_>,
+    body: &str,
+    tmux_server: Option<&str>,
+) -> Result<Sent> {
+    let route = Route::of(sender.home, target_root, feature)?;
 
     // The recipient must be an active agent. Messaging never conjures a new
     // agent — agents are stood up by `pm feat new`/`feat adopt` (the whole
     // team) or `pm agent spawn`.
-    if !recipient_is_active(project_root, feature, recipient)? {
-        let orchestrator = scope::orchestrator(project_root);
-        let hint = agent_not_found_hint(recipient, sender_scope, feature, &orchestrator);
-        return Err(PmError::AgentNotFound(format!(
-            "No active agent called '{recipient}' exists in scope '{feature}'.{hint}"
-        )));
+    if !recipient_is_active(target_root, feature, recipient)? {
+        let orchestrator = scope::orchestrator(target_root);
+        return Err(PmError::AgentNotFound(if route.outside_target() {
+            let project = paths::project_name(target_root);
+            let hint = hint::other_project_hint(recipient, feature, &orchestrator);
+            format!(
+                "No active agent called '{recipient}' exists in scope '{feature}' of project \
+                 '{project}'.{hint}"
+            )
+        } else {
+            let sender_scope = sender.home.map_or(feature, |h| h.scope);
+            let hint = agent_not_found_hint(recipient, sender_scope, feature, &orchestrator);
+            format!("No active agent called '{recipient}' exists in scope '{feature}'.{hint}")
+        }));
     }
 
     // Deliver the message first, then heal a dead window. This ensures the
     // message is durably queued in the inbox before the agent starts, so it
     // will be picked up on first read.
-    let messages_dir = paths::messages_dir(project_root);
-    let is_cross_scope = target_scope.is_some() && target_scope != Some(sender_scope);
-    let index = messages::send_with_scope(
-        &messages_dir,
-        feature,
-        recipient,
-        sender,
-        body,
-        if is_cross_scope {
-            Some(sender_scope)
-        } else {
-            None
-        },
-    )?;
-    let mut status = if is_cross_scope {
-        format!(
-            "Message {index:03} sent to '{recipient}@{feature}' (from '{sender}@{sender_scope}')"
-        )
-    } else {
-        format!("Message {index:03} sent to '{recipient}' (from '{sender}')")
+    let messages_dir = paths::messages_dir(target_root);
+    let name = sender.name;
+    let index = messages::send_meta(&messages_dir, feature, recipient, &route.meta(name), body)?;
+    let mut status = match &route {
+        Route::SameScope => format!("Message {index:03} sent to '{recipient}' (from '{name}')"),
+        Route::OtherScope(home_scope) => format!(
+            "Message {index:03} sent to '{recipient}@{feature}' (from '{name}@{home_scope}')"
+        ),
+        Route::OtherProject { scope, project } => format!(
+            "Message {index:03} sent to '{recipient}@{feature}' in project '{}' (from \
+             '{name}@{scope}' in project '{project}')",
+            paths::project_name(target_root)
+        ),
+        Route::Outside => format!(
+            "Message {index:03} sent to '{recipient}@{feature}' in project '{}' (from \
+             '{name}', outside every project: replies have nowhere to go)",
+            paths::project_name(target_root)
+        ),
     };
 
     // The agent is active, but its tmux window may have died (crash,
@@ -119,16 +219,17 @@ pub fn agent_send(
     // socket is unreachable from a sandbox) is not a delivery failure: warn
     // and exit 0 rather than make the sender think the message was lost.
     let mut heal = None;
-    match super::agent_spawn::agent_spawn(project_root, feature, recipient, None, None, tmux_server)
+    match super::agent_spawn::agent_spawn(target_root, feature, recipient, None, None, tmux_server)
     {
         Ok((outcome, spawn_msg, _)) if outcome.is_new_window() => {
             heal = Some(Heal {
+                root: target_root.to_path_buf(),
                 scope: feature.to_string(),
                 agent: recipient.to_string(),
                 report: spawn_msg,
             });
         }
-        Ok(_) => match super::agent_rearm::rearm(project_root, feature, recipient, tmux_server) {
+        Ok(_) => match super::agent_rearm::rearm(target_root, feature, recipient, tmux_server) {
             Ok(Some(waiting)) => {
                 status = format!("{status}\nRe-armed '{recipient}' ({})", waiting.describe());
             }

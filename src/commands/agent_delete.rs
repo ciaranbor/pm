@@ -222,6 +222,7 @@ mod tests {
             sender: "implementer".to_string(),
             sender_scope: None,
             sender_project: None,
+            from_outside: false,
             index: 0,
         };
         crate::messages::save_last_read(&messages_dir, &feature, "reviewer", &lr).unwrap();

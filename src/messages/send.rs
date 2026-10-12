@@ -54,6 +54,25 @@ pub fn send_full(
     sender_scope: Option<&str>,
     sender_project: Option<&str>,
 ) -> Result<u32> {
+    let meta = MessageMeta {
+        sender: sender.to_string(),
+        timestamp: Utc::now(),
+        sender_scope: sender_scope.map(|s| s.to_string()),
+        sender_project: sender_project.map(|s| s.to_string()),
+        from_outside: false,
+    };
+    send_meta(messages_dir, feature, recipient, &meta, body)
+}
+
+/// Send a message carrying `meta`, whose sender names the queue.
+pub fn send_meta(
+    messages_dir: &Path,
+    feature: &str,
+    recipient: &str,
+    meta: &MessageMeta,
+    body: &str,
+) -> Result<u32> {
+    let sender = meta.sender.as_str();
     validate_name(feature, "feature")?;
     validate_name(recipient, "recipient")?;
     validate_name(sender, "sender")?;
@@ -62,13 +81,6 @@ pub fn send_full(
     let mdir = meta_dir(messages_dir, feature, recipient, sender);
     std::fs::create_dir_all(&sdir)?;
     std::fs::create_dir_all(&mdir)?;
-
-    let meta = MessageMeta {
-        sender: sender.to_string(),
-        timestamp: Utc::now(),
-        sender_scope: sender_scope.map(|s| s.to_string()),
-        sender_project: sender_project.map(|s| s.to_string()),
-    };
 
     // Sends from one sender take turns, so an index becomes visible only
     // after every lower one. Readers find a message by its body file, so the
@@ -81,7 +93,7 @@ pub fn send_full(
     write_whole(
         &mdir,
         &format!("{index:03}.json"),
-        serde_json::to_string_pretty(&meta)?.as_bytes(),
+        serde_json::to_string_pretty(meta)?.as_bytes(),
     )?;
     write_whole(&sdir, &format!("{index:03}.md"), body.as_bytes())?;
 

@@ -194,7 +194,7 @@ where you run it, so from outside that project, name it: `--scope` (a
 feature name for `pm feat`), or nothing for a bare `pm feat status`, which
 shows the whole project. `--project` doesn't combine with `--all` or
 `--global`, which already span every project. On `pm msg send`, `--project`
-names the recipient's project instead; the sender stays in its own.
+names the recipient's project instead ([Messaging](#messaging)).
 
 When an agent misbehaves, `pm agent restart <name>` respawns it on the same
 conversation, or on a new one, saying so, when there is none to resume (its
@@ -442,7 +442,15 @@ agent: it errors on an inactive recipient, and respawns one whose window
 died, or whose harness exited to the shell in a window nobody is looking
 at. To an `unarmed` recipient it types the prompt the waiter would have
 given, but only when that agent's input line is empty; elsewhere the
-message waits.
+message waits. All of this holds for a recipient in another project too.
+
+A reply lands in the inbox the original sender's waiter watches. An agent's
+replies name its own project and scope as their return route, even when it
+replies from another project's inbox with `pm msg reply --project`; anyone
+else's name the inbox they replied from. No agent has to read another
+project's inbox to hear back. `pm msg send --project` works
+from outside every project, but the recipient can't reply to it. `read`,
+`list` and `wait --project` inspect another project's inbox.
 
 Identity resolves as `PM_AGENT_NAME` (set at spawn) > `$USER` > `"user"`, so
 spawned agents need no `--as-agent`. An agent's scope resolves from the

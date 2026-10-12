@@ -2,6 +2,7 @@
 //! recipient, and the scope recorded on a cross-scope send.
 
 mod heal;
+mod other_project;
 mod recipient;
 mod scope;
 
@@ -35,33 +36,44 @@ fn setup_project_files(dir: &Path, project_name: &str) -> PathBuf {
 
 /// Set up a project with a tmux session for the feature.
 fn setup_project_with_tmux(dir: &Path, server: &TestServer) -> (PathBuf, String, String) {
-    let project_name = server.scope("proj");
-    let feature_name = "login";
+    let (root, session_name) = setup_named_project(dir, server, "proj", "login");
+    (root, session_name, "login".to_string())
+}
+
+/// A project named `server.scope(name)` at `dir`, with a main worktree and
+/// a worktree and tmux session for `scope_name`.
+fn setup_named_project(
+    dir: &Path,
+    server: &TestServer,
+    name: &str,
+    scope_name: &str,
+) -> (PathBuf, String) {
+    let project_name = server.scope(name);
     let root = setup_project_files(dir, &project_name);
-    let pm_dir = root.join(".pm");
+    std::fs::create_dir_all(paths::main_worktree(&root)).unwrap();
 
-    let now = Utc::now();
-    let state = FeatureState {
-        status: FeatureStatus::Wip,
-        branch: feature_name.to_string(),
-        worktree: feature_name.to_string(),
-        base: String::new(),
-        pr: String::new(),
-        context: String::new(),
-        workflow: None,
-        created: now,
-        last_active: now,
-        team: Default::default(),
-    };
-    state.save(&pm_dir.join("features"), feature_name).unwrap();
+    if scope_name != crate::state::scope::MAIN {
+        let now = Utc::now();
+        let state = FeatureState {
+            status: FeatureStatus::Wip,
+            branch: scope_name.to_string(),
+            worktree: scope_name.to_string(),
+            base: String::new(),
+            pr: String::new(),
+            context: String::new(),
+            workflow: None,
+            created: now,
+            last_active: now,
+            team: Default::default(),
+        };
+        state.save(&root.join(".pm/features"), scope_name).unwrap();
+    }
 
-    let worktree = root.join(feature_name);
+    let worktree = root.join(scope_name);
     std::fs::create_dir_all(&worktree).unwrap();
-
-    let session_name = tmux::session_name(&project_name, feature_name);
+    let session_name = tmux::session_name(&project_name, scope_name);
     tmux::create_session(server.name(), &session_name, &worktree).unwrap();
-
-    (root, session_name, feature_name.to_string())
+    (root, session_name)
 }
 
 /// Create an agent definition in the main worktree (where `pm agents install-project` writes).

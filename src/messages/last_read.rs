@@ -57,6 +57,7 @@ mod tests {
             sender: "reviewer".to_string(),
             sender_scope: Some("main".to_string()),
             sender_project: None,
+            from_outside: false,
             index: 3,
         };
         save_last_read(&mdir, "login", "implementer", &lr).unwrap();
@@ -88,6 +89,7 @@ mod tests {
             sender: "reviewer".to_string(),
             sender_scope: Some("main".to_string()),
             sender_project: None,
+            from_outside: false,
             index: 1,
         };
         save_last_read(&mdir, "login", "implementer", &lr1).unwrap();
@@ -96,6 +98,7 @@ mod tests {
             sender: "user".to_string(),
             sender_scope: Some("other-feat".to_string()),
             sender_project: Some("exo".to_string()),
+            from_outside: false,
             index: 5,
         };
         save_last_read(&mdir, "login", "implementer", &lr2).unwrap();
