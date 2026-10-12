@@ -1,25 +1,36 @@
+//! `pm msg reply`: answer the last message read from an inbox, routed to
+//! the inbox its sender's waiter watches.
+//!
+//! Where the reply is read from (the inbox holding `.last_read`) and who it
+//! is from are separate. The reply's own route back is the replier's home
+//! when it replies as the agent its process runs for (`PM_AGENT_NAME`), so
+//! an agent answering from another project's inbox is still answered in its
+//! own. Anyone else — a human, or one acting `--as-agent` someone else — is
+//! routed back to the inbox it replied from.
+
 use std::path::Path;
 
-use super::agent_send::Sent;
+use super::agent_send::{Home, Sender, Sent, send_as};
 use crate::error::{PmError, Result};
 use crate::messages;
 use crate::state::paths;
+use crate::state::project::ProjectEntry;
 use crate::state::scope;
 
-/// Reply to the last-read message, auto-routing to the sender's scope.
-///
-/// Loads `.last_read` from the agent's inbox, determines the target scope
-/// from the original message metadata, and sends the reply via the existing
-/// `agent_send` / `agent_send_cross_project` machinery.
+/// Reply as `agent` to the last message read from its inbox in
+/// `inbox_scope` of the project at `inbox_root`. `home` is the replier's
+/// own, if it has one; `projects_dir` resolves a sender in another project.
 pub fn msg_reply(
-    project_root: &Path,
-    current_scope: &str,
+    projects_dir: &Path,
+    inbox_root: &Path,
+    inbox_scope: &str,
     agent: &str,
+    home: Option<Home<'_>>,
     body: &str,
     tmux_server: Option<&str>,
 ) -> Result<Sent> {
-    let messages_dir = paths::messages_dir(project_root);
-    let last_read = messages::load_last_read(&messages_dir, current_scope, agent)?;
+    let messages_dir = paths::messages_dir(inbox_root);
+    let last_read = messages::load_last_read(&messages_dir, inbox_scope, agent)?;
 
     let last_read = last_read.ok_or_else(|| {
         PmError::Messaging(
@@ -27,37 +38,38 @@ pub fn msg_reply(
                 .to_string(),
         )
     })?;
-
-    if let Some(ref sender_project) = last_read.sender_project {
-        // Cross-project reply
-        let pm_dir = paths::pm_dir(project_root);
-        let config = crate::state::project::ProjectConfig::load(&pm_dir)?;
-        let our_project = &config.project.name;
-        let target_scope = last_read.sender_scope.as_deref().unwrap_or(scope::MAIN);
-
-        super::agent_send::agent_send_cross_project(&super::agent_send::CrossProjectSendParams {
-            target_project_name: sender_project,
-            sender_scope: current_scope,
-            sender_project: our_project,
-            target_scope,
-            recipient: &last_read.sender,
-            sender: agent,
-            body,
-        })
-        .map(|status| Sent { status, heal: None })
-    } else {
-        // Same-project reply: use sender_scope as target if set
-        let target_scope = last_read.sender_scope.as_deref();
-        super::agent_send::agent_send(
-            project_root,
-            current_scope,
-            target_scope,
-            &last_read.sender,
-            agent,
-            body,
-            tmux_server,
-        )
+    if last_read.from_outside {
+        return Err(PmError::Messaging(format!(
+            "'{}' sent that message from outside every project: there is no inbox to reply to",
+            last_read.sender
+        )));
     }
+
+    let (target_root, target_scope) = match &last_read.sender_project {
+        Some(project) => (
+            ProjectEntry::load_here(projects_dir, project)?.1,
+            last_read.sender_scope.as_deref().unwrap_or(scope::MAIN),
+        ),
+        None => (
+            inbox_root.to_path_buf(),
+            last_read.sender_scope.as_deref().unwrap_or(inbox_scope),
+        ),
+    };
+    let home = home.unwrap_or(Home {
+        root: inbox_root,
+        scope: inbox_scope,
+    });
+    send_as(
+        &target_root,
+        target_scope,
+        &last_read.sender,
+        Sender {
+            name: agent,
+            home: Some(home),
+        },
+        body,
+        tmux_server,
+    )
 }
 
 #[cfg(test)]
@@ -132,7 +144,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = setup_project_no_tmux(dir.path());
 
-        let err = msg_reply(&root, "login", "implementer", "hello", None).unwrap_err();
+        let err = msg_reply(&root, &root, "login", "implementer", None, "hello", None).unwrap_err();
         assert!(format!("{err}").contains("No message to reply to"));
     }
 
@@ -175,8 +187,10 @@ mod tests {
         // Reply
         let result = msg_reply(
             &root,
+            &root,
             &feature,
             "implementer",
+            None,
             "done, please review",
             server.name(),
         )
@@ -220,70 +234,20 @@ mod tests {
             .unwrap();
 
         // Reply — should stay same-scope
-        let result = msg_reply(&root, &feature, "implementer", "got it", server.name())
-            .unwrap()
-            .status;
+        let result = msg_reply(
+            &root,
+            &root,
+            &feature,
+            "implementer",
+            None,
+            "got it",
+            server.name(),
+        )
+        .unwrap()
+        .status;
 
         // Same-scope: no @scope notation
         assert!(result.contains("Message 001 sent to 'reviewer'"));
         assert!(!result.contains("@"));
-    }
-
-    #[test]
-    fn reply_cross_project() {
-        let dir = tempdir().unwrap();
-        let root = setup_project_no_tmux(dir.path());
-
-        // Set up project config so we have a project name
-        let pm_dir = root.join(".pm");
-        let config = ProjectConfig {
-            project: ProjectInfo {
-                name: "myapp".to_string(),
-                max_features: None,
-            },
-            agents: Default::default(),
-            harness: Default::default(),
-        };
-        config.save(&pm_dir).unwrap();
-
-        // Set up a "source project" in a separate temp dir
-        let source_dir = tempdir().unwrap();
-        let source_root = source_dir.path().to_path_buf();
-        std::fs::create_dir_all(source_root.join(".pm/messages")).unwrap();
-
-        // Register the source project in global projects dir
-        let projects_dir = tempdir().unwrap();
-        let entry = crate::state::project::ProjectEntry {
-            root: source_root.to_str().unwrap().to_string(),
-            main_branch: "main".to_string(),
-            repo_url: None,
-            state_remote: None,
-        };
-        entry.save(projects_dir.path(), "source-proj").unwrap();
-
-        // Simulate receiving a cross-project message
-        let messages_dir = paths::messages_dir(&root);
-        messages::send_full(
-            &messages_dir,
-            "login",
-            "implementer",
-            "reviewer",
-            "cross-project request",
-            Some("main"),
-            Some("source-proj"),
-        )
-        .unwrap();
-
-        // Read it (writes .last_read with sender_project)
-        crate::commands::agent_read::agent_read(&root, "login", "implementer", None, None).unwrap();
-
-        // Verify .last_read has cross-project info
-        let lr = messages::load_last_read(&messages_dir, "login", "implementer")
-            .unwrap()
-            .unwrap();
-        assert_eq!(lr.sender, "reviewer");
-        assert_eq!(lr.sender_scope.as_deref(), Some("main"));
-        assert_eq!(lr.sender_project.as_deref(), Some("source-proj"));
-        assert_eq!(lr.index, 1);
     }
 }

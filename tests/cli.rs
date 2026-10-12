@@ -493,6 +493,12 @@ fn a_named_project_is_reached_from_outside_every_project() {
     let home = home.path();
     let alpha = registered_project(home, "alpha");
     let beta = registered_project(home, "beta");
+    std::fs::write(
+        beta.join(".pm/agents/main.toml"),
+        "[agents.lead]\ntype = \"agent\"\nsession_id = \"\"\nwindow_name = \"lead\"\n\
+         active = true\nharness = \"claude-code\"\n",
+    )
+    .unwrap();
     pm::messages::send_full(
         &pm::state::paths::messages_dir(&alpha),
         "main",
@@ -535,10 +541,151 @@ fn a_named_project_is_reached_from_outside_every_project() {
     .unwrap();
     assert_eq!(replies.len(), 1, "the reply reaches lead in beta");
     pm_at_home()
+        .args(["msg", "send", "--project", "beta", "lead", "status?"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("outside every project"));
+    pm_at_home()
         .args(["feat", "status", "--project", "alpha"])
         .assert()
         .success()
         .stdout("No features\n");
+}
+
+/// Register `agents` as active in `scope` of the project at `root`.
+fn activate(root: &std::path::Path, scope: &str, agents: &[&str]) {
+    let entries: String = agents
+        .iter()
+        .map(|a| {
+            format!(
+                "[agents.{a}]\ntype = \"agent\"\nsession_id = \"\"\nwindow_name = \"{a}\"\n\
+                 active = true\nharness = \"claude-code\"\n"
+            )
+        })
+        .collect();
+    std::fs::write(root.join(format!(".pm/agents/{scope}.toml")), entries).unwrap();
+}
+
+/// The scope and project a reply recorded as its route back.
+fn route_of(
+    root: &std::path::Path,
+    recipient: &str,
+    sender: &str,
+) -> (Option<String>, Option<String>) {
+    let msg = pm::messages::read_at(
+        &pm::state::paths::messages_dir(root),
+        "main",
+        recipient,
+        sender,
+        1,
+    )
+    .unwrap()
+    .unwrap();
+    (msg.meta.sender_scope, msg.meta.sender_project)
+}
+
+#[test]
+fn an_agent_replying_from_another_projects_inbox_is_answered_at_home() {
+    let home = tempdir().unwrap();
+    let home = home.path();
+    let alpha = registered_project(home, "alpha");
+    let beta = registered_project(home, "beta");
+    std::fs::write(alpha.join(".pm/features/login.toml"), "").unwrap();
+    std::fs::create_dir_all(alpha.join("login")).unwrap();
+    activate(&beta, "main", &["lead"]);
+    pm::messages::send(
+        &pm::state::paths::messages_dir(&beta),
+        "main",
+        "implementer",
+        "lead",
+        "question",
+    )
+    .unwrap();
+    let as_implementer = |args: &[&str]| {
+        Command::from_std(std_pm(home))
+            .current_dir(alpha.join("login"))
+            .env("PM_AGENT_NAME", "implementer")
+            .env(pm::state::paths::AGENT_WORKTREE_ENV, alpha.join("login"))
+            .args(args)
+            .args(["--project", "beta", "--scope", "main"])
+            .assert()
+            .success();
+    };
+
+    as_implementer(&["msg", "read"]);
+    as_implementer(&["msg", "reply", "answer"]);
+
+    assert_eq!(
+        route_of(&beta, "lead", "implementer"),
+        (Some("login".to_string()), Some("alpha".to_string()))
+    );
+}
+
+#[test]
+fn a_reply_as_another_agent_is_routed_to_the_inbox_it_came_from() {
+    let home = tempdir().unwrap();
+    let home = home.path();
+    let alpha = registered_project(home, "alpha");
+    let beta = registered_project(home, "beta");
+    activate(&beta, "main", &["lead"]);
+    pm::messages::send_full(
+        &pm::state::paths::messages_dir(&alpha),
+        "main",
+        "reviewer",
+        "lead",
+        "hello reviewer",
+        Some("main"),
+        Some("beta"),
+    )
+    .unwrap();
+    let in_beta = |args: &[&str]| {
+        Command::from_std(std_pm(home))
+            .current_dir(beta.join("main"))
+            .args(args)
+            .args([
+                "--project",
+                "alpha",
+                "--scope",
+                "main",
+                "--as-agent",
+                "reviewer",
+            ])
+            .assert()
+            .success();
+    };
+
+    in_beta(&["msg", "read"]);
+    in_beta(&["msg", "reply", "thanks"]);
+
+    assert_eq!(
+        route_of(&beta, "lead", "reviewer"),
+        (Some("main".to_string()), Some("alpha".to_string()))
+    );
+}
+
+#[test]
+fn a_send_naming_its_own_project_defaults_to_its_own_scope() {
+    let home = tempdir().unwrap();
+    let home = home.path();
+    let alpha = registered_project(home, "alpha");
+    std::fs::write(alpha.join(".pm/features/login.toml"), "").unwrap();
+    std::fs::create_dir_all(alpha.join("login")).unwrap();
+    activate(&alpha, "login", &["reviewer"]);
+
+    Command::from_std(std_pm(home))
+        .current_dir(alpha.join("login"))
+        .args([
+            "msg",
+            "send",
+            "--project",
+            "alpha",
+            "--as-agent",
+            "implementer",
+        ])
+        .args(["reviewer", "hi"])
+        .assert()
+        .success()
+        .stdout("Message 001 sent to 'reviewer' (from 'implementer')\n");
 }
 
 #[test]
@@ -554,6 +701,13 @@ fn a_named_project_off_this_machine_is_refused_and_global_flags_conflict() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("run `pm restore alpha`"));
+    Command::from_std(std_pm(home))
+        .current_dir(home)
+        .args(["msg", "send", "--project", "alpha", "reviewer", "hi"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("run `pm restore alpha`"));
+    assert!(!alpha.join(".pm/messages").exists());
     for args in [
         &["feat", "list", "--all", "--project", "alpha"][..],
         &["feat", "status", "--all", "--project", "alpha"],

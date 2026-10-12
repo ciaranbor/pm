@@ -21,7 +21,7 @@ pub use last_read::{load_last_read, save_last_read};
 pub use list::list;
 pub use read::{check, read_at, read_count, unread_count};
 pub use resolve::resolve_sender;
-pub use send::{send, send_full, send_with_scope};
+pub use send::{send, send_full, send_meta, send_with_scope};
 pub use types::{
     LastRead, Message, MessageMeta, MessageStatus, MessageSummary, SenderChoice, UnreadSummary,
 };

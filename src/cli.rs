@@ -608,7 +608,7 @@ pub enum MsgCommands {
         /// Deliver to the parent scope (base branch's feature). Shorthand for --scope <base>.
         #[arg(long, conflicts_with = "scope")]
         upstream: bool,
-        /// Deliver to a different project (by registered name)
+        /// Deliver to a different project (by registered name): its main scope unless --scope names another
         #[arg(long, conflicts_with = "upstream")]
         project: Option<String>,
     },

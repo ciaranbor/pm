@@ -56,7 +56,17 @@ pub(super) fn project_root(projects_dir: &Path, project: Option<&str>) -> Result
 /// project at `project_root` — not of another project `--project` named.
 pub(super) fn own_scope(project_root: &Path) -> Option<String> {
     let (root, scope) = paths::agent_scope().ok()?;
-    (root.canonicalize().ok()? == project_root.canonicalize().ok()?).then_some(scope)
+    paths::same_root(&root, project_root).then_some(scope)
+}
+
+/// [`paths::agent_scope`], or `None` when the caller isn't inside a project.
+/// Only that case is swallowed.
+pub(super) fn optional_agent_scope() -> Result<Option<(PathBuf, String)>> {
+    match paths::agent_scope() {
+        Ok(found) => Ok(Some(found)),
+        Err(PmError::NotInProject) => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 /// The current project root, or `None` when the caller isn't inside a

@@ -126,6 +126,7 @@ pub fn agent_read(
                             sender: m.sender.clone(),
                             sender_scope: m.meta.sender_scope.clone(),
                             sender_project: m.meta.sender_project.clone(),
+                            from_outside: m.meta.from_outside,
                             index: m.index,
                         },
                     )?;
@@ -189,6 +190,8 @@ fn format_message(m: &Message, current_scope: Option<&str>) -> Vec<String> {
     let timestamp = m.meta.timestamp.format("%Y-%m-%d %H:%M:%S UTC");
     let note = if messages::is_no_reply(&m.sender) {
         " (sent by pm, not an agent: no one to reply to; report as `pm workflow show` says)"
+    } else if m.meta.from_outside {
+        " (sent from outside every project: no one to reply to)"
     } else {
         ""
     };
@@ -682,6 +685,32 @@ mod tests {
         let lines = agent_read(&root, "main", "reviewer", None, None).unwrap();
         assert!(lines[0].contains("implementer@login (other-app)"));
         assert_eq!(lines[1], "cross-project msg");
+    }
+
+    #[test]
+    fn a_bare_read_takes_the_oldest_sender_when_one_is_in_another_project() {
+        let dir = tempdir().unwrap();
+        let root = setup_project(dir.path());
+        let mdir = paths::messages_dir(&root);
+        messages::send_full(
+            &mdir,
+            "main",
+            "reviewer",
+            "lead",
+            "from beta",
+            Some("main"),
+            Some("beta"),
+        )
+        .unwrap();
+        messages::send(&mdir, "main", "reviewer", "implementer", "local").unwrap();
+
+        let lines = agent_read(&root, "main", "reviewer", None, None).unwrap();
+
+        assert!(lines[0].starts_with("--- from lead@main (beta) [001]"));
+        assert_eq!(
+            lines.last().unwrap(),
+            "1 more sender pending: implementer — pm msg read --from implementer"
+        );
     }
 
     #[test]

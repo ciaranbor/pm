@@ -263,9 +263,17 @@ pub fn command_scope(
 }
 
 /// The name `project_root`'s config gives it, else its path.
-fn project_name(project_root: &Path) -> String {
+pub fn project_name(project_root: &Path) -> String {
     crate::state::project::ProjectConfig::load(&pm_dir(project_root))
         .map_or_else(|_| project_root.display().to_string(), |c| c.project.name)
+}
+
+/// Whether `a` and `b` name the same directory, however spelled.
+pub fn same_root(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
 }
 
 /// The project root and scope of the agent this process runs for, resolved

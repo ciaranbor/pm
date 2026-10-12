@@ -11,16 +11,8 @@ pub(super) fn agent_not_found_hint(
     target_scope: &str,
     orchestrator: &str,
 ) -> String {
-    // If the name contains '@', the user may have used shorthand syntax
-    // directly instead of letting dispatch parse it.
-    if let Some(pos) = recipient.find('@') {
-        let name = &recipient[..pos];
-        let scope = &recipient[pos + 1..];
-        if !name.is_empty() && !scope.is_empty() {
-            return format!(
-                "\n  Hint: Did you mean `pm msg send {name}@{scope}` (the @ shorthand is parsed by the CLI, not passed as the agent name)?"
-            );
-        }
+    if let Some(hint) = shorthand_hint(recipient) {
+        return hint;
     }
 
     // From a feature, a bare `main` or orchestrator name names an agent of
@@ -46,6 +38,37 @@ pub(super) fn agent_not_found_hint(
         "\n  Hint: The agent may exist in a different scope. \
          Try `pm msg send {recipient}@<scope>` or `--project <name>` for cross-project"
     )
+}
+
+/// The hint for a recipient missing from a scope of another project, where
+/// `--project` is already given.
+pub(super) fn other_project_hint(
+    recipient: &str,
+    target_scope: &str,
+    orchestrator: &str,
+) -> String {
+    if let Some(hint) = shorthand_hint(recipient) {
+        return hint;
+    }
+    if (recipient == scope::MAIN || recipient == orchestrator) && target_scope != scope::MAIN {
+        return format!(
+            "\n  Hint: that project's orchestrator is `{orchestrator}@main`, the agent \
+             `{orchestrator}` in its main scope"
+        );
+    }
+    "\n  Hint: The agent may exist in another scope of that project: try `<agent>@<scope>`"
+        .to_string()
+}
+
+/// A recipient with an `@` in its name: the user may have passed the
+/// shorthand through instead of letting dispatch parse it.
+fn shorthand_hint(recipient: &str) -> Option<String> {
+    let (name, scope) = recipient.split_once('@')?;
+    (!name.is_empty() && !scope.is_empty()).then(|| {
+        format!(
+            "\n  Hint: Did you mean `pm msg send {name}@{scope}` (the @ shorthand is parsed by the CLI, not passed as the agent name)?"
+        )
+    })
 }
 
 #[cfg(test)]

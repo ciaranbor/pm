@@ -17,6 +17,9 @@ pub struct MessageMeta {
     /// Only set for cross-project messages.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender_project: Option<String>,
+    /// Sent from outside every project, so there is no inbox to reply to.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub from_outside: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -76,5 +79,7 @@ pub struct LastRead {
     pub sender: String,
     pub sender_scope: Option<String>,
     pub sender_project: Option<String>,
+    #[serde(default)]
+    pub from_outside: bool,
     pub index: u32,
 }

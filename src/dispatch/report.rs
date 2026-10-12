@@ -86,15 +86,11 @@ pub(super) fn restart_select(stale: bool) -> commands::agent_restart_all::Select
 /// Print what a send did, reporting a respawned recipient only once its
 /// harness has come up. The message is queued either way, so a failed
 /// launch is a warning.
-pub(super) fn report_sent(
-    project_root: &Path,
-    sent: commands::agent_send::Sent,
-    server: Option<&str>,
-) {
+pub(super) fn report_sent(sent: commands::agent_send::Sent, server: Option<&str>) {
     println!("{}", sent.status);
     if let Some(heal) = sent.heal {
         let agents = [heal.agent];
-        match commands::launch_check::confirm(project_root, &heal.scope, &agents, server).first() {
+        match commands::launch_check::confirm(&heal.root, &heal.scope, &agents, server).first() {
             None => println!("{}", heal.report),
             Some(failure) => eprintln!("warning: {}", failure.message()),
         }
