@@ -134,7 +134,7 @@ fn type_prompt(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::agent_send::agent_send;
+    use crate::commands::agent_send::tests::agent_send;
     use crate::commands::running_agents::waiting;
     use crate::testing::{ControlClient, TestServer};
     use chrono::Utc;

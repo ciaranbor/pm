@@ -76,6 +76,9 @@
 //! The **ready notice** files are the scope's own, not an agent's: they live
 //! in `<project>/.pm/runtime/<scope>/` and go with the scope
 //! ([`ready_notice`](crate::commands::ready_notice)).
+//!
+//! **Scheduled sends** are the project's own, in
+//! `<project>/.pm/runtime/.scheduled/` ([`scheduled`]).
 
 use std::path::{Path, PathBuf};
 
@@ -91,6 +94,7 @@ mod dialog;
 mod ended;
 mod inbound;
 mod latest;
+pub mod scheduled;
 pub use denial::*;
 pub use dialog::*;
 pub use ended::*;

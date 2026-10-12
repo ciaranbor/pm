@@ -743,6 +743,22 @@ pub enum MsgCommands {
         /// Deliver to a different project (by registered name): its main scope unless --scope names another
         #[arg(long, conflicts_with = "upstream")]
         project: Option<String>,
+        /// Hold the message until this long from now (e.g. 30s, 10m, 2h, 1d, 1h30m). The
+        /// recipient's project's waiters deliver it, on this machine only
+        #[arg(long = "in", value_name = "DURATION", value_parser = pm::commands::msg_scheduled::parse_delay)]
+        delay: Option<chrono::Duration>,
+    },
+    /// List the project's scheduled sends (`pm msg send --in`), soonest due first
+    Scheduled {
+        #[command(flatten)]
+        target: ProjectFlag,
+    },
+    /// Cancel a scheduled send
+    Cancel {
+        /// The send's id, or a leading part of it naming one send
+        id: String,
+        #[command(flatten)]
+        target: ProjectFlag,
     },
     /// Read the next unread message and advance the cursor
     Read {

@@ -36,7 +36,10 @@ fn setup_project_files(dir: &Path, project_name: &str) -> PathBuf {
 }
 
 /// Set up a project with a tmux session for the feature.
-fn setup_project_with_tmux(dir: &Path, server: &TestServer) -> (PathBuf, String, String) {
+pub(crate) fn setup_project_with_tmux(
+    dir: &Path,
+    server: &TestServer,
+) -> (PathBuf, String, String) {
     let (root, session_name) = setup_named_project(dir, server, "proj", "login");
     (root, session_name, "login".to_string())
 }
@@ -84,4 +87,33 @@ fn create_agent_definition(root: &Path, agent_name: &str) {
         .join(format!("{agent_name}.md"));
     std::fs::create_dir_all(agent_def.parent().unwrap()).unwrap();
     std::fs::write(&agent_def, "# agent stub").unwrap();
+}
+
+/// Send a message from `sender` to an agent in the sender's own project:
+/// [`send_as`] with a home of `(project_root, sender_scope)`. `target_scope`
+/// defaults to `sender_scope`.
+pub(crate) fn agent_send(
+    project_root: &Path,
+    sender_scope: &str,
+    target_scope: Option<&str>,
+    recipient: &str,
+    sender: &str,
+    body: &str,
+    tmux_server: Option<&str>,
+) -> Result<Sent> {
+    let sender = Sender {
+        name: sender,
+        home: Some(Home {
+            root: project_root,
+            scope: sender_scope,
+        }),
+    };
+    send_as(
+        project_root,
+        target_scope.unwrap_or(sender_scope),
+        recipient,
+        sender,
+        body,
+        tmux_server,
+    )
 }

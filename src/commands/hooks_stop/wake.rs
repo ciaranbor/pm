@@ -36,6 +36,7 @@ use std::time::Duration;
 use crate::commands::agent_wait;
 use crate::commands::attention::AgentState;
 use crate::commands::hook_process::Caller;
+use crate::commands::msg_scheduled::Sweeper;
 use crate::commands::running_agents::AgentAt;
 use crate::commands::{hooks_dialog, hooks_user_prompt, hooks_waiting};
 use crate::error::Result;
@@ -44,7 +45,7 @@ use crate::messages;
 use crate::state::paths;
 use crate::state::runtime::{self, Breaker, Waiting, WaitingKind};
 
-use super::{background_work, hook_ended, parse_busy, read_stdin, unread_senders};
+use super::{background_work, hook_ended, parse_busy, read_stdin, sweep, unread_senders};
 
 /// Wasted wakes in a row that stop the loop.
 pub(super) const MAX_WASTED: u32 = 5;
@@ -75,17 +76,22 @@ pub(super) enum Waited {
 /// Run the waiter for `harness`. Returns the exit code: 2 with the
 /// continuation on stderr for a rewake, else 0, or 1 once it failed, the
 /// agent then marked unarmed.
-pub(super) fn run(harness: Harness, on_turn: &mut dyn FnMut(AgentState, u32)) -> i32 {
+pub(super) fn run(
+    harness: Harness,
+    sweeper: Sweeper<'_>,
+    on_turn: &mut dyn FnMut(AgentState, u32),
+) -> i32 {
     if std::env::var_os("PM_AGENT_NAME").is_none() {
         return 0;
     }
-    run_on(harness, &read_stdin(), on_turn)
+    run_on(harness, &read_stdin(), sweeper, on_turn)
 }
 
 /// [`run`] on the hook payload `payload`, already read.
 pub(super) fn run_on(
     harness: Harness,
     payload: &str,
+    sweeper: Sweeper<'_>,
     on_turn: &mut dyn FnMut(AgentState, u32),
 ) -> i32 {
     let caller = Caller::current();
@@ -102,18 +108,16 @@ pub(super) fn run_on(
         &agent,
         &format!("{harness} waiter: {}", background_work(payload)),
     );
-    let waited = wait(
+    let at = AgentAt {
         harness,
-        busy,
-        &project_root,
-        &scope,
-        &agent,
-        on_turn,
-        |interval| {
-            std::thread::sleep(interval);
-            !caller.alive()
-        },
-    );
+        project_root: &project_root,
+        scope: &scope,
+        name: &agent,
+    };
+    let waited = wait(at, busy, sweeper, on_turn, |interval| {
+        std::thread::sleep(interval);
+        !caller.alive()
+    });
     let failed = |why: String, on_turn: &mut dyn FnMut(AgentState, u32)| {
         runtime::log_stop_hook(&project_root, &scope, &agent, &why);
         hook_ended(&project_root, &scope, &agent, why.clone(), on_turn);
@@ -155,6 +159,7 @@ pub(super) fn run_on(
 pub(super) fn run_in_turn(
     harness: Harness,
     payload: &str,
+    sweeper: Sweeper<'_>,
     on_turn: &mut dyn FnMut(AgentState, u32),
 ) -> i32 {
     let caller = Caller::current();
@@ -174,7 +179,7 @@ pub(super) fn run_in_turn(
         scope: &scope,
         name: &agent,
     };
-    let waited = wait_in_turn(at, &prompt, on_turn, |interval| {
+    let waited = wait_in_turn(at, &prompt, sweeper, on_turn, |interval| {
         std::thread::sleep(interval);
         !caller.alive()
     });
@@ -198,6 +203,7 @@ pub(super) fn run_in_turn(
 fn wait_in_turn(
     at: AgentAt<'_>,
     prompt: &str,
+    sweeper: Sweeper<'_>,
     on_turn: &mut dyn FnMut(AgentState, u32),
     mut gone: impl FnMut(Duration) -> bool,
 ) -> Result<Waited> {
@@ -234,6 +240,7 @@ fn wait_in_turn(
             });
             return Ok(Waited::Ended);
         }
+        sweep(project_root, scope, agent, sweeper);
         if sent() > before && messages::unread_count(&messages_dir, scope, agent) > 0 {
             break;
         }
@@ -261,14 +268,18 @@ const POLL: Duration = Duration::from_secs(2);
 /// poll interval and returns whether the harness that ran the waiter is
 /// gone.
 fn wait(
-    harness: Harness,
+    at: AgentAt<'_>,
     busy: bool,
-    project_root: &Path,
-    scope: &str,
-    agent: &str,
+    sweeper: Sweeper<'_>,
     on_turn: &mut dyn FnMut(AgentState, u32),
     mut gone: impl FnMut(Duration) -> bool,
 ) -> Result<Waited> {
+    let AgentAt {
+        harness,
+        project_root,
+        scope,
+        name: agent,
+    } = at;
     let log = |line: &str| runtime::log_stop_hook(project_root, scope, agent, line);
     let waiter = std::process::id();
     let newest = || runtime::read_waiter(project_root, scope, agent) == Some(waiter);
@@ -282,6 +293,9 @@ fn wait(
     runtime::touch_activity(project_root, scope, agent)?;
     runtime::clear_waiting(project_root, scope, agent)?;
     let immediate = !unread_senders(project_root, scope, agent)?.is_empty();
+    // After `immediate`: a send this delivers arrives during the wait, so a
+    // wake for it is never counted wasted.
+    sweep(project_root, scope, agent, sweeper);
     let marker = if busy {
         WaitingKind::Background
     } else {
@@ -295,6 +309,9 @@ fn wait(
         let mut ended = false;
         agent_wait::agent_wait_while(project_root, scope, agent, None, None, |d| {
             ended = gone(d) || !newest();
+            if !ended {
+                sweep(project_root, scope, agent, sweeper);
+            }
             !ended
         })?;
         if ended || !newest() {
@@ -368,6 +385,7 @@ fn trips(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::hooks_stop::tests::{NO_SWEEP, sweeper};
     use tempfile::tempdir;
 
     #[test]
@@ -382,6 +400,7 @@ mod tests {
         let waited = wait_in_turn(
             at(&root),
             "go on",
+            NO_SWEEP,
             &mut |state, unread| turns.push((state, unread)),
             |_| {
                 polls += 1;
@@ -410,7 +429,7 @@ mod tests {
     fn a_turn_waiter_ends_once_its_turn_ends() {
         let dir = tempdir().unwrap();
         let root = dir.path();
-        let waited = wait_in_turn(at(root), "go on", &mut |_, _| {}, |_| {
+        let waited = wait_in_turn(at(root), "go on", NO_SWEEP, &mut |_, _| {}, |_| {
             runtime::take_waiter(root, "login", "implementer", 1, None).unwrap();
             false
         })
@@ -437,7 +456,7 @@ mod tests {
         messages::next(&messages, "login", "implementer", "reviewer@login").unwrap();
         runtime::take_waiter(root, "login", "implementer", 1, None).unwrap();
 
-        let waited = wait_in_turn(at(root), &continuation, &mut |_, _| {}, |_| {
+        let waited = wait_in_turn(at(root), &continuation, NO_SWEEP, &mut |_, _| {}, |_| {
             panic!("waited on a prompt that starts no turn")
         })
         .unwrap();
@@ -453,13 +472,40 @@ mod tests {
         runtime::trip_loop(root, "login", "implementer", "stopped").unwrap();
         let messages = paths::messages_dir(root);
 
-        let waited = wait_in_turn(at(root), "go on", &mut |_, _| {}, |_| {
+        let waited = wait_in_turn(at(root), "go on", NO_SWEEP, &mut |_, _| {}, |_| {
             messages::send(&messages, "login", "implementer", "qa", "during").unwrap();
             false
         })
         .unwrap();
 
         assert_eq!(waited, Waited::Ended);
+    }
+
+    #[test]
+    fn a_send_falling_due_as_a_waiter_starts_is_no_wasted_wake() {
+        let server = crate::testing::TestServer::new();
+        let dir = tempdir().unwrap();
+        let (root, session, scope) =
+            crate::commands::agent_send::tests::setup_project_with_tmux(dir.path(), &server);
+        server.spawn_fake_agent(&root, &session, &scope, "implementer");
+        let wasted = MAX_WASTED - 1;
+        runtime::write_breaker(&root, "login", "implementer", &Breaker { wasted, read: 0 })
+            .unwrap();
+        super::super::tests::due_send(&root, "implementer");
+
+        let waited = wait(at(&root), false, sweeper(&server), &mut |_, _| {}, |_| {
+            panic!("waited on a due send")
+        })
+        .unwrap();
+
+        assert_eq!(
+            waited,
+            Waited::Wake(
+                "You have new messages from lead@login. Run `pm msg read` to read them.".into()
+            )
+        );
+        let breaker = runtime::read_breaker(&root, "login", "implementer").unwrap();
+        assert_eq!(breaker.wasted, 0);
     }
 
     #[test]
@@ -479,12 +525,14 @@ mod tests {
         runtime::write_dialog(root, "login", "implementer", &record).unwrap();
         let mut turns = Vec::new();
 
+        let codex = AgentAt {
+            harness: Harness::Codex,
+            ..at(root)
+        };
         let waited = wait(
-            Harness::Codex,
+            codex,
             false,
-            root,
-            "login",
-            "implementer",
+            NO_SWEEP,
             &mut |state, _| turns.push(state),
             |_| true,
         )
