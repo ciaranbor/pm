@@ -119,14 +119,25 @@ pub fn readiness(global: &GlobalConfig, root: &Path, user_home: &Path) -> Result
             let mut problems =
                 harness_check::problems_on(harness, SUPERVISOR, global, &worktree, user_home)?;
             if problems.is_empty() && harness.logged_in() == Some(false) {
-                problems.push(format!(
-                    "not logged in: {}",
-                    harness.credentials_step(&global.harness)
-                ));
+                problems.push(not_logged_in(harness, global));
             }
             Ok(Readiness { harness, problems })
         })
         .collect()
+}
+
+fn not_logged_in(harness: Harness, global: &GlobalConfig) -> String {
+    let mut problem = format!(
+        "not logged in: {}",
+        harness.credentials_step(&global.harness)
+    );
+    if cfg!(target_os = "macos") && harness.reads_keychain() {
+        problem.push_str(&format!(
+            "; if you are, unlock the login keychain (`{}`)",
+            crate::keychain::UNLOCK
+        ));
+    }
+    problem
 }
 
 /// The harness to offer first: `configured` when it is ready, else the
@@ -252,6 +263,14 @@ mod tests {
             default_choice(&[status(Harness::Codex, &["x"])], None),
             None
         );
+    }
+
+    #[test]
+    fn not_logged_in_says_to_unlock_the_keychain_only_for_a_keychain_reader_on_macos() {
+        let global = GlobalConfig::default();
+        let says_unlock = |h| not_logged_in(h, &global).contains(crate::keychain::UNLOCK);
+        assert_eq!(says_unlock(Harness::ClaudeCode), cfg!(target_os = "macos"));
+        assert!(!says_unlock(Harness::OpenCode));
     }
 
     #[test]
