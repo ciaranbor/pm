@@ -48,6 +48,19 @@ pub(in crate::harness) fn text_mode_key(
         .then_some(("i", "BSpace"))
 }
 
+/// The keys that interrupt a turn: Escape, or with the input box in vim
+/// INSERT mode, one Escape to leave it and another to interrupt (verified
+/// on 2.1.296). A further Escape, at the prompt, opens the rewind menu.
+/// Read off the screen: only it shows whether the box is in INSERT mode. A
+/// dialog over the box takes the one Escape.
+pub(in crate::harness) fn interrupt_keys(screen: &str) -> &'static [&'static str] {
+    if is_empty_in(screen, true).is_some() {
+        &["Escape", "Escape"]
+    } else {
+        &["Escape"]
+    }
+}
+
 fn is_empty_in(screen: &str, vim: bool) -> Option<bool> {
     let lines: Vec<String> = screen.lines().map(visible_text).collect();
     let prompt = lines
@@ -156,6 +169,21 @@ mod tests {
         assert_eq!(text_mode_key(dialog, vim.path(), None), None);
         let draft = input("❯\u{a0}half a thought");
         assert_eq!(text_mode_key(&draft, vim.path(), None), None);
+    }
+
+    #[test]
+    fn insert_mode_takes_an_escape_more_to_interrupt() {
+        let insert = screen(&["❯\u{a0}"], "  -- INSERT -- ⏸ manual mode on");
+        let draft = screen(
+            &["❯\u{a0}half a thought"],
+            "  -- INSERT -- esc to interrupt",
+        );
+        let dialog = " Do you want to proceed?\n ❯ 1. Yes\n   2. No\n";
+
+        assert_eq!(interrupt_keys(&insert), ["Escape", "Escape"]);
+        assert_eq!(interrupt_keys(&draft), ["Escape", "Escape"]);
+        assert_eq!(interrupt_keys(&input("❯\u{a0}")), ["Escape"]);
+        assert_eq!(interrupt_keys(dialog), ["Escape"]);
     }
 
     #[test]

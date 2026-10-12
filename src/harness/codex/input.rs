@@ -16,6 +16,10 @@ use crate::harness::screen::visible_text;
 const PROMPT: char = '›';
 const VIM_NORMAL: &str = "Vim: Normal";
 
+/// One Escape ends codex's turn (verified on 0.160); a second, at the
+/// composer, would start editing the previous message.
+pub(in crate::harness) const INTERRUPT_KEYS: &[&str] = &["Escape"];
+
 /// Whether the composer at the bottom of `screen` holds no text; `None`
 /// when no composer is found or typed keys would not reach it as text.
 pub(in crate::harness) fn is_empty(screen: &str) -> Option<bool> {
