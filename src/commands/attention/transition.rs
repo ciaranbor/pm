@@ -326,6 +326,7 @@ mod tests {
                 since: None,
                 dialog: None,
             }),
+            latest: None,
         }
     }
 

@@ -319,6 +319,10 @@ consumer must tolerate values it doesn't know:
         "kind": "question",
         "detail": "Postgres or SQLite?",
         "since": "2026-10-02T09:31:00Z"
+      },
+      "latest": {
+        "text": "Postgres or SQLite? Both fit the schema; Postgres if you plan to scale.",
+        "at": "2026-10-02T09:30:55Z"
       }
     }],
     "working": false,
@@ -344,7 +348,11 @@ agent's tmux target, `null` while it has none. `waiting` is what an
 `permission`, `plan`, `dialog`, `startup`, `interrupted`, `hook-ended`,
 `error`, `prompt`, `tripped`, `background`), else `null`; its `since` is
 when that began, `null` for `tripped`. `dialog` is the id of a dialog that
-can be answered remotely, present only then. `background_since` is when the
-scope's longest-waiting `background` agent began waiting, `null` with none.
+can be answered remotely, present only then. `latest` is the agent's last
+reply on one line (markdown dropped, up to 200 characters) with when it was
+written (`at`, `null` where its harness records no time); `null` while it
+has no conversation, or wrote no reply in what pm reads back from its end.
+`background_since` is when the scope's longest-waiting `background` agent
+began waiting, `null` with none.
 `last_activity` is the last time any of the scope's agents showed
 activity, `null` if none ever has.

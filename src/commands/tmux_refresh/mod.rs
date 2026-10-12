@@ -39,6 +39,7 @@ mod values;
 
 use alert::{alert, announce};
 use attention::transition::{self, Judged};
+use values::latest_value;
 pub(crate) use values::window_values;
 use values::{feature_entry, features_alerted, global_values, main_values, session_values};
 
@@ -70,7 +71,15 @@ const AGENT_STATE: &str = "@pm_agent_state";
 const UNREAD: &str = "@pm_unread";
 const AGENT_BADGE: &str = "@pm_agent_badge";
 const AGENT_LABEL: &str = "@pm_agent_label";
-pub(super) const WINDOW_OPTIONS: &[&str] = &[AGENT, AGENT_STATE, UNREAD, AGENT_BADGE, AGENT_LABEL];
+const AGENT_LATEST: &str = "@pm_agent_latest";
+pub(super) const WINDOW_OPTIONS: &[&str] = &[
+    AGENT,
+    AGENT_STATE,
+    UNREAD,
+    AGENT_BADGE,
+    AGENT_LABEL,
+    AGENT_LATEST,
+];
 
 const ANNOUNCEMENT_HIDDEN: &str = "@pm_announcement_hidden";
 const ANNOUNCEMENT_WINDOW: &str = "@pm_announcement_window";
@@ -83,6 +92,7 @@ const WINDOW_READ: &[&str] = &[
     UNREAD,
     AGENT_BADGE,
     AGENT_LABEL,
+    AGENT_LATEST,
     ANNOUNCEMENT_HIDDEN,
 ];
 
@@ -286,7 +296,9 @@ fn agent_windows<'a>(
             continue;
         };
         windows.insert(window);
-        diff(writes, Scope::Window(window), held, &window_values(agent));
+        let mut values = window_values(agent);
+        values.push((AGENT_LATEST, latest_value(agent)));
+        diff(writes, Scope::Window(window), held, &values);
     }
 }
 

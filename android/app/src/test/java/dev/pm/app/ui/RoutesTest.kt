@@ -5,6 +5,7 @@ import androidx.navigation3.runtime.NavKey
 import dev.pm.app.SNAPSHOT
 import dev.pm.app.model.AgentSnapshot
 import dev.pm.app.model.Attention
+import dev.pm.app.model.Latest
 import dev.pm.app.model.Need
 import dev.pm.app.model.Snapshot
 import dev.pm.app.push.Target
@@ -207,5 +208,27 @@ class WorkingLineTest {
         }
         assertEquals("ready · plain", workingLine(need("ready")))
         assertEquals("plain", workingLine(need("wip")))
+    }
+
+    @Test
+    fun a_working_row_says_what_its_working_agent_said_last() {
+        val agents =
+            listOf(
+                AgentSnapshot(
+                    "impl",
+                    "busy",
+                    latest = Latest("Running tests", "2026-10-12T10:00:00Z"),
+                ),
+                AgentSnapshot(
+                    "qa",
+                    "busy",
+                    latest = Latest("Found a bug", "2026-10-12T10:05:00.5Z"),
+                ),
+                AgentSnapshot("rev", "idle", latest = Latest("Approved", "2026-10-12T11:00:00Z")),
+            )
+        val need = Need("app", "f", Attention(), agents, null, working = true, progress = "ready")
+        assertEquals("ready · qa: Found a bug", workingLine(need))
+        assertEquals("rev: Approved", latestLine(agents))
+        assertEquals(null, latestLine(listOf(AgentSnapshot("impl", "busy", latest = Latest(" ")))))
     }
 }

@@ -197,6 +197,41 @@ fn last_pending_calls(
     Ok(calls)
 }
 
+/// What moves whenever `session` gains or rewrites a row: its latest
+/// `time_updated`, with how many rows it has, since a row deleted moves no
+/// time.
+pub(in crate::harness) fn version(db: &Path, session: &str) -> Result<String> {
+    let conn = open(db)?;
+    conn.query_row(
+        "SELECT COUNT(*), COALESCE(MAX(time_updated), 0) FROM session_message \
+         WHERE session_id = ?1",
+        params![session],
+        |r| Ok(format!("{}:{}", r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+    )
+    .map_err(sql)
+}
+
+/// Rows [`last_reply`] reads back before giving up.
+const REPLY_SCAN: i64 = 4 * BATCH;
+
+/// The last reply the agent wrote in `session`, from its last
+/// [`REPLY_SCAN`] rows.
+pub(in crate::harness) fn last_reply(db: &Path, session: &str) -> Result<Option<Item>> {
+    let conn = open(db)?;
+    let query = format!(
+        "SELECT {COLUMNS} FROM session_message WHERE session_id = ?1 \
+         ORDER BY seq DESC LIMIT ?2"
+    );
+    Ok(rows(&conn, &query, params![session, REPLY_SCAN])?
+        .iter()
+        .find_map(|row| {
+            items(row)
+                .into_iter()
+                .rev()
+                .find(|item| matches!(item.body, Body::Assistant { .. }))
+        }))
+}
+
 /// The whole output a truncated result's `full` reference names.
 pub(in crate::harness) fn full_result(
     db: &Path,
@@ -372,6 +407,27 @@ mod tests {
         };
         assert!(result.error, "an interrupted tool failed");
         assert_eq!(page.before, None);
+    }
+
+    #[test]
+    fn the_last_reply_is_the_last_assistant_text_past_later_calls() {
+        let db = Db::with_fixture();
+        let whole = page(&db.path, SESSION, None, 100).unwrap();
+        let reply = last_reply(&db.path, SESSION).unwrap().unwrap();
+        let last = whole
+            .items
+            .iter()
+            .rev()
+            .find(|i| matches!(i.body, Body::Assistant { .. }));
+        assert_eq!(Some(&reply), last);
+        assert_eq!(last_reply(&db.path, "ses_other").unwrap(), None);
+
+        let before = version(&db.path, SESSION).unwrap();
+        assert_eq!(version(&db.path, SESSION).unwrap(), before);
+        db.conn
+            .execute("DELETE FROM session_message WHERE seq = 1", [])
+            .unwrap();
+        assert_ne!(version(&db.path, SESSION).unwrap(), before, "a row went");
     }
 
     #[test]

@@ -55,7 +55,8 @@ attention it needs. A kind that means what a state means shares its glyph.
 The window list shows glyphs only; pm's tree, which has room, labels each
 one: a session line reads `<glyph> blocked  implementer: which DB?` (on
 `main`, its main agent's state unless `main` is blocked and none of its
-agents is asking), a window line `<glyph> idle <envelope> 2`,
+agents is asking), a window line `<glyph> idle <envelope> 2` and the
+agent's [latest line](../README.md#follow-what-needs-you),
 and a session's activity `<gear> working`, `<spinner> background 1d` or
 `quiet 2h`. Follow a badge with a space in your own formats: some terminals
 (Ghostty) draw a glyph small when the next cell isn't blank.
@@ -97,6 +98,7 @@ unset, text is escaped for formats, and each name is set at one scope only:
 | | `@pm_unread` | unread message count |
 | | `@pm_agent_badge` | the badge, styled; it resets with `#[default]`, so placed anywhere but the start of a format, follow it with your theme's style |
 | | `@pm_agent_label` | the badge with words, as pm's tree shows it: the state after its glyph, the unread count after the envelope |
+| | `@pm_agent_latest` | the agent's last reply on one line, cut to 100 characters, escaped for formats; unset when it has none |
 | | `@pm_announcement_hidden`, `@pm_announcement_window` | pm's own bookkeeping: the window of an agent whose ask is announced, and the announcement without that ask, shown there instead |
 | global | `@pm_summary` | each kind's glyph, how many sessions have `@pm_attention`, and the kind (`2 blocked`), styled and joined by ` · `; unset when none has |
 | | `@pm_announcement` | the latest announcement (`pm: app/login ready: …`), escaped for formats; unset `display-time` after it is made (tmux's 750 ms when `display-time` is 0). Show it with `#{@pm_announcement}`, never `#{E:…}`, so a `%` in it survives |

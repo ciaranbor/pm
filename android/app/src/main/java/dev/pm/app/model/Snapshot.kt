@@ -217,9 +217,21 @@ data class AgentSnapshot(
     val unread: Int = 0,
     val window: String? = null,
     val waiting: Waiting? = null,
+    /** Its last reply, on one line. */
+    val latest: Latest? = null,
 ) {
     val stateOf: AgentState
         get() = AgentState.of(state)
+}
+
+@Serializable
+data class Latest(
+    val text: String = "",
+    /** When it was written, where its harness records that. */
+    val at: String? = null,
+) {
+    val atOf: Instant?
+        get() = at?.let { runCatching { Instant.parse(it) }.getOrNull() }
 }
 
 @Serializable

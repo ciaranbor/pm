@@ -4,7 +4,9 @@
 //! you", has the ranking; docs/remote-api.md, "Attention snapshot", the
 //! JSON contract). It reads pm state and the tmux server once
 //! ([`Windows`]), takes the PR state `pm feat sync` last recorded, and
-//! never calls `gh` or a harness, so it is cheap enough to poll.
+//! never calls `gh` or a harness, so it is cheap enough to poll. Each
+//! agent's conversation, read for its latest line, it rereads only once that
+//! has changed (`attention/latest.rs`).
 //!
 //! An agent is classified by its window and what it is at
 //! ([`classify`]); one busy is refined by that into
@@ -29,7 +31,7 @@ use crate::state::paths;
 use crate::state::project::{
     GlobalConfig, HarnessConfig, ProjectConfig, ProjectEntry, resolve_harness_config,
 };
-use crate::state::runtime::{self, Waiting, WaitingClass, WaitingKind};
+use crate::state::runtime::{self, Latest, Waiting, WaitingClass, WaitingKind};
 use crate::state::scope::{self, TeamStatus};
 use crate::tmux;
 
@@ -37,7 +39,10 @@ use super::feat_status_view::first_line;
 use super::hooks_dialog;
 use super::running_agents::{AgentAt, Liveness, Windows, classify, starting};
 
+mod latest;
 pub mod transition;
+
+pub use latest::{WIDTH as LATEST_WIDTH, cut};
 
 /// Bumped when a field changes meaning or goes away; added fields, kinds
 /// and states keep it.
@@ -155,6 +160,9 @@ pub struct AgentSnapshot {
     pub pane: Option<String>,
     /// What an asking, unarmed or background agent is at.
     pub waiting: Option<WaitingSnapshot>,
+    /// Its last reply, on one line; never read for [`scope_agents`], whose
+    /// callers show none.
+    pub latest: Option<Latest>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -491,8 +499,25 @@ pub fn scope_agents_in(
         project: &project_config.project.name,
         windows,
         config: &config,
+        latest: false,
     };
     Ok(reader.read(scope, TeamStatus::default())?.agents)
+}
+
+/// The latest line of each agent of `scope` that has one, in the
+/// registry's order.
+pub fn scope_latest(project_root: &Path, scope: &str) -> Result<Vec<(String, Latest)>> {
+    let registry = AgentRegistry::load(&paths::agents_dir(project_root), scope)?;
+    Ok(registry
+        .agents
+        .iter()
+        .filter_map(|(name, entry)| {
+            Some((
+                name.clone(),
+                latest::latest(project_root, scope, name, entry)?,
+            ))
+        })
+        .collect())
 }
 
 fn sort(features: &mut [FeatureSnapshot]) {
@@ -521,6 +546,7 @@ fn project_features(
         project: &project,
         windows,
         config: &config,
+        latest: true,
     };
     let features = FeatureState::list(&paths::features_dir(project_root))?
         .into_iter()
@@ -572,6 +598,8 @@ struct ScopeReader<'a> {
     project: &'a str,
     windows: &'a Windows,
     config: &'a HarnessConfig,
+    /// Whether each agent's latest line is read.
+    latest: bool,
 }
 
 impl ScopeReader<'_> {
@@ -628,6 +656,10 @@ impl ScopeReader<'_> {
                     window: pane.map(|p| p.window.clone()),
                     pane: pane.map(|p| p.id.clone()),
                     waiting,
+                    latest: self
+                        .latest
+                        .then(|| latest::latest(self.project_root, scope, agent, entry))
+                        .flatten(),
                 }
             })
             .collect();
@@ -740,6 +772,7 @@ mod tests {
             window: (state != AgentState::Dead).then(|| format!("app/login:{name}")),
             pane: None,
             waiting: None,
+            latest: None,
         }
     }
 
@@ -873,7 +906,13 @@ mod tests {
         let mut f = feature(Progress::Blocked, FeatureStatus::Wip);
         f.blocked_reason = Some("which DB?".into());
         f.blocked_by = Some("implementer".into());
-        f.agents = vec![agent("implementer", AgentState::Idle, 0)];
+        f.agents = vec![AgentSnapshot {
+            latest: Some(Latest {
+                text: "Which database should login use?".into(),
+                at: Some("2026-10-02T09:29:00Z".parse().unwrap()),
+            }),
+            ..agent("implementer", AgentState::Idle, 0)
+        }];
         f.attention = attention(&f);
         let snapshot = Snapshot {
             version: VERSION,
@@ -933,7 +972,8 @@ mod tests {
                                 "kind": "plan",
                                 "detail": "plan approval",
                                 "since": "2026-10-02T09:25:00Z"
-                            }
+                            },
+                            "latest": null
                         }],
                         "attention": {
                             "kind": "asking",
@@ -965,7 +1005,11 @@ mod tests {
                         "state": "idle",
                         "unread": 0,
                         "window": "app/login:implementer",
-                        "waiting": null
+                        "waiting": null,
+                        "latest": {
+                            "text": "Which database should login use?",
+                            "at": "2026-10-02T09:29:00Z"
+                        }
                     }],
                     "working": false,
                     "background_since": null,

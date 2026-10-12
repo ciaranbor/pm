@@ -170,7 +170,10 @@ answer what is asking or blocked, merge what is ready, restart what is
 dead, prompt what is unarmed, and ask a stalled team why it stopped. In a
 feature, `pm feat status` shows just that feature; `pm feat status main`
 shows `main`. Its `--json` form is a stable contract for scripts
-([docs/remote-api.md](docs/remote-api.md#attention-snapshot)).
+([docs/remote-api.md](docs/remote-api.md#attention-snapshot)). Under each
+row, every agent's *latest line* — the start of its last reply — says what
+it last said without attaching to it; pm's tmux tree and the phone app
+show it too.
 
 ### Work with the agents
 

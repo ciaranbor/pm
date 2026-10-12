@@ -52,6 +52,9 @@
 //! The **dialog record** is a dialog that can be answered remotely
 //! ([`DialogRecord`]).
 //!
+//! The **latest reply** caches the agent's last reply for the status views
+//! ([`LatestRecord`]).
+//!
 //! The **launch stamp** is what the agent's last spawn launched with
 //! ([`launch_stamp`](crate::commands::launch_stamp)).
 //!
@@ -81,8 +84,10 @@ use crate::state::paths;
 
 mod dialog;
 mod inbound;
+mod latest;
 pub use dialog::*;
 pub use inbound::*;
+pub use latest::*;
 
 const WAITING_FILE: &str = "waiting.json";
 const ACTIVITY_FILE: &str = "activity";
