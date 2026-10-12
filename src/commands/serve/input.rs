@@ -66,7 +66,7 @@ pub(super) fn post(
         }
         "interrupt" => {
             let reply = match agent_input::interrupt(root, scope, name, tmux_server)? {
-                Ok(()) => json(200, serde_json::json!({})),
+                Ok(stopped) => json(200, serde_json::json!({ "stopped": stopped })),
                 Err(refusal) => refused(&refusal),
             };
             Ok(Written {

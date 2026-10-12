@@ -44,6 +44,16 @@ impl Harness {
         }
     }
 
+    /// The tmux keys that interrupt a turn on this harness, its pane showing
+    /// `screen`, pressed in order, each on its own.
+    pub fn interrupt_keys(self, screen: &str) -> &'static [&'static str] {
+        match self {
+            Harness::ClaudeCode => claude_code::input::interrupt_keys(screen),
+            Harness::Codex => codex::input::INTERRUPT_KEYS,
+            Harness::OpenCode => opencode::input::INTERRUPT_KEYS,
+        }
+    }
+
     /// The environment variable that moves the harness's config away from
     /// its default, where the input line's settings are read, for the
     /// SessionStart hook to record from the agent's own environment.

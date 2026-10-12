@@ -12,6 +12,10 @@ const BOTTOM: char = '╹';
 const BAR: char = '┃';
 const PLACEHOLDER: &str = "Ask anything…";
 
+/// opencode interrupts a turn on a second Escape within a few seconds of
+/// the first, which only arms it (verified on v2.0.24).
+pub(in crate::harness) const INTERRUPT_KEYS: &[&str] = &["Escape", "Escape"];
+
 /// Whether the prompt box at the bottom of `screen` holds no text; `None`
 /// when no prompt box is found.
 pub(in crate::harness) fn is_empty(screen: &str) -> Option<bool> {

@@ -1,6 +1,6 @@
 package dev.pm.app.push
 
-import dev.pm.app.api.PmError
+import dev.pm.app.api.reason
 import kotlin.time.Duration
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
@@ -20,9 +20,7 @@ internal object Sending {
             failed("no answer in time")
         } catch (e: CancellationException) {
             throw e
-        } catch (e: PmError.Unreachable) {
-            failed("pm serve unreachable")
         } catch (e: Exception) {
-            failed(e.message ?: e.javaClass.simpleName)
+            failed(e.reason())
         }
 }

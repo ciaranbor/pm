@@ -45,6 +45,7 @@ internal object AlertNotification {
                 .setCategory(NotificationCompat.CATEGORY_MESSAGE)
                 .setContentIntent(open)
                 .setAutoCancel(true)
+                .setAllowSystemGeneratedContextualActions(false)
                 .setGroup(group)
                 .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_SUMMARY)
                 .addExtras(Bundle().apply { putString(EXTRA_ALERT, encoded) })
@@ -70,17 +71,15 @@ internal object AlertNotification {
     }
 
     /**
-     * A conversation with the agent the alert names, under the feature's title; with no agent, the
-     * lines as one text.
+     * A conversation with the agent the alert names, under the feature's title; with no agent, or
+     * one that died, its lines are pm's.
      */
     private fun style(context: Context, alert: Alert, now: Long): NotificationCompat.Style {
         val agent = alert.transition.agent
-        if (agent == null || alert.transition.kindOf == AttentionKind.Dead) {
-            return NotificationCompat.BigTextStyle()
-                .bigText(alert.lines.joinToString("\n") { text(context, it) })
-        }
-        val them = Person.Builder().setName(agent).setKey(agent).build()
         val pm = Person.Builder().setName(context.getString(R.string.app_name)).setKey("pm").build()
+        val them =
+            if (agent == null || alert.transition.kindOf == AttentionKind.Dead) pm
+            else Person.Builder().setName(agent).setKey(agent).build()
         val you = Person.Builder().setName(context.getString(R.string.reply_you)).build()
         val style =
             NotificationCompat.MessagingStyle(you)

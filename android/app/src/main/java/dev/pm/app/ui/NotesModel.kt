@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.pm.app.api.PmClient
 import dev.pm.app.api.PmError
+import dev.pm.app.api.reason
 import dev.pm.app.data.NotesDrafts
 import dev.pm.app.model.MAX_NOTES_BYTES
 import dev.pm.app.model.Notes
@@ -211,7 +212,7 @@ class NotesModel(
                 } catch (e: PmError.Unreachable) {
                     now.also { fail("Can't reach pm serve. The edit is kept on this phone.") }
                 } catch (e: Exception) {
-                    now.also { fail(e.message ?: e.javaClass.simpleName) }
+                    now.also { fail(e.reason()) }
                 }
         }
     }
@@ -264,8 +265,7 @@ class NotesModel(
             } catch (e: Exception) {
                 if (_state.value is NotesState.Editing)
                     fail(
-                        "Couldn't keep the edit on this phone: " +
-                            (e.message ?: e.javaClass.simpleName),
+                        "Couldn't keep the edit on this phone: " + e.reason(),
                         saveAgain = false,
                     )
             }

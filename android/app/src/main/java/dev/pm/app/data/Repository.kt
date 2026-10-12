@@ -2,6 +2,7 @@ package dev.pm.app.data
 
 import dev.pm.app.api.PmClient
 import dev.pm.app.api.PmError
+import dev.pm.app.api.reason
 import dev.pm.app.model.Pairing
 import dev.pm.app.model.Snapshot
 import kotlinx.coroutines.CancellationException
@@ -158,7 +159,7 @@ class Repository(
                     _connection.value = Connection.Unauthorized
                     return@launch
                 } catch (e: Exception) {
-                    _connection.value = Connection.Unreachable(e.message ?: e.javaClass.simpleName)
+                    _connection.value = Connection.Unreachable(e.reason())
                 }
                 delay(backoff.next())
             }

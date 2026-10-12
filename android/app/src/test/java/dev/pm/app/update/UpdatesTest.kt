@@ -87,6 +87,18 @@ class UpdatesTest {
         }
 
     @Test
+    fun a_github_that_cannot_be_reached_is_told_from_one_that_answers_an_error() = runBlocking {
+        server.enqueue(MockResponse.Builder().code(503).build())
+        val answered = runCatching { updates.check("0.2.0", listOf("x86_64")) }.exceptionOrNull()
+        assertEquals("GitHub answered 503", answered?.message)
+        assertTrue("$answered", answered !is GitHubUnreachable)
+
+        server.close()
+        val unreachable = runCatching { updates.check("0.2.0", listOf("x86_64")) }.exceptionOrNull()
+        assertTrue("$unreachable", unreachable is GitHubUnreachable)
+    }
+
+    @Test
     fun versions_compare_by_semver_precedence() {
         assertEquals(0, Updates.compare("0.2.0+3.gabc", "0.2.0"))
         assertTrue(Updates.compare("0.2.0-rc.1", "0.2.0") < 0)

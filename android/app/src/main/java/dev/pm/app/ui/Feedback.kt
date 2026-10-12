@@ -209,7 +209,13 @@ fun FeedbackHost(feedback: Feedback, modifier: Modifier = Modifier) {
                 contentColor = MaterialTheme.colorScheme.onErrorContainer,
                 actionColor = MaterialTheme.colorScheme.onErrorContainer,
             )
-        } else Snackbar(data)
+        } else
+            Snackbar(
+                data,
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+                actionColor = MaterialTheme.colorScheme.primary,
+            )
     }
 }
 

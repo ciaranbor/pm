@@ -6,11 +6,16 @@
 //! text doesn't count as a draft. With `editorMode: "vim"`, typed keys are
 //! commands in NORMAL mode, which shows no indicator, so the box counts as
 //! empty only while `-- INSERT --` shows; `i` there enters INSERT mode and
-//! changes nothing else ([`text_mode_key`]). Vim mode is read from the
-//! global config, `.claude.json` in `$CLAUDE_CONFIG_DIR`, else in the home
-//! directory (verified on 2.1.287). Anything else in the box's place —
-//! a dialog — reads as unknown, so a caller that types only into an empty
-//! box errs towards leaving it alone.
+//! changes nothing else ([`text_mode_key`]).
+//!
+//! `editorMode` is read from the user settings (`settings.json` in
+//! `$CLAUDE_CONFIG_DIR`, else in `~/.claude`), which decide when they set
+//! it, else from the global config (`.claude.json` in `$CLAUDE_CONFIG_DIR`,
+//! else in the home directory). Project and local settings outrank both
+//! (verified on 2.1.296) but are not read here.
+//!
+//! Anything else in the box's place — a dialog — reads as unknown, so a
+//! caller that types only into an empty box errs towards leaving it alone.
 
 use std::path::Path;
 
@@ -20,7 +25,8 @@ const PROMPT: char = '❯';
 const RULE: char = '─';
 const INSERT: &str = "-- INSERT --";
 
-/// The variable naming the agent's config dir, which holds `.claude.json`.
+/// The variable naming the agent's config dir, which holds `.claude.json` and
+/// `settings.json`.
 pub(in crate::harness) const CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
 
 /// Whether the input box at the bottom of `screen` holds no text; `None`
@@ -31,7 +37,7 @@ pub(in crate::harness) fn is_empty(
     home: &Path,
     config_dir: Option<&Path>,
 ) -> Option<bool> {
-    is_empty_in(screen, vim_mode(config_dir.unwrap_or(home)))
+    is_empty_in(screen, vim_mode(home, config_dir))
 }
 
 /// The key that puts an input box in vim NORMAL mode into INSERT mode, and
@@ -43,9 +49,22 @@ pub(in crate::harness) fn text_mode_key(
     home: &Path,
     config_dir: Option<&Path>,
 ) -> Option<(&'static str, &'static str)> {
-    let vim = vim_mode(config_dir.unwrap_or(home));
+    let vim = vim_mode(home, config_dir);
     (vim && is_empty_in(screen, false) == Some(true) && is_empty_in(screen, true).is_none())
         .then_some(("i", "BSpace"))
+}
+
+/// The keys that interrupt a turn: Escape, or with the input box in vim
+/// INSERT mode, one Escape to leave it and another to interrupt (verified
+/// on 2.1.296). A further Escape, at the prompt, opens the rewind menu.
+/// Read off the screen: only it shows whether the box is in INSERT mode. A
+/// dialog over the box takes the one Escape.
+pub(in crate::harness) fn interrupt_keys(screen: &str) -> &'static [&'static str] {
+    if is_empty_in(screen, true).is_some() {
+        &["Escape", "Escape"]
+    } else {
+        &["Escape"]
+    }
 }
 
 fn is_empty_in(screen: &str, vim: bool) -> Option<bool> {
@@ -71,13 +90,18 @@ fn is_empty_in(screen: &str, vim: bool) -> Option<bool> {
     Some(rest.trim().is_empty())
 }
 
-/// Whether the global config in `dir` turns on Claude Code's vim editor
-/// mode.
-fn vim_mode(dir: &Path) -> bool {
-    std::fs::read_to_string(dir.join(".claude.json"))
-        .ok()
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .is_some_and(|config| config["editorMode"] == "vim")
+/// Whether Claude Code's config turns on its vim editor mode.
+fn vim_mode(home: &Path, config_dir: Option<&Path>) -> bool {
+    let global = config_dir.unwrap_or(home).join(".claude.json");
+    let settings = config_dir.map_or_else(|| home.join(".claude"), Path::to_path_buf);
+    let editor_mode = |file: &Path| {
+        std::fs::read_to_string(file)
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .and_then(|config| config["editorMode"].as_str().map(str::to_string))
+    };
+    editor_mode(&settings.join("settings.json")).or_else(|| editor_mode(&global))
+        == Some("vim".into())
 }
 
 #[cfg(test)]
@@ -159,10 +183,44 @@ mod tests {
     }
 
     #[test]
-    fn vim_mode_is_read_from_the_global_config() {
+    fn insert_mode_takes_an_escape_more_to_interrupt() {
+        let insert = screen(&["❯\u{a0}"], "  -- INSERT -- ⏸ manual mode on");
+        let draft = screen(
+            &["❯\u{a0}half a thought"],
+            "  -- INSERT -- esc to interrupt",
+        );
+        let dialog = " Do you want to proceed?\n ❯ 1. Yes\n   2. No\n";
+
+        assert_eq!(interrupt_keys(&insert), ["Escape", "Escape"]);
+        assert_eq!(interrupt_keys(&draft), ["Escape", "Escape"]);
+        assert_eq!(interrupt_keys(&input("❯\u{a0}")), ["Escape"]);
+        assert_eq!(interrupt_keys(dialog), ["Escape"]);
+    }
+
+    #[test]
+    fn the_user_settings_decide_vim_mode_over_the_global_config() {
+        let vim = r#"{"editorMode":"vim"}"#;
         let home = tempfile::tempdir().unwrap();
-        assert!(!vim_mode(home.path()));
-        std::fs::write(home.path().join(".claude.json"), r#"{"editorMode":"vim"}"#).unwrap();
-        assert!(vim_mode(home.path()));
+        assert!(!vim_mode(home.path(), None));
+        std::fs::write(home.path().join(".claude.json"), vim).unwrap();
+        assert!(vim_mode(home.path(), None));
+
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir(home.path().join(".claude")).unwrap();
+        std::fs::write(home.path().join(".claude/settings.json"), vim).unwrap();
+        assert!(vim_mode(home.path(), None));
+
+        let config_dir = tempfile::tempdir().unwrap();
+        assert!(!vim_mode(home.path(), Some(config_dir.path())));
+        std::fs::write(config_dir.path().join("settings.json"), vim).unwrap();
+        assert!(vim_mode(home.path(), Some(config_dir.path())));
+
+        let normal = r#"{"editorMode":"normal"}"#;
+        std::fs::write(home.path().join(".claude.json"), vim).unwrap();
+        std::fs::write(home.path().join(".claude/settings.json"), normal).unwrap();
+        assert!(!vim_mode(home.path(), None));
+        std::fs::write(home.path().join(".claude.json"), normal).unwrap();
+        std::fs::write(home.path().join(".claude/settings.json"), vim).unwrap();
+        assert!(vim_mode(home.path(), None));
     }
 }

@@ -15,8 +15,8 @@
 //! mode): a draft at the keyboard is never merged into or cleared.
 //!
 //! An idle agent sits at its prompt, pm's waiter running beside it, so
-//! text submits at once and Escape or a key does no harm. Text typed
-//! mid-turn the harness holds until a step of the turn ends.
+//! text submits at once. Text typed mid-turn the harness holds until a step
+//! of the turn ends.
 
 use std::path::Path;
 
@@ -29,6 +29,10 @@ use crate::state::runtime::{self, SessionPath, Waiting, WaitingClass};
 use crate::tmux::{self, Pane};
 
 use super::running_agents::{AgentAt, Liveness, Windows, classify};
+
+mod interrupt;
+
+pub use interrupt::interrupt;
 
 /// The keys a device may press, by tmux's names for them.
 pub const KEYS: &[&str] = &[
@@ -134,6 +138,37 @@ fn target(
     agent: &str,
     tmux_server: Option<&str>,
 ) -> Result<std::result::Result<Target, Refusal>> {
+    let found = match find(project_root, scope, agent, tmux_server)? {
+        Ok(found) => found,
+        Err(refusal) => return Ok(Err(refusal)),
+    };
+    if found.liveness == Liveness::Dead || !found.runs_harness {
+        return Ok(Err(Refusal::NotRunning));
+    }
+    out_of_mode(tmux_server, &found.pane)?;
+    Ok(Ok(Target {
+        harness: found.harness,
+        pane: found.pane.id,
+        liveness: found.liveness,
+        at: found.at,
+    }))
+}
+
+/// `agent`'s pane as it is now, and what the agent is doing.
+struct Found {
+    harness: Harness,
+    pane: Pane,
+    runs_harness: bool,
+    liveness: Liveness,
+    at: Option<Waiting>,
+}
+
+fn find(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    tmux_server: Option<&str>,
+) -> Result<std::result::Result<Found, Refusal>> {
     let registry = AgentRegistry::load(&paths::agents_dir(project_root), scope)?;
     let Some(entry) = registry.get(agent).filter(|e| e.active) else {
         return Ok(Err(Refusal::Inactive));
@@ -150,21 +185,18 @@ fn target(
         ps.iter()
             .any(|p| entry.harness.runs_as(&p.command, &config))
     });
-    let agent = AgentAt {
+    let at = AgentAt {
         project_root,
         scope,
         name: agent,
         harness: entry.harness,
     };
-    let (state, at) = classify(agent, processes.as_deref(), &config);
-    if state == Liveness::Dead || !runs_harness {
-        return Ok(Err(Refusal::NotRunning));
-    }
-    out_of_mode(tmux_server, pane)?;
-    Ok(Ok(Target {
+    let (liveness, at) = classify(at, processes.as_deref(), &config);
+    Ok(Ok(Found {
         harness: entry.harness,
-        pane: pane.id.clone(),
-        liveness: state,
+        pane: pane.clone(),
+        runs_harness,
+        liveness,
         at,
     }))
 }
@@ -271,21 +303,6 @@ pub fn said(conversation: &Conversation, after: &str, text_sha256: &str) -> Resu
     conversation.took_in(after, |text| sha256(text) == text_sha256)
 }
 
-/// Press Escape in `agent`'s pane.
-pub fn interrupt(
-    project_root: &Path,
-    scope: &str,
-    agent: &str,
-    tmux_server: Option<&str>,
-) -> Result<std::result::Result<(), Refusal>> {
-    let target = match target(project_root, scope, agent, tmux_server)? {
-        Ok(target) => target,
-        Err(refusal) => return Ok(Err(refusal)),
-    };
-    tmux::send_key(tmux_server, &target.pane, "Escape")?;
-    Ok(Ok(()))
-}
-
 /// Press `keys`, each [`pressable`], in `agent`'s pane, in order.
 pub fn send_keys(
     project_root: &Path,
@@ -366,6 +383,7 @@ mod tests {
     use crate::state::runtime::{Waiting, WaitingKind};
     use crate::testing::TestServer;
     use std::path::PathBuf;
+    use std::time::Duration;
     use tempfile::tempdir;
 
     const TEXT: &str = "first line\nquote \" and ' and $HOME; `ls` \\ end\n";
@@ -464,18 +482,12 @@ mod tests {
     }
 
     #[test]
-    fn an_idle_agent_takes_text_at_once_and_keys() {
+    fn an_idle_agent_takes_text_at_once() {
         let agent = Recording::new(Harness::ClaudeCode);
         agent.idle();
 
         assert_eq!(agent.send("hello"), Ok(Delivery::Sent));
         let want = pasted("hello");
-        assert_eq!(agent.received(want.len()), want);
-
-        let interrupted = interrupt(&agent.project, "login", "implementer", agent.server.name());
-        assert_eq!(interrupted.unwrap(), Ok(()));
-        let mut want = want;
-        want.push(0x1b);
         assert_eq!(agent.received(want.len()), want);
     }
 
@@ -601,14 +613,93 @@ mod tests {
         assert_eq!(std::fs::read(&agent.received).unwrap(), code.as_bytes());
     }
 
+    impl Recording {
+        fn interrupt(&self, within: Duration) -> std::result::Result<bool, Refusal> {
+            self.interrupt_with_gap(within, Duration::from_millis(120))
+        }
+
+        fn interrupt_with_gap(
+            &self,
+            within: Duration,
+            gap: Duration,
+        ) -> std::result::Result<bool, Refusal> {
+            interrupt::interrupt_within(
+                &self.project,
+                "login",
+                "implementer",
+                self.server.name(),
+                within,
+                gap,
+            )
+            .unwrap()
+        }
+    }
+
     #[test]
-    fn a_busy_agent_is_interrupted_with_escape() {
+    fn a_busy_agent_is_interrupted_with_escape_and_seen_stopped() {
+        let agent = Recording::new(Harness::ClaudeCode);
+        let stopped = std::thread::scope(|s| {
+            s.spawn(|| {
+                agent.received(1);
+                agent.mark(WaitingKind::Interrupted);
+            });
+            agent.interrupt(Duration::from_secs(5))
+        });
+
+        assert_eq!(stopped, Ok(true));
+    }
+
+    #[test]
+    fn an_agent_stopped_by_the_first_key_is_sent_no_second() {
+        let agent = Recording::new(Harness::OpenCode);
+        let stopped = std::thread::scope(|s| {
+            s.spawn(|| {
+                agent.received(1);
+                agent.mark(WaitingKind::Interrupted);
+            });
+            agent.interrupt_with_gap(Duration::from_secs(5), Duration::from_secs(1))
+        });
+
+        assert_eq!(stopped, Ok(true));
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(std::fs::read(&agent.received).unwrap(), b"\x1b");
+    }
+
+    #[test]
+    fn an_agent_that_keeps_running_is_not_seen_stopped() {
         let agent = Recording::new(Harness::ClaudeCode);
 
-        let interrupted =
-            interrupt(&agent.project, "login", "implementer", agent.server.name()).unwrap();
+        assert_eq!(agent.interrupt(Duration::from_millis(300)), Ok(false));
+        assert_eq!(agent.received(1), b"\x1b");
+    }
 
-        assert_eq!(interrupted, Ok(()));
+    #[test]
+    fn opencode_is_interrupted_with_two_escapes() {
+        let agent = Recording::new(Harness::OpenCode);
+
+        assert_eq!(agent.interrupt(Duration::from_millis(300)), Ok(false));
+        assert_eq!(agent.received(2), b"\x1b\x1b");
+    }
+
+    #[test]
+    fn an_agent_at_its_prompt_is_sent_nothing_and_reads_stopped() {
+        let agent = Recording::new(Harness::ClaudeCode);
+        agent.idle();
+        assert_eq!(agent.interrupt(Duration::from_secs(5)), Ok(true));
+
+        agent.mark(WaitingKind::Prompt);
+        assert_eq!(agent.interrupt(Duration::from_secs(5)), Ok(true));
+
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(std::fs::read(&agent.received).unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_agent_asking_is_interrupted() {
+        let agent = Recording::new(Harness::ClaudeCode);
+        agent.mark(WaitingKind::Permission);
+
+        assert_eq!(agent.interrupt(Duration::from_millis(300)), Ok(false));
         assert_eq!(agent.received(1), b"\x1b");
     }
 }

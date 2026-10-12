@@ -9,6 +9,9 @@ import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
+/** GitHub couldn't be reached: no network, or it didn't answer in time. */
+class GitHubUnreachable(cause: IOException) : IOException("GitHub unreachable", cause)
+
 /** A release newer than this app, and the APK of it to install. */
 data class Update(val version: String, val apk: String)
 
@@ -38,10 +41,14 @@ class Updates(
     private fun fetch(): Release {
         val request =
             Request.Builder().url(latest).header("Accept", "application/vnd.github+json").build()
-        http.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw IOException("GitHub answered ${response.code}")
-            return json.decodeFromString(Release.serializer(), response.body.string())
-        }
+        val (code, body) =
+            try {
+                http.newCall(request).execute().use { it.code to it.body.string() }
+            } catch (e: IOException) {
+                throw GitHubUnreachable(e)
+            }
+        if (code !in 200..299) throw IOException("GitHub answered $code")
+        return json.decodeFromString(Release.serializer(), body)
     }
 
     @Serializable
