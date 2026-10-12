@@ -241,6 +241,7 @@ pub(super) fn spawn_session_with_config(
     ] {
         runtime::write_session_path(params.project_root, params.feature, name, which, None)?;
     }
+    runtime::write_inbound(params.project_root, params.feature, name, None)?;
 
     runtime::reset_started(params.project_root, params.feature, name)?;
     runtime::set_launch_prompt(

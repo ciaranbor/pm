@@ -550,6 +550,11 @@ pub enum HarnessHooksCommands {
     SessionStart,
     /// UserPromptSubmit hook handler — unblocks a feature on the user's input (not for direct use)
     UserPrompt,
+    /// UserPromptSubmit waiter — wakes an interrupted turn for a message sent during it (not for direct use)
+    TurnWaiter {
+        /// The harness whose hook entry runs it in the background
+        harness: pm::harness::Harness,
+    },
     /// Status hook handler — records when an agent waits on the user (not for direct use)
     Waiting {
         /// The harness whose hook payload arrives on stdin

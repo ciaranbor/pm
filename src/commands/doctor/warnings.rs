@@ -121,6 +121,26 @@ pub(super) fn baseline_capability_warnings(
         .collect())
 }
 
+/// Warn when a harness in use, as installed or set up, may not wake an
+/// agent through its inbound channel ([`Harness::wake_problems`]): the
+/// settings of main's worktree and each feature's count.
+pub(super) fn wake_warnings(project_root: &Path, probe: Probe) -> Result<Vec<String>> {
+    let home = paths::home_dir()?;
+    let features = crate::state::feature::FeatureState::list(&paths::features_dir(project_root))?;
+    let worktrees: Vec<_> = std::iter::once(crate::state::scope::MAIN.to_string())
+        .chain(features.into_iter().map(|(name, _)| name))
+        .map(|scope| paths::scope_worktree(project_root, &scope))
+        .collect();
+    Ok(skills::harnesses_in_use(project_root)?
+        .into_iter()
+        .flat_map(|h| {
+            h.wake_problems(&home, &worktrees, probe)
+                .into_iter()
+                .map(move |problem| format!("wake — {h}: {problem}"))
+        })
+        .collect())
+}
+
 fn prompt_delivery_unsupported(harness: Harness) -> String {
     format!(
         "{harness} does not support {}; the shared agent baseline \

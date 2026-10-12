@@ -5,7 +5,7 @@ use std::path::Path;
 
 use crate::error::{PmError, Result};
 use crate::harness::{Harness, claude_code, codex, opencode};
-use crate::state::runtime::{self, Waiting, WaitingClass, WaitingKind};
+use crate::state::runtime::{self, Inbound, Waiting, WaitingClass, WaitingKind};
 
 impl Harness {
     /// How pm's Stop hook, installed for this harness, gets the
@@ -63,20 +63,77 @@ impl Harness {
         }
     }
 
+    /// The channel a process outside the session posts it prompts through
+    /// ([`post_prompt`](Self::post_prompt)), read from the environment its
+    /// hooks run in; `None` for a harness with none there, which is then
+    /// typed into.
+    pub fn inbound_from_env(self) -> Option<Inbound> {
+        match self {
+            Harness::ClaudeCode => claude_code::inbound::from_env(),
+            Harness::Codex | Harness::OpenCode => None,
+        }
+    }
+
+    /// Post `text` to the session listening on `inbound` as a prompt: a
+    /// turn once the session is free to take one, with no keystroke. An
+    /// error when nothing listens there any more.
+    pub fn post_prompt(self, inbound: &Inbound, text: &str) -> Result<()> {
+        match self {
+            Harness::ClaudeCode => claude_code::inbound::post(inbound, text),
+            Harness::Codex | Harness::OpenCode => {
+                Err(PmError::Agent(format!("{self} has no inbound channel")))
+            }
+        }
+    }
+
+    /// Why this harness, as installed and set up for sessions in
+    /// `worktrees`, may not wake pm's agents through their
+    /// [inbound channel](Self::post_prompt), one line each.
+    pub fn wake_problems(
+        self,
+        home: &Path,
+        worktrees: &[std::path::PathBuf],
+        probe: crate::harness::Probe,
+    ) -> Vec<String> {
+        match self {
+            // Lib tests must not depend on what the machine has installed.
+            Harness::ClaudeCode if cfg!(test) => {
+                claude_code::inbound::problems(&[], home, worktrees, None)
+            }
+            Harness::ClaudeCode => claude_code::inbound::problems(
+                &claude_code::inbound::MANAGED_SETTINGS
+                    .iter()
+                    .map(std::path::PathBuf::from)
+                    .collect::<Vec<_>>(),
+                home,
+                worktrees,
+                claude_code::installed_version(probe).as_deref(),
+            ),
+            Harness::Codex | Harness::OpenCode => Vec::new(),
+        }
+    }
+
     /// What a prompt UserPromptSubmit reports says: the continuation of a
-    /// Stop hook's [rewake](Wake::Rewake) comes wrapped.
+    /// Stop hook's [rewake](Wake::Rewake), and a
+    /// [post](Self::post_prompt), come wrapped.
     pub fn prompt_said(self, prompt: &str) -> &str {
         match self {
-            Harness::ClaudeCode => claude_code::rewake_reason(prompt).unwrap_or(prompt),
+            Harness::ClaudeCode => claude_code::rewake_reason(prompt)
+                .or_else(|| claude_code::inbound::said(prompt))
+                .unwrap_or(prompt),
             Harness::Codex | Harness::OpenCode => prompt,
         }
     }
 
     /// Whether `prompt`, as UserPromptSubmit reports it, is one the harness
-    /// wrote itself rather than the user typed.
+    /// wrote itself rather than the user typed: a post is another
+    /// session's, wrapped by the harness.
     pub fn synthesized_prompt(self, prompt: &str) -> bool {
         match self {
-            Harness::ClaudeCode => claude_code::chat::is_synthesized(prompt),
+            Harness::ClaudeCode => {
+                claude_code::chat::is_synthesized(prompt)
+                    || claude_code::inbound::said(prompt).is_some()
+            }
             Harness::Codex | Harness::OpenCode => false,
         }
     }

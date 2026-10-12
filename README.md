@@ -436,14 +436,19 @@ or deleted. [Customising](#customising) covers writing your own.
 Agents never sit idle: after every turn, pm's waiter waits until the agent
 has unread messages, then wakes it to read them, so the brief at feature
 creation is just the first message. The turn has ended meanwhile, so the
-agent's prompt is yours. An agent left with no waiter — interrupted or
-failed in a turn a message started, its harness ending the waiter, a
-session whose start armed none, or a codex turn interrupted at all — is
-`unarmed`: no message wakes it until
-something prompts it. [`pm msg send`](#messaging) re-arms it when its input
-line is empty and takes text (not vim NORMAL mode) and no one is using its
-pane (a tmux mode such as copy or tree mode, or shown on an attached
-client); otherwise the message waits for a later send. A loop that wakes an
+agent's prompt is yours. A Claude Code turn you interrupt with Esc still
+has a waiter, so a message sent after the Esc wakes the agent: Esc stops the
+turn, not the agent (`pm agent stop` does that). An agent left with no
+waiter — failed in a turn a message started, its harness ending the waiter,
+a session whose start armed none, or a codex turn interrupted at all — is
+`unarmed`: no message wakes it until something prompts it.
+[`pm msg send`](#messaging) re-arms it. A Claude Code agent gets the prompt
+through its session's messaging socket when the session reported one,
+whatever its window shows; `pm doctor` warns when Claude Code is too old for
+that or a `crossSessionInbound` setting refuses or holds it. Otherwise the
+agent is typed the prompt, and only when its input line is empty and takes text (not vim NORMAL mode) and no one
+is using its pane (a tmux mode such as copy or tree mode, or shown on an
+attached client); otherwise the message waits for a later send. A loop that wakes an
 agent turn after turn without its inbox draining stops itself and says so;
 `pm agent restart` starts it again. pm installs the hooks once per machine
 ([docs/harnesses.md](docs/harnesses.md#hooks)); `pm doctor --fix` restores a
@@ -479,9 +484,10 @@ earliest unread message is oldest, ending with
 wait. History stays on disk. `pm msg send` never spawns an
 agent: it errors on an inactive recipient, and respawns one whose window
 died, or whose harness exited to the shell in a window nobody is looking
-at. To an `unarmed` recipient it types the prompt the waiter would have
-given, but only when that agent's input line is empty; elsewhere the
-message waits. All of this holds for a recipient in another project too.
+at. An `unarmed` recipient it [re-arms](#agents-are-message-processors)
+with the prompt the waiter would have given; when that cannot reach it, the
+message waits, and a socket nothing listens on any more is reported. All of
+this holds for a recipient in another project too.
 
 A reply lands in the inbox the original sender's waiter watches. An agent's
 replies name its own project and scope as their return route, even when it

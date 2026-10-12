@@ -44,7 +44,8 @@
 //! ([`Harness::turn_ended`](crate::harness::Harness::turn_ended)), and the
 //! config dir its environment named, where its input settings are
 //! read ([`Harness::config_dir_env`](crate::harness::Harness::config_dir_env)).
-//! Every spawn forgets them until the new session starts. A turn's end read
+//! Every spawn forgets them until the new session starts, as it does the
+//! **inbound channel** ([`Inbound`]). A turn's end read
 //! from the transcript has no marker to remove, so the one who acts on it
 //! claims it with a stamp instead, after which it no longer counts.
 //!
@@ -79,7 +80,9 @@ use crate::fs_utils::write_atomic;
 use crate::state::paths;
 
 mod dialog;
+mod inbound;
 pub use dialog::*;
+pub use inbound::*;
 
 const WAITING_FILE: &str = "waiting.json";
 const ACTIVITY_FILE: &str = "activity";

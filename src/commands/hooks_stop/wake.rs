@@ -3,7 +3,9 @@
 //! agent sits at its prompt between turns and takes typing and keys as
 //! the user's. A SessionStart hook that
 //! [waits](crate::harness::Harness::waits_at_session_start) runs it too, so
-//! the agent waits from its start without a first turn.
+//! the agent waits from its start without a first turn. On Claude Code,
+//! UserPromptSubmit runs a turn waiter too ([`run_in_turn`]), so a turn the
+//! user interrupts, which runs no Stop hook, still leaves one.
 //!
 //! It takes over the agent's waiter file and marks the agent idle (or
 //! background, while background work runs, which the waiter file records
@@ -15,7 +17,7 @@
 //! as a later turn starts, so one can outlive several turns and fire
 //! mid-turn; each new one supersedes it, and a superseded waiter, or one
 //! whose harness is gone, ends without a word or a marker. Whatever is
-//! delivered twice — a mid-turn wake, a typed re-arm, a stale queue item —
+//! delivered twice — a mid-turn wake, a re-arm, a stale queue item —
 //! UserPromptSubmit drops once the inbox is empty
 //! ([`hooks_user_prompt`](crate::commands::hooks_user_prompt)).
 //!
@@ -34,7 +36,8 @@ use std::time::Duration;
 use crate::commands::agent_wait;
 use crate::commands::attention::AgentState;
 use crate::commands::hook_process::Caller;
-use crate::commands::{hooks_dialog, hooks_waiting};
+use crate::commands::running_agents::AgentAt;
+use crate::commands::{hooks_dialog, hooks_user_prompt, hooks_waiting};
 use crate::error::Result;
 use crate::harness::{Harness, Wake};
 use crate::messages;
@@ -140,6 +143,119 @@ pub(super) fn run_on(
         Wake::Block => failed("ran as a waiter for a harness it blocks".into(), on_turn),
     }
 }
+
+/// Run `harness`'s waiter for the turn a prompt starts, from its
+/// UserPromptSubmit hook, whose `payload` it has read. It wakes the agent
+/// only for a message that arrives during the turn, which the harness
+/// delivers after the turn's next step, or at once should the user
+/// interrupt the turn: no Stop hook then starts a waiter. It leaves the
+/// agent's marker alone, since the agent is busy, and ends without a word
+/// for a prompt UserPromptSubmit drops, which starts no turn. Returns the
+/// exit code, as [`run`] does.
+pub(super) fn run_in_turn(
+    harness: Harness,
+    payload: &str,
+    on_turn: &mut dyn FnMut(AgentState, u32),
+) -> i32 {
+    let caller = Caller::current();
+    let Ok(agent) = std::env::var("PM_AGENT_NAME") else {
+        return 0;
+    };
+    let Ok((project_root, scope)) = paths::agent_scope() else {
+        return 0;
+    };
+    let prompt = serde_json::from_str::<serde_json::Value>(payload)
+        .ok()
+        .and_then(|v| v.get("prompt")?.as_str().map(str::to_string))
+        .unwrap_or_default();
+    let at = AgentAt {
+        harness,
+        project_root: &project_root,
+        scope: &scope,
+        name: &agent,
+    };
+    let waited = wait_in_turn(at, &prompt, on_turn, |interval| {
+        std::thread::sleep(interval);
+        !caller.alive()
+    });
+    match waited {
+        Ok(Waited::Wake(prompt)) if harness.wake() == Wake::Rewake => {
+            eprint!("{prompt}");
+            2
+        }
+        Ok(_) => 0,
+        Err(e) => {
+            let why = format!("turn waiter failed: {e}");
+            runtime::log_stop_hook(&project_root, &scope, &agent, &why);
+            1
+        }
+    }
+}
+
+/// Wait, as the agent's newest waiter, for a message to arrive in its inbox
+/// after the wait began, unless `prompt` is one UserPromptSubmit drops.
+/// `gone` is as for [`wait`].
+fn wait_in_turn(
+    at: AgentAt<'_>,
+    prompt: &str,
+    on_turn: &mut dyn FnMut(AgentState, u32),
+    mut gone: impl FnMut(Duration) -> bool,
+) -> Result<Waited> {
+    let AgentAt {
+        harness,
+        project_root,
+        scope,
+        name: agent,
+    } = at;
+    if hooks_user_prompt::is_duplicate(Some(harness), project_root, scope, agent, prompt) {
+        return Ok(Waited::Ended);
+    }
+    let log = |line: &str| runtime::log_stop_hook(project_root, scope, agent, line);
+    let waiter = std::process::id();
+    let newest = || runtime::read_waiter(project_root, scope, agent) == Some(waiter);
+    runtime::take_waiter(project_root, scope, agent, waiter, None)?;
+    if runtime::loop_tripped(project_root, scope, agent).is_some() {
+        log("turn waiter: the loop is stopped: ends at once");
+        return Ok(Waited::Ended);
+    }
+    let messages_dir = paths::messages_dir(project_root);
+    let sent = || {
+        messages::read_count(&messages_dir, scope, agent)
+            + messages::unread_count(&messages_dir, scope, agent)
+    };
+    let before = sent();
+    log("turn waiter: waits for a message sent during the turn");
+    loop {
+        if gone(POLL) || !newest() {
+            log(if newest() {
+                "turn waiter: its harness is gone: ends"
+            } else {
+                "turn waiter: superseded: ends"
+            });
+            return Ok(Waited::Ended);
+        }
+        if sent() > before && messages::unread_count(&messages_dir, scope, agent) > 0 {
+            break;
+        }
+    }
+    // A new message is no wasted wake, as after a Stop waiter's wait.
+    let read = messages::read_count(&messages_dir, scope, agent);
+    runtime::write_breaker(project_root, scope, agent, &Breaker { wasted: 0, read })?;
+    log("turn waiter: a message arrived: wakes the agent");
+    runtime::touch_activity(project_root, scope, agent)?;
+    on_turn(
+        AgentState::Busy,
+        messages::unread_count(&messages_dir, scope, agent),
+    );
+    Ok(Waited::Wake(messages::wake_text(&unread_senders(
+        project_root,
+        scope,
+        agent,
+    )?)))
+}
+
+/// How often a turn waiter checks the inbox, as [`agent_wait`] does.
+const POLL: Duration = Duration::from_secs(2);
 
 fn session_id(payload: &str) -> Option<String> {
     serde_json::from_str::<serde_json::Value>(payload)
@@ -261,6 +377,98 @@ fn trips(
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn a_turn_waiter_wakes_for_a_message_sent_during_the_turn_only() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let messages = paths::messages_dir(&root);
+        messages::send(&messages, "login", "implementer", "reviewer", "before").unwrap();
+        let mut polls = 0;
+        let mut turns = Vec::new();
+
+        let waited = wait_in_turn(
+            at(&root),
+            "go on",
+            &mut |state, unread| turns.push((state, unread)),
+            |_| {
+                polls += 1;
+                if polls == 3 {
+                    messages::send(&messages, "login", "implementer", "qa", "during").unwrap();
+                }
+                false
+            },
+        )
+        .unwrap();
+
+        assert_eq!(polls, 3, "the message unread as it began woke nothing");
+        assert_eq!(
+            waited,
+            Waited::Wake(
+                "You have new messages from reviewer@login, qa@login. Run `pm msg read` to \
+                 read them."
+                    .into()
+            )
+        );
+        assert_eq!(turns, [(AgentState::Busy, 2)]);
+        assert_eq!(runtime::read_waiting(&root, "login", "implementer"), None);
+    }
+
+    #[test]
+    fn a_turn_waiter_ends_once_its_turn_ends() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let waited = wait_in_turn(at(root), "go on", &mut |_, _| {}, |_| {
+            runtime::take_waiter(root, "login", "implementer", 1, None).unwrap();
+            false
+        })
+        .unwrap();
+        assert_eq!(waited, Waited::Ended);
+    }
+
+    fn at(root: &Path) -> AgentAt<'_> {
+        AgentAt {
+            harness: Harness::ClaudeCode,
+            project_root: root,
+            scope: "login",
+            name: "implementer",
+        }
+    }
+
+    #[test]
+    fn a_dropped_continuation_leaves_the_idle_waiter_in_charge() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let messages = paths::messages_dir(root);
+        messages::send(&messages, "login", "implementer", "reviewer", "hi").unwrap();
+        let continuation = super::super::continuation(root, "login", "implementer").unwrap();
+        messages::next(&messages, "login", "implementer", "reviewer@login").unwrap();
+        runtime::take_waiter(root, "login", "implementer", 1, None).unwrap();
+
+        let waited = wait_in_turn(at(root), &continuation, &mut |_, _| {}, |_| {
+            panic!("waited on a prompt that starts no turn")
+        })
+        .unwrap();
+
+        assert_eq!(waited, Waited::Ended);
+        assert_eq!(runtime::read_waiter(root, "login", "implementer"), Some(1));
+    }
+
+    #[test]
+    fn a_turn_waiter_of_a_stopped_loop_ends_at_once() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        runtime::trip_loop(root, "login", "implementer", "stopped").unwrap();
+        let messages = paths::messages_dir(root);
+
+        let waited = wait_in_turn(at(root), "go on", &mut |_, _| {}, |_| {
+            messages::send(&messages, "login", "implementer", "qa", "during").unwrap();
+            false
+        })
+        .unwrap();
+
+        assert_eq!(waited, Waited::Ended);
+    }
 
     #[test]
     fn a_question_codex_drops_with_the_turn_leaves_the_agent_idle_not_asking() {

@@ -3,16 +3,16 @@
 //!
 //! Only the user's input resets it. pm's own prompts are ignored: the
 //! launch prompts a codex agent starts with ([`is_launch_prompt`]), a
-//! continuation however it came — typed to re-arm the agent (see
-//! `agent_rearm`), queued, or a rewake, which the harness wraps
-//! ([`Harness::prompt_said`]) — and
+//! continuation however it came — posted or typed to re-arm the agent (see
+//! `agent_rearm`), queued, or a rewake; the harness wraps a post and a
+//! rewake ([`Harness::prompt_said`]) — and
 //! the notice of a loop that stopped itself; so are prompts the harness
 //! wrote itself ([`Harness::synthesized_prompt`]), a background task's end
 //! among them. A `block` continuation runs no UserPromptSubmit. Blocked is
 //! per scope, main included, so input to any of its agents resets it.
 //!
 //! A continuation that reaches an agent with nothing unread is dropped: it
-//! is a duplicate — a waiter's wake mid-turn, a typed re-arm, a queue item
+//! is a duplicate — a waiter's wake mid-turn, a re-arm, a queue item
 //! from before a restart — whose messages an earlier prompt took. The hook
 //! blocks it (`{"decision":"block"}`), so no turn runs, and does nothing
 //! else: the waiter that marked the agent idle still waits.
@@ -92,15 +92,26 @@ fn user_prompt_inner() -> Result<Option<(Prompted, u32)>> {
     Ok(Some((prompted, unread)))
 }
 
+/// Whether `prompt` to `agent`, running `harness`, is a continuation with
+/// nothing unread, which the hook drops.
+pub(crate) fn is_duplicate(
+    harness: Option<Harness>,
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    prompt: &str,
+) -> bool {
+    crate::messages::is_continuation(harness.map_or(prompt, |h| h.prompt_said(prompt)))
+        && messages::unread_count(&paths::messages_dir(project_root), scope, agent) == 0
+}
+
 /// Any prompt to `agent`: drop a continuation with nothing unread, else
 /// unblock its scope if the prompt is the user's, then clear its marker
 /// and claim its transcript's turn end.
 fn on_prompt(project_root: &Path, scope: &str, agent: &str, prompt: &str) -> Result<Prompted> {
     let registry = AgentRegistry::load(&paths::agents_dir(project_root), scope)?;
     let harness = registry.get(agent).map(|e| e.harness);
-    let said = harness.map_or(prompt, |h| h.prompt_said(prompt));
-    let unread = messages::unread_count(&paths::messages_dir(project_root), scope, agent);
-    if crate::messages::is_continuation(said) && unread == 0 {
+    if is_duplicate(harness, project_root, scope, agent, prompt) {
         return Ok(Prompted::Dropped);
     }
     on_user_prompt(project_root, scope, prompt, harness)?;
@@ -367,7 +378,8 @@ mod tests {
 
     /// Claude Code's prompts for a rewake carrying `reason`, naming the
     /// hook by its event, by pm's own command, whose quotes the reason must
-    /// be found past (2.1.289), and as SessionStart's waiter (2.1.294).
+    /// be found past (2.1.289), and as SessionStart's waiter (2.1.294); and
+    /// for a post of it to the session's socket (2.1.296).
     fn rewakes(reason: &str) -> Vec<String> {
         let command = crate::commands::hooks_install::stop_hook_command(Harness::ClaudeCode);
         [
@@ -385,6 +397,9 @@ mod tests {
                 if named.starts_with(':') { "" } else { " " }
             )
         })
+        .chain(std::iter::once(
+            crate::harness::claude_code_inbound_testing::wrapped(reason),
+        ))
         .collect()
     }
 
@@ -411,6 +426,20 @@ mod tests {
                 Some(idle.clone())
             );
         }
+        assert_eq!(state(&project).progress, Progress::Blocked);
+    }
+
+    #[test]
+    fn another_sessions_message_is_not_the_user() {
+        let dir = tempdir().unwrap();
+        let project = blocked_feature(dir.path());
+        register(&project, Harness::ClaudeCode);
+        let post = crate::harness::claude_code_inbound_testing::wrapped("can you review #42?");
+
+        assert_eq!(
+            on_prompt(&project, "login", "implementer", &post).unwrap(),
+            Prompted::Taken
+        );
         assert_eq!(state(&project).progress, Progress::Blocked);
     }
 
