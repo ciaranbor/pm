@@ -19,6 +19,9 @@ pub const LIMIT: Duration = Duration::from_secs(5);
 /// The command pm asks the keychain with, as the user would run it.
 pub const COMMAND: &str = "security show-keychain-info login.keychain";
 
+/// The command that unlocks the login keychain, as the user would run it.
+pub const UNLOCK: &str = "security unlock-keychain login.keychain";
+
 /// How the keychain answered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Answer {

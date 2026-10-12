@@ -17,9 +17,10 @@ use std::path::{Path, PathBuf};
 
 use crate::commands::config::{self, Files, Tier};
 use crate::commands::skills::{self, GlobalStore};
-use crate::commands::{harness_check, hooks_install, init};
+use crate::commands::{feat_common, harness_check, hooks_install, init};
 use crate::error::{PmError, Result};
 use crate::harness::Harness;
+use crate::messages;
 use crate::state::agent::AgentRegistry;
 use crate::state::dirs::Dirs;
 use crate::state::paths;
@@ -32,7 +33,8 @@ pub const HOME_NAME: &str = "home";
 /// The definition home's main scope runs.
 pub const SUPERVISOR: &str = "supervisor";
 
-/// The supervisor's first message, queued as `agent spawn --context` does.
+/// The supervisor's first message, queued as a `feat new` brief is: from
+/// pm, with no one to reply to.
 pub const BRIEF: &str = "The user just ran `pm onboard` on this machine. Onboard them: ask \
 what they want set up, then walk them through it one step at a time.";
 
@@ -119,14 +121,25 @@ pub fn readiness(global: &GlobalConfig, root: &Path, user_home: &Path) -> Result
             let mut problems =
                 harness_check::problems_on(harness, SUPERVISOR, global, &worktree, user_home)?;
             if problems.is_empty() && harness.logged_in() == Some(false) {
-                problems.push(format!(
-                    "not logged in: {}",
-                    harness.credentials_step(&global.harness)
-                ));
+                problems.push(not_logged_in(harness, global));
             }
             Ok(Readiness { harness, problems })
         })
         .collect()
+}
+
+fn not_logged_in(harness: Harness, global: &GlobalConfig) -> String {
+    let mut problem = format!(
+        "not logged in: {}",
+        harness.credentials_step(&global.harness)
+    );
+    if cfg!(target_os = "macos") && harness.reads_keychain() {
+        problem.push_str(&format!(
+            "; if you are, unlock the login keychain (`{}`)",
+            crate::keychain::UNLOCK
+        ));
+    }
+    problem
 }
 
 /// The harness to offer first: `configured` when it is ready, else the
@@ -204,12 +217,22 @@ pub fn mark(config_dir: &Path) -> Result<()> {
 pub fn spawn_supervisor(root: &Path, tmux_server: Option<&str>) -> Result<Option<String>> {
     let registry = AgentRegistry::load(&paths::agents_dir(root), scope::MAIN)?;
     let name = scope::orchestrator(root);
-    let context = match registry.get(&name) {
+    match registry.get(&name) {
         Some(entry) if entry.active => return Ok(None),
-        Some(_) => None,
-        None => Some(BRIEF),
-    };
-    init::spawn_main(root, context, tmux_server).map(Some)
+        Some(_) => {}
+        None => queue_brief(root, name)?,
+    }
+    init::spawn_main(root, tmux_server).map(Some)
+}
+
+/// Queue [`BRIEF`] for `name` unless its inbox already holds a message: a
+/// spawn that failed leaves the brief queued and nothing registered, so a
+/// rerun reaches here again.
+fn queue_brief(root: &Path, name: String) -> Result<()> {
+    if messages::unread_count(&paths::messages_dir(root), scope::MAIN, &name) == 0 {
+        feat_common::enqueue_initial_context(root, scope::MAIN, &[name], BRIEF)?;
+    }
+    Ok(())
 }
 
 fn global_files(config_dir: &Path) -> Files {
@@ -251,6 +274,26 @@ mod tests {
         assert_eq!(
             default_choice(&[status(Harness::Codex, &["x"])], None),
             None
+        );
+    }
+
+    #[test]
+    fn not_logged_in_says_to_unlock_the_keychain_only_for_a_keychain_reader_on_macos() {
+        let global = GlobalConfig::default();
+        let says_unlock = |h| not_logged_in(h, &global).contains(crate::keychain::UNLOCK);
+        assert_eq!(says_unlock(Harness::ClaudeCode), cfg!(target_os = "macos"));
+        assert!(!says_unlock(Harness::OpenCode));
+    }
+
+    #[test]
+    fn a_rerun_after_a_failed_spawn_queues_no_second_brief() {
+        let dir = tempdir().unwrap();
+        queue_brief(dir.path(), SUPERVISOR.into()).unwrap();
+        queue_brief(dir.path(), SUPERVISOR.into()).unwrap();
+        let messages = paths::messages_dir(dir.path());
+        assert_eq!(
+            messages::unread_count(&messages, scope::MAIN, SUPERVISOR),
+            1
         );
     }
 
@@ -333,10 +376,9 @@ mod tests {
         assert!(registry.get(SUPERVISOR).is_some_and(|e| e.active));
         assert!(registry.get(scope::DEFAULT_ORCHESTRATOR).is_none());
         let messages = paths::messages_dir(&root);
-        assert_eq!(
-            crate::messages::unread_count(&messages, scope::MAIN, SUPERVISOR),
-            1
-        );
+        let briefs = messages::check(&messages, scope::MAIN, SUPERVISOR).unwrap();
+        assert_eq!(briefs.len(), 1);
+        assert!(messages::is_no_reply(&briefs[0].sender));
         assert_eq!(spawn_supervisor(&root, server.name()).unwrap(), None);
     }
 }
