@@ -64,6 +64,7 @@ fn state_remote(dir: &Path, name: &str) -> PathBuf {
         project: crate::state::project::ProjectInfo {
             name: name.to_string(),
             max_features: Some(7),
+            fresh_base: None,
         },
         agents: Default::default(),
         harness: Default::default(),

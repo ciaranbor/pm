@@ -143,6 +143,7 @@ fn a_feature_whose_worktree_git_dropped_is_deleted_with_what_is_left_of_it() {
     let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
     let worktree = project_path.join("login");
     let main = paths::main_worktree(&project_path);
+    git::unlock_worktree(&main, &worktree);
     std::fs::remove_file(worktree.join(".git")).unwrap();
     git::prune_worktrees(&main).unwrap();
     std::fs::write(worktree.join("left.txt"), "left behind").unwrap();
@@ -168,4 +169,31 @@ fn a_feature_whose_worktree_git_dropped_is_deleted_with_what_is_left_of_it() {
         "login"
     ));
     assert!(!git::branch_exists(&main, "login").unwrap());
+}
+
+#[test]
+fn a_feature_whose_worktree_directory_is_gone_still_loses_its_branch() {
+    let dir = tempdir().unwrap();
+    let server = TestServer::new();
+    // Canonical, so the path matches the one git records for the worktree.
+    let root = dir.path().canonicalize().unwrap();
+    let (project_path, _) = server.setup_project_with_feature(&root, "login");
+    let main = paths::main_worktree(&project_path);
+    std::fs::remove_dir_all(project_path.join("login")).unwrap();
+
+    feat_delete(
+        &project_path,
+        &TestServer::registry_dir(&project_path),
+        "login",
+        false,
+        server.name(),
+    )
+    .unwrap();
+
+    assert!(!git::branch_exists(&main, "login").unwrap());
+    assert!(
+        git::find_worktree_for_branch(&main, "login")
+            .unwrap()
+            .is_none()
+    );
 }

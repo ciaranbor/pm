@@ -66,6 +66,7 @@ fn merge_feature_based_on_a_non_pm_branch_refuses_with_adopt_hint() {
         context: None,
         base: Some("develop"),
         workflow: None,
+        fresh: None,
         tmux_server: server.name(),
     })
     .unwrap();
@@ -99,6 +100,7 @@ fn merge_stacked_feature_merges_into_parent_worktree() {
         context: None,
         base: Some("parent"),
         workflow: None,
+        fresh: None,
         tmux_server: server.name(),
     })
     .unwrap();
@@ -136,6 +138,7 @@ fn merge_stacked_feature_cleans_up_by_default() {
         context: None,
         base: Some("parent"),
         workflow: None,
+        fresh: None,
         tmux_server: server.name(),
     })
     .unwrap();

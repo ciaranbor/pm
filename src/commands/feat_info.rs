@@ -183,6 +183,7 @@ mod tests {
             context: Some("fix the widget"),
             base: None,
             workflow: Some("implement-and-review"),
+            fresh: None,
             tmux_server: server.name(),
         })
         .unwrap();

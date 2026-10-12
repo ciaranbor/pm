@@ -126,6 +126,7 @@ pub fn register(
         project: ProjectInfo {
             name: project_name.clone(),
             max_features: None,
+            fresh_base: None,
         },
         agents: Default::default(),
         harness: Default::default(),

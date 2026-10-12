@@ -803,6 +803,14 @@ pub enum FeatCommands {
         /// Base branch to stack on (defaults to current branch from CWD)
         #[arg(long)]
         base: Option<String>,
+        /// Base on the main branch, starting from its copy on the remote,
+        /// fetched now (the default when the `fresh_base` config is set and
+        /// the base is the main branch)
+        #[arg(long, conflicts_with_all = ["base", "no_fresh"])]
+        fresh: bool,
+        /// Start from the local base even when `fresh_base` is set
+        #[arg(long)]
+        no_fresh: bool,
         /// Workflow name (defaults to 'solo' when --context is given).
         /// Run `pm workflow list` for installed workflows.
         #[arg(long)]

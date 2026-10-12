@@ -37,6 +37,29 @@ pub fn fetch_remote(repo: &Path, remote: &str) -> Result<()> {
     Ok(())
 }
 
+/// Fetch `branch` from `remote`, updating its remote-tracking ref, without
+/// prompting for credentials.
+pub fn fetch_branch(repo: &Path, remote: &str, branch: &str) -> Result<()> {
+    let output = Command::new("git")
+        .args(["-C", &repo.to_string_lossy(), "fetch", remote, branch])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(std::process::Stdio::null())
+        .output()?;
+    if !output.status.success() {
+        return Err(super::failure(&output));
+    }
+    Ok(())
+}
+
+/// The remote `branch` tracks, if it has an upstream.
+pub fn branch_remote(repo: &Path, branch: &str) -> Result<Option<String>> {
+    match run_git(repo, &["config", &format!("branch.{branch}.remote")]) {
+        Ok(remote) if !remote.is_empty() => Ok(Some(remote)),
+        Ok(_) | Err(crate::error::PmError::Git(_)) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// The branches `remote` holds and the commit each points at, asked of the
 /// remote itself (`git ls-remote --heads`) rather than read from the last
 /// fetch, and without prompting for credentials.

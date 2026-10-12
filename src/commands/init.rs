@@ -149,6 +149,7 @@ pub(super) fn scaffold_state(path: &Path, name: &str, global: &GlobalStore) -> R
         project: ProjectInfo {
             name: name.to_string(),
             max_features: None,
+            fresh_base: None,
         },
         agents: AgentsConfig::default(),
         harness: Default::default(),

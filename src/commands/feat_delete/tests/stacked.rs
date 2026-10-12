@@ -16,6 +16,7 @@ fn delete_stacked_feature_merged_into_parent_succeeds() {
         context: None,
         base: Some("parent"),
         workflow: None,
+        fresh: None,
         tmux_server: server.name(),
     })
     .unwrap();
@@ -89,6 +90,7 @@ fn delete_feature_based_on_a_non_pm_branch_checks_merge_against_it() {
         context: None,
         base: Some("develop"),
         workflow: None,
+        fresh: None,
         tmux_server: server.name(),
     })
     .unwrap();
@@ -125,6 +127,7 @@ fn delete_stacked_feature_not_merged_into_parent_blocks() {
         context: None,
         base: Some("parent"),
         workflow: None,
+        fresh: None,
         tmux_server: server.name(),
     })
     .unwrap();

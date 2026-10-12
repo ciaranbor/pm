@@ -48,6 +48,8 @@ fn in_project(cmd: FeatCommands, server: Option<&str>) -> Result<()> {
             feature_name,
             context,
             base,
+            fresh,
+            no_fresh,
             workflow,
             ..
         } => {
@@ -58,6 +60,7 @@ fn in_project(cmd: FeatCommands, server: Option<&str>) -> Result<()> {
                 name_override: feature_name.as_deref(),
                 context: context.as_deref(),
                 base: base.as_deref(),
+                fresh: (fresh || no_fresh).then_some(fresh),
                 workflow: workflow.as_deref(),
                 tmux_server: server,
             })?;

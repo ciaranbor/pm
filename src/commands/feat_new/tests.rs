@@ -467,3 +467,27 @@ fn feat_new_allowed_under_feature_limit() {
     assert!(FeatureState::exists(&features_dir, "first"));
     assert!(FeatureState::exists(&features_dir, "second"));
 }
+
+#[test]
+fn feat_new_copies_the_ignored_files_worktreeinclude_names() {
+    let dir = tempdir().unwrap();
+    let server = TestServer::new();
+    let (project_path, projects_dir, _) = server.setup_project(dir.path());
+    let main = paths::main_worktree(&project_path);
+    std::fs::write(main.join(".gitignore"), ".env\n").unwrap();
+    std::fs::write(main.join(".env"), "SECRET=1").unwrap();
+    std::fs::write(main.join(crate::commands::worktree_include::FILE), ".env\n").unwrap();
+
+    feat_new(&FeatNewParams::with_defaults(
+        &project_path,
+        &projects_dir,
+        "login",
+        server.name(),
+    ))
+    .unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(project_path.join("login/.env")).unwrap(),
+        "SECRET=1"
+    );
+}

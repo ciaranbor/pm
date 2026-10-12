@@ -271,6 +271,9 @@ pub(crate) fn cleanup_feature_with_timing(
 fn remove_worktree(params: &CleanupParams, warnings: &mut Vec<String>) -> Result<()> {
     let path = params.worktree_path;
     if !path.exists() {
+        // A locked record outlives its directory, keeping the branch
+        // checked out until the prune that follows can drop it.
+        git::unlock_worktree(params.repo, path);
         return Ok(());
     }
     let tracked = git::is_worktree(params.repo, path)?;

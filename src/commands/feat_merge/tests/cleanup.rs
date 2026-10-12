@@ -280,3 +280,28 @@ fn a_merge_whose_cleanup_failed_is_recorded_merged_so_a_retry_only_cleans_up() {
     assert!(!FeatureState::exists(&features_dir, "login"));
     assert!(!git::branch_exists(&main, "login").unwrap());
 }
+
+#[test]
+fn a_feature_whose_worktree_directory_is_gone_still_merges() {
+    let dir = tempdir().unwrap();
+    let server = TestServer::new();
+    // Canonical, so the path matches the one git records for the worktree.
+    let root = dir.path().canonicalize().unwrap();
+    let (project_path, _) = server.setup_project_with_feature(&root, "login");
+    TestServer::add_feature_commit(&project_path, "login");
+    let main_repo = paths::main_worktree(&project_path);
+    let tip = git::branch_commit(&main_repo, "login").unwrap().unwrap();
+    std::fs::remove_dir_all(project_path.join("login")).unwrap();
+
+    feat_merge(
+        &project_path,
+        &TestServer::registry_dir(&project_path),
+        "login",
+        false,
+        server.name(),
+    )
+    .unwrap();
+
+    assert!(git::branch_merged_into(&main_repo, &tip, "main").unwrap());
+    assert!(!git::branch_exists(&main_repo, "login").unwrap());
+}

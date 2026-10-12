@@ -121,6 +121,7 @@ Implement the login page.
 EOF
 pm feat new login                                   # bare feature, no agents
 pm feat new child --base parent                     # stack on another feature
+pm feat new login --fresh                           # start from the remote's main, fetched now
 ```
 
 With `--context` but no `--workflow`, pm uses the single-agent `solo`
@@ -392,6 +393,23 @@ parent, not main. If the parent is merged or deleted first, the child's base
 is gone: `pm feat delete --force` still removes it, but `merge` and the
 non-forced `delete` refuse and say how to rebase it onto a live branch.
 
+`--fresh` bases the feature on the main branch but starts it from the
+remote's copy (the branch's upstream remote, else `origin`), fetched first,
+so a stale local main doesn't matter; the new branch tracks nothing. The
+`fresh_base` setting ([Configuration](#configuration)) makes that the
+default for every feature based on main; `--no-fresh` opts out.
+
+pm locks each feature's worktree (`git worktree lock`), so a `git worktree
+prune` run while its directory is out of reach (a moved or unmounted
+directory) keeps it; `pm feat merge`/`delete` unlock it before removing it.
+
+A `.worktreeinclude` in the main worktree lists, in gitignore syntax,
+gitignored files to copy into each new feature worktree (`feat new`,
+`adopt`, `review`, and `pm restore` recreating a lost one) before its
+hooks run: `.env`, `config/local.toml`. It is Claude Code's format, so one
+file serves both; a file it names that git doesn't ignore is skipped, as
+the branch brings it.
+
 ### Workflows and agents
 
 Two decoupled layers:
@@ -632,9 +650,10 @@ project-specific steps: `post-create.sh` (after `pm feat new`/`adopt`/
 tmux window of the session they concern — the new feature's for
 `post-create`, the base's for `post-merge`, each recreated session's for
 `restore` — with that session's worktree as the working directory. Use them
-to install deps, run migrations, copy gitignored secrets into a new
-worktree; remove a script to disable it. pm only writes a hook script that
-is missing, so your edits survive upgrades.
+to install deps or run migrations (gitignored secrets are simpler copied
+by [`.worktreeinclude`](#features-and-worktrees)); remove a script to
+disable it. pm only writes a hook script that is missing, so your edits
+survive upgrades.
 
 Every hook receives its context as `PM_*` environment variables, scoped to
 the hook process (concurrent projects never see each other's values):
@@ -653,13 +672,11 @@ the hook process (concurrent projects never see each other's values):
 `[ -n "$PM_FEATURE" ]`. For a `post-merge` of a stacked feature it names the
 base feature, not the merged one.
 
-A `post-create.sh` that gives each new feature the main worktree's secrets,
-if it has any, and its own dependencies:
+A `post-create.sh` that gives each new feature its own dependencies:
 
 ```sh
 #!/bin/sh
 set -eu
-if [ -f "$PM_MAIN_WORKTREE/.env" ]; then cp "$PM_MAIN_WORKTREE/.env" "$PM_WORKTREE/"; fi
 npm install
 ```
 
@@ -720,6 +737,7 @@ reviewer = "read-only"       # codex's -s sandbox mode, as reviewer runs on code
 
 [project]
 max_features = 6             # refuse feat new / feat adopt beyond 6 unmerged features
+fresh_base = true            # feat new on main starts from the remote's main (see --fresh)
 ```
 
 **Rows.** Keys are the `--agent` definition, not the display name: an agent
@@ -764,7 +782,8 @@ agents](#work-with-the-agents)).
 
 **`[project] max_features`** caps a project's in-flight features (any not
 merged or stale); the project value beats the global one, and unset means
-no cap.
+no cap. **`[project] fresh_base`** resolves the same way, unset meaning
+off; when the fetch fails it warns and starts from the local main.
 
 ### Where pm keeps its files
 
