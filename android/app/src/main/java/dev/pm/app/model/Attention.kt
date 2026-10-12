@@ -11,6 +11,7 @@ enum class AttentionKind(val wire: String) {
     Ready("ready"),
     Dead("dead"),
     Unarmed("unarmed"),
+    Denied("denied"),
     Stalled("stalled"),
     None("none"),
 
@@ -71,6 +72,7 @@ enum class Glyph {
     Hand,
     Broom,
     CheckCircle,
+    Ban,
     Pause,
     Unknown,
 }
@@ -89,7 +91,7 @@ enum class Tone {
     /** Going well: working, ready. */
     Positive,
 
-    /** Worth a look, nothing broken: stalled, unarmed, unread messages. */
+    /** Worth a look, nothing broken: stalled, unarmed, denied, unread messages. */
     Caution,
 
     /** Nothing to act on. */
@@ -127,6 +129,7 @@ object Marks {
             AttentionKind.Ready -> Mark(Glyph.CheckCircle, Tone.Positive, strong = true)
             AttentionKind.Dead -> agent(AgentState.Dead)
             AttentionKind.Unarmed -> agent(AgentState.Unarmed)
+            AttentionKind.Denied -> Mark(Glyph.Ban, Tone.Caution)
             AttentionKind.Stalled -> Mark(Glyph.Pause, Tone.Caution)
             AttentionKind.Unknown -> Mark(Glyph.Unknown, Tone.Neutral)
             AttentionKind.None -> null

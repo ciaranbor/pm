@@ -38,6 +38,10 @@
 //! check reads it ([`launch_check`](crate::commands::launch_check)). Every
 //! spawn removes it with the launch stamp.
 //!
+//! The **end stamp** ([`mark_ended`]) names the harness process whose
+//! session ended, and the **denial record** ([`Denial`]) a tool call the
+//! harness's classifier refused.
+//!
 //! The **session paths** are what the current session reported at its
 //! start: its transcript, for a harness that records an interrupt or a
 //! failed turn only there
@@ -82,10 +86,14 @@ use crate::error::Result;
 use crate::fs_utils::write_atomic;
 use crate::state::paths;
 
+mod denial;
 mod dialog;
+mod ended;
 mod inbound;
 mod latest;
+pub use denial::*;
 pub use dialog::*;
+pub use ended::*;
 pub use inbound::*;
 pub use latest::*;
 

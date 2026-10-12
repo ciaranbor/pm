@@ -418,6 +418,7 @@ mod tests {
             pane: None,
             waiting: None,
             latest: None,
+            denied: None,
         }
     }
 

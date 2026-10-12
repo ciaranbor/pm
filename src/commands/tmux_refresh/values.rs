@@ -222,6 +222,7 @@ mod tests {
             pane: None,
             waiting: None,
             latest: None,
+            denied: None,
         };
         let main = ScopeSnapshot::main_of(
             vec![

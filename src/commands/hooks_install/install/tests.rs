@@ -61,9 +61,11 @@ fn install_creates_user_file_on_fresh_machine() {
         events(&parsed),
         [
             "Notification",
+            "PermissionDenied",
             "PermissionRequest",
             "PostToolUse",
             "PostToolUseFailure",
+            "SessionEnd",
             "SessionStart",
             "Stop",
             "StopFailure",
@@ -81,6 +83,10 @@ fn install_creates_user_file_on_fresh_machine() {
             "Stop",
             "UserPromptSubmit"
         ]
+    );
+    assert_eq!(
+        command_at(&parsed, "/hooks/SessionEnd/0/hooks/0/command"),
+        session_end_hook_command(Harness::ClaudeCode)
     );
     assert_eq!(
         command_at(&codex, "/hooks/Interrupt/0/hooks/0/command"),

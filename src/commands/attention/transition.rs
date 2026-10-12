@@ -327,6 +327,7 @@ mod tests {
                 dialog: None,
             }),
             latest: None,
+            denied: None,
         }
     }
 

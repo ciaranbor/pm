@@ -7,9 +7,9 @@
 //! agent's composed prompt — definition body, baseline, notice boards — as
 //! `additionalContext`, so the role re-applies on every start and resume.
 //! A started session is past any startup dialog, so it also clears the
-//! agent's waiting marker and stamps its activity. On a harness whose
-//! SessionStart hook [waits](Harness::waits_at_session_start) it then
-//! runs the waiter ([`hooks_stop::wait_from`]) — in this hook, not an entry
+//! agent's waiting marker and end stamp and stamps its activity. On a
+//! harness whose SessionStart hook [waits](Harness::waits_at_session_start)
+//! it then runs the waiter ([`hooks_stop::wait_from`]) — in this hook, not an entry
 //! of its own: the harness runs an event's hooks in parallel, and clearing
 //! the marker could erase the idle one the waiter just wrote. It does not
 //! run one for a session its spawn launched with a prompt
@@ -191,6 +191,7 @@ fn record_start(
     if !compacted(payload) {
         runtime::mark_started(project_root, feature, agent_name)?;
         runtime::clear_waiting(project_root, feature, agent_name)?;
+        runtime::clear_ended(project_root, feature, agent_name)?;
     }
     let session_path = |which, path: Option<&Path>| {
         runtime::write_session_path(project_root, feature, agent_name, which, path)
@@ -321,6 +322,20 @@ mod tests {
             runtime::started_at(&root, "login", "reviewer").is_some(),
             "the launch check reads the session as up"
         );
+
+        runtime::mark_ended(&root, "login", "reviewer", 4242).unwrap();
+        let compact = Payload {
+            source: Some("compact".into()),
+            ..started("s1")
+        };
+        record_start(&root, "login", "reviewer", &compact).unwrap();
+        assert_eq!(
+            runtime::read_ended(&root, "login", "reviewer"),
+            Some(4242),
+            "a compaction is no start"
+        );
+        record_start(&root, "login", "reviewer", &started("s2")).unwrap();
+        assert_eq!(runtime::read_ended(&root, "login", "reviewer"), None);
     }
 
     #[test]

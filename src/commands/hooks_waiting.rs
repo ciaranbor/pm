@@ -13,6 +13,9 @@
 //! otherwise wait for the next one sent. It must be quick: codex gives the
 //! Interrupt hook 3 s.
 //!
+//! It also records a tool call the harness's classifier refused
+//! ([`Harness::denial`]).
+//!
 //! It runs on every tool call, so the common path — a tool finished, no
 //! marker — costs one stamp of the agent's activity, one failed unlink and
 //! one failed read of its dialogs dir, with no registry read. Its stdout can
@@ -31,19 +34,29 @@ use crate::state::runtime::{self, Dialog, Waiting, WaitingKind};
 use chrono::{DateTime, Utc};
 
 /// Run the hook, the agent's window on `tmux_server`. `on_change` is told
-/// the agent's new state and unread count when its marker changed.
+/// the agent's new state and unread count when its marker changed, and
+/// `on_denial` is called instead when it only recorded a denial.
 pub fn waiting(
     harness: Harness,
     tmux_server: Option<&str>,
     on_change: impl FnOnce(AgentState, u32),
+    on_denial: impl FnOnce(),
 ) -> i32 {
-    if let Ok(Some((state, unread))) = waiting_inner(harness, tmux_server) {
-        on_change(state, unread);
+    let mut denied = false;
+    match waiting_inner(harness, tmux_server, &mut denied) {
+        Ok(Some((state, unread))) => on_change(state, unread),
+        _ if denied => on_denial(),
+        _ => {}
     }
     0
 }
 
-fn waiting_inner(harness: Harness, tmux_server: Option<&str>) -> Result<Option<(AgentState, u32)>> {
+/// [`waiting`]'s work, setting `denied` once it recorded a denial.
+fn waiting_inner(
+    harness: Harness,
+    tmux_server: Option<&str>,
+    denied: &mut bool,
+) -> Result<Option<(AgentState, u32)>> {
     let Some(agent) = std::env::var("PM_AGENT_NAME")
         .ok()
         .filter(|a| !a.is_empty())
@@ -57,6 +70,10 @@ fn waiting_inner(harness: Harness, tmux_server: Option<&str>) -> Result<Option<(
     };
     let (project_root, scope) = paths::agent_scope()?;
     runtime::touch_activity(&project_root, &scope, &agent)?;
+    if let Some(denial) = harness.denial(&payload) {
+        runtime::write_denial(&project_root, &scope, &agent, &denial)?;
+        *denied = true;
+    }
     let Some(state) = settle(&project_root, &scope, &agent, harness, &payload)? else {
         return Ok(None);
     };

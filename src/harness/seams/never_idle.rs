@@ -157,6 +157,16 @@ impl Harness {
         }
     }
 
+    /// The tool call a hook payload from this harness says its permission
+    /// classifier refused; `None` when none, as for a harness with no
+    /// classifier.
+    pub fn denial(self, payload: &serde_json::Value) -> Option<runtime::Denial> {
+        match self {
+            Harness::ClaudeCode => claude_code::waiting::denial(payload),
+            Harness::Codex | Harness::OpenCode => None,
+        }
+    }
+
     /// How the last turn of the session whose transcript is at `transcript`
     /// ended, when it ended in a way the harness fires no hook for —
     /// interrupted, or failed — and nothing has happened in it since; dated

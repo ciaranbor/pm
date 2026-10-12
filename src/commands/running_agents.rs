@@ -19,6 +19,13 @@
 //! will wake it, and a background task the harness reported may have ended
 //! already.
 //!
+//! A pane still running the harness process whose session-end hook
+//! stamped it ended ([`runtime::read_ended`]) is dead whatever else it
+//! reads: the harness is exiting, and the waiter it kills on the way out
+//! may outlive it a moment. A stamp naming a process no longer in the pane
+//! is left to the process check, so one from a session a restart replaced
+//! does not mark the new one.
+//!
 //! A Stop hook in the pane that is not its recorded waiter does not make it
 //! idle: a superseded one lingers up to a poll interval, maybe into its
 //! agent's next turn.
@@ -202,6 +209,11 @@ pub fn classify(
         name,
         harness,
     } = agent;
+    if runtime::read_ended(project_root, scope, name)
+        .is_some_and(|pid| processes.is_some_and(|ps| ps.iter().any(|p| p.pid == pid)))
+    {
+        return (Liveness::Dead, None);
+    }
     let at = waiting(project_root, scope, name, harness);
     let waiter = waiter_runs(project_root, scope, name, processes.unwrap_or_default());
     if waiter && at.as_ref().is_some_and(|w| harness.waiter_wakes(w.kind)) {
@@ -337,6 +349,34 @@ mod tests {
         assert_eq!(state("busy"), (Liveness::Busy, None));
         assert_eq!(state("idle"), (Liveness::Idle, None));
         assert_eq!(state("dead"), (Liveness::Dead, None));
+    }
+
+    #[test]
+    fn a_session_end_reads_dead_while_its_process_is_in_the_pane() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let session = tmux::session_name(&project_name, "login");
+        server.spawn_idle_fake_agent(&project, &session, "login", "qa");
+        let config = HarnessConfig::default();
+        let windows = Windows::read(server.name()).unwrap();
+        let processes = windows
+            .processes(windows.find(&session, "qa").unwrap())
+            .unwrap();
+        let agent = AgentAt {
+            project_root: &project,
+            scope: "login",
+            name: "qa",
+            harness: Harness::ClaudeCode,
+        };
+        let liveness = || classify(agent, Some(&processes), &config).0;
+        assert_eq!(liveness(), Liveness::Idle);
+
+        runtime::mark_ended(&project, "login", "qa", processes[0].pid).unwrap();
+        assert_eq!(liveness(), Liveness::Dead, "its waiter not yet gone");
+
+        runtime::mark_ended(&project, "login", "qa", u32::MAX).unwrap();
+        assert_eq!(liveness(), Liveness::Idle, "a session a restart replaced");
     }
 
     #[test]

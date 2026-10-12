@@ -150,6 +150,12 @@ pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
                     ),
                 }
             }
+            HarnessHooksCommands::SessionEnd { harness } => exit_unless_ok(
+                commands::hooks_session_end::session_end(harness, |unread| {
+                    publish(AgentState::Dead, unread);
+                    push();
+                }),
+            ),
             HarnessHooksCommands::UserPrompt => {
                 exit_unless_ok(commands::hooks_user_prompt::user_prompt(|unread| {
                     publish(AgentState::Busy, unread);
@@ -167,6 +173,7 @@ pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
                         publish(state, unread);
                         push();
                     },
+                    push,
                 ))
             }
             HarnessHooksCommands::Dialog { harness } => {

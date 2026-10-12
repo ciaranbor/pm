@@ -57,6 +57,12 @@
 //! which [`host`] gives with `turn/start`. SessionStart runs only as the
 //! first turn starts, and an async SessionStart's exit 2 is ignored, so
 //! no hook arms a session that has had no turn.
+//!
+//! Codex's SessionEnd runs only as the server tears a root thread down,
+//! which neither the TUI's exit nor `/new` does under [`host`]: the host
+//! ends the server with SIGTERM, which skips it (verified on 0.162.1). So
+//! pm installs no session-end hook for codex, whose window reads dead once
+//! the host has stopped the server, within 2 s.
 
 pub(super) mod app_server;
 pub(super) mod chat;

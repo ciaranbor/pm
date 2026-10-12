@@ -41,6 +41,14 @@ file of every supported harness (`~/.claude/settings.json` for Claude Code,
   agent interrupted mid-turn or a dialog it rejected, nor a codex turn an
   API error ended; pm reads those from the tail of the session's
   transcript instead.
+  On Claude Code it also records a tool call auto mode refused, which
+  reads `denied` once the agent is between turns, until it is next
+  prompted.
+- the **session-end hook** (`pm harness hooks session-end`), on Claude
+  Code's SessionEnd, which reads the agent `dead` as its harness exits
+  rather than once the process is gone. `/clear` and `/resume` end a
+  session too, but not the process, so they don't count. codex's SessionEnd
+  never fires for pm's agents, and opencode has none.
 - the **dialog hook** (`pm harness hooks dialog`), on Claude Code's
   PermissionRequest, and from opencode's plugin on a permission ask: it
   waits, with the Stop hook's timeout, for the dialog to be answered from

@@ -95,7 +95,7 @@ fn agent_mark(state: AgentState) -> (&'static str, &'static str) {
     }
 }
 
-/// nf-fa-hand, nf-md-broom, nf-fa-check_circle, nf-fa-pause.
+/// nf-fa-hand, nf-md-broom, nf-fa-check_circle, nf-fa-ban, nf-fa-pause.
 fn attention_mark(kind: AttentionKind) -> Option<(&'static str, &'static str)> {
     Some(match kind {
         AttentionKind::Blocked => ("fg=red,bold", "\u{f256}"),
@@ -104,6 +104,7 @@ fn attention_mark(kind: AttentionKind) -> Option<(&'static str, &'static str)> {
         AttentionKind::Ready => ("fg=green,bold", "\u{f058}"),
         AttentionKind::Dead => agent_mark(AgentState::Dead),
         AttentionKind::Unarmed => agent_mark(AgentState::Unarmed),
+        AttentionKind::Denied => ("fg=yellow", "\u{f05e}"),
         AttentionKind::Stalled => ("fg=yellow", "\u{f04c}"),
         AttentionKind::None => return None,
     })

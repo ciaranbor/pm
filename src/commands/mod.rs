@@ -41,6 +41,7 @@ pub mod harness_settings;
 pub mod hook_process;
 pub mod hooks_dialog;
 pub mod hooks_install;
+pub mod hooks_session_end;
 pub mod hooks_session_start;
 pub mod hooks_stop;
 pub mod hooks_user_prompt;

@@ -39,6 +39,12 @@
 //! [`crate::commands::hooks_waiting`]). It is installed without a matcher:
 //! the handler filters by payload.
 //!
+//! The session-end hook is `pm harness hooks session-end <harness>`, under
+//! [`Harness::session_end_event`] for a harness that has one, with the
+//! harness's default timeout: the event's budget is short, and on Claude
+//! Code a hook's own timeout raises it (see
+//! [`crate::commands::hooks_session_end`]).
+//!
 //! The dialog hook is `pm harness hooks dialog <harness>`, installed under
 //! each event of [`Harness::dialog_events`] in an entry of its own, beside
 //! the status hook's, with the Stop hook's timeout: it blocks until a
@@ -91,6 +97,10 @@ const TURN_WAITER_MARKERS: &[&str] = &[PM_TURN_WAITER_MARKER];
 pub const PM_WAITING_MARKER: &str = "pm harness hooks waiting";
 pub(super) const WAITING_MARKERS: &[&str] = &[PM_WAITING_MARKER];
 
+/// Marker string for pm-owned session-end hook entries.
+pub const PM_SESSION_END_MARKER: &str = "pm harness hooks session-end";
+const SESSION_END_MARKERS: &[&str] = &[PM_SESSION_END_MARKER];
+
 /// Marker string for pm-owned dialog hook entries.
 pub const PM_DIALOG_MARKER: &str = "pm harness hooks dialog";
 const DIALOG_MARKERS: &[&str] = &[PM_DIALOG_MARKER];
@@ -111,8 +121,19 @@ pub fn pm_events(harness: Harness) -> Vec<(&'static str, &'static [&'static str]
         .copied()
         .chain(turn_waiter_events(harness))
         .chain(waiting_events(harness))
+        .chain(session_end_events(harness))
         .chain(dialog_events(harness))
         .collect()
+}
+
+/// `harness`'s session-end event, if it has one, with its marker.
+pub fn session_end_events(
+    harness: Harness,
+) -> impl Iterator<Item = (&'static str, &'static [&'static str])> {
+    harness
+        .session_end_event()
+        .map(|event| (event, SESSION_END_MARKERS))
+        .into_iter()
 }
 
 /// `harness`'s dialog hook events, with their marker.
@@ -214,6 +235,11 @@ pub fn waiting_hook_command(harness: Harness) -> String {
     format!("{GUARD}{PM_WAITING_MARKER} {harness}")
 }
 
+/// The shell command registered as `harness`'s session-end hook.
+pub fn session_end_hook_command(harness: Harness) -> String {
+    format!("{GUARD}{PM_SESSION_END_MARKER} {harness}")
+}
+
 /// The shell command registered as `harness`'s dialog hook.
 pub fn dialog_hook_command(harness: Harness) -> String {
     format!("{GUARD}{PM_DIALOG_MARKER} {harness}")
@@ -241,6 +267,9 @@ pub(super) fn pm_entries(harness: Harness) -> Vec<(&'static str, &'static [&'sta
     }
     for (event, markers) in waiting_events(harness) {
         entries.push((event, markers, command(waiting_hook_command(harness))));
+    }
+    for (event, markers) in session_end_events(harness) {
+        entries.push((event, markers, command(session_end_hook_command(harness))));
     }
     for (event, markers) in dialog_events(harness) {
         // As long as the Stop hook's: a dialog may wait on the user that long.
@@ -289,6 +318,7 @@ mod tests {
             session_start_hook_command(),
             user_prompt_hook_command(),
             waiting_hook_command(Harness::ClaudeCode),
+            session_end_hook_command(Harness::ClaudeCode),
         ] {
             let out = std::process::Command::new("/bin/sh")
                 .args(["-c", &command])
@@ -322,6 +352,10 @@ mod tests {
             (
                 waiting_hook_command(Harness::Codex),
                 "harness hooks waiting codex",
+            ),
+            (
+                session_end_hook_command(Harness::ClaudeCode),
+                "harness hooks session-end claude-code",
             ),
         ] {
             let out = std::process::Command::new("/bin/sh")

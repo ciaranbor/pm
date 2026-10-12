@@ -31,6 +31,11 @@ impl Caller {
         }
     }
 
+    /// The harness process's pid.
+    pub(crate) fn pid(&self) -> u32 {
+        self.parent as u32
+    }
+
     /// Whether `caught` should end the wait. A SIGTERM must come from the
     /// harness: it is what `kill`, `pkill` and `killall` send by default, so
     /// a stray one must not end a hook the harness still waits on. SIGINT
