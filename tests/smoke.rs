@@ -63,6 +63,40 @@ fn init_starts_main_in_the_main_session() {
     assert_eq!(s.window_names("proj/main"), ["main"]);
 }
 
+/// Catches: `pm onboard` not rooting home under the real XDG data dir, not
+/// starting the supervisor in home's main session, or launching it without
+/// the real config dir to edit.
+#[test]
+#[ignore]
+fn onboard_starts_the_supervisor_in_home() {
+    let s = Smoke::new();
+    s.pm(s.home())
+        .args(["onboard", "--harness", "claude-code"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Spawned agent 'supervisor'"));
+
+    let home = s.home().join(".local/share/pm/home");
+    let records = s.argv_records("supervisor", 1);
+    assert_eq!(Path::new(&records[0].cwd), home.join("main"));
+    let config = s.home().join(".config/pm");
+    assert!(
+        records[0]
+            .argv
+            .contains(&format!("--add-dir={}", config.display())),
+        "{:?}",
+        records[0].argv
+    );
+    assert_eq!(s.window_names("home/main"), ["supervisor"]);
+
+    s.pm(s.home())
+        .arg("onboard")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Opening home"));
+    assert_eq!(s.window_names("home/main"), ["supervisor"]);
+}
+
 /// Catches: `pm notes` not finding its editor in the inherited env — an
 /// empty `$VISUAL` taken over `$EDITOR`, or an `$EDITOR` with arguments not
 /// run through the shell.

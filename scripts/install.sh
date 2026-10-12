@@ -131,4 +131,12 @@ Next, add pm's tmux plugin, one line in your tmux config:
 
 See $repo#install for the rest.
 EOF
+    # A PM_VERSION before the supervisor has no `pm onboard`.
+    if "$pm" onboard --help >/dev/null 2>&1; then
+        cat <<EOF
+
+Then run \`pm onboard\` to start the supervisor, an agent that walks you
+through the rest of the setup.
+EOF
+    fi
 fi

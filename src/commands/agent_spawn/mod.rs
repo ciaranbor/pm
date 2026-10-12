@@ -108,6 +108,7 @@ pub fn agent_spawn_in(
     project_root: &Path,
     feature: &str,
     agent_name: &str,
+    context: Option<&str>,
     pane: &str,
     tmux_server: Option<&str>,
 ) -> Result<(SpawnOutcome, String, Vec<String>)> {
@@ -116,7 +117,7 @@ pub fn agent_spawn_in(
         feature,
         agent_name,
         None,
-        None,
+        context,
         Some(pane),
         tmux_server,
     )

@@ -72,14 +72,14 @@ fn restart_one(
         Some(pane) if keep_old => {
             let fresh = panes::split(tmux_server, &pane, &worktree)?;
             (
-                agent_spawn_in(project_root, feature, agent_name, &fresh, tmux_server)?,
+                agent_spawn_in(project_root, feature, agent_name, None, &fresh, tmux_server)?,
                 Some(pane),
             )
         }
         Some(pane) => {
             panes::respawn(tmux_server, &pane, &worktree)?;
             (
-                agent_spawn_in(project_root, feature, agent_name, &pane, tmux_server)?,
+                agent_spawn_in(project_root, feature, agent_name, None, &pane, tmux_server)?,
                 None,
             )
         }

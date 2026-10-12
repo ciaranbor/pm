@@ -61,6 +61,11 @@ pub struct ProjectInfo {
 /// Global configuration stored at ~/.config/pm/config.toml.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct GlobalConfig {
+    /// The registered name of this machine's home project, where the
+    /// supervisor runs (`commands::onboard`). Per machine: the registry
+    /// entry syncs, this file does not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<String>,
     #[serde(default)]
     pub project: GlobalProjectConfig,
     #[serde(default)]

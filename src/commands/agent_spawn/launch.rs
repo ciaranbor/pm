@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use crate::commands::onboard;
 use crate::error::Result;
 use crate::harness::Harness;
 use crate::state::project::{
@@ -72,15 +73,19 @@ fn global_dirs() -> Vec<std::path::PathBuf> {
 }
 
 /// The pm state dirs outside its worktree that an agent of `definition`
-/// edits: every agent may own a summary, and the orchestrator also keeps the
-/// information store.
+/// edits: every agent may own a summary, the orchestrator also keeps the
+/// information store, and the supervisor edits pm's config.
 fn edit_dirs(project_root: &Path, definition: &str) -> Vec<std::path::PathBuf> {
-    let summaries = paths::summaries_dir(project_root);
+    let mut dirs = vec![paths::summaries_dir(project_root)];
     if definition == scope::orchestrator_definition(project_root) {
-        vec![paths::docs_dir(project_root), summaries]
-    } else {
-        vec![summaries]
+        dirs.insert(0, paths::docs_dir(project_root));
     }
+    if definition == onboard::SUPERVISOR
+        && let Ok(config) = paths::global_config_dir()
+    {
+        dirs.push(config);
+    }
+    dirs
 }
 
 /// The definition that reaches the harness: the effective definition, except
@@ -161,6 +166,18 @@ mod tests {
         assert_eq!(
             edit_dirs(root, "reviewer"),
             [PathBuf::from("/proj/.pm/summaries")]
+        );
+    }
+
+    #[test]
+    fn the_supervisor_also_edits_pm_config() {
+        let root = Path::new("/proj");
+        assert_eq!(
+            edit_dirs(root, onboard::SUPERVISOR),
+            [
+                PathBuf::from("/proj/.pm/summaries"),
+                paths::global_config_dir().unwrap()
+            ]
         );
     }
 

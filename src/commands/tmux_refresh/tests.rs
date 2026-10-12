@@ -448,6 +448,7 @@ fn main_scope(agents: Vec<AgentSnapshot>) -> Snapshot {
             name: "app".into(),
             root: "/src/app".into(),
             skipped: None,
+            home: false,
             main: Some(ScopeSnapshot::main_of(agents, TeamStatus::default())),
         }],
         features: Vec::new(),

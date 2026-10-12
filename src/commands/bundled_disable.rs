@@ -13,7 +13,7 @@ use std::path::Path;
 use crate::error::{PmError, Result};
 use crate::state::paths;
 use crate::state::project::{BundledDisable, GlobalConfig};
-use crate::state::workflow;
+use crate::state::{scope, workflow};
 
 use super::feat_common::DEFAULT_WORKFLOW;
 use super::feat_review::REVIEW_WORKFLOW;
@@ -93,7 +93,7 @@ impl Disabled {
     /// What pm or a workflow needs by a name this table disables and no
     /// custom resolves, one line per reference: the agent teams of installed
     /// workflows, the `solo` default, `pm feat review`'s workflow and agent,
-    /// the `main` orchestrator, and the baseline.
+    /// main's orchestrator, and the baseline.
     pub fn dangling(
         &self,
         project_root: &Path,
@@ -108,7 +108,10 @@ impl Disabled {
                 && workflow::resolve_dir(Some(project_root), name, global_dir).is_none()
         };
 
+        // Main's workflow, once installed, reports its lead, the orchestrator.
+        let mut main_workflow_listed = false;
         for w in workflow::list_installed_in(Some(project_root), global_dir)?.workflows {
+            main_workflow_listed |= w.name == scope::MAIN_WORKFLOW;
             for agent in w.def.effective_team().iter().filter(|a| agent_missing(a)) {
                 out.push(format!("workflow '{}' needs agent '{agent}'", w.name));
             }
@@ -126,8 +129,11 @@ impl Disabled {
         if agent_missing("reviewer") {
             out.push("`pm feat review` needs agent 'reviewer'".to_string());
         }
-        if agent_missing("main") {
-            out.push("the orchestrator `main` needs agent 'main'".to_string());
+        let orchestrator = scope::orchestrator_definition(project_root);
+        if agent_missing(&orchestrator) && !main_workflow_listed {
+            out.push(format!(
+                "the orchestrator in `main` needs agent '{orchestrator}'"
+            ));
         }
         if self.baseline() {
             out.push(
@@ -241,5 +247,27 @@ mod tests {
             d.explain(root, PmError::WorkflowNotFound("qa".into())),
             PmError::WorkflowNotFound(_)
         ));
+    }
+
+    #[test]
+    fn dangling_names_once_the_orchestrator_a_shadowed_main_workflow_runs() {
+        let root = tempfile::tempdir().unwrap();
+        let global = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let shadow = paths::workflows_dir(root.path()).join(scope::MAIN_WORKFLOW);
+        std::fs::create_dir_all(&shadow).unwrap();
+        std::fs::write(
+            shadow.join("config.toml"),
+            "description = \"d\"\nagents = [\"supervisor\"]\n",
+        )
+        .unwrap();
+        let lines = disabled("agents = [\"main\", \"supervisor\"]\n")
+            .dangling(root.path(), global.path(), Some(home.path()))
+            .unwrap();
+        assert_eq!(
+            lines,
+            ["workflow 'orchestrator' needs agent 'supervisor'"],
+            "{lines:?}"
+        );
     }
 }

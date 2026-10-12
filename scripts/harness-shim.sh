@@ -16,6 +16,11 @@ case $1 in
     esac
     exit 0 ;;
 esac
+case "$name $1 $2" in
+  "claude auth status"|"codex login status") echo "Logged in"; exit 0 ;;
+  # No hook-trust answer: pm reads that as untrusted, without waiting.
+  "codex app-server"*) exit 0 ;;
+esac
 if [ "$name" = opencode ]; then
   # Without it opencode starts a server shared by every agent of this HOME.
   case " $* " in

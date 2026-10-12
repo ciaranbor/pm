@@ -175,6 +175,9 @@ pub(super) fn installed_version(probe: Probe) -> Option<String> {
     exit.success.then(|| exit.stdout.trim().to_string())
 }
 
+/// Exits 0 only when Claude Code holds credentials.
+pub(super) const LOGIN_STATUS: &[&str] = &["auth", "status"];
+
 /// The manual step that gives a new machine's Claude Code its credentials,
 /// which live outside anything pm syncs (the login keychain or
 /// `~/.claude.json`).

@@ -44,6 +44,17 @@ pub enum Commands {
         #[arg(long)]
         no_main: bool,
     },
+    /// Set up this machine's home project and start its supervisor, an
+    /// agent that changes pm settings and acts on any project for you
+    ///
+    /// Reports which harnesses are ready, asks which one the supervisor
+    /// runs on, then creates home and attaches to it. Once home exists, it
+    /// just opens home.
+    Onboard {
+        /// The supervisor's harness, instead of asking
+        #[arg(long)]
+        harness: Option<Harness>,
+    },
     /// List all registered projects
     List,
     /// Open/reconstruct a project's tmux sessions

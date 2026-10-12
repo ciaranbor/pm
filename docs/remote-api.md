@@ -284,6 +284,7 @@ consumer must tolerate values it doesn't know:
     "name": "app",
     "root": "/src/app",
     "skipped": null,
+    "home": false,
     "main": {
       "session": "app/main",
       "session_exists": true,
@@ -334,7 +335,9 @@ kinds or `none`; `progress` stays `ready` while a busy agent holds
 [`ready`](../README.md#follow-what-needs-you) back; `skipped` says why a
 project's features are missing, and
 `main` (its status, session and agents, shaped like a feature's) is then `null`,
-and `root` empty if its registry entry is unreadable;
+and `root` empty if its registry entry is unreadable; `home` is true on
+this machine's [home project](../README.md#supervisor), the one the global
+config's `home` names;
 `summary` is the summary's first line whatever the status; `window` is the
 agent's tmux target, `null` while it has none. `waiting` is what an
 `asking`, `unarmed` or `background` agent is at (`kind` one of `question`,
