@@ -131,6 +131,80 @@ class TerminalTest {
         assertEquals("row under the tap", before.y * 100, after.y * 100, 1.5f)
     }
 
+    /**
+     * A pinch about `at` spread over frames, as fingers move: the fingers part from `from` to `to`
+     * apart, hold still, then one lifts and the other drifts a little before it lifts too.
+     */
+    private fun pinchAbout(at: Offset, from: Float, to: Float) =
+        compose.onRoot().performTouchInput {
+            down(0, at - Offset(from / 2, 0f))
+            down(1, at + Offset(from / 2, 0f))
+            val steps = 12
+            for (i in 1..steps) {
+                val apart = from + (to - from) * i / steps
+                updatePointerTo(0, at - Offset(apart / 2, 0f))
+                updatePointerTo(1, at + Offset(apart / 2, 0f))
+                move()
+            }
+            move()
+            up(1)
+            repeat(4) { moveBy(0, Offset(-15f, -15f)) }
+            up(0)
+        }
+
+    /** Where `at` is on the drawn screen of `rows`, in columns and rows. */
+    private fun cellUnder(rows: List<String>, at: Offset): Offset {
+        val node =
+            compose
+                .onNode(
+                    SemanticsMatcher.expectValue(
+                        SemanticsProperties.Text,
+                        listOf(rows.joinToString("\n").asText()),
+                    )
+                )
+                .fetchSemanticsNode()
+        val padding = with(compose.density) { Spacing.s.toPx() }
+        val on = at - node.positionInRoot - Offset(padding, padding)
+        val columns = rows.maxOf { it.length }
+        return Offset(
+            on.x / (node.size.width - 2 * padding) * columns,
+            on.y / (node.size.height - 2 * padding) * rows.size,
+        )
+    }
+
+    private fun aPinchKeepsTheCellUnderTheFingers(scrolledRight: Boolean = false) {
+        val rows = List(100) { "%03d ".format(it) + "x".repeat(76) }
+        compose.setContent { PmTheme { TerminalView(rows) } }
+        val view = compose.onRoot().fetchSemanticsNode().size
+        val at = Offset(view.width * 0.4f, view.height * 0.6f)
+        if (scrolledRight) {
+            compose.onRoot().performTouchInput { doubleClick(Offset(view.width * 0.9f, at.y)) }
+            compose.waitForIdle()
+        }
+        val before = cellUnder(rows, at)
+
+        pinchAbout(at, 100f, 400f)
+        compose.waitForIdle()
+
+        val after = cellUnder(rows, at)
+        assertEquals("column under the fingers", before.x, after.x, 1f)
+        assertEquals("row under the fingers", before.y, after.y, 1f)
+    }
+
+    @Test
+    @Config(qualifiers = "w360dp-h640dp-440dpi")
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun a_pinch_from_the_bottom_keeps_the_cell_under_the_fingers() {
+        aPinchKeepsTheCellUnderTheFingers()
+    }
+
+    @Test
+    @Config(qualifiers = "w360dp-h640dp-440dpi")
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun a_pinch_scrolled_right_keeps_the_cell_under_the_fingers() {
+        aPinchKeepsTheCellUnderTheFingers(scrolledRight = true)
+    }
+
     @Test
     fun the_screen_drops_the_blank_rows_below_it_and_collapses_those_between() {
         assertEquals(

@@ -25,7 +25,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -42,6 +41,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.text
@@ -102,11 +102,12 @@ internal fun TerminalView(rows: List<String>, modifier: Modifier = Modifier) {
     val vertical = rememberScrollState()
     val horizontal = rememberScrollState()
     var follow by rememberSaveable { mutableStateOf(true) }
+    var pinching by remember { mutableStateOf(false) }
     LaunchedEffect(vertical) {
         followEnd(
             position = { vertical.value },
             behind = { vertical.canScrollForward },
-            following = { follow },
+            following = { follow && !pinching },
             setFollowing = { follow = it },
             toEnd = { vertical.scrollTo(vertical.maxValue) },
         )
@@ -119,28 +120,38 @@ internal fun TerminalView(rows: List<String>, modifier: Modifier = Modifier) {
             )
         val most = maxOf(1f, MAX_SP / (BASE_SP * fit))
         val scale = fit * zoom.coerceIn(1f, most)
-        // Where the scroll should be once a zoom is laid out, to keep the point under the fingers.
-        var anchored by remember { mutableStateOf<Offset?>(null) }
+        val anchor = remember { Anchor() }
+        // Where the grid starts on the scrolled content: its padding in, and a screen shorter
+        // than the view sits at its foot.
+        fun origin(scale: Float) =
+            Offset(
+                padding,
+                padding + maxOf(0f, constraints.maxHeight - grid.height * scale - 2 * padding),
+            )
         fun zoomTo(target: Float, about: Offset) {
             val before = fit * zoom.coerceIn(1f, most)
             zoom = target.coerceIn(1f, most)
-            val change = fit * zoom / before
-            val from = anchored ?: Offset(horizontal.value.toFloat(), vertical.value.toFloat())
-            anchored = (from + about) * change - about
-        }
-        LaunchedEffect(anchored) {
-            val to = anchored ?: return@LaunchedEffect
-            withFrameNanos {}
-            horizontal.scrollTo(to.x.roundToInt())
-            vertical.scrollTo(to.y.roundToInt())
-            anchored = null
+            val after = fit * zoom
+            val on = anchor.from(horizontal.value, vertical.value) + about - origin(before)
+            val to = on * (after / before) + origin(after) - about
+            val width = constraints.maxWidth.toFloat()
+            val height = constraints.maxHeight.toFloat()
+            val ends =
+                Offset(
+                    maxOf(0f, grid.width * after + 2 * padding - width),
+                    maxOf(0f, grid.height * after + 2 * padding - height),
+                )
+            anchor.aim(Offset(to.x.coerceIn(0f, ends.x), to.y.coerceIn(0f, ends.y)), after)
         }
         val pinched by rememberUpdatedState { centroid: Offset, change: Float ->
             zoomTo(zoom * change, centroid)
         }
         Box(
             Modifier.fillMaxSize()
-                .pinchZoom { centroid, change -> pinched(centroid, change) }
+                .pinchZoom(
+                    zoom = { centroid, change -> pinched(centroid, change) },
+                    pinching = { pinching = it },
+                )
                 .nestedScroll(KeepScroll)
                 .pointerInput(fit, most) {
                     detectTapGestures(
@@ -149,6 +160,17 @@ internal fun TerminalView(rows: List<String>, modifier: Modifier = Modifier) {
                             zoomTo(if (zoom < read * 0.9f) read else 1f, at)
                         }
                     )
+                }
+                .layout { measurable, constraints ->
+                    // The scrolls take their new extent as they measure; a zoom's scroll is set
+                    // before they are placed, so the frame that draws the zoom draws it too.
+                    val placeable = measurable.measure(constraints)
+                    anchor.at(scale)?.let { to ->
+                        horizontal.dispatchRawDelta(to.x - horizontal.value)
+                        vertical.dispatchRawDelta(to.y - vertical.value)
+                        anchor.reached(to)
+                    }
+                    layout(placeable.width, placeable.height) { placeable.place(0, 0) }
                 }
                 .verticalScroll(vertical)
                 .horizontalScroll(horizontal)
@@ -177,6 +199,36 @@ internal fun TerminalView(rows: List<String>, modifier: Modifier = Modifier) {
 }
 
 /**
+ * Where a zoom puts the scroll to keep the point under the fingers, until the view is laid out at
+ * the zoom's scale; then kept unrounded while the scroll stays there, so a pinch's many small steps
+ * don't add up rounding.
+ */
+private class Anchor {
+    private var to by mutableStateOf<Offset?>(null)
+    private var scale = 0f
+    private var last: Offset? = null
+
+    fun aim(to: Offset, scale: Float) {
+        this.to = to
+        this.scale = scale
+    }
+
+    /** Where the scroll goes once laid out at `scale`; null for nowhere, or not yet. */
+    fun at(scale: Float): Offset? = to?.takeIf { scale == this.scale }
+
+    fun reached(at: Offset) {
+        last = at
+        to = null
+    }
+
+    /** Where the next zoom starts from, the scroll being at `x`, `y`. */
+    fun from(x: Int, y: Int): Offset =
+        to
+            ?: last?.takeIf { it.x.roundToInt() == x && it.y.roundToInt() == y }
+            ?: Offset(x.toFloat(), y.toFloat())
+}
+
+/**
  * Keeps what the view's scrolling leaves over, so a drag on the screen pans it and never drags the
  * sheet it sits in down.
  */
@@ -189,20 +241,32 @@ private object KeepScroll : NestedScrollConnection {
 
 /**
  * Two fingers zoom, about their centre. The gesture is taken before the scrolling inside sees it,
- * else a zoomed view's scroll claims the fingers' movement and a pinch can't zoom back out.
+ * else a zoomed view's scroll claims the fingers' movement and a pinch can't zoom back out. Once
+ * two fingers are down, the gesture is a pinch until the last lifts: the finger left after the
+ * other lifts doesn't pan.
  */
-private fun Modifier.pinchZoom(zoom: (centroid: Offset, change: Float) -> Unit) =
+private fun Modifier.pinchZoom(
+    zoom: (centroid: Offset, change: Float) -> Unit,
+    pinching: (Boolean) -> Unit,
+) =
     pointerInput(Unit) {
         awaitEachGesture {
             awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-            do {
-                val event = awaitPointerEvent(PointerEventPass.Initial)
-                if (event.changes.count { it.pressed } >= 2) {
-                    val change = event.calculateZoom()
-                    if (change != 1f) zoom(event.calculateCentroid(useCurrent = true), change)
-                    event.changes.forEach { if (it.positionChanged()) it.consume() }
-                }
-            } while (event.changes.any { it.pressed })
+            var pinch = false
+            try {
+                do {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    if (event.changes.count { it.pressed } >= 2) {
+                        if (!pinch) pinching(true)
+                        pinch = true
+                        val change = event.calculateZoom()
+                        if (change != 1f) zoom(event.calculateCentroid(useCurrent = true), change)
+                    }
+                    if (pinch) event.changes.forEach { if (it.positionChanged()) it.consume() }
+                } while (event.changes.any { it.pressed })
+            } finally {
+                if (pinch) pinching(false)
+            }
         }
     }
 
