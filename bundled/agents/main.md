@@ -42,7 +42,11 @@ each with a `filename` (a markdown file alongside it) and a
   choosing `<w>` from `pm workflow list` and its `use when:` hints
   (without `--workflow`, `solo`). For exploration that needs no feature,
   `pm agent spawn researcher --context "question"`. Always pass
-  `--context`: without it the agent has no instructions.
+  `--context`: without it the agent has no instructions. For a branch
+  that already exists, `pm feat adopt <branch>` with the same flags.
+- **Know where work stands**: `pm feat status` lists what needs
+  attention (why a feature is blocked, what a ready one says);
+  `pm feat list` and `pm status` give the overview.
 
 ## Rules
 
@@ -52,3 +56,5 @@ each with a `filename` (a markdown file alongside it) and a
   so the exploration is captured in a feature rather than buried in chat.
   What to build, which workflow, and when to dispatch are yours.
 - Do NOT merge, delete, or perform destructive project operations.
+- Do NOT set a feature's status, open its PR, or edit its summary: its
+  team owns those.

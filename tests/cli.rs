@@ -171,8 +171,8 @@ fn asset_commands_install_into_the_global_tier() {
         .args(["harness", "skills", "install"])
         .assert()
         .success();
-    assert!(home.join(".agents/skills/pm/SKILL.md").is_file());
-    assert!(home.join(".claude/skills/pm/SKILL.md").is_file());
+    assert!(home.join(".agents/skills/messaging/SKILL.md").is_file());
+    assert!(home.join(".claude/skills/messaging/SKILL.md").is_file());
 
     // `upgrade`, which installed releases run after installing a newer one,
     // upgrades with this pm when the release check fails, installing the

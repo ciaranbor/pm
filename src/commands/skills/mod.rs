@@ -13,12 +13,14 @@
 //! project one, so a project custom of a global skill's name never applies
 //! there: `pm doctor` reports it ([`shadowed_project_skills`]).
 //!
-//! Projection deletes only three things:
+//! Projection deletes only four things:
 //! [`write_atomic`](crate::fs_utils::write_atomic) temp files whose writer
 //! has exited, a feature's projection of a skill its branch deleted
-//! ([`seed`](super::seed)), and an item the global `[bundled.disable]`
-//! table disables ([`bundled_disable`](super::bundled_disable)), which
-//! every global install removes from the global tier and its projections.
+//! ([`seed`](super::seed)), and, from the global tier and its projections on
+//! every global install, an item the global `[bundled.disable]` table
+//! disables ([`bundled_disable`](super::bundled_disable)) and a file of an
+//! item pm no longer bundles whose content pm shipped (`RETIRED_ITEMS` in
+//! `bundled.rs`).
 
 mod audit;
 mod bundled;

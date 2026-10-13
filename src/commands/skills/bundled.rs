@@ -60,14 +60,6 @@ pub(super) const BUNDLED_ITEMS: &[BundledItem] = &[
     // Skills
     BundledItem {
         kind: BundledKind::Skill,
-        name: "pm",
-        files: &[(
-            "pm/SKILL.md",
-            include_str!("../../../bundled/skills/pm/SKILL.md"),
-        )],
-    },
-    BundledItem {
-        kind: BundledKind::Skill,
         name: "messaging",
         files: &[(
             "messaging/SKILL.md",
@@ -249,8 +241,54 @@ pub(super) const BUNDLED_ITEMS: &[BundledItem] = &[
     },
 ];
 
+/// An item pm once bundled and no longer ships.
+pub(super) struct RetiredItem {
+    pub(super) kind: BundledKind,
+    pub(super) name: &'static str,
+    /// Each file it installed (relative to its kind's store dir), with the
+    /// SHA-256 of every content pm ever shipped for it.
+    pub(super) files: &'static [(&'static str, &'static [&'static str])],
+}
+
+/// Every global install deletes these from the global tier and its harness
+/// projections, so they don't linger as global customs. Once retired the
+/// name is free, so only a file whose content pm shipped is deleted; anything
+/// else is the user's.
+pub(super) const RETIRED_ITEMS: &[RetiredItem] = &[RetiredItem {
+    kind: BundledKind::Skill,
+    name: "pm",
+    files: &[(
+        "pm/SKILL.md",
+        &[
+            "48e2824bc215d481f1bb307d2e35a0a57235a2959c255f761b930211f8aa4643",
+            "c972e03d62876cf588f856a7d1a93a068859f72c1c8c343b4f66f849a03d5fbe",
+            "2382f1be86d833cc7f8a4e878598cb1f78e77aa15ebba10076fa536e32d00f8d",
+            "847c373e6bb7b2babd785e7378a8b3934fe843ebfeee215d5e93002b283b88ea",
+            "78b76dded044d3bdbf4c689aac21f86e9ca6ddcf388d3d8d8f4c26e01e02917c",
+            "07594610c6b44686705c92d52916ddda4f5815bb6fc23580b2a3888048313992",
+            "804a395a44b53081423b86505976a913193129cecb059cc32445dcfc78f13aad",
+            "c2e918258267a12fbb3f21ea31cfe3c8d75d3878cb689789af56646686b00d1d",
+            "73d744ef7346adabeedc1f9a7ec35b691bdd9bc921ab291fc4d8d4e45af5a9b3",
+            "413af84def16824e6880f14b5d021857bb71a02371ae6488465c799d1c2922ae",
+            "2cecd71d519b5b5de43d9349930cda5d0d04546a8b91388b88e9fda065d1edd3",
+            "4842f62a6c99f7033fdae574c91befc1c5f5945803cea57216aa4cad0ee83265",
+            "59d8540fd90cace46ec08d39016d3e280b3decf75e586913590b942adcc5fa2c",
+            "58e5bd86f1b1de413e833ae27e7fcb8b5a4bcf35aa3f1b23058662229e2067df",
+            "b08fe0211f153527622ea3a2a674f20e70131462a659b42c4b03a1ff56041f8c",
+            "22060eddeeb492ce0f8e4037caac40ee328bc37f7ee747ce164b93ee1bbd837b",
+            "07d03eb219a4b4bbc8a5eef017f2d134e4d5f2107e8632f57f1c8eb870000d1e",
+            "788f4de272ca216b36f73436c66e929d6c8729488e238208fe34dbbb3dc4c567",
+            "99379dcb7da58bd3c66e4a2db28ddbe21c4a78bf44c11e103c5dc7bdcb26df38",
+        ],
+    )],
+}];
+
 pub(super) fn items_of_kind(kind: BundledKind) -> impl Iterator<Item = &'static BundledItem> {
     BUNDLED_ITEMS.iter().filter(move |i| i.kind == kind)
+}
+
+pub(super) fn retired_of_kind(kind: BundledKind) -> impl Iterator<Item = &'static RetiredItem> {
+    RETIRED_ITEMS.iter().filter(move |i| i.kind == kind)
 }
 
 /// Whether pm bundles an item of `kind` named `name`.
@@ -316,6 +354,13 @@ pub fn bundled_workflow_names() -> Vec<&'static str> {
 mod tests {
     use super::*;
     use crate::commands::skills::{BASELINE_FILE, CANONICAL_DIR};
+
+    #[test]
+    fn no_retired_name_is_bundled() {
+        for item in RETIRED_ITEMS {
+            assert!(!is_bundled(item.kind, item.name), "{}", item.name);
+        }
+    }
 
     #[test]
     fn bundled_workflow_names_are_reserved() {

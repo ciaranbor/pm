@@ -7,7 +7,7 @@ use crate::error::Result;
 use crate::fs_utils::write_atomic;
 use crate::state::paths;
 
-use super::bundled::{BundledKind, items_of_kind};
+use super::bundled::{BundledKind, items_of_kind, retired_of_kind};
 use super::install::prune_empty_parents;
 use super::projection::{harnesses_in_use, project_dir};
 use super::{BASELINE_FILE, CANONICAL_DIR, legacy_baseline_path};
@@ -30,9 +30,9 @@ pub fn write_migration_marker(project_root: &Path) -> Result<()> {
     )
 }
 
-/// The project-tier paths a migration removes: every bundled skill/agent
-/// file in main's and each feature worktree's canonical store and harness
-/// projections, the baseline (canonical and legacy), and the bundled
+/// The project-tier paths a migration removes: every bundled or retired
+/// skill/agent file in main's and each feature worktree's canonical store and
+/// harness projections, the baseline (canonical and legacy), and the bundled
 /// workflow directories. Only what exists on disk.
 pub fn stale_bundled_copies(project_root: &Path) -> Result<Vec<PathBuf>> {
     let mut stores = vec![PathBuf::from(CANONICAL_DIR)];
@@ -46,12 +46,10 @@ pub fn stale_bundled_copies(project_root: &Path) -> Result<Vec<PathBuf>> {
         for store in &stores {
             for kind in [BundledKind::Skill, BundledKind::Agent] {
                 let dir = base.join(store).join(kind.store_subdir().unwrap());
-                for item in items_of_kind(kind) {
-                    for (rel, _) in item.files {
-                        let path = dir.join(rel);
-                        if path.exists() {
-                            out.push(path);
-                        }
+                for rel in bundled_files(kind) {
+                    let path = dir.join(rel);
+                    if path.exists() {
+                        out.push(path);
                     }
                 }
             }
@@ -66,13 +64,23 @@ pub fn stale_bundled_copies(project_root: &Path) -> Result<Vec<PathBuf>> {
         }
     }
     let workflows = paths::workflows_dir(project_root);
-    for item in items_of_kind(BundledKind::Workflow) {
-        let dir = workflows.join(item.name);
+    let names = items_of_kind(BundledKind::Workflow)
+        .map(|i| i.name)
+        .chain(retired_of_kind(BundledKind::Workflow).map(|i| i.name));
+    for name in names {
+        let dir = workflows.join(name);
         if dir.is_dir() {
             out.push(dir);
         }
     }
     Ok(out)
+}
+
+/// The files of every item of `kind` pm bundles or once bundled.
+fn bundled_files(kind: BundledKind) -> impl Iterator<Item = &'static str> {
+    items_of_kind(kind)
+        .flat_map(|i| i.files.iter().map(|(rel, _)| *rel))
+        .chain(retired_of_kind(kind).flat_map(|i| i.files.iter().map(|(rel, _)| *rel)))
 }
 
 /// Main plus every feature worktree that exists on disk.
@@ -161,8 +169,8 @@ mod tests {
         fs::create_dir_all(project_root.join("my-feat")).unwrap();
     }
 
-    /// A pre-migration project: bundled copies in main's canonical store and
-    /// harness dir, a seeded feature, both baselines, bundled and custom
+    /// A pre-migration project: bundled and retired copies in main's canonical
+    /// store and harness dir, a seeded feature, both baselines, bundled and custom
     /// workflows, and customs beside the bundled files.
     fn pre_migration_project(project_root: &Path) {
         project_with_feature(project_root);
@@ -174,6 +182,10 @@ mod tests {
                 let dir = base.join(store);
                 install_in(&dir.join("agents"), BundledKind::Agent, None).unwrap();
                 install_in(&dir.join("skills"), BundledKind::Skill, None).unwrap();
+                for (rel, _) in retired_of_kind(BundledKind::Skill).flat_map(|i| i.files) {
+                    fs::create_dir_all(dir.join("skills").join(rel).parent().unwrap()).unwrap();
+                    fs::write(dir.join("skills").join(rel), "retired skill").unwrap();
+                }
                 fs::write(dir.join("agents/custom.md"), "custom def").unwrap();
                 fs::create_dir_all(dir.join("skills/mine")).unwrap();
                 fs::write(dir.join("skills/mine/SKILL.md"), "custom skill").unwrap();

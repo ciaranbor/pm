@@ -14,6 +14,10 @@ upgrades with the running pm; `--local` skips the release check. `pm
 upgrade` still works, as an alias. Removed: `pm self-update`. A post-merge
 hook that runs `pm upgrade` should run `pm update --local`, so merges skip
 the check.
+- The bundled `pm` skill is gone; the orchestrator's definition now covers
+adopting branches and checking status. `pm update` deletes skills, agents
+and workflows pm no longer ships from `~/.agents/` and each harness's copy,
+and `[bundled.disable]` warns about naming one, as for any unknown name.
 
 ## 0.7.0 — 2026-10-12
 

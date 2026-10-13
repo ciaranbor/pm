@@ -193,7 +193,7 @@ mod tests {
     #[test]
     fn only_bundled_names_match_and_the_rest_are_unknown() {
         let d = disabled(
-            "agents = [\"qa\", \"planner\"]\nworkflows = [\"solo\"]\nskills = [\"pm\", \"qa\"]\n\
+            "agents = [\"qa\", \"planner\"]\nworkflows = [\"solo\"]\nskills = [\"messaging\", \"qa\", \"pm\"]\n\
              baseline = true\n",
         );
         assert!(d.agent("qa"));
@@ -201,11 +201,15 @@ mod tests {
         assert!(d.workflow("solo"));
         assert!(!d.workflow("qa"));
         assert!(d.baseline());
-        assert_eq!(d.unknown(), vec!["agents 'planner'", "skills 'qa'"]);
+        // `pm` is a retired skill: no longer bundled, so unknown like any other.
+        assert_eq!(
+            d.unknown(),
+            vec!["agents 'planner'", "skills 'qa'", "skills 'pm'"]
+        );
         assert_eq!(
             d.items(),
             vec![
-                "Skill 'pm'",
+                "Skill 'messaging'",
                 "Agent 'qa'",
                 "Baseline 'pm-baseline'",
                 "Workflow 'solo'"
