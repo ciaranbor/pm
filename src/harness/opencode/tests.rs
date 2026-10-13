@@ -38,7 +38,7 @@ fn ctx<'a>(dir: &'a Path, agent: &'a str) -> LaunchContext<'a> {
     }
 }
 
-/// `definition` as `pm upgrade` projects it into `worktree`.
+/// `definition` as `pm update` projects it into `worktree`.
 fn project_definition(worktree: &Path, definition: &str) {
     let agents = worktree.join(CONFIG_DIR).join("agents");
     std::fs::create_dir_all(&agents).unwrap();
@@ -570,16 +570,13 @@ fn a_definition_opencode_would_not_find_is_refused_with_the_fix_for_its_worktree
     let refused = "definition 'def' is not projected for opencode, which would run agent \
                    'frontend-rev' without its role; ";
 
-    // `pm upgrade` projects into main, never into a feature worktree.
+    // `pm update` projects into main, never into a feature worktree.
     let err = refusal("main", &main);
-    assert!(
-        err.ends_with(&format!("{refused}run `pm upgrade`")),
-        "{err}"
-    );
+    assert!(err.ends_with(&format!("{refused}run `pm update`")), "{err}");
     let err = refusal("login", &login);
     assert!(
         err.ends_with(&format!(
-            "{refused}run `pm upgrade`, then `pm harness pull login`"
+            "{refused}run `pm update`, then `pm harness pull login`"
         )),
         "{err}"
     );

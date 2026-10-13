@@ -1,6 +1,8 @@
-//! `pm self-update`: replace this binary with the latest GitHub release
-//! for its target, then run the new binary's `pm upgrade`, so the
-//! bundled assets installed are the new binary's, not this one's.
+//! `pm update`: replace this binary with the latest GitHub release for its
+//! target when that is newer, then run the upgrade steps
+//! ([`upgrade`](super::upgrade)) with the new binary's `pm update --local`,
+//! so the bundled assets installed are the new binary's, not this one's.
+//! Without a newer release, or with `--local`, this binary runs them.
 //!
 //! The release is the one `releases/latest` names, which excludes
 //! prereleases. Its `pm-<target>` asset is checked against the release's
@@ -10,8 +12,8 @@
 //! killed, and the rename gives the new mtime `pm tmux watch` and `pm
 //! serve` re-execute on ([`reexec`](super::reexec)).
 //!
-//! A build from source is left alone unless forced: the checkout's `cargo
-//! install --path .` is what updates it.
+//! A build from source compares as the release it was built from, so a
+//! newer release replaces it too.
 
 use std::cmp::Ordering;
 use std::io::Write;
@@ -51,8 +53,6 @@ pub struct Update<'a> {
     pub current: &'a str,
     /// Its target triple, naming the asset fetched.
     pub target: &'a str,
-    /// Install the latest release whatever the current version.
-    pub force: bool,
 }
 
 #[derive(Deserialize)]
@@ -70,7 +70,7 @@ struct Asset {
 impl Release {
     fn asset(&self, name: &str) -> Result<&Asset> {
         self.assets.iter().find(|a| a.name == name).ok_or_else(|| {
-            PmError::SelfUpdate(format!("release {} has no asset {name}", self.tag_name))
+            PmError::Update(format!("release {} has no asset {name}", self.tag_name))
         })
     }
 }
@@ -95,7 +95,7 @@ fn get(agent: &ureq::Agent, url: &str, accept: Option<&str>) -> Result<ureq::Bod
     request
         .call()
         .map(|response| response.into_body())
-        .map_err(|e| PmError::SelfUpdate(format!("GET {url}: {e}")))
+        .map_err(|e| PmError::Update(format!("GET {url}: {e}")))
 }
 
 fn download(agent: &ureq::Agent, asset: &Asset) -> Result<Vec<u8>> {
@@ -103,7 +103,7 @@ fn download(agent: &ureq::Agent, asset: &Asset) -> Result<Vec<u8>> {
         .with_config()
         .limit(MAX_ASSET)
         .read_to_vec()
-        .map_err(|e| PmError::SelfUpdate(format!("downloading {}: {e}", asset.name)))
+        .map_err(|e| PmError::Update(format!("downloading {}: {e}", asset.name)))
 }
 
 /// The digest `sums` (a `sha256sum` listing) gives for `name`.
@@ -114,39 +114,16 @@ fn listed_digest<'a>(sums: &'a str, name: &str) -> Option<&'a str> {
     })
 }
 
-/// What [`update`] did.
-#[derive(Debug)]
-pub enum Outcome {
-    UpToDate(String),
-    /// What it printed, the new binary's `upgrade` included.
-    Installed(Vec<String>),
+/// The release `api` names latest.
+fn latest_release(agent: &ureq::Agent, api: &str) -> Result<Release> {
+    let url = format!("{}/releases/latest", api.trim_end_matches('/'));
+    let body = get(agent, &url, Some("application/vnd.github+json"))?;
+    serde_json::from_reader(body.into_reader()).map_err(|e| PmError::Update(format!("{url}: {e}")))
 }
 
-/// Check the release `api` names latest and, if it is newer than
-/// `update.current` (or `update.force`), install it over `update.exe` and
-/// run its `upgrade`.
-pub fn update(update: &Update<'_>) -> Result<Outcome> {
-    if version::is_dev(update.current) && !update.force {
-        return Err(PmError::SelfUpdate(format!(
-            "this pm ({}) was built from source: `cargo install --path .` in its checkout \
-             updates it, or `pm self-update --force` replaces it with the latest release",
-            update.current
-        )));
-    }
-    let agent = agent();
-    let url = format!("{}/releases/latest", update.api.trim_end_matches('/'));
-    let body = get(&agent, &url, Some("application/vnd.github+json"))?;
-    let release: Release = serde_json::from_reader(body.into_reader())
-        .map_err(|e| PmError::SelfUpdate(format!("{url}: {e}")))?;
-    let latest = release.tag_name.trim_start_matches('v');
-    let newer = version::compare(latest, update.current) == Some(Ordering::Greater);
-    if !newer && !update.force {
-        return Ok(Outcome::UpToDate(format!(
-            "pm {} is up to date (latest release: {latest})",
-            update.current
-        )));
-    }
-
+/// Download `release`'s binary for `update.target`, check it against the
+/// release's `SHA256SUMS` and install it over `update.exe`.
+fn install_release(agent: &ureq::Agent, update: &Update<'_>, release: &Release) -> Result<()> {
     let name = format!("pm-{}", update.target);
     let binary = release.asset(&name).map_err(|_| {
         // The release workflow adds the macOS binary after the rest.
@@ -155,39 +132,82 @@ pub fn update(update: &Update<'_>) -> Result<Outcome> {
         } else {
             ""
         };
-        PmError::SelfUpdate(format!(
+        PmError::Update(format!(
             "release {} has no binary for {}; {pending}build from source: \
              cargo install --git https://github.com/ciaranbor/pm",
             release.tag_name, update.target
         ))
     })?;
-    let sums = download(&agent, release.asset("SHA256SUMS")?)?;
+    let sums = download(agent, release.asset("SHA256SUMS")?)?;
     let sums = String::from_utf8_lossy(&sums);
     let expected = listed_digest(&sums, &name)
-        .ok_or_else(|| PmError::SelfUpdate(format!("SHA256SUMS lists no {name}")))?;
-    let bytes = download(&agent, binary)?;
+        .ok_or_else(|| PmError::Update(format!("SHA256SUMS lists no {name}")))?;
+    let bytes = download(agent, binary)?;
     let actual = sha256(&bytes);
     if !actual.eq_ignore_ascii_case(expected) {
-        return Err(PmError::SelfUpdate(format!(
+        return Err(PmError::Update(format!(
             "{name} does not match SHA256SUMS (expected {expected}, got {actual}); nothing was installed"
         )));
     }
-    install(update.exe, &bytes)?;
+    install(update.exe, &bytes)
+}
 
-    let mut lines = vec![format!(
+/// What the release half of an update did.
+#[derive(Debug)]
+pub enum Outcome {
+    /// Nothing was installed: the upgrade steps are this binary's to run,
+    /// after the line saying why.
+    Kept(String),
+    /// A newer release was installed, and the line saying so: the upgrade
+    /// steps are the new binary's to run.
+    Installed(String),
+}
+
+/// Install the latest release over `update.exe` if it is newer than
+/// `update.current`. A dry run only says whether it would. A release check
+/// that fails is reported, not an error, so the upgrade steps still run; a
+/// failed install is an error.
+pub fn from_release(update: &Update<'_>, dry_run: bool) -> Result<Outcome> {
+    let agent = agent();
+    let release = match latest_release(&agent, update.api) {
+        Ok(release) => release,
+        Err(e) => {
+            return Ok(Outcome::Kept(format!(
+                "Warning: could not check for a newer pm release ({e}); upgrading with pm {}",
+                update.current
+            )));
+        }
+    };
+    let latest = release.tag_name.trim_start_matches('v');
+    if version::compare(latest, update.current) != Some(Ordering::Greater) {
+        return Ok(Outcome::Kept(format!(
+            "pm {} is up to date (latest release: {latest})",
+            update.current
+        )));
+    }
+    if dry_run {
+        return Ok(Outcome::Kept(format!(
+            "Would install pm {latest} over {}; the preview below is pm {}'s, not {latest}'s",
+            update.current, update.current
+        )));
+    }
+    install_release(&agent, update, &release).map_err(|e| {
+        PmError::Update(format!(
+            "{e} (`pm update --local` upgrades the projects without it)"
+        ))
+    })?;
+    Ok(Outcome::Installed(format!(
         "Installed pm {latest} over {} ({})",
         update.current,
         update.exe.display()
-    )];
-    lines.extend(upgrade_projects(update.exe));
-    Ok(Outcome::Installed(lines))
+    )))
 }
 
 /// Put `bytes` at `exe` by renaming a file written beside it.
 fn install(exe: &Path, bytes: &[u8]) -> Result<()> {
     let dir = exe.parent().unwrap_or(Path::new("."));
     let cannot =
-        |e: std::io::Error| PmError::SelfUpdate(format!("cannot replace {}: {e}", exe.display()));
+        |e: std::io::Error| PmError::Update(format!("cannot replace {}: {e}", exe.display()));
     let mut file = tempfile::Builder::new()
         .prefix(".pm-new-")
         .tempfile_in(dir)
@@ -200,36 +220,26 @@ fn install(exe: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Run `exe upgrade`, returning what it printed.
-fn upgrade_projects(exe: &Path) -> Vec<String> {
-    let mut lines = vec!["Upgrading all projects...".to_string()];
-    match run_just_written(Command::new(exe).arg("upgrade")) {
-        Ok(out) => {
-            lines.extend(
-                String::from_utf8_lossy(&out.stdout)
-                    .lines()
-                    .map(String::from),
-            );
-            if !out.status.success() {
-                lines.push(format!(
-                    "Warning: `pm upgrade` failed: {}",
-                    String::from_utf8_lossy(&out.stderr).trim()
-                ));
-            }
-        }
-        Err(e) => lines.push(format!("Warning: could not run `pm upgrade`: {e}")),
+/// Run `exe update --local`, its output going straight to this process's.
+fn upgrade_with(exe: &Path) -> Result<()> {
+    let status = run_just_written(Command::new(exe).args(["update", "--local"]))
+        .map_err(|e| PmError::Update(format!("could not run `pm update --local`: {e}")))?;
+    if !status.success() {
+        return Err(PmError::Update(format!(
+            "the new pm's `pm update --local` failed ({status})"
+        )));
     }
-    lines
+    Ok(())
 }
 
 /// Run `command`, whose program was just written. On Linux its exec fails
 /// with "Text file busy" while a child that another thread of this process
 /// forked (as test threads do) still holds the write handle, until that
 /// child execs.
-fn run_just_written(command: &mut Command) -> std::io::Result<std::process::Output> {
+fn run_just_written(command: &mut Command) -> std::io::Result<std::process::ExitStatus> {
     let mut tries = 0;
     loop {
-        match command.output() {
+        match command.status() {
             Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && tries < 20 => {
                 tries += 1;
                 std::thread::sleep(Duration::from_millis(50));
@@ -239,35 +249,55 @@ fn run_just_written(command: &mut Command) -> std::io::Result<std::process::Outp
     }
 }
 
-/// `pm self-update` for this binary.
-pub fn self_update(force: bool) -> Result<Vec<String>> {
-    let api = std::env::var(REPO_API_ENV).unwrap_or_else(|_| REPO_API.to_string());
-    let exe: PathBuf = std::env::current_exe()?.canonicalize()?;
-    let mut lines = match update(&Update {
-        api: &api,
-        exe: &exe,
-        current: version::VERSION,
-        target: version::TARGET,
-        force,
-    })? {
-        Outcome::UpToDate(line) => return Ok(vec![line]),
-        Outcome::Installed(lines) => lines,
-    };
-    let active_features = count_active_features()?;
-    if !active_features.is_empty() {
-        let total: usize = active_features.iter().map(|(_, c)| c).sum();
-        lines.push(format!(
-            "⚠ {total} active feature{} across {} project{} (new binary may differ from in-flight worktrees):",
-            if total == 1 { "" } else { "s" },
-            active_features.len(),
-            if active_features.len() == 1 { "" } else { "s" },
-        ));
-        lines.extend(
-            active_features
-                .iter()
-                .map(|(name, count)| format!("  {name}: {count}")),
-        );
+/// `pm update`: unless `local`, install a newer release first and have it
+/// run the upgrade steps, its output printed as it goes; otherwise this
+/// binary runs them.
+pub fn update(local: bool, dry_run: bool, tmux_server: Option<&str>) -> Result<Vec<String>> {
+    let mut lines = Vec::new();
+    if !local {
+        let api = std::env::var(REPO_API_ENV).unwrap_or_else(|_| REPO_API.to_string());
+        let exe: PathBuf = std::env::current_exe()?.canonicalize()?;
+        let outcome = from_release(
+            &Update {
+                api: &api,
+                exe: &exe,
+                current: version::VERSION,
+                target: version::TARGET,
+            },
+            dry_run,
+        )?;
+        match outcome {
+            Outcome::Kept(line) => lines.push(line),
+            Outcome::Installed(line) => {
+                println!("{line}");
+                upgrade_with(&exe)?;
+                return active_features_warning();
+            }
+        }
     }
+    lines.extend(super::upgrade::upgrade(dry_run, tmux_server)?);
+    Ok(lines)
+}
+
+/// A warning naming the projects with active features, which a new binary
+/// may not suit; empty when there are none.
+fn active_features_warning() -> Result<Vec<String>> {
+    let active_features = count_active_features()?;
+    if active_features.is_empty() {
+        return Ok(Vec::new());
+    }
+    let total: usize = active_features.iter().map(|(_, c)| c).sum();
+    let mut lines = vec![format!(
+        "⚠ {total} active feature{} across {} project{} (new binary may differ from in-flight worktrees):",
+        if total == 1 { "" } else { "s" },
+        active_features.len(),
+        if active_features.len() == 1 { "" } else { "s" },
+    )];
+    lines.extend(
+        active_features
+            .iter()
+            .map(|(name, count)| format!("  {name}: {count}")),
+    );
     Ok(lines)
 }
 
@@ -370,20 +400,22 @@ mod tests {
         std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
         std::fs::write(&exe, "old").unwrap();
         let release = format!(
-            "#!/bin/sh\necho \"$@\" > '{}'\necho upgraded\n",
+            "#!/bin/sh\necho \"$@\" > '{}'\n",
             dir.path().join("ran").display()
         );
         (dir, exe, release.into_bytes())
     }
 
-    fn run(api: &str, exe: &Path, current: &str, force: bool) -> Result<Outcome> {
-        update(&Update {
-            api,
-            exe,
-            current,
-            target: TARGET,
-            force,
-        })
+    fn run(api: &str, exe: &Path, current: &str, dry_run: bool) -> Result<Outcome> {
+        from_release(
+            &Update {
+                api,
+                exe,
+                current,
+                target: TARGET,
+            },
+            dry_run,
+        )
     }
 
     #[test]
@@ -391,15 +423,17 @@ mod tests {
         let (_dir, exe, release) = installed();
         let github = releases("v0.3.0", &release, None);
         let missing = |target| {
-            let result = update(&Update {
-                api: &github.api,
-                exe: &exe,
-                current: "0.2.0",
-                target,
-                force: false,
-            });
+            let result = from_release(
+                &Update {
+                    api: &github.api,
+                    exe: &exe,
+                    current: "0.2.0",
+                    target,
+                },
+                false,
+            );
             match result {
-                Err(PmError::SelfUpdate(message)) => message,
+                Err(PmError::Update(message)) => message,
                 other => panic!("{other:?}"),
             }
         };
@@ -413,24 +447,35 @@ mod tests {
     fn a_newer_release_is_verified_renamed_over_the_binary_and_upgrades_projects() {
         let (dir, exe, release) = installed();
         let github = releases("v0.3.0", &release, None);
-        let Outcome::Installed(lines) = run(&github.api, &exe, "0.2.0", false).unwrap() else {
-            panic!("0.3.0 is newer");
-        };
+        let outcome = run(&github.api, &exe, "0.2.0", false).unwrap();
+        assert!(matches!(outcome, Outcome::Installed(_)), "{outcome:?}");
         assert_eq!(std::fs::read(&exe).unwrap(), release);
         assert_eq!(
             std::fs::metadata(&exe).unwrap().permissions().mode() & 0o777,
             0o755
         );
+        upgrade_with(&exe).unwrap();
         assert_eq!(
             std::fs::read_to_string(dir.path().join("ran")).unwrap(),
-            "upgrade\n"
+            "update --local\n"
         );
-        assert!(lines.iter().any(|l| l == "upgraded"), "{lines:?}");
         let leftovers: Vec<_> = std::fs::read_dir(exe.parent().unwrap())
             .unwrap()
             .map(|e| e.unwrap().file_name())
             .collect();
         assert_eq!(leftovers, ["pm"]);
+    }
+
+    #[test]
+    fn the_new_binarys_failed_upgrade_is_an_error() {
+        let dir = tempdir().unwrap();
+        let exe = dir.path().join("pm");
+        install(&exe, b"#!/bin/sh\nexit 1\n").unwrap();
+        let err = upgrade_with(&exe).unwrap_err();
+        assert!(
+            err.to_string().contains("`pm update --local` failed"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -449,9 +494,9 @@ mod tests {
     fn the_same_or_an_older_release_downloads_nothing() {
         let (_dir, exe, release) = installed();
         let github = releases("v0.2.0", &release, None);
-        for current in ["0.2.0", "0.3.0-rc.1", "1.0.0"] {
+        for current in ["0.2.0", "0.2.0+3.gabc1234", "0.3.0-rc.1", "1.0.0"] {
             let outcome = run(&github.api, &exe, current, false).unwrap();
-            assert!(matches!(outcome, Outcome::UpToDate(_)), "{current}");
+            assert!(matches!(outcome, Outcome::Kept(_)), "{current}");
         }
         assert_eq!(
             github.downloads.load(std::sync::atomic::Ordering::SeqCst),
@@ -461,14 +506,37 @@ mod tests {
     }
 
     #[test]
-    fn a_build_from_source_is_replaced_only_when_forced() {
+    fn a_newer_release_replaces_a_build_from_source() {
         let (_dir, exe, release) = installed();
-        let github = releases("v0.2.0", &release, None);
-        let err = run(&github.api, &exe, "0.2.0+3.gabc1234", false).unwrap_err();
-        assert!(err.to_string().contains("cargo install --path ."), "{err}");
-        assert_eq!(std::fs::read_to_string(&exe).unwrap(), "old");
-
-        run(&github.api, &exe, "0.2.0+3.gabc1234", true).unwrap();
+        let github = releases("v0.3.0", &release, None);
+        let outcome = run(&github.api, &exe, "0.2.0+3.gabc1234", false).unwrap();
+        assert!(matches!(outcome, Outcome::Installed(_)), "{outcome:?}");
         assert_eq!(std::fs::read(&exe).unwrap(), release);
+    }
+
+    #[test]
+    fn a_dry_run_installs_nothing() {
+        let (dir, exe, release) = installed();
+        let github = releases("v0.3.0", &release, None);
+        let Outcome::Kept(line) = run(&github.api, &exe, "0.2.0", true).unwrap() else {
+            panic!("a dry run installed");
+        };
+        assert!(line.contains("Would install pm 0.3.0"), "{line}");
+        assert_eq!(std::fs::read_to_string(&exe).unwrap(), "old");
+        assert!(!dir.path().join("ran").exists());
+    }
+
+    #[test]
+    fn an_unreachable_release_server_still_leaves_the_upgrade_steps_to_run() {
+        let (_dir, exe, _) = installed();
+        let unreachable = {
+            let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+            format!("http://{}", server.server_addr().to_ip().unwrap())
+        };
+        let Outcome::Kept(line) = run(&unreachable, &exe, "0.2.0", false).unwrap() else {
+            panic!("nothing to install");
+        };
+        assert!(line.starts_with("Warning: could not check"), "{line}");
+        assert_eq!(std::fs::read_to_string(&exe).unwrap(), "old");
     }
 }

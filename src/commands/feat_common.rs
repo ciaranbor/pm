@@ -72,7 +72,7 @@ pub fn resolve_workflow_in<'a>(
                 }
                 return Err(PmError::SafetyCheck(format!(
                     "default workflow '{DEFAULT_WORKFLOW}' is not installed. \
-                     Run `pm upgrade`, or pass --workflow <name>."
+                     Run `pm update`, or pass --workflow <name>."
                 )));
             }
             Ok(Some(DEFAULT_WORKFLOW))
@@ -323,10 +323,7 @@ mod tests {
         )
         .unwrap_err()
         .to_string();
-        assert!(
-            err.contains("'solo'") && err.contains("pm upgrade"),
-            "{err}"
-        );
+        assert!(err.contains("'solo'") && err.contains("pm update"), "{err}");
 
         // Global tier alone is enough …
         let solo = global.path().join(DEFAULT_WORKFLOW);

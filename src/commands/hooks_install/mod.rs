@@ -2,7 +2,7 @@
 //! harness (`~/.claude/settings.json`, `$CODEX_HOME/hooks.json`
 //! — both take the same nested `hooks` shape) — once per machine. A
 //! harness whose loop is a plugin gets [`Harness::plugin_files`] written
-//! instead. The install is idempotent, so `pm init`, `pm upgrade`,
+//! instead. The install is idempotent, so `pm init`, `pm update`,
 //! `pm harness hooks install` and `pm doctor --fix` all run it
 //! unconditionally.
 //!

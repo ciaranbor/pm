@@ -32,7 +32,7 @@ pub(super) fn run(cmd: WorkflowCommands) -> Result<()> {
             let out = commands::workflow::list_rows(project_root.as_deref())?;
             // Print rows to stdout (the normal listing).
             if out.rows.is_empty() {
-                println!("No workflows installed. Run `pm upgrade` to install bundled workflows.");
+                println!("No workflows installed. Run `pm update` to install bundled workflows.");
             } else {
                 for line in &out.rows {
                     println!("{line}");

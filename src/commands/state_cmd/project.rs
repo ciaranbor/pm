@@ -22,7 +22,7 @@ fn project_ctx(pm_dir: &Path) -> RepoContext<'_> {
 /// Initialise a git repo in `.pm/` for state backup/sync.
 ///
 /// Commits the current state. Idempotent. When called non-interactively
-/// (e.g. from `pm init` or `pm upgrade`), skips the remote setup prompt.
+/// (e.g. from `pm init` or `pm update`), skips the remote setup prompt.
 pub fn init(project_root: &Path) -> Result<String> {
     init_inner(project_root, false, None)
 }

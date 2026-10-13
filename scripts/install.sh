@@ -115,9 +115,12 @@ case ":$PATH:" in
 esac
 
 if $replacing; then
-    # A PM_VERSION whose `pm upgrade` covers only the project it runs in
-    # lists `--all` in its help; later ones upgrade every project anyway.
-    if "$pm" upgrade --help | grep -q -- --all; then
+    # The release was just installed, so skip `pm update`'s own check. A
+    # PM_VERSION before `pm update` has `pm upgrade`, which in one whose
+    # help lists `--all` covers only the project it runs in without it.
+    if "$pm" update --help 2>/dev/null | grep -q -- --local; then
+        "$pm" update --local
+    elif "$pm" upgrade --help | grep -q -- --all; then
         "$pm" upgrade --all
     else
         "$pm" upgrade

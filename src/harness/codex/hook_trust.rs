@@ -1,6 +1,6 @@
 //! Whether codex will run pm's hooks. Codex records trust per hook as a
 //! hash of the hook's normalized definition (`hooks.state.<key>.trusted_hash`
-//! in `config.toml`), so a pm upgrade that changes a hook's command leaves an
+//! in `config.toml`), so a pm update that changes a hook's command leaves an
 //! entry codex no longer honours: it asks again at the next start and runs
 //! nothing until then. The hash is codex's own fingerprint of its internal
 //! TOML form, so pm asks codex instead of recomputing it — the app-server's

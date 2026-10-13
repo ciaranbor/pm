@@ -105,7 +105,7 @@ pub struct ListOutput {
 /// Build the column-aligned listing used by `pm workflow list`. Returns
 /// one row per installed workflow, sorted by name and tagged
 /// `[<tier>, bundled|user]` — `bundled` meaning pm-owned and rewritten by
-/// `pm upgrade`, and a project entry shadowing a same-named global one —
+/// `pm update`, and a project entry shadowing a same-named global one —
 /// plus a warning per broken `config.toml` so users don't discover the
 /// breakage only when `pm feat new --workflow <name>` fails. Outside a
 /// project (`None`) only the global tier is listed. Main's workflow is

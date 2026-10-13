@@ -51,14 +51,13 @@ pub fn run(cli: Cli) -> pm::error::Result<()> {
         Commands::Msg(cmd) => msg::run(cmd, server),
         Commands::Feat(cmd) => feat::run(cmd, server),
         Commands::Doctor { fix, project } => maintenance::doctor(fix, project, server),
-        Commands::Upgrade { dry_run } => maintenance::upgrade(dry_run, server),
+        Commands::Update { local, dry_run, .. } => maintenance::update(local, dry_run, server),
         Commands::Restore { projects, imports } => maintenance::restore(projects, imports, server),
         Commands::Migrate(MigrateCommands::Check {
             projects,
             verbose,
             json,
         }) => maintenance::migrate_check(projects, verbose, json, server),
-        Commands::SelfUpdate { force } => maintenance::self_update(force),
         Commands::State(cmd) => state::run(cmd),
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();

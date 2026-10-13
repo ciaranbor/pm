@@ -6,6 +6,15 @@ notes.
 
 ## Unreleased
 
+- `pm update` replaces `pm self-update` and `pm upgrade`: it installs the
+latest release if it is newer than the running pm, then upgrades every
+project with it. A build from source is replaced too once a newer release
+is out, so `--force` is gone. If GitHub can't be reached it warns and
+upgrades with the running pm; `--local` skips the release check. `pm
+upgrade` still works, as an alias. Removed: `pm self-update`. A post-merge
+hook that runs `pm upgrade` should run `pm update --local`, so merges skip
+the check.
+
 ## 0.7.0 — 2026-10-12
 
 - A machine-wide supervisor: `pm onboard` creates a `home` project at

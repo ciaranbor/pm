@@ -128,7 +128,7 @@ pub enum PmError {
 
     #[error(
         "Workflow not found: {0}\n  Hint: run `pm workflow list` to see installed workflows, \
-         or run `pm upgrade` to install the bundled ones."
+         or run `pm update` to install the bundled ones."
     )]
     WorkflowNotFound(String),
 
@@ -140,7 +140,7 @@ pub enum PmError {
     #[error(
         "{kind} '{name}' is bundled but disabled by `[bundled.disable] {key}` in the global pm config.\n  \
          Hint: add a project custom at {custom}, or remove '{name}' from that list and run \
-         `pm upgrade`."
+         `pm update`."
     )]
     BundledDisabled {
         kind: &'static str,
@@ -183,7 +183,7 @@ pub enum PmError {
     },
 
     #[error(
-        "No agent definition 'default': the vanilla agent is now 'plain'. Run `pm upgrade` to \
+        "No agent definition 'default': the vanilla agent is now 'plain'. Run `pm update` to \
          migrate agents spawned as 'default', or spawn 'plain'."
     )]
     UnmigratedVanillaAgent,
@@ -224,8 +224,8 @@ pub enum PmError {
     #[error("editor: {0}")]
     Editor(String),
 
-    #[error("self-update: {0}")]
-    SelfUpdate(String),
+    #[error("update: {0}")]
+    Update(String),
 
     #[error("Transcript unreadable: {0}")]
     Transcript(String),

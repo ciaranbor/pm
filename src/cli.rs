@@ -132,14 +132,26 @@ pub enum Commands {
         #[arg(long)]
         project: Option<String>,
     },
-    /// Reinstall pm's hooks and bundled assets in every registered project, then restart
+    /// Install the latest pm release if it is newer than this pm, then reinstall
+    /// pm's hooks and bundled assets in every registered project and restart
     /// the agents left stale
-    Upgrade {
+    ///
+    /// A release check that fails (offline, GitHub unreachable) is reported and
+    /// the projects are upgraded with this pm.
+    #[command(visible_alias = "upgrade")]
+    Update {
+        /// Skip the release check: only upgrade the projects, with this pm
+        #[arg(long)]
+        local: bool,
         /// Preview changes without writing anything. Stale agents are
         /// judged against the assets installed now, not the ones the
-        /// upgrade would install
+        /// update would install
         #[arg(long, alias = "check")]
         dry_run: bool,
+        /// Ignored: every project is always upgraded; pm 0.5.0 and earlier
+        /// pass it after installing a release
+        #[arg(long, hide = true)]
+        all: bool,
     },
     /// Restore projects on a fresh machine from the global registry
     Restore {
@@ -154,14 +166,6 @@ pub enum Commands {
     /// Moving projects to another machine
     #[command(subcommand)]
     Migrate(MigrateCommands),
-    /// Install the latest pm release over this binary, then upgrade all
-    /// projects with it
-    SelfUpdate {
-        /// Install the latest release even if this pm is newer or was built
-        /// from source
-        #[arg(long)]
-        force: bool,
-    },
     /// Read and change pm settings: the global config.toml and each
     /// project's .pm/config.toml
     ///
@@ -496,7 +500,7 @@ pub enum HarnessAgentsCommands {
     List,
     /// Uninstall bundled agent definitions from ~/.agents/agents/ (and its projections)
     ///
-    /// `pm upgrade` reinstalls them; `[bundled.disable]` in the global config keeps them off.
+    /// `pm update` reinstalls them; `[bundled.disable]` in the global config keeps them off.
     Uninstall {
         /// Agent name (required unless --all is passed)
         name: Option<String>,
@@ -554,7 +558,7 @@ pub enum HarnessSkillsCommands {
     },
     /// Uninstall bundled skills from ~/.agents/skills/ (and its projections)
     ///
-    /// `pm upgrade` reinstalls them; `[bundled.disable]` in the global config keeps them off.
+    /// `pm update` reinstalls them; `[bundled.disable]` in the global config keeps them off.
     Uninstall {
         /// Skill name (required unless --all is passed)
         name: Option<String>,
@@ -603,7 +607,7 @@ pub enum HarnessHooksCommands {
         /// The harness whose tool-call payload arrives on stdin
         harness: pm::harness::Harness,
     },
-    /// Restart an agent `pm upgrade` deferred, now idle (started by the Stop hook)
+    /// Restart an agent `pm update` deferred, now idle (started by the Stop hook)
     #[command(hide = true)]
     RestartAtIdle {
         agent: String,

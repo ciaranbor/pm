@@ -118,7 +118,8 @@ load_claude_token() {
 
 # Point every helper at sandbox NAME. The sandbox environment: everything
 # the real machine could leak through is unset, and the sandbox's own bin/
-# leads PATH.
+# leads PATH. PM_RELEASES_URL names a closed port, so `pm update` never
+# installs a GitHub release over the build under test.
 select_sandbox() {
   name=$1
   home="$tmpbase/pm-test-home-$name"
@@ -130,6 +131,7 @@ select_sandbox() {
     -u GIT_CONFIG_GLOBAL -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL
     -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL
     HOME="$home" PM_TMUX_SERVER="$server" PM_SANDBOX="$name"
+    PM_RELEASES_URL="http://127.0.0.1:9"
     PATH="$home/bin:$caller_path")
 }
 select_sandbox "$name"

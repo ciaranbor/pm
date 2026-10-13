@@ -1,4 +1,4 @@
-//! The restart a sweep defers: a stale agent `pm upgrade` passed over as
+//! The restart a sweep defers: a stale agent `pm update` passed over as
 //! busy, or the one that ran it, is marked ([`runtime::mark_restart_at_idle`])
 //! and restarted once its turn ends. Its waiter, as it marks the agent
 //! idle with nothing unread, starts `pm harness hooks restart-at-idle` in a

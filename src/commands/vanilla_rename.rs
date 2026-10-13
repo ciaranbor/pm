@@ -2,7 +2,7 @@
 //!
 //! An agent registered as `default` was launched vanilla; once `default` is
 //! an ordinary name, restarting or healing it would look for a `default`
-//! definition. `pm upgrade` migrates each project once: every such entry
+//! definition. `pm update` migrates each project once: every such entry
 //! keeps its name (window, `PM_AGENT_NAME`, inbox) and records `plain` as its
 //! definition, so a running agent is untouched and its respawns stay
 //! vanilla. The migration is one-shot (a marker under `.pm/migrations/`)
@@ -36,7 +36,7 @@ pub fn legacy_agents(project_root: &Path) -> Result<Vec<(String, String)>> {
     let mut out = Vec::new();
     for scope in registry_scopes(&agents_dir)? {
         // A registry that doesn't parse can't spawn anything to migrate, and
-        // must not fail the rest of `pm upgrade`.
+        // must not fail the rest of `pm update`.
         let Ok(registry) = AgentRegistry::load(&agents_dir, &scope) else {
             continue;
         };

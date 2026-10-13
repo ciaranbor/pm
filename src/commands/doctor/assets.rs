@@ -25,7 +25,7 @@ pub(super) fn asset_issues(
         issues.push(Issue {
             kind: IssueKind::GlobalStoreMissing,
             message: format!(
-                "not installed in the global asset store: {} (run `pm upgrade`)",
+                "not installed in the global asset store: {} (run `pm update`)",
                 missing.join(", ")
             ),
             fix: Fix::Auto(FixAction::InstallGlobalAssets),
@@ -43,7 +43,7 @@ pub(super) fn asset_issues(
         issues.push(Issue {
             kind: IssueKind::DisabledStillInstalled,
             message: format!(
-                "disabled by `[bundled.disable]` but still installed: {} (run `pm upgrade`)",
+                "disabled by `[bundled.disable]` but still installed: {} (run `pm update`)",
                 still_installed.join(", ")
             ),
             fix: Fix::Auto(FixAction::InstallGlobalAssets),
@@ -56,7 +56,7 @@ pub(super) fn asset_issues(
             issues.push(Issue {
                 kind: IssueKind::StaleBundledCopies,
                 message: format!(
-                    "{} pre-migration bundled copies shadow the global store (run `pm upgrade`)",
+                    "{} pre-migration bundled copies shadow the global store (run `pm update`)",
                     stale.len()
                 ),
                 fix: Fix::None,
@@ -81,7 +81,7 @@ pub(super) fn asset_issues(
         issues.push(Issue {
             kind: IssueKind::AssetNotProjected,
             message: format!(
-                "canonical agent '{name}' not projected for {harness} (run `pm upgrade`)"
+                "canonical agent '{name}' not projected for {harness} (run `pm update`)"
             ),
             fix: Fix::Skip,
         });
@@ -197,7 +197,7 @@ fn unprojected_project_definitions(
 }
 
 /// Project-tier definitions a feature worktree lacks a projected copy of.
-/// `pm upgrade` projects into main only; the harness, started in the
+/// `pm update` projects into main only; the harness, started in the
 /// feature, never sees main's copy.
 pub(super) fn feature_projection_issues(
     project_root: &Path,
@@ -215,7 +215,7 @@ pub(super) fn feature_projection_issues(
                     .missing_in_main
                     .contains(&(name.clone(), harness));
                 let (remedy, fix) = if main_lacks {
-                    (format!("run `pm upgrade`, then {pull}"), Fix::None)
+                    (format!("run `pm update`, then {pull}"), Fix::None)
                 } else {
                     (
                         format!("run {pull}"),
@@ -334,7 +334,7 @@ mod tests {
             "{lines:?}"
         );
 
-        // `pm upgrade` projects into main only; the feature needs a pull.
+        // `pm update` projects into main only; the feature needs a pull.
         crate::commands::skills::project_assets(&project_path, false).unwrap();
         assert!(unprojected(&project_path).unwrap().is_empty());
         let lines = doctor(&project_path, &projects_dir, false, server.name())
@@ -390,7 +390,7 @@ mod tests {
         .unwrap();
         assert!(
             messages(&issues, IssueKind::AssetNotProjected).contains(
-                &"canonical agent 'planner' not projected for opencode (run `pm upgrade`)"
+                &"canonical agent 'planner' not projected for opencode (run `pm update`)"
                     .to_string()
             ),
             "{:?}",

@@ -66,7 +66,7 @@ pub(super) fn findings(m: &Machine<'_>) -> Result<Vec<Finding>> {
     let version = crate::version::VERSION;
     let script = format!(
         "curl -fsSL {} | PM_VERSION={} sh",
-        crate::commands::self_update::INSTALL_SCRIPT,
+        crate::commands::update::INSTALL_SCRIPT,
         crate::version::base(version)
     );
     out.push(Finding::manual(

@@ -19,7 +19,7 @@
 //!
 //! Each harness's agents restart behind a canary ([`canary`]).
 //!
-//! [`Select::Stale`] (`--stale`, and `pm upgrade`) narrows the sweep to
+//! [`Select::Stale`] (`--stale`, and `pm update`) narrows the sweep to
 //! running agents whose launch is stale ([`launch_stamp`]): a dead agent,
 //! or one of a closed session, launches with what is current at its next
 //! spawn anyway. The caller, which asked for no restart of its own, and an

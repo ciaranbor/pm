@@ -9,6 +9,6 @@ and publishes the release with those notes. The macOS binary is added to
 the published release once its runner gets to it; if its job fails,
 re-running the run's failed jobs adds it. `--dry-run` checks everything
 first. A version such as `0.2.0-rc.1` is published as a prerelease, which
-the install script, `pm self-update` and the app all pass over. CI signs
+the install script, `pm update` and the app all pass over. CI signs
 the APK with secrets that `scripts/release --setup-secrets` sets from
 `~/.config/pm-secrets/`, once.

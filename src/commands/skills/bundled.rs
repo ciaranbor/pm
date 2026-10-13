@@ -297,7 +297,7 @@ pub(super) fn is_bundled_asset(rel: &Path) -> bool {
 }
 
 /// Whether `name` is one of the bundled workflows — pm-owned in the global
-/// tier, where `pm upgrade` rewrites them. A same-named project workflow is
+/// tier, where `pm update` rewrites them. A same-named project workflow is
 /// a user override.
 pub fn is_bundled_workflow(name: &str) -> bool {
     items_of_kind(BundledKind::Workflow).any(|i| i.name == name)
