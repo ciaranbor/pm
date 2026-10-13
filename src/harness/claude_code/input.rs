@@ -16,6 +16,11 @@
 //!
 //! Anything else in the box's place — a dialog — reads as unknown, so a
 //! caller that types only into an empty box errs towards leaving it alone.
+//! So does a box with a dialog drawn right above it, its footer (`Enter to
+//! confirm · Esc to cancel`) on the box's upper rule: the dialog has the
+//! keyboard, and Enter there picks its option. "Teach auto mode about your
+//! environment?" is drawn so on a resumed session; after a turn it is drawn
+//! below the box, where its own `❯` is the last one (verified on 2.1.296).
 
 use std::path::Path;
 
@@ -24,6 +29,7 @@ use crate::harness::screen::visible_text;
 const PROMPT: char = '❯';
 const RULE: char = '─';
 const INSERT: &str = "-- INSERT --";
+const DIALOG_FOOTER: &str = "Esc to cancel";
 
 /// The variable naming the agent's config dir, which holds `.claude.json` and
 /// `settings.json`.
@@ -78,6 +84,9 @@ fn is_empty_in(screen: &str, vim: bool) -> Option<bool> {
             .is_some_and(|line| line.trim_start().starts_with(RULE))
     };
     if prompt == 0 || !is_rule(prompt - 1) {
+        return None;
+    }
+    if prompt >= 2 && lines[prompt - 2].contains(DIALOG_FOOTER) {
         return None;
     }
     if vim && !lines[prompt..].iter().any(|line| line.contains(INSERT)) {
@@ -156,6 +165,28 @@ mod tests {
         assert_eq!(is_empty_in("", false), None);
         let dialog = " Security guide\n ❯ No, exit\n   Yes, I trust this folder\n";
         assert_eq!(is_empty_in(dialog, false), None);
+    }
+
+    #[test]
+    fn a_dialog_over_or_under_an_empty_box_is_unknown() {
+        let teach = [
+            "\x1b[38;5;153m──────────────────────────────",
+            "\x1b[39m  \x1b[1m\x1b[38;5;153mTeach auto mode about your environment?\x1b[0m",
+            "",
+            "  \x1b[38;5;153m❯\x1b[39m \x1b[38;5;246m1. \x1b[38;5;153mYes\x1b[39m",
+            "    \x1b[38;5;246m2. \x1b[39mNot now",
+            "",
+            "  \x1b[3m\x1b[38;5;246mEnter to confirm · Esc to cancel\x1b[0m",
+        ]
+        .join("\n");
+        let rule = "\x1b[38;5;244m──────────────────────────────";
+        let status = "\x1b[39m  ⏵⏵ auto mode on (shift+tab to cycle)";
+        let resumed = format!("⏺ ok\n\n{teach}\n{rule}\n\x1b[39m❯ \n{rule}\n{status}");
+        assert_eq!(is_empty_in(&resumed, false), None);
+        let after_turn = format!("⏺ ok\n\n{rule}\n\x1b[39m❯ \n{rule}\n{status}\n\n{teach}");
+        assert_eq!(is_empty_in(&after_turn, false), None);
+        let plain = format!("⏺ ok\n\n{rule}\n\x1b[39m❯ \n{rule}\n{status}");
+        assert_eq!(is_empty_in(&plain, false), Some(true));
     }
 
     #[test]
