@@ -469,6 +469,12 @@ fn get(config: &Config, path: &str, query: &Query, token_sha256: &str) -> Result
             Ok(agent) => super::dialog::get(&agent, which == "dialogs"),
             Err(reply) => Ok(reply),
         },
+        ["agents", project, scope, agent, "mode"] => {
+            match find_agent(config, project, scope, agent)? {
+                Ok(agent) => super::mode::get(&agent, server),
+                Err(reply) => Ok(reply),
+            }
+        }
         ["agents", project, scope, agent, "screen"] => {
             let root = match project_root(config, project)? {
                 Ok(root) => root,

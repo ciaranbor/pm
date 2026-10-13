@@ -3,12 +3,21 @@
 
 /// `line` without its escape sequences or the text they draw dim.
 pub(in crate::harness) fn visible_text(line: &str) -> String {
+    strip(line, true)
+}
+
+/// `line` without its escape sequences, dim text kept.
+pub(in crate::harness) fn plain_text(line: &str) -> String {
+    strip(line, false)
+}
+
+fn strip(line: &str, drop_dim: bool) -> String {
     let mut text = String::new();
     let mut dim = false;
     let mut chars = line.chars();
     while let Some(c) = chars.next() {
         if c != '\x1b' {
-            if !dim {
+            if !(dim && drop_dim) {
                 text.push(c);
             }
             continue;
@@ -65,6 +74,14 @@ mod tests {
         assert_eq!(
             visible_text("\x1b[38;2;246;2;183mtrue\x1b[39m \x1b[38;5;2mindexed"),
             "true indexed"
+        );
+    }
+
+    #[test]
+    fn plain_text_keeps_dim_text() {
+        assert_eq!(
+            plain_text("\x1b[1m›\x1b[0m \x1b[2mAsk Codex\x1b[0m"),
+            "› Ask Codex"
         );
     }
 }

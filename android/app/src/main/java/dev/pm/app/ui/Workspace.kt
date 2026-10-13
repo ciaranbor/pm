@@ -25,6 +25,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.pm.app.R
 import dev.pm.app.api.PmClient
 import dev.pm.app.model.AgentSnapshot
@@ -99,7 +101,14 @@ fun Workspace(
     }
 
     var terminal by rememberSaveable { mutableStateOf<String?>(null) }
+    val modes = client?.let { modeModel(it, project, scope, selected) }
+    modes?.let { FollowMode(it, selected, agents.find { a -> a.name == selected }?.stateOf) }
+    val mode = modes?.mode?.collectAsStateWithLifecycle()?.value
+    val switching = modes?.switching?.collectAsStateWithLifecycle()?.value
     TopBarActions(topBar) {
+        if (modes != null && mode != null) {
+            ModeChip(mode, switching, open = modes::refresh, switch = modes::switch)
+        }
         agents.find { it.name == selected }?.let { StatePill(it.stateOf, stale) }
         if (feature != null) {
             IconButton(onClick = openFeature) {
@@ -155,6 +164,30 @@ fun Workspace(
     val sheet = terminal
     if (sheet != null && client != null) {
         ScreenSheet(client, project, scope, sheet, dismiss = { terminal = null })
+    }
+}
+
+@Composable
+private fun modeModel(client: PmClient, project: String, scope: String, agent: String): ModeModel =
+    viewModel(key = "mode/$project/$scope/$agent") { ModeModel(client, project, scope, agent) }
+
+/**
+ * Keep `model`, `agent`'s mode, read as it opens and again as its `state` changes, since a mode can
+ * be switched at the keyboard; each switch's outcome goes to the snackbar.
+ */
+@Composable
+private fun FollowMode(model: ModeModel, agent: String, state: AgentState?) {
+    LaunchedEffect(model, state) { model.refresh() }
+    val feedback = LocalFeedback.current
+    LaunchedEffect(model) {
+        model.switched.collect {
+            when (it) {
+                is ModeSwitched.Done -> feedback.done("$agent is in ${it.label}")
+                is ModeSwitched.Refused -> feedback.failed(it.text)
+                is ModeSwitched.Failed ->
+                    feedback.failed("Couldn't switch mode: ${it.reason}") { model.switch(it.id) }
+            }
+        }
     }
 }
 

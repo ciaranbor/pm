@@ -48,6 +48,22 @@ fn missing(harness: &str) -> Option<String> {
     }
 }
 
+/// Let `proj`'s codex agents run pm's hooks without codex's interactive
+/// trust gate.
+fn bypass_codex_hook_trust(proj: &Path) {
+    let config = proj.join(".pm/config.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    let text = if text.contains("[harness.codex]\n") {
+        text.replace(
+            "[harness.codex]\n",
+            "[harness.codex]\nbypass_hook_trust = true\n",
+        )
+    } else {
+        text + "\n[harness.codex]\nbypass_hook_trust = true\n"
+    };
+    std::fs::write(&config, text).unwrap();
+}
+
 fn require(harness: &str) {
     if let Some(why) = missing(harness) {
         panic!("cannot run {harness} here: {why}");
@@ -580,16 +596,7 @@ fn codex_async_question_reads_asking_and_is_answered_through_serve() {
     require("codex");
     let s = Smoke::real();
     let proj = s.project_on("proj", "codex", None);
-    let config = proj.join(".pm/config.toml");
-    let text = std::fs::read_to_string(&config).unwrap();
-    let text = match text.contains("[harness.codex]\n") {
-        true => text.replace(
-            "[harness.codex]\n",
-            "[harness.codex]\nbypass_hook_trust = true\n",
-        ),
-        false => text + "\n[harness.codex]\nbypass_hook_trust = true\n",
-    };
-    std::fs::write(&config, text).unwrap();
+    bypass_codex_hook_trust(&proj);
     let main = proj.join("main");
     s.pm(&main)
         .args(["agent", "spawn", "plain"])
@@ -1107,4 +1114,120 @@ fn opencode_an_unarmed_agent_is_woken_through_its_server() {
             "the plugin's wait outlived the window"
         );
     }
+}
+
+/// `pm agent mode`'s output: the agent's mode, then each it may be put in.
+fn agent_mode(s: &Smoke, cwd: &Path, args: &[&str]) -> std::process::Output {
+    s.pm(cwd)
+        .args(["agent", "mode", "plain"])
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+fn mode_now(s: &Smoke, cwd: &Path) -> String {
+    let out = agent_mode(s, cwd, &[]);
+    assert!(out.status.success(), "{out:?}");
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Catches: Claude Code's footer no longer read as its mode, or ⇧Tab no
+/// longer cycling it — so the phone shows no mode, or a switch presses
+/// keys that land somewhere else — and a mode outside the session's cycle
+/// not coming back round to where it started. No model call.
+#[test]
+#[ignore]
+fn claude_mode_is_read_off_its_footer_and_walked_with_shift_tab() {
+    use pm::state::runtime::{self, WaitingKind};
+    require("claude");
+    let s = Smoke::real();
+    let proj = s.project_on("proj", "claude-code", Some("haiku"));
+    let main = proj.join("main");
+    sandbox_ok(&s.name, &["trust", &main.to_string_lossy()]);
+    s.pm(&main)
+        .args(["agent", "spawn", "plain"])
+        .assert()
+        .success();
+    wait_for("the agent idle", TURN, &s, || {
+        runtime::read_waiting(&proj, "main", "plain").is_some_and(|w| w.kind == WaitingKind::Idle)
+    });
+    wait_for("its mode on screen", Duration::from_secs(20), &s, || {
+        mode_now(&s, &main) != "unknown"
+    });
+    let start = mode_now(&s, &main);
+    assert!(
+        ["auto", "default", "acceptEdits", "plan"].contains(&start.as_str()),
+        "{start}"
+    );
+
+    let out = agent_mode(&s, &main, &["plan"]);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(mode_now(&s, &main), "plan");
+    let out = agent_mode(&s, &main, &["acceptEdits"]);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(mode_now(&s, &main), "acceptEdits");
+
+    let out = agent_mode(&s, &main, &["bypassPermissions"]);
+    assert!(!out.status.success(), "{out:?}");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("isn't available"), "{err}");
+    assert_eq!(mode_now(&s, &main), "acceptEdits");
+    s.pm(&main)
+        .args(["agent", "stop", "plain"])
+        .assert()
+        .success();
+}
+
+/// Catches: codex's collaboration mode not read from, or set through, the
+/// agent's own app-server — the settings update refused for a value the
+/// server no longer takes, or not shown by the attached TUI. One turn on
+/// codex's default model, to start the session.
+#[test]
+#[ignore]
+fn codex_mode_switches_between_plan_and_default_through_its_server() {
+    use pm::state::runtime::{self, WaitingKind};
+    require("codex");
+    let s = Smoke::real();
+    let proj = s.project_on("proj", "codex", None);
+    bypass_codex_hook_trust(&proj);
+    let main = proj.join("main");
+    s.pm(&main)
+        .args(["agent", "spawn", "plain"])
+        .assert()
+        .success();
+    wait_for("the agent idle", TURN, &s, || {
+        runtime::read_waiting(&proj, "main", "plain").is_some_and(|w| w.kind == WaitingKind::Idle)
+    });
+    assert_eq!(mode_now(&s, &main), "default");
+
+    let out = agent_mode(&s, &main, &["plan"]);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(mode_now(&s, &main), "plan");
+    let session = s
+        .sessions()
+        .into_iter()
+        .find(|n| n.contains("main"))
+        .unwrap();
+    let window = s.find_window(&session, "plain").unwrap();
+    wait_for(
+        "the TUI to show Plan mode",
+        Duration::from_secs(10),
+        &s,
+        || {
+            s.tmux_ok(&["capture-pane", "-p", "-t", &window])
+                .contains("Plan mode")
+        },
+    );
+
+    let out = agent_mode(&s, &main, &["default"]);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(mode_now(&s, &main), "default");
+    s.pm(&main)
+        .args(["agent", "stop", "plain"])
+        .assert()
+        .success();
 }

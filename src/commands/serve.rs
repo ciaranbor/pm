@@ -59,6 +59,7 @@ mod events;
 mod in_flight;
 mod input;
 mod lifecycle;
+mod mode;
 mod notes;
 mod push;
 mod routes;

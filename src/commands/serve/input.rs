@@ -1,8 +1,8 @@
 //! The write endpoints: text, an interrupt, keys and text typed as keys
-//! for an agent, all reaching its pane ([`agent_input`]), and a dialog's answer
-//! ([`super::dialog`]). Typed text is confirmed by finding it in the agent's
-//! conversation; text queued mid-turn is answered at once, and the client
-//! sees it arrive on its watch.
+//! for an agent, all reaching its pane ([`agent_input`]), a dialog's answer
+//! ([`super::dialog`]), and its mode ([`super::mode`]). Typed text is
+//! confirmed by finding it in the agent's conversation; text queued mid-turn
+//! is answered at once, and the client sees it arrive on its watch.
 
 use std::time::{Duration, Instant};
 
@@ -75,6 +75,7 @@ pub(super) fn post(
             })
         }
         "dialog" => super::dialog::post(agent, body, tmux_server),
+        "mode" => super::mode::post(agent, body, tmux_server),
         "keys" => {
             let keys: Vec<String> = match parse(body, "keys").and_then(|v| {
                 serde_json::from_value(v).map_err(|_| "keys is a list of key names".to_string())
@@ -134,7 +135,7 @@ pub(super) fn post(
 }
 
 /// The field `key` of the JSON object `body`.
-fn parse(body: &str, key: &str) -> std::result::Result<serde_json::Value, String> {
+pub(super) fn parse(body: &str, key: &str) -> std::result::Result<serde_json::Value, String> {
     let mut value: serde_json::Value =
         serde_json::from_str(body).map_err(|_| "the body is not JSON".to_string())?;
     value

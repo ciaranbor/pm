@@ -143,6 +143,16 @@ pub(super) fn run(cmd: AgentCommands, server: Option<&str>) -> Result<()> {
             );
             Ok(())
         }
+        AgentCommands::Mode {
+            name, mode, scope, ..
+        } => {
+            let scope = resolve_scope_with_flag(&project_root, scope)?;
+            print!(
+                "{}",
+                commands::agent_mode::run(&project_root, &scope, &name, mode.as_deref(), server)?
+            );
+            Ok(())
+        }
         AgentCommands::Fork {
             source,
             name,
@@ -170,6 +180,7 @@ fn project(cmd: &AgentCommands) -> Option<&str> {
         | AgentCommands::Delete { target, .. }
         | AgentCommands::Restart { target, .. }
         | AgentCommands::Fork { target, .. }
+        | AgentCommands::Mode { target, .. }
         | AgentCommands::Log { target, .. } => target.project.as_deref(),
     }
 }

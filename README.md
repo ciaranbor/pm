@@ -210,6 +210,10 @@ of its output (`-n` sets how many entries, 20 by default). It answers "what
 is it stuck on" without opening its window, from the phone through the
 [Supervisor](#supervisor) too.
 
+`pm agent mode <name> [<mode>]` shows or switches a Claude Code or codex
+agent's [permission mode](docs/remote-api.md#permission-mode), as the
+phone app does.
+
 When an agent misbehaves, `pm agent restart <name>` respawns it on the same
 conversation, or on a new one, saying so, when there is none to resume (its
 harness changed, or it never took a turn); `pm agent spawn <name>` adds one
@@ -358,9 +362,10 @@ worktrees too — `main` included, unpushed history with it.
 
 `pm serve` serves the attention view to pm's Android app, and types what you
 send from it into agents' panes: from the phone you can see what needs you,
-read an agent's conversation, reply, interrupt, answer its dialogs — one
-the app can't show as a card (a startup prompt, a codex approval) from its
-terminal, with keys and typed text — edit a project's
+read an agent's conversation, reply, interrupt, switch its permission
+mode (Claude Code and codex), answer its dialogs — one the app can't show
+as a card (a startup prompt, a codex approval) from its terminal, with keys
+and typed text — edit a project's
 [notes](#project-notes) and read its
 [information store](#information-store-and-summaries). On a Mac, the `pm serve install --pair <device>` that pairs the
 [Android app](#android-app) also runs `pm serve` as a LaunchAgent and puts
