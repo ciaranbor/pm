@@ -5,7 +5,7 @@ use std::path::Path;
 
 use chrono::{DateTime, Utc};
 
-use crate::error::{PmError, Result};
+use crate::error::Result;
 use crate::harness::{Harness, claude_code, codex, opencode};
 use crate::state::runtime::{self, Inbound, Waiting, WaitingClass, WaitingKind};
 
@@ -69,7 +69,7 @@ impl Harness {
         match self {
             Harness::ClaudeCode => claude_code::inbound::from_env(),
             Harness::Codex => codex::inbound(project_root, scope, agent, session_id),
-            Harness::OpenCode => None,
+            Harness::OpenCode => opencode::inbound(session_id),
         }
     }
 
@@ -80,7 +80,7 @@ impl Harness {
         match self {
             Harness::ClaudeCode => claude_code::inbound::post(inbound, text),
             Harness::Codex => codex::post(inbound, text),
-            Harness::OpenCode => Err(PmError::Agent(format!("{self} has no inbound channel"))),
+            Harness::OpenCode => opencode::post(inbound, text),
         }
     }
 

@@ -590,7 +590,7 @@ mod tests {
         server.spawn_recording_agent(&project, &session, "login", "implementer", Harness::Codex);
         let app_server = crate::testing::FakeAppServer::bind(dir.path());
         let inbound = runtime::Inbound {
-            socket: app_server.path.clone(),
+            endpoint: runtime::Endpoint::Socket(app_server.path.clone()),
             token: None,
             thread: Some("t1".into()),
         };

@@ -23,7 +23,6 @@
 //! row pinned on it.
 
 use std::collections::HashSet;
-use std::hash::{BuildHasher, Hasher};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -34,7 +33,7 @@ use serde_json::{Value, json};
 
 use super::api::{TRANSFER, api, command, detached, refusal, run_api, try_api};
 use super::config::ModelRef;
-use super::{binary, installed_version};
+use super::{PASSWORD_ENV, binary, installed_version, random_password};
 use crate::bounded;
 use crate::error::{PmError, Result};
 use crate::harness::{ImportOutcome, InUse, per_session_outcome};
@@ -47,7 +46,6 @@ const ALREADY_EXISTS: &str = "Session already exists";
 /// The `_tag` of opencode's error for a session id its store does not hold.
 const SESSION_NOT_FOUND: &str = "SessionNotFoundError";
 
-const PASSWORD_ENV: &str = "OPENCODE_PASSWORD";
 const LISTENING: &str = "server listening on ";
 const SERVER_START: Duration = Duration::from_secs(30);
 const MOVE_APPLIED: Duration = Duration::from_secs(30);
@@ -155,12 +153,7 @@ struct MoveServer<'a> {
 
 impl<'a> MoveServer<'a> {
     fn start(cfg: &'a OpenCodeConfig) -> Result<Self> {
-        let random = || {
-            std::collections::hash_map::RandomState::new()
-                .build_hasher()
-                .finish()
-        };
-        let password = format!("{:016x}{:016x}", random(), random());
+        let password = random_password()?;
 
         let mut command = detached(binary(cfg));
         command

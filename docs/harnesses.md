@@ -221,9 +221,14 @@ bash`. What differs:
   rule denies; an `[agents.permissions]` row is opencode's rule list as a
   JSON array. `[harness.opencode] auto = false` makes it ask instead, at the
   terminal or from the phone app.
-- **Always `--standalone`.** Without it, opencode commands share one server
-  whose plugins act as whichever agent started it. If you run `opencode`
-  yourself in an agent's window, pass `--standalone` too.
+- **A server per agent.** An agent's window runs `pm harness
+  opencode-host`, which starts an `opencode serve` of the agent's own, runs
+  the TUI attached to it, and ends the server with the window; `pm msg
+  send` re-arms the agent through that server. Its output is in
+  `.pm/runtime/<scope>/<agent>/opencode-server.log`. opencode commands
+  without a server of their own share one whose plugins act as whichever
+  agent started it, so if you run `opencode` yourself in an agent's window,
+  pass `--standalone`.
 - An `enabled_providers` in your own `~/.config/opencode/opencode.json`
   overrides pm's provider restriction; `pm doctor` reports it.
 - **A provider only your own opencode config defines is out of reach** of

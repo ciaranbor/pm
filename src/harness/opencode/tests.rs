@@ -64,7 +64,7 @@ fn body_of(call: &[String]) -> Value {
 }
 
 #[test]
-fn build_cmd_opens_the_prepared_session_standalone_and_auto() {
+fn build_cmd_runs_the_host_on_the_prepared_session_with_auto() {
     let cmd = build_cmd(
         &SpawnSpec {
             definition: Some("reviewer"),
@@ -81,8 +81,8 @@ fn build_cmd_opens_the_prepared_session_standalone_and_auto() {
     assert_eq!(
         cmd,
         "'env' '-u' 'OPENCODE_CONFIG_CONTENT' 'PM_OPENCODE_SESSION=ses_1' \
-         'PM_APPEND_PROMPT_FILE=/x/base line.md' 'opencode' '--standalone' '--auto' \
-         '--session' 'ses_1'"
+         'PM_APPEND_PROMPT_FILE=/x/base line.md' 'pm' 'harness' 'opencode-host' '--binary' \
+         'opencode' '--auto' '--session' 'ses_1'"
     );
 }
 
@@ -98,7 +98,8 @@ fn build_cmd_quotes_a_session_id_the_shell_would_act_on() {
     );
     assert_eq!(
         cmd,
-        "'env' 'opencode' '--standalone' '--auto' '--session' 'ses_1; touch '\\''x'\\'' $(id)'"
+        "'env' 'pm' 'harness' 'opencode-host' '--binary' 'opencode' '--auto' '--session' \
+         'ses_1; touch '\\''x'\\'' $(id)'"
     );
 }
 
@@ -111,7 +112,7 @@ fn build_cmd_drops_auto_only_when_configured_off() {
     };
     assert_eq!(
         build_cmd(&SpawnSpec::default(), &off, &PreLaunch::default()),
-        "'env' '/opt/open code/bin/opencode' '--standalone'"
+        "'env' 'pm' 'harness' 'opencode-host' '--binary' '/opt/open code/bin/opencode'"
     );
     let on = OpenCodeConfig {
         auto: Some(true),
@@ -119,12 +120,12 @@ fn build_cmd_drops_auto_only_when_configured_off() {
     };
     assert_eq!(
         build_cmd(&SpawnSpec::default(), &on, &PreLaunch::default()),
-        "'env' 'opencode' '--standalone' '--auto'"
+        "'env' 'pm' 'harness' 'opencode-host' '--binary' 'opencode' '--auto'"
     );
 }
 
 #[test]
-fn every_command_line_is_standalone() {
+fn every_pre_launch_call_is_standalone() {
     let dir = tempfile::tempdir().unwrap();
     let cfg = fake_opencode(dir.path(), r#"{"data":{"id":"ses_new"}}"#, 0);
 
@@ -146,17 +147,12 @@ fn every_command_line_is_standalone() {
         },
     ] {
         let before = fake_opencode_calls(dir.path()).len();
-        let pre = pre_launch(&ctx(dir.path(), "reviewer"), &spec, &cfg).unwrap();
+        pre_launch(&ctx(dir.path(), "reviewer"), &spec, &cfg).unwrap();
         let calls = fake_opencode_calls(dir.path());
         assert!(calls.len() > before, "{spec:?} made no call");
         for call in &calls[before..] {
             assert_eq!(&call[..2], ["api", "--standalone"], "{spec:?}");
         }
-        let cmd = build_cmd(&spec, &cfg, &pre);
-        assert!(
-            cmd.contains("/opencode' '--standalone' '--auto' '--session' "),
-            "{spec:?}: {cmd}"
-        );
     }
 }
 

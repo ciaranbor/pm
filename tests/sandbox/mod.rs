@@ -330,6 +330,24 @@ impl Smoke {
         }
     }
 
+    /// Give Claude Code a conversation for `session`, run in `cwd`, in its
+    /// store under the real home, where a resume looks for it.
+    pub fn give_claude_conversation(&self, cwd: &Path, session: &str) {
+        let resolved = cwd.canonicalize().unwrap();
+        let key: String = resolved
+            .to_string_lossy()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        let store = self.home().join(".claude/projects").join(key);
+        std::fs::create_dir_all(&store).unwrap();
+        std::fs::write(
+            store.join(format!("{session}.jsonl")),
+            format!("{}\n", serde_json::json!({"cwd": resolved})),
+        )
+        .unwrap();
+    }
+
     pub fn capture_all(&self) -> String {
         let panes = self.tmux(&[
             "list-panes",
@@ -399,6 +417,28 @@ impl Drop for Smoke {
     fn drop(&mut self) {
         sandbox_ok(&self.name, &["down", "--force"]);
     }
+}
+
+/// Whether process `pid` exists.
+pub fn alive(pid: impl std::fmt::Display) -> bool {
+    StdCommand::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap()
+        .success()
+}
+
+/// Whether process `pid` ends within `limit`.
+pub fn ends_within(pid: impl std::fmt::Display, limit: Duration) -> bool {
+    let deadline = Instant::now() + limit;
+    while alive(&pid) {
+        if Instant::now() > deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    true
 }
 
 pub fn sandbox_ok(name: &str, args: &[&str]) -> String {

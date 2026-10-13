@@ -30,6 +30,8 @@ fn spawn_builds_the_command_through_the_real_shell() {
         s.home().join("bin/claude").to_string_lossy().to_string(),
         "--agent".into(),
         "reviewer".into(),
+        "-n".into(),
+        "reviewer.login".into(),
         "--model".into(),
         "x[1m]".into(),
         "--append-system-prompt-file".into(),
@@ -38,6 +40,13 @@ fn spawn_builds_the_command_through_the_real_shell() {
             .to_string_lossy()
             .to_string(),
         format!("--add-dir={}", s.proj().join(".pm/summaries").display()),
+        // A feature's agent is kept out of main's checkout.
+        "--settings".into(),
+        serde_json::json!({"permissions": {"deny": [format!(
+            "Edit(/{}/**)",
+            s.proj().join("main").canonicalize().unwrap().display()
+        )]}})
+        .to_string(),
     ]
     .into();
     assert_eq!(rec.argv, expected);
@@ -333,6 +342,14 @@ fn a_deferred_restart_runs_once_the_agent_is_idle_again() {
     std::fs::write(s.home().join("shim-turns"), "").unwrap();
     let login = s.init_with_spawned_reviewer();
     s.argv_records("reviewer", 1);
+    // A restart resumes only a session Claude Code holds a conversation for.
+    let registry = std::fs::read_to_string(s.proj().join(".pm/agents/login.toml")).unwrap();
+    let session = registry
+        .lines()
+        .find_map(|l| l.strip_prefix("session_id = \""))
+        .map(|rest| rest.trim_end_matches('"'))
+        .unwrap();
+    s.give_claude_conversation(&login, session);
     std::fs::write(s.proj().join(".pm/notices.md"), "Be terse.").unwrap();
     // As `pm update` marks an agent it found mid-turn.
     std::fs::write(
@@ -695,35 +712,29 @@ fn stopping_a_codex_agent_ends_its_app_server() {
         .trim()
         .parse()
         .unwrap();
-    let alive = |pid: i32| {
-        std::process::Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .status()
-            .unwrap()
-            .success()
-    };
     assert!(alive(pid));
 
     s.pm(&login)
         .args(["agent", "stop", "reviewer"])
         .assert()
         .success();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while alive(pid) && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    assert!(!alive(pid), "the app-server outlived its window");
+    assert!(
+        ends_within(pid, Duration::from_secs(10)),
+        "the app-server outlived its window"
+    );
 }
 
-/// Catches: opencode's env-prefixed command line through the real shell;
-/// the session created before the window, from the real config dir, with
-/// the caller's own agent identity and opencode config kept out of that
-/// call and out of the window; `--standalone` on both invocations (the shim
-/// refuses one without it); and the plugin installed under the real
-/// `~/.config/opencode`.
+/// Catches: opencode's env-prefixed command line through the real shell
+/// and `pm harness opencode-host`; the session created before the window,
+/// from the real config dir, with the caller's own agent identity and
+/// opencode config kept out of that call and out of the window; the call
+/// `--standalone` and the TUI attached to the agent's own server (the shim
+/// refuses one with neither), which the session reports as its inbound
+/// channel; that server ended with the window; and the plugin installed
+/// under the real `~/.config/opencode`.
 #[test]
 #[ignore]
-fn opencode_spawn_creates_the_session_then_opens_it_standalone() {
+fn opencode_spawn_creates_the_session_then_opens_it_on_its_own_server() {
     let s = Smoke::new();
     let login = s.init_with_feature();
     s.set_agents_config("harness", "\"*\" = \"opencode\"");
@@ -762,7 +773,7 @@ fn opencode_spawn_creates_the_session_then_opens_it_standalone() {
     );
     let body: serde_json::Value = serde_json::from_str(call.argv.last().unwrap()).unwrap();
     assert_eq!(body["agent"], "reviewer");
-    assert_eq!(body["title"], "pm:reviewer");
+    assert_eq!(body["title"], "reviewer.login");
     assert_eq!(
         body["model"],
         serde_json::json!({"providerID": "local", "id": "qwen[1m]"})
@@ -789,15 +800,18 @@ fn opencode_spawn_creates_the_session_then_opens_it_standalone() {
 
     let records = s.argv_records("reviewer", 1);
     let rec = &records[0];
+    let url = rec.argv.get(2).cloned().unwrap_or_default();
     let expected: Vec<String> = [
         s.home().join("bin/opencode").to_string_lossy().to_string(),
-        "--standalone".into(),
+        "--server".into(),
+        url.clone(),
         "--auto".into(),
         "--session".into(),
         session.clone(),
     ]
     .into();
     assert_eq!(rec.argv, expected);
+    assert!(url.starts_with("http://127.0.0.1:"), "{url}");
     assert_eq!(rec.agent_name, "reviewer");
     assert_eq!(Path::new(&rec.cwd), login);
 
@@ -821,7 +835,15 @@ fn opencode_spawn_creates_the_session_then_opens_it_standalone() {
         serde_json::from_str(&std::fs::read_to_string(config).unwrap()).unwrap();
     assert_eq!(
         config,
-        serde_json::json!({"model": "local/qwen[1m]", "enabled_providers": ["local"]})
+        serde_json::json!({
+            "model": "local/qwen[1m]",
+            "enabled_providers": ["local"],
+            "permissions": [{
+                "action": "edit",
+                "resource": format!("{}/*", s.proj().join("main").canonicalize().unwrap().display()),
+                "effect": "deny",
+            }],
+        })
     );
     assert!(window.ends_with("OPENCODE_CONFIG_CONTENT=\n"), "{window}");
 
@@ -836,6 +858,32 @@ fn opencode_spawn_creates_the_session_then_opens_it_standalone() {
     for file in ["index.ts", "loop.ts", "pm.ts"] {
         assert!(plugin.join(file).is_file(), "{file}");
     }
+
+    let inbound = s.proj().join(".pm/runtime/login/reviewer/inbound.json");
+    let deadline = Instant::now() + WAIT;
+    while !inbound.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let inbound: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&inbound).unwrap()).unwrap();
+    let address: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(inbound["server_file"].as_str().unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(address["url"], url.as_str());
+    assert_eq!(inbound["thread"], session.as_str());
+
+    let pid = std::fs::read_to_string(s.home().join("log/opencode-serve-reviewer.pid")).unwrap();
+    let pid = pid.trim();
+    assert!(alive(pid));
+    s.pm(&login)
+        .args(["agent", "stop", "reviewer"])
+        .assert()
+        .success();
+    assert!(
+        ends_within(pid, Duration::from_secs(10)),
+        "the opencode server outlived its window"
+    );
 }
 
 /// Catches: an opencode call pm is waiting on outliving a Ctrl-C to pm. The
@@ -1257,19 +1305,7 @@ fn a_project_moves_to_a_fresh_machine_and_its_agent_resumes() {
         })
         .collect();
     std::fs::write(&agents, text.join("\n") + "\n").unwrap();
-    let resolved = login.canonicalize().unwrap();
-    let key: String = resolved
-        .to_string_lossy()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect();
-    let store = s.home().join(".claude/projects").join(key);
-    std::fs::create_dir_all(&store).unwrap();
-    std::fs::write(
-        store.join("sess-1.jsonl"),
-        format!("{{\"cwd\":\"{}\"}}\n", resolved.display()),
-    )
-    .unwrap();
+    s.give_claude_conversation(&login, "sess-1");
 
     let remotes = s.home().join("remotes");
     let remote = |name: &str| {

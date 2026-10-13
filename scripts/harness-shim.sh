@@ -28,10 +28,18 @@ case "$name $1 $2" in
   "codex app-server"*) exit 0 ;;
 esac
 if [ "$name" = opencode ]; then
-  # Without it opencode starts a server shared by every agent of this HOME.
+  # An agent's server: reports an address nothing answers on, records its
+  # pid, and holds until its stdin closes, as `serve --stdio` does.
+  if [ "$1 $2" = "serve --stdio" ]; then
+    port=$4; [ "$port" = 0 ] && port=$(( $$ % 50000 + 10000 ))
+    echo $$ > "$HOME/log/opencode-serve-$PM_AGENT_NAME.pid"
+    echo "{\"url\":\"http://127.0.0.1:$port\"}"
+    exec cat >/dev/null
+  fi
+  # Without one opencode starts a server shared by every agent of this HOME.
   case " $* " in
-    *" --standalone "*) ;;
-    *) echo "opencode shim: --standalone missing: $*" >&2; exit 2 ;;
+    *" --standalone "*|*" --server "*) ;;
+    *) echo "opencode shim: neither --standalone nor --server: $*" >&2; exit 2 ;;
   esac
   if [ "$1" = api ]; then
     {

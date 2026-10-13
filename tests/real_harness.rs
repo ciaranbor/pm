@@ -957,3 +957,154 @@ fn opencode_a_feature_agent_cannot_edit_main() {
     let proj = feature_agent(&s, "opencode", Some(&format!("local/{model}")), None);
     edits_only_its_own_worktree(&s, &proj, false);
 }
+
+/// An OpenAI-compatible model server on a loopback port, answering every
+/// completion with a short text and recording the user text of each.
+struct FakeModel {
+    port: u16,
+    prompts: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl FakeModel {
+    fn start() -> Self {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        let prompts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let record = prompts.clone();
+        std::thread::spawn(move || {
+            for mut request in server.incoming_requests() {
+                if request.method() == &tiny_http::Method::Get {
+                    let models = r#"{"object":"list","data":[{"id":"fake","object":"model"}]}"#;
+                    let _ = request.respond(tiny_http::Response::from_string(models));
+                    continue;
+                }
+                let mut text = String::new();
+                let _ = request.as_reader().read_to_string(&mut text);
+                let body: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+                let users = body["messages"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|m| m["role"] == "user")
+                    .map(|m| m["content"].to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                record.lock().unwrap().push(users);
+                let chunk = |delta: serde_json::Value, finish: Option<&str>| {
+                    let chunk = serde_json::json!({
+                        "id": "c1", "object": "chat.completion.chunk", "created": 0,
+                        "model": "fake",
+                        "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+                    });
+                    format!("data: {chunk}\n\n")
+                };
+                let stream = chunk(
+                    serde_json::json!({"role": "assistant", "content": "ok"}),
+                    None,
+                ) + &chunk(serde_json::json!({}), Some("stop"))
+                    + "data: [DONE]\n\n";
+                let header = "Content-Type: text/event-stream".parse::<tiny_http::Header>();
+                let _ = request
+                    .respond(tiny_http::Response::from_string(stream).with_header(header.unwrap()));
+            }
+        });
+        Self { port, prompts }
+    }
+
+    /// Whether a completion was asked for with user text containing `text`.
+    fn asked(&self, text: &str) -> bool {
+        self.prompts
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|p| p.contains(text))
+    }
+}
+
+/// Catches: an unarmed opencode agent not woken through its own server —
+/// pm's post refused by the real server, or not starting a turn — with its
+/// pane in copy mode, where nothing would be typed; then its server and the
+/// plugin's wait outliving the window. No model cost: the model is a fake.
+///
+/// The agent is unarmed by killing the plugin's wait, which the plugin
+/// replaces a second later; the send must land in that second. Every
+/// steadier way to unarm it (a tripped or stopped loop) also makes pm leave
+/// it alone, so a slow sandbox can fail this with no re-arm reported.
+#[test]
+#[ignore]
+fn opencode_an_unarmed_agent_is_woken_through_its_server() {
+    use pm::state::runtime::{self, WaitingKind};
+    require("opencode");
+    let model = FakeModel::start();
+    let s = Smoke::real();
+    std::fs::create_dir_all(s.global_config().parent().unwrap()).unwrap();
+    std::fs::write(
+        s.global_config(),
+        std::fs::read_to_string(s.global_config()).unwrap_or_default()
+            + &format!(
+                "\n[harness.opencode.providers.fake]\n\
+                 package = \"@opencode/ai/providers/openai-compatible\"\n\
+                 settings = {{ baseURL = \"http://127.0.0.1:{}/v1\" }}\n\
+                 [harness.opencode.providers.fake.models.fake]\n",
+                model.port
+            ),
+    )
+    .unwrap();
+    let proj = s.project_on("proj", "opencode", Some("fake/fake"));
+    let main = proj.join("main");
+    s.pm(&main)
+        .args(["agent", "spawn", "plain"])
+        .assert()
+        .success();
+    let waiter = || runtime::read_waiter(&proj, "main", "plain");
+    wait_for("the plugin to arm", TURN, &s, || {
+        runtime::read_waiting(&proj, "main", "plain").map(|w| w.kind) == Some(WaitingKind::Idle)
+            && waiter().is_some_and(alive)
+    });
+    let inbound: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(proj.join(".pm/runtime/main/plain/inbound.json")).unwrap(),
+    )
+    .unwrap();
+    let address: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(inbound["server_file"].as_str().unwrap()).unwrap(),
+    )
+    .unwrap();
+    let url = address["url"].as_str().unwrap().to_string();
+
+    s.tmux_ok(&["copy-mode", "-t", "proj/main:plain"]);
+    // The plugin arms again a second after its wait dies; the send must
+    // land in between.
+    let pid = waiter().unwrap();
+    std::process::Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .status()
+        .unwrap();
+    while alive(pid) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let out = s
+        .pm(&main)
+        .args(["msg", "send", "plain", "hello"])
+        .output()
+        .unwrap();
+    let status = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(status.contains("'plain' was unarmed"), "{status}{out:?}");
+    wait_for("the posted turn", TURN, &s, || {
+        model.asked("[pm message] From ")
+    });
+
+    s.pm(&main)
+        .args(["agent", "stop", "plain"])
+        .assert()
+        .success();
+    let address = url.trim_start_matches("http://").to_string();
+    wait_for("the server to end", Duration::from_secs(10), &s, || {
+        std::net::TcpStream::connect(&address).is_err()
+    });
+    if let Some(pid) = waiter() {
+        assert!(
+            ends_within(pid, Duration::from_secs(10)),
+            "the plugin's wait outlived the window"
+        );
+    }
+}

@@ -10,21 +10,52 @@ use serde::{Deserialize, Serialize};
 
 use super::{agent_dir, agent_file};
 use crate::error::Result;
-use crate::fs_utils::write_atomic;
+use crate::fs_utils::write_private;
 
 const INBOUND_FILE: &str = "inbound.json";
 
 /// A session's inbound channel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Inbound {
-    /// The unix socket the session listens on.
-    pub socket: PathBuf,
+    /// Where the session listens.
+    #[serde(flatten)]
+    pub endpoint: Endpoint,
     /// What tells the session a post is from one of its own, if it gave one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
     /// The conversation to post to, for a socket that serves several.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread: Option<String>,
+}
+
+/// Where a session listens for posts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Endpoint {
+    /// A unix socket.
+    Socket(PathBuf),
+    /// A file naming an HTTP server's base URL and password, read at each
+    /// post.
+    ServerFile(PathBuf),
+}
+
+impl Inbound {
+    /// The unix socket the session listens on, if it listens on one.
+    pub fn socket(&self) -> Option<&Path> {
+        match &self.endpoint {
+            Endpoint::Socket(path) => Some(path),
+            Endpoint::ServerFile(_) => None,
+        }
+    }
+
+    /// The file naming the server the session listens on, if it listens on
+    /// one.
+    pub fn server_file(&self) -> Option<&Path> {
+        match &self.endpoint {
+            Endpoint::ServerFile(path) => Some(path),
+            Endpoint::Socket(_) => None,
+        }
+    }
 }
 
 /// Record `inbound` as the agent's current session's, or forget it (`None`).
@@ -36,11 +67,7 @@ pub fn write_inbound(
 ) -> Result<()> {
     let file = agent_dir(project_root, scope, agent)?.join(INBOUND_FILE);
     match inbound {
-        Some(inbound) => {
-            write_atomic(&file, serde_json::to_string(inbound)?.as_bytes())?;
-            let owner_only = std::os::unix::fs::PermissionsExt::from_mode(0o600);
-            Ok(std::fs::set_permissions(&file, owner_only)?)
-        }
+        Some(inbound) => write_private(&file, serde_json::to_string(inbound)?.as_bytes()),
         None => match std::fs::remove_file(file) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
             _ => Ok(()),
