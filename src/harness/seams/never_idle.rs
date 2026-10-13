@@ -3,6 +3,8 @@
 
 use std::path::Path;
 
+use chrono::{DateTime, Utc};
+
 use crate::error::{PmError, Result};
 use crate::harness::{Harness, claude_code, codex, opencode};
 use crate::state::runtime::{self, Inbound, Waiting, WaitingClass, WaitingKind};
@@ -179,6 +181,16 @@ impl Harness {
         }
     }
 
+    /// Whether the session whose transcript is at `transcript` recorded
+    /// that a dialog open since `since`, one no hook reports closing, has
+    /// closed; never for a harness with no such dialog.
+    pub fn dialog_closed(self, transcript: &Path, since: DateTime<Utc>) -> bool {
+        match self {
+            Harness::ClaudeCode => claude_code::transcript::dialog_closed(transcript, since),
+            Harness::Codex | Harness::OpenCode => false,
+        }
+    }
+
     /// Why this agent's never-idle loop stopped itself, if it did: pm's
     /// waiter records it, opencode's plugin in a file of its own.
     pub fn loop_stopped(self, project_root: &Path, scope: &str, agent: &str) -> Option<String> {
@@ -240,8 +252,9 @@ pub enum Wake {
 pub enum WaitingEvent {
     /// Replace any marker.
     Set(Waiting),
-    /// Set unless the agent already has a marker whose class isn't in
-    /// `over`: a vaguer report must not hide a more specific one.
+    /// Set unless the agent already has a marker of another kind whose
+    /// class isn't in `over`: a vaguer report must not hide a more specific
+    /// one, but a newer one replaces its own kind, which may be stale.
     Fill {
         waiting: Waiting,
         over: &'static [WaitingClass],

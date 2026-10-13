@@ -14,7 +14,11 @@
 //!   own, never the main thread's or another subagent's.
 //! - `Notification` follows 6s after any dialog opens, tool or not (plan
 //!   approval, MCP elicitation), and `idle_prompt` once the agent has sat at
-//!   its prompt for 60s; it never replaces an idle marker.
+//!   its prompt for 60s; it never replaces an idle marker. A host dialog
+//!   with no type of its own (the auto-mode setup proposal, verified on
+//!   2.1.296) reports `permission_prompt`, may open between turns, and fires
+//!   nothing when it closes: the transcript says so
+//!   ([`super::transcript::dialog_closed`]).
 //! - `StopFailure` fires instead of Stop when an API error ends the turn.
 //! - `PermissionDenied` fires when the auto-mode classifier refuses a tool
 //!   call, and for nothing else: not a denial at a dialog, a PreToolUse

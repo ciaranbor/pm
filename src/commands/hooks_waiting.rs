@@ -114,9 +114,10 @@ fn rearm_after_interrupt(
 /// dialog it opens that no hook holds ([`Harness::typed_dialog`]). A marker
 /// cleared while dialogs are still open is set to stand for the oldest, the
 /// one a terminal queueing several shows. Between turns, a marker a
-/// subagent's event sets stays between turns, and one it clears gives way
-/// to the waiter's ([`between_turns`]). Returns the agent's state when the
-/// marker changed.
+/// subagent's event or a notification sets stays between turns (the main
+/// thread's dialog requests come only mid-turn), and one a subagent's event
+/// clears gives way to the waiter's ([`between_turns`]). Returns the
+/// agent's state when the marker changed.
 fn settle(
     project_root: &Path,
     scope: &str,
@@ -141,8 +142,10 @@ fn settle(
         None => harness.waiting_event(payload),
     };
     let subagents = matches!(event, Some(WaitingEvent::ClearSubagent(_)));
-    if let Some(WaitingEvent::Set(w) | WaitingEvent::Fill { waiting: w, .. }) = &mut event {
-        w.between_turns = between && w.subagent.is_some();
+    match &mut event {
+        Some(WaitingEvent::Set(w)) => w.between_turns = between && w.subagent.is_some(),
+        Some(WaitingEvent::Fill { waiting: w, .. }) => w.between_turns = between,
+        _ => {}
     }
     let state = apply(project_root, scope, agent, event)?;
     if state != Some(AgentState::Busy) {
@@ -252,7 +255,7 @@ pub(crate) fn apply(
         Some(WaitingEvent::Set(waiting)) => waiting,
         Some(WaitingEvent::Fill { waiting, over }) => {
             let held = runtime::read_waiting(project_root, scope, agent);
-            if held.is_some_and(|h| !over.contains(&h.kind.class())) {
+            if held.is_some_and(|h| h.kind != waiting.kind && !over.contains(&h.kind.class())) {
                 return Ok(None);
             }
             waiting
@@ -536,6 +539,46 @@ mod tests {
         .unwrap();
         assert_eq!(notify(root, "permission_prompt"), Some(AgentState::Asking));
         assert_eq!(kind(root), Some(WaitingKind::Dialog));
+    }
+
+    #[test]
+    fn a_dialog_notified_between_turns_stays_between_turns() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let mut idle = Waiting::now(WaitingKind::Idle, None);
+        idle.between_turns = true;
+        runtime::write_waiting(root, "login", "implementer", &idle).unwrap();
+        let notify = json!({"hook_event_name": "Notification",
+            "notification_type": "permission_prompt",
+            "message": "Auto-mode setup proposal is ready for review"});
+
+        assert_eq!(
+            send(root, Harness::ClaudeCode, notify.clone()),
+            Some(AgentState::Asking)
+        );
+        let marker = runtime::read_waiting(root, "login", "implementer").unwrap();
+        assert_eq!(
+            (marker.kind, marker.between_turns),
+            (WaitingKind::Dialog, true)
+        );
+
+        let mut later = notify.clone();
+        later["message"] = "Auto-mode setup flagged some permission rules for review".into();
+        send(root, Harness::ClaudeCode, later);
+        let marker = runtime::read_waiting(root, "login", "implementer").unwrap();
+        assert_eq!(
+            marker.detail.as_deref(),
+            Some("Auto-mode setup flagged some permission rules for review"),
+            "a dialog's marker, which may be stale, gives way to a newer one"
+        );
+
+        runtime::clear_waiting(root, "login", "implementer").unwrap();
+        send(root, Harness::ClaudeCode, notify);
+        let marker = runtime::read_waiting(root, "login", "implementer").unwrap();
+        assert_eq!(
+            (marker.kind, marker.between_turns),
+            (WaitingKind::Dialog, false)
+        );
     }
 
     #[test]

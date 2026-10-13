@@ -136,8 +136,8 @@ user's prompt: it resets a blocked feature, and the conversation shows it as
 `user`. An idle agent sits at its prompt, so text starts a turn at once.
 An `input` the agent can't take now is refused with `409` and
 `{"error", "refused"}`: `asking` (a dialog is up; answer it through
-`dialog`, or with `keys`), `not-at-prompt` (a draft in its input line, or
-no input line on screen), `not-running`, `no-window` or `inactive`. Text is never merged into a draft typed at the terminal.
+`dialog`, or with `keys`), `not-at-prompt` (a draft in its input line,
+no input line on screen, or a dialog no hook reports drawn against it), `not-running`, `no-window` or `inactive`. Text is never merged into a draft typed at the terminal.
 Text is taken while a codex async question (below) is pending, since it
 waits beside the input line: it is `queued`, as the agent works on, and
 codex drops the question.
