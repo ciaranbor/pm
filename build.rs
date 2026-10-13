@@ -1,5 +1,5 @@
 //! Sets `PM_VERSION`, the version pm reports, and `PM_TARGET`, the target
-//! triple a self-update fetches the binary of.
+//! triple `pm update` fetches the binary of.
 //!
 //! A release build (`PM_RELEASE=1`, as CI builds) reports the Cargo.toml
 //! version alone. Any other build appends what `git describe` says of the

@@ -106,7 +106,7 @@ pub struct BundledDisable {
     pub baseline: bool,
 }
 
-/// `pm upgrade`'s settings; global only, as an upgrade sweeps every
+/// `pm update`'s settings; global only, as an upgrade sweeps every
 /// project.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct UpgradeConfig {
@@ -345,7 +345,7 @@ implementer = "sonnet"
     fn project_config_ignores_unknown_agents_default_field() {
         // Legacy projects may still carry the now-removed [agents].default
         // field. Loading them must succeed (silently dropping the field),
-        // so `pm upgrade` can rewrite them without manual intervention.
+        // so `pm update` can rewrite them without manual intervention.
         let toml_str = r#"
 [project]
 name = "myapp"

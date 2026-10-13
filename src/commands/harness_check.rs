@@ -387,7 +387,7 @@ fn team_problems(
                         member,
                         format!(
                             "{member} ({harness}): definition '{member}' is not projected for \
-                         {harness}, so the agent would start without its role (run `pm upgrade`)"
+                         {harness}, so the agent would start without its role (run `pm update`)"
                         ),
                     );
                 }
@@ -747,7 +747,7 @@ mod tests {
             check(&["qa", "plain"]).lines,
             [
                 "qa (opencode): definition 'qa' is not projected for opencode, so the agent would \
-              start without its role (run `pm upgrade`)"
+              start without its role (run `pm update`)"
             ]
         );
 

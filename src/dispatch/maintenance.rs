@@ -1,4 +1,4 @@
-//! Keeping pm and its projects healthy: doctor, upgrade, restore, migration checks.
+//! Keeping pm and its projects healthy: doctor, update, restore, migration checks.
 
 use std::path::PathBuf;
 
@@ -25,8 +25,8 @@ pub(super) fn doctor(fix: bool, project: Option<String>, server: Option<&str>) -
     Ok(())
 }
 
-pub(super) fn upgrade(dry_run: bool, server: Option<&str>) -> Result<()> {
-    let lines = commands::upgrade::upgrade(dry_run, server)?;
+pub(super) fn update(local: bool, dry_run: bool, server: Option<&str>) -> Result<()> {
+    let lines = commands::update::update(local, dry_run, server)?;
     for line in lines {
         println!("{line}");
     }
@@ -72,14 +72,6 @@ pub(super) fn migrate_check(
     }
     if report.blockers() > 0 {
         std::process::exit(1);
-    }
-    Ok(())
-}
-
-pub(super) fn self_update(force: bool) -> Result<()> {
-    let lines = commands::self_update::self_update(force)?;
-    for line in lines {
-        println!("{line}");
     }
     Ok(())
 }

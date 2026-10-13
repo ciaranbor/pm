@@ -2,7 +2,7 @@
 //!
 //! Every bundled kind installs once into the **global tier**: skills, agent
 //! definitions, and the baseline under `~/.agents/`, workflows under the pm
-//! config dir. `pm init`/`pm upgrade` refresh it and the bundle is
+//! config dir. `pm init`/`pm update` refresh it and the bundle is
 //! authoritative there (bundled names are reserved). The **project tier**
 //! (`main/.agents/{agents,skills}`, `.pm/workflows/`) holds only the user's
 //! customs and shadows the global tier by name. No harness reads pm's
@@ -75,7 +75,7 @@ fn list_kind(kind: BundledKind, project_root: Option<&Path>) -> Result<Vec<Strin
             disabled.contains(kind, item.name),
             is_installed(&global, item),
         ) {
-            (true, true) => "disabled (still installed; run `pm upgrade`)",
+            (true, true) => "disabled (still installed; run `pm update`)",
             (true, false) => "disabled",
             (false, _) => status_label(&global, item),
         };
@@ -120,10 +120,10 @@ pub fn agents_uninstall(name: Option<&str>) -> Result<Vec<String>> {
 
 /// Absolute path of the shared baseline to apply for this project: the
 /// global `~/.agents/pm-baseline.md`. A project spawning on a new binary
-/// before its `pm upgrade` ran may only have the pre-migration project copy
+/// before its `pm update` ran may only have the pre-migration project copy
 /// (`main/.agents/`, or the older `main/.claude/`), so those are returned
 /// when the global one is absent — unless `[bundled.disable]` lists the
-/// baseline, when only the global path (gone after `pm upgrade`) is. The
+/// baseline, when only the global path (gone after `pm update`) is. The
 /// caller checks existence either way.
 pub fn baseline_path(project_root: &Path) -> PathBuf {
     baseline_path_in(project_root, GlobalStore::resolve().ok().as_ref())

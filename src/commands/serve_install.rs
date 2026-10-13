@@ -9,7 +9,7 @@
 //! shell's, if UTF-8), which launchd leaves unset. Its output goes to
 //! `serve.log` ([`ServeFiles`]). The port is
 //! `[serve] port`, read as the server starts, so the plist names none.
-//! Installing again repairs an install; `pm upgrade` refreshes one
+//! Installing again repairs an install; `pm update` refreshes one
 //! ([`refresh`]).
 
 use std::path::{Path, PathBuf};

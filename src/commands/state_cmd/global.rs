@@ -20,7 +20,7 @@ fn global_ctx(dir: &Path) -> RepoContext<'_> {
 }
 
 /// Initialise a git repo in the pm config dir for global registry backup.
-/// Non-interactive variant for programmatic use (e.g. `pm upgrade`).
+/// Non-interactive variant for programmatic use (e.g. `pm update`).
 pub fn global_init() -> Result<String> {
     let dir = paths::global_config_dir()?;
     global_init_at(&dir, &set_aside_dir()?, false, None)

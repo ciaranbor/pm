@@ -2,7 +2,7 @@
 # the signed Android APK (`pm-<version>-android-<abi>.apk`), install.sh, and
 # SHA256SUMS over them all. The macOS binary joins the published release once
 # built, since a macOS runner can stay queued for hours and would otherwise
-# hold back the whole release; until then install.sh and `pm self-update`
+# hold back the whole release; until then install.sh and `pm update`
 # on macOS find no binary and install nothing.
 name: release
 

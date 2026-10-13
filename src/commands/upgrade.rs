@@ -1,3 +1,8 @@
+//! The upgrade steps `pm update` runs, after installing any newer release
+//! (`pm update --local` runs only these): reinstall pm's hooks and bundled
+//! assets for every registered project, then restart the agents left stale
+//! ([`super::upgrade_restart`]).
+
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
@@ -197,7 +202,7 @@ fn upgrade_projects(projects_dir: &Path) -> Result<Vec<String>> {
     for (name, entry) in &projects {
         // Skip legacy entries with non-portable roots — calling
         // `to_portable` on a relative `PathBuf` would `debug_assert!` in
-        // debug builds and silently misbehave in release. `pm self-update`
+        // debug builds and silently misbehave in release. `pm update`
         // chains through here, so a single bad entry must not break the
         // command users run to *pick up* the fix.
         if !crate::path_utils::is_portable(&entry.root) {
@@ -446,7 +451,7 @@ last_active = "2026-01-01T00:00:00Z"
     fn upgrade_installs_hooks_and_state_but_no_bundled_copies() {
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
-        // The tier `pm upgrade` installs before touching any project — the
+        // The tier `pm update` installs before touching any project — the
         // per-project pass deliberately doesn't.
         skills::install_global().unwrap();
 
@@ -832,9 +837,8 @@ last_active = "2026-01-01T00:00:00Z"
 
     #[test]
     fn upgrade_skips_legacy_non_portable_root() {
-        // Regression: a single bad entry must not break `pm upgrade` or
-        // (by extension) `pm self-update`, which is the command users would
-        // run to *pick up* this fix.
+        // Regression: a single bad entry must not break `pm update`, which
+        // is the command users would run to *pick up* this fix.
         let dir = tempdir().unwrap();
         let projects_dir = dir.path().join("registry");
         write_raw_registry_entry(&projects_dir, "exo-bench", "exo-bench");

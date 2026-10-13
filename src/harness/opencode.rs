@@ -299,7 +299,7 @@ pub(super) fn pre_launch(
 }
 
 /// Refuse `definition` when opencode, started in the agent's worktree, would
-/// not find it. `pm upgrade` projects into main and the global dir only; a
+/// not find it. `pm update` projects into main and the global dir only; a
 /// feature worktree gets main's copy from `pm harness pull`.
 fn unprojected_definition(ctx: &LaunchContext<'_>, definition: &str, home: &Path) -> Result<()> {
     let opencode = super::Harness::OpenCode;
@@ -309,11 +309,11 @@ fn unprojected_definition(ctx: &LaunchContext<'_>, definition: &str, home: &Path
     let main = crate::state::paths::main_worktree(ctx.project_root);
     let pull = format!("`pm harness pull {}`", ctx.feature);
     let fix = if ctx.worktree == main {
-        "run `pm upgrade`".to_string()
+        "run `pm update`".to_string()
     } else if opencode.definition_projected(&main, home, definition) {
         format!("run {pull}")
     } else {
-        format!("run `pm upgrade`, then {pull}")
+        format!("run `pm update`, then {pull}")
     };
     Err(PmError::Agent(format!(
         "definition '{definition}' is not projected for opencode, which would run agent '{}' \

@@ -423,7 +423,7 @@ pub(crate) mod test_support {
         server.spawn_fake_agent(dir, session_name, feature, agent_name)
     }
 
-    /// `definition` as `pm upgrade` projects it for opencode into `worktree`.
+    /// `definition` as `pm update` projects it for opencode into `worktree`.
     pub(crate) fn project_opencode_definition(worktree: &Path, definition: &str) {
         let agents = worktree.join(Harness::OpenCode.config_dir()).join("agents");
         std::fs::create_dir_all(&agents).unwrap();

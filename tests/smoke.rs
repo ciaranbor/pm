@@ -280,7 +280,7 @@ fn restart_all_global_from_inside_an_agents_own_window_restarts_it_last() {
     assert!(s.find_window("proj/main", "scout").is_some());
 }
 
-/// Catches: `pm upgrade` run from a stale agent's own pane — as the
+/// Catches: `pm update --local` run from a stale agent's own pane — as the
 /// post-merge hook runs it — killing that agent mid-command instead of
 /// deferring it, while restarting the other stale agents.
 #[test]
@@ -302,7 +302,7 @@ fn upgrade_from_inside_a_stale_agents_window_defers_it_and_restarts_the_rest() {
     s.tmux_ok(&["send-keys", "-t", &old, "C-c", ""]);
     s.wait_for_shell(&old);
 
-    let outcome = s.run_in(&old, "pm upgrade");
+    let outcome = s.run_in(&old, "pm update --local");
     assert!(outcome.alive, "the caller's pane was killed: {outcome:?}");
     assert!(
         outcome.log.contains(
@@ -334,7 +334,7 @@ fn a_deferred_restart_runs_once_the_agent_is_idle_again() {
     let login = s.init_with_spawned_reviewer();
     s.argv_records("reviewer", 1);
     std::fs::write(s.proj().join(".pm/notices.md"), "Be terse.").unwrap();
-    // As `pm upgrade` marks an agent it found mid-turn.
+    // As `pm update` marks an agent it found mid-turn.
     std::fs::write(
         s.proj().join(".pm/runtime/login/reviewer/restart-at-idle"),
         "",

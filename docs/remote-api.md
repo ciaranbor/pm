@@ -9,7 +9,7 @@ app and your own tools can rely on. The README's
 `pm serve` listens on `127.0.0.1` only (port 7764 by default, `[serve] port`
 otherwise); `tailscale serve` puts it on your tailnet. `pm serve install`
 runs it as a LaunchAgent, which starts it at login, restarts it, and follows
-upgrades: `pm upgrade` rewrites an outdated plist, keeping what install
+upgrades: `pm update` rewrites an outdated plist, keeping what install
 chose. Install runs `tailscale serve --bg <port>` itself (`--no-tailscale`
 not to) when the tailnet has MagicDNS and HTTPS certificates on and nothing
 serves its port 443 here; otherwise it changes nothing and says what to do,

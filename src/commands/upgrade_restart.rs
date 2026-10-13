@@ -1,4 +1,4 @@
-//! `pm upgrade`'s last step: restart the agents it left stale
+//! `pm update`'s last step: restart the agents it left stale
 //! ([`launch_stamp`](super::launch_stamp)), through `pm agent restart --all
 //! --stale`'s sweep ([`Select::Stale`]), after the new assets and hooks are
 //! installed so the stamps compare against them. Idle and unarmed agents
@@ -34,7 +34,7 @@ use super::agent_restart_all::{Scope, Select, global_scopes, harnesses_of, plan,
 pub const DRY_RUN_CAVEAT: &str = "Stale agents: judged against the assets installed now; \
      the upgrade also restarts any its new assets make stale";
 
-/// The scopes `pm upgrade` sweeps, every registered project's, and a line
+/// The scopes `pm update` sweeps, every registered project's, and a line
 /// for each project it can't read.
 pub fn scopes(projects_dir: &Path) -> (Vec<Scope>, Vec<String>) {
     global_scopes(projects_dir)

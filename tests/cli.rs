@@ -174,9 +174,24 @@ fn asset_commands_install_into_the_global_tier() {
     assert!(home.join(".agents/skills/pm/SKILL.md").is_file());
     assert!(home.join(".claude/skills/pm/SKILL.md").is_file());
 
-    // `upgrade` installs the bundled workflows into the global tier;
-    // `workflow list` lists them from outside a project.
-    pm_home().args(["upgrade"]).assert().success();
+    // `upgrade`, which installed releases run after installing a newer one,
+    // upgrades with this pm when the release check fails, installing the
+    // bundled workflows into the global tier; `workflow list` lists them
+    // from outside a project.
+    pm_home()
+        .args(["upgrade"])
+        .env("PM_RELEASES_URL", "http://127.0.0.1:9")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "could not check for a newer pm release",
+        ));
+    // pm 0.5.0 and earlier run this after installing a release.
+    pm_home()
+        .args(["upgrade", "--all"])
+        .env("PM_RELEASES_URL", "http://127.0.0.1:9")
+        .assert()
+        .success();
     pm_home()
         .args(["workflow", "list"])
         .assert()

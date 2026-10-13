@@ -37,15 +37,15 @@ On macOS (Apple silicon) or Linux (x86_64):
 curl -fsSL https://github.com/ciaranbor/pm/releases/latest/download/install.sh | sh
 ```
 
-Run again, or run `pm self-update`, to upgrade in place; `pm --version`
+Run again, or run `pm update`, to upgrade in place; `pm --version`
 says which pm you have. Elsewhere, or to run your own changes, build from
 source (Rust 1.91 or later): `cargo install --path .` in a checkout, or
 `cargo install --git https://github.com/ciaranbor/pm`. Such a build
-reports its commit in its version (`0.2.0+3.gabc1234`), and `pm
-self-update` leaves it alone unless given `--force`. Keep one pm on
-`PATH`: with a source build in `~/.cargo/bin` and a release in
-`~/.local/bin`, an upgrade of one leaves the other running, and `pm doctor`
-warns.
+reports its commit in its version (`0.2.0+3.gabc1234`) and counts as the
+release it was built from, so `pm update` replaces it once a newer release
+is out (`pm update --local` keeps it). Keep one pm on `PATH`: with a source
+build in `~/.cargo/bin` and a release in `~/.local/bin`, an upgrade of one
+leaves the other running, and `pm doctor` warns.
 
 Then add pm's tmux plugin, one line at the end of your tmux config:
 
@@ -235,9 +235,15 @@ running, rather than restarted into the same wait. Each agent gets a line
 and the run ends with a count; a failed restart, or one that did not come
 up, makes it exit non-zero.
 
+`pm update` (or `pm upgrade`, the same command) first installs the latest
+release if it is newer than the running pm, then has the new pm reinstall
+pm's hooks and bundled assets in every registered project. With no newer
+release, or with `--local`, the running pm does that itself; if GitHub
+can't be reached, it says so and does the same.
+
 A running agent keeps what it was launched with: its definition, the
 baseline and notice boards, its config rows, and on codex and opencode pm's
-hooks. So `pm upgrade` ends by restarting each running agent that would
+hooks. So `pm update` ends by restarting each running agent that would
 launch differently now — one of those changed since it started, or a pm
 release changed what agents launch with. Idle agents restart on the same
 conversation. A busy agent, and the agent running the upgrade, restart at
@@ -246,7 +252,7 @@ cut short. Left running and listed with the command that restarts them: one
 whose configured harness changed (a restart would start its conversation
 over), and one that would not relaunch — no model row, or codex hooks not
 yet trusted. A dead agent picks up the change at its next spawn. `pm
-upgrade` covers every registered project, since the bundled assets and
+update` covers every registered project, since the bundled assets and
 hooks it installs are the machine's; a project it can't upgrade gets its
 own line and the rest go ahead. `--dry-run` judges agents against the assets
 installed now, so it cannot list those only the new assets make stale, and
@@ -571,8 +577,8 @@ stays until `main` has triaged and deleted it; until then `pm feat new` and
 ### Agents, workflows and skills
 
 Bundled skills, agent definitions, workflows, and the shared baseline
-install **once per machine** and are refreshed by `pm upgrade`, which `pm
-self-update` and the install script run:
+install **once per machine** and are refreshed by `pm update`, which the
+install script runs too:
 
 | Tier | Skills / agents / baseline | Workflows |
 |------|----------------------------|-----------|
@@ -581,13 +587,13 @@ self-update` and the install script run:
 
 Everything resolves **project tier first, then global**, by name, so a
 project file with a bundled name overrides it for that project. Bundled
-names are pm's in the global tier — `pm upgrade` rewrites them there — so
+names are pm's in the global tier — `pm update` rewrites them there — so
 keep global customs under names of your own. To customise a bundled agent
 for one project:
 
 ```sh
 cp ~/.agents/agents/reviewer.md <project>/main/.agents/agents/reviewer.md
-pm upgrade                      # projects it for the harness
+pm update --local               # projects it for the harness
 pm harness pull <feature>       # existing features don't get it otherwise
 ```
 
@@ -601,7 +607,7 @@ vanilla session with none.
 **Skills are the exception.** Claude Code ranks *personal* skills above
 project ones, and pm projects every bundled skill into `~/.claude/skills/`,
 so a project copy under a bundled skill's name never applies. Customise a
-bundled skill globally (accepting that `pm upgrade` rewrites it) or copy it
+bundled skill globally (accepting that `pm update` rewrites it) or copy it
 to a name of your own; `pm doctor` flags a shadowed project skill.
 
 **Disabling bundled items.** To keep a bundled agent, workflow, skill or
@@ -616,7 +622,7 @@ skills    = ["pm"]
 baseline  = true             # unset or false keeps it
 ```
 
-The next `pm upgrade` removes each from the global tier and its harness
+The next `pm update` removes each from the global tier and its harness
 projections, and later upgrades leave it out; remove the entry to get it
 back. A project custom under the same name still applies, and a disabled
 skill's name becomes free for a project skill. A command that needs a
@@ -635,7 +641,7 @@ example.
 
 **Features get main's customs when created, and not again.** `pm feat
 new`/`adopt`/`review` copy main's custom skills, agent definitions and
-`.claude/settings.json` into the new worktree; `pm upgrade` never modifies a
+`.claude/settings.json` into the new worktree; `pm update` never modifies a
 feature worktree. `pm harness pull [feature]` brings later changes in,
 without writing over a file the feature's branch tracks or restoring one
 it deleted. Agent definitions stay main's until merged, because pm
@@ -703,7 +709,8 @@ npm install
 
 A `post-merge.sh` that installs the merged main and pushes it, skipping
 merges into a stacked feature's base. This one is pm's own, so it also
-refreshes the projects' pm assets:
+refreshes the projects' pm assets, with `--local` so a merge never waits
+on GitHub:
 
 ```sh
 #!/bin/sh
@@ -711,7 +718,7 @@ set -eu
 [ -z "$PM_FEATURE" ] || exit 0
 echo "merged $PM_MERGED_FEATURE; installing and pushing"
 cargo install --path .
-pm upgrade
+pm update --local
 git push
 ```
 
@@ -721,7 +728,7 @@ Settings live in `<project>/.pm/config.toml`, or `config.toml` in the pm
 config dir ([Where pm keeps its files](#where-pm-keeps-its-files)) for every
 project. Agent settings are re-read at every spawn, so
 restart, fork, `pm open`, and a dead-window heal pick up edits, and `pm
-upgrade` restarts the idle agents an edit leaves stale; there is no
+update` restarts the idle agents an edit leaves stale; there is no
 spawn-time flag. For a one-off change, edit the row and restart the agent,
 or switch inside the session (`/model`).
 
@@ -798,7 +805,7 @@ hook-trust step per machine** and fails silently without it;
 items](#agents-workflows-and-skills).
 
 **`[upgrade] restart_agents`**, in the global config only: `false` stops
-`pm upgrade` restarting stale agents, now or at their next idle ([Work with the
+`pm update` restarting stale agents, now or at their next idle ([Work with the
 agents](#work-with-the-agents)).
 
 **`[project] max_features`** caps a project's in-flight features (any not

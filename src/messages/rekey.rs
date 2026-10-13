@@ -1,6 +1,6 @@
 //! Moving messages from queues keyed by bare sender name, as inboxes were
 //! before queues were keyed by address, into the queue each one's metadata
-//! addresses ([`address::queue_key`]). `pm upgrade` runs it on every
+//! addresses ([`address::queue_key`]). `pm update` runs it on every
 //! project.
 //!
 //! A queue's messages keep their order and its read ones stay read: each

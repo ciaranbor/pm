@@ -4,7 +4,7 @@
 //! The pm config dir can be git-backed (`pm state init --global`) so the
 //! project registry, global config, and global *custom* workflows sync
 //! between machines. The bundled workflows share the dir but are not state
-//! to sync: `pm upgrade` rewrites them every release, and committing that
+//! to sync: `pm update` rewrites them every release, and committing that
 //! churn would make every machine's registry dirty after each upgrade. So
 //! `.gitignore` carries a marker-delimited block naming them, regenerated
 //! wherever bundled workflows are written, from the bundle — never a
@@ -15,7 +15,7 @@
 //! Copies an earlier release committed are untracked in the same pass
 //! (`git rm --cached`), staged but not committed: the next `pm state push
 //! --global` commits the deletion, and a machine that pulls it loses the
-//! files from disk until pm writes them again (`pm upgrade` reinstalls the
+//! files from disk until pm writes them again (`pm update` reinstalls the
 //! workflows).
 
 use std::path::{Path, PathBuf};

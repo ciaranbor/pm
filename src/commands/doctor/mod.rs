@@ -77,7 +77,7 @@ pub enum IssueKind {
     SkillShadowedByGlobal,
     /// An active agent is named `claude`, the removed vanilla alias: it runs
     /// until its window dies, then restart/heal fail to resolve a definition.
-    /// Also an agent registered as `default` in a project `pm upgrade` has not
+    /// Also an agent registered as `default` in a project `pm update` has not
     /// yet migrated to `plain` (`commands::vanilla_rename`).
     LegacyVanillaAgentName,
     /// An `[agents.*]` row keyed `default`, which names no definition: it

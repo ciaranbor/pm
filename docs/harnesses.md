@@ -5,7 +5,7 @@ What each agent harness needs to run under pm. The README's
 
 ## Hooks
 
-`pm init` and `pm upgrade` install pm's hooks into the user-level hooks
+`pm init` and `pm update` install pm's hooks into the user-level hooks
 file of every supported harness (`~/.claude/settings.json` for Claude Code,
 `$CODEX_HOME/hooks.json` for codex; opencode gets a
 [plugin](#opencode) that does the same), once per machine:

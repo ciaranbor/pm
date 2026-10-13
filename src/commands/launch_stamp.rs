@@ -3,7 +3,7 @@
 //! named agent. An agent is stale when the stamp a spawn would write now
 //! differs from its own, or it has none: it runs on a definition, prompt,
 //! flags or never-idle loop it would not be launched with today, which a
-//! running session does not pick up. `pm upgrade` restarts the idle ones
+//! running session does not pick up. `pm update` restarts the idle ones
 //! ([`super::agent_restart_all`]); `pm doctor` reports them.
 //!
 //! The spawn and the check compute the stamp through the one resolution

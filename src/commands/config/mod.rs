@@ -191,10 +191,10 @@ fn keys_under(prefix: &[&str], project: &Shape, global: &Shape) -> Vec<String> {
 fn pickup_note(section: &str) -> Option<&'static str> {
     match section {
         "agents" | "harness" => Some(
-            "Running agents pick this up when restarted (`pm agent restart`); `pm upgrade` \
+            "Running agents pick this up when restarted (`pm agent restart`); `pm update` \
              restarts the idle ones it leaves stale.",
         ),
-        "bundled" => Some("Takes effect at the next `pm upgrade`."),
+        "bundled" => Some("Takes effect at the next `pm update`."),
         "serve" => Some("A running `pm serve` picks this up when restarted."),
         _ => None,
     }

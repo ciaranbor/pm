@@ -13,7 +13,7 @@ Usage: scripts/release X.Y.Z [--dry-run]
                    commit "Release vX.Y.Z", tag vX.Y.Z, and push main and the
                    tag; CI builds and publishes the release. A version with a
                    pre-release part (0.2.0-rc.1) is published as a prerelease,
-                   which self-update and the app ignore; it leaves the
+                   which `pm update` and the app ignore; it leaves the
                    changelog alone and takes Unreleased as its notes.
   --dry-run        check everything and print the release notes; change nothing
   --notes X.Y.Z    print the release notes of X.Y.Z: its CHANGELOG.md section,
