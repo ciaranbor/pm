@@ -127,6 +127,7 @@ pub fn agent_read(
                             sender_scope: m.meta.sender_scope.clone(),
                             sender_project: m.meta.sender_project.clone(),
                             from_outside: m.meta.from_outside,
+                            from_shell: m.meta.from_shell,
                             index: m.index,
                         },
                     )?;
@@ -187,6 +188,8 @@ fn format_message(m: &Message, current_scope: Option<&str>) -> Vec<String> {
         " (sent by pm, not an agent: no one to reply to; report as `pm workflow show` says)"
     } else if m.meta.from_outside {
         " (sent from outside every project: no one to reply to)"
+    } else if m.meta.from_shell {
+        " (sent from a shell, not by an agent: no one to reply to; report in your own session)"
     } else {
         ""
     };

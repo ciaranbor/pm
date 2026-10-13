@@ -156,8 +156,10 @@ pub(super) fn spawn_session_with_config(
     settings
         .harness
         .trust_worktree(&paths::home_dir()?, &worktree_path)?;
+    let shown_as = crate::harness::session_name(name, params.feature);
     let spec = SpawnSpec {
         definition: definition_flag(effective_definition),
+        session_name: Some(&shown_as),
         append_prompt_file: append_file.as_deref(),
         prompt: effective_prompt,
         resume_session: params.resume_session,

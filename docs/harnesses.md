@@ -67,6 +67,15 @@ hook run notes what it did, and the background work the harness reported,
 in `.pm/runtime/<scope>/<agent>/stop-hook.log`: start there when an agent
 didn't wake.
 
+## Session names
+
+An agent's session is named `<agent>.<scope>` (`reviewer.login`) wherever
+its harness shows one: Claude Code's `-n` name (above its input box, in
+`claude agents` and to cross-session messaging), codex's thread name (in its
+status line and session list), set once the launch prompt's turn has
+started, and the title opencode gives a session pm creates. Each launch
+sets it again, a resume included, except opencode's, set only at creation.
+
 ## Mixed teams
 
 `pm feat new` and `pm feat adopt --workflow` first check that each team

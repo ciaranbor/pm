@@ -1,8 +1,8 @@
 //! A queue's key: the address of its sender as the recipient's inbox sees
 //! it, `name@scope`, with `@project` appended when the sender is in another
-//! project. Senders with no home — pm itself (`no-reply-*`), or someone
-//! outside every project — are keyed by bare name, as is a queue whose
-//! messages predate metadata.
+//! project. Senders with no home — pm itself (`no-reply-*`), someone at a
+//! shell, or someone outside every project — are keyed by bare name, as is
+//! a queue whose messages predate metadata.
 //!
 //! `--from` takes a whole address, or any leading part of one ending at an
 //! `@` (`implementer`, `implementer@login`), as long as it names one queue.
@@ -14,7 +14,7 @@ use crate::error::{PmError, Result};
 /// The key of the queue a message carrying `meta` goes to in an inbox of
 /// `inbox_scope`.
 pub fn queue_key(meta: &MessageMeta, inbox_scope: &str) -> String {
-    if meta.from_outside || super::is_no_reply(&meta.sender) {
+    if meta.from_outside || meta.from_shell || super::is_no_reply(&meta.sender) {
         return meta.sender.clone();
     }
     let scope = meta.sender_scope.as_deref().unwrap_or(inbox_scope);
@@ -100,6 +100,7 @@ mod tests {
             sender_scope: scope.map(str::to_string),
             sender_project: project.map(str::to_string),
             from_outside: false,
+            from_shell: false,
         }
     }
 

@@ -138,6 +138,7 @@ pub(super) fn project_assets(
 pub(super) fn build_cmd(spec: &SpawnSpec<'_>) -> String {
     let SpawnSpec {
         definition,
+        session_name,
         append_prompt_file,
         prompt,
         resume_session,
@@ -154,6 +155,11 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>) -> String {
     if let Some(name) = definition {
         parts.push("--agent".to_string());
         parts.push(name.to_string());
+    }
+
+    if let Some(name) = session_name {
+        parts.push("-n".to_string());
+        parts.push(tmux::shell_quote(name));
     }
 
     // Config-sourced values are shell-quoted: the command is sent through the

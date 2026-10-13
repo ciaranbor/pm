@@ -5,7 +5,9 @@
 //! is from are separate. An agent's reply (`PM_AGENT_NAME` set) routes back
 //! to its home, so an agent answering from another project's inbox is still
 //! answered in its own. Anyone else is routed back to the inbox it replied
-//! from.
+//! from, as a shell sender no one can answer in turn. A message from a
+//! sender with no inbox (pm itself, a shell, outside every project) has no
+//! reply.
 
 use std::path::Path;
 
@@ -18,7 +20,8 @@ use crate::state::scope;
 
 /// Reply as `agent` to the last message read from its inbox in
 /// `inbox_scope` of the project at `inbox_root`. `home` is the replier's
-/// own, if it has one; `projects_dir` resolves a sender in another project.
+/// own, if it is an agent; `projects_dir` resolves a sender in another
+/// project.
 pub fn msg_reply(
     projects_dir: &Path,
     inbox_root: &Path,
@@ -37,9 +40,19 @@ pub fn msg_reply(
                 .to_string(),
         )
     })?;
-    if last_read.from_outside {
+    let nowhere = if last_read.from_outside {
+        Some("from outside every project")
+    } else if last_read.from_shell {
+        Some("from a shell, not as an agent")
+    } else if messages::is_no_reply(&last_read.sender) {
+        Some("as pm itself, not as an agent")
+    } else {
+        None
+    };
+    if let Some(how) = nowhere {
         return Err(PmError::Messaging(format!(
-            "'{}' sent that message from outside every project: there is no inbox to reply to",
+            "'{}' sent that message {how}: there is no one to reply to. Report in your own \
+             session, or as `pm workflow show` says",
             last_read.sender
         )));
     }
@@ -54,6 +67,7 @@ pub fn msg_reply(
             last_read.sender_scope.as_deref().unwrap_or(inbox_scope),
         ),
     };
+    let replier_home = home;
     let home = home.unwrap_or(Home {
         root: inbox_root,
         scope: inbox_scope,
@@ -65,6 +79,7 @@ pub fn msg_reply(
         Sender {
             name: agent,
             home: Some(home),
+            shell: replier_home.is_none(),
         },
         body,
         tmux_server,
@@ -190,7 +205,10 @@ mod tests {
             &root,
             &feature,
             "implementer",
-            None,
+            Some(Home {
+                root: &root,
+                scope: &feature,
+            }),
             "done, please review",
             server.name(),
         )
@@ -239,7 +257,10 @@ mod tests {
             &root,
             &feature,
             "implementer",
-            None,
+            Some(Home {
+                root: &root,
+                scope: &feature,
+            }),
             "got it",
             server.name(),
         )

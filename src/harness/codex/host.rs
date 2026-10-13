@@ -61,6 +61,12 @@ const CALL_LIMIT: Duration = Duration::from_secs(2);
 /// How long the TUI may take to open its thread: past it, the launch
 /// prompt is not given.
 const OPEN_WITHIN: Duration = Duration::from_secs(600);
+/// How long the thread may take to accept a name once its first turn has
+/// started.
+const NAME_WITHIN: Duration = Duration::from_secs(30);
+/// The end of codex's refusal to name a thread whose rollout has no
+/// entries yet: `rollout at <path> is empty`.
+const NO_ROLLOUT_YET: &str = "is empty";
 
 /// What a codex agent's window runs, as pm config resolved it at spawn.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -75,6 +81,8 @@ pub struct CodexHost {
     pub resume: Option<String>,
     pub fork: bool,
     pub prompt: Option<String>,
+    /// What codex shows the thread as.
+    pub name: Option<String>,
 }
 
 /// The socket `agent`'s app-server listens on.
@@ -190,9 +198,16 @@ pub fn run(host: &CodexHost) -> Result<i32> {
     if let Some(prompt) = host.prompt.clone() {
         let (socket, permissions, log) = (socket.clone(), host.permissions(), log.clone());
         let resumed = host.resumed().map(str::to_string);
+        let name = host.name.clone();
         std::thread::spawn(move || {
-            if let Err(e) = launch_turn(&socket, resumed.as_deref(), &prompt, &permissions) {
-                log(&format!("could not give the launch prompt: {e}"));
+            let mut client = match launch_turn(&socket, resumed.as_deref(), &prompt, &permissions) {
+                Ok(client) => client,
+                Err(e) => return log(&format!("could not give the launch prompt: {e}")),
+            };
+            if let Some(name) = name
+                && let Err(e) = client.name_thread(&name)
+            {
+                log(&format!("could not name its thread: {e}"));
             }
         });
     }
@@ -236,13 +251,13 @@ pub fn run(host: &CodexHost) -> Result<i32> {
 
 /// Give `prompt` to the TUI's thread — `resumed`, or the one a fresh or
 /// forking TUI opens, the server's first — once the TUI has loaded it,
-/// with `permissions`.
+/// with `permissions`. Returns the connection, on that thread.
 fn launch_turn(
     socket: &Path,
     resumed: Option<&str>,
     prompt: &str,
     permissions: &Permissions,
-) -> Result<()> {
+) -> Result<Thread> {
     let mut client = Client::connect(socket, CALL_LIMIT)?;
     let deadline = Instant::now() + OPEN_WITHIN;
     let thread = loop {
@@ -262,7 +277,37 @@ fn launch_turn(
         }
         std::thread::sleep(Duration::from_millis(200));
     };
-    client.start_turn(&thread, prompt, Some(permissions))
+    client.start_turn(&thread, prompt, Some(permissions))?;
+    Ok(Thread { client, thread })
+}
+
+/// A connection to the server, on the TUI's thread.
+struct Thread {
+    client: Client,
+    thread: String,
+}
+
+impl Thread {
+    /// Set the name codex lists the thread under. codex refuses it until
+    /// the thread's rollout has its first entries, a moment after the
+    /// first turn starts (verified on 0.162.1), so that refusal alone is
+    /// retried, for up to [`NAME_WITHIN`].
+    fn name_thread(&mut self, name: &str) -> Result<()> {
+        let deadline = Instant::now() + NAME_WITHIN;
+        loop {
+            let named = self.client.call(
+                "thread/name/set",
+                serde_json::json!({"threadId": self.thread, "name": name}),
+            );
+            match named {
+                Ok(_) => return Ok(()),
+                Err(e) if Instant::now() > deadline || !e.to_string().contains(NO_ROLLOUT_YET) => {
+                    return Err(e);
+                }
+                Err(_) => std::thread::sleep(Duration::from_millis(250)),
+            }
+        }
+    }
 }
 
 static SIGNAL: AtomicI32 = AtomicI32::new(0);
@@ -391,11 +436,14 @@ mod tests {
     }
 
     #[test]
-    fn the_launch_prompt_goes_to_the_thread_the_tui_opened_with_the_permissions() {
+    fn the_launch_prompt_goes_to_the_thread_the_tui_opened_with_the_permissions_then_names_it() {
         let dir = tempfile::tempdir().unwrap();
         let server = FakeAppServer::bind(dir.path());
         let permissions = host("danger-full-access").permissions();
-        launch_turn(&server.path, None, "Stand by.", &permissions).unwrap();
+        launch_turn(&server.path, None, "Stand by.", &permissions)
+            .unwrap()
+            .name_thread("rev.login")
+            .unwrap();
         assert_eq!(
             server.turn().unwrap(),
             json!({
@@ -405,5 +453,23 @@ mod tests {
                 "sandboxPolicy": {"type": "dangerFullAccess"},
             })
         );
+        let named = server.request();
+        assert_eq!(named["method"], "thread/name/set");
+        assert_eq!(
+            named["params"],
+            json!({"threadId": "t1", "name": "rev.login"})
+        );
+    }
+
+    #[test]
+    fn a_refusal_other_than_an_empty_rollout_is_not_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = FakeAppServer::bind(dir.path());
+        let permissions = host("danger-full-access").permissions();
+        let mut thread = launch_turn(&server.path, None, "Stand by.", &permissions).unwrap();
+        let started = Instant::now();
+        let err = thread.name_thread("refused").unwrap_err();
+        assert!(err.to_string().contains("method not found"), "{err}");
+        assert!(started.elapsed() < Duration::from_secs(2), "{err}");
     }
 }

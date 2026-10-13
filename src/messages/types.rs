@@ -20,6 +20,10 @@ pub struct MessageMeta {
     /// Sent from outside every project, so there is no inbox to reply to.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub from_outside: bool,
+    /// Sent from a shell, not by an agent: no waiter reads the sender's
+    /// inbox, so there is no one to reply to.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub from_shell: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -76,5 +80,7 @@ pub struct LastRead {
     pub sender_project: Option<String>,
     #[serde(default)]
     pub from_outside: bool,
+    #[serde(default)]
+    pub from_shell: bool,
     pub index: u32,
 }

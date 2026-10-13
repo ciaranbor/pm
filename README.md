@@ -467,7 +467,9 @@ or deleted. [Customising](#customising) covers writing your own.
 
 Agents never sit idle: after every turn, pm's waiter waits until the agent
 has unread messages, then wakes it to read them, so the brief at feature
-creation is just the first message. The turn has ended meanwhile, so the
+creation is just the first message. The wake-up names the sender a bare
+`pm msg read` takes next, quotes that message's first line, and says it is
+pm's; the body stays in the inbox. The turn has ended meanwhile, so the
 agent's prompt is yours. A Claude Code turn you interrupt with Esc still
 has a waiter, so a message sent after the Esc wakes the agent: Esc stops the
 turn, not the agent (`pm agent stop` does that). A codex turn you interrupt
@@ -524,14 +526,21 @@ died, or whose harness exited to the shell in a window nobody is looking
 at. An `unarmed` recipient it [re-arms](#agents-are-message-processors)
 with the prompt the waiter would have given; when that cannot reach it, the
 message waits, and a socket nothing listens on any more is reported. All of
-this holds for a recipient in another project too.
+this holds for a recipient in another project too. A send then says what
+the recipient was doing, and so when it reads the message: idle (woken
+now), busy (at its turn's end), waiting on background work (woken now),
+asking the user (once that is answered), or unarmed (re-armed, or not until
+something prompts it).
 
 A reply lands in the inbox the original sender's waiter watches. An agent's
 replies name its own project and scope as their return route, even when it
 replies from another project's inbox with `pm msg reply --project`; anyone
 else's name the inbox they replied from. No agent has to read another
-project's inbox to hear back. `pm msg send --project` works
-from outside every project, but the recipient can't reply to it. `read`,
+project's inbox to hear back. A message sent from a shell rather than by an
+agent has no reply, like pm's own briefs: `pm msg read` says so and
+`pm msg reply` refuses, since no waiter watches the sender's inbox.
+`pm msg send --project` works from outside every project, but the
+recipient can't reply to it either. `read`,
 `list` and `wait --project` inspect another project's inbox.
 
 A send `--in` a delay is checked like any send, then held until it falls

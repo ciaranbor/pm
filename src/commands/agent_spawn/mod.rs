@@ -172,7 +172,8 @@ fn spawn_agent(
         if let Some(ctx) = context {
             let messages_dir = paths::messages_dir(project_root);
             let sender = crate::messages::default_user_name();
-            crate::messages::send(&messages_dir, feature, agent_name, &sender, ctx)?;
+            let shell = crate::messages::from_shell();
+            crate::messages::send_by(&messages_dir, feature, agent_name, &sender, shell, ctx)?;
         }
         Ok(())
     };

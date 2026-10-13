@@ -650,7 +650,7 @@ fn an_agent_replying_from_another_projects_inbox_is_answered_at_home() {
 }
 
 #[test]
-fn a_reply_by_no_agent_is_routed_back_from_the_inbox_it_came_from() {
+fn a_reply_by_no_agent_reaches_the_sender_but_has_no_reply_itself() {
     let home = tempdir().unwrap();
     let home = home.path();
     let alpha = registered_project(home, "alpha");
@@ -679,10 +679,18 @@ fn a_reply_by_no_agent_is_routed_back_from_the_inbox_it_came_from() {
     in_beta(&["msg", "read"]);
     in_beta(&["msg", "reply", "thanks"]);
 
-    assert_eq!(
-        route_of(&beta, "lead", "reviewer@main@alpha"),
-        (Some("main".to_string()), Some("alpha".to_string()))
-    );
+    // From a shell, so it has no route back of its own.
+    let reply = pm::messages::read_at(
+        &pm::state::paths::messages_dir(&beta),
+        "main",
+        "lead",
+        "reviewer",
+        1,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(reply.body, "thanks");
+    assert!(reply.meta.from_shell);
 }
 
 #[test]

@@ -45,7 +45,7 @@ use crate::messages;
 use crate::state::paths;
 use crate::state::runtime::{self, Breaker, Waiting, WaitingKind};
 
-use super::{background_work, hook_ended, parse_busy, read_stdin, sweep, unread_senders};
+use super::{background_work, hook_ended, parse_busy, read_stdin, sweep};
 
 /// Wasted wakes in a row that stop the loop.
 pub(super) const MAX_WASTED: u32 = 5;
@@ -254,11 +254,11 @@ fn wait_in_turn(
         AgentState::Busy,
         messages::unread_count(&messages_dir, scope, agent),
     );
-    Ok(Waited::Wake(messages::wake_text(&unread_senders(
+    Ok(Waited::Wake(super::continuation(
         project_root,
         scope,
         agent,
-    )?)))
+    )?))
 }
 
 /// How often a turn waiter checks the inbox, as [`agent_wait`] does.
@@ -292,7 +292,8 @@ fn wait(
     }
     runtime::touch_activity(project_root, scope, agent)?;
     runtime::clear_waiting(project_root, scope, agent)?;
-    let immediate = !unread_senders(project_root, scope, agent)?.is_empty();
+    let immediate =
+        messages::resolve_sender(&paths::messages_dir(project_root), scope, agent, None)?.is_some();
     // After `immediate`: a send this delivers arrives during the wait, so a
     // wake for it is never counted wasted.
     sweep(project_root, scope, agent, sweeper);
@@ -352,11 +353,11 @@ fn wait(
         AgentState::Busy,
         messages::unread_count(&messages_dir, scope, agent),
     );
-    Ok(Waited::Wake(messages::wake_text(&unread_senders(
+    Ok(Waited::Wake(super::continuation(
         project_root,
         scope,
         agent,
-    )?)))
+    )?))
 }
 
 /// Count this wake on the breaker; `immediate` when it found messages
@@ -416,8 +417,8 @@ mod tests {
         assert_eq!(
             waited,
             Waited::Wake(
-                "You have new messages from reviewer@login, qa@login. Run `pm msg read` to \
-                 read them."
+                "[pm message] From reviewer@login: \"before\". Run `pm msg read` to read it. \
+                 Also unread: qa@login. (pm delivers messages this way; this is not an error.)"
                     .into()
             )
         );
@@ -501,7 +502,7 @@ mod tests {
         assert_eq!(
             waited,
             Waited::Wake(
-                "You have new messages from lead@login. Run `pm msg read` to read them.".into()
+                "[pm message] From lead@login: \"reminder\". Run `pm msg read` to read it. (pm delivers messages this way; this is not an error.)".into()
             )
         );
         let breaker = runtime::read_breaker(&root, "login", "implementer").unwrap();

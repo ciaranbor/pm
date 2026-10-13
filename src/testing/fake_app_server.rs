@@ -78,6 +78,9 @@ fn answer(request: &Value) -> Value {
         "turn/start" if params["threadId"] == "missing" => {
             json!({"error": {"code": -32600, "message": "no thread missing"}})
         }
+        "thread/name/set" if params["name"] == "refused" => {
+            json!({"error": {"code": -32601, "message": "method not found"}})
+        }
         _ => json!({"result": {}}),
     }
 }

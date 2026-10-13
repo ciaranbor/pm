@@ -144,10 +144,7 @@ fn a_signal_from_another_process_leaves_the_hook_armed() {
     assert!(out.status.success(), "{out:?}");
     let decision: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(decision["decision"], "block");
-    assert_eq!(
-        decision["reason"],
-        "You have new messages from researcher@main. Run `pm msg read` to read them."
-    );
+    assert_eq!(decision["reason"], CONTINUATION);
 }
 
 #[test]
@@ -225,8 +222,8 @@ fn await_idle(dir: &Path, hook: &Child) {
     }
 }
 
-const CONTINUATION: &str =
-    "You have new messages from researcher@main. Run `pm msg read` to read them.";
+const CONTINUATION: &str = "[pm message] From researcher@main: \"hi\". Run `pm msg read` to read it. (pm delivers \
+     messages this way; this is not an error.)";
 
 #[test]
 fn a_waiter_with_messages_unread_wakes_the_agent_at_once() {

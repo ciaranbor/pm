@@ -140,8 +140,17 @@ mod tests {
     use chrono::Utc;
     use tempfile::tempdir;
 
-    const PROMPT: &str =
-        "You have new messages from reviewer@login. Run `pm msg read` to read them.";
+    const PROMPT: &str = "[pm message] From reviewer@login: \"hi\". Run `pm msg read` to read it. \
+                          (pm delivers messages this way; this is not an error.)";
+
+    /// Assert a send's `status` says it queued the message and re-armed
+    /// nothing; returns the line on the recipient's state.
+    fn left_alone(status: &str) -> String {
+        let (sent, state) = status.split_once('\n').unwrap_or((status, ""));
+        assert_eq!(sent, "Message 001 sent to 'implementer' (from 'reviewer')");
+        assert!(!state.contains("re-armed"), "{status}");
+        state.to_string()
+    }
 
     /// A feature whose `implementer` sits at an empty Claude Code prompt
     /// with `marker` as its waiting marker.
@@ -189,7 +198,9 @@ mod tests {
         let status = send(&server, &project);
 
         assert!(
-            status.ends_with("\nRe-armed 'implementer' (Stop hook ended)"),
+            status.ends_with(
+                "\n'implementer' was unarmed (Stop hook ended): re-armed, it reads this now"
+            ),
             "{status}"
         );
         assert_eq!(
@@ -198,7 +209,7 @@ mod tests {
         );
         server.wait_for_pane_text(&target, &format!("❯ {PROMPT}"));
         let users = server.tmux_stdout(&["capture-pane", "-p", "-t", &users]);
-        assert!(!users.contains("You have new messages"), "{users}");
+        assert!(!users.contains("[pm message]"), "{users}");
     }
 
     /// Record `socket` as the agent's session's inbound channel.
@@ -224,7 +235,9 @@ mod tests {
         let status = send(&server, &project);
 
         assert!(
-            status.ends_with("\nRe-armed 'implementer' (Stop hook ended)"),
+            status.ends_with(
+                "\n'implementer' was unarmed (Stop hook ended): re-armed, it reads this now"
+            ),
             "{status}"
         );
         let prompt = serde_json::json!({
@@ -243,7 +256,7 @@ mod tests {
             None
         );
         assert!(tmux::paste::in_mode(server.name(), &pane).unwrap());
-        assert!(!screen(&server, &target).contains("You have new messages"));
+        assert!(!screen(&server, &target).contains("[pm message]"));
     }
 
     /// A codex agent at its composer with `marker`, its session's thread
@@ -293,7 +306,7 @@ mod tests {
 
             let status = send(&server, &project);
 
-            assert!(status.contains("\nRe-armed 'implementer'"), "{status}");
+            assert!(status.contains("\n'implementer' was unarmed ("), "{status}");
             assert_eq!(
                 app_server.turn(),
                 Some(serde_json::json!({
@@ -315,10 +328,7 @@ mod tests {
                 runtime::trip_loop(&project, "login", "implementer", "wasted wakes").unwrap();
             }
 
-            assert_eq!(
-                send(&server, &project),
-                "Message 001 sent to 'implementer' (from 'reviewer')"
-            );
+            left_alone(&send(&server, &project));
             assert_eq!(app_server.turn(), None);
         }
     }
@@ -331,10 +341,7 @@ mod tests {
         let socket = crate::testing::FakeSocket::bind(dir.path());
         listening(&project, &socket.path);
 
-        assert_eq!(
-            send(&server, &project),
-            "Message 001 sent to 'implementer' (from 'reviewer')"
-        );
+        left_alone(&send(&server, &project));
         assert!(!socket.posted());
     }
 
@@ -352,17 +359,14 @@ mod tests {
             runtime::read_waiting(&project, "login", "implementer").map(|w| w.kind),
             Some(WaitingKind::HookEnded)
         );
-        assert!(!screen(&server, &target).contains("You have new messages"));
+        assert!(!screen(&server, &target).contains("[pm message]"));
     }
 
     /// Send the agent a message and check it is left alone, still unarmed.
     fn assert_left_alone(server: &TestServer, project: &Path) {
         let status = send(server, project);
 
-        assert_eq!(
-            status,
-            "Message 001 sent to 'implementer' (from 'reviewer')"
-        );
+        left_alone(&status);
         assert_eq!(
             runtime::read_waiting(project, "login", "implementer").map(|w| w.kind),
             Some(WaitingKind::HookEnded)
@@ -433,9 +437,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let (project, target) = started_long_ago(&server, dir.path(), chrono::Duration::seconds(1));
 
+        let state = left_alone(&send(&server, &project));
         assert_eq!(
-            send(&server, &project),
-            "Message 001 sent to 'implementer' (from 'reviewer')"
+            state,
+            "'implementer' is busy: it reads this when its turn ends"
         );
         assert!(!screen(&server, &target).contains(PROMPT));
     }
@@ -449,13 +454,14 @@ mod tests {
         let status = send(&server, &project);
 
         assert!(
-            status.ends_with("\nRe-armed 'implementer' (its session started, but armed no waiter)"),
+            status.ends_with("\n'implementer' was unarmed (its session started, but armed no waiter): re-armed, it reads this now"),
             "{status}"
         );
         server.wait_for_pane_text(&target, &format!("❯ {PROMPT}"));
         assert_eq!(
             send(&server, &project),
-            "Message 002 sent to 'implementer' (from 'reviewer')"
+            "Message 002 sent to 'implementer' (from 'reviewer')\n'implementer' is busy: it \
+             reads this when its turn ends"
         );
     }
 
@@ -468,7 +474,7 @@ mod tests {
         let status = send(&server, &project);
 
         assert!(
-            status.ends_with("\nRe-armed 'implementer' (its waiter for background work is gone)"),
+            status.ends_with("\n'implementer' was unarmed (its waiter for background work is gone): re-armed, it reads this now"),
             "{status}"
         );
         assert_eq!(
@@ -487,10 +493,11 @@ mod tests {
         let status = send(&server, &project);
 
         assert_eq!(
-            status,
-            "Message 001 sent to 'implementer' (from 'reviewer')"
+            left_alone(&status),
+            "'implementer' is asking the user (permission prompt): it reads this once that is \
+             answered"
         );
-        assert!(!screen(&server, &target).contains("You have new messages"));
+        assert!(!screen(&server, &target).contains("[pm message]"));
     }
 
     #[test]
@@ -502,10 +509,11 @@ mod tests {
         let status = send(&server, &project);
 
         assert_eq!(
-            status,
-            "Message 001 sent to 'implementer' (from 'reviewer')"
+            left_alone(&status),
+            "'implementer' is unarmed (never-idle loop stopped): nothing wakes it to read this \
+             until it is prompted"
         );
-        assert!(!screen(&server, &target).contains("You have new messages"));
+        assert!(!screen(&server, &target).contains("[pm message]"));
     }
 
     #[test]
@@ -526,13 +534,10 @@ mod tests {
 
         let status = send(&server, &project);
 
-        assert_eq!(
-            status,
-            "Message 001 sent to 'implementer' (from 'reviewer')"
-        );
+        left_alone(&status);
         let screen = screen(&server, &target);
         assert!(screen.contains("❯ half a thought"), "{screen}");
-        assert!(!screen.contains("You have new messages"), "{screen}");
+        assert!(!screen.contains("[pm message]"), "{screen}");
         assert_eq!(
             runtime::read_waiting(&project, "login", "implementer").map(|w| w.kind),
             Some(WaitingKind::Prompt)
@@ -569,7 +574,9 @@ mod tests {
         let status = send(&server, &project);
 
         assert!(
-            status.ends_with("\nRe-armed 'implementer' (interrupted)"),
+            status.ends_with(
+                "\n'implementer' was unarmed (interrupted): re-armed, it reads this now"
+            ),
             "{status}"
         );
         assert_eq!(
@@ -620,7 +627,9 @@ mod tests {
         let status = send(&server, &project);
 
         assert!(
-            status.ends_with("\nRe-armed 'implementer' (its waiter is gone)"),
+            status.ends_with(
+                "\n'implementer' was unarmed (its waiter is gone): re-armed, it reads this now"
+            ),
             "{status}"
         );
         assert_eq!(

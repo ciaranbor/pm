@@ -189,6 +189,7 @@ fn sandbox_mode<'a>(cfg: &'a CodexConfig, permission_mode: Option<&'a str>) -> &
 pub(super) fn build_cmd(spec: &SpawnSpec<'_>, cfg: &CodexConfig) -> String {
     let SpawnSpec {
         definition: _,
+        session_name,
         append_prompt_file: _,
         prompt,
         resume_session,
@@ -231,6 +232,10 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>, cfg: &CodexConfig) -> String {
     if let Some(p) = prompt {
         parts.push("--prompt".to_string());
         parts.push(tmux::shell_quote(p));
+    }
+    if let Some(name) = session_name {
+        parts.push("--name".to_string());
+        parts.push(tmux::shell_quote(name));
     }
     parts.join(" ")
 }
@@ -473,6 +478,7 @@ mod tests {
                 definition: Some("reviewer"),
                 append_prompt_file: Some("/x/baseline.md"),
                 prompt: Some("Stand by."),
+                session_name: Some("reviewer.login"),
                 writable_dirs: &dirs,
                 ..Default::default()
             },
@@ -481,7 +487,7 @@ mod tests {
         assert_eq!(
             cmd,
             "pm harness codex-host --approval 'never' --sandbox 'danger-full-access' \
-             --prompt 'Stand by.'"
+             --prompt 'Stand by.' --name 'reviewer.login'"
         );
 
         let config = CodexConfig {

@@ -10,11 +10,8 @@ use super::types::MessageMeta;
 use super::validation::validate_name;
 use crate::error::Result;
 
-/// Send a message to an agent's inbox. Returns the message index.
-///
-/// `sender_scope` is the scope (feature name or "main") the sender is in.
-/// Stored in message metadata so the recipient knows where the message
-/// originated. Pass `None` for same-scope messages (backward compat).
+/// Send a message to an agent's inbox from `sender` in its scope. Returns
+/// the message index.
 pub fn send(
     messages_dir: &Path,
     feature: &str,
@@ -22,7 +19,7 @@ pub fn send(
     sender: &str,
     body: &str,
 ) -> Result<u32> {
-    send_with_scope(messages_dir, feature, recipient, sender, body, None)
+    send_by(messages_dir, feature, recipient, sender, false, body)
 }
 
 /// Like [`send`], but records the sender's scope and optionally project in metadata.
@@ -61,6 +58,28 @@ pub fn send_full(
         sender_scope: sender_scope.map(|s| s.to_string()),
         sender_project: sender_project.map(|s| s.to_string()),
         from_outside: false,
+        from_shell: false,
+    };
+    send_meta(messages_dir, feature, recipient, &meta, body)
+}
+
+/// Send a message from `sender` in the recipient's scope, or with
+/// `from_shell`, from someone at a shell, whom no reply reaches.
+pub fn send_by(
+    messages_dir: &Path,
+    feature: &str,
+    recipient: &str,
+    sender: &str,
+    from_shell: bool,
+    body: &str,
+) -> Result<u32> {
+    let meta = MessageMeta {
+        sender: sender.to_string(),
+        timestamp: Utc::now(),
+        sender_scope: None,
+        sender_project: None,
+        from_outside: false,
+        from_shell,
     };
     send_meta(messages_dir, feature, recipient, &meta, body)
 }
@@ -119,6 +138,23 @@ mod tests {
     use crate::messages::test_support::messages_dir;
     use crate::messages::{cursor_for, list, next, read_at};
     use tempfile::tempdir;
+
+    #[test]
+    fn a_send_by_someone_at_a_shell_is_keyed_by_name_with_no_route_back() {
+        let dir = tempdir().unwrap();
+        let messages_dir = dir.path();
+        send_by(messages_dir, "login", "reviewer", "ciaran", true, "context").unwrap();
+        send_by(messages_dir, "login", "reviewer", "lead", false, "more").unwrap();
+
+        let shell = read_at(messages_dir, "login", "reviewer", "ciaran", 1)
+            .unwrap()
+            .unwrap();
+        assert!(shell.meta.from_shell);
+        let agent = read_at(messages_dir, "login", "reviewer", "lead@login", 1)
+            .unwrap()
+            .unwrap();
+        assert!(!agent.meta.from_shell);
+    }
 
     #[test]
     fn a_send_after_one_that_died_part_way_is_delivered() {

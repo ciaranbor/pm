@@ -116,6 +116,7 @@ pub fn read_at(
         sender_scope: None,
         sender_project: None,
         from_outside: false,
+        from_shell: false,
     });
 
     Ok(Some(Message {

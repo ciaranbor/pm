@@ -9,9 +9,12 @@
 //! The message records the sender's *home* — the project and scope whose
 //! inbox its waiter watches — relative to the recipient, so `pm msg reply`
 //! routes back there. A sender with no home (outside every project) can
-//! send with `--project` but cannot be replied to.
+//! send with `--project` but cannot be replied to, nor can one at a shell:
+//! no waiter watches its inbox, and its home serves only the hint when the
+//! recipient is missing.
 
 mod hint;
+mod state;
 mod upstream;
 
 pub use upstream::resolve_upstream;
@@ -35,12 +38,13 @@ pub struct Home<'a> {
     pub scope: &'a str,
 }
 
-/// Who a message is from: a name, and the home a reply reaches it in, if
-/// it has one.
+/// Who a message is from: a name, the scope it sends from, if any, and
+/// whether it is at a shell rather than an agent.
 #[derive(Debug, Clone, Copy)]
 pub struct Sender<'a> {
     pub name: &'a str,
     pub home: Option<Home<'a>>,
+    pub shell: bool,
 }
 
 /// Where the sender's home lies relative to the recipient's inbox.
@@ -75,18 +79,22 @@ impl Route {
         matches!(self, Self::OtherProject { .. } | Self::Outside)
     }
 
-    fn meta(&self, sender: &str) -> MessageMeta {
+    fn meta(&self, sender: Sender<'_>) -> MessageMeta {
+        let from_outside = matches!(self, Self::Outside);
+        let from_shell = sender.shell && !from_outside;
         let (sender_scope, sender_project) = match self {
+            _ if from_shell => (None, None),
             Self::SameScope | Self::Outside => (None, None),
             Self::OtherScope(scope) => (Some(scope.clone()), None),
             Self::OtherProject { scope, project } => (Some(scope.clone()), Some(project.clone())),
         };
         MessageMeta {
-            sender: sender.to_string(),
+            sender: sender.name.to_string(),
             timestamp: Utc::now(),
             sender_scope,
             sender_project,
-            from_outside: matches!(self, Self::Outside),
+            from_outside,
+            from_shell,
         }
     }
 }
@@ -179,14 +187,24 @@ pub fn send_as(
     let route = Route::of(sender.home, target_root, feature)?;
 
     require_recipient(&route, target_root, feature, recipient, sender)?;
+    let found = state::read(target_root, feature, recipient, tmux_server);
 
     // Deliver the message first, then heal a dead window. This ensures the
     // message is durably queued in the inbox before the agent starts, so it
     // will be picked up on first read.
     let messages_dir = paths::messages_dir(target_root);
     let name = sender.name;
-    let index = messages::send_meta(&messages_dir, feature, recipient, &route.meta(name), body)?;
+    let meta = route.meta(sender);
+    let index = messages::send_meta(&messages_dir, feature, recipient, &meta, body)?;
+    let in_project = match route {
+        Route::OtherProject { .. } => format!(" in project '{}'", paths::project_name(target_root)),
+        _ => String::new(),
+    };
     let mut status = match &route {
+        _ if meta.from_shell => format!(
+            "Message {index:03} sent to '{recipient}@{feature}'{in_project} (from '{name}' at a \
+             shell, not an agent: replies have nowhere to go)"
+        ),
         Route::SameScope => format!("Message {index:03} sent to '{recipient}' (from '{name}')"),
         Route::OtherScope(home_scope) => format!(
             "Message {index:03} sent to '{recipient}@{feature}' (from '{name}@{home_scope}')"
@@ -208,8 +226,7 @@ pub fn send_as(
     // a no-op (`AlreadyActive`) if the harness runs, a respawn/resume if
     // not. Pass `None` for `agent_definition` so `agent_spawn` reads the
     // stored definition from the registry entry — preserving aliases. Only
-    // report a heal when one actually happened, keeping the common-case
-    // output byte-identical.
+    // a heal that happened is reported.
     //
     // The message is already queued, so a heal failure (e.g. the tmux
     // socket is unreachable from a sandbox) is not a delivery failure: a
@@ -228,9 +245,16 @@ pub fn send_as(
         }
         Ok(_) => match super::agent_rearm::rearm(target_root, feature, recipient, tmux_server) {
             Ok(Some(waiting)) => {
-                status = format!("{status}\nRe-armed '{recipient}' ({})", waiting.describe());
+                status = format!(
+                    "{status}\n'{recipient}' was unarmed ({}): re-armed, it reads this now",
+                    waiting.describe()
+                );
             }
-            Ok(None) => {}
+            Ok(None) => {
+                if let Some(found) = &found {
+                    status = format!("{status}\n{}", state::describe(recipient, found));
+                }
+            }
             Err(e) => warnings.push(format!(
                 "message {index:03} is queued for '{recipient}@{feature}', but it could not be \
                  re-armed: {e}"
