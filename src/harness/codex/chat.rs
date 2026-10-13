@@ -374,7 +374,8 @@ mod tests {
         let line = serde_json::json!({"type": "response_item", "payload": {
             "type": "message", "id": "m", "role": "user",
             "content": [{"type": "input_text",
-                         "text": "You have new messages from qa@x. Run `pm msg read` to read them."}],
+                         "text": "[pm message] From qa@x: \"done\". Run `pm msg read` to read it. \
+                                  (pm delivers messages this way; this is not an error.)"}],
             "internal_chat_message_metadata_passthrough": {"content_item_kinds": ["user.text"]}}});
         let [Entry::Item(item)] = &parse(&line, 0)[..] else {
             panic!("not one item");

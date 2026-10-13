@@ -13,7 +13,11 @@ fn home<'a>(root: &'a Path, scope: &'a str) -> Option<Home<'a>> {
 }
 
 fn from<'a>(name: &'a str, home: Option<Home<'a>>) -> Sender<'a> {
-    Sender { name, home }
+    Sender {
+        name,
+        home,
+        shell: false,
+    }
 }
 
 fn name_of(root: &Path) -> String {
@@ -139,7 +143,9 @@ fn send_to_another_project_rearms_an_unarmed_agent() {
     .status;
 
     assert!(
-        status.ends_with("\nRe-armed 'implementer' (Stop hook ended)"),
+        status.ends_with(
+            "\n'implementer' was unarmed (Stop hook ended): re-armed, it reads this now"
+        ),
         "{status}"
     );
 }
@@ -306,8 +312,8 @@ fn a_home_spelled_differently_from_the_target_root_is_the_same_project() {
     .unwrap();
 
     assert_eq!(
-        sent.status,
-        "Message 001 sent to 'reviewer' (from 'implementer')"
+        sent.status.lines().next(),
+        Some("Message 001 sent to 'reviewer' (from 'implementer')")
     );
 }
 

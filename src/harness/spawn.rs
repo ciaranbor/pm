@@ -11,6 +11,8 @@ use super::Harness;
 pub struct SpawnSpec<'a> {
     /// Agent definition to launch; `None` is a plain, definition-less session.
     pub definition: Option<&'a str>,
+    /// What the harness shows the session as ([`session_name`]).
+    pub session_name: Option<&'a str>,
     /// The composed baseline + notice-board file appended to the system prompt.
     pub append_prompt_file: Option<&'a str>,
     /// Initial positional prompt.
@@ -33,6 +35,13 @@ pub struct SpawnSpec<'a> {
     /// of another scope). Each harness enforces this its own way; see its
     /// module docs.
     pub protected_dirs: &'a [PathBuf],
+}
+
+/// The name a harness shows an agent's session under, where it names
+/// sessions: the agent and its scope, so a session list tells pm's agents
+/// apart.
+pub fn session_name(agent: &str, scope: &str) -> String {
+    format!("{agent}.{scope}")
 }
 
 /// `dir` as a glob pattern's literal prefix: `None` when it holds a
@@ -110,6 +119,7 @@ mod tests {
         let cmd = Harness::ClaudeCode.build_cmd(
             &SpawnSpec {
                 definition: Some("reviewer"),
+                session_name: Some("reviewer.login"),
                 append_prompt_file: Some("/proj/main/.agents/pm-baseline.md"),
                 prompt: Some("go"),
                 resume_session: Some("abc123"),
@@ -125,7 +135,7 @@ mod tests {
         );
         assert_eq!(
             cmd,
-            "claude --agent reviewer --model 'opus' \
+            "claude --agent reviewer -n 'reviewer.login' --model 'opus' \
              --append-system-prompt-file '/proj/main/.agents/pm-baseline.md' \
              --permission-mode 'acceptEdits' --add-dir='/proj/.pm/summaries' \
              --settings '{\"permissions\":{\"deny\":[\"Edit(//proj/main/**)\"]}}' \

@@ -68,6 +68,7 @@ pub(super) fn run(cmd: MsgCommands, server: Option<&str>) -> Result<()> {
             let sender = Sender {
                 name: &sender,
                 home: home.as_ref().map(|(root, scope)| Home { root, scope }),
+                shell: pm::messages::from_shell(),
             };
             if let Some(delay) = delay {
                 let send = commands::msg_scheduled::schedule(

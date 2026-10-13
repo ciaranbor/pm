@@ -198,3 +198,45 @@ fn send_cross_scope_dead_window_queues_and_respawns() {
             .is_some()
     );
 }
+
+#[test]
+fn a_send_from_a_shell_cannot_be_replied_to() {
+    let server = TestServer::new();
+    let dir = tempdir().unwrap();
+    let (root, session, feature) = setup_project_with_tmux(dir.path(), &server);
+    server.spawn_fake_agent(&root, &session, &feature, "reviewer");
+
+    let sender = Sender {
+        name: "ciaran",
+        home: Some(Home {
+            root: &root,
+            scope: "main",
+        }),
+        shell: true,
+    };
+    let status = send_as(&root, &feature, "reviewer", sender, "look", server.name())
+        .unwrap()
+        .status;
+    assert!(status.contains("from 'ciaran' at a shell"), "{status}");
+
+    let read =
+        crate::commands::agent_read::agent_read(&root, &feature, "reviewer", None, None).unwrap();
+    assert!(read[0].starts_with("--- from ciaran [001] "), "{read:?}");
+    assert!(read[0].contains("sent from a shell"), "{read:?}");
+    assert!(!read.iter().any(|l| l.starts_with("Reply: ")), "{read:?}");
+
+    let err = crate::commands::msg_reply::msg_reply(
+        dir.path(),
+        &root,
+        &feature,
+        "reviewer",
+        Some(Home {
+            root: &root,
+            scope: &feature,
+        }),
+        "thanks",
+        server.name(),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("from a shell"), "{err}");
+}

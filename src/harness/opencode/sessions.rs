@@ -38,7 +38,7 @@ use super::{binary, installed_version};
 use crate::bounded;
 use crate::error::{PmError, Result};
 use crate::harness::{ImportOutcome, InUse, per_session_outcome};
-use crate::harness::{LaunchContext, Probe};
+use crate::harness::{LaunchContext, Probe, SpawnSpec};
 use crate::state::project::OpenCodeConfig;
 
 const PAGE_SIZE: &str = "limit=100";
@@ -422,7 +422,7 @@ pub(in crate::harness) fn import(
 pub(super) fn create_session(
     cfg: &OpenCodeConfig,
     ctx: &LaunchContext<'_>,
-    definition: Option<&str>,
+    spec: &SpawnSpec<'_>,
     model: &ModelRef<'_>,
 ) -> Result<String> {
     // The TUI reports its location by the resolved cwd.
@@ -432,10 +432,12 @@ pub(super) fn create_session(
         .unwrap_or_else(|_| ctx.worktree.to_path_buf());
     let mut body = json!({
         "location": {"directory": directory},
-        "title": format!("pm:{}", ctx.agent),
         "model": model.to_json(),
     });
-    if let Some(def) = definition {
+    if let Some(name) = spec.session_name {
+        body["title"] = json!(name);
+    }
+    if let Some(def) = spec.definition {
         body["agent"] = json!(def);
     }
     let body = body.to_string();

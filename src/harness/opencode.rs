@@ -262,10 +262,10 @@ pub(super) fn pre_launch(
                 notes.push(format!(
                     "opencode no longer has session {source}; previous session not resumed"
                 ));
-                create_session(cfg, ctx, spec.definition, &model)?
+                create_session(cfg, ctx, spec, &model)?
             }
         }
-        None => create_session(cfg, ctx, spec.definition, &model)?,
+        None => create_session(cfg, ctx, spec, &model)?,
     };
 
     clear_status_files(ctx.project_root, ctx.feature, ctx.agent)?;

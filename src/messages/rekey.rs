@@ -294,6 +294,7 @@ mod tests {
             sender_scope: scope.map(str::to_string),
             sender_project: None,
             from_outside: false,
+            from_shell: false,
         }
     }
 

@@ -45,7 +45,7 @@ pub use session_store::{
     AgentSession, Conversation, ExportJob, ImportOutcome, InUse, SessionStore,
 };
 pub(crate) use session_store::{per_session_outcome, session_counts};
-pub use spawn::{LaunchContext, PreLaunch, SpawnSpec, resumable_session};
+pub use spawn::{LaunchContext, PreLaunch, SpawnSpec, resumable_session, session_name};
 
 use std::fmt;
 use std::str::FromStr;

@@ -491,6 +491,9 @@ pub enum HarnessCommands {
         /// The launch prompt
         #[arg(long, allow_hyphen_values = true)]
         prompt: Option<String>,
+        /// What codex shows the session as
+        #[arg(long)]
+        name: Option<String>,
     },
 }
 

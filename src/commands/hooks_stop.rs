@@ -46,17 +46,13 @@ use crate::state::runtime::{self, Waiting, WaitingKind};
 use crate::commands::hook_process::{Caller, Signals};
 
 /// The prompt that tells `agent` to read its unread messages: the reason
-/// the hook returns ([`messages::wake_text`]), so pm sends one text however it reaches the agent.
+/// the hook returns ([`messages::wake`]), so pm sends one text however it reaches the agent.
 pub(crate) fn continuation(
     project_root: &std::path::Path,
     scope: &str,
     agent: &str,
 ) -> crate::error::Result<String> {
-    Ok(messages::wake_text(&unread_senders(
-        project_root,
-        scope,
-        agent,
-    )?))
+    messages::wake(&paths::messages_dir(project_root), scope, agent)
 }
 
 /// Run the Stop hook: as `harness`'s waiter when its hook runs once the
@@ -233,7 +229,8 @@ fn wait_and_decide(
     runtime::touch_activity(project_root, feature, agent)?;
     runtime::clear_waiting(project_root, feature, agent)?;
     sweep(project_root, feature, agent, sweeper);
-    if unread_senders(project_root, feature, agent)?.is_empty() {
+    let messages_dir = paths::messages_dir(project_root);
+    if messages::resolve_sender(&messages_dir, feature, agent, None)?.is_none() {
         let waiter = std::process::id();
         runtime::take_waiter(project_root, feature, agent, waiter, None)?;
         let idle = Waiting::now(WaitingKind::Idle, None);
@@ -263,27 +260,15 @@ fn wait_and_decide(
     let _ = runtime::touch_activity(project_root, feature, agent);
     let unread = messages::unread_count(&paths::messages_dir(project_root), feature, agent);
     on_turn(AgentState::Busy, unread);
-    let senders = unread_senders(project_root, feature, agent)?;
-    Ok(Decided::Answer(block_decision(&senders)))
+    Ok(Decided::Answer(block_decision(&continuation(
+        project_root,
+        feature,
+        agent,
+    )?)))
 }
 
-/// Senders with unread messages, oldest first — the order bare `pm msg read`
-/// will take them in.
-fn unread_senders(
-    project_root: &std::path::Path,
-    feature: &str,
-    agent: &str,
-) -> crate::error::Result<Vec<String>> {
-    let messages_dir = paths::messages_dir(project_root);
-    Ok(
-        messages::resolve_sender(&messages_dir, feature, agent, None)?
-            .map(|c| std::iter::once(c.sender).chain(c.pending).collect())
-            .unwrap_or_default(),
-    )
-}
-
-fn block_decision(senders: &[String]) -> String {
-    json!({"decision": "block", "reason": messages::wake_text(senders)}).to_string()
+fn block_decision(reason: &str) -> String {
+    json!({"decision": "block", "reason": reason}).to_string()
 }
 
 fn allow_decision() -> String {
@@ -441,7 +426,7 @@ mod tests {
         assert_eq!(parsed["decision"], "block");
         assert_eq!(
             parsed["reason"],
-            "You have new messages from implementer@login. Run `pm msg read` to read them."
+            "[pm message] From implementer@login: \"hi\". Run `pm msg read` to read it. (pm delivers messages this way; this is not an error.)"
         );
     }
 
@@ -478,7 +463,7 @@ mod tests {
         assert_eq!(parsed["decision"], "block");
         assert_eq!(
             parsed["reason"],
-            "You have new messages from implementer@login. Run `pm msg read` to read them."
+            "[pm message] From implementer@login: \"hi\". Run `pm msg read` to read it. (pm delivers messages this way; this is not an error.)"
         );
     }
 
@@ -570,7 +555,7 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(
             parsed["reason"],
-            "You have new messages from zed@login, amy@login. Run `pm msg read` to read them."
+            "[pm message] From zed@login: \"hi\". Run `pm msg read` to read it. Also unread: amy@login. (pm delivers messages this way; this is not an error.)"
         );
     }
 
@@ -668,6 +653,7 @@ mod tests {
                 root: root.to_path_buf(),
                 scope: "login".into(),
             }),
+            shell: false,
             body: "reminder".into(),
             failed: None,
             retrying_since: None,

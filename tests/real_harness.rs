@@ -475,7 +475,7 @@ fn claude_an_interrupted_or_unarmed_agent_is_woken_without_typing() {
     let before = transcript().len();
     let status = send("third: reply with the word plum and nothing else.");
     assert!(
-        status.contains("Re-armed 'plain' (its waiter is gone)"),
+        status.contains("'plain' was unarmed (its waiter is gone): re-armed, it reads this now"),
         "{status}"
     );
     wait_for("the posted continuation's turn", TURN, &s, || {
@@ -769,7 +769,7 @@ fn codex_is_woken_without_typing_and_keeps_its_sandbox() {
     });
     let status = send("plain", "Reply with the word fig and nothing else.");
     assert!(
-        status.contains("Re-armed 'plain' (interrupted)"),
+        status.contains("'plain' was unarmed (interrupted): re-armed, it reads this now"),
         "{status}"
     );
     idle_and_read("plain");

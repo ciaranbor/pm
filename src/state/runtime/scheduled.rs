@@ -32,6 +32,9 @@ pub struct Scheduled {
     pub sender: String,
     /// Where a reply reaches the sender, if anywhere.
     pub home: Option<ScheduledHome>,
+    /// Scheduled from a shell, not by an agent.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shell: bool,
     pub body: String,
     /// Why delivery failed for good; such a send is never retried.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -244,6 +247,7 @@ mod tests {
             recipient: "reviewer".into(),
             sender: "implementer".into(),
             home: None,
+            shell: false,
             body: "hi".into(),
             failed: None,
             retrying_since: None,

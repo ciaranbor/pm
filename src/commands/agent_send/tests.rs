@@ -107,6 +107,7 @@ pub(crate) fn agent_send(
             root: project_root,
             scope: sender_scope,
         }),
+        shell: false,
     };
     send_as(
         project_root,

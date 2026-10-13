@@ -24,8 +24,8 @@ fn send_to_active_agent_does_not_spawn() {
     )
     .unwrap();
     assert_eq!(
-        sent.status,
-        "Message 001 sent to 'reviewer' (from 'implementer')"
+        sent.status.lines().next(),
+        Some("Message 001 sent to 'reviewer' (from 'implementer')")
     );
     assert!(sent.heal.is_none());
 }
@@ -148,4 +148,43 @@ fn send_to_unspawned_agent_errors() {
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("No active agent called 'reviewer' exists in scope"));
+}
+
+#[test]
+fn a_send_says_an_idle_recipient_is_woken_to_read_it() {
+    let server = TestServer::new();
+    let dir = tempdir().unwrap();
+    let (root, session, feature) = setup_project_with_tmux(dir.path(), &server);
+    let harness = crate::harness::Harness::ClaudeCode;
+    let shell = crate::testing::fake_harness_binary(harness, Path::new("/bin/sh"));
+    let waiter = format!(
+        "{} -c \"sh -c 'sleep 999; :' {}; :\"",
+        shell.display(),
+        crate::commands::hooks_install::PM_HOOK_MARKER,
+    );
+    server.spawn_harness_agent(
+        &root,
+        &session,
+        &feature,
+        "reviewer",
+        harness,
+        &waiter,
+        crate::commands::running_agents::Liveness::Idle,
+    );
+
+    let sent = agent_send(
+        &root,
+        &feature,
+        None,
+        "reviewer",
+        "implementer",
+        "hello",
+        server.name(),
+    )
+    .unwrap();
+    assert_eq!(
+        sent.status,
+        "Message 001 sent to 'reviewer' (from 'implementer')\n'reviewer' is idle: pm wakes it \
+         to read this now"
+    );
 }

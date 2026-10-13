@@ -37,6 +37,7 @@ fn from_main(root: &std::path::Path) -> Sender<'_> {
             root,
             scope: "main",
         }),
+        shell: false,
     }
 }
 
@@ -78,6 +79,42 @@ fn a_send_is_delivered_once_due_with_its_senders_home() {
     assert_eq!(message.body, "hi");
     assert_eq!(message.meta.sender_scope.as_deref(), Some("main"));
     assert!(scheduled::list(&root).unwrap().is_empty());
+}
+
+#[test]
+fn a_send_scheduled_from_a_shell_is_delivered_with_no_reply() {
+    let server = TestServer::new();
+    let dir = tempdir().unwrap();
+    let root = project(dir.path(), &server);
+    let sender = Sender {
+        name: "ciaran",
+        shell: true,
+        ..from_main(&root)
+    };
+
+    let send = schedule(
+        &root,
+        "login",
+        "reviewer",
+        sender,
+        "later",
+        chrono::Duration::minutes(1),
+    )
+    .unwrap();
+    deliver_due(&root, send.due, server.name());
+
+    let message = messages::read_at(
+        &paths::messages_dir(&root),
+        "login",
+        "reviewer",
+        "ciaran",
+        1,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(message.body, "later");
+    assert!(message.meta.from_shell);
+    assert_eq!(message.meta.sender_scope, None);
 }
 
 #[test]

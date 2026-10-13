@@ -204,6 +204,7 @@ pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
             resume,
             fork,
             prompt,
+            name,
         } => {
             let code = pm::harness::run_codex_host(&pm::harness::CodexHost {
                 approval,
@@ -214,6 +215,7 @@ pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
                 fork: fork.is_some(),
                 resume: fork.or(resume),
                 prompt,
+                name,
             })?;
             std::process::exit(code)
         }

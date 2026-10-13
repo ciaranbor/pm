@@ -50,6 +50,7 @@ pub(crate) fn stamp(
     let flag = definition_flag(definition);
     let spec = SpawnSpec {
         definition: flag,
+        session_name: None,
         append_prompt_file: None,
         prompt: None,
         resume_session: None,

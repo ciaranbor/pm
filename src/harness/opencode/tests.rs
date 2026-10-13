@@ -177,6 +177,7 @@ fn pre_launch_creates_a_session_for_the_definition_in_the_worktree() {
         },
         &SpawnSpec {
             definition: Some("rev"),
+            session_name: Some("frontend-rev.login"),
             append_prompt_file: Some("/x/baseline.md"),
             model: Some("local/qwen"),
             ..Default::default()
@@ -208,7 +209,7 @@ fn pre_launch_creates_a_session_for_the_definition_in_the_worktree() {
         body_of(&calls[0]),
         json!({
             "location": {"directory": worktree.canonicalize().unwrap()},
-            "title": "pm:frontend-rev",
+            "title": "frontend-rev.login",
             "agent": "rev",
             "model": {"providerID": "local", "id": "qwen"},
         })

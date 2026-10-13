@@ -81,6 +81,7 @@ pub fn schedule(
                 root: h.root.to_path_buf(),
                 scope: h.scope.to_string(),
             }),
+            shell: sender.shell,
             body: body.to_string(),
             failed: None,
             retrying_since: None,
@@ -201,6 +202,7 @@ pub fn deliver_due(project_root: &Path, now: DateTime<Utc>, tmux_server: Option<
                 root: &h.root,
                 scope: &h.scope,
             }),
+            shell: send.shell,
         };
         let sent = send_as(
             project_root,

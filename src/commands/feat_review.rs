@@ -120,7 +120,15 @@ fn setup_review(
         // pm's waiter wakes the reviewer with it once its session starts.
         let messages_dir = paths::messages_dir(project_root);
         let sender = crate::messages::default_user_name();
-        crate::messages::send(&messages_dir, feature_name, "reviewer", &sender, &context)?;
+        let shell = crate::messages::from_shell();
+        crate::messages::send_by(
+            &messages_dir,
+            feature_name,
+            "reviewer",
+            &sender,
+            shell,
+            &context,
+        )?;
 
         // Step 3: Create tmux session
         tmux::create_session(tmux_server, &session_name, &worktree_path)?;
