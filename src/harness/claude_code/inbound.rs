@@ -23,7 +23,7 @@ use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
 use crate::error::{PmError, Result};
-use crate::state::runtime::Inbound;
+use crate::state::runtime::{Endpoint, Inbound};
 
 pub(in crate::harness) const SOCKET_ENV: &str = "CLAUDE_CODE_MESSAGING_SOCKET";
 pub(in crate::harness) const TOKEN_ENV: &str = "CLAUDE_CODE_MESSAGING_TOKEN";
@@ -106,7 +106,7 @@ fn parse_version(output: &str) -> Option<(u32, u32, u32)> {
 pub(in crate::harness) fn from_env() -> Option<Inbound> {
     let var = |name| std::env::var(name).ok().filter(|v| !v.is_empty());
     Some(Inbound {
-        socket: var(SOCKET_ENV)?.into(),
+        endpoint: Endpoint::Socket(var(SOCKET_ENV)?.into()),
         token: var(TOKEN_ENV),
         thread: None,
     })
@@ -114,8 +114,11 @@ pub(in crate::harness) fn from_env() -> Option<Inbound> {
 
 /// Post `text` to the session listening on `inbound` as a prompt.
 pub(in crate::harness) fn post(inbound: &Inbound, text: &str) -> Result<()> {
-    let socket = inbound.socket.display();
-    let mut stream = UnixStream::connect(&inbound.socket).map_err(|e| {
+    let path = inbound.socket().ok_or_else(|| {
+        PmError::Agent("its Claude Code session reported no messaging socket".to_string())
+    })?;
+    let socket = path.display();
+    let mut stream = UnixStream::connect(path).map_err(|e| {
         PmError::Agent(format!(
             "its Claude Code session's messaging socket {socket} is gone ({e}): the session \
              that reported it has ended, or restarted without pm's SessionStart hook"

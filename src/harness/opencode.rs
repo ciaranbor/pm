@@ -1,13 +1,20 @@
-//! opencode v2: `opencode --standalone --auto --session <id>`, with the
-//! session created by pm before the TUI starts.
+//! opencode v2: the window runs `pm harness opencode-host` ([`host`]),
+//! which starts the agent's own `opencode serve --stdio` and runs the TUI
+//! attached to it (`opencode --server <url> --auto --session <id>`), with
+//! the session created by pm before the TUI starts.
 //!
-//! **Every invocation carries `--standalone`** ([`argv`] is the only place a
-//! command line is built). Without it any server-needing command starts a
-//! shared `opencode serve --service` per `$HOME`, whose plugins see the
-//! environment of whichever client started it — a second agent is then
-//! driven under the first one's `PM_AGENT_NAME`. The one exception is a
-//! session move, which needs a server that outlives the request and gets one
-//! of its own ([`sessions`]).
+//! **Every other invocation carries `--standalone`** ([`argv`] builds every
+//! command line but the host's). Without it any server-needing command
+//! starts a shared `opencode serve --service` per `$HOME`, whose plugins
+//! see the environment of whichever client started it — a second agent is
+//! then driven under the first one's `PM_AGENT_NAME`. The exceptions each
+//! get a server of their own: the agent's TUI ([`host`]), and a session
+//! move, which needs a server that outlives the request ([`sessions`]).
+//! A user running opencode by hand in an agent's window still needs
+//! `--standalone`.
+//!
+//! pm prompts the agent through its server ([`inbound`]): a re-arm posts
+//! its continuation there instead of typing it.
 //!
 //! opencode has no Stop hook. The never-idle loop is the bundled
 //! `pm-never-idle` plugin (`bundled/plugins/opencode/pm-never-idle/`), installed once
@@ -91,6 +98,8 @@ mod api;
 pub(super) mod chat;
 mod config;
 pub(super) mod dialog;
+pub(super) mod host;
+mod inbound;
 pub(super) mod input;
 mod messages;
 mod provider_check;
@@ -114,6 +123,7 @@ use sessions::{create_session, fork_session, pin_model};
 use status_files::{clear_status_files, spawn_file};
 
 pub(super) use config::{row_issues, row_notes};
+pub(super) use inbound::{inbound, post};
 pub(super) use status_files::{loaded_file, trip_file, turn_error_file};
 pub(super) use version::{
     installed_version, min_version_string, unusable_reason, version_supported,
@@ -150,6 +160,18 @@ const PROMPT_ENV: &str = "PM_APPEND_PROMPT_FILE";
 const TRIP_ENV: &str = "PM_OPENCODE_TRIP_FILE";
 const CONFIG_ENV: &str = "OPENCODE_CONFIG";
 const CONFIG_CONTENT_ENV: &str = "OPENCODE_CONFIG_CONTENT";
+/// The password an opencode server takes, and a client sends it.
+const PASSWORD_ENV: &str = "OPENCODE_PASSWORD";
+/// The file holding the address of the agent's own server, set by its host.
+const SERVER_FILE_ENV: &str = "PM_OPENCODE_SERVER_FILE";
+
+/// A password for a server of pm's own.
+fn random_password() -> Result<String> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes)
+        .map_err(|e| PmError::Agent(format!("could not pick a server password: {e}")))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
 
 /// `$XDG_CONFIG_HOME/opencode`, else `<home>/.config/opencode`. Tests always
 /// get the latter so a developer's own environment never leaks into a test
@@ -197,23 +219,22 @@ fn argv(cfg: &OpenCodeConfig, subcommand: &[&str], rest: &[&str]) -> Vec<String>
     out
 }
 
-/// `env -u <removed>… <KEY=value>… opencode …`, every word quoted: the
-/// session id comes from opencode's answer or the registry, the rest from
-/// config.
+/// `env -u <removed>… <KEY=value>… pm harness opencode-host …`, every word
+/// quoted: the session id comes from opencode's answer or the registry, the
+/// rest from config.
 pub(super) fn build_cmd(_spec: &SpawnSpec<'_>, cfg: &OpenCodeConfig, pre: &PreLaunch) -> String {
-    let mut rest = Vec::new();
-    if cfg.auto != Some(false) {
-        rest.push("--auto");
-    }
-    if let Some(id) = &pre.session_id {
-        rest.extend(["--session", id]);
-    }
     let mut words = vec!["env".to_string()];
     for key in &pre.env_remove {
         words.extend(["-u".to_string(), key.clone()]);
     }
     words.extend(pre.env.iter().map(|(key, value)| format!("{key}={value}")));
-    words.extend(argv(cfg, &[], &rest));
+    words.extend(["pm", "harness", "opencode-host", "--binary", binary(cfg)].map(str::to_string));
+    if cfg.auto != Some(false) {
+        words.push("--auto".to_string());
+    }
+    if let Some(id) = &pre.session_id {
+        words.extend(["--session".to_string(), id.clone()]);
+    }
     words
         .iter()
         .map(|word| tmux::shell_quote(word))

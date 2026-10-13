@@ -105,9 +105,12 @@ pub(crate) const HOLD_START: &str = "hold-start";
 
 /// A directory of stand-ins for `claude` and `codex`, ahead of the rest of
 /// `PATH` in every test server's windows, so a spawn launches one — and for
-/// `pm`, as the codex one, since a codex agent's window runs `pm harness
-/// codex-host`. That `pm` runs nothing else: any other `pm` command in a
-/// test window fails, rather than reach an installed pm. Each
+/// `pm`, since codex and opencode agents' windows run `pm harness
+/// codex-host` and `pm harness opencode-host`: as the codex one for the
+/// first, and for the second by running the opencode binary it names as
+/// the host runs the TUI, against a server nothing listens on. That `pm`
+/// runs nothing else: any other `pm` command in a test window fails, rather
+/// than reach an installed pm. Each
 /// stamps its session as started, as the harness's session-start hook
 /// would ([`runtime::started_at`](crate::state::runtime::started_at)), then
 /// runs as [`fake_claude`] does. One launched for an agent whose runtime
@@ -136,8 +139,12 @@ fn fake_harness_path() -> &'static std::path::Path {
             if harness == crate::harness::Harness::Codex {
                 let pm = script.replacen(
                     "#!/bin/sh\n",
-                    "#!/bin/sh\n[ \"$1 $2\" = 'harness codex-host' ] || \
-                     { echo \"test pm stand-in runs only harness codex-host: $*\" >&2; exit 127; }\n",
+                    "#!/bin/sh\ncase \"$1 $2 $3\" in\n\
+                     'harness opencode-host --binary') bin=$4; shift 4; \
+                     exec \"$bin\" --server http://127.0.0.1:9 \"$@\" ;;\n\
+                     'harness codex-host '*) ;;\n\
+                     *) echo \"test pm stand-in runs only harness codex-host and opencode-host: \
+                     $*\" >&2; exit 127 ;;\nesac\n",
                     1,
                 );
                 super::write_executable(&dir.join("pm"), &pm);

@@ -19,6 +19,7 @@ mod control_client;
 mod fake_agents;
 mod fake_app_server;
 mod fake_harness;
+mod fake_opencode_server;
 mod fake_socket;
 mod home;
 mod projects;
@@ -34,6 +35,7 @@ pub use fake_harness::{
     fake_opencode, fake_opencode_argv, fake_opencode_calls, fake_opencode_scripted,
     fake_opencode_sequence,
 };
+pub use fake_opencode_server::{FakeOpenCodeServer, OpenCodeRequest};
 pub use fake_socket::FakeSocket;
 pub use home::test_home;
 pub use tmux_server::{OwnServer, TestServer, server_socket_exists};

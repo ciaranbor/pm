@@ -88,7 +88,7 @@ use crate::fs_utils::write_atomic;
 use crate::harness::probe::{self, Probe};
 use crate::harness::{SpawnSpec, Wake};
 use crate::state::project::CodexConfig;
-use crate::state::runtime::Inbound;
+use crate::state::runtime::{Endpoint, Inbound};
 use crate::tmux;
 
 pub(super) const CONFIG_DIR: &str = ".codex";
@@ -139,7 +139,7 @@ pub(super) fn inbound(
     let socket = host::socket_path(project_root, scope, agent).ok()?;
     std::fs::symlink_metadata(&socket).ok()?;
     Some(Inbound {
-        socket,
+        endpoint: Endpoint::Socket(socket),
         token: None,
         thread: Some(thread.to_string()).filter(|t| !t.is_empty()),
     })
@@ -151,7 +151,10 @@ pub(super) fn post(inbound: &Inbound, text: &str) -> Result<()> {
     let thread = inbound.thread.as_deref().ok_or_else(|| {
         PmError::Agent("its codex session reported no thread to prompt".to_string())
     })?;
-    app_server::Client::within(&inbound.socket, POST_WITHIN)?.start_turn(thread, text, None)
+    let socket = inbound.socket().ok_or_else(|| {
+        PmError::Agent("its codex session reported no app-server socket".to_string())
+    })?;
+    app_server::Client::within(socket, POST_WITHIN)?.start_turn(thread, text, None)
 }
 
 /// How long a post may take, connecting included: codex kills the

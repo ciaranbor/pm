@@ -479,8 +479,8 @@ waiter, a session whose start armed none, or a codex turn interrupted with
 nothing unread — is `unarmed`: no message wakes it until something prompts
 it. [`pm msg send`](#messaging) re-arms it. A Claude Code agent gets the
 prompt through its session's messaging socket when the session reported
-one, and a codex agent through its own app-server, whatever its window
-shows; `pm doctor` warns when Claude Code is too old for that or a
+one, and a codex or opencode agent through its own server, whatever its
+window shows; `pm doctor` warns when Claude Code is too old for that or a
 `crossSessionInbound` setting refuses or holds it. Otherwise the
 agent is typed the prompt, and only when its input line is empty and takes text (not vim NORMAL mode) and no one
 is using its pane (a tmux mode such as copy or tree mode, or shown on an

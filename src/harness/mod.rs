@@ -12,6 +12,7 @@
 mod claude_code;
 mod codex;
 mod hook_trust;
+mod host;
 mod opencode;
 pub(crate) mod probe;
 mod projection;
@@ -36,6 +37,7 @@ pub use codex::host::{CodexHost, run as run_codex_host};
 pub use hook_trust::{HookTrust, HookTrustStatus};
 #[cfg(test)]
 pub(crate) use opencode::chat::testing as opencode_testing;
+pub use opencode::host::{OpenCodeHost, run as run_opencode_host};
 pub use probe::Probe;
 pub(crate) use projection::project_by_copy;
 pub use projection::{Projection, ProjectionScope};

@@ -215,7 +215,7 @@ mod tests {
     /// Record `socket` as the agent's session's inbound channel.
     fn listening(project: &Path, socket: &Path) {
         let inbound = runtime::Inbound {
-            socket: socket.to_path_buf(),
+            endpoint: runtime::Endpoint::Socket(socket.to_path_buf()),
             token: Some("t0k".into()),
             thread: None,
         };
@@ -289,7 +289,7 @@ mod tests {
         .unwrap();
         let app_server = crate::testing::FakeAppServer::bind(dir);
         let inbound = runtime::Inbound {
-            socket: app_server.path.clone(),
+            endpoint: runtime::Endpoint::Socket(app_server.path.clone()),
             token: None,
             thread: Some("t1".into()),
         };
@@ -316,6 +316,72 @@ mod tests {
             );
             assert_eq!(std::fs::read_to_string(received).unwrap_or_default(), "");
         }
+    }
+
+    /// An idle opencode agent whose session `ses_1` is served at `url`
+    /// with password `pw`, as its host's address file says. Returns the project and the file the pane's
+    /// keystrokes go to.
+    fn opencode_at_prompt(
+        server: &TestServer,
+        dir: &Path,
+        url: &str,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
+        let (project, project_name) = server.setup_project_with_feature(dir, "login");
+        let session = tmux::session_name(&project_name, "login");
+        let (_, received) = server.spawn_recording_agent(
+            &project,
+            &session,
+            "login",
+            "implementer",
+            Harness::OpenCode,
+        );
+        let idle = Waiting::now(WaitingKind::Idle, None);
+        runtime::write_waiting(&project, "login", "implementer", &idle).unwrap();
+        let file = dir.join("opencode-server.json");
+        let address = serde_json::json!({"url": url, "password": "pw"});
+        std::fs::write(&file, address.to_string()).unwrap();
+        let inbound = runtime::Inbound {
+            endpoint: runtime::Endpoint::ServerFile(file),
+            token: None,
+            thread: Some("ses_1".into()),
+        };
+        runtime::write_inbound(&project, "login", "implementer", Some(&inbound)).unwrap();
+        (project, received)
+    }
+
+    #[test]
+    fn an_unarmed_opencode_agent_is_prompted_through_its_server_never_typed() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let opencode = crate::testing::FakeOpenCodeServer::answering(200, "{}");
+        let (project, received) = opencode_at_prompt(&server, dir.path(), &opencode.url);
+
+        let status = send(&server, &project);
+
+        assert!(status.contains("\n'implementer' was unarmed"), "{status}");
+        let request = opencode.request().expect("a prompt");
+        assert_eq!(request.path, "/api/session/ses_1/prompt");
+        assert_eq!(request.body["text"], PROMPT);
+        assert_eq!(std::fs::read_to_string(received).unwrap_or_default(), "");
+    }
+
+    #[test]
+    fn an_opencode_server_that_is_gone_leaves_the_agent_unarmed_and_says_so() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", closed.local_addr().unwrap());
+        drop(closed);
+        let (project, received) = opencode_at_prompt(&server, dir.path(), &url);
+
+        let err = rearm(&project, "login", "implementer", server.name()).unwrap_err();
+
+        assert!(err.to_string().contains("could not reach"), "{err}");
+        assert_eq!(
+            runtime::read_waiting(&project, "login", "implementer").map(|w| w.kind),
+            Some(WaitingKind::Idle)
+        );
+        assert_eq!(std::fs::read_to_string(received).unwrap_or_default(), "");
     }
 
     #[test]

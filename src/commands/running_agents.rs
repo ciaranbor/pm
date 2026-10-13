@@ -551,14 +551,17 @@ mod tests {
             Harness::Codex,
             "node /usr/local/bin/codex --remote unix:///r/app-server.sock"
         ));
-        assert!(runs(Harness::OpenCode, "opencode --standalone"));
+        assert!(runs(
+            Harness::OpenCode,
+            "opencode --server http://127.0.0.1:1"
+        ));
         assert!(!runs(Harness::ClaudeCode, "/bin/zsh"));
         assert!(!runs(Harness::ClaudeCode, "vim notes about claude"));
         assert!(!runs(Harness::Codex, "claude --agent implementer"));
 
         let mut custom = HarnessConfig::default();
         custom.opencode.binary = Some("/opt/oc/opencode-dev".to_string());
-        let process = process("/opt/oc/opencode-dev --standalone");
+        let process = process("/opt/oc/opencode-dev --server http://127.0.0.1:1");
         assert_eq!(
             liveness(
                 Some(std::slice::from_ref(&process)),

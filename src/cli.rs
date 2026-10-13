@@ -495,6 +495,19 @@ pub enum HarnessCommands {
         #[arg(long)]
         name: Option<String>,
     },
+    /// Run an opencode agent's server and TUI (what its window runs; not for direct use)
+    #[command(hide = true)]
+    OpencodeHost {
+        /// The opencode binary
+        #[arg(long)]
+        binary: String,
+        /// Approve whatever no permission rule denies
+        #[arg(long)]
+        auto: bool,
+        /// Session to open
+        #[arg(long)]
+        session: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

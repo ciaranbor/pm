@@ -2,15 +2,9 @@
 //! agent's `codex app-server`, runs the TUI against it, and applies pm's
 //! permissions and launch prompt over the server's API.
 //!
-//! The server runs in a process group of its own, so the terminal's
-//! signals reach only the TUI and this process, and is killed when the TUI
-//! exits or this process is told to end (SIGHUP as the window closes,
-//! SIGTERM, SIGINT). A server started in the background of a shell
-//! instead outlives a killed window: the TUI holds the terminal's
-//! foreground group, so the hangup never reaches it, and a loaded thread
-//! would then take a wake as a turn nobody sees. A server that dies under
-//! a live TUI is started again at the same socket, where the TUI
-//! reconnects to it.
+//! The server and TUI are supervised as [`crate::harness::host`] says. A
+//! server that dies under a live TUI is started again at the same socket,
+//! where the TUI reconnects to it.
 //!
 //! Under `--remote` the TUI refuses permission flags on a resume or fork,
 //! and `--add-dir` always, and on a fresh start it sends a sandbox derived
@@ -38,24 +32,19 @@ mod server;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 
-use self::server::{Server, wait_within};
+use self::server::Server;
 use super::app_server::{Client, Permissions, Sandbox};
 use super::{BINARY, READ_ONLY, READ_ONLY_PROFILE, RESUME_IN_CURRENT_DIR, WORKSPACE_WRITE};
 use crate::error::{PmError, Result};
+use crate::harness::host::{catch_signals, supervise};
 use crate::state::{paths, runtime};
 
 /// The socket an agent's app-server listens on, in its runtime dir.
 const SOCKET_FILE: &str = "app-server.sock";
 /// Where the server's output goes, in its runtime dir.
 const SERVER_LOG: &str = "app-server.log";
-/// How many times in a row a server that died under a live TUI is
-/// started again; one that stays up for [`STAYED_UP`] resets the count.
-const RESTARTS: u32 = 5;
-const STAYED_UP: Duration = Duration::from_secs(60);
-const TICK: Duration = Duration::from_millis(100);
 /// How long one exchange with the server may take.
 const CALL_LIMIT: Duration = Duration::from_secs(2);
 /// How long the TUI may take to open its thread: past it, the launch
@@ -190,8 +179,8 @@ pub fn run(host: &CodexHost) -> Result<i32> {
     };
 
     catch_signals();
-    let mut server = Some(Server::start(host, &socket, &log_file)?);
-    let mut tui = Command::new(BINARY)
+    let server = Server::start(host, &socket, &log_file)?;
+    let tui = Command::new(BINARY)
         .args(host.tui_args(&socket, &worktree))
         .spawn()?;
 
@@ -212,41 +201,13 @@ pub fn run(host: &CodexHost) -> Result<i32> {
         });
     }
 
-    let mut restarts = 0;
-    let mut started = Instant::now();
-    loop {
-        match tui.try_wait() {
-            Ok(Some(status)) => return Ok(status.code().unwrap_or(1)),
-            Ok(None) => {}
-            Err(e) => {
-                let _ = tui.kill();
-                return Err(e.into());
-            }
-        }
-        let signal = SIGNAL.swap(0, Ordering::SeqCst);
-        if signal != 0 {
-            drop(server);
-            // SAFETY: signalling the child this process started.
-            unsafe { libc::kill(tui.id() as libc::pid_t, signal) };
-            let _ = wait_within(&mut tui, Duration::from_secs(5));
-            let _ = tui.kill();
-            let _ = tui.wait();
-            return Ok(128 + signal);
-        }
-        let down = server.as_mut().is_none_or(Server::exited);
-        if !down && started.elapsed() > STAYED_UP {
-            restarts = 0;
-        }
-        if down && restarts < RESTARTS {
-            restarts += 1;
-            log("its app-server exited under a live TUI: starting it again");
-            server = Server::start(host, &socket, &log_file)
-                .inspect_err(|e| log(&e.to_string()))
-                .ok();
-            started = Instant::now();
-        }
-        std::thread::sleep(TICK);
-    }
+    supervise(
+        tui,
+        server,
+        Server::exited,
+        || Server::start(host, &socket, &log_file),
+        &log,
+    )
 }
 
 /// Give `prompt` to the TUI's thread — `resumed`, or the one a fresh or
@@ -307,19 +268,6 @@ impl Thread {
                 Err(_) => std::thread::sleep(Duration::from_millis(250)),
             }
         }
-    }
-}
-
-static SIGNAL: AtomicI32 = AtomicI32::new(0);
-
-extern "C" fn on_signal(signal: libc::c_int) {
-    SIGNAL.store(signal, Ordering::SeqCst);
-}
-
-fn catch_signals() {
-    for signal in [libc::SIGHUP, libc::SIGTERM, libc::SIGINT] {
-        // SAFETY: the handler only stores to an atomic.
-        unsafe { libc::signal(signal, on_signal as *const () as libc::sighandler_t) };
     }
 }
 

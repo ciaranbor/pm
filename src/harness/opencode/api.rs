@@ -6,7 +6,8 @@ use std::process::{Command, Stdio};
 use serde_json::Value;
 
 use super::{
-    CONFIG_CONTENT_ENV, CONFIG_ENV, DEFAULT_BINARY, PROMPT_ENV, SESSION_ENV, TRIP_ENV, argv,
+    CONFIG_CONTENT_ENV, CONFIG_ENV, DEFAULT_BINARY, PROMPT_ENV, SERVER_FILE_ENV, SESSION_ENV,
+    TRIP_ENV, argv,
 };
 use crate::bounded;
 use crate::error::{PmError, Result};
@@ -30,6 +31,7 @@ const SCRUBBED_ENV: &[&str] = &[
     TRIP_ENV,
     CONFIG_ENV,
     CONFIG_CONTENT_ENV,
+    SERVER_FILE_ENV,
 ];
 
 /// A non-interactive `opencode <subcommand> <args>`, with stdin closed

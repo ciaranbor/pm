@@ -593,7 +593,7 @@ mod tests {
     fn opencode_tui_argv(project_root: &Path) -> Vec<String> {
         for _ in 0..500 {
             let argv = crate::testing::fake_opencode_argv(project_root);
-            if argv.first().is_some_and(|first| first == "--standalone") {
+            if argv.first().is_some_and(|first| first == "--server") {
                 return argv;
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -623,7 +623,13 @@ mod tests {
 
         assert_eq!(
             opencode_tui_argv(dir.path()),
-            ["--standalone", "--auto", "--session", "ses_abc"]
+            [
+                "--server",
+                "http://127.0.0.1:9",
+                "--auto",
+                "--session",
+                "ses_abc"
+            ]
         );
         let target = tmux::find_window(server.name(), &session_name, "reviewer")
             .unwrap()
@@ -869,7 +875,13 @@ package = "second-pkg"
         assert_eq!(outcome, SpawnOutcome::Resumed);
         assert_eq!(
             opencode_tui_argv(dir.path()),
-            ["--standalone", "--auto", "--session", "ses_first"]
+            [
+                "--server",
+                "http://127.0.0.1:9",
+                "--auto",
+                "--session",
+                "ses_first"
+            ]
         );
         // No SessionStart hook refills it on opencode before the plugin
         // loads, and a window that dies first must still be resumable.

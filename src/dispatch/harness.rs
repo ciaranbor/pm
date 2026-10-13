@@ -219,6 +219,18 @@ pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
             })?;
             std::process::exit(code)
         }
+        HarnessCommands::OpencodeHost {
+            binary,
+            auto,
+            session,
+        } => {
+            let code = pm::harness::run_opencode_host(&pm::harness::OpenCodeHost {
+                binary,
+                auto,
+                session,
+            })?;
+            std::process::exit(code)
+        }
         HarnessCommands::Pull { name, dry_run } => {
             let project_root = paths::find_project_root(&std::env::current_dir()?)?;
             let name = resolve_feature_name(name, &project_root)?;

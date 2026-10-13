@@ -182,6 +182,16 @@ pub fn resolve_binary(binary: &str, path: Option<&std::ffi::OsStr>) -> Option<Pa
 /// rename, creating parent directories as needed. A concurrent reader sees
 /// either the old file or the complete new one, never a partial write.
 pub fn write_atomic(path: &Path, content: &[u8]) -> Result<()> {
+    write_atomic_mode(path, content, None)
+}
+
+/// [`write_atomic`] for a file only its owner may read: it is never
+/// readable by anyone else, not even before the rename.
+pub fn write_private(path: &Path, content: &[u8]) -> Result<()> {
+    write_atomic_mode(path, content, Some(0o600))
+}
+
+fn write_atomic_mode(path: &Path, content: &[u8], mode: Option<u32>) -> Result<()> {
     let parent = path.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(parent)?;
     let n = TMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -190,7 +200,12 @@ pub fn write_atomic(path: &Path, content: &[u8]) -> Result<()> {
         .map(|f| f.to_string_lossy().into_owned())
         .unwrap_or_default();
     let tmp = parent.join(format!(".{name}.{}.{n}{TMP_SUFFIX}", std::process::id()));
-    std::fs::write(&tmp, content)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    if let Some(mode) = mode {
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, mode);
+    }
+    std::io::Write::write_all(&mut options.open(&tmp)?, content)?;
     if let Err(e) = std::fs::rename(&tmp, path) {
         let _ = std::fs::remove_file(&tmp);
         return Err(e.into());

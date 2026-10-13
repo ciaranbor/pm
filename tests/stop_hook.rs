@@ -534,7 +534,7 @@ fn a_codex_waiter_starts_a_turn_on_its_sessions_thread() {
     project(dir.path());
     let server = fake_app_server::FakeAppServer::bind(dir.path());
     let inbound = runtime::Inbound {
-        socket: server.path.clone(),
+        endpoint: runtime::Endpoint::Socket(server.path.clone()),
         token: None,
         thread: Some("thr-1".into()),
     };
