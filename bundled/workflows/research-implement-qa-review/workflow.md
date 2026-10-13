@@ -18,6 +18,12 @@ When the change is ready, hand off to qa, and leave the worktree unchanged
 while qa runs. Fix what qa reports and hand back until qa passes, then
 hand off to the reviewer.
 
+A Blocked verdict is not a pass. Remove the blocker (fix the
+environment, or give qa what it lacks) and hand back to qa; if you
+can't, mark the feature `blocked`, naming each unexercised behaviour,
+for the user to unblock it or accept the gap. A gap the user accepts
+counts as passed for that behaviour.
+
 Every handoff to qa is behaviour-level: what a user can now do, how to
 trigger it, and what they should see. No commit hashes or file paths, and
 leave out changes with no user-visible behaviour; those go to the reviewer
