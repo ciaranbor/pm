@@ -595,6 +595,42 @@ mod tests {
     }
 
     #[test]
+    fn an_agent_whose_dialog_closed_between_turns_without_its_waiter_is_re_armed() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (project, target) = at_prompt(&server, dir.path(), WaitingKind::Dialog);
+        let mut dialog = runtime::read_waiting(&project, "login", "implementer").unwrap();
+        dialog.since -= chrono::Duration::minutes(1);
+        dialog.between_turns = true;
+        runtime::write_waiting(&project, "login", "implementer", &dialog).unwrap();
+        let transcript = dir.path().join("session.jsonl");
+        let discarded = serde_json::json!({"type": "system", "subtype": "informational",
+            "content": "Auto-mode proposal discarded — nothing was saved.",
+            "timestamp": Utc::now().to_rfc3339()});
+        std::fs::write(&transcript, format!("{discarded}\n")).unwrap();
+        runtime::write_session_path(
+            &project,
+            "login",
+            "implementer",
+            runtime::SessionPath::Transcript,
+            Some(&transcript),
+        )
+        .unwrap();
+
+        let status = send(&server, &project);
+
+        assert!(
+            status.ends_with("\nRe-armed 'implementer' (its waiter is gone)"),
+            "{status}"
+        );
+        assert_eq!(
+            runtime::read_waiting(&project, "login", "implementer"),
+            None
+        );
+        server.wait_for_pane_text(&target, &format!("❯ {PROMPT}"));
+    }
+
+    #[test]
     fn a_box_in_vim_normal_mode_is_pressed_no_key() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();

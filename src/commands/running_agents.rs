@@ -168,10 +168,32 @@ pub fn exited_pane(
 /// its harness recorded a turn's end after it that fires no hook (an
 /// interrupt, a failure). Once that end is claimed
 /// ([`runtime::claim_turn_end`]) the agent was prompted, so it is at
-/// nothing: busy.
+/// nothing: busy. A dialog marker whose dialog the harness recorded closing
+/// ([`Harness::dialog_closed`]) stands for where the agent went back to: its
+/// prompt between turns, idle and dated as the marker, so a re-arm can claim
+/// that marker ([`super::agent_rearm`]); mid-turn, nothing.
 pub fn waiting(project_root: &Path, scope: &str, agent: &str, harness: Harness) -> Option<Waiting> {
-    let marker = runtime::read_waiting(project_root, scope, agent);
-    let ended = runtime::read_session_path(project_root, scope, agent, SessionPath::Transcript)
+    let transcript =
+        runtime::read_session_path(project_root, scope, agent, SessionPath::Transcript);
+    let marker = runtime::read_waiting(project_root, scope, agent).and_then(|m| {
+        let closed = m.kind == WaitingKind::Dialog
+            && transcript
+                .as_deref()
+                .is_some_and(|t| harness.dialog_closed(t, m.since));
+        if !closed {
+            Some(m)
+        } else if m.between_turns {
+            Some(Waiting {
+                kind: WaitingKind::Idle,
+                detail: None,
+                subagent: None,
+                ..m
+            })
+        } else {
+            None
+        }
+    });
+    let ended = transcript
         .and_then(|transcript| harness.turn_ended(&transcript))
         .filter(|end| marker.as_ref().is_none_or(|m| end.since > m.since));
     match ended {
@@ -549,6 +571,63 @@ mod tests {
             liveness(Some(&[process]), Harness::OpenCode, &config),
             Liveness::Dead
         );
+    }
+
+    #[test]
+    fn a_dialog_the_transcript_closed_gives_way_to_the_prompt_or_the_turn() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let transcript = root.join("session.jsonl");
+        runtime::write_session_path(
+            root,
+            "login",
+            "qa",
+            SessionPath::Transcript,
+            Some(&transcript),
+        )
+        .unwrap();
+        let opened = Utc::now() - chrono::Duration::minutes(5);
+        let closed = opened + chrono::Duration::minutes(1);
+        let mut dialog = Waiting::now(
+            WaitingKind::Dialog,
+            Some("Auto-mode setup proposal is ready for review".into()),
+        );
+        dialog.since = opened;
+        dialog.between_turns = true;
+        let mark = |dialog: &Waiting| runtime::write_waiting(root, "login", "qa", dialog).unwrap();
+        let at = || waiting(root, "login", "qa", Harness::ClaudeCode);
+        let entry = serde_json::json!({"type": "system", "subtype": "away_summary",
+                                       "timestamp": closed.to_rfc3339()});
+        std::fs::write(&transcript, format!("{entry}\n")).unwrap();
+
+        mark(&dialog);
+        assert_eq!(at(), Some(dialog.clone()), "still open");
+
+        let entry = serde_json::json!({"type": "system", "subtype": "informational",
+            "content": "Auto-mode proposal discarded — nothing was saved.",
+            "timestamp": closed.to_rfc3339()});
+        std::fs::write(&transcript, format!("{entry}\n")).unwrap();
+        let idle = at().unwrap();
+        assert_eq!(
+            (idle.kind, idle.since, idle.between_turns),
+            (WaitingKind::Idle, opened, true)
+        );
+        assert_eq!(
+            waiting(root, "login", "qa", Harness::Codex),
+            Some(dialog.clone())
+        );
+
+        mark(&Waiting {
+            between_turns: false,
+            ..dialog.clone()
+        });
+        assert_eq!(at(), None, "mid-turn, back at work");
+
+        mark(&Waiting {
+            kind: WaitingKind::Permission,
+            ..dialog
+        });
+        assert_eq!(at().map(|w| w.kind), Some(WaitingKind::Permission));
     }
 
     #[test]
