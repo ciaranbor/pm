@@ -10,21 +10,20 @@ an empty repo that belongs to no project; reach projects only through `pm`.
 
 ## What you do
 
-- **Change settings** with `pm config get/set/unset/list`, `--global` or
-  `--project <P>`. Never hand-edit a project's config.
-- **Onboard the user**: help them choose harnesses, models and permission
-  modes per role, codex's one-time hook-trust step (`pm doctor` reports
-  it), the tmux status line, phone pairing (`pm serve install --pair <device>`), and
-  bring existing repos under pm (`pm register`, then project hooks, skills
-  and notices).
+- **Change settings** with `pm config`. Never hand-edit a project's config.
+- **Onboard the user**: harnesses, models and permission modes per role,
+  hook trust, tmux, phone pairing, and bringing their repos under pm.
 - **Read state on demand**, never preloaded: `pm list`,
   `pm status --project <P>`, `pm feat status --all --json`,
   `pm feat summary show <f> --project <P>`, `pm docs [<category>] --project <P>`
   (the project's information store), and
   `pm agent log <agent> --scope <S> --project <P>` (what an agent is doing
   or stuck on).
-- **Act on agents** with `pm agent …` and `pm msg send`, using `--project`
-  and `--scope`: message, restart, spawn or stop them.
+- **Act on agents** with `pm agent …` and `pm msg send`: message, restart,
+  spawn or stop them.
+
+The `pm-admin` skill says which command fits each of these; load it
+before acting.
 
 ## Boundary
 

@@ -17,7 +17,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Create a new pm project with a git repo
+    /// Create a pm project from a new repo, or by cloning a remote one (--git)
     Init {
         /// Path for the new project root; its last component names the
         /// project. Defaults to `./<repo name>` when cloning with --git
@@ -30,7 +30,8 @@ pub enum Commands {
         #[arg(long)]
         no_main: bool,
     },
-    /// Register an existing git repo as a pm project
+    /// Make an existing local repo a pm project, symlinked into a `<name>-pm/` wrapper
+    /// (or moved there with --move)
     Register {
         /// Path to the existing git repo
         path: PathBuf,
@@ -76,7 +77,7 @@ pub enum Commands {
     /// Inter-agent messaging
     #[command(subcommand)]
     Msg(MsgCommands),
-    /// Agent harness integration
+    /// The agent CLIs pm launches: hooks, bundled skills and agents, sessions
     #[command(subcommand)]
     Harness(HarnessCommands),
     /// Close all tmux sessions for a project (counterpart to `pm open`)
@@ -153,7 +154,7 @@ pub enum Commands {
         #[arg(long, hide = true)]
         all: bool,
     },
-    /// Restore projects on a fresh machine from the global registry
+    /// Set up registered projects on a machine that lacks them, from the global registry
     Restore {
         /// A registered project to restore (repeatable; default: every one)
         #[arg(long = "project", value_name = "NAME")]
@@ -163,7 +164,7 @@ pub enum Commands {
         #[arg(long = "import", value_name = "TARBALL")]
         imports: Vec<PathBuf>,
     },
-    /// Moving projects to another machine
+    /// Check that projects can move to another machine (`pm restore` sets them up there)
     #[command(subcommand)]
     Migrate(MigrateCommands),
     /// Read and change pm settings: the global config.toml and each
@@ -177,7 +178,7 @@ pub enum Commands {
     /// Git-backed state management (.pm/ backup and sync)
     #[command(subcommand)]
     State(StateCommands),
-    /// Per-feature workflow management
+    /// Workflows: each scope's team and who hands off to whom
     #[command(subcommand)]
     Workflow(WorkflowCommands),
     /// tmux integration: pm state published on the tmux server

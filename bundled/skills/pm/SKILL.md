@@ -5,7 +5,7 @@ description: Create and dispatch features, check feature or project status, adop
 
 # pm — Feature Dispatch & Status
 
-This user manages projects with `pm`, a terminal-based project manager built around git worktrees and tmux sessions. Use this skill to create features and inspect status. **Do not merge, delete, or perform project-level operations** — those are user-initiated only.
+This user manages projects with `pm`, a terminal-based project manager built around git worktrees and tmux sessions. Use this skill to create features and inspect status. Merging, deleting and project-level operations are user-initiated; see What NOT to do.
 
 ## Creating a feature
 
@@ -58,7 +58,9 @@ For messaging commands (`pm msg send`, `pm msg read`, `pm msg list`, `pm msg wai
 
 ## What NOT to do
 
+Unless your own agent definition directs you to (it takes precedence over
+this list), these are user-initiated — only create features and inspect status:
+
 - Do not run `pm feat merge`, `pm feat delete`, `pm delete`, or `pm doctor --fix`
 - Do not run `pm feat pr`, set a feature's status, or edit a feature's summary — the feature's team owns those
-- Do not run `pm agent spawn` — only the user spawns agents
-- These are user-initiated operations — only create features and inspect status
+- Do not run `pm agent spawn`

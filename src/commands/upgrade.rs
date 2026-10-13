@@ -11,6 +11,7 @@ use crate::state::project::{GlobalConfig, ProjectEntry};
 use crate::state::workflow::VANILLA_AGENT;
 
 use super::hooks_install;
+use super::onboard;
 use super::serve_install::{self, Refresh};
 use super::skills;
 use super::upgrade_restart;
@@ -191,6 +192,7 @@ fn display_path(project_root: &Path, path: &Path) -> String {
 /// `projects_dir`: a summary line per project, a broken one included.
 fn upgrade_projects(projects_dir: &Path) -> Result<Vec<String>> {
     let projects = ProjectEntry::list(projects_dir)?;
+    let global = GlobalConfig::load_or_default();
 
     if projects.is_empty() {
         let mut lines = install_global_lines(false);
@@ -230,12 +232,18 @@ fn upgrade_projects(projects_dir: &Path) -> Result<Vec<String>> {
             ));
             continue;
         }
-        match upgrade_project(&root) {
-            Ok(project_lines) => {
+        let home = if onboard::is_home(&global, name, &root) {
+            onboard::write_skill(&root, false)
+        } else {
+            Ok(None)
+        };
+        match home.and_then(|skill| upgrade_project(&root).map(|l| (skill, l))) {
+            Ok((skill, project_lines)) => {
                 let mut project_lines = project_lines.into_iter();
                 if let Some(summary) = project_lines.next() {
                     lines.push(format!("{name}: {summary}"));
                 }
+                lines.extend(skill.map(|s| format!("  Wrote home's {s}")));
                 lines.extend(project_lines.map(|l| format!("  {l}")));
             }
             Err(e) => lines.push(format!("{name}: error: {e}")),
@@ -248,6 +256,7 @@ fn upgrade_projects(projects_dir: &Path) -> Result<Vec<String>> {
 /// launch with would change in any project.
 fn upgrade_projects_dry_run(projects_dir: &Path) -> Result<(Vec<String>, bool)> {
     let projects = ProjectEntry::list(projects_dir)?;
+    let global = GlobalConfig::load_or_default();
     let mut hooks_change = false;
 
     if projects.is_empty() {
@@ -275,9 +284,12 @@ fn upgrade_projects_dry_run(projects_dir: &Path) -> Result<(Vec<String>, bool)> 
             ));
             continue;
         }
-        let actions = upgrade_project_dry_run(&root).map(|(actions, hooks)| {
+        let actions = upgrade_project_dry_run(&root).and_then(|(mut actions, hooks)| {
             hooks_change |= hooks;
-            actions
+            if onboard::is_home(&global, name, &root) {
+                actions.extend(onboard::write_skill(&root, true)?);
+            }
+            Ok(actions)
         });
         match actions {
             Ok(actions) if actions.is_empty() => {
