@@ -180,13 +180,13 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let project_root = tmp.path();
         let skills = paths::main_worktree(project_root).join(".agents/skills");
-        for name in ["pm", "mine"] {
+        for name in ["messaging", "mine"] {
             fs::create_dir_all(skills.join(name)).unwrap();
             fs::write(skills.join(name).join("SKILL.md"), "custom").unwrap();
         }
         assert_eq!(
             shadowed_project_skills_in(project_root, &store).unwrap(),
-            vec![("pm".to_string(), Harness::ClaudeCode)]
+            vec![("messaging".to_string(), Harness::ClaudeCode)]
         );
     }
 }

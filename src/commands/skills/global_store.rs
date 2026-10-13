@@ -7,11 +7,12 @@ use std::path::{Path, PathBuf};
 use crate::error::{PmError, Result};
 use crate::fs_utils::copy_dir_recursive;
 use crate::harness::Harness;
+use crate::hash::sha256_hex;
 use crate::state::paths;
 
 use super::super::bundled_disable::Disabled;
 use super::super::state_gitignore;
-use super::bundled::{BUNDLED_ITEMS, BundledKind, items_of_kind};
+use super::bundled::{BUNDLED_ITEMS, BundledKind, RETIRED_ITEMS, RetiredItem, items_of_kind};
 use super::install::{
     Applied, enabled_items, install_items, install_items_dry_run, install_messages,
     prune_empty_parents, uninstall_in,
@@ -89,21 +90,65 @@ pub(super) fn remove_disabled(
     disabled: &Disabled,
     dry_run: bool,
 ) -> Result<Vec<String>> {
-    let mut removed = Vec::new();
-    for item in BUNDLED_ITEMS
+    let items = BUNDLED_ITEMS
         .iter()
         .filter(|i| disabled.contains(i.kind, i.name))
-    {
-        let mut roots = vec![store.dir(item.kind)];
-        roots.extend(global_projection_dirs(store, item.kind));
+        .map(|i| {
+            let files = i.files.iter().map(|(rel, _)| (*rel, None)).collect();
+            (i.kind, i.name, files)
+        });
+    remove_items(store, items, dry_run)
+}
+
+/// [`remove_disabled`] for every [`RETIRED_ITEMS`] entry, sparing a file
+/// whose content pm never shipped.
+pub(super) fn remove_retired(store: &GlobalStore, dry_run: bool) -> Result<Vec<String>> {
+    remove_retired_items(store, RETIRED_ITEMS, dry_run)
+}
+
+fn remove_retired_items(
+    store: &GlobalStore,
+    retired: &[RetiredItem],
+    dry_run: bool,
+) -> Result<Vec<String>> {
+    let items = retired.iter().map(|i| {
+        let files = i
+            .files
+            .iter()
+            .map(|(rel, shipped)| (*rel, Some(*shipped)))
+            .collect();
+        (i.kind, i.name, files)
+    });
+    remove_items(store, items, dry_run)
+}
+
+/// A file to remove, relative to its kind's store dir, with the SHA-256s its
+/// content must match; `None` removes it whatever it holds.
+type Removal<'a> = (&'a str, Option<&'a [&'a str]>);
+
+fn remove_items<'a>(
+    store: &GlobalStore,
+    items: impl IntoIterator<Item = (BundledKind, &'a str, Vec<Removal<'a>>)>,
+    dry_run: bool,
+) -> Result<Vec<String>> {
+    let mut removed = Vec::new();
+    for (kind, name, files) in items {
+        let mut roots = vec![store.dir(kind)];
+        roots.extend(global_projection_dirs(store, kind));
         let present: Vec<(PathBuf, &PathBuf)> = roots
             .iter()
             .flat_map(|root| {
-                item.files
+                files
                     .iter()
-                    .map(move |(rel, _)| (root.join(rel), root))
+                    .map(move |(rel, shipped)| (root.join(rel), root, *shipped))
             })
-            .filter(|(path, _)| path.exists())
+            .filter(|(path, _, shipped)| match shipped {
+                None => path.exists(),
+                Some(shipped) => {
+                    fs::read(path).is_ok_and(|bytes| shipped.contains(&sha256_hex(&bytes).as_str()))
+                }
+            })
+            .map(|(path, root, _)| (path, root))
             .collect();
         if present.is_empty() {
             continue;
@@ -114,7 +159,7 @@ pub(super) fn remove_disabled(
                 prune_empty_parents(path, root);
             }
         }
-        removed.push(format!("{} '{}'", item.kind.label(), item.name));
+        removed.push(format!("{} '{name}'", kind.label()));
     }
     Ok(removed)
 }
@@ -127,10 +172,15 @@ pub fn install_global() -> Result<Vec<String>> {
 
 pub fn install_global_in(store: &GlobalStore) -> Result<Vec<String>> {
     let disabled = Disabled::load_in(&store.config_dir)?;
-    let mut lines: Vec<String> = remove_disabled(store, &disabled, false)?
+    let mut lines: Vec<String> = remove_retired(store, false)?
         .into_iter()
-        .map(|item| format!("Removed disabled {item} (global)"))
+        .map(|item| format!("Removed retired {item} (global)"))
         .collect();
+    lines.extend(
+        remove_disabled(store, &disabled, false)?
+            .into_iter()
+            .map(|item| format!("Removed disabled {item} (global)")),
+    );
     for kind in BundledKind::ALL {
         let label = kind.label();
         for (item, applied) in install_items(&store.dir(kind), enabled_items(kind, &disabled))? {
@@ -158,10 +208,15 @@ pub fn install_global_dry_run() -> Result<Vec<String>> {
 
 pub fn install_global_dry_run_in(store: &GlobalStore) -> Result<Vec<String>> {
     let disabled = Disabled::load_in(&store.config_dir)?;
-    let mut lines: Vec<String> = remove_disabled(store, &disabled, true)?
+    let mut lines: Vec<String> = remove_retired(store, true)?
         .into_iter()
-        .map(|item| format!("Would remove disabled {item} (global)"))
+        .map(|item| format!("Would remove retired {item} (global)"))
         .collect();
+    lines.extend(
+        remove_disabled(store, &disabled, true)?
+            .into_iter()
+            .map(|item| format!("Would remove disabled {item} (global)")),
+    );
     for kind in BundledKind::ALL {
         for line in install_items_dry_run(&store.dir(kind), enabled_items(kind, &disabled))? {
             lines.push(format!("{line} (global)"));
@@ -182,6 +237,7 @@ pub fn install_global_dry_run_in(store: &GlobalStore) -> Result<Vec<String>> {
         }
         install_items(&staged_store.dir(kind), enabled_items(kind, &disabled))?;
     }
+    remove_retired(&staged_store, false)?;
     remove_disabled(&staged_store, &disabled, false)?;
     lines.extend(project_global_from(
         &staged_store.canonical(),
@@ -391,7 +447,7 @@ mod tests {
         );
 
         let h = home.path();
-        assert!(h.join(".agents/skills/pm/SKILL.md").exists());
+        assert!(h.join(".agents/skills/messaging/SKILL.md").exists());
         assert!(h.join(".agents/agents/reviewer.md").exists());
         assert!(h.join(".agents/pm-baseline.md").exists());
         assert!(h.join(".config/pm/workflows/solo/config.toml").exists());
@@ -401,7 +457,7 @@ mod tests {
             if harness.projects_definitions() {
                 assert!(dir.join("agents/reviewer.md").exists(), "{harness}");
                 assert_eq!(
-                    dir.join("skills/pm/SKILL.md").exists(),
+                    dir.join("skills/messaging/SKILL.md").exists(),
                     harness.projected_dirs().contains(&"skills"),
                     "{harness}"
                 );
@@ -451,8 +507,8 @@ mod tests {
             ".agents/agents/qa.md",
             ".claude/agents/qa.md",
             ".config/opencode/agents/qa.md",
-            ".agents/skills/pm",
-            ".claude/skills/pm",
+            ".agents/skills/messaging",
+            ".claude/skills/messaging",
             ".config/pm/workflows/research-only",
             ".agents/pm-baseline.md",
         ];
@@ -461,7 +517,7 @@ mod tests {
         }
         write_global_config(
             &store,
-            "[bundled.disable]\nagents = [\"qa\"]\nskills = [\"pm\"]\nworkflows = [\"research-only\"]\n\
+            "[bundled.disable]\nagents = [\"qa\"]\nskills = [\"messaging\"]\nworkflows = [\"research-only\"]\n\
              baseline = true\n",
         );
 
@@ -469,7 +525,7 @@ mod tests {
         assert_eq!(
             dry,
             vec![
-                "Would remove disabled Skill 'pm' (global)",
+                "Would remove disabled Skill 'messaging' (global)",
                 "Would remove disabled Agent 'qa' (global)",
                 "Would remove disabled Baseline 'pm-baseline' (global)",
                 "Would remove disabled Workflow 'research-only' (global)",
@@ -490,7 +546,7 @@ mod tests {
         for path in [
             ".agents/agents/reviewer.md",
             ".claude/agents/reviewer.md",
-            ".agents/skills/messaging/SKILL.md",
+            ".agents/skills/pm-workflow/SKILL.md",
             ".config/pm/workflows/solo/config.toml",
         ] {
             assert!(h.join(path).exists(), "{path}");
@@ -503,14 +559,68 @@ mod tests {
         assert_eq!(
             global_store_missing_in(&store),
             vec![
-                "Skill 'pm'",
+                "Skill 'messaging'",
                 "Baseline 'pm-baseline'",
                 "Workflow 'research-only'"
             ]
         );
         install_global_in(&store).unwrap();
-        assert!(h.join(".claude/skills/pm/SKILL.md").exists());
+        assert!(h.join(".claude/skills/messaging/SKILL.md").exists());
         assert!(!h.join(".claude/agents/qa.md").exists());
+    }
+
+    #[test]
+    fn retired_items_go_from_the_tier_and_every_projection_unless_edited() {
+        const GONE: RetiredItem = RetiredItem {
+            kind: BundledKind::Skill,
+            name: "gone",
+            files: &[(
+                "gone/SKILL.md",
+                // SHA-256 of "old release".
+                &["05d3a835ff4f5e5138805558c46f0daaae88b7b7806e4b99349e11fe1f6621ea"],
+            )],
+        };
+        let home = tempfile::tempdir().unwrap();
+        let store = GlobalStore::at(home.path());
+        let mut roots = vec![store.dir(BundledKind::Skill)];
+        roots.extend(global_projection_dirs(&store, BundledKind::Skill));
+        let planted: Vec<PathBuf> = roots.iter().map(|r| r.join("gone/SKILL.md")).collect();
+        for path in &planted {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "old release").unwrap();
+        }
+        let (edited, shipped) = planted.split_last().unwrap();
+        fs::write(edited, "old release, edited").unwrap();
+
+        let dry = remove_retired_items(&store, &[GONE], true).unwrap();
+        assert_eq!(dry, vec!["Skill 'gone'"]);
+        assert!(planted.iter().all(|p| p.exists()));
+
+        assert_eq!(remove_retired_items(&store, &[GONE], false).unwrap(), dry);
+        for path in shipped {
+            assert!(!path.parent().unwrap().exists(), "{}", path.display());
+        }
+        assert_eq!(fs::read_to_string(edited).unwrap(), "old release, edited");
+        assert!(
+            remove_retired_items(&store, &[GONE], false)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn install_global_keeps_a_users_own_file_under_a_retired_name() {
+        let home = tempfile::tempdir().unwrap();
+        let store = GlobalStore::at(home.path());
+        let retired = &RETIRED_ITEMS[0];
+        let (rel, _) = retired.files[0];
+        let own = store.dir(retired.kind).join(rel);
+        fs::create_dir_all(own.parent().unwrap()).unwrap();
+        fs::write(&own, "my own").unwrap();
+
+        let lines = install_global_in(&store).unwrap();
+        assert!(!lines.iter().any(|l| l.contains("retired")), "{lines:?}");
+        assert_eq!(fs::read_to_string(&own).unwrap(), "my own");
     }
 
     #[test]

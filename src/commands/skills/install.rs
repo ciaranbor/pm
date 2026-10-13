@@ -173,41 +173,41 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("store");
         assert_eq!(
-            status_label(&dir, item(BundledKind::Skill, "pm")),
-            "not installed"
-        );
-
-        let messages = install_messages(&dir, BundledKind::Skill, Some("pm")).unwrap();
-        assert_eq!(messages, vec!["Installed Skill 'pm'".to_string()]);
-        assert_eq!(
-            status_label(&dir, item(BundledKind::Skill, "pm")),
-            "installed"
-        );
-        assert_eq!(
             status_label(&dir, item(BundledKind::Skill, "messaging")),
             "not installed"
         );
 
-        let second = install_messages(&dir, BundledKind::Skill, Some("pm")).unwrap();
+        let messages = install_messages(&dir, BundledKind::Skill, Some("messaging")).unwrap();
+        assert_eq!(messages, vec!["Installed Skill 'messaging'".to_string()]);
+        assert_eq!(
+            status_label(&dir, item(BundledKind::Skill, "messaging")),
+            "installed"
+        );
+        assert_eq!(
+            status_label(&dir, item(BundledKind::Skill, "pm-workflow")),
+            "not installed"
+        );
+
+        let second = install_messages(&dir, BundledKind::Skill, Some("messaging")).unwrap();
         assert!(second[0].contains("already up to date"));
         assert!(
-            install_items_dry_run(&dir, [item(BundledKind::Skill, "pm")])
+            install_items_dry_run(&dir, [item(BundledKind::Skill, "messaging")])
                 .unwrap()
                 .is_empty()
         );
 
-        fs::write(dir.join("pm/SKILL.md"), "old content").unwrap();
+        fs::write(dir.join("messaging/SKILL.md"), "old content").unwrap();
         assert_eq!(
-            status_label(&dir, item(BundledKind::Skill, "pm")),
+            status_label(&dir, item(BundledKind::Skill, "messaging")),
             "outdated"
         );
         assert_eq!(
-            install_items_dry_run(&dir, [item(BundledKind::Skill, "pm")]).unwrap(),
-            vec!["Would update Skill 'pm'".to_string()]
+            install_items_dry_run(&dir, [item(BundledKind::Skill, "messaging")]).unwrap(),
+            vec!["Would update Skill 'messaging'".to_string()]
         );
-        let third = install_messages(&dir, BundledKind::Skill, Some("pm")).unwrap();
-        assert_eq!(third, vec!["Rewrote Skill 'pm'".to_string()]);
-        assert!(is_up_to_date(&dir, item(BundledKind::Skill, "pm")));
+        let third = install_messages(&dir, BundledKind::Skill, Some("messaging")).unwrap();
+        assert_eq!(third, vec!["Rewrote Skill 'messaging'".to_string()]);
+        assert!(is_up_to_date(&dir, item(BundledKind::Skill, "messaging")));
     }
 
     #[test]
@@ -258,13 +258,17 @@ mod tests {
         fs::create_dir_all(user_skill.parent().unwrap()).unwrap();
         fs::write(&user_skill, "mine").unwrap();
 
-        let messages = uninstall_in(&dir, BundledKind::Skill, Some("pm")).unwrap();
-        assert_eq!(messages, vec!["Uninstalled Skill 'pm'".to_string()]);
-        assert!(!dir.join("pm").exists());
-        assert!(dir.join("messaging/SKILL.md").exists());
+        let messages = uninstall_in(&dir, BundledKind::Skill, Some("messaging")).unwrap();
+        assert_eq!(messages, vec!["Uninstalled Skill 'messaging'".to_string()]);
+        assert!(!dir.join("messaging").exists());
+        assert!(dir.join("pm-workflow/SKILL.md").exists());
 
         let messages = uninstall_in(&dir, BundledKind::Skill, None).unwrap();
-        assert!(messages.iter().any(|m| m.contains("'pm' is not installed")));
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("'messaging' is not installed"))
+        );
         for item in items_of_kind(BundledKind::Skill) {
             assert!(!is_installed(&dir, item));
         }

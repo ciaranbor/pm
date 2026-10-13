@@ -629,7 +629,7 @@ the baseline off the machine, list it under `[bundled.disable]` in the global
 [bundled.disable]
 agents    = ["qa"]
 workflows = ["research-only"]
-skills    = ["pm"]
+skills    = ["messaging"]
 baseline  = true             # unset or false keeps it
 ```
 
