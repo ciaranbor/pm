@@ -97,6 +97,17 @@ fn onboard_starts_the_supervisor_in_home() {
         records[0].argv
     );
     assert_eq!(s.window_names("home/main"), ["supervisor"]);
+    let skill = home.join("main/.agents/skills/pm-admin/SKILL.md");
+    let projected = home.join("main/.claude/skills/pm-admin/SKILL.md");
+    let written = std::fs::read_to_string(&skill).unwrap();
+    assert_eq!(std::fs::read_to_string(&projected).unwrap(), written);
+    std::fs::write(&skill, "stale").unwrap();
+    s.pm(s.home())
+        .args(["update", "--local"])
+        .assert()
+        .success();
+    assert_eq!(std::fs::read_to_string(&skill).unwrap(), written);
+    assert_eq!(std::fs::read_to_string(&projected).unwrap(), written);
 
     s.pm(s.home())
         .arg("onboard")

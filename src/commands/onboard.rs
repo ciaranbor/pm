@@ -9,6 +9,13 @@
 //! `home` key names it on this machine; only the snapshot's `home` flag and
 //! this command read it.
 //!
+//! Home's project tier also holds [`SKILL_NAME`], the supervisor's command
+//! guide. It is never a bundled item: the global tier is listed in every
+//! agent's context on every harness, while home's `main/` is a repo only the
+//! supervisor runs in. pm owns that one custom and rewrites it whenever it
+//! differs, at `pm onboard` and at `pm update`, so a user edit there does not
+//! last.
+//!
 //! Every step is idempotent, so a rerun finishes a setup cut short and
 //! otherwise only opens home. The shadow is written before anything is
 //! spawned in home, since `pm init`'s spawn would launch bundled `main`.
@@ -19,6 +26,7 @@ use crate::commands::config::{self, Files, Tier};
 use crate::commands::skills::{self, GlobalStore};
 use crate::commands::{feat_common, harness_check, hooks_install, init};
 use crate::error::{PmError, Result};
+use crate::fs_utils;
 use crate::harness::Harness;
 use crate::messages;
 use crate::state::agent::AgentRegistry;
@@ -37,6 +45,12 @@ pub const SUPERVISOR: &str = "supervisor";
 /// pm, with no one to reply to.
 pub const BRIEF: &str = "The user just ran `pm onboard` on this machine. Onboard them: ask \
 what they want set up, then walk them through it one step at a time.";
+
+/// The skill only home's supervisor lists: which pm command fits which
+/// administrative case.
+pub const SKILL_NAME: &str = "pm-admin";
+
+const SKILL: &str = include_str!("../../bundled/home/skills/pm-admin/SKILL.md");
 
 const SHADOW_DESCRIPTION: &str =
     "This machine's home: the supervisor, working for the user across every project";
@@ -202,6 +216,36 @@ pub fn write_shadow(root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Bring home's [`SKILL_NAME`] skill up to date in its canonical store,
+/// without projecting it. Returns what changed (`Would …` in `dry_run`,
+/// which writes nothing), `None` when it is current.
+pub fn write_skill(root: &Path, dry_run: bool) -> Result<Option<String>> {
+    let path = skill_path(root);
+    if std::fs::read_to_string(&path).is_ok_and(|s| s == SKILL) {
+        return Ok(None);
+    }
+    if dry_run {
+        return Ok(Some(format!("Would write home's {SKILL_NAME} skill")));
+    }
+    fs_utils::write_atomic(&path, SKILL.as_bytes())?;
+    Ok(Some(format!("{SKILL_NAME} skill")))
+}
+
+/// [`write_skill`], then project home's store so each harness reads it.
+pub fn install_skill(root: &Path) -> Result<()> {
+    write_skill(root, false)?;
+    skills::project_assets(root, false)?;
+    Ok(())
+}
+
+fn skill_path(root: &Path) -> PathBuf {
+    paths::main_worktree(root)
+        .join(skills::CANONICAL_DIR)
+        .join("skills")
+        .join(SKILL_NAME)
+        .join("SKILL.md")
+}
+
 /// Name home in the global config, unless it already does.
 pub fn mark(config_dir: &Path) -> Result<()> {
     if GlobalConfig::load(config_dir)?.home.as_deref() == Some(HOME_NAME) {
@@ -349,6 +393,30 @@ mod tests {
 
         std::fs::create_dir_all(paths::main_worktree(&root)).unwrap();
         assert_eq!(find(&projects_dir, &root).unwrap(), Some(root));
+    }
+
+    #[test]
+    fn install_skill_writes_homes_skill_and_projects_it_for_claude_code() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(paths::main_worktree(root)).unwrap();
+        let canonical = skill_path(root);
+        let projected = paths::main_worktree(root)
+            .join(".claude/skills")
+            .join(SKILL_NAME)
+            .join("SKILL.md");
+
+        install_skill(root).unwrap();
+        assert_eq!(std::fs::read_to_string(&canonical).unwrap(), SKILL);
+        assert_eq!(std::fs::read_to_string(&projected).unwrap(), SKILL);
+        assert_eq!(write_skill(root, true).unwrap(), None);
+
+        std::fs::write(&canonical, "stale").unwrap();
+        assert!(write_skill(root, true).unwrap().is_some());
+        assert_eq!(std::fs::read_to_string(&canonical).unwrap(), "stale");
+        install_skill(root).unwrap();
+        assert_eq!(std::fs::read_to_string(&canonical).unwrap(), SKILL);
+        assert_eq!(std::fs::read_to_string(&projected).unwrap(), SKILL);
     }
 
     #[test]

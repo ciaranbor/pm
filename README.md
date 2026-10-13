@@ -285,7 +285,9 @@ settings, globally or per project; to tell you how every project stands;
 or to message, restart, spawn or stop any agent. It acts only through `pm`
 commands. It never edits another project's `.pm/` by hand, asks that
 project's `main` to start features there rather than starting them itself,
-and merges or deletes a feature only when you name it.
+and merges or deletes a feature only when you name it. A skill only it sees,
+`pm-admin` in home's `main/.agents/skills/`, tells it which command fits
+each task; pm rewrites it at `pm onboard` and `pm update`.
 
 `pm onboard` sets it up. It reports which harnesses are installed, logged
 in and trusted, asks which one the supervisor runs on (`--harness` skips

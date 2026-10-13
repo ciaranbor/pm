@@ -36,6 +36,7 @@ pub(super) fn run(harness: Option<Harness>, server: Option<&str>) -> Result<()> 
         }
     };
     onboard::write_shadow(&root)?;
+    onboard::install_skill(&root)?;
     onboard::mark(&dirs.config)?;
 
     let mut opened = commands::open::open(&root, &projects_dir, server)?;
